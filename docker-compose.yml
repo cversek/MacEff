@@ -1,0 +1,51 @@
+services:
+  maceff-sandbox:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: maceff-sandbox:latest
+    container_name: maceff-sandbox
+    ports:
+      - "2222:22"
+    environment:
+      CLEAN_ADMIN_HOME: "1"
+      DEFAULT_PA: "maceff_user001"
+      UV_LINK_MODE: "copy"
+    volumes:
+      - ./keys:/keys:ro
+      - ./tools:/opt/tools                    # editable dev
+      - sshd_keys:/etc/ssh                    # stable host keys
+      - home_all:/home                        # secure: named volume
+      - shared_workspace:/shared_workspace    # secure: named volume
+      - maceff_venv:/opt/maceff-venv
+    restart: unless-stopped
+
+  # Mirror named volumes to host paths (read-only on host)
+  mirror:
+    image: alpine:3.20
+    container_name: maceff-mirror
+    command: sh -lc '
+      apk add --no-cache rsync >/dev/null &&
+      mkdir -p /export/home /export/shared &&
+      rsync -a --delete /src_home/ /export/home/ &&
+      rsync -a --delete /src_shared/ /export/shared/ &&
+      echo "[mirror] sync complete"
+    '
+    volumes:
+      - home_all:/src_home:ro
+      - shared_workspace:/src_shared:ro
+      - ./sandbox-home:/export/home
+      - ./sandbox-shared_workspace:/export/shared
+    profiles: ["mirror"]
+
+# OPTIONAL profile: bind-mount home + shared directly (RW) — WARNING: macOS bind mounts weaken UID/ACL enforcement
+# Use: docker compose --profile hostbind up -d
+  hostbind:
+    image: alpine:3.20
+    profiles: ["hostbind"]
+
+volumes:
+  home_all:
+  shared_workspace:
+  maceff_venv:
+  sshd_keys:
