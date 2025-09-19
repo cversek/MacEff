@@ -13,7 +13,7 @@ if [[ "${CLEAN_ADMIN_HOME:-0}" == "1" ]]; then
   rm -rf /home/admin/* /home/admin/.[!.]* /home/admin/..?* 2>/dev/null || true
 fi
 
-# Shared collaborative area (world-writable sticky)
+# Shared collaborative area (world-writable sticky at init; we harden below)
 install -d -m 1777 /shared_workspace
 
 install_key(){
@@ -73,7 +73,7 @@ setup_agent_tree(){
   install -d -m 0555 -o root -g "$pa" "$ROOT"
 
   install -d -m 0750 -o "$sa" -g "$sa" "$SA_PUB" "$SA_PRIV"
-  install -d -m 0750 -o "$sa_user" -g "$sa_user" "$SA_PUB/logs" "$SA_PRIV/logs"
+  install -d -m 0750 -o "$sa" -g "$sa" "$SA_PUB/logs" "$SA_PRIV/logs"   # fixed: $sa_user -> $sa
   install -d -m 0755 -o "$pa" -g "$pa" "$SA_ASN"
   [[ -f "$SA_DEF" ]] || install -m 0644 -o root -g "$pa" /dev/null "$SA_DEF"
 
@@ -143,6 +143,16 @@ fi
 
 # Admin key (if any)
 install_key admin
+
+# --- enforce collaborative perms on /shared_workspace ---
+# ensure common group exists (idempotent)
+getent group agents_all >/dev/null 2>&1 || groupadd agents_all
+# set group, make contents group-writable + SGID; keep sticky bit on root
+chgrp -R agents_all /shared_workspace || true
+chmod -R g+ws     /shared_workspace  || true
+chmod g+s /shared_workspace || true   # inherit group on new dirs
+chmod +t  /shared_workspace || true   # sticky bit for safer deletes
+log "shared_workspace perms: $(stat -c '%A %U %G %n' /shared_workspace)"
 
 log "sshd starting..."
 exec /usr/sbin/sshd -D
