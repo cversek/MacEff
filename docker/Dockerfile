@@ -33,6 +33,7 @@ RUN mkdir -p /var/run/sshd /etc/ssh/sshd_config.d \
   > /etc/ssh/sshd_config.d/10-container.conf
 
 # Runner used for parallel SA jobs (scoped via sudoers)
+# sa-exec runner
 COPY docker/sa-exec /usr/local/bin/sa-exec
 RUN chmod 0755 /usr/local/bin/sa-exec
 
