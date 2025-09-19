@@ -24,25 +24,28 @@ services:
   mirror:
     image: alpine:3.20
     container_name: maceff-mirror
-    command: sh -lc '
-      apk add --no-cache rsync >/dev/null &&
-      mkdir -p /export/home /export/shared &&
-      rsync -a --delete /src_home/ /export/home/ &&
-      rsync -a --delete /src_shared/ /export/shared/ &&
-      echo "[mirror] sync complete"
-    '
+    profiles: ["mirror"]   # only runs when you opt-in
+    command: ["/bin/sh","-lc","apk add --no-cache rsync >/dev/null; mkdir -p /export/home /export/shared; rsync -a --delete /src_home/ /export/home/; rsync -a --delete /src_shared/ /export/shared/; echo '[mirror] sync complete'"]
     volumes:
       - home_all:/src_home:ro
       - shared_workspace:/src_shared:ro
       - ./sandbox-home:/export/home
       - ./sandbox-shared_workspace:/export/shared
-    profiles: ["mirror"]
 
-# OPTIONAL profile: bind-mount home + shared directly (RW) — WARNING: macOS bind mounts weaken UID/ACL enforcement
-# Use: docker compose --profile hostbind up -d
-  hostbind:
-    image: alpine:3.20
-    profiles: ["hostbind"]
+  # OPTIONAL profile: bind-mount home + shared directly (RW) — WARNING: macOS bind mounts weaken UID/ACL enforcement
+  #  Use: docker compose --profile hostbind up -d
+  maceff-sandbox-hostbind:
+      extends:
+        service: maceff-sandbox
+      container_name: maceff-sandbox-hostbind
+      profiles: ["hostbind"]            # opt-in only
+      volumes:
+        - ./keys:/keys:ro
+        - ./tools:/opt/tools
+        - ./sandbox-home:/home
+        - ./sandbox-shared_workspace:/shared_workspace
+        - sshd_keys:/etc/ssh
+        - maceff_venv:/opt/maceff-venv
 
 volumes:
   home_all:
