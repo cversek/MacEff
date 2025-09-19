@@ -129,6 +129,87 @@ This exports the **full** `/home` (including agent private folders) and `/shared
 - Make sure those dirs are writable: ```chmod -R u+rwX sandbox-home sandbox-shared_workspace```
 
 
+## Make quickstart
+
+Common developer workflows are wrapped in `make` targets. These commands assume you’ve already built the images and added your SSH public keys to `keys/` (see macOS setup above).
+
+### Targets
+```
+make build          # docker-compose build
+make up             # start services
+make logs           # follow logs for the sandbox
+make down           # stop services
+make mirror         # snapshot volumes -> ./sandbox-*
+make mirror-watch   # continuous mirroring (if profile enabled)
+make ssh-pa         # SSH into Primary Agent (PA)
+make ssh-admin      # SSH into admin
+make sa-test        # run a small SubAgent job from the PA
+```
+
+### Variables
+- `PA`   — PA username (default: `maceff_user001`)
+- `SID`  — SubAgent id under the PA (default: `001`)
+- `PORT` — SSH port on host (default: `2222`)
+
+### Keys and fallback resolution
+The Makefile looks for private keys in this order:
+1. `keys/<name>` (e.g. `keys/maceff_user001`, `keys/admin`)  
+2. `~/.ssh/id_ed25519_<name>` (e.g. `~/.ssh/id_ed25519_maceff_user001`, `~/.ssh/id_ed25519_admin`)
+3. For PAs with numeric suffixes (e.g. `maceff_user001`), it also tries the **base** name without digits: `~/.ssh/id_ed25519_maceff_user`.
+
+You can override explicitly with `PA_KEY` / `ADMIN_KEY`.
+
+### Examples
+
+#### Start, tail logs, and stop
+```
+make build
+make up
+make logs
+make down
+```
+
+#### SSH into the PA/admin
+```
+make ssh-pa
+make ssh-admin
+```
+
+If your private key isn’t under `keys/`, point to it:
+```
+make ssh-pa PA_KEY=$HOME/.ssh/id_ed25519_maceff_user
+make ssh-admin ADMIN_KEY=$HOME/.ssh/id_ed25519_admin
+```
+
+#### Run a quick SA job from the PA
+```
+# Uses PA=maceff_user001 and SID=001 by default
+make sa-test
+
+# Or specify which PA/SID and key to use
+make sa-test PA=maceff_user001 SID=001 PA_KEY=$HOME/.ssh/id_ed25519_maceff_user
+```
+
+This launches a detached SA process via `sa-exec`, writing output to:
+```
+/home/<PA>/agent/subagents/<SID>/public/logs/make-test.log
+```
+
+#### Mirror container data to host snapshots
+```
+make mirror
+ls -la sandbox-home
+ls -la sandbox-shared_workspace
+```
+
+> **Note:** `mirror` exports **full** `/home` (including agent/private) and `/shared_workspace` into `./sandbox-*`. Be careful not to commit secrets from `sandbox-home/` into public repos.
+
+### Troubleshooting
+- **“PA_KEY not found”**: Provide `PA_KEY=$HOME/.ssh/id_ed25519_maceff_user` (or put a private key at `keys/maceff_user001`).
+- **Cannot connect via SSH**: Ensure the container is up (`make up`) and the correct key matches the **public** key you placed in `keys/`.
+
+
+
 ## Mirror container data to the host (read-only snapshot)
 
 Create export dirs once (host):
@@ -203,3 +284,45 @@ git commit -m "chore: initial commit"
 - If pushing from inside the container, prefer **SSH agent forwarding** or **deploy keys** scoped to that repo.
 
 > Note: The `mirror` service currently exports **full `/home`** to `./sandbox-home` (including private folders). Be careful not to commit secrets from the snapshot into public repos.
+
+
+## Running subagent jobs (`sa-exec`)
+
+Primary Agents (PAs) can launch work as their SubAgent (SA) using a safe runner that only accepts workdirs under:
+```
+/home/maceff_user*/agent/subagents/*
+```
+
+**Usage (inside the container, as the PA):**
+```
+# identities
+P=maceff_user001
+SID=001
+SA=sa_${P}_${SID}
+
+# paths
+WD=/home/$P/agent/subagents/$SID
+LOG=$WD/public/logs/run.log
+
+# ensure log dir exists and run a small job
+sudo -n -u "$SA" /usr/local/bin/sa-exec "$WD" "$LOG" -- ':'
+sudo -n -u "$SA" /usr/local/bin/sa-exec "$WD" "$LOG" -- 'id; whoami; pwd; echo SA job; sleep 1; echo done'
+
+# tail the result
+tail -n 50 "$LOG"
+```
+
+**Notes**
+- Output is appended to `<LOG>`. `sa-exec` starts a detached login shell with `setsid`, so jobs keep running if your PA shell exits.
+- The runner **whitelists** PA agent paths; any other `WD` is rejected (`unsafe workdir`).
+- Default umask is `027` to keep files private to the SA’s group.
+- For multiple parallel delegates, use distinct logs (e.g., `logs/ts-$(date +%s).log`).
+
+**Quick host-side check:**
+```
+# from your mac (host)
+ssh -i keys/maceff_user001 -p 2222 maceff_user001@localhost \
+  'P=maceff_user001; SID=001; SA=sa_${P}_${SID}; WD=/home/$P/agent/subagents/$SID; LOG=$WD/public/logs/quick.log;
+   sudo -n -u "$SA" /usr/local/bin/sa-exec "$WD" "$LOG" -- "echo hello from SA; id; whoami; pwd";
+   sleep 0.2; tail -n 10 "$LOG"'
+```
