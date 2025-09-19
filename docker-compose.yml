@@ -14,6 +14,7 @@ services:
     volumes:
       - ./keys:/keys:ro
       - ./tools:/opt/tools                    # editable dev
+      - ./agent_defs:/opt/agent_defs:ro       # PA/SA definitions
       - sshd_keys:/etc/ssh                    # stable host keys
       - home_all:/home                        # secure: named volume
       - shared_workspace:/shared_workspace    # secure: named volume
