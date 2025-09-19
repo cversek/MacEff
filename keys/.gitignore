@@ -1,0 +1,4 @@
+# ignore everything in this dir by default
+*
+# keep only public keys
+!*.pub
