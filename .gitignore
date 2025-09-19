@@ -1,0 +1,17 @@
+# Runtime state
+.env
+keys/*
+!keys/.gitkeep
+workspace/**
+# Python/venvs
+**/.venv/**
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+# Node
+**/node_modules/**
+# Docker artifacts
+*.tar
