@@ -3,12 +3,17 @@ set -euo pipefail
 # Usage: sa-exec <workdir> <logfile> -- <command...>
 WD="$1"; shift
 LOG="$1"; shift
-[[ "${1:-}" == "--" ]] && shift || { echo "usage: sa-exec <workdir> <logfile> -- <command...>"; exit 2; }
+[[ "${1:-}" == "--" ]] && shift || { echo "usage: sa-exec <workdir> <logfile> -- <command...>" >&2; exit 2; }
+
+# Only allow PA agent trees
 case "$WD" in
-  /home/sa_*/*/subagents/*) ;;          # only allow SA trees
+  /home/maceff_user*/agent/subagents/*) ;;
   *) echo "unsafe workdir: $WD" >&2; exit 1 ;;
 esac
+
 umask 027
-mkdir -p "$(dirname "$LOG")"
+mkdir -p -- "$(dirname "$LOG")"
 cd "$WD"
-setsid -f bash -lc "$* >> \"$LOG\" 2>&1"
+
+# Detached login shell; append output to LOG
+setsid -f bash -lc "$* >> \"$LOG\" 2>&1" </dev/null >/dev/null 2>&1 || true
