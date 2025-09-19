@@ -14,4 +14,47 @@ When multiple agents are organized into systems, this allows for various combina
 MacEff aims to provide a basic kit of policies and tools that enable the directed evolution of useful multiagent systems.
 A demo implementation of MacEff is based on a Docker container running a minimal Ubuntu container with preinstalled Claude Code referred to as ClaudeMacEff. 
 
-# 
+
+## Mirror container data to the host (read-only snapshot)
+
+Create export dirs once (host):
+```bash
+chmod 1777 sandbox-home sandbox-shared_workspace
+```
+
+Build the tiny image with rsync:
+```bash
+docker build -t maceff-mirror:local -f docker/mirror.Dockerfile .
+```
+
+One-shot mirror (reads named volumes, writes snapshots into `./sandbox-*`):
+```bash
+docker run --rm \
+  -v maceff_home_all:/src_home:ro \
+  -v maceff_shared_workspace:/src_shared:ro \
+  -v "$PWD/sandbox-home:/export/home" \
+  -v "$PWD/sandbox-shared_workspace:/export/shared" \
+  maceff-mirror:local \
+  sh -lc 'mkdir -p /export/home /export/shared; \
+          rsync -rltD --delete --no-perms --no-owner --no-group /src_home/   /export/home/; \
+          rsync -rltD --delete --no-perms --no-owner --no-group /src_shared/ /export/shared/; \
+          echo "[mirror] sync complete"'
+```
+
+You should see `[mirror] sync complete`, then:
+```bash
+ls -la sandbox-home
+ls -la sandbox-home/maceff_user001
+ls -la sandbox-shared_workspace
+```
+
+### Notes
+- **macOS:** writing to `./sandbox-*` works because we avoid owner/perms changes with `--no-owner --no-group --no-perms`.
+- **Linux:** if you want a faithful copy of owners/groups instead, use:
+```
+docker run --rm \
+  -v maceff_home_all:/src_home:ro \
+  -v "$PWD/sandbox-home:/export/home" \
+  maceff-mirror:local \
+  sh -lc 'rsync -a --delete --numeric-ids /src_home/ /export/home/'
+```
