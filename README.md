@@ -58,3 +58,34 @@ docker run --rm \
   maceff-mirror:local \
   sh -lc 'rsync -a --delete --numeric-ids /src_home/ /export/home/'
 ```
+
+## Using Git in `/shared_workspace` (collaborative, group-shared)
+
+Agents do day-to-day development inside `/shared_workspace`. The directory is group-writable with SGID so new files/dirs inherit the `agents_all` group, enabling collaboration.
+
+**Repo-local identity (recommended):** set a neutral identity per repo to avoid leaking host details.
+
+```
+# inside the container, as a PA, in a project dir under /shared_workspace/<repo>
+git config user.name  "PA001 (maceff_user001)"
+git config user.email "pa001@container.invalid"
+```
+
+**Initialize a shared repo:**
+
+```
+git init -b main
+git config core.sharedRepository group
+# optional: initial content
+echo "hello" > README.md
+git add README.md
+git commit -m "chore: initial commit"
+```
+
+**Why it works:** `/shared_workspace` has `agents_all` as its group and SGID set, so new files/dirs keep that group. `core.sharedRepository=group` makes Git objects group-writable.
+
+**Pushing to remotes:**
+- Safest: push from **host/CI** after mirroring.
+- If pushing from inside the container, prefer **SSH agent forwarding** or **deploy keys** scoped to that repo.
+
+> Note: The `mirror` service currently exports **full `/home`** to `./sandbox-home` (including private folders). Be careful not to commit secrets from the snapshot into public repos.
