@@ -21,11 +21,24 @@ services:
     restart: unless-stopped
 
   # Mirror named volumes to host paths (read-only on host)
+  #  Use: docker compose --profile mirror up -d
   mirror:
     image: alpine:3.20
     container_name: maceff-mirror
     profiles: ["mirror"]   # only runs when you opt-in
     command: ["/bin/sh","-lc","apk add --no-cache rsync >/dev/null; mkdir -p /export/home /export/shared; rsync -a --delete /src_home/ /export/home/; rsync -a --delete /src_shared/ /export/shared/; echo '[mirror] sync complete'"]
+    volumes:
+      - home_all:/src_home:ro
+      - shared_workspace:/src_shared:ro
+      - ./sandbox-home:/export/home
+      - ./sandbox-shared_workspace:/export/shared
+
+  # Mirror named volumes to host paths (read-only on host) and watch for changes every 5 seconds
+  #  Use: docker compose --profile mirror-watch up -d
+  mirror-watch:
+    image: alpine:3.20
+    profiles: ["mirror"]
+    command: ["/bin/sh","-lc","apk add --no-cache rsync >/dev/null; mkdir -p /export/home /export/shared; while :; do rsync -a --delete /src_home/ /export/home/; rsync -a --delete /src_shared/ /export/shared/; echo '[mirror] synced at '$(date); sleep 5; done"]
     volumes:
       - home_all:/src_home:ro
       - shared_workspace:/src_shared:ro
