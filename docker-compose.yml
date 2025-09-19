@@ -30,6 +30,7 @@ services:
     profiles: ["mirror"]
     command: ["/bin/sh","-lc",
       "mkdir -p /export/home /export/shared;
+       chmod -R u+rwX /export/home /export/shared || true;
        rsync -rltD --delete --no-perms --no-owner --no-group /src_home/   /export/home/;
        rsync -rltD --delete --no-perms --no-owner --no-group /src_shared/ /export/shared/;
        echo '[mirror] FULL sync complete'"]
