@@ -15,5 +15,6 @@ umask 027
 mkdir -p -- "$(dirname "$LOG")"
 cd "$WD"
 
-# Detached login shell; append output to LOG
-setsid -f bash -lc "$* >> \"$LOG\" 2>&1" </dev/null >/dev/null 2>&1 || true
+# Detached login shell; redirect the entire shell so *all* commands log
+# (previous version only redirected the last command)
+setsid -f bash -lc "exec >> '$LOG' 2>&1; $*" </dev/null >/dev/null 2>&1 || true
