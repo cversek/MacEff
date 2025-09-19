@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Usage: sa-exec <workdir> <logfile> -- <command...>
+WD="$1"; shift
+LOG="$1"; shift
+[[ "${1:-}" == "--" ]] && shift || { echo "usage: sa-exec <workdir> <logfile> -- <command...>"; exit 2; }
+case "$WD" in
+  /home/sa_*/*/subagents/*) ;;          # only allow SA trees
+  *) echo "unsafe workdir: $WD" >&2; exit 1 ;;
+esac
+umask 027
+mkdir -p "$(dirname "$LOG")"
+cd "$WD"
+setsid -f bash -lc "$* >> \"$LOG\" 2>&1"
