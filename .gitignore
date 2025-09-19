@@ -15,3 +15,20 @@ dist/
 **/node_modules/**
 # Docker artifacts
 *.tar
+
+# Python / build
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Local runtime
+.claude/
+.swp
+.DS_Store
+
+# Sandbox mirrors
+sandbox-home/
+sandbox-shared_workspace/
