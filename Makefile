@@ -71,3 +71,27 @@ sa-test:
 		sudo -n -u "$${SA}" /usr/local/bin/sa-exec "$${WD}" "$${LOG}" -- "echo from-make; id; whoami; pwd"; \
 		sleep 0.2; tail -n 20 "$${LOG}" \
 	'
+# --- Claude Code helpers ---
+PROJ ?= demo
+
+.PHONY: claude claude-doctor
+
+claude:
+	@key='$(PA_KEY)'; key="$${key/#\~/$$HOME}";
+	@if [ -z "$$key" ] || [ ! -f "$$key" ]; then \
+	  echo "PA_KEY not found. Provide PA_KEY=... (e.g. $$HOME/.ssh/id_ed25519_$(PA))"; exit 1; \
+	fi
+	ssh -t -i "$$key" -p "$(PORT)" "$(PA)@localhost" '\
+		set -e; \
+		mkdir -p /shared_workspace/$(PROJ); cd /shared_workspace/$(PROJ); \
+		claude || true \
+	'
+
+claude-doctor:
+	@key='$(PA_KEY)'; key="$${key/#\~/$$HOME}";
+	@if [ -z "$$key" ] || [ ! -f "$$key" ]; then \
+	  echo "PA_KEY not found. Provide PA_KEY=... (e.g. $$HOME/.ssh/id_ed25519_$(PA))"; exit 1; \
+	fi
+	ssh -t -i "$$key" -p "$(PORT)" "$(PA)@localhost" '\
+		claude doctor || true \
+	'
