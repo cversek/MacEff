@@ -14,6 +14,120 @@ When multiple agents are organized into systems, this allows for various combina
 MacEff aims to provide a basic kit of policies and tools that enable the directed evolution of useful multiagent systems.
 A demo implementation of MacEff is based on a Docker container running a minimal Ubuntu container with preinstalled Claude Code referred to as ClaudeMacEff. 
 
+## macOS setup: Docker CLI + Colima, then build & run
+
+> These steps use the Homebrew Docker **CLI** (not Docker Desktop) with **Colima** as the lightweight Linux VM. Works on Apple Silicon and Intel Macs.
+
+### 1) Install prerequisites (Homebrew)
+```
+brew install colima docker docker-compose jq rsync
+# optional: buildx if you prefer BuildKit
+brew install docker-buildx
+```
+
+### 2) Start Colima (recommended resources)
+```
+# Start a Linux VM for Docker; tweak cpu/memory/disk as you like.
+colima start --cpu 4 --memory 8 --disk 30
+# (once) switch the Docker CLI to use Colima’s context
+docker context use colima
+```
+
+> If you ever need to edit Colima’s config:  
+> $```colima stop && colima start --edit$``` → remove any proxy/env you don’t want, save, then:  
+> $```colima start$```
+
+### 3) (One-time) prepare host snapshot folders for mirroring
+```
+mkdir -p sandbox-home sandbox-shared_workspace
+chmod 1777 sandbox-home sandbox-shared_workspace
+```
+
+### 4) Provide SSH public keys for in-container users
+Put **public** keys (only `*.pub`) into `keys/`:
+- `keys/admin.pub` → grants SSH to the `admin` user (port 2222)
+- `keys/maceff_user001.pub` → grants SSH to the default PA (`maceff_user001`)
+
+If you don’t have them yet:
+```
+mkdir -p keys
+ssh-keygen -t ed25519 -f keys/admin -N ''
+ssh-keygen -t ed25519 -f keys/maceff_user001 -N ''
+# commit only the .pub files; keep private keys out of git
+```
+
+### 5) Build the images
+```
+# Build main sandbox image
+docker-compose build
+
+# Build tiny rsync mirror image used for snapshots
+docker build -t maceff-mirror:local -f docker/mirror.Dockerfile .
+```
+
+> **If you hit BuildKit/proxy errors:** temporarily force the legacy builder:  
+> $```DOCKER_BUILDKIT=0 COMPOSE_DOCKER_CLI_BUILD=0 docker-compose build$```  
+> Also ensure no stray `HTTP_PROXY`/`HTTPS_PROXY` envs are set in your shell or Colima config.
+
+### 6) Launch the sandbox
+```
+docker-compose up -d
+# tail logs
+docker-compose logs -f --tail=120
+```
+
+You should see lines creating the PA/SA users and ending with `sshd starting...`.
+
+### 7) Log in (PA and admin)
+```
+# PA (uses keys/maceff_user001.pub)
+ssh -i keys/maceff_user001 -p 2222 maceff_user001@localhost
+
+# admin (uses keys/admin.pub)
+ssh -i keys/admin -p 2222 admin@localhost
+```
+
+### 8) Create a shared project (inside the container, as PA)
+```
+cd /shared_workspace
+mkdir demo && cd demo
+git init -b main
+git config core.sharedRepository group
+git config user.name  "PA001 (maceff_user001)"
+git config user.email "pa001@container.invalid"
+echo "hello from PA" > README.md
+git add README.md && git commit -m "feat: initial README"
+```
+
+> `/shared_workspace` is group-shared (`agents_all`, SGID set) so collaborators can work together safely.
+
+### 9) Snapshot container data to the host (read-only export)
+First build the mirror image (step 5), then:
+```
+docker-compose --profile mirror up --no-deps mirror
+# snapshots appear under:
+ls -la sandbox-home
+ls -la sandbox-shared_workspace
+```
+
+This exports the **full** `/home` (including agent private folders) and `/shared_workspace` for inspection/versioning **on the host**. Be careful not to commit secrets from `sandbox-home/` into public repos.
+
+---
+
+### Troubleshooting
+
+**Build fails pulling `docker/dockerfile:…` or tries `127.0.0.1:9090`:**
+- Remove any `HTTP_PROXY/HTTPS_PROXY/NO_PROXY` from your shell and Colima config.
+- Rebuild with the legacy builder once:
+  ```DOCKER_BUILDKIT=0 COMPOSE_DOCKER_CLI_BUILD=0 docker-compose build```
+
+**`docker-compose: cannot connect to daemon`:**
+- Ensure Colima is running: ```colima start```  
+- Ensure Docker CLI uses Colima: ```docker context use colima && docker ps```
+
+**Permission denied while mirroring to `sandbox-*`:**
+- Make sure those dirs are writable: ```chmod -R u+rwX sandbox-home sandbox-shared_workspace```
+
 
 ## Mirror container data to the host (read-only snapshot)
 
