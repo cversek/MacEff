@@ -4,17 +4,9 @@ PA       ?= maceff_user001
 SID      ?= 001
 PORT     ?= 2222
 KEYS_DIR ?= keys
+PROJ     ?= demo
 
-# Default/fallback private keys
-HOME_SSH            := $(HOME)/.ssh
-DEFAULT_PA_PRIV     := $(HOME_SSH)/id_ed25519_$(PA)
-DEFAULT_ADMIN_PRIV  := $(HOME_SSH)/id_ed25519_admin
-
-# Prefer keys/<name> if present; else fall back to ~/.ssh
-PA_KEY    ?= $(shell [ -f "$(KEYS_DIR)/$(PA)" ] && printf "$(KEYS_DIR)/$(PA)" || ([ -f "$(DEFAULT_PA_PRIV)" ] && printf "$(DEFAULT_PA_PRIV)" || printf ""))
-ADMIN_KEY ?= $(shell [ -f "$(KEYS_DIR)/admin" ] && printf "$(KEYS_DIR)/admin" || ([ -f "$(DEFAULT_ADMIN_PRIV)" ] && printf "$(DEFAULT_ADMIN_PRIV)" || printf ""))
-
-.PHONY: help build up logs down mirror mirror-watch ssh-pa ssh-admin sa-test
+.PHONY: help build up logs down mirror mirror-watch ssh-pa ssh-admin sa-test claude claude-doctor
 
 help:
 	@echo "Targets:"
@@ -23,10 +15,12 @@ help:
 	@echo "  make logs         - follow logs"
 	@echo "  make down         - stop services"
 	@echo "  make mirror       - snapshot volumes -> sandbox-*"
-	@echo "  make mirror-watch - continuous mirror (if enabled)"
-	@echo "  make ssh-pa       - SSH into PA (override PA=..., PA_KEY=...)"
-	@echo "  make ssh-admin    - SSH into admin (override ADMIN_KEY=...)"
+	@echo "  make mirror-watch - continuous mirroring (if enabled)"
+	@echo "  make ssh-pa       - SSH into PA"
+	@echo "  make ssh-admin    - SSH into admin"
 	@echo "  make sa-test      - run a small SA job from the PA"
+	@echo "  make claude       - launch Claude in /shared_workspace/<PROJ>"
+	@echo "  make claude-doctor- run 'claude doctor' inside the container"
 
 build:
 	docker-compose build
@@ -47,22 +41,48 @@ mirror-watch:
 	docker-compose --profile mirror-watch up mirror-watch
 
 ssh-pa:
-	@if [ -z "$(PA_KEY)" ] || [ ! -f "$(PA_KEY)" ]; then \
-	  echo "PA_KEY not found. Provide a private key via PA_KEY=... (e.g. ~/.ssh/id_ed25519_$(PA))"; exit 1; \
-	fi
-	ssh -i "$(PA_KEY)" -p "$(PORT)" "$(PA)@localhost"
+	@set -e; \
+	key="$${PA_KEY:-}"; \
+	if [ -z "$$key" ]; then \
+	  base="$$(echo '$(PA)' | sed -E 's/[0-9]+$$//')"; \
+	  for cand in "$(KEYS_DIR)/$(PA)" "$$HOME/.ssh/id_ed25519_$(PA)" "$$HOME/.ssh/id_ed25519_$${base}"; do \
+	    [ -f "$$cand" ] && key="$$cand" && break; \
+	  done; \
+	fi; \
+	if [ -z "$$key" ] || [ ! -f "$$key" ]; then \
+	  echo "PA key not found. Set PA_KEY or create one of: $(KEYS_DIR)/$(PA), $$HOME/.ssh/id_ed25519_$(PA), $$HOME/.ssh/id_ed25519_$${base}"; \
+	  exit 1; \
+	fi; \
+	ssh -i "$$key" -p "$(PORT)" "$(PA)@localhost"
 
 ssh-admin:
-	@if [ -z "$(ADMIN_KEY)" ] || [ ! -f "$(ADMIN_KEY)" ]; then \
-	  echo "ADMIN_KEY not found. Provide a private key via ADMIN_KEY=... (e.g. ~/.ssh/id_ed25519_admin)"; exit 1; \
-	fi
-	ssh -i "$(ADMIN_KEY)" -p "$(PORT)" admin@localhost
+	@set -e; \
+	key="$${ADMIN_KEY:-}"; \
+	if [ -z "$$key" ]; then \
+	  for cand in "$(KEYS_DIR)/admin" "$$HOME/.ssh/id_ed25519_admin"; do \
+	    [ -f "$$cand" ] && key="$$cand" && break; \
+	  done; \
+	fi; \
+	if [ -z "$$key" ] || [ ! -f "$$key" ]; then \
+	  echo "ADMIN key not found. Set ADMIN_KEY or create one of: $(KEYS_DIR)/admin, $$HOME/.ssh/id_ed25519_admin"; \
+	  exit 1; \
+	fi; \
+	ssh -i "$$key" -p "$(PORT)" admin@localhost
 
 sa-test:
-	@if [ -z "$(PA_KEY)" ] || [ ! -f "$(PA_KEY)" ]; then \
-	  echo "PA_KEY not found. Provide PA_KEY=... (e.g. ~/.ssh/id_ed25519_$(PA))"; exit 1; \
-	fi
-	ssh -i "$(PA_KEY)" -p "$(PORT)" "$(PA)@localhost" '\
+	@set -e; \
+	key="$${PA_KEY:-}"; \
+	if [ -z "$$key" ]; then \
+	  base="$$(echo '$(PA)' | sed -E 's/[0-9]+$$//')"; \
+	  for cand in "$(KEYS_DIR)/$(PA)" "$$HOME/.ssh/id_ed25519_$(PA)" "$$HOME/.ssh/id_ed25519_$${base}"; do \
+	    [ -f "$$cand" ] && key="$$cand" && break; \
+	  done; \
+	fi; \
+	if [ -z "$$key" ] || [ ! -f "$$key" ]; then \
+	  echo "PA key not found. Set PA_KEY or create one of: $(KEYS_DIR)/$(PA), $$HOME/.ssh/id_ed25519_$(PA), $$HOME/.ssh/id_ed25519_$${base}"; \
+	  exit 1; \
+	fi; \
+	ssh -i "$$key" -p "$(PORT)" "$(PA)@localhost" '\
 		set -euo pipefail; \
 		P=$(PA); SID=$(SID); SA=sa_$${P}_$${SID}; \
 		WD=/home/$${P}/agent/subagents/$${SID}; \
@@ -71,16 +91,20 @@ sa-test:
 		sudo -n -u "$${SA}" /usr/local/bin/sa-exec "$${WD}" "$${LOG}" -- "echo from-make; id; whoami; pwd"; \
 		sleep 0.2; tail -n 20 "$${LOG}" \
 	'
-# --- Claude Code helpers ---
-PROJ ?= demo
-
-.PHONY: claude claude-doctor
 
 claude:
-	@key='$(PA_KEY)'; key="$${key/#\~/$$HOME}";
-	@if [ -z "$$key" ] || [ ! -f "$$key" ]; then \
-	  echo "PA_KEY not found. Provide PA_KEY=... (e.g. $$HOME/.ssh/id_ed25519_$(PA))"; exit 1; \
-	fi
+	@set -e; \
+	key="$${PA_KEY:-}"; \
+	if [ -z "$$key" ]; then \
+	  base="$$(echo '$(PA)' | sed -E 's/[0-9]+$$//')"; \
+	  for cand in "$(KEYS_DIR)/$(PA)" "$$HOME/.ssh/id_ed25519_$(PA)" "$$HOME/.ssh/id_ed25519_$${base}"; do \
+	    [ -f "$$cand" ] && key="$$cand" && break; \
+	  done; \
+	fi; \
+	if [ -z "$$key" ] || [ ! -f "$$key" ]; then \
+	  echo "PA key not found. Set PA_KEY or create one of: $(KEYS_DIR)/$(PA), $$HOME/.ssh/id_ed25519_$(PA), $$HOME/.ssh/id_ed25519_$${base}"; \
+	  exit 1; \
+	fi; \
 	ssh -t -i "$$key" -p "$(PORT)" "$(PA)@localhost" '\
 		set -e; \
 		mkdir -p /shared_workspace/$(PROJ); cd /shared_workspace/$(PROJ); \
@@ -88,10 +112,16 @@ claude:
 	'
 
 claude-doctor:
-	@key='$(PA_KEY)'; key="$${key/#\~/$$HOME}";
-	@if [ -z "$$key" ] || [ ! -f "$$key" ]; then \
-	  echo "PA_KEY not found. Provide PA_KEY=... (e.g. $$HOME/.ssh/id_ed25519_$(PA))"; exit 1; \
-	fi
-	ssh -t -i "$$key" -p "$(PORT)" "$(PA)@localhost" '\
-		claude doctor || true \
-	'
+	@set -e; \
+	key="$${PA_KEY:-}"; \
+	if [ -z "$$key" ]; then \
+	  base="$$(echo '$(PA)' | sed -E 's/[0-9]+$$//')"; \
+	  for cand in "$(KEYS_DIR)/$(PA)" "$$HOME/.ssh/id_ed25519_$(PA)" "$$HOME/.ssh/id_ed25519_$${base}"; do \
+	    [ -f "$$cand" ] && key="$$cand" && break; \
+	  done; \
+	fi; \
+	if [ -z "$$key" ] || [ ! -f "$$key" ]; then \
+	  echo "PA key not found. Set PA_KEY or create one of: $(KEYS_DIR)/$(PA), $$HOME/.ssh/id_ed25519_$(PA), $$HOME/.ssh/id_ed25519_$${base}"; \
+	  exit 1; \
+	fi; \
+	ssh -t -i "$$key" -p "$(PORT)" "$(PA)@localhost" 'claude doctor || true'
