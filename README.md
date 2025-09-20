@@ -19,14 +19,14 @@ A demo implementation of MacEff is based on a Docker container running a minimal
 > These steps use the Homebrew Docker **CLI** (not Docker Desktop) with **Colima** as the lightweight Linux VM. Works on Apple Silicon and Intel Macs.
 
 ### 1) Install prerequisites (Homebrew)
-```
+```bash
 brew install colima docker docker-compose jq rsync
 # optional: buildx if you prefer BuildKit
 brew install docker-buildx
 ```
 
 ### 2) Start Colima (recommended resources)
-```
+```bash
 # Start a Linux VM for Docker; tweak cpu/memory/disk as you like.
 colima start --cpu 4 --memory 8 --disk 30
 # (once) switch the Docker CLI to use Colima’s context
@@ -38,7 +38,7 @@ docker context use colima
 > $```colima start$```
 
 ### 3) (One-time) prepare host snapshot folders for mirroring
-```
+```bash
 mkdir -p sandbox-home sandbox-shared_workspace
 chmod 1777 sandbox-home sandbox-shared_workspace
 ```
@@ -49,7 +49,7 @@ Put **public** keys (only `*.pub`) into `keys/`:
 - `keys/maceff_user001.pub` → grants SSH to the default PA (`maceff_user001`)
 
 If you don’t have them yet:
-```
+```bash
 mkdir -p keys
 ssh-keygen -t ed25519 -f keys/admin -N ''
 ssh-keygen -t ed25519 -f keys/maceff_user001 -N ''
@@ -57,7 +57,7 @@ ssh-keygen -t ed25519 -f keys/maceff_user001 -N ''
 ```
 
 ### 5) Build the images
-```
+```bash
 # Build main sandbox image
 docker-compose build
 
@@ -66,11 +66,11 @@ docker build -t maceff-mirror:local -f docker/mirror.Dockerfile .
 ```
 
 > **If you hit BuildKit/proxy errors:** temporarily force the legacy builder:  
-> $```DOCKER_BUILDKIT=0 COMPOSE_DOCKER_CLI_BUILD=0 docker-compose build$```  
+> ```DOCKER_BUILDKIT=0 COMPOSE_DOCKER_CLI_BUILD=0 docker-compose build```  
 > Also ensure no stray `HTTP_PROXY`/`HTTPS_PROXY` envs are set in your shell or Colima config.
 
 ### 6) Launch the sandbox
-```
+```bash
 docker-compose up -d
 # tail logs
 docker-compose logs -f --tail=120
@@ -79,7 +79,7 @@ docker-compose logs -f --tail=120
 You should see lines creating the PA/SA users and ending with `sshd starting...`.
 
 ### 7) Log in (PA and admin)
-```
+```bash
 # PA (uses keys/maceff_user001.pub)
 ssh -i keys/maceff_user001 -p 2222 maceff_user001@localhost
 
@@ -88,7 +88,7 @@ ssh -i keys/admin -p 2222 admin@localhost
 ```
 
 ### 8) Create a shared project (inside the container, as PA)
-```
+```bash
 cd /shared_workspace
 mkdir demo && cd demo
 git init -b main
@@ -103,7 +103,7 @@ git add README.md && git commit -m "feat: initial README"
 
 ### 9) Snapshot container data to the host (read-only export)
 First build the mirror image (step 5), then:
-```
+```bash
 docker-compose --profile mirror up --no-deps mirror
 # snapshots appear under:
 ls -la sandbox-home
@@ -119,11 +119,15 @@ This exports the **full** `/home` (including agent private folders) and `/shared
 **Build fails pulling `docker/dockerfile:…` or tries `127.0.0.1:9090`:**
 - Remove any `HTTP_PROXY/HTTPS_PROXY/NO_PROXY` from your shell and Colima config.
 - Rebuild with the legacy builder once:
-  ```DOCKER_BUILDKIT=0 COMPOSE_DOCKER_CLI_BUILD=0 docker-compose build```
+  ```bash
+  DOCKER_BUILDKIT=0 COMPOSE_DOCKER_CLI_BUILD=0 docker-compose build
+  ```
 
 **`docker-compose: cannot connect to daemon`:**
 - Ensure Colima is running: ```colima start```  
-- Ensure Docker CLI uses Colima: ```docker context use colima && docker ps```
+- Ensure Docker CLI uses Colima: ```bash
+  docker context use colima && docker ps
+  ```
 
 **Permission denied while mirroring to `sandbox-*`:**
 - Make sure those dirs are writable: ```chmod -R u+rwX sandbox-home sandbox-shared_workspace```
@@ -134,7 +138,7 @@ This exports the **full** `/home` (including agent private folders) and `/shared
 Common developer workflows are wrapped in `make` targets. These commands assume you’ve already built the images and added your SSH public keys to `keys/` (see macOS setup above).
 
 ### Targets
-```
+```bash
 make build          # docker-compose build
 make up             # start services
 make logs           # follow logs for the sandbox
@@ -162,7 +166,7 @@ You can override explicitly with `PA_KEY` / `ADMIN_KEY`.
 ### Examples
 
 #### Start, tail logs, and stop
-```
+```bash
 make build
 make up
 make logs
@@ -170,19 +174,19 @@ make down
 ```
 
 #### SSH into the PA/admin
-```
+```bash
 make ssh-pa
 make ssh-admin
 ```
 
 If your private key isn’t under `keys/`, point to it:
-```
+```bash
 make ssh-pa PA_KEY=$HOME/.ssh/id_ed25519_maceff_user
 make ssh-admin ADMIN_KEY=$HOME/.ssh/id_ed25519_admin
 ```
 
 #### Run a quick SA job from the PA
-```
+```bash
 # Uses PA=maceff_user001 and SID=001 by default
 make sa-test
 
@@ -191,12 +195,12 @@ make sa-test PA=maceff_user001 SID=001 PA_KEY=$HOME/.ssh/id_ed25519_maceff_user
 ```
 
 This launches a detached SA process via `sa-exec`, writing output to:
-```
+```bash
 /home/<PA>/agent/subagents/<SID>/public/logs/make-test.log
 ```
 
 #### Mirror container data to host snapshots
-```
+```bash
 make mirror
 ls -la sandbox-home
 ls -la sandbox-shared_workspace
@@ -208,7 +212,54 @@ ls -la sandbox-shared_workspace
 - **“PA_KEY not found”**: Provide `PA_KEY=$HOME/.ssh/id_ed25519_maceff_user` (or put a private key at `keys/maceff_user001`).
 - **Cannot connect via SSH**: Ensure the container is up (`make up`) and the correct key matches the **public** key you placed in `keys/`.
 
+## Using Claude Code inside the container
 
+Launch Claude Code as your Primary Agent (PA) inside a shared project folder. This works with **Claude Max account login** (no API key).
+
+### Quick start
+```bash
+# one-time: bring up the sandbox
+make up
+
+# verify CLI install
+make claude-doctor PA_KEY=$HOME/.ssh/id_ed25519_maceff_user
+
+# launch Claude in /shared_workspace/demo (default PROJ=demo)
+make claude PA_KEY=$HOME/.ssh/id_ed25519_maceff_user
+```
+
+On first run in the Claude prompt, type:
+```bash
+/login
+```
+Follow the browser flow and sign in with your Claude Max account. Credentials are persisted under the PA’s home (a Docker named volume), so you won’t need to log in again across restarts.
+
+### Choose a different project directory
+```bash
+make claude PROJ=myproj PA_KEY=$HOME/.ssh/id_ed25519_maceff_user
+```
+This creates/uses `/shared_workspace/myproj` and launches Claude there.
+
+### Where settings live (inside the container)
+- User/global settings: `~/.claude/settings.json`
+- Per-project settings: `./.claude/settings.json` within the project directory
+- Credentials live under `~/.claude/` and survive container restarts
+
+### Tips
+- Commit **project files** from `/shared_workspace/<PROJ>`; avoid committing anything from `/home/<PA>/.claude/`.
+- If you see permission errors in shared repos, ensure SGID/group settings are intact (our startup sets `/shared_workspace` group to `agents_all` and enables SGID).
+
+### Troubleshooting
+- **“command not found: claude”**: rebuild and restart the container.
+  ```bash
+  make build
+  make up
+  make claude-doctor PA_KEY=$HOME/.ssh/id_ed25519_maceff_user
+  ```
+- **Unable to SSH**: confirm your private key path and that the matching public key is in `keys/<PA>.pub` (mounted read-only into the container).
+- **Login loop**: run `make claude-doctor` and check for network/proxy issues; retry `/login`.
+
+---
 
 ## Mirror container data to the host (read-only snapshot)
 
@@ -246,7 +297,7 @@ ls -la sandbox-shared_workspace
 ### Notes
 - **macOS:** writing to `./sandbox-*` works because we avoid owner/perms changes with `--no-owner --no-group --no-perms`.
 - **Linux:** if you want a faithful copy of owners/groups instead, use:
-```
+```bash
 docker run --rm \
   -v maceff_home_all:/src_home:ro \
   -v "$PWD/sandbox-home:/export/home" \
@@ -260,7 +311,7 @@ Agents do day-to-day development inside `/shared_workspace`. The directory is gr
 
 **Repo-local identity (recommended):** set a neutral identity per repo to avoid leaking host details.
 
-```
+```bash
 # inside the container, as a PA, in a project dir under /shared_workspace/<repo>
 git config user.name  "PA001 (maceff_user001)"
 git config user.email "pa001@container.invalid"
@@ -268,7 +319,7 @@ git config user.email "pa001@container.invalid"
 
 **Initialize a shared repo:**
 
-```
+```bash
 git init -b main
 git config core.sharedRepository group
 # optional: initial content
@@ -289,12 +340,12 @@ git commit -m "chore: initial commit"
 ## Running subagent jobs (`sa-exec`)
 
 Primary Agents (PAs) can launch work as their SubAgent (SA) using a safe runner that only accepts workdirs under:
-```
+```bash
 /home/maceff_user*/agent/subagents/*
 ```
 
 **Usage (inside the container, as the PA):**
-```
+```bash
 # identities
 P=maceff_user001
 SID=001
@@ -319,7 +370,7 @@ tail -n 50 "$LOG"
 - For multiple parallel delegates, use distinct logs (e.g., `logs/ts-$(date +%s).log`).
 
 **Quick host-side check:**
-```
+```bash
 # from your mac (host)
 ssh -i keys/maceff_user001 -p 2222 maceff_user001@localhost \
   'P=maceff_user001; SID=001; SA=sa_${P}_${SID}; WD=/home/$P/agent/subagents/$SID; LOG=$WD/public/logs/quick.log;
