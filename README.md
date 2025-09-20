@@ -344,36 +344,58 @@ Primary Agents (PAs) can launch work as their SubAgent (SA) using a safe runner 
 /home/maceff_user*/agent/subagents/*
 ```
 
-**Usage (inside the container, as the PA):**
+SubAgents (SAs) are launched under their own Linux user and write logs under the PA’s agent tree. We provide a thin runner (`sa-exec`) plus a Make target to exercise this from your host.
+
+### Quick start
 ```bash
-# identities
-P=maceff_user001
-SID=001
-SA=sa_${P}_${SID}
+# one-time: container up
+make up
 
-# paths
-WD=/home/$P/agent/subagents/$SID
-LOG=$WD/public/logs/run.log
-
-# ensure log dir exists and run a small job
-sudo -n -u "$SA" /usr/local/bin/sa-exec "$WD" "$LOG" -- ':'
-sudo -n -u "$SA" /usr/local/bin/sa-exec "$WD" "$LOG" -- 'id; whoami; pwd; echo SA job; sleep 1; echo done'
-
-# tail the result
-tail -n 50 "$LOG"
+# run a small SA job under PA=maceff_user001, SID=001
+make sa-test PA_KEY=$HOME/.ssh/id_ed25519_maceff_user
 ```
+
+This launches a detached SA process that writes to:
+```bash
+/home/<PA>/agent/subagents/<SID>/public/logs/make-test.log
+```
+
+To read the log from the host after mirroring:
+```bash
+make mirror
+ls -la sandbox-home/<PA>/agent/subagents/<SID>/public/logs
+```
+
+### Customize which SA to run
+```bash
+# change PA and SID
+make sa-test PA=maceff_user001 SID=001 PA_KEY=$HOME/.ssh/id_ed25519_maceff_user
+```
+
+### What the target does
+- SSH into the PA user inside the container
+- Creates the log directory (as the SA) if needed
+- Runs a short test command sequence:
+  - prints `id`, `whoami`, and `pwd`
+  - appends output to `public/logs/make-test.log`
+
+### Troubleshooting
+- **“PA key not found”** — Provide an explicit key path:
+  ```bash
+  make sa-test PA_KEY=$HOME/.ssh/id_ed25519_maceff_user
+  ```
+- **No log appears** — Re-run and then mirror:
+  ```bash
+  make sa-test PA_KEY=$HOME/.ssh/id_ed25519_maceff_user
+  make mirror
+  ```
+- **Permission denied** — Ensure your host-side snapshots (`sandbox-*`) are writable:
+  ```bash
+  chmod 1777 sandbox-home sandbox-shared_workspace
+  ```
 
 **Notes**
 - Output is appended to `<LOG>`. `sa-exec` starts a detached login shell with `setsid`, so jobs keep running if your PA shell exits.
 - The runner **whitelists** PA agent paths; any other `WD` is rejected (`unsafe workdir`).
 - Default umask is `027` to keep files private to the SA’s group.
 - For multiple parallel delegates, use distinct logs (e.g., `logs/ts-$(date +%s).log`).
-
-**Quick host-side check:**
-```bash
-# from your mac (host)
-ssh -i keys/maceff_user001 -p 2222 maceff_user001@localhost \
-  'P=maceff_user001; SID=001; SA=sa_${P}_${SID}; WD=/home/$P/agent/subagents/$SID; LOG=$WD/public/logs/quick.log;
-   sudo -n -u "$SA" /usr/local/bin/sa-exec "$WD" "$LOG" -- "echo hello from SA; id; whoami; pwd";
-   sleep 0.2; tail -n 10 "$LOG"'
-```
