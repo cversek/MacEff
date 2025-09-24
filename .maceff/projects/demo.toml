@@ -1,0 +1,8 @@
+[policies]
+extra = ["net/access.yml"]
+
+[agents]
+enable = ["devops", "notebook"]
+
+[python]
+extraPaths = ["tools/src", "sandbox-shared_workspace/demo"]
