@@ -1,5 +1,5 @@
 # MacEff
-Multi-agent Containered Environment for frameworks
+Multi-agent Containerized Environment for frameworks
 
 # Notice
 This project is in the conceptual stage but will be developed in the clear as an Open Source formalization and generalization of concepts abstracted from independent experiments conducted within two agentic coding environments Claude Code and Gemini CLI.  The concepts are intented to be portable but ongoing work will be required before any of this is useful as a basis for serious projects.  
