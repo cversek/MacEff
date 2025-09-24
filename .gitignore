@@ -38,3 +38,6 @@ Makefile.bak.*
 
 # Local Makefile backups
 Makefile.bak.*
+# SSH keys: keep only public keys in git
+keys/*
+!keys/*.pub
