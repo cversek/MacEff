@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+proj_file="${root}/.maceff/project"
+projects_dir="${root}/.maceff/projects"
+
+usage(){ echo "usage: maceff-project {get|set <name>|list}" ; }
+
+cmd="${1:-}"; shift || true
+case "${cmd}" in
+  get)
+    [[ -s "${proj_file}" ]] && cat "${proj_file}" || echo ""
+    ;;
+  set)
+    name="${1:-}"; [[ -n "${name}" ]] || { echo "missing <name>" >&2; exit 2; }
+    printf "%s" "${name}" > "${proj_file}"
+    mkdir -p "${projects_dir}"
+    # seed per-project env stub if we create a new project later
+    [[ -f "${projects_dir}/${name}.env" ]] || {
+      cat > "${projects_dir}/${name}.env" <<EON
+# Per-project env for ${name}
+PROJ=${name}
+EON
+    }
+    echo "Project set to: ${name}"
+    ;;
+  list)
+    shopt -s nullglob
+    for f in "${projects_dir}"/*.env; do
+      b="$(basename "$f")"; echo "${b%.env}"
+    done
+    ;;
+  *)
+    usage; exit 1;;
+esac
