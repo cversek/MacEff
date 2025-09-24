@@ -32,3 +32,6 @@ dist/
 # Sandbox mirrors
 sandbox-home/
 sandbox-shared_workspace/
+
+# Local Makefile backups
+Makefile.bak.*
