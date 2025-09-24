@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+proj_file="${root}/.maceff/project"
+default_proj="demo"
+proj="${PROJ:-$([ -s "$proj_file" ] && cat "$proj_file" || echo "$default_proj")}"
+
+ctx="$(docker context show 2>/dev/null || echo default)"
+if [[ "${DEBUG:-0}" == "1" ]]; then
+  echo "[compose] context=${ctx} proj=${proj}" >&2
+fi
+
+args=( "--env-file" "$root/.maceff/global.env" )
+if [[ -f "$root/.maceff/projects/${proj}.env" ]]; then
+  args+=( "--env-file" "$root/.maceff/projects/${proj}.env" )
+fi
+
+exec docker compose "${args[@]}" "$@"
