@@ -11,9 +11,14 @@ services:
       CLEAN_ADMIN_HOME: "1"
       DEFAULT_PA: "maceff_user001"
       UV_LINK_MODE: "copy"
+    env_file:
+      - .maceff/global.env
+      - .maceff/projects/${PROJ}.env
     volumes:
       - ./keys:/keys:ro
       - ./tools:/opt/tools                    # editable dev
+      - ./.maceff/policies:/opt/maceff/policies
+      - ./.maceff/plugins:/opt/maceff/plugins:ro
       - ./agent_defs:/opt/agent_defs:ro       # PA/SA definitions
       - sshd_keys:/etc/ssh                    # stable host keys
       - home_all:/home                        # secure: named volume
