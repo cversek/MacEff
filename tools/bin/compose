@@ -11,9 +11,33 @@ if [[ "${DEBUG:-0}" == "1" ]]; then
   echo "[compose] context=${ctx} proj=${proj}" >&2
 fi
 
-args=( "--env-file" "$root/.maceff/global.env" )
-if [[ -f "$root/.maceff/projects/${proj}.env" ]]; then
-  args+=( "--env-file" "$root/.maceff/projects/${proj}.env" )
+# Prefer Compose v2 if present, else fallback to v1
+if docker compose version >/dev/null 2>&1; then
+  args=( "--env-file" "$root/.maceff/global.env" )
+  if [[ -f "$root/.maceff/projects/${proj}.env" ]]; then
+    args+=( "--env-file" "$root/.maceff/projects/${proj}.env" )
+  fi
+  exec docker compose "${args[@]}" "$@"
+elif command -v docker-compose >/dev/null 2>&1; then
+  # v1 fallback: emulate --env-file by exporting KEY=VALs
+  load_env_file() {
+    local f="$1"
+    [[ -f "$f" ]] || return 0
+    # shellcheck disable=SC2162
+    while IFS= read line || [ -n "$line" ]; do
+      [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+      # Only accept KEY=VAL (no spaces around =)
+      if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+        key="${BASH_REMATCH[1]}"; val="${BASH_REMATCH[2]}"
+        export "${key}=${val}"
+      fi
+    done < "$f"
+  }
+  load_env_file "$root/.maceff/global.env"
+  load_env_file "$root/.maceff/projects/${proj}.env"
+  exec docker-compose "$@"
+else
+  echo "ERROR: Neither 'docker compose' (v2) nor 'docker-compose' (v1) is available." >&2
+  echo "Install Docker Desktop (recommended) or 'brew install docker docker-compose' and configure cliPluginsExtraDirs." >&2
+  exit 1
 fi
-
-exec docker compose "${args[@]}" "$@"
