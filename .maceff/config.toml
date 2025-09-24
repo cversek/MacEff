@@ -1,0 +1,6 @@
+[policies]
+default = ["limits/basic.yml", "redaction/pii.yml"]
+
+[tools]
+base = ["grep", "jq"]
+research = ["python-maceff", "pandas", "numpy"]
