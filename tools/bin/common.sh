@@ -66,3 +66,8 @@ find_admin_key() {
   echo "ADMIN key not found. Set ADMIN_KEY or create one of: ${KEYS_DIR}/admin, \$HOME/.ssh/id_ed25519_admin" >&2
   return 1
 }
+
+# If HOST_SSH_PORT is set, prefer it for host connections
+if [[ -n "${HOST_SSH_PORT:-}" ]]; then
+  PORT="${HOST_SSH_PORT}"
+fi
