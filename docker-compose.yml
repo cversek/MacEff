@@ -6,7 +6,7 @@ services:
     image: maceff-sandbox:latest
     container_name: maceff-sandbox
     ports:
-      - "2222:22"
+      - "${HOST_SSH_PORT:-2222}:22"
     environment:
       CLEAN_ADMIN_HOME: "1"
       DEFAULT_PA: "maceff_user001"
