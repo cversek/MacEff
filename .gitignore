@@ -41,3 +41,10 @@ Makefile.bak.*
 # SSH keys: keep only public keys in git
 keys/*
 !keys/*.pub
+# Embedded policy repo (managed separately inside the container)
+.maceff/policies/
+
+# Local backup files
+docker-compose.yml.bak.*
+docker/start.sh.bak.*
+tools/bin/*.bak.*
