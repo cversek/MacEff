@@ -14,36 +14,29 @@ When multiple agents are organized into systems, this allows for various combina
 MacEff aims to provide a basic kit of policies and tools that enable the directed evolution of useful multiagent systems.
 A demo implementation of MacEff is based on a Docker container running a minimal Ubuntu container with preinstalled Claude Code referred to as ClaudeMacEff. 
 
-## macOS setup: Docker CLI + Colima, then build & run
+## macOS setup: Docker Desktop (recommended), then build & run
 
-> These steps use the Homebrew Docker **CLI** (not Docker Desktop) with **Colima** as the lightweight Linux VM. Works on Apple Silicon and Intel Macs.
+> This setup uses **Docker Desktop for Mac** which provides Docker Engine and **Docker Compose v2** (the `docker compose ...` CLI). It works on Apple Silicon and Intel Macs. If you prefer Colima, see the note at the end.
 
-### 1) Install prerequisites (Homebrew)
+### 1) Install prerequisites
+- Install **Docker Desktop for Mac** (from Docker’s website or Homebrew Cask).
+- Optional CLI tools:
+  ```bash
+  brew install jq rsync
+  ```
+
+Verify Compose v2 is available:
 ```bash
-brew install colima docker docker-compose jq rsync
-# optional: buildx if you prefer BuildKit
-brew install docker-buildx
+docker compose version
 ```
 
-### 2) Start Colima (recommended resources)
-```bash
-# Start a Linux VM for Docker; tweak cpu/memory/disk as you like.
-colima start --cpu 4 --memory 8 --disk 30
-# (once) switch the Docker CLI to use Colima’s context
-docker context use colima
-```
-
-> If you ever need to edit Colima’s config:  
-> $```colima stop && colima start --edit$``` → remove any proxy/env you don’t want, save, then:  
-> $```colima start$```
-
-### 3) (One-time) prepare host snapshot folders for mirroring
+### 2) (One-time) prepare host snapshot folders for mirroring
 ```bash
 mkdir -p sandbox-home sandbox-shared_workspace
 chmod 1777 sandbox-home sandbox-shared_workspace
 ```
 
-### 4) Provide SSH public keys for in-container users
+### 3) Provide SSH public keys for in-container users
 Put **public** keys (only `*.pub`) into `keys/`:
 - `keys/admin.pub` → grants SSH to the `admin` user (port 2222)
 - `keys/maceff_user001.pub` → grants SSH to the default PA (`maceff_user001`)
@@ -56,29 +49,31 @@ ssh-keygen -t ed25519 -f keys/maceff_user001 -N ''
 # commit only the .pub files; keep private keys out of git
 ```
 
-### 5) Build the images
+### 4) Build the images
 ```bash
 # Build main sandbox image
-docker-compose build
+docker compose build
 
 # Build tiny rsync mirror image used for snapshots
 docker build -t maceff-mirror:local -f docker/mirror.Dockerfile .
 ```
 
-> **If you hit BuildKit/proxy errors:** temporarily force the legacy builder:  
-> ```DOCKER_BUILDKIT=0 COMPOSE_DOCKER_CLI_BUILD=0 docker-compose build```  
-> Also ensure no stray `HTTP_PROXY`/`HTTPS_PROXY` envs are set in your shell or Colima config.
+> **If you hit BuildKit/proxy errors:** temporarily force the legacy builder:
+> ```bash
+> DOCKER_BUILDKIT=0 COMPOSE_DOCKER_CLI_BUILD=0 docker compose build
+> ```
+> Also ensure no stray `HTTP_PROXY`/`HTTPS_PROXY` environment variables are set in your shell.
 
-### 6) Launch the sandbox
+### 5) Launch the sandbox
 ```bash
-docker-compose up -d
+docker compose up -d
 # tail logs
-docker-compose logs -f --tail=120
+docker compose logs -f --tail=120
 ```
 
 You should see lines creating the PA/SA users and ending with `sshd starting...`.
 
-### 7) Log in (PA and admin)
+### 6) Log in (PA and admin)
 ```bash
 # PA (uses keys/maceff_user001.pub)
 ssh -i keys/maceff_user001 -p 2222 maceff_user001@localhost
@@ -87,7 +82,7 @@ ssh -i keys/maceff_user001 -p 2222 maceff_user001@localhost
 ssh -i keys/admin -p 2222 admin@localhost
 ```
 
-### 8) Create a shared project (inside the container, as PA)
+### 7) Create a shared project (inside the container, as PA)
 ```bash
 cd /shared_workspace
 mkdir demo && cd demo
@@ -99,12 +94,12 @@ echo "hello from PA" > README.md
 git add README.md && git commit -m "feat: initial README"
 ```
 
-> `/shared_workspace` is group-shared (`agents_all`, SGID set) so collaborators can work together safely.
+> `/shared_workspace` is group-shared (SGID) so collaborators can work together safely.
 
-### 9) Snapshot container data to the host (read-only export)
-First build the mirror image (step 5), then:
+### 8) Snapshot container data to the host (read-only export)
+First build the mirror image (step 4), then:
 ```bash
-docker-compose --profile mirror up --no-deps mirror
+docker compose --profile mirror up --no-deps mirror
 # snapshots appear under:
 ls -la sandbox-home
 ls -la sandbox-shared_workspace
@@ -117,21 +112,51 @@ This exports the **full** `/home` (including agent private folders) and `/shared
 ### Troubleshooting
 
 **Build fails pulling `docker/dockerfile:…` or tries `127.0.0.1:9090`:**
-- Remove any `HTTP_PROXY/HTTPS_PROXY/NO_PROXY` from your shell and Colima config.
+- Remove any `HTTP_PROXY/HTTPS_PROXY/NO_PROXY` from your shell.
 - Rebuild with the legacy builder once:
   ```bash
-  DOCKER_BUILDKIT=0 COMPOSE_DOCKER_CLI_BUILD=0 docker-compose build
+  DOCKER_BUILDKIT=0 COMPOSE_DOCKER_CLI_BUILD=0 docker compose build
   ```
 
-**`docker-compose: cannot connect to daemon`:**
-- Ensure Colima is running: ```colima start```  
-- Ensure Docker CLI uses Colima: ```bash
-  docker context use colima && docker ps
+**`docker compose: cannot connect to daemon`:**
+- Make sure Docker Desktop is running (launch the Docker app).
+- Check your Docker context:
+  ```bash
+  docker context ls
+  docker context show
+  docker ps
   ```
 
 **Permission denied while mirroring to `sandbox-*`:**
-- Make sure those dirs are writable: ```chmod -R u+rwX sandbox-home sandbox-shared_workspace```
+- Make sure those dirs are writable:
+  ```bash
+  chmod -R u+rwX sandbox-home sandbox-shared_workspace
+  ```
 
+---
+
+### Note: Using Colima instead of Docker Desktop (optional)
+
+If you prefer Colima (lightweight VM) instead of Docker Desktop:
+
+1) Install:
+```bash
+brew install colima docker docker-compose jq rsync
+```
+
+2) Start Colima and select its context:
+```bash
+colima start --cpu 4 --memory 8 --disk 30
+docker context use colima
+```
+
+> Edit Colima config if needed:  
+> ```colima stop && colima start --edit``` → adjust settings, save, then:  
+> ```colima start```
+
+The rest of the steps are the same, but use `docker compose ...` with the Colima context selected.
+
+---
 
 ## Make quickstart
 
