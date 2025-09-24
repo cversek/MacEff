@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=common.sh
+. "${SCRIPT_DIR}/common.sh"
+
+key="$(find_pa_key)"
+ssh -i "${key}" -p "${PORT}" "${PA}@localhost" '
+  set -euo pipefail
+  P='"${PA}"'; SID='"${SID}"'; SA=sa_'"${PA}"'_'\"${SID}\"';
+  WD=/home/'"${PA}"'/agent/subagents/'"${SID}"';
+  LOG=${WD}/public/logs/make-test.log;
+  sudo -n -u "${SA}" /usr/local/bin/sa-exec "${WD}" "${LOG}" -- ":"
+  sudo -n -u "${SA}" /usr/local/bin/sa-exec "${WD}" "${LOG}" -- "echo from-make; id; whoami; pwd"
+  sleep 0.2; tail -n 20 "${LOG}"
+'

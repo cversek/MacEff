@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=common.sh
+. "${SCRIPT_DIR}/common.sh"
+
+# Parse local-only options and collect args to forward to claude
+forward_args=()
+while (($#)); do
+  case "$1" in
+    --project|-P|--proj)
+      [[ $# -ge 2 ]] || { echo "error: --project requires a value" >&2; exit 2; }
+      PROJ="$2"; shift 2
+      ;;
+    --project=*)
+      PROJ="${1#*=}"; shift
+      ;;
+    --) # stop local parsing; forward the rest verbatim
+      shift
+      forward_args+=("$@")
+      break
+      ;;
+    *)
+      forward_args+=("$1"); shift
+      ;;
+  esac
+done
+
+# Build a single safely-escaped remote command
+build_remote_cmd() {
+  # Pre-create and cd into the workspace dir, then run claude with forwarded args
+  printf 'set -e; mkdir -p %q && cd %q; claude' \
+    "/shared_workspace/${PROJ}" "/shared_workspace/${PROJ}"
+  for a in "$@"; do
+    printf ' %q' "$a"
+  done
+}
+
+key="$(find_pa_key)"
+remote_cmd="$(build_remote_cmd "${forward_args[@]}")"
+
+# Optional debug
+if [[ "${DEBUG:-0}" == "1" ]]; then
+  echo "[claude-remote] PROJ=${PROJ}"
+  echo "[claude-remote] remote_cmd: ${remote_cmd}"
+fi
+
+ssh -t -i "${key}" -p "${PORT}" "${PA}@localhost" "${remote_cmd}" || true
