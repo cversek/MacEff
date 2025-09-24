@@ -3,6 +3,13 @@ set -euo pipefail
 : "${EDITOR:=nano}"
 POLICY_DIR="/opt/maceff/policies"
 
+# Prefer the container venv if present (created by start.sh)
+if [[ -x /opt/maceff-venv/bin/python ]]; then
+  PYTHON=/opt/maceff-venv/bin/python
+else
+  PYTHON=python3
+fi
+
 usage(){ echo "usage: policyctl [list|edit <file>|diff|test|commit <msg...>]"; }
 
 cmd="${1:-}"; shift || true
@@ -18,12 +25,12 @@ case "${cmd}" in
     git -C "${POLICY_DIR}" --no-pager diff || true
     ;;
   test)
-    python3 - <<'PY' || exit 1
+    "$PYTHON" - <<'PY' || exit 1
 import sys, pathlib
 try:
     import yaml  # type: ignore
 except Exception:
-    print("warn: pyyaml not installed; skipping validation", file=sys.stderr)
+    print("warn: PyYAML not available in this Python; install it into the venv.", file=sys.stderr)
     sys.exit(0)
 ok=True
 for p in pathlib.Path("/opt/maceff/policies").rglob("*.yml"):
