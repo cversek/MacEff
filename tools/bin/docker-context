@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage(){ echo "usage: docker-context {use <name>|desktop|colima|show|ls}"; }
+
+cmd="${1:-}"; shift || true
+case "${cmd}" in
+  show)
+    docker context show
+    ;;
+  ls)
+    docker context ls
+    ;;
+  use)
+    name="${1:-}"; [[ -n "${name}" ]] || { usage; exit 2; }
+    docker context use "${name}"
+    ;;
+  desktop)
+    # Prefer Docker Desktop context name if present, else fallback to default
+    if docker context ls --format '{{.Name}}' | grep -q '^desktop-linux$'; then
+      docker context use desktop-linux
+    else
+      docker context use default
+    fi
+    # Mac nicety: try to start Docker.app, stop colima if present
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+      command -v colima >/dev/null 2>&1 && colima stop || true
+      open -a Docker || true
+    fi
+    ;;
+  colima)
+    # Use colima context if available
+    if docker context ls --format '{{.Name}}' | grep -q '^colima'; then
+      docker context use colima
+    else
+      echo "colima context not found; run 'colima start' first" >&2
+      exit 1
+    fi
+    # Mac nicety: quit Docker.app to avoid conflicts
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+      osascript -e 'quit app "Docker"' >/dev/null 2>&1 || true
+      command -v colima >/dev/null 2>&1 && colima start || true
+    fi
+    ;;
+  *)
+    usage; exit 1;;
+esac
