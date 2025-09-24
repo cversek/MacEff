@@ -29,22 +29,22 @@ help:
 	@echo "  make claude-doctor - run 'claude doctor' inside the container"
 
 build:
-	docker compose build
+	tools/bin/compose build
 
 up:
-	docker compose up -d
+	tools/bin/compose up -d
 
 logs:
-	docker compose logs -f --tail=120
+	tools/bin/compose logs -f --tail=120
 
 down:
-	docker compose down
+	tools/bin/compose down
 
 mirror:
-	docker compose --profile mirror up --no-deps mirror
+	tools/bin/compose --profile mirror up --no-deps mirror
 
 mirror-watch:
-	docker compose --profile mirror-watch up mirror-watch
+	tools/bin/compose --profile mirror-watch up mirror-watch
 
 ssh-pa:
 	tools/bin/ssh-pa
