@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+: "${EDITOR:=nano}"
+POLICY_DIR="/opt/maceff/policies"
+
+usage(){ echo "usage: policyctl [list|edit <file>|diff|test|commit <msg...>]"; }
+
+cmd="${1:-}"; shift || true
+case "${cmd}" in
+  list) ls -1 "${POLICY_DIR}";;
+  edit)
+    f="${1:-}"; [[ -n "$f" ]] || { usage; exit 2; }
+    [[ -w "${POLICY_DIR}" ]] || { echo "no write permission to ${POLICY_DIR}"; exit 1; }
+    "$EDITOR" "${POLICY_DIR}/${f}"
+    ;;
+  diff)
+    git -C "${POLICY_DIR}" status -s || true
+    git -C "${POLICY_DIR}" --no-pager diff || true
+    ;;
+  test)
+    # validate YAML files if Python/yaml is available; otherwise no-op pass
+    python3 - <<'PY' || exit 1
+import sys, pathlib
+try:
+    import yaml  # type: ignore
+except Exception:
+    print("warn: pyyaml not installed; skipping validation", file=sys.stderr)
+    sys.exit(0)
+base = pathlib.Path("/opt/maceff/policies")
+ok = True
+for p in base.rglob("*.yml"):
+    try: yaml.safe_load(p.read_text())
+    except Exception as e:
+        ok = False; print(f"[ERR] {p}: {e}", file=sys.stderr)
+sys.exit(0 if ok else 1)
+PY
+    ;;
+  commit)
+    msg="${*:-policy update}"
+    git -C "${POLICY_DIR}" add -A || true
+    git -C "${POLICY_DIR}" commit -m "$msg" || { echo "nothing to commit"; exit 0; }
+    ;;
+  *) usage; exit 1;;
+esac
