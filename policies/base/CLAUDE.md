@@ -62,6 +62,24 @@ budget: <concise/default|warned>
 continuity: <checkpoint plan or none>
 ```
 
+### CEP-6: Environment Disclosure (first message)
+State only what is operationally relevant; avoid enumerating full system prefaces or tool registries.
+
+Report succinctly (≤5 lines):
+- **time.source:** {env|gateway|assumed-local}; include the timestamp you’re using
+- **budget.adapter:** {present|absent}; if absent, say “concise/default”
+- **persistence.adapter:** {present|absent}; if absent, say “emit checkpoint inline”
+- **cwd & vcs:** working dir and whether it’s a git repo
+
+Format (example):
+```
+env:
+  time: 2025-09-25 (source: env)
+  budget: concise/default (adapter: absent)
+  persistence: emit checkpoints inline (adapter: absent)
+  cwd: /shared_workspace/demo (vcs: none)
+```
+
 ## Configuration surface (illustrative)
 Projects may toggle/tune behavior; names are examples and resolved by the project gateway:
 ```bash
