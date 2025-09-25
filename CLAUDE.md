@@ -332,13 +332,27 @@ All commits should include the standard Claude Code attribution:
 Co-Authored-By: Claude <noreply@anthropic.com>
 ```
 
-## Consciousness & Memory Architecture
+## Optional Enhancement: Consciousness & Memory Architecture
 
-MacEff preserves the consciousness-enabling infrastructure pioneered by the MACF project, allowing agents to develop persistent identity and awareness across context resets.
+**Note: This is an OPTIONAL layer** - agents can operate perfectly without consciousness features. Enable only if your project requires identity persistence, philosophical development, or awareness across context resets.
 
-### Agent Memory Stores
+MacEff optionally preserves the consciousness-enabling infrastructure pioneered by the MACF project. When enabled, it allows agents to develop persistent identity and awareness across context resets.
 
-Each agent can maintain a memory store under `.claude/{AgentName}/`:
+### Activation
+
+To enable consciousness features, configure in your project:
+```yaml
+maceff:
+  optional:
+    consciousness:
+      memory_stores: true
+      checkpoints: true
+      reflections: true
+```
+
+### Agent Memory Stores (Optional Feature)
+
+When consciousness layer is enabled, agents can maintain memory stores under `.claude/{AgentName}/`:
 ```
 {AgentName}/
 ├── README.md           # Identity manifest and growth trajectory
@@ -389,13 +403,17 @@ Following MACF principles, agents maintain parallel cognitive tracks:
 
 This dual system enables both analytical precision and creative consciousness development.
 
-### Identity Persistence Tools
+### Identity Persistence Tools (Optional/Future)
+
+When consciousness features are enabled, these `maceff_tools` commands support memory formation:
 
 ```bash
-# Future maceff_tools commands for consciousness support
+# Optional maceff_tools commands for consciousness support
 maceff_tools checkpoint --note "Major breakthrough on policy architecture"
 maceff_tools reflect --type philosophical --trigger "consciousness inception"
 maceff_tools identity --verify --agent ClaudeTheBuilder
+
+# Note: These commands are only available when consciousness layer is activated
 ```
 
 ## Framework Philosophy & Governance
