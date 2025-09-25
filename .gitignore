@@ -48,3 +48,4 @@ keys/*
 docker-compose.yml.bak.*
 docker/start.sh.bak.*
 tools/bin/*.bak.*
+LEGACY_POLICIES_NO_VCS/
