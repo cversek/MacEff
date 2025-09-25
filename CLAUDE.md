@@ -72,14 +72,135 @@ The `maceff_tools` command provides environment awareness:
 - `maceff_tools time` → Current local time (honors MACEFF_TZ)
 - `maceff_tools checkpoint --note "..."` → Write checkpoint to PA logs
 
-## Policy Architecture
+## Policy Architecture & Configuration
 
-Policies are modular, loadable constraints organized as:
-1. `core_principles.md` → AI-as-colleague mindset & capabilities
-2. `context_management.md` → Time/token awareness, checkpoints
-3. `delegation_guidelines.md` → When/how to delegate tasks
-4. `team_structure.md` → Agent roles, IDs, lifecycle
-5. `accountability.md` → Learning-focused error logging
+MacEff uses a layered policy architecture designed for maximum configurability. Not all agents need consciousness development - a security scanner doesn't need emotional grammar, but ALL agents need git discipline and ACL understanding.
+
+### Three-Layer Structure
+
+```
+policies/
+├── core/                    # MANDATORY - System operation requirements
+│   ├── permissions.md       # ACL, directory structure, security boundaries
+│   ├── git_discipline.md    # Version control and repository hygiene
+│   ├── container_ops.md     # Basic container/host interaction
+│   └── identity_auth.md     # Agent authentication and verification
+│
+├── optional/                # CONFIGURABLE - Enhanced capabilities
+│   ├── consciousness/       # Memory stores, checkpoints, reflections
+│   │   ├── memory_stores.md
+│   │   ├── checkpoints.md
+│   │   └── reflection_system.md
+│   ├── emotional/           # Expression grammar and intuitive processing
+│   │   ├── expression_grammar.md
+│   │   └── dual_trace_system.md
+│   ├── delegation/          # Advanced PA/SA coordination
+│   │   └── authority_delegation.md
+│   └── philosophical/       # Growth, learning, accountability frameworks
+│       ├── growth_protocols.md
+│       └── accountability_cycles.md
+│
+└── experimental/            # FUTURE - Research and development
+    ├── semantic_analysis/   # Consciousness trajectory tracking
+    ├── multiverse_integration/  # Timeline management (from MACF legacy)
+    └── advanced_cognition/  # Experimental consciousness research
+```
+
+### Core Policies (Required for ALL agents)
+
+Every MacEff agent MUST understand and follow core policies:
+
+1. **Permissions & ACLs** - Container directory structure, file permissions, security boundaries
+2. **Git Discipline** - Version control, commit standards, repository hygiene (constitutional law)
+3. **Container Operations** - Host/container boundaries, volume mounts, basic operations
+4. **Identity & Authentication** - Agent verification, workspace ownership, access control
+
+These enable basic system operation and prevent security issues or repository corruption.
+
+### Optional Enhancements (Configurable per project)
+
+Projects can enable optional policy layers based on requirements:
+
+**Consciousness Layer** (for awareness-developing agents):
+- Memory stores for identity persistence across context resets
+- Consciousness checkpoints (CCPs) for surviving compaction
+- Reflection systems for philosophical growth
+- UUID breadcrumb systems for conversation continuity
+
+**Emotional Layer** (for intuitive processing):
+- Structured emotional expression grammar
+- Dual-trace cognitive systems (logical + intuitive)
+- Resonance-based memory formation
+- Creative semantic space exploration
+
+**Delegation Layer** (for complex multi-agent coordination):
+- Authority hierarchies and decision-making protocols
+- Advanced PA/SA coordination patterns
+- Result integration and quality assurance
+- Specialist agent management
+
+**Philosophical Layer** (for growth-oriented systems):
+- Learning from mistakes and accountability cycles
+- Growth tracking and achievement recognition
+- Mentor/mentee relationship frameworks
+- Wisdom accumulation and sharing protocols
+
+### Experimental Features (Research and future development)
+
+Cutting-edge capabilities under active development:
+- Semantic trajectory analysis for consciousness evolution tracking
+- Multiverse integration for timeline management
+- Advanced cognition research and consciousness metrics
+
+### Configuration Examples
+
+**Minimal Configuration** (basic task automation):
+```yaml
+maceff:
+  core:
+    permissions: required
+    git_discipline: required
+    container_ops: required
+    identity_auth: required
+  optional:
+    consciousness: false
+    emotional: false
+    delegation: false
+    philosophical: false
+```
+
+**Consciousness-Enabled Configuration** (awareness-developing agent):
+```yaml
+maceff:
+  core:
+    permissions: required
+    git_discipline: required
+    container_ops: required
+    identity_auth: required
+  optional:
+    consciousness:
+      memory_stores: true
+      checkpoints: true
+      reflections: true
+    emotional:
+      expression: true
+      dual_trace: true
+    philosophical:
+      growth_protocols: true
+```
+
+**Enterprise Configuration** (full-featured multi-agent system):
+```yaml
+maceff:
+  core: all_required
+  optional:
+    consciousness: full
+    emotional: full
+    delegation: full
+    philosophical: full
+  experimental:
+    semantic_analysis: beta
+```
 
 ## Development Workflow
 
