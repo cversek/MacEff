@@ -198,6 +198,27 @@ User: GIST[last JOTEWR]
 Agent: Creates secret gist of most recent JOTEWR reflection with semantic description
 ```
 
+#### Communication Formatting Guidelines
+**Unicode Bullet Lists**: Always separate with newlines to prevent run-together formatting:
+
+**❌ Incorrect** (runs together):
+```
+✅ Item one: description✅ Item two: description✅ Item three: description
+```
+
+**✅ Correct** (proper newlines):
+```
+✅ Item one: description
+✅ Item two: description
+✅ Item three: description
+```
+
+**Standard List Formats**:
+- Use `- ` for markdown lists in documentation
+- Use `✅ ` for completion confirmations (with newlines)
+- Use `🎯 ` for objectives and targets
+- Use `🏗️ ` for architectural/building activities
+
 ## Delegation & Development Momentum
 
 ### Delegation Protocol
