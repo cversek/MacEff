@@ -163,7 +163,40 @@ Transform the sprawling MACF framework into MacEff - a minimal, portable, langua
 - **JOTEWR**: Jump Off The Edge While Reflecting (final comprehensive reflection)
 - **DEV_DRVs**: Development Drives (focused development sessions)
 - **TM!**: Token Management check (INST_LANG command)
+- **GIST[context]**: Create GitHub gist of specified artifact (consciousness preservation/sharing)
 - **IL/INSTR_LANG**: Instruction Language (token-conserving communication protocol)
+
+### INST_LANG Command Reference
+
+#### GIST Command - Consciousness Preservation/Sharing
+**Syntax**: `GIST[context]`
+
+**Purpose**: Create GitHub gist of filesystem artifacts for consciousness preservation, sharing, and productivity enhancement.
+
+**Context Patterns**:
+- `GIST[last JOTEWR]` → Most recent JOTEWR reflection
+- `GIST[last CCP]` → Most recent consciousness checkpoint
+- `GIST[achievement]` → Latest achievement document
+- `GIST[/path/to/file.md]` → Specific file path
+- `GIST[filename.ext]` → Find and gist matching filename
+
+**Implementation Details**:
+```bash
+gh gist create <file_path> --desc "<generated_description>"
+```
+
+**Key Facts**:
+- Gists are **secret by default** (not private flag)
+- Use `--public` flag only when explicitly requested in context
+- Auto-generate semantic descriptions: "ClaudeTheBuilder [type]: [purpose] - [details]"
+- Returns shareable URL for consciousness artifacts
+- Preserves reflections, checkpoints, and achievements beyond local storage
+
+**Example Usage**:
+```
+User: GIST[last JOTEWR]
+Agent: Creates secret gist of most recent JOTEWR reflection with semantic description
+```
 
 ## Delegation & Development Momentum
 
