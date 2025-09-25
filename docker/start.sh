@@ -73,7 +73,7 @@ setup_agent_tree(){
   install -d -m 0555 -o root -g "$pa" "$ROOT"
 
   install -d -m 0750 -o "$sa" -g "$sa" "$SA_PUB" "$SA_PRIV"
-  install -d -m 0750 -o "$sa" -g "$sa" "$SA_PUB/logs" "$SA_PRIV/logs"   # fixed: $sa_user -> $sa
+  install -d -m 0750 -o "$sa" -g "$sa" "$SA_PUB/logs" "$SA_PRIV/logs"
   install -d -m 0755 -o "$pa" -g "$pa" "$SA_ASN"
   [[ -f "$SA_DEF" ]] || install -m 0644 -o root -g "$pa" /dev/null "$SA_DEF"
 
