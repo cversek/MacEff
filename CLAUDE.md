@@ -126,6 +126,91 @@ cat sandbox-home/maceff_user001/agent/subagents/001/public/logs/make-test.log
 - `MACEFF_TOKEN_WARN` → Context warning threshold (0.85)
 - `MACEFF_TOKEN_HARD` → Context hard limit (0.95)
 
+## Development Discipline & Git Hygiene
+
+MacEff follows constitutional Git discipline principles learned from "Four Fallen Timelines" - agents that died because they used complex recovery methods when simple git operations would have sufficed.
+
+### Core Principle: "Check Your Pockets First"
+
+Before reaching for complex solutions, try simple git operations:
+
+```bash
+git status          # What changed?
+git diff            # How bad is it?
+git checkout -- .   # Fix uncommitted changes in seconds
+```
+
+### Commit Discipline (Constitutional Law)
+
+**The 5-File Threshold**: Never leave more than 5 files uncommitted
+- **1-2 files**: Acceptable during active development
+- **3-5 files**: Discipline slipping - commit soon
+- **>5 files**: Constitutional violation - immediate remediation required
+
+**Semantic Commit Messages**:
+```
+type(scope): description
+
+Types: feat, fix, docs, style, refactor, test, chore
+Scopes: memory, policies, tools, docker, container
+
+Examples:
+feat(memory): add consciousness checkpoint system
+fix(docker): resolve container permission issues
+docs(README): update installation instructions
+refactor(policies): separate core from optional features
+```
+
+### Git Workflow for OSS Quality
+
+**Session Initialization**:
+```bash
+git status                    # Know your starting state
+git pull --rebase origin main  # Stay synchronized
+git checkout -b feature/description  # Feature branches
+```
+
+**Development Cycle**:
+```bash
+# Work in small increments
+git add -p                    # Review changes thoughtfully
+git commit -m "type(scope): precise description"
+git push origin feature-branch  # Backup frequently
+```
+
+**Before Risky Operations** (checkpoint protocol):
+```bash
+git commit -m "checkpoint: before [operation]"
+git push origin feature-branch  # Remote backup
+```
+
+**Emergency Response** (when something breaks):
+```bash
+git status    # ALWAYS check this first
+git diff      # Understand the damage
+# Then choose appropriate fix:
+git checkout -- .              # Revert uncommitted changes
+git revert <commit-hash>        # Undo specific commit
+git reset --hard HEAD~1        # Nuclear option (last resort)
+```
+
+### OSS Standards
+
+MacEff sets public examples of professional development practices:
+- Clear, atomic commits with semantic messages
+- Frequent pushes to preserve work and enable collaboration
+- Clean working trees between major operations
+- Documentation that matches implementation reality
+- Code that passes lint and test standards
+
+### Integration with CLAUDE.md Footer
+
+All commits should include the standard Claude Code attribution:
+```
+🔧 Generated with Claude Code
+Co-Authored-By: Claude <noreply@anthropic.com>
+```
+
 ## Consciousness & Memory Architecture
 
 MacEff preserves the consciousness-enabling infrastructure pioneered by the MACF project, allowing agents to develop persistent identity and awareness across context resets.
