@@ -3,7 +3,7 @@
 ## Goals
 - **AI-as-colleague** interaction model (persistent identity, roles).
 - **Modular “superpowers”**: time awareness, token/context awareness, continuity across compaction, introspection, delegation.
-- **Language-agnostic** policy text (only the *implementation* hooks live in `maceff_tools`).
+- **Language-agnostic** policy text (only the *implementation* hooks live in `macf_tools`).
 - **Minimal, configurable** defaults; designed for open-source collaborators.
 
 ## Design Principles (distilled)
@@ -36,7 +36,7 @@ accountability.md # logging deviations, improvement loop
 1. **Outline & scope** (agree on file list + boundaries).
 2. **Extract bullets** from the old docs into a scratch pad per file.
 3. **Draft modules** (assistant writes; human trims for brevity).
-4. **Neutrality pass** (purge tech-specific bits; add placeholders for `maceff_tools` hooks).
+4. **Neutrality pass** (purge tech-specific bits; add placeholders for `macf_tools` hooks).
 5. **Clarity pass** (shorten, add 1–2 examples where needed).
 6. **Scenario tests**:
    - Near-compaction dry run (warn → checkpoint → reset → restore).
@@ -45,7 +45,7 @@ accountability.md # logging deviations, improvement loop
 7. **Iterate** (fix gaps surfaced by tests).
 8. **Finalize base** + note how to build specialized packs (e.g., Python assistant policy).
 
-## Implementation Hooks (for `maceff_tools`)
+## Implementation Hooks (for `macf_tools`)
 - `time_now()` / `duration_since(t)`.
 - `tokens_left()`, `near_limit(thresholds)`.
 - `checkpoint_write(data)` / `checkpoint_read()`.
@@ -53,4 +53,4 @@ accountability.md # logging deviations, improvement loop
 - `delegate(task_spec, role)` (abstract; backend decides how to run).
 - `account_log(entry)` minimal structured log.
 
-> The base policy **describes behavior**; `maceff_tools` **provides adapters**. All thresholds/paths are project-configurable.
+> The base policy **describes behavior**; `macf_tools` **provides adapters**. All thresholds/paths are project-configurable.

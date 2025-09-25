@@ -140,7 +140,7 @@ if [[ -d /opt/tools ]]; then
   uv pip install --python "$VENV/bin/python" -e /opt/tools >/dev/null
   # Ensure policyctl test can validate YAML even on a fresh boot
   uv pip install --python "$VENV/bin/python" 'pyyaml==6.*' >/dev/null 2>&1 || true
-  ln -sf "$VENV/bin/maceff_tools" /usr/local/bin/maceff_tools
+  ln -sf "$VENV/bin/macf_tools" /usr/local/bin/macf_tools
 fi
 
 # Admin key (if any)
