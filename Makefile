@@ -60,3 +60,13 @@ claude:
 
 claude-doctor:
 	tools/bin/claude-doctor
+
+.PHONY: policy-sync policy-sync-%
+help:: ; @echo "  make policy-sync     - sync policies/<set> (default: base) into container & link current"
+help:: ; @echo "  make policy-sync-SET - sync policies/SET (e.g., policy-sync-base)"
+
+policy-sync:
+	tools/bin/policy-sync
+
+policy-sync-%:
+	tools/bin/policy-sync $*
