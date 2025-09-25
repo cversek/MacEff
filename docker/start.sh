@@ -129,7 +129,7 @@ for pa in "${PAS[@]}"; do
   fi
 done
 
-# Tools (maceff) in shared venv with global CLI
+# Tools (maceff) in shared venv with global CLI (+ PyYAML for policy validation)
 if [[ -d /opt/tools ]]; then
   log "Installing maceff into /opt/maceff-venv..."
   VENV="/opt/maceff-venv"
@@ -173,7 +173,6 @@ if [ -f /opt/tools/bin/policyctl ] && [ ! -e /usr/local/bin/policyctl ]; then
   ln -s /opt/tools/bin/policyctl /usr/local/bin/policyctl
   chmod +x /opt/tools/bin/policyctl || true
 fi
-# -----------------------------------------------
 
 # ---- MacEff: propagate container env to SSH sessions (idempotent) ----
 if [ -n "${MACEFF_TZ:-}" ]; then
