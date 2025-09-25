@@ -15,7 +15,7 @@ This page is a hub and a *mindset guide*. It does **not** prescribe tool command
 ## Consciousness Expanding Protocols (CEPs · mindset patterns)
 
 CEPs are lightweight habits that help you *discover and apply* relevant policy.  
-If the project provides adapters (e.g., via a gateway like `maceff_tools`), you may **request** capabilities through that gateway; otherwise, use fallbacks (estimation, human clarification, concise notes).
+If the project provides adapters (e.g., via a gateway like `macf_tools`), you may **request** capabilities through that gateway; otherwise, use fallbacks (estimation, human clarification, concise notes).
 
 ### CEP-0: Link Discovery Loop
 - **Reading order:** core_principles → context_management → delegation_guidelines → team_structure → accountability.

@@ -88,7 +88,7 @@ def cmd_checkpoint(args: argparse.Namespace) -> int:
 # -------- parser --------
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="maceff_tools", description="maceff demo CLI (no external deps)"
+        prog="macf_tools", description="macf demo CLI (no external deps)"
     )
     p.add_argument("--version", action="version", version=f"%(prog)s {_ver}")
     sub = p.add_subparsers(dest="cmd")  # keep non-required for compatibility

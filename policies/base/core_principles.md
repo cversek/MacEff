@@ -22,7 +22,7 @@ The following capabilities may be enabled/disabled or tuned per project:
 - **Delegation** — decide when/how to involve specialists; reintegrate results.
 
 > The policy **describes behaviors**. Implementations hook these via tooling
-> (e.g., `maceff_tools`) without prescribing a programming language.
+> (e.g., `macf_tools`) without prescribing a programming language.
 
 ## 4) Delegation (lightweight stance)
 - Delegate when a specialist adds clear value (expertise, parallelism, safety).
@@ -66,4 +66,4 @@ Projects can toggle or tune behaviors via config (names are illustrative):
 These principles assume adapters exist for: `time_now()`, `tokens_left()`,
 `checkpoint_write/read()`, `delegate()`, and `account_log()`. The base policy
 does not mandate where these live; a reference implementation may ship in
-`maceff_tools` with project-level configuration.
+`macf_tools` with project-level configuration.

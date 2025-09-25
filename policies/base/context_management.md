@@ -1,6 +1,6 @@
 # Context Management (Base · Minimal)
 
-This module keeps behavior **time-aware**, **token-aware**, and **compaction-ready** while staying language-agnostic. It describes *what* to do; a project gateway (e.g., `maceff_tools`) may provide adapters.
+This module keeps behavior **time-aware**, **token-aware**, and **compaction-ready** while staying language-agnostic. It describes *what* to do; a project gateway (e.g., `macf_tools`) may provide adapters.
 
 ---
 

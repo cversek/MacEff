@@ -12,4 +12,4 @@ authors = [{ name = "Craig Versek" }]
 dependencies = []
 
 [project.scripts]
-maceff_tools = "maceff.cli:main"     # fastest startup (direct Python)
+macf_tools = "maceff.cli:main"     # fastest startup (direct Python)
