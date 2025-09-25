@@ -174,26 +174,16 @@ if [ -f /opt/tools/bin/policyctl ] && [ ! -e /usr/local/bin/policyctl ]; then
   chmod +x /opt/tools/bin/policyctl || true
 fi
 # -----------------------------------------------
+
+# ---- MacEff: propagate container env to SSH sessions (idempotent) ----
+if [ -n "${MACEFF_TZ:-}" ]; then
+  # Make available to non-interactive SSH sessions via PAM
+  sed -i '/^MACEFF_TZ=/d' /etc/environment 2>/dev/null || true
+  printf 'MACEFF_TZ=%s\n' "$MACEFF_TZ" >> /etc/environment
+
+  # Also export for interactive login shells
+  printf 'export MACEFF_TZ=%q\n' "$MACEFF_TZ" > /etc/profile.d/99-maceff-env.sh
+fi
+# ----------------------------------------------------------------------
 log "sshd starting..."
 exec /usr/sbin/sshd -D
-
-# ---- MacEff policy editor setup (idempotent) ----
-set -e
-groupadd -f policyeditors || true
-install -d -o root -g policyeditors -m 2770 /opt/maceff/policies
-find /opt/maceff/policies -type d -exec chgrp policyeditors {} \; -exec chmod 2770 {} \; || true
-find /opt/maceff/policies -type f -exec chgrp policyeditors {} \; -exec chmod 0660 {} \; || true
-
-# Add configured users (POLICY_EDITORS="user1 user2")
-if [ -n "${POLICY_EDITORS:-}" ]; then
-  for u in ${POLICY_EDITORS}; do
-    id -u "$u" >/dev/null 2>&1 && usermod -a -G policyeditors "$u" || echo "warn: $u not present"
-  done
-fi
-
-# Expose policyctl if present on the /opt/tools bind
-if [ -f /opt/tools/bin/policyctl ] && [ ! -e /usr/local/bin/policyctl ]; then
-  ln -s /opt/tools/bin/policyctl /usr/local/bin/policyctl
-  chmod +x /opt/tools/bin/policyctl || true
-fi
-# -----------------------------------------------
