@@ -138,6 +138,8 @@ if [[ -d /opt/tools ]]; then
     "$VENV/bin/python" -m pip -q install --upgrade pip
   fi
   uv pip install --python "$VENV/bin/python" -e /opt/tools >/dev/null
+  # Ensure policyctl test can validate YAML even on a fresh boot
+  uv pip install --python "$VENV/bin/python" 'pyyaml==6.*' >/dev/null 2>&1 || true
   ln -sf "$VENV/bin/maceff_tools" /usr/local/bin/maceff_tools
 fi
 
@@ -145,9 +147,7 @@ fi
 install_key admin
 
 # --- enforce collaborative perms on /shared_workspace ---
-# ensure common group exists (idempotent)
 getent group agents_all >/dev/null 2>&1 || groupadd agents_all
-# set group, make contents group-writable + SGID; keep sticky bit on root
 chgrp -R agents_all /shared_workspace || true
 chmod -R g+ws     /shared_workspace  || true
 chmod g+s /shared_workspace || true   # inherit group on new dirs
