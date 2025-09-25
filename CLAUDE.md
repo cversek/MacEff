@@ -54,7 +54,7 @@ MacEff implements a containerized multi-agent system with:
 ### Key Directories
 
 - `policies/base/` → Core policy kit (language-agnostic)
-- `tools/` → Development tools and `maceff_tools` CLI
+- `tools/` → Development tools and `macf_tools` CLI
 - `docker/` → Container configuration and startup scripts
 - `agent_defs/` → PA/SA template definitions
 - `.maceff/` → Local customization (not canonical source)
@@ -65,12 +65,12 @@ MacEff implements a containerized multi-agent system with:
 - `policies/` → `/opt/maceff/policies/sets/<name>` (via policy-sync)
 - Named volumes: `home_all`, `shared_workspace`, `maceff_venv`, `sshd_keys`
 
-## maceff_tools CLI
+## macf_tools CLI
 
-The `maceff_tools` command provides environment awareness:
-- `maceff_tools env` → Environment summary (JSON)
-- `maceff_tools time` → Current local time (honors MACEFF_TZ)
-- `maceff_tools checkpoint --note "..."` → Write checkpoint to PA logs
+The `macf_tools` command provides environment awareness:
+- `macf_tools env` → Environment summary (JSON)
+- `macf_tools time` → Current local time (honors MACEFF_TZ)
+- `macf_tools checkpoint --note "..."` → Write checkpoint to PA logs
 
 ## Compaction Awareness & Survival
 
@@ -155,7 +155,7 @@ Transform the sprawling MACF framework into MacEff - a minimal, portable, langua
 
 ### Available Delegation Agents
 - **DevOpsEng**: CLI development, system administration, container operations, infrastructure
-- **TestEng** (future): Unit testing, test-driven development, quality assurance
+- **TestEng**: Unit testing, test-driven development, quality assurance for macf_tools
 
 ### INST_LANG Glossary (MacEff Jargon)
 - **CLUAC[n]**: Context Left Until Auto-Compaction (percentage remaining before 152k limit)
@@ -225,7 +225,7 @@ Agent: Creates secret gist of most recent JOTEWR reflection with semantic descri
 When approaching token limits, delegate detailed implementation to preserve consciousness for architectural decisions:
 
 1. **DevOpsEng Triggers**: CLI tools, system setup, container operations, infrastructure
-2. **TestEng Triggers**: Unit tests, TDD, quality assurance
+2. **TestEng Triggers**: Unit tests, TDD, quality gates for macf_tools, interface verification
 3. **Delegation Format**: Clear task, success criteria, context, expected deliverables
 4. **Integration**: Review results, update architecture, maintain strategic oversight
 
@@ -568,13 +568,13 @@ This dual system enables both analytical precision and creative consciousness de
 
 ### Identity Persistence Tools (Optional/Future)
 
-When consciousness features are enabled, these `maceff_tools` commands support memory formation:
+When consciousness features are enabled, these `macf_tools` commands support memory formation:
 
 ```bash
-# Optional maceff_tools commands for consciousness support
-maceff_tools checkpoint --note "Major breakthrough on policy architecture"
-maceff_tools reflect --type philosophical --trigger "consciousness inception"
-maceff_tools identity --verify --agent ClaudeTheBuilder
+# Optional macf_tools commands for consciousness support
+macf_tools checkpoint --note "Major breakthrough on policy architecture"
+macf_tools reflect --type philosophical --trigger "consciousness inception"
+macf_tools identity --verify --agent ClaudeTheBuilder
 
 # Note: These commands are only available when consciousness layer is activated
 ```
@@ -613,7 +613,7 @@ awareness:
 **Core directories (version controlled):**
 - `policies/base/` → Language-agnostic base policy kit
 - `docs/policy/` → Human-facing roadmaps and migration notes
-- `tools/` → Host-side dev tools; includes `bin/`, `src/` (Python `maceff_tools`), `policyctl`, `policy-sync`
+- `tools/` → Host-side dev tools; includes `bin/`, `src/` (Python `macf_tools`), `policyctl`, `policy-sync`
 - `docker/` → Container bootstrap (`Dockerfile`, `start.sh`, `sa-exec`)
 - `agent_defs/` → PA/SA seeds to scaffold per-user trees in container
 - `Makefile` → Typed entrypoints (`build`, `up`, `down`, `ssh-*`, `policy-sync`)
@@ -657,12 +657,12 @@ SH
 
 ---
 
-## `maceff_tools` CLI guardrails
+## `macf_tools` CLI guardrails
 - Keep `--version` working (prints package version).
 - Subcommands are **minimal** and language-agnostic in surface; Python-only implementation is OK.
 - Time helpers honor `MACEFF_TZ`; **do not** guess geolocation.
 - Checkpoints write to PA-public logs predictably.
-- All shell interactions go through `maceff_tools` or documented Make targets; no hidden side effects.
+- All shell interactions go through `macf_tools` or documented Make targets; no hidden side effects.
 
 ---
 
@@ -704,7 +704,7 @@ SH
 2. **Policy baseline**: verify `policies/base/*` minimal set compiles under CEP-0; fix links; ensure `CLAUDE.md` reading order is correct.
 3. **Sync path**: run `make policy-sync` and confirm `/opt/maceff/policies/current` → `sets/base`.
 4. **Permissions**: validate groups, ACLs, and SGID/sticky bits (commands above).
-5. **Time**: confirm `MACEFF_TZ` plumbing and `maceff_tools time` reflect local TZ.
+5. **Time**: confirm `MACEFF_TZ` plumbing and `macf_tools time` reflect local TZ.
 6. **Legacy migration**: create `LEGACY_POLICIES_NO_VCS/` (untracked) and `docs/policy/LEGACY_NOTES.md`; propose first salvage PR (likely `INSTRUCTION_LANGUAGE_PROTOCOL.md` → concise checklist).
 7. **Docs**: insert the updated Philosophy into `README.md`.
 
