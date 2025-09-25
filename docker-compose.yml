@@ -9,7 +9,7 @@ services:
       - "${HOST_SSH_PORT:-2222}:22"
     environment:
       MACEFF_TZ: ${MACEFF_TZ:-America/New_York}
-      MACEFF_TZ: ${MACEFF_TZ:-America/New_York}      CLEAN_ADMIN_HOME: "1"
+      CLEAN_ADMIN_HOME: "1"
       DEFAULT_PA: "maceff_user001"
       UV_LINK_MODE: "copy"
     env_file:
