@@ -183,7 +183,15 @@ if [ -n "${MACEFF_TZ:-}" ]; then
 
   # Also export for interactive login shells
   printf 'export MACEFF_TZ=%q\n' "$MACEFF_TZ" > /etc/profile.d/99-maceff-env.sh
+  chmod 0644 /etc/profile.d/99-maceff-env.sh
 fi
-# ----------------------------------------------------------------------
+
+# ---- Shell TZ bridge (so /bin/date honors MACEFF_TZ in login shells) ----
+cat >/etc/profile.d/maceff_tz.sh <<'EOSH'
+# Set TZ for interactive shells based on project MACEFF_TZ
+[ -n "$MACEFF_TZ" ] && export TZ="$MACEFF_TZ"
+EOSH
+chmod 0644 /etc/profile.d/maceff_tz.sh
+
 log "sshd starting..."
 exec /usr/sbin/sshd -D
