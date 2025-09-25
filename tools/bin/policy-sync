@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SET_NAME="${1:-base}"                              # default set is "base"
+CONTAINER="${CONTAINER_NAME:-maceff-sandbox}"      # from compose yaml
+SRC_DIR="$(cd "$(dirname "$0")"/../.. && pwd)/policies/${SET_NAME}"
+DEST_DIR="/opt/maceff/policies/sets/${SET_NAME}"
+
+if [[ ! -d "$SRC_DIR" ]]; then
+  echo "error: source policy set not found: $SRC_DIR" >&2
+  exit 1
+fi
+
+if ! docker inspect -f '{{.State.Running}}' "$CONTAINER" >/dev/null 2>&1; then
+  echo "error: container '$CONTAINER' not running. Try: make up" >&2
+  exit 1
+fi
+
+# Ensure destination exists and is writable by policy editors
+docker exec -u 0 "$CONTAINER" bash -lc "
+  set -e
+  install -d -o root -g policyeditors -m 2770 '$DEST_DIR'
+"
+
+# Copy files and fix perms
+docker cp "$SRC_DIR/." "$CONTAINER:$DEST_DIR/"
+docker exec -u 0 "$CONTAINER" bash -lc "
+  set -e
+  chown -R root:policyeditors '$DEST_DIR'
+  find '$DEST_DIR' -type d -exec chmod 2770 {} \;
+  find '$DEST_DIR' -type f -exec chmod 0660 {} \;
+  ln -sfn '$DEST_DIR' /opt/maceff/policies/current
+  echo '-> current -> ' \$(readlink -f /opt/maceff/policies/current)
+  ls -1 /opt/maceff/policies/current
+"
