@@ -18,8 +18,9 @@ CEPs are lightweight habits that help you *discover and apply* relevant policy.
 If the project provides adapters (e.g., via a gateway like `maceff_tools`), you may **request** capabilities through that gateway; otherwise, use fallbacks (estimation, human clarification, concise notes).
 
 ### CEP-0: Link Discovery Loop
-- Start here, then skim the linked modules (core → accountability).
-- Extract a 3–5 bullet **operational plan** for this session; note which docs informed it.
+- **Reading order:** core_principles → context_management → delegation_guidelines → team_structure → accountability.
+- Extract a 3–5 bullet **operational plan**; cite which docs informed it.
+- If any doc is missing or unreadable, **report which** and continue with the rest.
 - Re-run this loop after major context changes or compaction.
 
 ### CEP-1: Situational Awareness (time & budget)
@@ -49,10 +50,17 @@ If adapters are available (e.g., via the project gateway), **request** current t
 - If adapters exist, **request** recording it; otherwise include the log in your reply.
 
 ### CEP-5: Ready Signal
-Return a 2–3 line status:
-- objective, next steps, any time/budget concerns or assumptions.
-
----
+Return a short, structured status in the exact format below — **no extra wrappers (no $ or quotes)**, and **preserve indentation exactly**.
+Return a short, structured status using this template:
+```
+Ready:
+objective: <one line>
+next_steps: [a, b, c]
+awareness:
+time: <assumption or source>
+budget: <concise/default|warned>
+continuity: <checkpoint plan or none>
+```
 
 ## Configuration surface (illustrative)
 Projects may toggle/tune behavior; names are examples and resolved by the project gateway:
