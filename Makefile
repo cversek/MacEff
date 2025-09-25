@@ -27,6 +27,8 @@ help:
 	@echo "  make sa-test       - run a small SA job from the PA"
 	@echo "  make claude        - launch Claude in /shared_workspace/\$(PROJ) (args forwarded)"
 	@echo "  make claude-doctor - run 'claude doctor' inside the container"
+	@echo "  make policy-sync     - sync policies/<set> (default: base) into container & link current"
+	@echo "  make policy-sync-SET - sync policies/SET (e.g., policy-sync-base)"
 
 build:
 	tools/bin/compose build
@@ -62,8 +64,6 @@ claude-doctor:
 	tools/bin/claude-doctor
 
 .PHONY: policy-sync policy-sync-%
-help:: ; @echo "  make policy-sync     - sync policies/<set> (default: base) into container & link current"
-help:: ; @echo "  make policy-sync-SET - sync policies/SET (e.g., policy-sync-base)"
 
 policy-sync:
 	tools/bin/policy-sync
