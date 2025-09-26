@@ -1,0 +1,29 @@
+[consciousness]
+session_retention_days = 7
+checkpoint_format = "structured"
+reflection_triggers = ["delegation", "error", "milestone", "completion"]
+
+[paths]
+temp_dir = "/tmp/macf"
+logs_dir = "logs"
+checkpoints_dir = "checkpoints"
+reflections_dir = "reflections"
+
+[features]
+reflection_enabled = true
+strategic_checkpoints = true
+tactical_checkpoints = true
+operational_checkpoints = true
+private_reflections = true
+session_tracking = true
+
+[metadata]
+default_timezone = "UTC"
+timestamp_format = "iso"
+include_session_id = true
+include_agent_name = true
+
+[formatting]
+checkpoint_template = "structured"
+reflection_template = "guided"
+note_max_length = 500
