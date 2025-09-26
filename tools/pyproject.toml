@@ -3,13 +3,13 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "maceff"
+name = "macf"
 version = "0.1.0"
-description = "maceff tools (no external deps)"
+description = "macf tools (no external deps)"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "Craig Versek" }]
 dependencies = []
 
 [project.scripts]
-macf_tools = "maceff.cli:main"     # fastest startup (direct Python)
+macf_tools = "macf.cli:main"     # fastest startup (direct Python)
