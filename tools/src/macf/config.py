@@ -6,6 +6,7 @@ from test_config.py. It provides intelligent path resolution for consciousness
 artifacts across different environments (container, host, fallback).
 """
 
+import json
 import os
 from pathlib import Path
 from typing import Optional
@@ -80,6 +81,14 @@ class ConsciousnessConfig:
             current = current.parent
         return None
 
+    def _is_container(self) -> bool:
+        """Check if running in container context."""
+        return Path("/.dockerenv").exists()
+
+    def _is_host(self) -> bool:
+        """Check if running in host context with project."""
+        return self._find_project_root() is not None
+
     def _find_agent_root(self) -> Path:
         """
         Find agent root directory using detection priority.
@@ -99,7 +108,7 @@ class ConsciousnessConfig:
             return Path(env_root)
 
         # 2. Container detection (/.dockerenv exists)
-        if Path("/.dockerenv").exists():
+        if self._is_container():
             user = os.getenv("USER", "user")
             return Path(f"/home/{user}/agent")
 
@@ -155,3 +164,54 @@ class ConsciousnessConfig:
             Path to agent/public/reflections/ directory.
         """
         return self.get_public_path() / "reflections"
+
+    @property
+    def agent_id(self) -> str:
+        """
+        Get agent identifier for logging paths with multi-agent support.
+
+        Resolution priority:
+        1. Container: MACEFF_USER or USER environment variable
+        2. Host: .maceff/config.json moniker field
+        3. Fallback: 'unknown_agent'
+
+        Returns:
+            str: Agent identifier suitable for filesystem paths
+        """
+        # Container context - use env vars
+        if self._is_container():
+            agent = os.environ.get('MACEFF_USER') or os.environ.get('USER')
+            if agent:
+                return agent
+
+        # Host context - read from .maceff/config.json
+        if self._is_host():
+            config_file = Path.cwd() / '.maceff' / 'config.json'
+            if config_file.exists():
+                try:
+                    with open(config_file) as f:
+                        config = json.load(f)
+                        moniker = config.get('agent_identity', {}).get('moniker')
+                        if moniker:
+                            return moniker
+                except Exception:
+                    pass  # Fall through to fallback
+
+        # Fallback - use unknown_agent
+        return 'unknown_agent'
+
+    def load_config(self) -> dict:
+        """
+        Load .maceff/config.json if it exists.
+
+        Returns:
+            dict: Configuration data or empty dict if not found
+        """
+        config_file = Path.cwd() / '.maceff' / 'config.json'
+        if config_file.exists():
+            try:
+                with open(config_file) as f:
+                    return json.load(f)
+            except Exception:
+                return {}
+        return {}

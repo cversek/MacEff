@@ -183,12 +183,13 @@ def cmd_session_info(args: argparse.Namespace) -> int:
         config = ConsciousnessConfig()
         session_id = _find_session_id()
 
-        # Get temp directory path using session ID
-        temp_dir = Path("/tmp") / "maceff" / config.agent_name / session_id / "dev_scripts"
+        # Get temp directory path using agent_id and session ID
+        temp_dir = Path("/tmp") / "maceff" / config.agent_id / session_id / "dev_scripts"
 
         data = {
             "session_id": session_id,
             "agent_name": config.agent_name,
+            "agent_id": config.agent_id,
             "agent_root": str(config.agent_root),
             "cwd": str(Path.cwd()),
             "temp_directory": str(temp_dir),
@@ -388,6 +389,90 @@ def cmd_hook_test(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_config_init(args: argparse.Namespace) -> int:
+    """Initialize .maceff/config.json with interactive prompts."""
+    config_dir = Path.cwd() / '.maceff'
+    config_file = config_dir / 'config.json'
+
+    if config_file.exists() and not args.force:
+        print(f"Config file already exists: {config_file}")
+        print("Use --force to overwrite")
+        return 1
+
+    # Interactive prompts
+    print("Initialize MacEff agent configuration\n")
+    moniker = input("Agent moniker (e.g., ClaudeTheBuilder): ").strip()
+    if not moniker:
+        print("Error: Moniker required")
+        return 1
+
+    agent_type = input("Agent type [primary_agent]: ").strip() or "primary_agent"
+    description = input("Description: ").strip() or f"{moniker} agent"
+
+    # Create config structure
+    config = {
+        "agent_identity": {
+            "moniker": moniker,
+            "type": agent_type,
+            "description": description
+        },
+        "logging": {
+            "enabled": True,
+            "level": "INFO",
+            "console_output": False
+        },
+        "hooks": {
+            "capture_output": True,
+            "sidecar_enabled": True
+        }
+    }
+
+    # Write config file
+    config_dir.mkdir(parents=True, exist_ok=True)
+    with open(config_file, 'w') as f:
+        json.dump(config, f, indent=2)
+
+    print(f"\n✅ Configuration created: {config_file}")
+    print(f"   Agent moniker: {moniker}")
+    print(f"   Logging paths: /tmp/macf_hooks/{moniker}/{{session_id}}/")
+
+    return 0
+
+
+def cmd_config_show(args: argparse.Namespace) -> int:
+    """Display current configuration."""
+    config = ConsciousnessConfig()
+
+    print(f"Agent ID: {config.agent_id}")
+    print(f"Agent Name: {config.agent_name}")
+    print(f"Agent Root: {config.agent_root}")
+
+    # Determine context
+    if config._is_container():
+        context = "container"
+    elif config._is_host():
+        context = "host"
+    else:
+        context = "fallback"
+    print(f"Detection Context: {context}")
+
+    # Load and display full config if available
+    config_data = config.load_config()
+    if config_data:
+        print("\nFull configuration:")
+        print(json.dumps(config_data, indent=2))
+    else:
+        print("\nNo .maceff/config.json found (using defaults)")
+
+    # Show computed paths
+    print(f"\nComputed paths:")
+    print(f"  Checkpoints: {config.get_checkpoints_path()}")
+    print(f"  Reflections: {config.get_reflections_path()}")
+    print(f"  Logs: /tmp/macf_hooks/{config.agent_id}/{{session_id}}/")
+
+    return 0
+
+
 # -------- parser --------
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -422,6 +507,16 @@ def _build_parser() -> argparse.ArgumentParser:
     install_parser.set_defaults(func=cmd_hook_install)
 
     hook_sub.add_parser("test", help="test compaction detection on current session").set_defaults(func=cmd_hook_test)
+
+    # Config commands
+    config_parser = sub.add_parser("config", help="agent configuration management")
+    config_sub = config_parser.add_subparsers(dest="config_cmd")
+
+    init_parser = config_sub.add_parser("init", help="initialize agent configuration")
+    init_parser.add_argument("--force", action="store_true", help="overwrite existing config")
+    init_parser.set_defaults(func=cmd_config_init)
+
+    config_sub.add_parser("show", help="show current configuration").set_defaults(func=cmd_config_show)
 
     return p
 
