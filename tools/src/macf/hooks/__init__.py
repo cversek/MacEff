@@ -1,0 +1,1 @@
+"""Hook ecosystem for cognitive superpower capabilities."""
