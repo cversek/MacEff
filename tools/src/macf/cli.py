@@ -1,5 +1,5 @@
 # tools/src/maceff/cli.py
-import argparse, json, os, sys
+import argparse, json, os, sys, glob
 from pathlib import Path
 from datetime import datetime, timezone
 try:
@@ -11,6 +11,9 @@ try:
     from . import __version__ as _ver
 except Exception:
     _ver = "0.0.0"
+
+from .config import ConsciousnessConfig
+from .hooks.compaction import detect_compaction, inject_recovery
 
 # -------- helpers --------
 def _pick_tz():
@@ -30,6 +33,44 @@ def _pick_tz():
 def _now_iso(tz=None):
     tz = tz or _pick_tz()
     return datetime.now(tz).replace(microsecond=0).isoformat()
+
+def _find_session_id() -> str:
+    """Find current session ID from .claude project JSONL files."""
+    try:
+        # Look for .claude/projects/ directories
+        claude_dir = Path.home() / ".claude" / "projects"
+        if not claude_dir.exists():
+            return "unknown"
+
+        # Find all JSONL files and get the most recently modified one
+        all_jsonl_files = []
+        for project_dir in claude_dir.iterdir():
+            if project_dir.is_dir():
+                jsonl_files = list(project_dir.glob("*.jsonl"))
+                all_jsonl_files.extend(jsonl_files)
+
+        if not all_jsonl_files:
+            return "unknown"
+
+        # Get most recently modified JSONL file
+        latest_file = max(all_jsonl_files, key=lambda p: p.stat().st_mtime)
+
+        # Extract UUID from filename (the stem without .jsonl extension)
+        return latest_file.stem
+    except Exception:
+        return "unknown"
+
+def _format_time_ago(file_path: Path) -> str:
+    """Format time ago string for a file."""
+    try:
+        mtime = datetime.fromtimestamp(file_path.stat().st_mtime, tz=_pick_tz())
+        now = datetime.now(_pick_tz())
+        delta = now - mtime
+        hours = int(delta.total_seconds() // 3600)
+        minutes = int((delta.total_seconds() % 3600) // 60)
+        return f"{hours}h {minutes}m ago"
+    except Exception:
+        return "unknown"
 
 # -------- commands --------
 def cmd_env(_: argparse.Namespace) -> int:
@@ -58,7 +99,32 @@ def cmd_env(_: argparse.Namespace) -> int:
     return 0
 
 def cmd_time(_: argparse.Namespace) -> int:
-    print(_now_iso())  # local (per MACEFF_TZ/TZ)
+    current_time = _now_iso()
+    print(current_time)
+
+    # Show gap since most recent CCP
+    try:
+        config = ConsciousnessConfig()
+        checkpoints_path = config.get_checkpoints_path()
+        if checkpoints_path.exists():
+            # Find CCP files (multiple patterns for consciousness checkpoints)
+            ccp_patterns = ["*_ccp.md", "*_CCP.md", "*_checkpoint.md"]
+            ccp_files = []
+            for pattern in ccp_patterns:
+                ccp_files.extend(checkpoints_path.glob(pattern))
+            ccp_files = sorted(ccp_files, key=lambda p: p.stat().st_mtime, reverse=True)
+            if ccp_files:
+                latest_ccp = ccp_files[0]
+                ccp_mtime = datetime.fromtimestamp(latest_ccp.stat().st_mtime, tz=_pick_tz())
+                now = datetime.now(_pick_tz())
+                delta = now - ccp_mtime
+                hours = int(delta.total_seconds() // 3600)
+                minutes = int((delta.total_seconds() % 3600) // 60)
+                print(f"Last CCP: {latest_ccp.name} ({hours}h {minutes}m ago)")
+    except Exception:
+        # Graceful fallback if CCP lookup fails
+        pass
+
     return 0
 
 def cmd_budget(_: argparse.Namespace) -> int:
@@ -75,15 +141,252 @@ def cmd_budget(_: argparse.Namespace) -> int:
     print(json.dumps(payload, indent=2))
     return 0
 
-def cmd_checkpoint(args: argparse.Namespace) -> int:
-    note = args.note or ""
-    ts = _now_iso()
-    log_path = Path.home() / "agent" / "public" / "logs" / "checkpoints.log"
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    with log_path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps({"ts": ts, "note": note}) + "\n")
-    print(str(log_path))
+def cmd_list_ccps(args: argparse.Namespace) -> int:
+    """List consciousness checkpoints with timestamps."""
+    try:
+        config = ConsciousnessConfig()
+        checkpoints_path = config.get_checkpoints_path()
+
+        if not checkpoints_path.exists():
+            print("No checkpoints directory found")
+            return 0
+
+        # Find CCP files (multiple patterns for consciousness checkpoints)
+        ccp_patterns = ["*_ccp.md", "*_CCP.md", "*_checkpoint.md"]
+        ccp_files = []
+        for pattern in ccp_patterns:
+            ccp_files.extend(checkpoints_path.glob(pattern))
+        ccp_files = sorted(ccp_files, key=lambda p: p.stat().st_mtime, reverse=True)
+
+        if not ccp_files:
+            print("No consciousness checkpoints found")
+            return 0
+
+        # Apply --recent limit if specified
+        recent = getattr(args, 'recent', None)
+        if recent is not None:
+            ccp_files = ccp_files[:recent]
+
+        for ccp_file in ccp_files:
+            time_ago = _format_time_ago(ccp_file)
+            print(f"{ccp_file.name} ({time_ago})")
+
+    except Exception as e:
+        print(f"Error listing CCPs: {e}")
+        return 1
+
     return 0
+
+def cmd_session_info(args: argparse.Namespace) -> int:
+    """Show session information as JSON."""
+    try:
+        config = ConsciousnessConfig()
+        session_id = _find_session_id()
+
+        # Get temp directory path using session ID
+        temp_dir = Path("/tmp") / "maceff" / config.agent_name / session_id / "dev_scripts"
+
+        data = {
+            "session_id": session_id,
+            "agent_name": config.agent_name,
+            "agent_root": str(config.agent_root),
+            "cwd": str(Path.cwd()),
+            "temp_directory": str(temp_dir),
+            "checkpoints_path": str(config.get_checkpoints_path()),
+            "reflections_path": str(config.get_reflections_path())
+        }
+
+        print(json.dumps(data, indent=2))
+
+    except Exception as e:
+        print(f"Error getting session info: {e}")
+        return 1
+
+    return 0
+
+
+def _update_settings_file(settings_path: Path, hooks_command: str) -> bool:
+    """Update settings.json with hooks configuration, merging existing settings."""
+    try:
+        # Load existing settings or create new
+        if settings_path.exists():
+            with open(settings_path) as f:
+                settings = json.load(f)
+        else:
+            settings = {}
+
+        # Ensure hooks section exists
+        if "hooks" not in settings:
+            settings["hooks"] = {}
+
+        # Add SessionStart hook
+        settings["hooks"]["SessionStart"] = [
+            {
+                "matcher": "",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": hooks_command
+                    }
+                ]
+            }
+        ]
+
+        # Backup existing file
+        if settings_path.exists():
+            backup_path = settings_path.with_suffix('.json.backup')
+            settings_path.rename(backup_path)
+            print(f"   Backed up existing settings to: {backup_path}")
+
+        # Write updated settings
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(settings_path, 'w') as f:
+            json.dump(settings, f, indent=2)
+
+        return True
+
+    except Exception as e:
+        print(f"Error updating settings: {e}")
+        return False
+
+
+def cmd_hook_install(args: argparse.Namespace) -> int:
+    """Install session_start hook with local/global mode selection."""
+    try:
+        # Determine installation mode
+        if hasattr(args, 'global_install') and args.global_install:
+            mode = 'global'
+        elif hasattr(args, 'local_install') and args.local_install:
+            mode = 'local'
+        else:
+            # Interactive mode
+            print("\nWhere do you want to install hooks?")
+            print("[1] Local project (.claude/hooks/) [DEFAULT]")
+            print("[2] Global user directory (~/.claude/hooks/)")
+            choice = input("\nPress Enter for [1], or enter choice: ").strip() or "1"
+            mode = 'global' if choice == '2' else 'local'
+
+        # Set paths based on mode
+        if mode == 'global':
+            hooks_dir = Path.home() / ".claude" / "hooks"
+            settings_file = Path.home() / ".claude" / "settings.json"
+            hooks_command = "python ~/.claude/hooks/session_start.py"
+        else:
+            hooks_dir = Path.cwd() / ".claude" / "hooks"
+            settings_file = Path.cwd() / ".claude" / "settings.local.json"
+            hooks_command = "python .claude/hooks/session_start.py"
+
+        # Create hooks directory
+        hooks_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create session_start.py hook script with official JSON output
+        hook_script = hooks_dir / "session_start.py"
+
+        hook_content = '''#!/usr/bin/env python3
+"""SessionStart hook for compaction detection - uses official JSON output."""
+import json
+import sys
+from pathlib import Path
+
+try:
+    # Import from installed macf_tools package
+    from macf.hooks.compaction import detect_compaction, inject_recovery
+
+    # Find current session JSONL
+    claude_dir = Path.home() / ".claude" / "projects"
+    if claude_dir.exists():
+        all_jsonl_files = []
+        for project_dir in claude_dir.iterdir():
+            if project_dir.is_dir():
+                all_jsonl_files.extend(project_dir.glob("*.jsonl"))
+
+        if all_jsonl_files:
+            latest_file = max(all_jsonl_files, key=lambda p: p.stat().st_mtime)
+
+            # Check for compaction
+            if detect_compaction(latest_file):
+                recovery_msg = inject_recovery()
+
+                # OFFICIAL JSON OUTPUT FORMAT
+                output = {
+                    "continue": True,
+                    "additionalContext": f"<system-reminder>\\n{recovery_msg}\\n</system-reminder>"
+                }
+                print(json.dumps(output))
+                sys.exit(0)
+
+    # No compaction detected - allow normal continuation
+    output = {"continue": True}
+    print(json.dumps(output))
+    sys.exit(0)
+
+except Exception as e:
+    # Fail gracefully - don't disrupt session
+    output = {"continue": True}
+    print(json.dumps(output), file=sys.stdout)
+    print(f"Hook error: {e}", file=sys.stderr)
+    sys.exit(0)
+'''
+
+        # Write hook script
+        hook_script.write_text(hook_content)
+        hook_script.chmod(0o755)
+
+        # Update settings file
+        if _update_settings_file(settings_file, hooks_command):
+            print(f"\n✅ Hooks installed successfully!")
+            print(f"   Mode: {mode}")
+            print(f"   Script: {hook_script}")
+            print(f"   Settings: {settings_file}")
+            print(f"\nCompaction detection will activate on next session start.")
+            return 0
+        else:
+            print(f"\n❌ Hook script created but settings update failed")
+            print(f"   Manually add to {settings_file}")
+            return 1
+
+    except Exception as e:
+        print(f"Error installing hook: {e}")
+        return 1
+
+
+def cmd_hook_test(args: argparse.Namespace) -> int:
+    """Test compaction detection on current session."""
+    try:
+        # Find current session JSONL file
+        claude_dir = Path.home() / ".claude" / "projects"
+        if not claude_dir.exists():
+            print("No .claude/projects directory found")
+            return 1
+
+        all_jsonl_files = []
+        for project_dir in claude_dir.iterdir():
+            if project_dir.is_dir():
+                jsonl_files = list(project_dir.glob("*.jsonl"))
+                all_jsonl_files.extend(jsonl_files)
+
+        if not all_jsonl_files:
+            print("No JSONL transcript files found")
+            return 1
+
+        # Get most recently modified JSONL file
+        latest_file = max(all_jsonl_files, key=lambda p: p.stat().st_mtime)
+
+        print(f"Testing transcript: {latest_file.name}")
+
+        # Check for compaction
+        if detect_compaction(latest_file):
+            print("✅ COMPACTION DETECTED")
+            print(inject_recovery())
+        else:
+            print("❌ No compaction detected - session appears normal")
+
+    except Exception as e:
+        print(f"Error testing hook: {e}")
+        return 1
+
+    return 0
+
 
 # -------- parser --------
 def _build_parser() -> argparse.ArgumentParser:
@@ -93,11 +396,32 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--version", action="version", version=f"%(prog)s {_ver}")
     sub = p.add_subparsers(dest="cmd")  # keep non-required for compatibility
     sub.add_parser("env", help="print env summary (JSON)").set_defaults(func=cmd_env)
-    sub.add_parser("time", help="print current local time").set_defaults(func=cmd_time)
+    sub.add_parser("time", help="print current local time with CCP gap").set_defaults(func=cmd_time)
     sub.add_parser("budget", help="print budget thresholds (JSON)").set_defaults(func=cmd_budget)
-    cp = sub.add_parser("checkpoint", help="append a checkpoint note")
-    cp.add_argument("--note", default="", help="freeform note to include")
-    cp.set_defaults(func=cmd_checkpoint)
+
+    # New consciousness commands
+    list_parser = sub.add_parser("list", help="list consciousness artifacts")
+    list_sub = list_parser.add_subparsers(dest="list_cmd")
+    ccps_parser = list_sub.add_parser("ccps", help="list consciousness checkpoints")
+    ccps_parser.add_argument("--recent", type=int, help="limit to N most recent CCPs")
+    ccps_parser.set_defaults(func=cmd_list_ccps)
+
+    session_parser = sub.add_parser("session", help="session management")
+    session_sub = session_parser.add_subparsers(dest="session_cmd")
+    session_sub.add_parser("info", help="show session information").set_defaults(func=cmd_session_info)
+
+    # Hook commands
+    hook_parser = sub.add_parser("hooks", help="hook management")
+    hook_sub = hook_parser.add_subparsers(dest="hook_cmd")
+
+    install_parser = hook_sub.add_parser("install", help="install compaction detection hook")
+    install_parser.add_argument("--local", dest="local_install", action="store_true",
+                               help="install to local project (default)")
+    install_parser.add_argument("--global", dest="global_install", action="store_true",
+                               help="install to global ~/.claude directory")
+    install_parser.set_defaults(func=cmd_hook_install)
+
+    hook_sub.add_parser("test", help="test compaction detection on current session").set_defaults(func=cmd_hook_test)
 
     return p
 
