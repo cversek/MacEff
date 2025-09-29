@@ -43,6 +43,8 @@ keys/*
 !keys/*.pub
 # Embedded policy repo (managed separately inside the container)
 .maceff/policies/
+# Local machine-specific config overrides (but track .maceff/config.json)
+.maceff/local.json
 
 # Local backup files
 docker-compose.yml.bak.*

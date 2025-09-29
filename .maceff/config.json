@@ -1,0 +1,16 @@
+{
+  "agent_identity": {
+    "moniker": "MacEffDev",
+    "type": "primary_agent",
+    "description": "Development agent for MacEff framework infrastructure"
+  },
+  "logging": {
+    "enabled": true,
+    "level": "INFO",
+    "console_output": false
+  },
+  "hooks": {
+    "capture_output": true,
+    "sidecar_enabled": true
+  }
+}
