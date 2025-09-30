@@ -14,6 +14,12 @@ except Exception:
 
 from .config import ConsciousnessConfig
 from .hooks.compaction import detect_compaction, inject_recovery
+from .utils import (
+    get_current_session_id,
+    get_dev_scripts_dir,
+    get_hooks_dir,
+    get_formatted_timestamp
+)
 
 # -------- helpers --------
 def _pick_tz():
@@ -33,32 +39,6 @@ def _pick_tz():
 def _now_iso(tz=None):
     tz = tz or _pick_tz()
     return datetime.now(tz).replace(microsecond=0).isoformat()
-
-def _find_session_id() -> str:
-    """Find current session ID from .claude project JSONL files."""
-    try:
-        # Look for .claude/projects/ directories
-        claude_dir = Path.home() / ".claude" / "projects"
-        if not claude_dir.exists():
-            return "unknown"
-
-        # Find all JSONL files and get the most recently modified one
-        all_jsonl_files = []
-        for project_dir in claude_dir.iterdir():
-            if project_dir.is_dir():
-                jsonl_files = list(project_dir.glob("*.jsonl"))
-                all_jsonl_files.extend(jsonl_files)
-
-        if not all_jsonl_files:
-            return "unknown"
-
-        # Get most recently modified JSONL file
-        latest_file = max(all_jsonl_files, key=lambda p: p.stat().st_mtime)
-
-        # Extract UUID from filename (the stem without .jsonl extension)
-        return latest_file.stem
-    except Exception:
-        return "unknown"
 
 def _format_time_ago(file_path: Path) -> str:
     """Format time ago string for a file."""
@@ -181,10 +161,10 @@ def cmd_session_info(args: argparse.Namespace) -> int:
     """Show session information as JSON."""
     try:
         config = ConsciousnessConfig()
-        session_id = _find_session_id()
+        session_id = get_current_session_id()
 
-        # Get temp directory path using agent_id and session ID
-        temp_dir = Path("/tmp") / "maceff" / config.agent_id / session_id / "dev_scripts"
+        # Get temp directory path using unified utils
+        temp_dir = get_dev_scripts_dir(session_id)
 
         data = {
             "session_id": session_id,
@@ -192,7 +172,7 @@ def cmd_session_info(args: argparse.Namespace) -> int:
             "agent_id": config.agent_id,
             "agent_root": str(config.agent_root),
             "cwd": str(Path.cwd()),
-            "temp_directory": str(temp_dir),
+            "temp_directory": str(temp_dir) if temp_dir else "unavailable",
             "checkpoints_path": str(config.get_checkpoints_path()),
             "reflections_path": str(config.get_reflections_path())
         }
@@ -389,6 +369,99 @@ def cmd_hook_test(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_hook_logs(args: argparse.Namespace) -> int:
+    """Display hook event logs."""
+    # Get session_id
+    session_id = args.session if hasattr(args, 'session') and args.session else get_current_session_id()
+
+    # Get agent_id
+    config = ConsciousnessConfig()
+    agent_id = config.agent_id
+
+    # Get log path using unified utils
+    log_dir = get_hooks_dir(session_id, create=False)
+    if not log_dir:
+        print(f"No logs found for session: {session_id}")
+        return 1
+
+    log_file = log_dir / "hook_events.log"
+    if not log_file.exists():
+        print(f"No hook events logged yet for session: {session_id}")
+        return 0
+
+    # Display logs
+    print(f"Hook events for session {session_id} (agent: {agent_id}):\n")
+
+    with open(log_file, 'r') as f:
+        for line in f:
+            try:
+                event = json.loads(line)
+                timestamp = event.get('timestamp', 'unknown')
+                hook_name = event.get('hook_name', 'unknown')
+                event_type = event.get('event_type', 'unknown')
+
+                # Format based on event type
+                if event_type == "HOOK_START":
+                    print(f"[{timestamp}] {hook_name}: START")
+                elif event_type == "HOOK_COMPLETE":
+                    duration = event.get('duration_ms', '?')
+                    print(f"[{timestamp}] {hook_name}: COMPLETE ({duration}ms)")
+                elif event_type == "HOOK_ERROR":
+                    error = event.get('error', 'unknown error')
+                    print(f"[{timestamp}] {hook_name}: ERROR - {error}")
+                elif event_type == "COMPACTION_CHECK":
+                    detected = event.get('compaction_detected', False)
+                    duration = event.get('duration_ms', '?')
+                    print(f"[{timestamp}] {hook_name}: Compaction={'DETECTED' if detected else 'not detected'} ({duration}ms)")
+                elif event_type == "TRANSCRIPT_FOUND":
+                    transcript_name = event.get('transcript_name', 'unknown')
+                    print(f"[{timestamp}] {hook_name}: Found transcript {transcript_name}")
+                else:
+                    print(f"[{timestamp}] {hook_name}: {event_type}")
+
+            except json.JSONDecodeError:
+                print(f"Invalid log entry: {line.strip()}")
+
+    return 0
+
+
+def cmd_hook_status(args: argparse.Namespace) -> int:
+    """Display current hook sidecar states."""
+    from .hooks.sidecar import read_sidecar
+
+    # Get session_id
+    session_id = get_current_session_id()
+
+    # Get agent_id
+    config = ConsciousnessConfig()
+    agent_id = config.agent_id
+
+    # Get hooks directory using unified utils
+    hooks_dir = get_hooks_dir(session_id, create=False)
+    if not hooks_dir:
+        print(f"No session directory found for: {session_id}")
+        return 1
+
+    print(f"Hook states for session {session_id} (agent: {agent_id}):\n")
+
+    # Find all sidecar files
+    sidecar_files = list(hooks_dir.glob("sidecar_*.json"))
+
+    if not sidecar_files:
+        print("No hook states recorded yet")
+        return 0
+
+    for sidecar_file in sidecar_files:
+        hook_name = sidecar_file.stem.replace("sidecar_", "")
+        state = read_sidecar(hook_name, session_id)
+
+        print(f"Hook: {hook_name}")
+        print(json.dumps(state, indent=2))
+        print()
+
+    return 0
+
+
 def cmd_config_init(args: argparse.Namespace) -> int:
     """Initialize .maceff/config.json with interactive prompts."""
     config_dir = Path.cwd() / '.maceff'
@@ -507,6 +580,12 @@ def _build_parser() -> argparse.ArgumentParser:
     install_parser.set_defaults(func=cmd_hook_install)
 
     hook_sub.add_parser("test", help="test compaction detection on current session").set_defaults(func=cmd_hook_test)
+
+    logs_parser = hook_sub.add_parser("logs", help="display hook event logs")
+    logs_parser.add_argument("--session", help="specific session ID (default: current)")
+    logs_parser.set_defaults(func=cmd_hook_logs)
+
+    hook_sub.add_parser("status", help="display current hook states").set_defaults(func=cmd_hook_status)
 
     # Config commands
     config_parser = sub.add_parser("config", help="agent configuration management")
