@@ -481,7 +481,7 @@ def get_latest_consciousness_artifacts(
         if not agent_root.exists():
             return ConsciousnessArtifacts()
 
-        public_dir = agent_root / "agent" / "public"
+        public_dir = agent_root / "public"
 
         if not public_dir.exists():
             return ConsciousnessArtifacts()
