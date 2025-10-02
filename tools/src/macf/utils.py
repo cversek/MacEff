@@ -14,9 +14,11 @@ import json
 import os
 import subprocess
 import sys
+import time
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     import dateutil.tz  # type: ignore
@@ -308,3 +310,272 @@ def read_json_safely(path: Path) -> dict:
     except Exception:
         pass
     return {}
+
+
+# =============================================================================
+# Consciousness State Infrastructure
+# =============================================================================
+
+
+@dataclass
+class SessionOperationalState:
+    """
+    Operational state that persists across compaction.
+
+    Stored in: /tmp/macf/{agent_id}/{session_id}/session_state.json
+
+    This dataclass holds session-level operational configuration and state
+    that should survive context compaction events.
+    """
+    session_id: str
+    agent_id: str
+    auto_mode: bool = False
+    auto_mode_source: str = "default"  # CLI, env, config, session, default
+    auto_mode_confidence: float = 0.0  # 0.0-1.0
+    pending_todos: List[dict] = field(default_factory=list)
+    recovery_policy_path: Optional[str] = None
+    compaction_count: int = 0
+    started_at: float = field(default_factory=lambda: time.time())
+    last_updated: float = field(default_factory=lambda: time.time())
+
+    def save(self) -> bool:
+        """
+        Atomically save state to session directory.
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Update timestamp
+            self.last_updated = time.time()
+
+            # Get session directory
+            session_dir = get_session_dir(
+                session_id=self.session_id,
+                agent_id=self.agent_id,
+                create=True
+            )
+
+            if not session_dir:
+                return False
+
+            state_path = session_dir / "session_state.json"
+            return write_json_safely(state_path, asdict(self))
+        except Exception:
+            return False
+
+    @classmethod
+    def load(cls, session_id: str, agent_id: Optional[str] = None) -> "SessionOperationalState":
+        """
+        Load state from session directory, returning default instance on failure.
+
+        Args:
+            session_id: Session identifier
+            agent_id: Agent identifier (auto-detected if None)
+
+        Returns:
+            SessionOperationalState instance (never crashes)
+        """
+        try:
+            # Auto-detect agent_id if needed
+            if not agent_id:
+                try:
+                    from .config import ConsciousnessConfig
+                    config = ConsciousnessConfig()
+                    agent_id = config.agent_id
+                except Exception:
+                    agent_id = os.environ.get('MACEFF_USER') or os.environ.get('USER') or 'unknown_agent'
+
+            # Get session directory (don't create if loading)
+            session_dir = get_session_dir(
+                session_id=session_id,
+                agent_id=agent_id,
+                create=False
+            )
+
+            if not session_dir:
+                return cls(session_id=session_id, agent_id=agent_id)
+
+            state_path = session_dir / "session_state.json"
+            data = read_json_safely(state_path)
+
+            if not data:
+                return cls(session_id=session_id, agent_id=agent_id)
+
+            # Restore from saved data
+            return cls(**data)
+        except Exception:
+            # Always return valid instance, never crash
+            return cls(session_id=session_id, agent_id=agent_id or "unknown_agent")
+
+
+@dataclass
+class ConsciousnessArtifacts:
+    """
+    Pythonic power object for discovered consciousness artifacts.
+
+    Provides rich interface for working with reflections, checkpoints, and roadmaps
+    instead of one-trick-pony functions.
+    """
+    reflections: List[Path] = field(default_factory=list)
+    checkpoints: List[Path] = field(default_factory=list)
+    roadmaps: List[Path] = field(default_factory=list)
+
+    @property
+    def latest_reflection(self) -> Optional[Path]:
+        """Most recent reflection by mtime."""
+        if not self.reflections:
+            return None
+        return max(self.reflections, key=lambda p: p.stat().st_mtime)
+
+    @property
+    def latest_checkpoint(self) -> Optional[Path]:
+        """Most recent checkpoint by mtime."""
+        if not self.checkpoints:
+            return None
+        return max(self.checkpoints, key=lambda p: p.stat().st_mtime)
+
+    @property
+    def latest_roadmap(self) -> Optional[Path]:
+        """Most recent roadmap by mtime."""
+        if not self.roadmaps:
+            return None
+        return max(self.roadmaps, key=lambda p: p.stat().st_mtime)
+
+    def all_paths(self) -> List[Path]:
+        """Flatten all artifacts into single list."""
+        return self.reflections + self.checkpoints + self.roadmaps
+
+    def __bool__(self) -> bool:
+        """True if any artifacts exist."""
+        return bool(self.reflections or self.checkpoints or self.roadmaps)
+
+
+def get_latest_consciousness_artifacts(
+    agent_root: Optional[Path] = None,
+    limit: int = 5
+) -> ConsciousnessArtifacts:
+    """
+    Discover consciousness artifacts with safe fallbacks.
+
+    Args:
+        agent_root: Agent directory (auto-detect via ConsciousnessConfig if None)
+        limit: Max artifacts per category
+
+    Returns:
+        ConsciousnessArtifacts (empty lists on any failure - NEVER crash)
+    """
+    try:
+        # Auto-detect agent_root if needed
+        if agent_root is None:
+            try:
+                from .config import ConsciousnessConfig
+                config = ConsciousnessConfig()
+                agent_root = config.agent_root
+            except Exception:
+                return ConsciousnessArtifacts()
+
+        # Ensure agent_root is a Path
+        agent_root = Path(agent_root)
+
+        if not agent_root.exists():
+            return ConsciousnessArtifacts()
+
+        public_dir = agent_root / "agent" / "public"
+
+        if not public_dir.exists():
+            return ConsciousnessArtifacts()
+
+        # Discover artifacts with safe empty list fallbacks
+        reflections_dir = public_dir / "reflections"
+        checkpoints_dir = public_dir / "checkpoints"
+        roadmaps_dir = public_dir / "roadmaps"
+
+        reflections = []
+        if reflections_dir.exists():
+            reflections = sorted(
+                [p for p in reflections_dir.glob("*.md") if p.is_file()],
+                key=lambda p: p.stat().st_mtime,
+                reverse=True
+            )[:limit]
+
+        checkpoints = []
+        if checkpoints_dir.exists():
+            checkpoints = sorted(
+                [p for p in checkpoints_dir.glob("*.md") if p.is_file()],
+                key=lambda p: p.stat().st_mtime,
+                reverse=True
+            )[:limit]
+
+        roadmaps = []
+        if roadmaps_dir.exists():
+            roadmaps = sorted(
+                [p for p in roadmaps_dir.glob("*.md") if p.is_file()],
+                key=lambda p: p.stat().st_mtime,
+                reverse=True
+            )[:limit]
+
+        return ConsciousnessArtifacts(
+            reflections=reflections,
+            checkpoints=checkpoints,
+            roadmaps=roadmaps
+        )
+    except Exception:
+        # NEVER crash - return empty artifacts
+        return ConsciousnessArtifacts()
+
+
+def detect_auto_mode(session_id: str) -> Tuple[bool, str, float]:
+    """
+    Hierarchical AUTO_MODE detection with confidence scoring.
+
+    Priority (highest to lowest):
+    1. CLI flag --auto-mode (not implemented yet, return None)
+    2. Environment variable MACF_AUTO_MODE=true/false - confidence 0.9
+    3. Config file .maceff/config.json "auto_mode" field - confidence 0.7
+    4. Session state (load previous setting) - confidence 0.5
+    5. Default (False, "default", 0.0)
+
+    Args:
+        session_id: Session identifier
+
+    Returns:
+        Tuple of (enabled: bool, source: str, confidence: float)
+    """
+    try:
+        # 1. CLI flag (not implemented yet)
+        # Future: Check sys.argv or click context
+
+        # 2. Environment variable
+        env_value = os.environ.get('MACF_AUTO_MODE', '').lower()
+        if env_value in ('true', '1', 'yes'):
+            return (True, "env", 0.9)
+        elif env_value in ('false', '0', 'no'):
+            return (False, "env", 0.9)
+
+        # 3. Config file
+        try:
+            project_root = find_project_root()
+            config_path = project_root / ".maceff" / "config.json"
+            config_data = read_json_safely(config_path)
+
+            if "auto_mode" in config_data:
+                auto_mode = bool(config_data["auto_mode"])
+                return (auto_mode, "config", 0.7)
+        except Exception:
+            pass
+
+        # 4. Session state (previous setting)
+        try:
+            state = SessionOperationalState.load(session_id)
+            if state.auto_mode_source != "default":
+                # Only use session state if it was set explicitly before
+                return (state.auto_mode, "session", 0.5)
+        except Exception:
+            pass
+
+        # 5. Default
+        return (False, "default", 0.0)
+    except Exception:
+        # NEVER crash
+        return (False, "default", 0.0)
