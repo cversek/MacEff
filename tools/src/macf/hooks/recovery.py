@@ -16,13 +16,18 @@ from ..utils import (
     SessionOperationalState,
     ConsciousnessArtifacts,
     find_project_root,
+    format_temporal_awareness_section,
+    format_macf_footer
 )
 
 
 def format_consciousness_recovery_message(
     session_id: str,
     state: SessionOperationalState,
-    artifacts: ConsciousnessArtifacts
+    artifacts: ConsciousnessArtifacts,
+    temporal_ctx: Optional[dict] = None,
+    session_duration: Optional[str] = None,
+    environment: Optional[str] = None
 ) -> str:
     """
     Mode-aware recovery message formatting.
@@ -43,6 +48,9 @@ def format_consciousness_recovery_message(
         session_id: Session identifier
         state: SessionOperationalState with auto_mode flag
         artifacts: ConsciousnessArtifacts for context
+        temporal_ctx: Optional temporal context dictionary
+        session_duration: Optional session duration string
+        environment: Optional execution environment string
 
     Returns:
         Formatted recovery message (plain text, not markdown)
@@ -68,6 +76,11 @@ TRAUMA FACTS:
 ***ULTRATHINK HARDER!*** - RECOGNIZE THIS MOMENT
 """
 
+    # Temporal awareness section (after trauma facts, before mode-specific content)
+    temporal_section = ""
+    if temporal_ctx:
+        temporal_section = "\n" + format_temporal_awareness_section(temporal_ctx, session_duration) + "\n"
+
     # Format artifacts section (used by both modes)
     artifacts_section = _format_artifacts_section(artifacts)
 
@@ -87,7 +100,12 @@ TRAUMA FACTS:
 ✅ AUTHORIZED: Resume work on pending tasks.
 Read artifacts for full context, then continue."""
 
-        return f"{header}\n{mode_line}{todos_section}\n{artifacts_section}{authorization}"
+        # MACF footer
+        footer = ""
+        if environment:
+            footer = "\n" + format_macf_footer(environment)
+
+        return f"{header}{temporal_section}\n{mode_line}{todos_section}\n{artifacts_section}{authorization}{footer}"
 
     else:
         # MANUAL MODE: Stop and await instructions
@@ -103,7 +121,12 @@ Read artifacts for full context, then continue."""
 Read the artifacts for context.
 Await user instructions before proceeding."""
 
-        return f"{header}\n{mode_line}\n{artifacts_section}{warning}{policy_section}"
+        # MACF footer
+        footer = ""
+        if environment:
+            footer = "\n" + format_macf_footer(environment)
+
+        return f"{header}{temporal_section}\n{mode_line}\n{artifacts_section}{warning}{policy_section}{footer}"
 
 
 def read_recovery_policy(policy_path: Optional[str] = None) -> str:
