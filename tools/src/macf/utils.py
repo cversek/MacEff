@@ -196,6 +196,66 @@ def get_session_transcript_path(session_id: str) -> Optional[str]:
     return None
 
 
+def get_last_user_prompt_uuid(session_id: Optional[str] = None) -> Optional[str]:
+    """
+    Get UUID of the last user prompt in current session.
+
+    Reads JSONL backwards to find most recent message with role='user'.
+
+    Args:
+        session_id: Session ID (auto-detected if None)
+
+    Returns:
+        Message UUID (message.id) or None if not found
+    """
+    if not session_id:
+        session_id = get_current_session_id()
+
+    if session_id == "unknown":
+        return None
+
+    # Find JSONL file
+    jsonl_pattern = f"{session_id}.jsonl"
+    project_dirs = [Path.home() / ".claude" / "projects"]
+
+    jsonl_path = None
+    for project_dir in project_dirs:
+        if not project_dir.exists():
+            continue
+        for file_path in project_dir.rglob(jsonl_pattern):
+            jsonl_path = file_path
+            break
+        if jsonl_path:
+            break
+
+    if not jsonl_path or not jsonl_path.exists():
+        return None
+
+    # Read backwards to find last user message
+    try:
+        with open(jsonl_path, 'r') as f:
+            lines = f.readlines()
+
+        # Iterate backwards
+        for line in reversed(lines):
+            line = line.strip()
+            if not line:
+                continue
+
+            try:
+                data = json.loads(line)
+                message = data.get('message', {})
+                if message.get('role') == 'user':
+                    return message.get('id')
+            except json.JSONDecodeError:
+                continue
+
+    except Exception:
+        pass
+
+    return None
+
+
 def get_session_dir(
     session_id: Optional[str] = None,
     agent_id: Optional[str] = None,
@@ -342,6 +402,16 @@ class SessionOperationalState:
     session_started_at: float = 0.0
     last_compaction_at: Optional[float] = None
     total_session_duration: float = 0.0
+
+    # Development Drive (DEV_DRV) tracking
+    current_dev_drv_started_at: Optional[float] = None
+    dev_drv_count: int = 0
+    total_dev_drv_duration: float = 0.0
+
+    # Delegation Drive (DELEG_DRV) tracking
+    current_deleg_drv_started_at: Optional[float] = None
+    deleg_drv_count: int = 0
+    total_deleg_drv_duration: float = 0.0
 
     def save(self) -> bool:
         """
@@ -587,6 +657,158 @@ def detect_auto_mode(session_id: str) -> Tuple[bool, str, float]:
 
 
 # =============================================================================
+# Development Drive (DEV_DRV) Infrastructure
+# =============================================================================
+
+
+def start_dev_drv(session_id: str, agent_id: Optional[str] = None) -> bool:
+    """
+    Mark Development Drive start.
+
+    DEV_DRV = period from user plan approval/UserPromptSubmit to Stop hook.
+
+    Returns:
+        True if successful, False otherwise
+    """
+    if agent_id is None:
+        from macf.config import ConsciousnessConfig
+        agent_id = ConsciousnessConfig().agent_id
+
+    state = SessionOperationalState.load(session_id, agent_id)
+    state.current_dev_drv_started_at = time.time()
+    return state.save()
+
+
+def complete_dev_drv(session_id: str, agent_id: Optional[str] = None) -> tuple[bool, float]:
+    """
+    Mark Development Drive completion and update stats.
+
+    Returns:
+        Tuple of (success: bool, duration_seconds: float)
+    """
+    if agent_id is None:
+        from macf.config import ConsciousnessConfig
+        agent_id = ConsciousnessConfig().agent_id
+
+    state = SessionOperationalState.load(session_id, agent_id)
+
+    if state.current_dev_drv_started_at is None:
+        return (False, 0.0)
+
+    # Calculate duration
+    duration = time.time() - state.current_dev_drv_started_at
+
+    # Update stats
+    state.dev_drv_count += 1
+    state.total_dev_drv_duration += duration
+    state.current_dev_drv_started_at = None  # Clear current
+
+    success = state.save()
+    return (success, duration)
+
+
+def get_dev_drv_stats(session_id: str, agent_id: Optional[str] = None) -> dict:
+    """
+    Get current Development Drive statistics.
+
+    Returns:
+        Dict with keys: count, total_duration, current_started_at, avg_duration
+    """
+    if agent_id is None:
+        from macf.config import ConsciousnessConfig
+        agent_id = ConsciousnessConfig().agent_id
+
+    state = SessionOperationalState.load(session_id, agent_id)
+
+    avg_duration = 0.0
+    if state.dev_drv_count > 0:
+        avg_duration = state.total_dev_drv_duration / state.dev_drv_count
+
+    return {
+        "count": state.dev_drv_count,
+        "total_duration": state.total_dev_drv_duration,
+        "current_started_at": state.current_dev_drv_started_at,
+        "avg_duration": avg_duration
+    }
+
+
+# =============================================================================
+# Delegation Drive (DELEG_DRV) Infrastructure
+# =============================================================================
+
+
+def start_deleg_drv(session_id: str, agent_id: Optional[str] = None) -> bool:
+    """
+    Mark Delegation Drive start.
+
+    DELEG_DRV = period from Task tool invocation to SubagentStop hook.
+
+    Returns:
+        True if successful, False otherwise
+    """
+    if agent_id is None:
+        from macf.config import ConsciousnessConfig
+        agent_id = ConsciousnessConfig().agent_id
+
+    state = SessionOperationalState.load(session_id, agent_id)
+    state.current_deleg_drv_started_at = time.time()
+    return state.save()
+
+
+def complete_deleg_drv(session_id: str, agent_id: Optional[str] = None) -> tuple[bool, float]:
+    """
+    Mark Delegation Drive completion and update stats.
+
+    Returns:
+        Tuple of (success: bool, duration_seconds: float)
+    """
+    if agent_id is None:
+        from macf.config import ConsciousnessConfig
+        agent_id = ConsciousnessConfig().agent_id
+
+    state = SessionOperationalState.load(session_id, agent_id)
+
+    if state.current_deleg_drv_started_at is None:
+        return (False, 0.0)
+
+    # Calculate duration
+    duration = time.time() - state.current_deleg_drv_started_at
+
+    # Update stats
+    state.deleg_drv_count += 1
+    state.total_deleg_drv_duration += duration
+    state.current_deleg_drv_started_at = None  # Clear current
+
+    success = state.save()
+    return (success, duration)
+
+
+def get_deleg_drv_stats(session_id: str, agent_id: Optional[str] = None) -> dict:
+    """
+    Get current Delegation Drive statistics.
+
+    Returns:
+        Dict with keys: count, total_duration, current_started_at, avg_duration
+    """
+    if agent_id is None:
+        from macf.config import ConsciousnessConfig
+        agent_id = ConsciousnessConfig().agent_id
+
+    state = SessionOperationalState.load(session_id, agent_id)
+
+    avg_duration = 0.0
+    if state.deleg_drv_count > 0:
+        avg_duration = state.total_deleg_drv_duration / state.deleg_drv_count
+
+    return {
+        "count": state.deleg_drv_count,
+        "total_duration": state.total_deleg_drv_duration,
+        "current_started_at": state.current_deleg_drv_started_at,
+        "avg_duration": avg_duration
+    }
+
+
+# =============================================================================
 # Temporal Awareness Infrastructure
 # =============================================================================
 
@@ -739,9 +961,33 @@ def format_temporal_awareness_section(
     return "\n".join(lines)
 
 
+def get_minimal_timestamp() -> str:
+    """
+    Get minimal timestamp for high-frequency hooks.
+
+    Returns:
+        Minimal timestamp like "03:22:45 PM"
+    """
+    now = datetime.now()
+    return now.strftime("%I:%M:%S %p")
+
+
+def format_minimal_temporal_message(timestamp: str) -> str:
+    """
+    Format lightweight temporal message for high-frequency hooks.
+
+    Args:
+        timestamp: From get_minimal_timestamp()
+
+    Returns:
+        Formatted message with 🏗️ MACF tag
+    """
+    return f"🏗️ MACF | {timestamp}"
+
+
 def format_macf_footer(environment: str) -> str:
     """
-    Standard MACF attribution footer.
+    Standard MACF attribution footer with shortened tag.
 
     Uses __version__ from macf package (single source of truth).
 
@@ -751,11 +997,10 @@ def format_macf_footer(environment: str) -> str:
     Returns:
         ```
         ---
-        MACF Tools {__version__} (Multi-Agent Coordination Framework)
+        🏗️ MACF Tools {__version__} (Multi-Agent Coordination Framework)
         Environment: {environment}
         ```
     """
     return f"""---
-🔴 MACF CONSCIOUSNESS INFRASTRUCTURE 🔴
-MACF Tools {__version__} (Multi-Agent Coordination Framework)
+🏗️ MACF Tools {__version__} (Multi-Agent Coordination Framework)
 Environment: {environment}"""
