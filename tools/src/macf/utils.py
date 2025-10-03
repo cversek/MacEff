@@ -405,6 +405,7 @@ class SessionOperationalState:
 
     # Development Drive (DEV_DRV) tracking
     current_dev_drv_started_at: Optional[float] = None
+    current_dev_drv_prompt_uuid: Optional[str] = None
     dev_drv_count: int = 0
     total_dev_drv_duration: float = 0.0
 
@@ -676,6 +677,11 @@ def start_dev_drv(session_id: str, agent_id: Optional[str] = None) -> bool:
 
     state = SessionOperationalState.load(session_id, agent_id)
     state.current_dev_drv_started_at = time.time()
+
+    # Capture UUID of user prompt that started this drive
+    uuid = get_last_user_prompt_uuid(session_id)
+    state.current_dev_drv_prompt_uuid = uuid
+
     return state.save()
 
 
@@ -701,7 +707,10 @@ def complete_dev_drv(session_id: str, agent_id: Optional[str] = None) -> tuple[b
     # Update stats
     state.dev_drv_count += 1
     state.total_dev_drv_duration += duration
-    state.current_dev_drv_started_at = None  # Clear current
+
+    # Clear current drive tracking
+    state.current_dev_drv_started_at = None
+    state.current_dev_drv_prompt_uuid = None
 
     success = state.save()
     return (success, duration)
@@ -728,6 +737,7 @@ def get_dev_drv_stats(session_id: str, agent_id: Optional[str] = None) -> dict:
         "count": state.dev_drv_count,
         "total_duration": state.total_dev_drv_duration,
         "current_started_at": state.current_dev_drv_started_at,
+        "prompt_uuid": state.current_dev_drv_prompt_uuid,
         "avg_duration": avg_duration
     }
 
