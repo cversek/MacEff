@@ -28,8 +28,10 @@ from macf.utils import (
     start_deleg_drv,
     complete_deleg_drv,
     get_deleg_drv_stats,
+    get_last_user_prompt_uuid,
     SessionOperationalState
 )
+from unittest.mock import patch
 
 
 @pytest.fixture(autouse=True)
@@ -461,3 +463,30 @@ class TestCrossComponentIntegration:
         assert deleg_stats["count"] == 1
         assert dev_stats["total_duration"] >= 0.05
         assert deleg_stats["total_duration"] >= 0.05
+
+    @patch("macf.utils.get_last_user_prompt_uuid")
+    def test_dev_drv_uuid_lifecycle(self, mock_get_uuid):
+        """Verify complete UUID tracking from start to stats display (Phase 1C)."""
+        mock_get_uuid.return_value = "msg_01TestUUID123"
+
+        session_id = "test_session_uuid"
+        agent_id = "test_agent"
+
+        # Start DEV_DRV → verify UUID captured
+        start_dev_drv(session_id, agent_id)
+        state = SessionOperationalState.load(session_id, agent_id)
+        assert state.current_dev_drv_prompt_uuid == "msg_01TestUUID123"
+
+        # Get stats → verify UUID present
+        stats = get_dev_drv_stats(session_id, agent_id)
+        assert stats["prompt_uuid"] == "msg_01TestUUID123"
+
+        # Complete DEV_DRV → verify UUID cleared
+        time.sleep(0.01)
+        complete_dev_drv(session_id, agent_id)
+        state = SessionOperationalState.load(session_id, agent_id)
+        assert state.current_dev_drv_prompt_uuid is None
+
+        # Get stats → verify UUID is None
+        stats = get_dev_drv_stats(session_id, agent_id)
+        assert stats["prompt_uuid"] is None

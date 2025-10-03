@@ -24,6 +24,7 @@ from macf.utils import (
     format_minimal_temporal_message,
     get_deleg_drv_stats,
     get_dev_drv_stats,
+    get_last_user_prompt_uuid,
     get_minimal_timestamp,
     start_deleg_drv,
     start_dev_drv,
@@ -77,11 +78,13 @@ def test_session_state_has_dev_drv_fields():
     state = SessionOperationalState(session_id="test", agent_id="agent")
 
     assert hasattr(state, "current_dev_drv_started_at")
+    assert hasattr(state, "current_dev_drv_prompt_uuid")
     assert hasattr(state, "dev_drv_count")
     assert hasattr(state, "total_dev_drv_duration")
 
     # Defaults
     assert state.current_dev_drv_started_at is None
+    assert state.current_dev_drv_prompt_uuid is None
     assert state.dev_drv_count == 0
     assert state.total_dev_drv_duration == 0.0
 
@@ -294,6 +297,7 @@ def test_dev_drv_stats_with_zero_count(mock_config, mock_get_session_dir, tmp_pa
     assert stats["total_duration"] == 0.0
     assert stats["avg_duration"] == 0.0
     assert stats["current_started_at"] is None
+    assert stats["prompt_uuid"] is None
 
 
 @patch("macf.utils.get_session_dir")
@@ -311,3 +315,114 @@ def test_deleg_drv_stats_with_zero_count(mock_config, mock_get_session_dir, tmp_
     assert stats["total_duration"] == 0.0
     assert stats["avg_duration"] == 0.0
     assert stats["current_started_at"] is None
+
+
+# =============================================================================
+# DEV_DRV UUID Tracking Tests (Phase 1C)
+# =============================================================================
+
+
+@patch("macf.utils.get_session_dir")
+@patch("macf.utils.get_last_user_prompt_uuid")
+@patch("macf.config.ConsciousnessConfig")
+def test_uuid_captured_on_dev_drv_start(mock_config, mock_get_uuid, mock_get_session_dir, tmp_path):
+    """Verify UUID captured when DEV_DRV starts."""
+    mock_config.return_value.agent_id = "test_agent"
+    mock_get_session_dir.return_value = tmp_path
+    mock_get_uuid.return_value = "msg_01XYZ123abc"
+
+    session_id = "test_session"
+
+    # Start DEV_DRV
+    success = start_dev_drv(session_id)
+    assert success is True
+
+    # Verify UUID captured
+    state = SessionOperationalState.load(session_id, "test_agent")
+    assert state.current_dev_drv_prompt_uuid == "msg_01XYZ123abc"
+
+
+@patch("macf.utils.get_session_dir")
+@patch("macf.utils.get_last_user_prompt_uuid")
+@patch("macf.config.ConsciousnessConfig")
+def test_uuid_persists_in_state(mock_config, mock_get_uuid, mock_get_session_dir, tmp_path):
+    """Verify UUID survives state save/load cycle."""
+    mock_config.return_value.agent_id = "test_agent"
+    mock_get_session_dir.return_value = tmp_path
+    mock_get_uuid.return_value = "msg_01ABC456def"
+
+    session_id = "test_session"
+
+    # Start DEV_DRV with UUID
+    start_dev_drv(session_id)
+
+    # Load fresh state from disk
+    state = SessionOperationalState.load(session_id, "test_agent")
+
+    # UUID should still be present
+    assert state.current_dev_drv_prompt_uuid == "msg_01ABC456def"
+
+
+@patch("macf.utils.get_session_dir")
+@patch("macf.utils.get_last_user_prompt_uuid")
+@patch("macf.config.ConsciousnessConfig")
+def test_uuid_included_in_stats(mock_config, mock_get_uuid, mock_get_session_dir, tmp_path):
+    """Verify get_dev_drv_stats() includes prompt_uuid."""
+    mock_config.return_value.agent_id = "test_agent"
+    mock_get_session_dir.return_value = tmp_path
+    mock_get_uuid.return_value = "msg_01PQR789ghi"
+
+    session_id = "test_session"
+
+    # Start DEV_DRV
+    start_dev_drv(session_id)
+
+    # Get stats
+    stats = get_dev_drv_stats(session_id)
+
+    # Verify UUID in stats
+    assert "prompt_uuid" in stats
+    assert stats["prompt_uuid"] == "msg_01PQR789ghi"
+
+
+@patch("macf.utils.get_session_dir")
+@patch("macf.utils.get_last_user_prompt_uuid")
+@patch("macf.config.ConsciousnessConfig")
+def test_uuid_cleared_on_completion(mock_config, mock_get_uuid, mock_get_session_dir, tmp_path):
+    """Verify UUID cleared when DEV_DRV completes."""
+    mock_config.return_value.agent_id = "test_agent"
+    mock_get_session_dir.return_value = tmp_path
+    mock_get_uuid.return_value = "msg_01STU012jkl"
+
+    session_id = "test_session"
+
+    # Start DEV_DRV with UUID
+    start_dev_drv(session_id)
+    time.sleep(0.01)
+
+    # Complete DEV_DRV
+    complete_dev_drv(session_id)
+
+    # Verify UUID cleared
+    state = SessionOperationalState.load(session_id, "test_agent")
+    assert state.current_dev_drv_prompt_uuid is None
+
+
+@patch("macf.utils.get_session_dir")
+@patch("macf.utils.get_last_user_prompt_uuid")
+@patch("macf.config.ConsciousnessConfig")
+def test_uuid_handles_missing_gracefully(mock_config, mock_get_uuid, mock_get_session_dir, tmp_path):
+    """Verify None UUID when get_last_user_prompt_uuid() fails."""
+    mock_config.return_value.agent_id = "test_agent"
+    mock_get_session_dir.return_value = tmp_path
+    mock_get_uuid.return_value = None  # Simulate failure
+
+    session_id = "test_session"
+
+    # Start DEV_DRV
+    success = start_dev_drv(session_id)
+    assert success is True  # Should not crash
+
+    # Verify UUID is None (not crash)
+    state = SessionOperationalState.load(session_id, "test_agent")
+    assert state.current_dev_drv_prompt_uuid is None

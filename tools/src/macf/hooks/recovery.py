@@ -115,11 +115,11 @@ Read artifacts for full context, then continue."""
         policy_content = read_recovery_policy(state.recovery_policy_path)
         policy_section = f"\nUSER POLICY:\n{policy_content}"
 
-        # Strong warning
+        # Strong warning with explicit artifact reading instruction
         warning = """
 ⚠️ STOP: DO NOT automatically resume work.
-Read the artifacts for context.
-Await user instructions before proceeding."""
+**IMMEDIATELY read ALL artifacts listed above for full context restoration.**
+Then await user instructions before proceeding with work."""
 
         # MACF footer
         footer = ""
