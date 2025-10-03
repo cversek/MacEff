@@ -246,7 +246,8 @@ def get_last_user_prompt_uuid(session_id: Optional[str] = None) -> Optional[str]
                 data = json.loads(line)
                 message = data.get('message', {})
                 if message.get('role') == 'user':
-                    return message.get('id')
+                    # User messages have top-level 'uuid' field, not message.id
+                    return data.get('uuid')
             except json.JSONDecodeError:
                 continue
 
