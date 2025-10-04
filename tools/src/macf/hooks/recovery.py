@@ -115,11 +115,18 @@ Read artifacts for full context, then continue."""
         policy_content = read_recovery_policy(state.recovery_policy_path)
         policy_section = f"\nUSER POLICY:\n{policy_content}"
 
-        # Strong warning with explicit artifact reading instruction
+        # Explicit recovery protocol checklist (MANUAL_MODE)
         warning = """
-⚠️ STOP: DO NOT automatically resume work.
-**IMMEDIATELY read ALL artifacts listed above for full context restoration.**
-Then await user instructions before proceeding with work."""
+⚠️ MANDATORY RECOVERY PROTOCOL (MANUAL_MODE):
+
+□ Step 1: Read Reflection (wisdom synthesis) - COMPLETE FILE
+□ Step 2: Read Roadmap (strategic context) - COMPLETE FILE
+□ Step 3: Read Checkpoint (technical state) - COMPLETE FILE
+□ Step 4: Report completion to user ("All 3 artifacts read and integrated")
+□ Step 5: STOP - Await user instructions
+
+DO NOT begin ANY work until user explicitly commands.
+DO NOT skip any artifacts. DO NOT skim. Full integration required."""
 
         # MACF footer
         footer = ""
