@@ -829,7 +829,7 @@ def get_deleg_drv_stats(session_id: str, agent_id: Optional[str] = None) -> dict
 # =============================================================================
 
 
-def start_new_cycle(session_id: str, agent_id: Optional[str] = None) -> int:
+def start_new_cycle(session_id: str, agent_id: Optional[str] = None, state: Optional[SessionOperationalState] = None) -> int:
     """
     Initialize new cycle after compaction, increment counter.
 
@@ -839,6 +839,7 @@ def start_new_cycle(session_id: str, agent_id: Optional[str] = None) -> int:
     Args:
         session_id: Session identifier
         agent_id: Optional agent ID (auto-detected if None)
+        state: Optional pre-loaded state object (avoids race condition)
 
     Returns:
         New cycle number (1-based)
@@ -847,7 +848,12 @@ def start_new_cycle(session_id: str, agent_id: Optional[str] = None) -> int:
         from macf.config import ConsciousnessConfig
         agent_id = ConsciousnessConfig().agent_id
 
-    state = SessionOperationalState.load(session_id, agent_id)
+    # Track whether state was provided or we need to load it
+    state_was_provided = state is not None
+
+    # Use provided state or load fresh (for backward compatibility)
+    if not state_was_provided:
+        state = SessionOperationalState.load(session_id, agent_id)
 
     # Increment cycle number
     state.current_cycle_number += 1
@@ -866,7 +872,11 @@ def start_new_cycle(session_id: str, agent_id: Optional[str] = None) -> int:
     state.deleg_drv_count = 0
     state.total_deleg_drv_duration = 0.0
 
-    state.save()
+    # Only save if we loaded fresh state (backward compatibility)
+    # If state was provided by caller, they're responsible for saving
+    if not state_was_provided:
+        state.save()
+
     return state.current_cycle_number
 
 
