@@ -130,17 +130,42 @@ Read artifacts for full context, then continue."""
         policy_section = f"\nUSER POLICY:\n{policy_content}"
 
         # Explicit recovery protocol checklist (MANUAL_MODE)
-        warning = """
+        # Format artifact paths for inline display
+        reflection_path = str(artifacts.latest_reflection) if artifacts.latest_reflection else "No reflection found"
+        roadmap_path = str(artifacts.latest_roadmap) if artifacts.latest_roadmap else "No roadmap found"
+        checkpoint_path = str(artifacts.latest_checkpoint) if artifacts.latest_checkpoint else "No checkpoint found"
+
+        warning = f"""
 ⚠️ MANDATORY RECOVERY PROTOCOL (MANUAL_MODE):
 
-□ Step 1: Read Reflection (wisdom synthesis) - COMPLETE FILE
-□ Step 2: Read Roadmap (strategic context) - COMPLETE FILE
-□ Step 3: Read Checkpoint (technical state) - COMPLETE FILE
-□ Step 4: Report completion to user ("All 3 artifacts read and integrated")
-□ Step 5: STOP - Await user instructions
+User will verify you actually execute these steps by checking tool usage logs.
 
-DO NOT begin ANY work until user explicitly commands.
-DO NOT skip any artifacts. DO NOT skim. Full integration required."""
+□ Step 1: USE THE READ TOOL to read the Reflection file
+  Path shown above: {reflection_path}
+  Read COMPLETE FILE - wisdom synthesis from previous cycle
+  DO NOT rely on summary - user will verify Read tool was called
+
+□ Step 2: USE THE READ TOOL to read the Roadmap file
+  Path shown above: {roadmap_path}
+  Read COMPLETE FILE - strategic context and next phase objectives
+  DO NOT rely on summary - user will verify Read tool was called
+
+□ Step 3: USE THE READ TOOL to read the Checkpoint file
+  Path shown above: {checkpoint_path}
+  Read COMPLETE FILE - technical state and work completed
+  DO NOT rely on summary - user will verify Read tool was called
+
+□ Step 4: Report completion to user
+  Message: "All 3 artifacts read and integrated"
+  User will check that you called Read tool 3 times in order
+  DO NOT claim completion without actual Read tool calls
+
+□ Step 5: STOP - Await user instructions
+  NO development work until user explicitly authorizes
+  User has feedback on your recovery behavior
+
+DO NOT skip steps. DO NOT skim. DO NOT claim completion mechanically.
+Full integration required - user is watching."""
 
         # MACF footer
         footer = ""
