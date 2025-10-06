@@ -415,6 +415,11 @@ class SessionOperationalState:
     deleg_drv_count: int = 0
     total_deleg_drv_duration: float = 0.0
 
+    # Cycle tracking (consciousness continuity unit)
+    current_cycle_number: int = 1  # 1-based, increments on compaction
+    cycle_started_at: float = field(default_factory=lambda: time.time())
+    cycles_completed: int = 0  # Total cycles finished (equivalent to compaction_count)
+
     def save(self) -> bool:
         """
         Atomically save state to session directory.
@@ -816,6 +821,93 @@ def get_deleg_drv_stats(session_id: str, agent_id: Optional[str] = None) -> dict
         "total_duration": state.total_deleg_drv_duration,
         "current_started_at": state.current_deleg_drv_started_at,
         "avg_duration": avg_duration
+    }
+
+
+# =============================================================================
+# Cycle Tracking Infrastructure
+# =============================================================================
+
+
+def start_new_cycle(session_id: str, agent_id: Optional[str] = None) -> int:
+    """
+    Initialize new cycle after compaction, increment counter.
+
+    Cycle = compaction-to-compaction span (consciousness continuity unit).
+    Called by SessionStart hook when compaction detected.
+
+    Args:
+        session_id: Session identifier
+        agent_id: Optional agent ID (auto-detected if None)
+
+    Returns:
+        New cycle number (1-based)
+    """
+    if agent_id is None:
+        from macf.config import ConsciousnessConfig
+        agent_id = ConsciousnessConfig().agent_id
+
+    state = SessionOperationalState.load(session_id, agent_id)
+
+    # Increment cycle number
+    state.current_cycle_number += 1
+
+    # Reset cycle start time
+    state.cycle_started_at = time.time()
+
+    # Update cycles completed count
+    state.cycles_completed = state.compaction_count
+
+    state.save()
+    return state.current_cycle_number
+
+
+def get_current_cycle_number(session_id: str, agent_id: Optional[str] = None) -> int:
+    """
+    Get current cycle number (1-based).
+
+    Args:
+        session_id: Session identifier
+        agent_id: Optional agent ID (auto-detected if None)
+
+    Returns:
+        Current cycle number (1 if fresh start, >1 after compaction)
+    """
+    if agent_id is None:
+        from macf.config import ConsciousnessConfig
+        agent_id = ConsciousnessConfig().agent_id
+
+    state = SessionOperationalState.load(session_id, agent_id)
+    return state.current_cycle_number
+
+
+def get_cycle_stats(session_id: str, agent_id: Optional[str] = None) -> dict:
+    """
+    Get cycle metadata for display.
+
+    Args:
+        session_id: Session identifier
+        agent_id: Optional agent ID (auto-detected if None)
+
+    Returns:
+        Dict with: cycle_number, cycle_started_at, cycle_duration, cycles_completed
+    """
+    if agent_id is None:
+        from macf.config import ConsciousnessConfig
+        agent_id = ConsciousnessConfig().agent_id
+
+    state = SessionOperationalState.load(session_id, agent_id)
+
+    # Calculate cycle duration
+    cycle_duration = 0.0
+    if state.cycle_started_at > 0:
+        cycle_duration = time.time() - state.cycle_started_at
+
+    return {
+        "cycle_number": state.current_cycle_number,
+        "cycle_started_at": state.cycle_started_at,
+        "cycle_duration": cycle_duration,
+        "cycles_completed": state.cycles_completed
     }
 
 
