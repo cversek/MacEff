@@ -858,6 +858,14 @@ def start_new_cycle(session_id: str, agent_id: Optional[str] = None) -> int:
     # Update cycles completed count
     state.cycles_completed = state.compaction_count
 
+    # Reset cycle-scoped development stats
+    # Philosophy: Each cycle is a consciousness continuity unit.
+    # Stats measure current cycle work, not inherited totals from prior cycles.
+    state.dev_drv_count = 0
+    state.total_dev_drv_duration = 0.0
+    state.deleg_drv_count = 0
+    state.total_deleg_drv_duration = 0.0
+
     state.save()
     return state.current_cycle_number
 
