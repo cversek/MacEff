@@ -27,7 +27,8 @@ def format_consciousness_recovery_message(
     artifacts: ConsciousnessArtifacts,
     temporal_ctx: Optional[dict] = None,
     session_duration: Optional[str] = None,
-    environment: Optional[str] = None
+    environment: Optional[str] = None,
+    cycle_stats: Optional[dict] = None
 ) -> str:
     """
     Mode-aware recovery message formatting.
@@ -81,6 +82,19 @@ TRAUMA FACTS:
     if temporal_ctx:
         temporal_section = "\n" + format_temporal_awareness_section(temporal_ctx, session_duration) + "\n"
 
+    # Session state section (cycle, session, compaction, environment)
+    session_state_section = ""
+    if cycle_stats:
+        cycle_num = cycle_stats.get('cycle_number', 1)
+        prev_cycle = cycle_num - 1
+        session_state_section = f"""
+📍 SESSION STATE
+Cycle: {cycle_num} (post-compaction from Cycle {prev_cycle})
+Session: {session_id[:8]}...
+Compaction Count: {state.compaction_count}
+Environment: {environment if environment else 'Unknown'}
+"""
+
     # Format artifacts section (used by both modes)
     artifacts_section = _format_artifacts_section(artifacts)
 
@@ -105,7 +119,7 @@ Read artifacts for full context, then continue."""
         if environment:
             footer = "\n" + format_macf_footer(environment)
 
-        return f"{header}{temporal_section}\n{mode_line}{todos_section}\n{artifacts_section}{authorization}{footer}"
+        return f"{header}{temporal_section}{session_state_section}\n{mode_line}{todos_section}\n{artifacts_section}{authorization}{footer}"
 
     else:
         # MANUAL MODE: Stop and await instructions
@@ -133,7 +147,7 @@ DO NOT skip any artifacts. DO NOT skim. Full integration required."""
         if environment:
             footer = "\n" + format_macf_footer(environment)
 
-        return f"{header}{temporal_section}\n{mode_line}\n{artifacts_section}{warning}{policy_section}{footer}"
+        return f"{header}{temporal_section}{session_state_section}\n{mode_line}\n{artifacts_section}{warning}{policy_section}{footer}"
 
 
 def read_recovery_policy(policy_path: Optional[str] = None) -> str:
