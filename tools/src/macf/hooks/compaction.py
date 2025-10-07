@@ -9,7 +9,10 @@ from pathlib import Path
 
 def detect_compaction(transcript_path: Path) -> bool:
     """
-    Detect if transcript contains fake continuation message.
+    Detect compaction via CC 2.0 compact_boundary marker.
+
+    CC 2.0 creates system messages with subtype "compact_boundary"
+    after compaction events. Look for these in recent messages.
 
     Args:
         transcript_path: Path to JSONL transcript file
@@ -20,10 +23,25 @@ def detect_compaction(transcript_path: Path) -> bool:
     if not transcript_path.exists():
         return False
 
+    import json
+
+    # Read all lines
     with open(transcript_path) as f:
-        for line in f:
-            if "continued from previous conversation" in line.lower():
+        lines = f.readlines()
+
+    # Check last 100 messages for compact_boundary
+    # (SessionStart runs early, so marker should be recent)
+    start_idx = max(0, len(lines) - 100)
+
+    for line in lines[start_idx:]:
+        try:
+            msg = json.loads(line)
+            if (msg.get('type') == 'system' and
+                msg.get('subtype') == 'compact_boundary'):
                 return True
+        except (json.JSONDecodeError, KeyError):
+            continue
+
     return False
 
 
