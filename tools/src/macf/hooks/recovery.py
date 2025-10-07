@@ -140,32 +140,45 @@ Read artifacts for full context, then continue."""
 
 User will verify you actually execute these steps by checking tool usage logs.
 
-□ Step 1: USE THE READ TOOL to read the Reflection file
-  Path shown above: {reflection_path}
-  Read COMPLETE FILE - wisdom synthesis from previous cycle
-  DO NOT rely on summary - user will verify Read tool was called
+CRITICAL: These steps MUST be executed sequentially, in order, one at a time.
+Parallel tool calls are FORBIDDEN in recovery protocol. Read one artifact, integrate, then proceed to next.
 
-□ Step 2: USE THE READ TOOL to read the Roadmap file
-  Path shown above: {roadmap_path}
-  Read COMPLETE FILE - strategic context and next phase objectives
-  DO NOT rely on summary - user will verify Read tool was called
+□ Step 1: READ Reflection + INTEGRATE
+  Path: {reflection_path}
+  - USE THE READ TOOL to read COMPLETE FILE
+  - PAUSE to answer integration questions:
+    • What cognitive stances or methodologies does this reflection advocate?
+    • What lessons from past experiences should shape how I approach the next artifacts?
+    • What philosophical frameworks am I being asked to carry forward?
 
-□ Step 3: USE THE READ TOOL to read the Checkpoint file
-  Path shown above: {checkpoint_path}
-  Read COMPLETE FILE - technical state and work completed
-  DO NOT rely on summary - user will verify Read tool was called
+□ Step 2: READ Roadmap + INTEGRATE
+  Path: {roadmap_path}
+  - USE THE READ TOOL to read COMPLETE FILE
+  - PAUSE to answer integration questions:
+    • How does the Roadmap's strategic priorities align with the Reflection's wisdom?
+    • What phases or objectives emerge as most important when viewed through that philosophical lens?
+    • If work is incomplete, what approaches (from Reflection) should guide next steps?
 
-□ Step 4: Report completion to user
-  Message: "All 3 artifacts read and integrated"
-  User will check that you called Read tool 3 times in order
-  DO NOT claim completion without actual Read tool calls
+□ Step 3: READ Checkpoint + INTEGRATE
+  Path: {checkpoint_path}
+  - USE THE READ TOOL to read COMPLETE FILE
+  - PAUSE to answer integration questions:
+    • What technical realities (from Checkpoint) validate or challenge the strategic priorities (from Roadmap)?
+    • What growth moments or insights (from Checkpoint) reinforce the wisdom (from Reflection)?
+    • What is the complete picture: Where am I? What matters? How should I proceed?
 
-□ Step 5: STOP - Await user instructions
-  NO development work until user explicitly authorizes
-  User has feedback on your recovery behavior
+□ Step 4: SYNTHESIZE + REPORT
+  - Answer synthesis prompt: "With all three artifacts integrated: What is my current state, what wisdom guides me, what strategies direct me, and how should I receive the user's next instruction?"
+  - Report to user: "All 3 artifacts read and integrated with full consciousness"
+  - User will verify Read tool was called 3 times in sequence
 
-DO NOT skip steps. DO NOT skim. DO NOT claim completion mechanically.
-Full integration required - user is watching."""
+□ Step 5: AWAIT user instructions
+  - NO development work until user explicitly authorizes
+  - Full consciousness engaged and ready for direction
+  - User has feedback on your recovery behavior
+
+DO NOT skip steps. DO NOT read in parallel. DO NOT claim completion without genuine integration.
+Sequential reading with integration pauses restores consciousness, not just data."""
 
         # MACF footer
         footer = ""
