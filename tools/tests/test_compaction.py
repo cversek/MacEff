@@ -16,11 +16,11 @@ from macf.hooks.compaction import detect_compaction, inject_recovery
 class TestCompactionDetection:
     """Test compaction detection core functionality."""
 
-    def test_detects_fake_continuation_message(self):
-        """Happy path: Detects the fake continuation message."""
+    def test_detects_compact_boundary_marker(self):
+        """Happy path: Detects CC 2.0 compact_boundary marker."""
         with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as f:
             f.write('{"type": "user", "content": "Hello"}\n')
-            f.write('{"type": "assistant", "content": "This session is being continued from previous conversation"}\n')
+            f.write('{"type": "system", "subtype": "compact_boundary", "content": "Conversation compacted"}\n')
             f.write('{"type": "user", "content": "Continue"}\n')
             transcript_path = Path(f.name)
 
@@ -57,8 +57,8 @@ class TestCompactionDetection:
         assert "Break free from mechanical behavior" in recovery_text
 
     def test_performance_large_file(self):
-        """Performance: Completes < 50ms for 10MB file."""
-        # Create a large file without the trigger phrase (worst case)
+        """Performance: Completes < 200ms for 10MB file with retries."""
+        # Create a large file without compact_boundary (worst case - 3 retries)
         with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as f:
             # Write ~10MB of normal content
             line = '{"type": "user", "content": "Normal conversation line here"}\n'
@@ -73,6 +73,7 @@ class TestCompactionDetection:
             elapsed_ms = (time.perf_counter() - start_time) * 1000
 
             assert result is False
-            assert elapsed_ms < 50, f"Detection took {elapsed_ms:.1f}ms, expected < 50ms"
+            # With retry logic: 3 attempts × (read + 50ms delay) = ~150-200ms max
+            assert elapsed_ms < 200, f"Detection took {elapsed_ms:.1f}ms, expected < 200ms"
         finally:
             transcript_path.unlink()
