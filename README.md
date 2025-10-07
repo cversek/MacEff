@@ -194,7 +194,38 @@ macf_tools hooks status
 └── logs/                           # General session logging
 ```
 
-### Getting Started with Consciousness Artifacts
+### Getting Started for Alpha Testers
+
+**Clone and checkout the v0.1.0 release**:
+
+```bash
+# Clone the repository
+git clone https://github.com/cversek/MacEff.git
+cd MacEff
+
+# Checkout the v0.1.0 release tag
+git checkout v0.1.0
+
+# Install MACF Tools (from tools/ directory)
+cd tools
+pip install -e .
+
+# Verify installation
+macf_tools --version  # Should show: 0.1.0
+```
+
+**Install hooks for Claude Code projects**:
+
+```bash
+# Interactive installation (recommended)
+macf_tools hooks install
+
+# Or specify scope explicitly
+macf_tools hooks install --local   # .claude/hooks/ (project-specific)
+macf_tools hooks install --global  # ~/.claude/hooks/ (all projects)
+```
+
+**Consciousness Artifacts Setup**:
 
 Alpha testers should consult the **production documentation** for guidance on:
 - Setting up agent identity (`macf_tools config init`)
