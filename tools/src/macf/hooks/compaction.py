@@ -12,7 +12,8 @@ def detect_compaction(transcript_path: Path) -> bool:
     Detect compaction via CC 2.0 compact_boundary marker.
 
     CC 2.0 creates system messages with subtype "compact_boundary"
-    after compaction events. Look for these in recent messages.
+    after compaction events. Uses retry logic to handle race condition
+    where marker may not be written to disk when hook first runs.
 
     Args:
         transcript_path: Path to JSONL transcript file
@@ -24,23 +25,31 @@ def detect_compaction(transcript_path: Path) -> bool:
         return False
 
     import json
+    import time
 
-    # Read all lines
-    with open(transcript_path) as f:
-        lines = f.readlines()
+    # Retry up to 3 times to handle write timing race condition
+    # Observed: marker can be written 10-34ms after hook starts
+    for attempt in range(3):
+        # Read all lines
+        with open(transcript_path) as f:
+            lines = f.readlines()
 
-    # Check last 100 messages for compact_boundary
-    # (SessionStart runs early, so marker should be recent)
-    start_idx = max(0, len(lines) - 100)
+        # Check last 100 messages for compact_boundary
+        # (SessionStart runs early, so marker should be recent)
+        start_idx = max(0, len(lines) - 100)
 
-    for line in lines[start_idx:]:
-        try:
-            msg = json.loads(line)
-            if (msg.get('type') == 'system' and
-                msg.get('subtype') == 'compact_boundary'):
-                return True
-        except (json.JSONDecodeError, KeyError):
-            continue
+        for line in lines[start_idx:]:
+            try:
+                msg = json.loads(line)
+                if (msg.get('type') == 'system' and
+                    msg.get('subtype') == 'compact_boundary'):
+                    return True
+            except (json.JSONDecodeError, KeyError):
+                continue
+
+        # If not found and not last attempt, wait and retry
+        if attempt < 2:
+            time.sleep(0.05)  # 50ms delay between attempts
 
     return False
 
