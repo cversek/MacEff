@@ -570,3 +570,114 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.container)
         elif "host" in item.name.lower():
             item.add_marker(pytest.mark.host)
+
+
+# Hook-specific fixtures for handle_* module tests
+
+@pytest.fixture
+def mock_session_state():
+    """Return mock SessionOperationalState for hook testing."""
+    state = MagicMock()
+    state.auto_mode = False
+    state.auto_mode_source = "default"
+    state.auto_mode_confidence = 0.0
+    state.pending_todos = []
+    state.compaction_count = 0
+    state.session_started_at = None
+    state.last_compaction_at = None
+    state.dev_drv_start = None
+    state.dev_drv_prompt_uuid = None
+    state.deleg_drv_start = None
+    state.save = MagicMock(return_value=True)
+    return state
+
+
+@pytest.fixture
+def mock_consciousness_artifacts():
+    """Return mock ConsciousnessArtifacts for hook testing."""
+    artifacts = MagicMock()
+    artifacts.latest_checkpoint = Path("/test/agent/public/checkpoints/2025-10-07_strategic_ccp.md")
+    artifacts.latest_reflection = Path("/test/agent/public/reflections/2025-10-07_jotewr.md")
+    artifacts.latest_roadmap = Path("/test/agent/public/roadmaps/2025-10-07_plan.md")
+    artifacts.__bool__ = MagicMock(return_value=True)
+    return artifacts
+
+
+@pytest.fixture
+def hook_stdin_empty():
+    """Return empty stdin for hook testing."""
+    return ""
+
+
+@pytest.fixture
+def hook_stdin_read_tool():
+    """Return Read tool stdin for hook testing."""
+    return '{"tool_name": "Read", "tool_input": {"file_path": "/foo/bar/test.py"}}'
+
+
+@pytest.fixture
+def hook_stdin_write_tool():
+    """Return Write tool stdin for hook testing."""
+    return '{"tool_name": "Write", "tool_input": {"file_path": "/foo/bar/config.yaml"}}'
+
+
+@pytest.fixture
+def hook_stdin_bash_tool():
+    """Return Bash tool stdin with long command for hook testing."""
+    return '{"tool_name": "Bash", "tool_input": {"command": "very long command that exceeds forty characters and needs truncation"}}'
+
+
+@pytest.fixture
+def hook_stdin_task_tool():
+    """Return Task tool stdin for delegation testing."""
+    return '{"tool_name": "Task", "tool_input": {"subagent_type": "devops-eng"}}'
+
+
+@pytest.fixture
+def hook_stdin_todowrite():
+    """Return TodoWrite tool stdin with various statuses."""
+    return json.dumps({
+        "tool_name": "TodoWrite",
+        "tool_input": {
+            "todos": [
+                {"content": "Task 1", "status": "completed", "activeForm": "Completing task 1"},
+                {"content": "Task 2", "status": "completed", "activeForm": "Completing task 2"},
+                {"content": "Task 3", "status": "in_progress", "activeForm": "Working on task 3"},
+                {"content": "Task 4", "status": "pending", "activeForm": "Starting task 4"},
+                {"content": "Task 5", "status": "pending", "activeForm": "Starting task 5"},
+                {"content": "Task 6", "status": "pending", "activeForm": "Starting task 6"}
+            ]
+        }
+    })
+
+
+@pytest.fixture
+def hook_stdin_grep_tool():
+    """Return Grep tool stdin with long pattern for hook testing."""
+    return '{"tool_name": "Grep", "tool_input": {"pattern": "very long pattern that should be truncated to thirty characters"}}'
+
+
+@pytest.fixture
+def hook_stdin_glob_tool():
+    """Return Glob tool stdin for hook testing."""
+    return '{"tool_name": "Glob", "tool_input": {"pattern": "**/*.py"}}'
+
+
+@pytest.fixture
+def mock_temporal_context_hook():
+    """Return fixed temporal context for hook testing."""
+    return {
+        "timestamp_formatted": "2025-10-08 12:45:30 AM EDT",
+        "day_of_week": "Wednesday",
+        "time_of_day": "12:45:30 AM",
+        "session_duration_seconds": 1800,
+        "session_duration_formatted": "30m",
+        "gap_since_last_checkpoint_seconds": None,
+        "gap_since_last_checkpoint_formatted": "Unknown"
+    }
+
+
+@pytest.fixture
+def mock_minimal_timestamp_hook():
+    """Return fixed minimal timestamp for high-frequency hooks."""
+    return "12:45:30 AM"

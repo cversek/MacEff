@@ -1,0 +1,108 @@
+"""Tests for handle_subagent_stop hook module."""
+import pytest
+from unittest.mock import patch, MagicMock
+
+
+@pytest.fixture
+def mock_dependencies():
+    """Mock all external dependencies for subagent_stop handler."""
+    with patch('macf.hooks.handle_subagent_stop.get_current_session_id') as mock_session, \
+         patch('macf.hooks.handle_subagent_stop.complete_deleg_drv') as mock_complete, \
+         patch('macf.hooks.handle_subagent_stop.get_deleg_drv_stats') as mock_stats, \
+         patch('macf.hooks.handle_subagent_stop.get_temporal_context') as mock_temporal:
+
+        mock_session.return_value = "test-session-123"
+        mock_complete.return_value = (True, 65)  # (success, duration) tuple
+        mock_stats.return_value = {
+            'count': 3,
+            'total_duration': 180
+        }
+        mock_temporal.return_value = {
+            "timestamp_formatted": "2025-10-08 01:15:30 AM EDT",
+            "day_of_week": "Wednesday",
+            "time_of_day": "01:15:30 AM"
+        }
+
+        yield {
+            'session_id': mock_session,
+            'complete': mock_complete,
+            'stats': mock_stats,
+            'temporal': mock_temporal
+        }
+
+
+def test_deleg_drv_completion_tracking(mock_dependencies):
+    """Test DELEG_DRV completion is tracked with duration."""
+    from macf.hooks.handle_subagent_stop import run
+
+    mock_dependencies['complete'].return_value = (True, 65)
+
+    result = run("")
+
+    # Verify complete_deleg_drv was called
+    mock_dependencies['complete'].assert_called_once_with("test-session-123")
+    assert result["continue"] is True
+
+
+def test_delegation_stats_display(mock_dependencies):
+    """Test delegation stats are displayed correctly."""
+    from macf.hooks.handle_subagent_stop import run
+
+    mock_dependencies['stats'].return_value = {
+        'count': 3,
+        'total_duration': 180
+    }
+
+    result = run("")
+
+    assert "hookSpecificOutput" in result
+    context = result["hookSpecificOutput"]["additionalContext"]
+
+    # Verify count
+    assert "Total Delegations: 3" in context or "3" in context
+
+    # Verify duration (180s = 3m)
+    assert "3m" in context
+
+
+def test_temporal_context_included(mock_dependencies):
+    """Test temporal context is included in output."""
+    from macf.hooks.handle_subagent_stop import run
+
+    result = run("")
+
+    context = result["hookSpecificOutput"]["additionalContext"]
+
+    # Verify timestamp present
+    assert "01:15:30 AM EDT" in context or "Wednesday" in context
+
+
+def test_duration_formatting(mock_dependencies):
+    """Test duration is formatted correctly."""
+    from macf.hooks.handle_subagent_stop import run
+
+    mock_dependencies['complete'].return_value = (True, 65)
+    mock_dependencies['stats'].return_value = {
+        'count': 1,
+        'total_duration': 65
+    }
+
+    result = run("")
+
+    context = result["hookSpecificOutput"]["additionalContext"]
+
+    # 65 seconds should display as 1m
+    assert "1m" in context
+
+
+def test_exception_handling(mock_dependencies):
+    """Test hook handles exceptions gracefully."""
+    from macf.hooks.handle_subagent_stop import run
+
+    # Simulate exception in stats
+    mock_dependencies['stats'].side_effect = Exception("Stats error")
+
+    result = run("")
+
+    # Should never crash
+    assert result == {"continue": True}

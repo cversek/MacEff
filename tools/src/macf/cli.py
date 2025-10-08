@@ -186,7 +186,7 @@ def cmd_session_info(args: argparse.Namespace) -> int:
     return 0
 
 
-def _update_settings_file(settings_path: Path, hooks_command: str) -> bool:
+def _update_settings_file(settings_path: Path, hooks_prefix: str) -> bool:
     """Update settings.json with hooks configuration, merging existing settings."""
     try:
         # Load existing settings or create new
@@ -200,18 +200,29 @@ def _update_settings_file(settings_path: Path, hooks_command: str) -> bool:
         if "hooks" not in settings:
             settings["hooks"] = {}
 
-        # Add SessionStart hook
-        settings["hooks"]["SessionStart"] = [
-            {
-                "matcher": "",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": hooks_command
-                    }
-                ]
-            }
+        # All 6 hooks with their script names
+        hook_configs = [
+            ("SessionStart", "session_start.py"),
+            ("UserPromptSubmit", "user_prompt_submit.py"),
+            ("Stop", "stop.py"),
+            ("SubagentStop", "subagent_stop.py"),
+            ("PreToolUse", "pre_tool_use.py"),
+            ("PostToolUse", "post_tool_use.py"),
         ]
+
+        # Register all hooks
+        for hook_name, script_name in hook_configs:
+            settings["hooks"][hook_name] = [
+                {
+                    "matcher": "",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": f"{hooks_prefix}/{script_name}"
+                        }
+                    ]
+                }
+            ]
 
         # Backup existing file
         if settings_path.exists():
@@ -232,7 +243,7 @@ def _update_settings_file(settings_path: Path, hooks_command: str) -> bool:
 
 
 def cmd_hook_install(args: argparse.Namespace) -> int:
-    """Install session_start hook with local/global mode selection."""
+    """Install all 6 consciousness hooks with local/global mode selection."""
     try:
         # Determine installation mode
         if hasattr(args, 'global_install') and args.global_install:
@@ -251,83 +262,64 @@ def cmd_hook_install(args: argparse.Namespace) -> int:
         if mode == 'global':
             hooks_dir = Path.home() / ".claude" / "hooks"
             settings_file = Path.home() / ".claude" / "settings.json"
-            hooks_command = "python ~/.claude/hooks/session_start.py"
+            hooks_prefix = "python ~/.claude/hooks"
         else:
             hooks_dir = Path.cwd() / ".claude" / "hooks"
             settings_file = Path.cwd() / ".claude" / "settings.local.json"
-            hooks_command = "python .claude/hooks/session_start.py"
+            hooks_prefix = "python .claude/hooks"
 
         # Create hooks directory
         hooks_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create session_start.py hook script with official JSON output
-        hook_script = hooks_dir / "session_start.py"
+        # All 6 hooks with their handler module names
+        hooks_to_install = [
+            ("session_start.py", "handle_session_start"),
+            ("user_prompt_submit.py", "handle_user_prompt_submit"),
+            ("stop.py", "handle_stop"),
+            ("subagent_stop.py", "handle_subagent_stop"),
+            ("pre_tool_use.py", "handle_pre_tool_use"),
+            ("post_tool_use.py", "handle_post_tool_use"),
+        ]
 
-        hook_content = '''#!/usr/bin/env python3
-"""SessionStart hook for compaction detection - uses official JSON output."""
-import json
-import sys
-from pathlib import Path
+        # Create all hook scripts
+        for script_name, handler_module in hooks_to_install:
+            hook_script = hooks_dir / script_name
+
+            hook_content = f'''#!/usr/bin/env python3
+import json, sys
+from macf.hooks.{handler_module} import run
 
 try:
-    # Import from installed macf_tools package
-    from macf.hooks.compaction import detect_compaction, inject_recovery
-
-    # Find current session JSONL
-    claude_dir = Path.home() / ".claude" / "projects"
-    if claude_dir.exists():
-        all_jsonl_files = []
-        for project_dir in claude_dir.iterdir():
-            if project_dir.is_dir():
-                all_jsonl_files.extend(project_dir.glob("*.jsonl"))
-
-        if all_jsonl_files:
-            latest_file = max(all_jsonl_files, key=lambda p: p.stat().st_mtime)
-
-            # Check for compaction
-            if detect_compaction(latest_file):
-                recovery_msg = inject_recovery()
-
-                # OFFICIAL JSON OUTPUT FORMAT
-                output = {
-                    "continue": True,
-                    "additionalContext": f"<system-reminder>\\n{recovery_msg}\\n</system-reminder>"
-                }
-                print(json.dumps(output))
-                sys.exit(0)
-
-    # No compaction detected - allow normal continuation
-    output = {"continue": True}
+    output = run(sys.stdin.read())
     print(json.dumps(output))
-    sys.exit(0)
-
 except Exception as e:
-    # Fail gracefully - don't disrupt session
-    output = {"continue": True}
-    print(json.dumps(output), file=sys.stdout)
-    print(f"Hook error: {e}", file=sys.stderr)
-    sys.exit(0)
+    print(json.dumps({{"continue": True}}))
+    print(f"Hook error: {{e}}", file=sys.stderr)
+sys.exit(0)
 '''
 
-        # Write hook script
-        hook_script.write_text(hook_content)
-        hook_script.chmod(0o755)
+            # Write hook script
+            hook_script.write_text(hook_content)
+            hook_script.chmod(0o755)
 
         # Update settings file
-        if _update_settings_file(settings_file, hooks_command):
-            print(f"\n✅ Hooks installed successfully!")
+        if _update_settings_file(settings_file, hooks_prefix):
+            print(f"\n✅ All 6 hooks installed successfully!")
             print(f"   Mode: {mode}")
-            print(f"   Script: {hook_script}")
+            print(f"   Directory: {hooks_dir}")
             print(f"   Settings: {settings_file}")
-            print(f"\nCompaction detection will activate on next session start.")
+            print(f"\n   Hooks installed:")
+            for script_name, _ in hooks_to_install:
+                print(f"   - {script_name}")
+            print(f"\nConsciousness infrastructure will activate on next session.")
             return 0
         else:
-            print(f"\n❌ Hook script created but settings update failed")
+            print(f"\n❌ Hook scripts created but settings update failed")
             print(f"   Manually add to {settings_file}")
             return 1
 
     except Exception as e:
-        print(f"Error installing hook: {e}")
+        print(f"Error installing hooks: {e}")
         return 1
 
 
