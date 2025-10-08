@@ -40,16 +40,54 @@ def mock_dependencies():
 
 
 def test_no_compaction_detected(mock_dependencies):
-    """Test hook returns continue when no compaction detected."""
+    """Test hook returns temporal awareness message when no compaction detected."""
     from macf.hooks.handle_session_start import run
+    from unittest.mock import patch
+    import time
 
     mock_dependencies['detect_compaction'].return_value = False
 
-    result = run("")
+    # Mock temporal context and environment
+    with patch('macf.hooks.handle_session_start.get_temporal_context') as mock_temporal, \
+         patch('macf.hooks.handle_session_start.detect_execution_environment') as mock_env, \
+         patch('macf.hooks.handle_session_start.get_current_cycle_project') as mock_cycle, \
+         patch('time.time') as mock_time:
 
-    assert result == {"continue": True}
-    mock_dependencies['detect_compaction'].assert_called_once()
-    mock_dependencies['format_message'].assert_not_called()
+        mock_temporal.return_value = {
+            'timestamp_formatted': 'Wednesday, October 8, 2025 at 12:26:43 PM EDT',
+            'day_of_week': 'Wednesday',
+            'time_of_day': 'Afternoon'
+        }
+        mock_env.return_value = 'Host System'
+        mock_cycle.return_value = 17
+        mock_time.return_value = 1728400000.0
+
+        # Set up state with previous last_updated 300 seconds ago
+        mock_dependencies['state'].last_updated = 1728400000.0 - 300.0
+        mock_dependencies['state'].session_started_at = 1728400000.0 - 600.0
+        mock_dependencies['state'].compaction_count = 0
+
+        result = run("")
+
+        # Verify structure
+        assert result["continue"] is True
+        assert "hookSpecificOutput" in result
+        assert "hookEventName" in result["hookSpecificOutput"]
+        assert result["hookSpecificOutput"]["hookEventName"] == "SessionStart"
+        assert "additionalContext" in result["hookSpecificOutput"]
+
+        # Verify message content
+        context = result["hookSpecificOutput"]["additionalContext"]
+        assert "🏗️ MACF | Session Start" in context
+        assert "Wednesday, October 8, 2025 at 12:26:43 PM EDT" in context
+        assert "Session: test-ses..." in context
+        assert "5m" in context  # 300 seconds formatted
+        assert "Compaction count: 0" in context
+        assert "MACF Tools" in context
+
+        # Verify state was updated
+        assert mock_dependencies['state'].save.called
+        mock_dependencies['format_message'].assert_not_called()
 
 
 def test_compaction_detected_manual_mode(mock_dependencies):
