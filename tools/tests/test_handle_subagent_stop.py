@@ -55,14 +55,14 @@ def test_delegation_stats_display(mock_dependencies):
 
     result = run("")
 
-    assert "hookSpecificOutput" in result
-    context = result["hookSpecificOutput"]["additionalContext"]
+    assert "systemMessage" in result
+    message = result["systemMessage"]
 
     # Verify count
-    assert "Total Delegations: 3" in context or "3" in context
+    assert "Total Delegations: 3" in message or "3" in message
 
     # Verify duration (180s = 3m)
-    assert "3m" in context
+    assert "3m" in message
 
 
 def test_temporal_context_included(mock_dependencies):
@@ -71,10 +71,10 @@ def test_temporal_context_included(mock_dependencies):
 
     result = run("")
 
-    context = result["hookSpecificOutput"]["additionalContext"]
+    message = result["systemMessage"]
 
     # Verify timestamp present
-    assert "01:15:30 AM EDT" in context or "Wednesday" in context
+    assert "01:15:30 AM EDT" in message or "Wednesday" in message
 
 
 def test_duration_formatting(mock_dependencies):
@@ -89,10 +89,10 @@ def test_duration_formatting(mock_dependencies):
 
     result = run("")
 
-    context = result["hookSpecificOutput"]["additionalContext"]
+    message = result["systemMessage"]
 
     # 65 seconds should display as 1m
-    assert "1m" in context
+    assert "1m" in message
 
 
 def test_exception_handling(mock_dependencies):

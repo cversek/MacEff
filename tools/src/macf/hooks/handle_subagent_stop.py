@@ -57,8 +57,7 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
         total_duration_str = format_duration(stats['total_duration'])
 
         # Format message with full timestamp and DELEG_DRV summary
-        message = f"""<system-reminder>
-🏗️ MACF | DELEG_DRV Complete
+        message = f"""🏗️ MACF | DELEG_DRV Complete
 Current Time: {temporal_ctx['timestamp_formatted']}
 Day: {temporal_ctx['day_of_week']}
 Time of Day: {temporal_ctx['time_of_day']}
@@ -69,16 +68,12 @@ Delegation Drive Stats:
 - Total Delegations: {stats['count']}
 - Total Duration: {total_duration_str}
 
-{format_macf_footer(environment)}
-</system-reminder>"""
+{format_macf_footer(environment)}"""
 
-        # Return with hookSpecificOutput.additionalContext
+        # Return with systemMessage (user display only - SubagentStop hook doesn't support hookSpecificOutput)
         return {
             "continue": True,
-            "hookSpecificOutput": {
-                "hookEventName": "SubagentStop",
-                "additionalContext": message
-            }
+            "systemMessage": message
         }
 
     except Exception:
