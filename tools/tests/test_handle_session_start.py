@@ -51,6 +51,7 @@ def test_no_compaction_detected(mock_dependencies):
     with patch('macf.hooks.handle_session_start.get_temporal_context') as mock_temporal, \
          patch('macf.hooks.handle_session_start.detect_execution_environment') as mock_env, \
          patch('macf.hooks.handle_session_start.get_current_cycle_project') as mock_cycle, \
+         patch('macf.hooks.handle_session_start.load_project_state') as mock_load_proj, \
          patch('time.time') as mock_time:
 
         mock_temporal.return_value = {
@@ -62,9 +63,12 @@ def test_no_compaction_detected(mock_dependencies):
         mock_cycle.return_value = 17
         mock_time.return_value = 1728400000.0
 
-        # Set up state with previous last_updated 300 seconds ago
-        mock_dependencies['state'].last_updated = 1728400000.0 - 300.0
-        mock_dependencies['state'].session_started_at = 1728400000.0 - 600.0
+        # Mock project state with last session ended 5 minutes ago
+        mock_load_proj.return_value = {
+            'last_session_ended_at': 1728400000.0 - 300.0  # 5 minutes ago
+        }
+
+        # Set up state
         mock_dependencies['state'].compaction_count = 0
 
         result = run("")
@@ -88,6 +92,42 @@ def test_no_compaction_detected(mock_dependencies):
         # Verify state was updated
         assert mock_dependencies['state'].save.called
         mock_dependencies['format_message'].assert_not_called()
+
+
+def test_first_session_no_project_state(mock_dependencies):
+    """Test hook shows 'First session' when no previous session exists."""
+    from macf.hooks.handle_session_start import run
+    from unittest.mock import patch
+
+    mock_dependencies['detect_compaction'].return_value = False
+
+    # Mock temporal context and environment
+    with patch('macf.hooks.handle_session_start.get_temporal_context') as mock_temporal, \
+         patch('macf.hooks.handle_session_start.detect_execution_environment') as mock_env, \
+         patch('macf.hooks.handle_session_start.get_current_cycle_project') as mock_cycle, \
+         patch('macf.hooks.handle_session_start.load_project_state') as mock_load_proj, \
+         patch('time.time') as mock_time:
+
+        mock_temporal.return_value = {
+            'timestamp_formatted': 'Wednesday, October 8, 2025 at 12:26:43 PM EDT',
+            'day_of_week': 'Wednesday',
+            'time_of_day': 'Afternoon'
+        }
+        mock_env.return_value = 'Host System'
+        mock_cycle.return_value = 17
+        mock_time.return_value = 1728400000.0
+
+        # Mock empty project state (no previous session)
+        mock_load_proj.return_value = {}
+
+        # Set up state
+        mock_dependencies['state'].compaction_count = 0
+
+        result = run("")
+
+        # Verify message content shows "First session"
+        context = result["hookSpecificOutput"]["additionalContext"]
+        assert "First session" in context
 
 
 def test_compaction_detected_manual_mode(mock_dependencies):

@@ -13,7 +13,10 @@ from ..utils import (
     get_current_session_id,
     complete_dev_drv,
     get_dev_drv_stats,
-    get_current_cycle_project
+    get_current_cycle_project,
+    format_duration,
+    load_project_state,
+    save_project_state
 )
 
 
@@ -53,19 +56,15 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
         else:
             uuid_display = "N/A"
 
-        # Format duration from seconds
-        def format_duration(seconds):
-            if seconds < 60:
-                return f"{int(seconds)}s"
-            minutes = int(seconds // 60)
-            if minutes < 60:
-                return f"{minutes}m"
-            hours = minutes // 60
-            remaining_minutes = minutes % 60
-            return f"{hours}h {remaining_minutes}m"
-
+        # Format durations using shared utility
         duration_str = format_duration(duration) if success else "N/A"
         total_duration_str = format_duration(stats['total_duration'])
+
+        # Save session end time to project state (cross-session persistence)
+        import time
+        project_state = load_project_state()
+        project_state['last_session_ended_at'] = time.time()
+        save_project_state(project_state)
 
         # Format message with full timestamp and DEV_DRV summary
         message = f"""🏗️ MACF | DEV_DRV Complete
