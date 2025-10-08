@@ -50,14 +50,14 @@ def test_stats_display_format(mock_dependencies):
 
     result = run("")
 
-    assert "hookSpecificOutput" in result
-    context = result["hookSpecificOutput"]["additionalContext"]
+    assert "systemMessage" in result
+    message = result["systemMessage"]
 
     # Verify count displayed
-    assert "Total Drives: 5" in context or "5" in context
+    assert "Total Drives: 5" in message or "5" in message
 
     # Verify duration formatted (3600s = 1h 0m)
-    assert "1h" in context
+    assert "1h" in message
 
 
 def test_uuid_truncation(mock_dependencies):
@@ -72,12 +72,12 @@ def test_uuid_truncation(mock_dependencies):
 
     result = run("")
 
-    context = result["hookSpecificOutput"]["additionalContext"]
+    message = result["systemMessage"]
 
     # UUID should be truncated
-    assert "dda5c541" in context
+    assert "dda5c541" in message
     # Full UUID should NOT be present
-    assert "dda5c541-e66d-4c55-ad30-68d54d6a73cb" not in context
+    assert "dda5c541-e66d-4c55-ad30-68d54d6a73cb" not in message
 
 
 def test_duration_formatting_seconds(mock_dependencies):
@@ -93,8 +93,8 @@ def test_duration_formatting_seconds(mock_dependencies):
 
     result = run("")
 
-    context = result["hookSpecificOutput"]["additionalContext"]
-    assert "45s" in context
+    message = result["systemMessage"]
+    assert "45s" in message
 
 
 def test_duration_formatting_minutes(mock_dependencies):
@@ -110,8 +110,8 @@ def test_duration_formatting_minutes(mock_dependencies):
 
     result = run("")
 
-    context = result["hookSpecificOutput"]["additionalContext"]
-    assert "5m" in context
+    message = result["systemMessage"]
+    assert "5m" in message
 
 
 def test_duration_formatting_hours(mock_dependencies):
@@ -127,8 +127,8 @@ def test_duration_formatting_hours(mock_dependencies):
 
     result = run("")
 
-    context = result["hookSpecificOutput"]["additionalContext"]
-    assert "2h" in context and "15m" in context
+    message = result["systemMessage"]
+    assert "2h" in message and "15m" in message
 
 
 def test_exception_handling(mock_dependencies):

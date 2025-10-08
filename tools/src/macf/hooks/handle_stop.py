@@ -68,8 +68,7 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
         total_duration_str = format_duration(stats['total_duration'])
 
         # Format message with full timestamp and DEV_DRV summary
-        message = f"""<system-reminder>
-🏗️ MACF | DEV_DRV Complete
+        message = f"""🏗️ MACF | DEV_DRV Complete
 Current Time: {temporal_ctx['timestamp_formatted']}
 Day: {temporal_ctx['day_of_week']}
 Time of Day: {temporal_ctx['time_of_day']}
@@ -81,16 +80,12 @@ Development Drive Stats:
 - Total Drives: {stats['count']}
 - Total Duration: {total_duration_str}
 
-{format_macf_footer(environment)}
-</system-reminder>"""
+{format_macf_footer(environment)}"""
 
-        # Return with hookSpecificOutput.additionalContext
+        # Return with systemMessage (user display only - Stop hook doesn't support hookSpecificOutput)
         return {
             "continue": True,
-            "hookSpecificOutput": {
-                "hookEventName": "Stop",
-                "additionalContext": message
-            }
+            "systemMessage": message
         }
 
     except Exception:
