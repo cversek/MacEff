@@ -76,6 +76,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Known Issues
 
 - **SessionStart hook output not pretty-printing**: Displays as raw text/escaped format in UI (functional but not visually polished—fix in progress)
+- **SubagentStop hook output not displaying**: Hook executes correctly and DELEG_DRV tracking works, but output never displays to agent (Claude Code 2.0 platform limitation confirmed through testing—systemMessage, hookSpecificOutput, and reason formats all blocked)
 - SessionStart hook can take 25-50ms on cold start (acceptable but noticeable)
 - Project state initialization on first run defaults to cycle 1 (manually editable if needed)
 - JOTEWR/CCP/DEV_DRV terminology requires learning curve (production docs explain conventions)
