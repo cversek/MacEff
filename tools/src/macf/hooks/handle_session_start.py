@@ -14,7 +14,9 @@ from ..utils import (
     detect_auto_mode,
     get_temporal_context,
     detect_execution_environment,
-    get_current_cycle_project
+    get_current_cycle_project,
+    format_duration,
+    format_macf_footer
 )
 from .compaction import detect_compaction
 from .recovery import format_consciousness_recovery_message
@@ -133,15 +135,60 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
                 }
             }
 
-        # No compaction detected - return minimal continue
+        # No compaction detected - provide temporal awareness message
+        import time
+
+        # Load session state to track time gaps
+        state = SessionOperationalState.load(session_id)
+
+        # Get temporal context
+        temporal_ctx = get_temporal_context()
+        environment = detect_execution_environment()
+        cycle_number = get_current_cycle_project()
+
+        # Calculate time gap since last session
+        current_time = time.time()
+
+        # Check if this is first session (last_updated == session_started_at)
+        if state.last_updated == state.session_started_at:
+            gap_display = "First session"
+        else:
+            time_gap_seconds = current_time - state.last_updated
+            gap_display = format_duration(time_gap_seconds)
+
+        # Update last_updated timestamp
+        state.last_updated = current_time
+        state.save()
+
+        # Format temporal awareness message
+        message = f"""🏗️ MACF | Session Start
+Current Time: {temporal_ctx['timestamp_formatted']}
+Day: {temporal_ctx['day_of_week']}
+Time of Day: {temporal_ctx['time_of_day']}
+Cycle: {cycle_number} | Session: {session_id[:8]}...
+
+Session Context:
+- Time since last session: {gap_display}
+- Compaction count: {state.compaction_count}
+- Environment: {environment}
+
+{format_macf_footer(environment)}"""
+
         log_hook_event({
             "hook_name": "session_start",
             "event_type": "HOOK_COMPLETE",
             "session_id": session_id,
-            "compaction_detected": False
+            "compaction_detected": False,
+            "time_gap": gap_display
         })
 
-        return {"continue": True}
+        return {
+            "continue": True,
+            "hookSpecificOutput": {
+                "hookEventName": "SessionStart",
+                "additionalContext": f"<system-reminder>\n{message}\n</system-reminder>"
+            }
+        }
 
     except Exception as e:
         # Log error and fail gracefully
