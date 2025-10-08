@@ -142,3 +142,40 @@ def test_exception_handling(mock_dependencies):
 
     # Should never crash
     assert result == {"continue": True}
+
+
+def test_saves_session_end_time_to_project_state(mock_dependencies):
+    """Test Stop hook saves end time to project state for cross-session tracking."""
+    from macf.hooks.handle_stop import run
+    from unittest.mock import patch
+
+    with patch('macf.hooks.handle_stop.load_project_state') as mock_load, \
+         patch('macf.hooks.handle_stop.save_project_state') as mock_save, \
+         patch('macf.hooks.handle_stop.get_temporal_context') as mock_temporal, \
+         patch('macf.hooks.handle_stop.detect_execution_environment') as mock_env, \
+         patch('macf.hooks.handle_stop.get_current_cycle_project') as mock_cycle, \
+         patch('time.time') as mock_time:
+
+        mock_load.return_value = {}
+        mock_time.return_value = 1728400000.0
+        mock_temporal.return_value = {
+            'timestamp_formatted': 'Wednesday, October 8, 2025 at 12:26:43 PM EDT',
+            'day_of_week': 'Wednesday',
+            'time_of_day': 'Afternoon'
+        }
+        mock_env.return_value = 'Host System'
+        mock_cycle.return_value = 17
+
+        result = run("")
+
+        # Verify project state was loaded and saved
+        mock_load.assert_called_once()
+        mock_save.assert_called_once()
+
+        # Verify the saved state contains last_session_ended_at
+        saved_state = mock_save.call_args[0][0]
+        assert 'last_session_ended_at' in saved_state
+        assert saved_state['last_session_ended_at'] == 1728400000.0
+
+        # Verify hook continues normally
+        assert result["continue"] is True

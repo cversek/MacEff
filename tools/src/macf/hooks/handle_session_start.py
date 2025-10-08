@@ -16,7 +16,8 @@ from ..utils import (
     detect_execution_environment,
     get_current_cycle_project,
     format_duration,
-    format_macf_footer
+    format_macf_footer,
+    load_project_state
 )
 from .compaction import detect_compaction
 from .recovery import format_consciousness_recovery_message
@@ -146,17 +147,20 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
         environment = detect_execution_environment()
         cycle_number = get_current_cycle_project()
 
+        # Load project state for cross-session time tracking
+        project_state = load_project_state()
+        last_session_ended = project_state.get('last_session_ended_at', None)
+
         # Calculate time gap since last session
         current_time = time.time()
 
-        # Check if this is first session (last_updated == session_started_at)
-        if state.last_updated == state.session_started_at:
+        if last_session_ended is None:
             gap_display = "First session"
         else:
-            time_gap_seconds = current_time - state.last_updated
+            time_gap_seconds = current_time - last_session_ended
             gap_display = format_duration(time_gap_seconds)
 
-        # Update last_updated timestamp
+        # Update session state timestamp (for within-session tracking)
         state.last_updated = current_time
         state.save()
 
