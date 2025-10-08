@@ -63,14 +63,21 @@ def test_stats_display_format(mock_dependencies):
 def test_uuid_truncation(mock_dependencies):
     """Test UUID is truncated to first 8 characters."""
     from macf.hooks.handle_stop import run
+    from unittest.mock import patch, MagicMock
 
     mock_dependencies['stats'].return_value = {
         'count': 1,
         'total_duration': 60,
-        'prompt_uuid': 'dda5c541-e66d-4c55-ad30-68d54d6a73cb'
+        'prompt_uuid': None  # Will be overwritten by state UUID
     }
 
-    result = run("")
+    # Mock state to return UUID (patch where it's imported from)
+    with patch('macf.utils.SessionOperationalState.load') as mock_state_load:
+        mock_state = MagicMock()
+        mock_state.current_dev_drv_prompt_uuid = 'dda5c541-e66d-4c55-ad30-68d54d6a73cb'
+        mock_state_load.return_value = mock_state
+
+        result = run("")
 
     message = result["systemMessage"]
 

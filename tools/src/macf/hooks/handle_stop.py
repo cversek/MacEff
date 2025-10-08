@@ -36,11 +36,17 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
         # Get current session
         session_id = get_current_session_id()
 
-        # Get stats BEFORE completing (complete_dev_drv clears UUID!)
-        stats = get_dev_drv_stats(session_id)
+        # Save UUID before completing (complete_dev_drv clears it)
+        from ..utils import SessionOperationalState
+        state = SessionOperationalState.load(session_id)
+        prompt_uuid = state.current_dev_drv_prompt_uuid
 
-        # Complete Development Drive
+        # Complete Development Drive (increments count, adds duration)
         success, duration = complete_dev_drv(session_id)
+
+        # Get stats AFTER completing (now includes this drive)
+        stats = get_dev_drv_stats(session_id)
+        stats['prompt_uuid'] = prompt_uuid  # Restore UUID for display
 
         # Get cycle number for display
         cycle_number = get_current_cycle_project()
