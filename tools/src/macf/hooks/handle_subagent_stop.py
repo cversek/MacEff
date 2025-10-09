@@ -12,7 +12,8 @@ from ..utils import (
     detect_execution_environment,
     get_current_session_id,
     complete_deleg_drv,
-    get_deleg_drv_stats
+    get_deleg_drv_stats,
+    format_duration
 )
 
 

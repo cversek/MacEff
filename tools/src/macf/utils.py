@@ -420,6 +420,9 @@ class SessionOperationalState:
     cycle_started_at: float = field(default_factory=lambda: time.time())
     cycles_completed: int = 0  # Total cycles finished (equivalent to compaction_count)
 
+    # Delegation tracking within DEV_DRV (Phase 1F)
+    delegations_this_drive: List[Dict[str, Any]] = field(default_factory=list)
+
     def save(self) -> bool:
         """
         Atomically save state to session directory.
@@ -1136,6 +1139,54 @@ def get_temporal_context() -> dict:
     }
 
 
+def format_duration(seconds: float) -> str:
+    """
+    Format duration from seconds to human-readable string.
+
+    Universal DRY utility for duration formatting across all hooks.
+
+    Args:
+        seconds: Duration in seconds (float or int)
+
+    Returns:
+        Human-readable string like "45s", "5m", "2h 15m", "1d 3h", "2d"
+    """
+    # Convert to int for cleaner display
+    total_seconds = int(seconds)
+
+    # Handle edge cases
+    if total_seconds < 0:
+        return "0s"
+
+    # Less than 60s: show seconds
+    if total_seconds < 60:
+        return f"{total_seconds}s"
+
+    # Less than 60m: show minutes only
+    total_minutes = total_seconds // 60
+    if total_minutes < 60:
+        return f"{total_minutes}m"
+
+    # Less than 24h: show hours and minutes
+    total_hours = total_minutes // 60
+    remaining_minutes = total_minutes % 60
+
+    if total_hours < 24:
+        if remaining_minutes > 0:
+            return f"{total_hours}h {remaining_minutes}m"
+        else:
+            return f"{total_hours}h"
+
+    # 24h or more: show days and hours
+    days = total_hours // 24
+    remaining_hours = total_hours % 24
+
+    if remaining_hours > 0:
+        return f"{days}d {remaining_hours}h"
+    else:
+        return f"{days}d"
+
+
 def calculate_session_duration(started_at: float, ended_at: Optional[float] = None) -> str:
     """
     Calculate human-readable session duration.
@@ -1162,17 +1213,8 @@ def calculate_session_duration(started_at: float, ended_at: Optional[float] = No
     if duration_seconds < 0:
         return "Fresh start"
 
-    # Format based on duration
-    if duration_seconds < 60:
-        return f"{duration_seconds}s"
-
-    minutes = duration_seconds // 60
-    if minutes < 60:
-        return f"{minutes}m"
-
-    hours = minutes // 60
-    remaining_minutes = minutes % 60
-    return f"{hours}h {remaining_minutes}m"
+    # Use shared format_duration utility
+    return format_duration(duration_seconds)
 
 
 def detect_execution_environment() -> str:
@@ -1282,3 +1324,119 @@ def format_macf_footer(environment: str) -> str:
     return f"""---
 🏗️ MACF Tools {__version__} (Multi-Agent Coordination Framework)
 Environment: {environment}"""
+
+
+# ============================================================================
+# Delegation Tracking (Phase 1F)
+# ============================================================================
+
+def record_delegation_start(
+    session_id: str,
+    tool_use_uuid: str,
+    subagent_type: str,
+    agent_id: Optional[str] = None
+) -> bool:
+    """
+    Record delegation start in session state.
+
+    Args:
+        session_id: Session identifier
+        tool_use_uuid: Task tool_use_id for JSONL sidechain lookup
+        subagent_type: Type of subagent (e.g., "devops-eng", "test-eng")
+        agent_id: Agent identifier (auto-detected if None)
+
+    Returns:
+        True if recorded successfully, False otherwise
+    """
+    try:
+        state = SessionOperationalState.load(session_id, agent_id)
+
+        delegation = {
+            "tool_use_uuid": tool_use_uuid,
+            "subagent_type": subagent_type,
+            "started_at": time.time(),
+            "completed_at": None,
+            "duration": None
+        }
+
+        state.delegations_this_drive.append(delegation)
+        return state.save()
+    except Exception:
+        return False
+
+
+def record_delegation_complete(
+    session_id: str,
+    tool_use_uuid: str,
+    duration: float,
+    agent_id: Optional[str] = None
+) -> bool:
+    """
+    Mark delegation as complete with duration.
+
+    Args:
+        session_id: Session identifier
+        tool_use_uuid: Task tool_use_id to match
+        duration: Duration in seconds
+        agent_id: Agent identifier (auto-detected if None)
+
+    Returns:
+        True if updated successfully, False otherwise
+    """
+    try:
+        state = SessionOperationalState.load(session_id, agent_id)
+
+        # Find matching delegation by UUID
+        for deleg in state.delegations_this_drive:
+            if deleg['tool_use_uuid'] == tool_use_uuid:
+                deleg['completed_at'] = time.time()
+                deleg['duration'] = duration
+                return state.save()
+
+        # UUID not found - still return True (safe failure)
+        return True
+    except Exception:
+        return False
+
+
+def get_delegations_this_drive(
+    session_id: str,
+    agent_id: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """
+    Get all delegations for current DEV_DRV.
+
+    Args:
+        session_id: Session identifier
+        agent_id: Agent identifier (auto-detected if None)
+
+    Returns:
+        List of delegation dicts (empty list on failure)
+    """
+    try:
+        state = SessionOperationalState.load(session_id, agent_id)
+        return state.delegations_this_drive
+    except Exception:
+        return []
+
+
+def clear_delegations_this_drive(
+    session_id: str,
+    agent_id: Optional[str] = None
+) -> bool:
+    """
+    Clear delegation list (called after DEV_DRV Complete reporting).
+
+    Args:
+        session_id: Session identifier
+        agent_id: Agent identifier (auto-detected if None)
+
+    Returns:
+        True if cleared successfully, False otherwise
+    """
+    try:
+        state = SessionOperationalState.load(session_id, agent_id)
+        state.delegations_this_drive = []
+        return state.save()
+    except Exception:
+        return False
