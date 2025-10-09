@@ -56,29 +56,49 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
             "session_id": session_id
         })
 
-        # Find current session JSONL for compaction detection
-        claude_dir = Path.home() / ".claude" / "projects"
+        # Primary detection: Check source field from Claude Code API
+        source = data.get('source')
         compaction_detected = False
+        detection_method = None
 
-        if claude_dir.exists():
-            all_jsonl_files = []
-            for project_dir in claude_dir.iterdir():
-                if project_dir.is_dir():
-                    all_jsonl_files.extend(project_dir.glob("*.jsonl"))
+        if source == 'compact':
+            # Primary detection via source field
+            compaction_detected = True
+            detection_method = "source_field"
 
-            if all_jsonl_files:
-                latest_file = max(all_jsonl_files, key=lambda p: p.stat().st_mtime)
-                compaction_detected = detect_compaction(latest_file)
+            log_hook_event({
+                "hook_name": "session_start",
+                "event_type": "COMPACTION_CHECK",
+                "session_id": session_id,
+                "compaction_detected": True,
+                "detection_method": "source_field",
+                "source": source
+            })
+        else:
+            # Fallback: JSONL transcript scanning for backward compatibility
+            claude_dir = Path.home() / ".claude" / "projects"
 
-                # Log detection result
-                log_hook_event({
-                    "hook_name": "session_start",
-                    "event_type": "COMPACTION_CHECK",
-                    "session_id": session_id,
-                    "compaction_detected": compaction_detected,
-                    "detection_method": "compact_boundary",
-                    "transcript": str(latest_file)
-                })
+            if claude_dir.exists():
+                all_jsonl_files = []
+                for project_dir in claude_dir.iterdir():
+                    if project_dir.is_dir():
+                        all_jsonl_files.extend(project_dir.glob("*.jsonl"))
+
+                if all_jsonl_files:
+                    latest_file = max(all_jsonl_files, key=lambda p: p.stat().st_mtime)
+                    compaction_detected = detect_compaction(latest_file)
+                    detection_method = "compact_boundary"
+
+                    # Log detection result
+                    log_hook_event({
+                        "hook_name": "session_start",
+                        "event_type": "COMPACTION_CHECK",
+                        "session_id": session_id,
+                        "compaction_detected": compaction_detected,
+                        "detection_method": "compact_boundary",
+                        "transcript": str(latest_file),
+                        "source": source  # Log source even if not "compact"
+                    })
 
         if compaction_detected:
             # Load session state

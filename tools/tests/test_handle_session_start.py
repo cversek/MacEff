@@ -219,3 +219,140 @@ def test_output_format_includes_hook_event_name(mock_dependencies):
     assert "hookSpecificOutput" in result
     assert "hookEventName" in result["hookSpecificOutput"]
     assert result["hookSpecificOutput"]["hookEventName"] == "SessionStart"
+
+
+def test_source_field_compact_detection(mock_dependencies):
+    """Test primary detection via source field when source='compact'."""
+    from macf.hooks.handle_session_start import run
+    import json
+    from unittest.mock import patch
+
+    # Prepare input with source='compact'
+    input_data = {"source": "compact", "session_id": "test123"}
+    stdin_json = json.dumps(input_data)
+
+    # Mock log_hook_event to capture events
+    with patch('macf.hooks.handle_session_start.log_hook_event') as mock_log:
+        result = run(stdin_json)
+
+        # Verify compaction was detected
+        assert result["continue"] is True
+        assert "hookSpecificOutput" in result
+        assert "additionalContext" in result["hookSpecificOutput"]
+
+        # Verify COMPACTION_CHECK event was logged with source_field method
+        compaction_check_calls = [
+            call for call in mock_log.call_args_list
+            if call[0][0].get('event_type') == 'COMPACTION_CHECK'
+        ]
+        assert len(compaction_check_calls) == 1
+
+        event = compaction_check_calls[0][0][0]
+        assert event['compaction_detected'] is True
+        assert event['detection_method'] == "source_field"
+        assert event['source'] == "compact"
+
+
+def test_source_field_startup_no_detection(mock_dependencies):
+    """Test no compaction detected when source='startup'."""
+    from macf.hooks.handle_session_start import run
+    import json
+    from unittest.mock import patch
+
+    # Prepare input with source='startup'
+    input_data = {"source": "startup", "session_id": "test123"}
+    stdin_json = json.dumps(input_data)
+
+    # Mock temporal context and environment for non-compaction path
+    with patch('macf.hooks.handle_session_start.get_temporal_context') as mock_temporal, \
+         patch('macf.hooks.handle_session_start.detect_execution_environment') as mock_env, \
+         patch('macf.hooks.handle_session_start.get_current_cycle_project') as mock_cycle, \
+         patch('macf.hooks.handle_session_start.load_project_state') as mock_load_proj, \
+         patch('time.time') as mock_time:
+
+        mock_temporal.return_value = {
+            'timestamp_formatted': 'Wednesday, October 8, 2025 at 12:26:43 PM EDT',
+            'day_of_week': 'Wednesday',
+            'time_of_day': 'Afternoon'
+        }
+        mock_env.return_value = 'Host System'
+        mock_cycle.return_value = 17
+        mock_time.return_value = 1728400000.0
+        mock_load_proj.return_value = {}
+
+        # Mock detect_compaction to ensure it's NOT called (source field takes precedence)
+        mock_dependencies['detect_compaction'].return_value = False
+
+        result = run(stdin_json)
+
+        # Verify no compaction detected (normal session start message)
+        assert result["continue"] is True
+        context = result["hookSpecificOutput"]["additionalContext"]
+        assert "🏗️ MACF | Session Start" in context
+        assert "Session Context:" in context
+
+        # Verify recovery message was NOT formatted (no compaction)
+        mock_dependencies['format_message'].assert_not_called()
+
+
+def test_source_field_missing_fallback_to_transcript(mock_dependencies):
+    """Test fallback to transcript scanning when source field missing."""
+    from macf.hooks.handle_session_start import run
+    import json
+    from unittest.mock import patch
+
+    # Prepare input WITHOUT source field
+    input_data = {"session_id": "test123"}
+    stdin_json = json.dumps(input_data)
+
+    # Mock detect_compaction to return True (transcript detection)
+    mock_dependencies['detect_compaction'].return_value = True
+
+    with patch('macf.hooks.handle_session_start.log_hook_event') as mock_log:
+        result = run(stdin_json)
+
+        # Verify compaction was detected via fallback
+        assert result["continue"] is True
+        assert "hookSpecificOutput" in result
+
+        # Verify COMPACTION_CHECK event used compact_boundary method
+        compaction_check_calls = [
+            call for call in mock_log.call_args_list
+            if call[0][0].get('event_type') == 'COMPACTION_CHECK'
+        ]
+        assert len(compaction_check_calls) == 1
+
+        event = compaction_check_calls[0][0][0]
+        assert event['compaction_detected'] is True
+        assert event['detection_method'] == "compact_boundary"
+
+
+def test_source_compact_logs_method(mock_dependencies):
+    """Test detection_method='source_field' logged when source='compact'."""
+    from macf.hooks.handle_session_start import run
+    import json
+    from unittest.mock import patch
+
+    # Prepare input with source='compact'
+    input_data = {"source": "compact", "session_id": "test123"}
+    stdin_json = json.dumps(input_data)
+
+    with patch('macf.hooks.handle_session_start.log_hook_event') as mock_log:
+        run(stdin_json)
+
+        # Find COMPACTION_CHECK event
+        compaction_check_calls = [
+            call for call in mock_log.call_args_list
+            if call[0][0].get('event_type') == 'COMPACTION_CHECK'
+        ]
+
+        assert len(compaction_check_calls) == 1
+        event = compaction_check_calls[0][0][0]
+
+        # Verify exact fields logged
+        assert event['hook_name'] == "session_start"
+        assert event['event_type'] == "COMPACTION_CHECK"
+        assert event['compaction_detected'] is True
+        assert event['detection_method'] == "source_field"
+        assert event['source'] == "compact"
+        assert 'session_id' in event
