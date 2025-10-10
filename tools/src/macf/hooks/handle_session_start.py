@@ -17,7 +17,8 @@ from ..utils import (
     get_current_cycle_project,
     format_duration,
     format_macf_footer,
-    load_project_state
+    load_project_state,
+    increment_cycle_project
 )
 from .compaction import detect_compaction
 from .recovery import format_consciousness_recovery_message
@@ -108,6 +109,9 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
             state.compaction_count += 1
             state.save()
 
+            # Increment cycle number in project state (survives session boundaries)
+            cycle_number = increment_cycle_project(session_id)
+
             # Detect AUTO_MODE
             auto_mode, source, confidence = detect_auto_mode(session_id)
             state.auto_mode = auto_mode
@@ -123,7 +127,6 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
             environment = detect_execution_environment()
 
             # Get cycle stats
-            cycle_number = get_current_cycle_project()
             cycle_stats = {
                 'cycle_number': cycle_number
             }

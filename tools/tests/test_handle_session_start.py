@@ -356,3 +356,29 @@ def test_source_compact_logs_method(mock_dependencies):
         assert event['detection_method'] == "source_field"
         assert event['source'] == "compact"
         assert 'session_id' in event
+
+
+def test_cycle_increments_on_compaction(mock_dependencies):
+    """Test cycle number increments in project state when compaction detected."""
+    from macf.hooks.handle_session_start import run
+    import json
+    from unittest.mock import patch
+
+    # Prepare input with source='compact'
+    input_data = {"source": "compact", "session_id": "test123"}
+    stdin_json = json.dumps(input_data)
+
+    mock_dependencies['detect_compaction'].return_value = True
+
+    with patch('macf.hooks.handle_session_start.increment_cycle_project') as mock_increment:
+        # Mock increment_cycle_project to return new cycle number
+        mock_increment.return_value = 20
+
+        result = run(stdin_json)
+
+        # Verify increment_cycle_project was called with session_id
+        mock_increment.assert_called_once_with("test-session-123")
+
+        # Verify hook continues successfully
+        assert result["continue"] is True
+        assert "hookSpecificOutput" in result
