@@ -13,6 +13,41 @@ from ..utils import (
 )
 
 
+def _is_bare_cd_command(command: str) -> bool:
+    """
+    Check if command is a bare 'cd' that changes working directory.
+
+    Bare cd is dangerous because it breaks relative hook paths.
+    Allow cd in subshells: (cd dir && cmd) or $(cd dir && cmd)
+
+    Args:
+        command: Bash command string
+
+    Returns:
+        True if bare cd detected, False if safe
+    """
+    # Strip whitespace
+    cmd = command.strip()
+
+    # Check if command starts with 'cd ' (bare cd)
+    if cmd.startswith("cd "):
+        # Check if it's in a subshell (starts with parenthesis)
+        if not cmd.startswith("("):
+            return True  # Bare cd detected
+
+    # Check for cd with && (chained commands without subshell)
+    # e.g., "cd /path && ls" is still bare cd that changes working dir
+    if " && " in cmd:
+        # Check if cd appears before && without being in subshell
+        parts = cmd.split(" && ")
+        first_part = parts[0].strip()
+        if first_part.startswith("cd ") and not first_part.startswith("("):
+            return True  # Bare cd in chain
+
+    # Safe: no bare cd detected
+    return False
+
+
 def run(stdin_json: str = "") -> Dict[str, Any]:
     """
     Run PreToolUse hook logic.
@@ -61,6 +96,21 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
             # Command tracking (first 40 chars)
             command = tool_input.get("command", "")
             if command:
+                # Block bare 'cd' commands that change working directory
+                # Allow cd in subshells: (cd dir && cmd) or $(...) contexts
+                if _is_bare_cd_command(command):
+                    return {
+                        "continue": False,
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "message": (
+                                "❌ Bare 'cd' command blocked - changes working directory and breaks hook paths.\n"
+                                "Use subshell instead: (cd /path && command)\n"
+                                "Or use absolute paths without cd."
+                            )
+                        }
+                    }
+
                 short_cmd = command[:40] + "..." if len(command) > 40 else command
                 message_parts.append(f"⚙️ {short_cmd}")
 
