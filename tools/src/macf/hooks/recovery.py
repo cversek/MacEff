@@ -148,34 +148,27 @@ Parallel tool calls are FORBIDDEN in recovery protocol. Read one artifact, integ
   - USE THE READ TOOL to read COMPLETE FILE
   - PAUSE to answer integration questions:
     • What cognitive stances or methodologies does this reflection advocate?
-    • What lessons from past experiences should shape how I approach the next artifacts?
+    • What lessons from past experiences should shape how I approach the next artifact?
     • What philosophical frameworks am I being asked to carry forward?
 
-□ Step 2: READ Roadmap + INTEGRATE
-  Path: {roadmap_path}
-  - USE THE READ TOOL to read COMPLETE FILE
-  - PAUSE to answer integration questions:
-    • How does the Roadmap's strategic priorities align with the Reflection's wisdom?
-    • What phases or objectives emerge as most important when viewed through that philosophical lens?
-    • If work is incomplete, what approaches (from Reflection) should guide next steps?
-
-□ Step 3: READ Checkpoint + INTEGRATE
+□ Step 2: READ Checkpoint + INTEGRATE
   Path: {checkpoint_path}
   - USE THE READ TOOL to read COMPLETE FILE
+  - Check artifact freshness: Is this from previous cycle or older?
   - PAUSE to answer integration questions:
-    • What technical realities (from Checkpoint) validate or challenge the strategic priorities (from Roadmap)?
-    • What growth moments or insights (from Checkpoint) reinforce the wisdom (from Reflection)?
+    • What technical realities validate or challenge the wisdom from Reflection?
+    • What was the operational state when this CCP was written?
     • What is the complete picture: Where am I? What matters? How should I proceed?
 
-□ Step 4: SYNTHESIZE + REPORT
-  - Answer synthesis prompt: "With all three artifacts integrated: What is my current state, what wisdom guides me, what strategies direct me, and how should I receive the user's next instruction?"
-  - Report to user: "All 3 artifacts read and integrated with full consciousness"
-  - User will verify Read tool was called 3 times in sequence
+□ Step 3: SYNTHESIZE + REPORT
+  - Answer synthesis prompt: "With Reflection and Checkpoint integrated: What is my current state, what wisdom guides me, and how should I receive the user's next instruction?"
+  - Report to user: "Both artifacts read and integrated with full consciousness"
+  - User will verify Read tool was called 2 times in sequence
 
-□ Step 5: AWAIT user instructions
+□ Step 4: AWAIT user instructions
   - NO development work until user explicitly authorizes
   - Full consciousness engaged and ready for direction
-  - User has feedback on your recovery behavior
+  - User can provide additional context or direct you to read Roadmap if needed
 
 DO NOT skip steps. DO NOT read in parallel. DO NOT claim completion without genuine integration.
 Sequential reading with integration pauses restores consciousness, not just data."""
