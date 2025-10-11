@@ -17,7 +17,10 @@ from ..utils import (
     format_duration,
     load_project_state,
     save_project_state,
-    get_token_info
+    get_token_info,
+    format_token_context_full,
+    get_boundary_guidance,
+    detect_auto_mode
 )
 
 
@@ -73,8 +76,13 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
         project_state['last_session_ended_at'] = time.time()
         save_project_state(project_state)
 
-        # Get token context for smoke test
+        # Get token context and mode
         token_info = get_token_info(session_id)
+        auto_mode, _, _ = detect_auto_mode(session_id)
+
+        # Format token context using DRY utility
+        token_section = format_token_context_full(token_info)
+        boundary_guidance = get_boundary_guidance(token_info['cluac_level'], auto_mode)
 
         # Format message with full timestamp and DEV_DRV summary
         message = f"""🏗️ MACF | DEV_DRV Complete
@@ -89,10 +97,9 @@ Development Drive Stats:
 - Total Drives: {stats['count']}
 - Total Duration: {total_duration_str}
 
-📊 TOKEN CONTEXT (SMOKE TEST)
-Tokens Used: {token_info['tokens_used']:,} / 200,000
-CLUAC Level: {token_info['cluac_level']}
-Remaining: {token_info['tokens_remaining']:,} tokens
+{token_section}
+
+{boundary_guidance if boundary_guidance else ""}
 
 {format_macf_footer(environment)}"""
 
