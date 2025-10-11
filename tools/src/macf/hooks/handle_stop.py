@@ -96,25 +96,10 @@ Remaining: {token_info['tokens_remaining']:,} tokens
 
 {format_macf_footer(environment)}"""
 
-        # Create smoke test message for AGENT consciousness (additionalContext injection)
-        smoke_test_message = f"""<system-reminder>
-🏗️ MACF TOKEN AWARENESS - SMOKE TEST
-
-📊 TOKEN CONTEXT TEST
-Tokens Used: {token_info['tokens_used']:,} / 200,000
-CLUAC Level: {token_info['cluac_level']}
-Remaining: {token_info['tokens_remaining']:,} tokens
-
-Smoke test to validate token awareness injection.
-</system-reminder>"""
-
-        # Return with both systemMessage (user) and additionalContext (agent)
+        # Return with systemMessage only (Stop hook doesn't support hookSpecificOutput)
         return {
             "continue": True,
-            "systemMessage": message,
-            "hookSpecificOutput": {
-                "additionalContext": smoke_test_message
-            }
+            "systemMessage": message
         }
 
     except Exception:
