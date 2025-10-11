@@ -1326,6 +1326,82 @@ def format_macf_footer(environment: str) -> str:
 Environment: {environment}"""
 
 
+# =============================================================================
+# Token/Context Awareness Formatting (Phase 1)
+# =============================================================================
+
+
+def format_token_context_minimal(token_info: Dict[str, Any]) -> str:
+    """
+    Format minimal CLUAC indicator for high-frequency hooks.
+
+    Args:
+        token_info: Dict from get_token_info()
+
+    Returns:
+        One-line string like "CLUAC 42 (58% used)"
+    """
+    cluac = token_info['cluac_level']
+    percentage_used = token_info['percentage_used']
+    return f"CLUAC {cluac} ({percentage_used:.0f}% used)"
+
+
+def format_token_context_full(token_info: Dict[str, Any]) -> str:
+    """
+    Format full token context section for low-frequency hooks.
+
+    Args:
+        token_info: Dict from get_token_info()
+
+    Returns:
+        Multi-line formatted section with emoji header
+    """
+    return f"""📊 TOKEN/CONTEXT AWARENESS
+Tokens Used: {token_info['tokens_used']:,} / {CC2_TOTAL_CONTEXT:,}
+CLUAC Level: {token_info['cluac_level']} ({token_info['percentage_used']:.1f}% used)
+Remaining: {token_info['tokens_remaining']:,} tokens"""
+
+
+def get_boundary_guidance(cluac: int, auto_mode: bool) -> Optional[str]:
+    """
+    Get mode-aware boundary guidance based on CLUAC level.
+
+    CRITICAL: Returns different messages for MANUAL vs AUTO mode.
+    - MANUAL: User present → STOP work, await guidance
+    - AUTO: User absent → Assess completion, prepare artifacts
+
+    Args:
+        cluac: CLUAC level (0-100, percentage remaining)
+        auto_mode: True if AUTO_MODE enabled, False for MANUAL
+
+    Returns:
+        Warning string or None if CLUAC > 10
+    """
+    # No warnings above CLUAC 10
+    if cluac > 10:
+        return None
+
+    # MANUAL MODE: User controls closure priorities
+    if not auto_mode:
+        if cluac <= 2:
+            return "🚨 EMERGENCY (MANUAL): STOP immediately - report status, await user priorities"
+        elif cluac <= 5:
+            return "⚠️ PREPARATION THRESHOLD (MANUAL): Report status, STOP work, await user guidance"
+        elif cluac <= 10:
+            return "🟡 BOUNDARY APPROACHING (MANUAL): Strategic preparation recommended"
+
+    # AUTO MODE: Autonomous preparation
+    else:
+        if cluac <= 2:
+            return "⚠️ EMERGENCY (AUTO): Write critical artifacts NOW - CCP minimum, JOTEWR if possible"
+        elif cluac <= 5:
+            return "🟡 PREPARATION MODE (AUTO): Assess completion state, prepare CCP if incomplete"
+        elif cluac <= 10:
+            return "🟠 BOUNDARY APPROACHING (AUTO): Strategic choices matter - measure workflow costs"
+
+    return None
+
+
 # ============================================================================
 # Delegation Tracking (Phase 1F)
 # ============================================================================
