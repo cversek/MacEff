@@ -18,7 +18,10 @@ from ..utils import (
     format_duration,
     format_macf_footer,
     load_project_state,
-    increment_cycle_project
+    increment_cycle_project,
+    get_token_info,
+    format_token_context_full,
+    get_boundary_guidance
 )
 from .compaction import detect_compaction
 from .recovery import format_consciousness_recovery_message
@@ -126,6 +129,9 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
             temporal_ctx = get_temporal_context()
             environment = detect_execution_environment()
 
+            # Get token context
+            token_info = get_token_info(session_id)
+
             # Get cycle stats
             cycle_stats = {
                 'cycle_number': cycle_number
@@ -138,7 +144,8 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
                 artifacts=artifacts,
                 temporal_ctx=temporal_ctx,
                 environment=environment,
-                cycle_stats=cycle_stats
+                cycle_stats=cycle_stats,
+                token_info=token_info
             )
 
             # Log recovery triggered
@@ -187,6 +194,10 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
         state.last_updated = current_time
         state.save()
 
+        # Get token context
+        token_info = get_token_info(session_id)
+        token_section = format_token_context_full(token_info)
+
         # Format temporal awareness message
         message = f"""🏗️ MACF | Session Start
 Current Time: {temporal_ctx['timestamp_formatted']}
@@ -198,6 +209,8 @@ Session Context:
 - Time since last session: {gap_display}
 - Compaction count: {state.compaction_count}
 - Environment: {environment}
+
+{token_section}
 
 {format_macf_footer(environment)}"""
 
