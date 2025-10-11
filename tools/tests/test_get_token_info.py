@@ -69,14 +69,15 @@ class TestGetTokenInfo:
         Formula: percentage_remaining = (tokens_remaining / 200000) * 100
         CLUAC = round(percentage_remaining)
         """
-        # Mock JSONL with known token values
+        # Mock JSONL with known token values (including output_tokens)
         mock_jsonl_content = json.dumps({
             "type": "assistant",
             "message": {
                 "usage": {
                     "cache_read_input_tokens": 50000,
                     "cache_creation_input_tokens": 10000,
-                    "input_tokens": 30000
+                    "input_tokens": 30000,
+                    "output_tokens": 10000
                 }
             }
         })
@@ -95,11 +96,11 @@ class TestGetTokenInfo:
 
                         result = get_token_info()
 
-        # Verify calculation: 90000 tokens used
-        expected_tokens_used = 90000
-        expected_tokens_remaining = 200000 - 90000  # 110000
-        expected_percentage_remaining = (110000 / 200000) * 100  # 55.0%
-        expected_cluac = round(expected_percentage_remaining)  # 55
+        # Verify calculation: 100000 actual + 45000 buffer = 145000 displayed
+        expected_tokens_used = 145000  # 100k actual + 45k buffer
+        expected_tokens_remaining = 200000 - 145000  # 55000
+        expected_percentage_remaining = (55000 / 200000) * 100  # 27.5%
+        expected_cluac = round(expected_percentage_remaining)  # 28
 
         assert result['tokens_used'] == expected_tokens_used
         assert result['cluac_level'] == expected_cluac
@@ -143,6 +144,49 @@ class TestGetTokenInfo:
         # Should still return valid structure on failure
         assert 'tokens_used' in result
         assert 'cluac_level' in result
+
+    def test_autocompact_buffer_assumption(self):
+        """
+        Test that autocompact buffer (45k) is added to match /context display.
+
+        ASSUMPTION: CC 2.0 displays actual_usage + 45k buffer as total.
+        This test validates that our calculation includes this buffer.
+        May require reverification in future Claude Code versions.
+        """
+        from macf.utils import CC2_AUTOCOMPACT_BUFFER
+
+        # Verify constant value
+        assert CC2_AUTOCOMPACT_BUFFER == 45000, "Buffer assumption changed - update tests"
+
+        # Mock JSONL with 80k actual usage
+        mock_jsonl = json.dumps({
+            "type": "assistant",
+            "message": {
+                "usage": {
+                    "cache_read_input_tokens": 40000,
+                    "cache_creation_input_tokens": 20000,
+                    "input_tokens": 15000,
+                    "output_tokens": 5000
+                }
+            }
+        })
+
+        with patch('macf.utils.get_current_session_id', return_value='test'):
+            with patch('macf.utils.get_session_transcript_path', return_value='/fake.jsonl'):
+                with patch('pathlib.Path.exists', return_value=True):
+                    with patch('builtins.open', create=True) as mock_open:
+                        mock_file = MagicMock()
+                        mock_file.__enter__.return_value = mock_file
+                        mock_file.read.return_value = mock_jsonl.encode('utf-8')
+                        mock_file.seek.return_value = 0
+                        mock_file.__iter__.return_value = [mock_jsonl.encode('utf-8') + b'\n']
+                        mock_open.return_value = mock_file
+
+                        result = get_token_info()
+
+        # Verify buffer is added: 80k actual + 45k buffer = 125k displayed
+        assert result['tokens_used'] == 125000, "Buffer not added to tokens_used"
+        assert result['tokens_remaining'] == 75000, "Remaining calculation incorrect"
 
 
 class TestContextCLI:
@@ -291,14 +335,15 @@ class TestTokenInfoEdgeCases:
 
     def test_near_compaction_tokens(self):
         """Test CLUAC calculation near compaction threshold."""
-        # Mock near-compaction scenario (140k tokens used)
+        # Mock near-compaction scenario (160k tokens used including output)
         mock_jsonl = json.dumps({
             "type": "assistant",
             "message": {
                 "usage": {
                     "cache_read_input_tokens": 70000,
                     "cache_creation_input_tokens": 40000,
-                    "input_tokens": 30000
+                    "input_tokens": 30000,
+                    "output_tokens": 20000
                 }
             }
         })
@@ -316,6 +361,7 @@ class TestTokenInfoEdgeCases:
 
                         result = get_token_info()
 
-        # 140k used, 60k remaining (CC 2.0: 200k total), 30% remaining → CLUAC30
-        assert result['tokens_used'] == 140000
-        assert result['cluac_level'] == 30  # CC 2.0 calculation
+        # 160k actual + 45k buffer = 205k displayed, -5k remaining (over limit)
+        # This scenario shows tokens exceeding usable space (entered buffer zone)
+        assert result['tokens_used'] == 205000  # 160k actual + 45k buffer
+        assert result['cluac_level'] == -2  # Negative CLUAC (over usable limit)
