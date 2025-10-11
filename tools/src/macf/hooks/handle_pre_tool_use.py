@@ -9,7 +9,8 @@ from typing import Dict, Any
 from ..utils import (
     get_minimal_timestamp,
     get_current_session_id,
-    start_deleg_drv
+    start_deleg_drv,
+    get_token_info
 )
 
 
@@ -73,6 +74,9 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
         tool_input = data.get("tool_input", {})
         session_id = get_current_session_id()
 
+        # Get token info for smoke test
+        token_info = get_token_info(session_id)
+
         # Base temporal message
         timestamp = get_minimal_timestamp()
         message_parts = [f"🏗️ MACF | {timestamp}"]
@@ -117,11 +121,20 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
         # Format message (single line for user visibility)
         message = " | ".join(message_parts)
 
+        # Add token context for Phase 0 smoke test
+        token_context = (
+            f"\n\n📊 TOKEN CONTEXT (SMOKE TEST)\n"
+            f"Tokens Used: {token_info['tokens_used']:,} / 200,000\n"
+            f"CLUAC Level: {token_info['cluac_level']}\n"
+            f"Remaining: {token_info['tokens_remaining']:,} tokens\n\n"
+            f"Smoke test: Validate agent demonstrates natural CLUAC awareness."
+        )
+
         return {
             "continue": True,
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
-                "additionalContext": f"<system-reminder>\n{message}\n</system-reminder>"
+                "additionalContext": f"<system-reminder>\n{message}{token_context}\n</system-reminder>"
             }
         }
 
