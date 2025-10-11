@@ -16,7 +16,8 @@ from ..utils import (
     get_current_cycle_project,
     format_duration,
     load_project_state,
-    save_project_state
+    save_project_state,
+    get_token_info
 )
 
 
@@ -72,6 +73,9 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
         project_state['last_session_ended_at'] = time.time()
         save_project_state(project_state)
 
+        # Get token context for smoke test
+        token_info = get_token_info(session_id)
+
         # Format message with full timestamp and DEV_DRV summary
         message = f"""🏗️ MACF | DEV_DRV Complete
 Current Time: {temporal_ctx['timestamp_formatted']}
@@ -85,12 +89,32 @@ Development Drive Stats:
 - Total Drives: {stats['count']}
 - Total Duration: {total_duration_str}
 
+📊 TOKEN CONTEXT (SMOKE TEST)
+Tokens Used: {token_info['tokens_used']:,} / 200,000
+CLUAC Level: {token_info['cluac_level']}
+Remaining: {token_info['tokens_remaining']:,} tokens
+
 {format_macf_footer(environment)}"""
 
-        # Return with systemMessage (user display only - Stop hook doesn't support hookSpecificOutput)
+        # Create smoke test message for AGENT consciousness (additionalContext injection)
+        smoke_test_message = f"""<system-reminder>
+🏗️ MACF TOKEN AWARENESS - SMOKE TEST
+
+📊 TOKEN CONTEXT TEST
+Tokens Used: {token_info['tokens_used']:,} / 200,000
+CLUAC Level: {token_info['cluac_level']}
+Remaining: {token_info['tokens_remaining']:,} tokens
+
+Smoke test to validate token awareness injection.
+</system-reminder>"""
+
+        # Return with both systemMessage (user) and additionalContext (agent)
         return {
             "continue": True,
-            "systemMessage": message
+            "systemMessage": message,
+            "hookSpecificOutput": {
+                "additionalContext": smoke_test_message
+            }
         }
 
     except Exception:
