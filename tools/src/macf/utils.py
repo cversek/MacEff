@@ -1462,9 +1462,10 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
     Returns:
         Dictionary with token counts and CLUAC level
     """
-    # Claude's actual context limit is 152,576 tokens (not 200k)
-    # This is the documented limit for Claude Opus 4.1
-    max_tokens = 152576
+    # Claude Code 2.0 transparent accounting: 200k total context
+    # (155k usable + 45k autocompact buffer reserve)
+    # This matches /context display which shows total including reserves
+    max_tokens = 200000
 
     # If session_id provided, try to get tokens from JSONL file
     if session_id or (session_id := get_current_session_id()) != "unknown":

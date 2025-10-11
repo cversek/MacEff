@@ -560,7 +560,7 @@ def cmd_context(args: argparse.Namespace) -> int:
         cluac_level = token_info['cluac_level']
         source = token_info['source']
 
-        print(f"Token Usage: {tokens_used:,} / 152,576 ({percentage_used:.1f}%)")
+        print(f"Token Usage: {tokens_used:,} / 200,000 ({percentage_used:.1f}%)")
         print(f"Remaining: {tokens_remaining:,} tokens")
         print(f"CLUAC Level: {cluac_level} (Context Left Until Auto-Compaction)")
         print(f"Source: {source}")
