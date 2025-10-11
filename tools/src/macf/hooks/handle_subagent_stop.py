@@ -13,7 +13,11 @@ from ..utils import (
     get_current_session_id,
     complete_deleg_drv,
     get_deleg_drv_stats,
-    format_duration
+    format_duration,
+    get_token_info,
+    format_token_context_full,
+    get_boundary_guidance,
+    detect_auto_mode
 )
 
 
@@ -43,6 +47,10 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
         temporal_ctx = get_temporal_context()
         environment = detect_execution_environment()
 
+        # Get token context and auto_mode
+        token_info = get_token_info(session_id)
+        auto_mode, _, _ = detect_auto_mode(session_id)
+
         # Format duration from seconds
         def format_duration(seconds):
             if seconds < 60:
@@ -57,6 +65,10 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
         duration_str = format_duration(duration) if success else "N/A"
         total_duration_str = format_duration(stats['total_duration'])
 
+        # Format token context sections
+        token_section = format_token_context_full(token_info)
+        boundary_guidance = get_boundary_guidance(token_info['cluac_level'], auto_mode)
+
         # Format message with full timestamp and DELEG_DRV summary
         message = f"""🏗️ MACF | DELEG_DRV Complete
 Current Time: {temporal_ctx['timestamp_formatted']}
@@ -68,6 +80,10 @@ Delegation Drive Stats:
 - This Delegation: {duration_str}
 - Total Delegations: {stats['count']}
 - Total Duration: {total_duration_str}
+
+{token_section}
+
+{boundary_guidance if boundary_guidance else ""}
 
 {format_macf_footer(environment)}"""
 
