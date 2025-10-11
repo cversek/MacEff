@@ -10,7 +10,8 @@ from ..utils import (
     get_minimal_timestamp,
     get_current_session_id,
     start_deleg_drv,
-    get_token_info
+    get_token_info,
+    format_token_context_minimal
 )
 
 
@@ -121,20 +122,14 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
         # Format message (single line for user visibility)
         message = " | ".join(message_parts)
 
-        # Add token context for Phase 0 smoke test
-        token_context = (
-            f"\n\n📊 TOKEN CONTEXT (SMOKE TEST)\n"
-            f"Tokens Used: {token_info['tokens_used']:,} / 200,000\n"
-            f"CLUAC Level: {token_info['cluac_level']}\n"
-            f"Remaining: {token_info['tokens_remaining']:,} tokens\n\n"
-            f"Smoke test: Validate agent demonstrates natural CLUAC awareness."
-        )
+        # Add minimal token context (high-frequency hook = minimal overhead)
+        token_context_minimal = format_token_context_minimal(token_info)
 
         return {
             "continue": True,
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
-                "additionalContext": f"<system-reminder>\n{message}{token_context}\n</system-reminder>"
+                "additionalContext": f"<system-reminder>\n{message} | {token_context_minimal}\n</system-reminder>"
             }
         }
 
