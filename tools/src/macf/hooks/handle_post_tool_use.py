@@ -8,7 +8,9 @@ from typing import Dict, Any
 
 from ..utils import (
     get_minimal_timestamp,
-    get_current_session_id
+    get_current_session_id,
+    get_token_info,
+    format_token_context_minimal
 )
 
 
@@ -23,6 +25,7 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
     - Grep/Glob: Show search patterns
     - TodoWrite: Count status summary
     - Minimal timestamp for high-frequency hook
+    - Minimal token context (CLUAC indicator)
 
     Args:
         stdin_json: JSON string from stdin (Claude Code hook input)
@@ -41,6 +44,11 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
 
         # Base temporal message
         timestamp = get_minimal_timestamp()
+
+        # Token awareness (minimal for high-frequency hook)
+        token_info = get_token_info(session_id)
+        token_context_minimal = format_token_context_minimal(token_info)
+
         message_parts = [f"🏗️ MACF | {timestamp}"]
 
         # Enhanced context based on tool type
@@ -84,6 +92,9 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
 
         # Format message (single line for user visibility)
         message = " | ".join(message_parts)
+
+        # Append token context
+        message = f"{message} | {token_context_minimal}"
 
         return {
             "continue": True,
