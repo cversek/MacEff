@@ -1446,6 +1446,13 @@ def clear_delegations_this_drive(
 # Token Tracking Infrastructure (Battle-Tested from Legacy MACF)
 # =============================================================================
 
+# Claude Code 2.0 Context Window Constants
+# ASSUMPTION: These values are correct for CC 2.0 as of 2025-10-11.
+# May require reverification in future Claude Code versions.
+CC2_TOTAL_CONTEXT = 200000  # Total context window (155k usable + 45k buffer)
+CC2_AUTOCOMPACT_BUFFER = 45000  # Reserved for autocompaction + safety margin
+CC2_USABLE_CONTEXT = CC2_TOTAL_CONTEXT - CC2_AUTOCOMPACT_BUFFER  # 155k
+
 
 def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
     """Get current token usage information from session JSONL or hooks state.
@@ -1460,12 +1467,11 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
                    If not provided, uses current session.
 
     Returns:
-        Dictionary with token counts and CLUAC level
+        Dictionary with token counts and CLUAC level (matches /context display)
     """
-    # Claude Code 2.0 transparent accounting: 200k total context
-    # (155k usable + 45k autocompact buffer reserve)
-    # This matches /context display which shows total including reserves
-    max_tokens = 200000
+    # Use CC2_TOTAL_CONTEXT to match /context display exactly
+    # /context shows: actual_usage + autocompact_buffer = total displayed
+    max_tokens = CC2_TOTAL_CONTEXT
 
     # If session_id provided, try to get tokens from JSONL file
     if session_id or (session_id := get_current_session_id()) != "unknown":
@@ -1524,6 +1530,7 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
                                         "cache_creation_input_tokens", 0
                                     )
                                     total_tokens += usage.get("input_tokens", 0)
+                                    total_tokens += usage.get("output_tokens", 0)
                                     if total_tokens > 0:
                                         assistant_messages.append(
                                             {
@@ -1563,6 +1570,7 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
                                         "cache_creation_input_tokens", 0
                                     )
                                     total_tokens += usage.get("input_tokens", 0)
+                                    total_tokens += usage.get("output_tokens", 0)
                                     if total_tokens > 0:
                                         # Always use the LATEST value, not the maximum
                                         last_assistant_tokens = total_tokens
@@ -1574,7 +1582,11 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
                         current_tokens = last_assistant_tokens
 
                 if current_tokens > 0:
-                    tokens_remaining = max_tokens - current_tokens
+                    # Add autocompact buffer to match /context display
+                    # /context shows: actual_usage + buffer = total_displayed
+                    tokens_used_with_buffer = current_tokens + CC2_AUTOCOMPACT_BUFFER
+                    tokens_remaining = max_tokens - tokens_used_with_buffer
+
                     # CLUAC is percentage REMAINING (not used)
                     # This matches the original CLUAC protocol where higher numbers = more danger
                     percentage_remaining = (
@@ -1601,9 +1613,9 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
                         )
 
                     return {
-                        "tokens_used": current_tokens,
+                        "tokens_used": tokens_used_with_buffer,
                         "tokens_remaining": tokens_remaining,
-                        "percentage_used": (current_tokens / max_tokens) * 100,
+                        "percentage_used": (tokens_used_with_buffer / max_tokens) * 100,
                         "percentage_remaining": percentage_remaining,
                         "cluac_level": cluac_level,
                         "last_updated": last_timestamp,
