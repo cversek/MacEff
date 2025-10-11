@@ -18,7 +18,8 @@ from .utils import (
     get_current_session_id,
     get_dev_scripts_dir,
     get_hooks_dir,
-    get_formatted_timestamp
+    get_formatted_timestamp,
+    get_token_info
 )
 
 # -------- helpers --------
@@ -538,6 +539,39 @@ def cmd_config_show(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_context(args: argparse.Namespace) -> int:
+    """Show current token usage and CLUAC level."""
+    try:
+        # Get session_id from args or use current
+        session_id = getattr(args, 'session', None)
+
+        # Get token info
+        token_info = get_token_info(session_id=session_id)
+
+        # JSON output mode
+        if getattr(args, 'json_output', False):
+            print(json.dumps(token_info, indent=2))
+            return 0
+
+        # Human-readable format
+        tokens_used = token_info['tokens_used']
+        tokens_remaining = token_info['tokens_remaining']
+        percentage_used = token_info['percentage_used']
+        cluac_level = token_info['cluac_level']
+        source = token_info['source']
+
+        print(f"Token Usage: {tokens_used:,} / 152,576 ({percentage_used:.1f}%)")
+        print(f"Remaining: {tokens_remaining:,} tokens")
+        print(f"CLUAC Level: {cluac_level} (Context Left Until Auto-Compaction)")
+        print(f"Source: {source}")
+
+        return 0
+
+    except Exception as e:
+        print(f"Error getting token info: {e}")
+        return 1
+
+
 def cmd_agent_init(args: argparse.Namespace) -> int:
     """Initialize agent with preamble injection (idempotent)."""
     try:
@@ -688,6 +722,13 @@ def _build_parser() -> argparse.ArgumentParser:
     agent_sub = agent_parser.add_subparsers(dest="agent_cmd")
 
     agent_sub.add_parser("init", help="initialize agent with PA preamble").set_defaults(func=cmd_agent_init)
+
+    # Context command
+    context_parser = sub.add_parser("context", help="show token usage and CLUAC level")
+    context_parser.add_argument("--json", dest="json_output", action="store_true",
+                               help="output as JSON")
+    context_parser.add_argument("--session", help="specific session ID (default: current)")
+    context_parser.set_defaults(func=cmd_context)
 
     return p
 
