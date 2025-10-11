@@ -538,6 +538,100 @@ def cmd_config_show(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_agent_init(args: argparse.Namespace) -> int:
+    """Initialize agent with preamble injection (idempotent)."""
+    try:
+        # Detect PA home directory
+        config = ConsciousnessConfig()
+        if config._is_container():
+            # In container: use detected home
+            pa_home = Path.home()
+        else:
+            # On host: try to find project root with .claude/
+            try:
+                from .utils import find_project_root
+                project_root = find_project_root()
+                if project_root:
+                    pa_home = project_root
+                else:
+                    pa_home = Path.cwd()
+            except Exception:
+                pa_home = Path.cwd()
+
+        claude_md_path = pa_home / "CLAUDE.md"
+
+        # Determine preamble template path
+        # Look for templates in MacEff repository structure
+        template_locations = [
+            Path(__file__).parent.parent.parent.parent.parent / "templates" / "PA_PREAMBLE.md",  # From installed package
+            Path("/opt/maceff/templates/PA_PREAMBLE.md"),  # Container path
+        ]
+
+        preamble_template_path = None
+        for loc in template_locations:
+            if loc.exists():
+                preamble_template_path = loc
+                break
+
+        if not preamble_template_path:
+            print("Error: PA_PREAMBLE.md template not found")
+            print("Expected locations:")
+            for loc in template_locations:
+                print(f"  - {loc}")
+            return 1
+
+        # Read preamble template
+        preamble_content = preamble_template_path.read_text()
+
+        # Check if CLAUDE.md exists and already has preamble
+        if claude_md_path.exists():
+            existing_content = claude_md_path.read_text()
+
+            # Check for version markers
+            if "<!-- MACEFF_PA_PREAMBLE_v1.0_START -->" in existing_content:
+                print(f"✅ PA Preamble already present in {claude_md_path}")
+                print("   (Idempotent - no changes made)")
+                return 0
+
+            # No preamble yet - prepend it
+            print(f"Adding PA Preamble to existing CLAUDE.md at {claude_md_path}")
+            new_content = preamble_content + "\n\n" + existing_content
+            claude_md_path.write_text(new_content)
+            print(f"✅ PA Preamble prepended successfully")
+        else:
+            # Create new CLAUDE.md with just the preamble
+            print(f"Creating new CLAUDE.md with PA Preamble at {claude_md_path}")
+            claude_md_path.write_text(preamble_content)
+            print(f"✅ CLAUDE.md created successfully")
+
+        # Create personal policy directory structure (PA only)
+        personal_policies_dir = pa_home / "agent" / "policies" / "personal"
+        personal_policies_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create personal manifest if it doesn't exist
+        personal_manifest = personal_policies_dir / "manifest.json"
+        if not personal_manifest.exists():
+            manifest_data = {
+                "version": "1.0.0",
+                "description": f"{config.agent_name} Personal Policies",
+                "extends": "/opt/maceff/policies/manifest.json",
+                "personal_policies": []
+            }
+            with open(personal_manifest, 'w') as f:
+                json.dump(manifest_data, f, indent=2)
+            print(f"✅ Created personal policy manifest at {personal_manifest}")
+
+        print(f"\n📍 PA Home: {pa_home}")
+        print(f"📍 Personal Policies: {personal_policies_dir}")
+        print(f"\nAgent initialization complete!")
+
+        return 0
+
+    except Exception as e:
+        print(f"Error during agent initialization: {e}")
+        return 1
+
+
 # -------- parser --------
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -588,6 +682,12 @@ def _build_parser() -> argparse.ArgumentParser:
     init_parser.set_defaults(func=cmd_config_init)
 
     config_sub.add_parser("show", help="show current configuration").set_defaults(func=cmd_config_show)
+
+    # Agent commands
+    agent_parser = sub.add_parser("agent", help="agent initialization and management")
+    agent_sub = agent_parser.add_subparsers(dest="agent_cmd")
+
+    agent_sub.add_parser("init", help="initialize agent with PA preamble").set_defaults(func=cmd_agent_init)
 
     return p
 
