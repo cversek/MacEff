@@ -15,8 +15,8 @@ from ..utils import (
     get_dev_drv_stats,
     get_current_cycle_project,
     format_duration,
-    load_project_state,
-    save_project_state,
+    load_agent_state,
+    save_agent_state,
     get_token_info,
     format_token_context_full,
     get_boundary_guidance,
@@ -29,6 +29,21 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
     Run Stop hook logic.
 
     Tracks DEV_DRV completion and displays stats.
+
+    ⚠️  WARNING: SIDE EFFECTS - DO NOT CALL DIRECTLY FOR TESTING ⚠️
+
+    This hook MUTATES SESSION AND PROJECT STATE on every execution:
+    - Increments DEV_DRV counter in session state
+    - Records drive duration and aggregates stats
+    - Updates last_session_ended_at timestamp in .maceff/project_state.json
+
+    Calling this hook directly (e.g., for testing) will cause:
+    - DEV_DRV counts to increment incorrectly
+    - Inaccurate session duration statistics
+    - Incorrect cross-session time gap calculations
+
+    For testing: Mock complete_dev_drv() and save_agent_state() or use
+    unit tests that isolate stat computation from state mutation.
 
     Args:
         stdin_json: JSON string from stdin (Claude Code hook input)
@@ -72,9 +87,9 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
 
         # Save session end time to project state (cross-session persistence)
         import time
-        project_state = load_project_state()
+        project_state = load_agent_state()
         project_state['last_session_ended_at'] = time.time()
-        save_project_state(project_state)
+        save_agent_state(project_state)
 
         # Get token context and mode
         token_info = get_token_info(session_id)
