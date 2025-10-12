@@ -832,9 +832,9 @@ def get_deleg_drv_stats(session_id: str, agent_id: Optional[str] = None) -> dict
 # =============================================================================
 
 
-def get_project_state_path(agent_root: Optional[Path] = None) -> Path:
+def get_agent_state_path(agent_root: Optional[Path] = None) -> Path:
     """
-    Get path to .maceff/project_state.json.
+    Get path to .maceff/agent_state.json.
 
     Args:
         agent_root: Project root (auto-detected if None)
@@ -847,10 +847,10 @@ def get_project_state_path(agent_root: Optional[Path] = None) -> Path:
     else:
         agent_root = Path(agent_root)
 
-    return agent_root / ".maceff" / "project_state.json"
+    return agent_root / ".maceff" / "agent_state.json"
 
 
-def load_project_state(agent_root: Optional[Path] = None) -> dict:
+def load_agent_state(agent_root: Optional[Path] = None) -> dict:
     """
     Load project state from JSON file.
 
@@ -864,13 +864,13 @@ def load_project_state(agent_root: Optional[Path] = None) -> dict:
         Project state dict or empty dict on error
     """
     try:
-        state_path = get_project_state_path(agent_root)
+        state_path = get_agent_state_path(agent_root)
         return read_json_safely(state_path)
     except Exception:
         return {}
 
 
-def save_project_state(state: dict, agent_root: Optional[Path] = None) -> bool:
+def save_agent_state(state: dict, agent_root: Optional[Path] = None) -> bool:
     """
     Save project state atomically (write-rename pattern).
 
@@ -884,7 +884,7 @@ def save_project_state(state: dict, agent_root: Optional[Path] = None) -> bool:
         True if successful, False otherwise
     """
     try:
-        state_path = get_project_state_path(agent_root)
+        state_path = get_agent_state_path(agent_root)
 
         # Create .maceff directory if needed
         state_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
@@ -908,8 +908,8 @@ def get_current_cycle_project(agent_root: Optional[Path] = None) -> int:
         Current cycle number (1 if project state doesn't exist)
     """
     try:
-        project_state = load_project_state(agent_root)
-        return project_state.get('current_cycle_number', 1)
+        agent_state = load_agent_state(agent_root)
+        return agent_state.get('current_cycle_number', 1)
     except Exception:
         return 1
 
@@ -926,13 +926,13 @@ def detect_session_migration(current_session_id: str, agent_root: Optional[Path]
         Tuple of (is_migration: bool, old_session_id: str)
     """
     try:
-        project_state = load_project_state(agent_root)
+        agent_state = load_agent_state(agent_root)
 
-        if not project_state:
+        if not agent_state:
             # First run - no migration
             return (False, "")
 
-        last_session_id = project_state.get('last_session_id', '')
+        last_session_id = agent_state.get('last_session_id', '')
 
         if not last_session_id:
             # No previous session recorded
@@ -959,11 +959,11 @@ def increment_cycle_project(session_id: str, agent_root: Optional[Path] = None) 
         New cycle number
     """
     try:
-        project_state = load_project_state(agent_root)
+        agent_state = load_agent_state(agent_root)
 
         # Initialize if empty
-        if not project_state:
-            project_state = {
+        if not agent_state:
+            agent_state = {
                 'current_cycle_number': 1,
                 'cycle_started_at': time.time(),
                 'cycles_completed': 0,
@@ -971,15 +971,15 @@ def increment_cycle_project(session_id: str, agent_root: Optional[Path] = None) 
             }
 
         # Increment cycle
-        project_state['current_cycle_number'] += 1
-        project_state['cycle_started_at'] = time.time()
-        project_state['cycles_completed'] = project_state['current_cycle_number'] - 1
-        project_state['last_session_id'] = session_id
+        agent_state['current_cycle_number'] += 1
+        agent_state['cycle_started_at'] = time.time()
+        agent_state['cycles_completed'] = agent_state['current_cycle_number'] - 1
+        agent_state['last_session_id'] = session_id
 
         # Save atomically
-        save_project_state(project_state, agent_root)
+        save_agent_state(agent_state, agent_root)
 
-        return project_state['current_cycle_number']
+        return agent_state['current_cycle_number']
     except Exception:
         return 1
 

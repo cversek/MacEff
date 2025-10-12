@@ -27,6 +27,21 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
 
     Tracks DELEG_DRV completion and displays delegation stats.
 
+    ⚠️  WARNING: SIDE EFFECTS - DO NOT CALL DIRECTLY FOR TESTING ⚠️
+
+    This hook MUTATES SESSION STATE on every execution:
+    - Increments DELEG_DRV counter in session state
+    - Records delegation duration and aggregates stats
+    - Clears current delegation tracking variables
+
+    Calling this hook directly (e.g., for testing) will cause:
+    - DELEG_DRV counts to increment incorrectly
+    - Inaccurate delegation duration statistics
+    - Lost tracking of current delegation context
+
+    For testing: Mock complete_deleg_drv() or use unit tests that isolate
+    stat computation from state mutation.
+
     Args:
         stdin_json: JSON string from stdin (Claude Code hook input)
 

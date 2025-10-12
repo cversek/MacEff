@@ -17,7 +17,7 @@ from ..utils import (
     get_current_cycle_project,
     format_duration,
     format_macf_footer,
-    load_project_state,
+    load_agent_state,
     increment_cycle_project,
     get_token_info,
     format_token_context_full,
@@ -37,6 +37,21 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
     - Mode-aware branching (AUTO vs MANUAL)
     - Artifact discovery
     - Session state restoration
+
+    ⚠️  WARNING: SIDE EFFECTS - DO NOT CALL DIRECTLY FOR TESTING ⚠️
+
+    This hook MUTATES PROJECT STATE on every compaction detection:
+    - Increments cycle counter in .maceff/project_state.json
+    - Increments compaction count in session state
+    - Updates session timestamps
+
+    Calling this hook directly (e.g., for testing) will cause:
+    - Cycle counter to increment incorrectly
+    - Project state corruption requiring manual correction
+    - Confusion about which cycle you're actually in
+
+    For testing: Mock the side-effect functions or use unit tests that
+    isolate the detection logic from the mutation logic.
 
     Args:
         stdin_json: JSON string from stdin (Claude Code hook input)
@@ -177,7 +192,7 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
         cycle_number = get_current_cycle_project()
 
         # Load project state for cross-session time tracking
-        project_state = load_project_state()
+        project_state = load_agent_state()
         last_session_ended = project_state.get('last_session_ended_at', None)
 
         # Calculate time gap since last session
