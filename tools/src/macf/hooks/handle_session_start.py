@@ -144,8 +144,7 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
                 artifacts=artifacts,
                 temporal_ctx=temporal_ctx,
                 environment=environment,
-                cycle_stats=cycle_stats,
-                token_info=token_info
+                cycle_stats=cycle_stats
             )
 
             # Log recovery triggered
