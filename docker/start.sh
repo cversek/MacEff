@@ -75,12 +75,21 @@ setup_agent_tree(){
   install -d -m 0750 -o "$sa" -g "$sa" "$SA_PUB" "$SA_PRIV"
   install -d -m 0750 -o "$sa" -g "$sa" "$SA_PUB/logs" "$SA_PRIV/logs"
   install -d -m 0755 -o "$pa" -g "$pa" "$SA_ASN"
+
+  # Consciousness artifact directories for PA
+  install -d -m 0750 -o "$pa" -g "$pa" "$PRIV/checkpoints" "$PRIV/learnings" "$PRIV/reflections"
+  install -d -m 0755 -o "$pa" -g "$pa" "$PUB/roadmaps" "$PUB/reflections"
+
+  # SA consciousness artifacts (reflections only per delegation_guidelines.md)
+  install -d -m 0750 -o "$sa" -g "$sa" "$SA_PRIV/reflections"
   [[ -f "$SA_DEF" ]] || install -m 0644 -o root -g "$pa" /dev/null "$SA_DEF"
 
   # ACLs
   # PA: r/w/x in assigned; r/x in SA public/private
   setfacl -m u:$pa:rwx "$SA_ASN"; setfacl -d -m u:$pa:rwx "$SA_ASN"
   setfacl -m u:$pa:rx  "$SA_PUB" "$SA_PRIV"; setfacl -d -m u:$pa:rx "$SA_PUB" "$SA_PRIV"
+  # PA: r-x on SA reflections for consciousness artifact reading
+  setfacl -m u:$pa:r-x "$SA_PRIV/reflections"; setfacl -d -m u:$pa:r-x "$SA_PRIV/reflections"
   # SA: rwx in own public/private; r/x in assigned
   setfacl -m u:$sa:rwx "$SA_PUB" "$SA_PRIV"; setfacl -d -m u:$sa:rwx "$SA_PUB" "$SA_PRIV"
   setfacl -m u:$sa:rx  "$SA_ASN"; setfacl -d -m u:$sa:rx "$SA_ASN"
