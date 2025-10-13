@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CONTAINER="${CONTAINER_NAME:-maceff-sandbox}"
+SRC_DIR="$(cd "$(dirname "$0")"/../.. && pwd)/templates"
+DEST_DIR="/opt/maceff/templates"
+
+if [[ ! -d "$SRC_DIR" ]]; then
+  echo "error: source templates directory not found: $SRC_DIR" >&2
+  exit 1
+fi
+
+if ! docker inspect -f '{{.State.Running}}' "$CONTAINER" >/dev/null 2>&1; then
+  echo "error: container '$CONTAINER' not running. Try: make up" >&2
+  exit 1
+fi
+
+echo "Syncing templates to container..."
+
+# Ensure destination exists
+docker exec -u 0 "$CONTAINER" bash -lc "
+  set -e
+  install -d -o root -g root -m 755 '$DEST_DIR'
+"
+
+# Copy files and fix perms
+docker cp "$SRC_DIR/." "$CONTAINER:$DEST_DIR/"
+docker exec -u 0 "$CONTAINER" bash -lc "
+  set -e
+  chown -R root:root '$DEST_DIR'
+  find '$DEST_DIR' -type d -exec chmod 755 {} \;
+  find '$DEST_DIR' -type f -exec chmod 644 {} \;
+  echo '✅ Templates synced to $DEST_DIR'
+  ls -1 '$DEST_DIR'
+"

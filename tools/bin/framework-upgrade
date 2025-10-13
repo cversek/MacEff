@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+echo "=== MacEff Framework Upgrade ==="
+echo ""
+
+# Step 1: Sync policies
+echo "[1/4] Syncing policies..."
+"${SCRIPT_DIR}/policy-sync"
+echo ""
+
+# Step 2: Sync templates
+echo "[2/4] Syncing templates..."
+"${SCRIPT_DIR}/template-sync"
+echo ""
+
+# Step 3: Sync tools (macf_tools package)
+echo "[3/4] Syncing macf_tools package..."
+"${SCRIPT_DIR}/tools-sync"
+echo ""
+
+# Step 4: Upgrade preambles
+echo "[4/4] Upgrading preambles..."
+"${SCRIPT_DIR}/preamble-upgrade"
+echo ""
+
+echo "✅ Framework upgrade complete"
+echo "   - Policies synced"
+echo "   - Templates synced"
+echo "   - macf_tools package updated"
+echo "   - Preambles upgraded (user content preserved)"
