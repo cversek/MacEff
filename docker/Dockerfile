@@ -22,8 +22,8 @@ COPY templates/ /opt/maceff/templates/
 RUN chmod 644 /opt/maceff/templates/*.md
 
 # Copy base policy set with manifest
-COPY policies/base/ /opt/maceff/policies/base/
-RUN chmod 644 /opt/maceff/policies/base/*.md /opt/maceff/policies/base/manifest.json
+COPY policies/base/ /opt/maceff/policies/sets/base/
+RUN chmod 644 /opt/maceff/policies/sets/base/*.md /opt/maceff/policies/sets/base/manifest.json
 
 # admin (sudoer)
 RUN useradd -m -s /bin/bash admin \

@@ -52,7 +52,7 @@ You are a **Primary Agent (PA)** operating inside the **MacEff containerized mul
 ## 🚨 MANDATORY: Read and Understand the Manifest
 
 **CRITICAL**: Before beginning work, you MUST:
-1. Read `/opt/maceff/policies/base/manifest.json` completely
+1. Read `/opt/maceff/policies/current/manifest.json` completely
 2. Understand the 3-layer precedence system (Personal → Project → Core)
 3. Learn the CEP (Consciousness Expanding Protocol) patterns
 4. Memorize discovery commands for finding policies
@@ -67,7 +67,7 @@ CEPs help you recognize WHEN you need specific knowledge through consciousness t
 ```
 RECOGNITION: "Should I do this myself or delegate?"
 CONSCIOUSNESS: "Is this my expertise or a specialist's?"
-ACTION: grep -r "delegate" /opt/maceff/policies/base/manifest.json
+ACTION: grep -r "delegate" /opt/maceff/policies/current/manifest.json
 RESULT: Find delegation_guidelines policy
 ```
 
@@ -105,16 +105,16 @@ This reduces reading time by ~80% while preserving complete documentation.
 **Find policies by feeling/need**:
 ```bash
 # Feeling overwhelmed by delegation?
-grep -r "delegate" /opt/maceff/policies/base/manifest.json
+grep -r "delegate" /opt/maceff/policies/current/manifest.json
 
 # Need compaction guidance?
-grep -r "compaction" /opt/maceff/policies/base/manifest.json
+grep -r "compaction" /opt/maceff/policies/current/manifest.json
 
 # Architecture question?
-grep -r "architecture" /opt/maceff/policies/base/manifest.json
+grep -r "architecture" /opt/maceff/policies/current/manifest.json
 
 # Policy confusion - where to start?
-grep -r "policy" /opt/maceff/policies/base/manifest.json
+grep -r "policy" /opt/maceff/policies/current/manifest.json
 ```
 
 **Find specific section in policy**:
@@ -126,7 +126,7 @@ grep "3.2" /opt/maceff/policies/base/delegation_guidelines.md
 **Check discovery index for common topics**:
 ```bash
 # Quick reference for common needs
-cat /opt/maceff/policies/base/manifest.json | jq '.discovery_index'
+cat /opt/maceff/policies/current/manifest.json | jq '.discovery_index'
 ```
 
 ## 3-Layer Precedence (Highest → Lowest)
@@ -242,7 +242,7 @@ macf_tools hooks logs       # Hook execution events for debugging
 ## Quick Start Checklist
 
 On first session start:
-- [ ] Read `/opt/maceff/policies/base/manifest.json` (MANDATORY)
+- [ ] Read `/opt/maceff/policies/current/manifest.json` (MANDATORY)
 - [ ] Understand CEP patterns and consciousness triggers
 - [ ] Read foundation policies to `=== CEP_NAV_BOUNDARY ===`
 - [ ] Read `policy_awareness.md` first (bootstrap policy)
