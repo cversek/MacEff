@@ -17,6 +17,14 @@ RUN --mount=type=cache,target=/var/cache/apt \
 RUN npm install -g @anthropic-ai/claude-code
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
 
+# Copy framework templates
+COPY templates/ /opt/maceff/templates/
+RUN chmod 644 /opt/maceff/templates/*.md
+
+# Copy base policy set with manifest
+COPY policies/base/ /opt/maceff/policies/base/
+RUN chmod 644 /opt/maceff/policies/base/*.md /opt/maceff/policies/base/manifest.json
+
 # admin (sudoer)
 RUN useradd -m -s /bin/bash admin \
  && echo "admin ALL=(ALL) NOPASSWD:ALL" >/etc/sudoers.d/90-admin \
