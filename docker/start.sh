@@ -138,6 +138,13 @@ for pa in "${PAS[@]}"; do
   fi
 done
 
+# Initialize PAs with preamble (idempotent)
+log "Initializing Primary Agents with framework preamble..."
+for pa in "${PAS[@]}"; do
+  su - "$pa" -c "macf_tools agent init" 2>/dev/null || \
+    log "PA init skipped for $pa (may already exist)"
+done
+
 # Tools (maceff) in shared venv with global CLI (+ PyYAML for policy validation)
 if [[ -d /opt/tools ]]; then
   log "Installing maceff into /opt/maceff-venv..."
