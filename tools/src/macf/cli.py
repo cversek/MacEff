@@ -617,23 +617,33 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
         # Read preamble template
         preamble_content = preamble_template_path.read_text()
 
-        # Check if CLAUDE.md exists and already has preamble
+        # Upgrade boundary marker
+        UPGRADE_BOUNDARY = """---
+
+<!-- ⚠️ DO NOT WRITE BELOW THIS LINE ⚠️ -->
+<!-- Framework preamble managed by macf_tools - edits below will be lost on upgrade -->
+<!-- Add custom policies and agent-specific content ABOVE this boundary -->
+"""
+
+        # Check if CLAUDE.md exists and process accordingly
         if claude_md_path.exists():
             existing_content = claude_md_path.read_text()
 
-            # Check for version markers
-            if "<!-- MACEFF_PA_PREAMBLE_v1.0_START -->" in existing_content:
-                print(f"✅ PA Preamble already present in {claude_md_path}")
-                print("   (Idempotent - no changes made)")
-                return 0
+            # If boundary exists, extract user content above it
+            if "<!-- ⚠️ DO NOT WRITE BELOW THIS LINE" in existing_content:
+                user_content = existing_content.split("<!-- ⚠️ DO NOT WRITE BELOW THIS LINE")[0].rstrip()
+                print(f"Updating PA Preamble in existing CLAUDE.md at {claude_md_path}")
+            else:
+                # No boundary = first time, preserve all existing content
+                user_content = existing_content.rstrip()
+                print(f"Adding PA Preamble to existing CLAUDE.md at {claude_md_path}")
 
-            # No preamble yet - prepend it
-            print(f"Adding PA Preamble to existing CLAUDE.md at {claude_md_path}")
-            new_content = preamble_content + "\n\n" + existing_content
+            # Append: user + boundary + preamble
+            new_content = user_content + "\n\n" + UPGRADE_BOUNDARY + "\n\n" + preamble_content
             claude_md_path.write_text(new_content)
-            print(f"✅ PA Preamble prepended successfully")
+            print(f"✅ PA Preamble appended successfully")
         else:
-            # Create new CLAUDE.md with just the preamble
+            # Create new CLAUDE.md with just the preamble (no boundary needed)
             print(f"Creating new CLAUDE.md with PA Preamble at {claude_md_path}")
             claude_md_path.write_text(preamble_content)
             print(f"✅ CLAUDE.md created successfully")
