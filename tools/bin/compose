@@ -27,13 +27,13 @@ load_env_file() {
 }
 
 # Preload for compose-file interpolation
-load_env_file "$root/.maceff/global.env"
-load_env_file "$root/.maceff/projects/${proj}.env"
+load_env_file "$root/.maceff/config/global.env"
+load_env_file "$root/.maceff/config/projects/${proj}.env"
 
 if docker compose version >/dev/null 2>&1; then
-  args=( "--env-file" "$root/.maceff/global.env" )
-  if [[ -f "$root/.maceff/projects/${proj}.env" ]]; then
-    args+=( "--env-file" "$root/.maceff/projects/${proj}.env" )
+  args=( "--env-file" "$root/.maceff/config/global.env" )
+  if [[ -f "$root/.maceff/config/projects/${proj}.env" ]]; then
+    args+=( "--env-file" "$root/.maceff/config/projects/${proj}.env" )
   fi
   exec docker compose "${args[@]}" "$@"
 elif command -v docker-compose >/dev/null 2>&1; then
