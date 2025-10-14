@@ -172,7 +172,7 @@ class ConsciousnessConfig:
 
         Resolution priority:
         1. Container: MACEFF_USER or USER environment variable
-        2. Host: .maceff/config.json moniker field
+        2. Host: .macf/config.json moniker field
         3. Fallback: 'unknown_agent'
 
         Returns:
@@ -184,9 +184,9 @@ class ConsciousnessConfig:
             if agent:
                 return agent
 
-        # Host context - read from .maceff/config.json
+        # Host context - read from .macf/config.json
         if self._is_host():
-            config_file = Path.cwd() / '.maceff' / 'config.json'
+            config_file = Path.cwd() / '.macf' / 'config.json'
             if config_file.exists():
                 try:
                     with open(config_file) as f:
@@ -202,12 +202,12 @@ class ConsciousnessConfig:
 
     def load_config(self) -> dict:
         """
-        Load .maceff/config.json if it exists.
+        Load .macf/config.json if it exists.
 
         Returns:
             dict: Configuration data or empty dict if not found
         """
-        config_file = Path.cwd() / '.maceff' / 'config.json'
+        config_file = Path.cwd() / '.macf' / 'config.json'
         if config_file.exists():
             try:
                 with open(config_file) as f:
