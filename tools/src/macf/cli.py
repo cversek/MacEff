@@ -594,12 +594,20 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
 
         claude_md_path = pa_home / "CLAUDE.md"
 
-        # Determine preamble template path
-        # Look for templates in MacEff repository structure
-        template_locations = [
-            Path(__file__).parent.parent.parent.parent.parent / "templates" / "PA_PREAMBLE.md",  # From installed package
-            Path("/opt/maceff/templates/PA_PREAMBLE.md"),  # Container path
-        ]
+        # Determine preamble template path (portable)
+        template_locations = []
+
+        # 1. Environment variable (deployment-configurable)
+        env_templates = os.getenv("MACEFF_TEMPLATES_DIR")
+        if env_templates:
+            template_locations.append(Path(env_templates) / "PA_PREAMBLE.md")
+
+        # 2. MacEff standard location (with MACEFF_ROOT support)
+        maceff_root = os.getenv("MACEFF_ROOT", "/opt/maceff")
+        template_locations.append(Path(maceff_root) / "framework" / "templates" / "PA_PREAMBLE.md")
+
+        # 3. Development mode (relative to current directory)
+        template_locations.append(Path.cwd() / "templates" / "PA_PREAMBLE.md")
 
         preamble_template_path = None
         for loc in template_locations:
