@@ -6,7 +6,7 @@ PORT     ?= 2222
 KEYS_DIR ?= keys
 PROJ     ?= demo
 
-.PHONY: help build up logs down mirror mirror-watch ssh-pa ssh-admin sa-test claude claude-doctor
+.PHONY: help init build up logs down mirror mirror-watch ssh-pa ssh-admin sa-test claude claude-doctor
 
 # Forward everything after the first goal as ARGS (and ignore a literal --)
 RAW_ARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
@@ -16,6 +16,7 @@ $(eval $(ARGS):;@:)
 
 help:
 	@echo "Targets:"
+	@echo "  make init          - initialize .maceff/ structure (run once)"
 	@echo "  make build         - docker compose build"
 	@echo "  make up            - start services (detached)"
 	@echo "  make logs          - follow logs"
@@ -70,3 +71,6 @@ policy-sync:
 
 policy-sync-%:
 	tools/bin/policy-sync $*
+
+init:
+	tools/bin/maceff-init
