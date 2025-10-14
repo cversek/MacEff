@@ -617,7 +617,7 @@ def detect_auto_mode(session_id: str) -> Tuple[bool, str, float]:
     Priority (highest to lowest):
     1. CLI flag --auto-mode (not implemented yet, return None)
     2. Environment variable MACF_AUTO_MODE=true/false - confidence 0.9
-    3. Config file .maceff/config.json "auto_mode" field - confidence 0.7
+    3. Config file .macf/config.json "auto_mode" field - confidence 0.7
     4. Session state (load previous setting) - confidence 0.5
     5. Default (False, "default", 0.0)
 
