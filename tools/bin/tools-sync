@@ -30,7 +30,7 @@ docker cp "$SRC_DIR/." "$CONTAINER:$DEST_DIR/"
 echo "Reinstalling macf_tools package..."
 docker exec "$CONTAINER" bash -lc "
   set -e
-  pip install -e /opt/tools
+  /opt/maceff-venv/bin/pip install -e /opt/tools
   echo '✅ macf_tools package updated'
   macf_tools --version
 "

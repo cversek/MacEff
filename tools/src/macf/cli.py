@@ -456,8 +456,8 @@ def cmd_hook_status(args: argparse.Namespace) -> int:
 
 
 def cmd_config_init(args: argparse.Namespace) -> int:
-    """Initialize .maceff/config.json with interactive prompts."""
-    config_dir = Path.cwd() / '.maceff'
+    """Initialize .macf/config.json with interactive prompts."""
+    config_dir = Path.cwd() / '.macf'
     config_file = config_dir / 'config.json'
 
     if config_file.exists() and not args.force:
@@ -528,7 +528,7 @@ def cmd_config_show(args: argparse.Namespace) -> int:
         print("\nFull configuration:")
         print(json.dumps(config_data, indent=2))
     else:
-        print("\nNo .maceff/config.json found (using defaults)")
+        print("\nNo .macf/config.json found (using defaults)")
 
     # Show computed paths
     print(f"\nComputed paths:")
