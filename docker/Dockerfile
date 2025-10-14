@@ -14,6 +14,17 @@ RUN --mount=type=cache,target=/var/cache/apt \
       tree \
  && rm -rf /var/lib/apt/lists/*
 
+# GitHub CLI (gh) for automation
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+ && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+ && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+ && apt-get update \
+ && apt-get install -y gh \
+ && rm -rf /var/lib/apt/lists/*
+
+# Python symlink for hooks compatibility (hooks use #!/usr/bin/env python)
+RUN ln -s /usr/bin/python3 /usr/bin/python
+
 RUN npm install -g @anthropic-ai/claude-code
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
 
@@ -24,6 +35,10 @@ RUN chmod 644 /opt/maceff/templates/*.md
 # Copy base policy set with manifest
 COPY policies/base/ /opt/maceff/policies/sets/base/
 RUN chmod 644 /opt/maceff/policies/sets/base/*.md /opt/maceff/policies/sets/base/manifest.json
+
+# Copy skeleton bashrc for new users (includes venv activation)
+COPY docker/skel/.bashrc /etc/skel/.bashrc
+RUN chmod 644 /etc/skel/.bashrc
 
 # admin (sudoer)
 RUN useradd -m -s /bin/bash admin \

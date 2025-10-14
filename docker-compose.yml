@@ -25,6 +25,7 @@ services:
       - home_all:/home                        # secure: named volume
       - shared_workspace:/shared_workspace    # secure: named volume
       - maceff_venv:/opt/maceff-venv
+      - "/Users/cversek/NeuroFieldzDev Dropbox/NEUro_DataScienceTeam/Neurofieldz2:/dropbox_Neurofieldz2:ro"  # NeuroVEP data (read-only)
     restart: unless-stopped
 
   # Mirror named volumes to host paths (read-only snapshot on host).
