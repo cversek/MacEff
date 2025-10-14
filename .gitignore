@@ -41,10 +41,13 @@ Makefile.bak.*
 # SSH keys: keep only public keys in git
 keys/*
 !keys/*.pub
-# Embedded policy repo (managed separately inside the container)
-.maceff/policies/
-# Local machine-specific config overrides (but track .maceff/config.json)
-.maceff/local.json
+# MacEff customization layer (user-specific, created by maceff-init)
+.maceff/framework/         # All framework content (policies, templates, agent_defs)
+.maceff/config/            # All configuration (env files, config.json)
+
+# Optional: Keep example templates in git if needed
+# !.maceff/config/config.json.example
+# !.maceff/framework/.gitkeep
 
 # Local backup files
 docker-compose.yml.bak.*
