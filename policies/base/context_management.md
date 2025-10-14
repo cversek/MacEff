@@ -378,7 +378,7 @@ macf_tools hooks test          # Test detection on current session
 
 **Mode Detection Hierarchy**:
 1. Environment: `MACF_AUTO_MODE=true`
-2. Config: `.maceff/config.json` auto_mode field
+2. Config: `.macf/config.json` auto_mode field
 3. Session state: Previous session's mode
 4. Default: False (MANUAL_MODE)
 
