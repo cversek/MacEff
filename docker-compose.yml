@@ -25,6 +25,7 @@ services:
       - home_all:/home                        # secure: named volume
       - shared_workspace:/shared_workspace    # secure: named volume
       - maceff_venv:/opt/maceff-venv
+      - "/Users/cversek/ExampleOrgDev Dropbox/NEUro_DataScienceTeam/Exampleorg2:/dropbox_Exampleorg2:ro"  # Orchard data (read-only)
     restart: unless-stopped
 
   # Mirror named volumes to host paths (read-only snapshot on host).
