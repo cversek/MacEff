@@ -162,6 +162,15 @@ fi
 # Admin key (if any)
 install_key admin
 
+# --- Auto-deploy policies if current symlink not present ---
+if [[ ! -L /opt/maceff/policies/current ]]; then
+  log "Creating policies/current symlink to base set..."
+  ln -sf /opt/maceff/policies/sets/base /opt/maceff/policies/current
+  log "Policies deployed (symlink created)"
+else
+  log "Policies already deployed (current symlink exists)"
+fi
+
 # --- enforce collaborative perms on /shared_workspace ---
 getent group agents_all >/dev/null 2>&1 || groupadd agents_all
 chgrp -R agents_all /shared_workspace || true
