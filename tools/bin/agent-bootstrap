@@ -187,7 +187,7 @@ fi
 
 # Step 7: Install hooks
 status "Step 7/8: Installing consciousness hooks..."
-if docker exec -u "$AGENT_NAME" "$CONTAINER" bash -c "cd ~/.claude && macf_tools hooks install --local" 2>&1; then
+if docker exec -u "$AGENT_NAME" "$CONTAINER" bash -c "cd ~ && macf_tools hooks install --local" 2>&1; then
     success "Hooks installed"
 else
     error "Failed to install hooks"
