@@ -13,14 +13,12 @@ services:
       DEFAULT_PA: "maceff_user001"
       UV_LINK_MODE: "copy"
     env_file:
-      - .maceff/global.env
-      - .maceff/projects/${PROJ}.env
+      - .maceff/config/global.env
+      - .maceff/config/projects/${PROJ}.env
     volumes:
       - ./keys:/keys:ro
       - ./tools:/opt/tools                    # editable dev
-      - ./.maceff/policies:/opt/maceff/policies
-      - ./.maceff/plugins:/opt/maceff/plugins:ro
-      - ./agent_defs:/opt/agent_defs:ro       # PA/SA definitions
+      - ./.maceff/framework:/opt/maceff/framework  # policies, templates, agent_defs
       - sshd_keys:/etc/ssh                    # stable host keys
       - home_all:/home                        # secure: named volume
       - shared_workspace:/shared_workspace    # secure: named volume

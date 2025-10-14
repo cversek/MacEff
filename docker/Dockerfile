@@ -28,13 +28,8 @@ RUN ln -s /usr/bin/python3 /usr/bin/python
 RUN npm install -g @anthropic-ai/claude-code
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
 
-# Copy framework templates
-COPY templates/ /opt/maceff/templates/
-RUN chmod 644 /opt/maceff/templates/*.md
-
-# Copy base policy set with manifest
-COPY policies/base/ /opt/maceff/policies/sets/base/
-RUN chmod 644 /opt/maceff/policies/sets/base/*.md /opt/maceff/policies/sets/base/manifest.json
+# NOTE: Framework content (policies, templates, agent_defs) comes from bind mount
+# at /opt/maceff/framework/ in dev mode, or baked via COPY in deployment Dockerfile
 
 # Copy skeleton bashrc for new users (includes venv activation)
 COPY docker/skel/.bashrc /etc/skel/.bashrc
