@@ -1,35 +1,34 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CONTAINER="${CONTAINER_NAME:-maceff-sandbox}"
-SRC_DIR="$(cd "$(dirname "$0")"/../.. && pwd)/templates"
-DEST_DIR="/opt/maceff/templates"
+# template-sync: Copy version-controlled templates to .maceff/framework/
+# Bind mount makes changes immediately visible in container (no docker cp needed)
+
+REPO_ROOT="$(cd "$(dirname "$0")"/../.. && pwd)"
+SRC_DIR="$REPO_ROOT/templates"
+DEST_DIR="$REPO_ROOT/.maceff/framework/templates"
 
 if [[ ! -d "$SRC_DIR" ]]; then
   echo "error: source templates directory not found: $SRC_DIR" >&2
+  echo "       (looking for version-controlled templates in repo)" >&2
   exit 1
 fi
 
-if ! docker inspect -f '{{.State.Running}}' "$CONTAINER" >/dev/null 2>&1; then
-  echo "error: container '$CONTAINER' not running. Try: make up" >&2
+if [[ ! -d "$REPO_ROOT/.maceff/framework" ]]; then
+  echo "error: .maceff/framework/ not initialized" >&2
+  echo "       run: make init" >&2
   exit 1
 fi
 
-echo "Syncing templates to container..."
+echo "Syncing templates from version control to framework..."
+echo "  Source: templates/"
+echo "  Dest:   .maceff/framework/templates/"
 
-# Ensure destination exists
-docker exec -u 0 "$CONTAINER" bash -lc "
-  set -e
-  install -d -o root -g root -m 755 '$DEST_DIR'
-"
+# Create destination directory
+mkdir -p "$DEST_DIR"
 
-# Copy files and fix perms
-docker cp "$SRC_DIR/." "$CONTAINER:$DEST_DIR/"
-docker exec -u 0 "$CONTAINER" bash -lc "
-  set -e
-  chown -R root:root '$DEST_DIR'
-  find '$DEST_DIR' -type d -exec chmod 755 {} \;
-  find '$DEST_DIR' -type f -exec chmod 644 {} \;
-  echo '✅ Templates synced to $DEST_DIR'
-  ls -1 '$DEST_DIR'
-"
+# Copy files from version control to .maceff/framework/
+rsync -av --delete "$SRC_DIR/" "$DEST_DIR/"
+
+echo "✅ Templates synced (bind mount makes them immediately visible in container)"
+ls -1 "$DEST_DIR/"

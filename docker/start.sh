@@ -97,9 +97,9 @@ setup_agent_tree(){
   setfacl -m g:sa_all:rx "$SA_PUB" "$SA_ASN"; setfacl -d -m g:sa_all:rx "$SA_PUB" "$SA_ASN"
   setfacl -m g:sa_all:--- "$SA_PRIV";      setfacl -d -m g:sa_all:--- "$SA_PRIV"
 
-  # Seed SUBAGENT_DEF.md if present in /opt/agent_defs
+  # Seed SUBAGENT_DEF.md if present in framework agent_defs
   local PAD="$(printf "%s" "$pa" | sed -E 's/^maceff_user//')"
-  local DEF_SRC="/opt/agent_defs/PA${PAD}/SA${sid}/SUBAGENT_DEF.md"
+  local DEF_SRC="/opt/maceff/framework/agent_defs/PA${PAD}/SA${sid}/SUBAGENT_DEF.md"
   if [[ -f "$DEF_SRC" ]]; then
     install -m 0644 -o root -g "$pa" "$DEF_SRC" "$SA_DEF"
     log "Seeded DEF for $pa/$sid"
@@ -111,13 +111,14 @@ setup_agent_tree(){
   chmod 0440 /etc/sudoers.d/agents
 }
 
-# --- Discover PAs/SAs from /opt/agent_defs; fallback to DEFAULT_PA + SA001 ---
+# --- Discover PAs/SAs from framework agent_defs; fallback to DEFAULT_PA + SA001 ---
 declare -a PAS
-if compgen -G "/opt/agent_defs/PA*/SA*/SUBAGENT_DEF.md" >/dev/null; then
+AGENT_DEFS_DIR="/opt/maceff/framework/agent_defs"
+if compgen -G "${AGENT_DEFS_DIR}/PA*/SA*/SUBAGENT_DEF.md" >/dev/null; then
   while IFS= read -r pa_dir; do
     pa_num="${pa_dir##*/PA}"; pa="maceff_user${pa_num}"
     PAS+=("$pa")
-  done < <(find /opt/agent_defs -maxdepth 1 -type d -name 'PA*' | sort)
+  done < <(find "$AGENT_DEFS_DIR" -maxdepth 1 -type d -name 'PA*' | sort)
   PAS=($(printf "%s\n" "${PAS[@]}" | awk '!x[$0]++'))  # uniq
 else
   PAS=("${DEFAULT_PA:-maceff_user001}")
@@ -128,11 +129,11 @@ for pa in "${PAS[@]}"; do
   mk_pa "$pa"
   pa_num="${pa#maceff_user}"
 
-  if compgen -G "/opt/agent_defs/PA${pa_num}/SA*/SUBAGENT_DEF.md" >/dev/null; then
+  if compgen -G "${AGENT_DEFS_DIR}/PA${pa_num}/SA*/SUBAGENT_DEF.md" >/dev/null; then
     while IFS= read -r sa_dir; do
       sa_id="${sa_dir##*/SA}"
       setup_agent_tree "$pa" "$sa_id"
-    done < <(find "/opt/agent_defs/PA${pa_num}" -maxdepth 1 -type d -name 'SA*' | sort)
+    done < <(find "${AGENT_DEFS_DIR}/PA${pa_num}" -maxdepth 1 -type d -name 'SA*' | sort)
   else
     setup_agent_tree "$pa" "001"
   fi
@@ -163,9 +164,10 @@ fi
 install_key admin
 
 # --- Auto-deploy policies if current symlink not present ---
-if [[ ! -L /opt/maceff/policies/current ]]; then
+POLICIES_DIR="/opt/maceff/framework/policies"
+if [[ ! -L "$POLICIES_DIR/current" ]]; then
   log "Creating policies/current symlink to base set..."
-  ln -sf /opt/maceff/policies/sets/base /opt/maceff/policies/current
+  ln -sf "$POLICIES_DIR/sets/base" "$POLICIES_DIR/current"
   log "Policies deployed (symlink created)"
 else
   log "Policies already deployed (current symlink exists)"
@@ -182,9 +184,9 @@ log "shared_workspace perms: $(stat -c '%A %U %G %n' /shared_workspace)"
 # ---- MacEff policy editor setup (idempotent) ----
 set -e
 groupadd -f policyeditors || true
-install -d -o root -g policyeditors -m 2770 /opt/maceff/policies
-find /opt/maceff/policies -type d -exec chgrp policyeditors {} \; -exec chmod 2770 {} \; || true
-find /opt/maceff/policies -type f -exec chgrp policyeditors {} \; -exec chmod 0660 {} \; || true
+install -d -o root -g policyeditors -m 2770 "$POLICIES_DIR"
+find "$POLICIES_DIR" -type d -exec chgrp policyeditors {} \; -exec chmod 2770 {} \; || true
+find "$POLICIES_DIR" -type f -exec chgrp policyeditors {} \; -exec chmod 0660 {} \; || true
 
 # Add configured users (POLICY_EDITORS="user1 user2")
 if [ -n "${POLICY_EDITORS:-}" ]; then
