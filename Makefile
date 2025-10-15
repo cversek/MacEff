@@ -33,48 +33,48 @@ help:
 	@echo "  make policy-sync-SET - sync policies/SET (e.g., policy-sync-base)"
 
 build:
-	tools/bin/compose build
+	maceff_tools/compose build
 
 up:
-	tools/bin/compose up -d
+	maceff_tools/compose up -d
 
 logs:
-	tools/bin/compose logs -f --tail=120
+	maceff_tools/compose logs -f --tail=120
 
 down:
-	tools/bin/compose down
+	maceff_tools/compose down
 
 mirror:
-	tools/bin/compose --profile mirror up --no-deps mirror
+	maceff_tools/compose --profile mirror up --no-deps mirror
 
 mirror-watch:
-	tools/bin/compose --profile mirror-watch up mirror-watch
+	maceff_tools/compose --profile mirror-watch up mirror-watch
 
 ssh-pa:
-	tools/bin/ssh-pa
+	maceff_tools/ssh-pa
 
 ssh-admin:
-	tools/bin/ssh-admin
+	maceff_tools/ssh-admin
 
 sa-test:
-	tools/bin/sa-test
+	maceff_tools/sa-test
 
 claude:
-	tools/bin/claude-remote $(ARGS)
+	maceff_tools/claude-remote $(ARGS)
 
 claude-doctor:
-	tools/bin/claude-doctor
+	maceff_tools/claude-doctor
 
 .PHONY: policy-sync policy-sync-%
 
 policy-sync:
-	tools/bin/policy-sync
+	maceff_tools/policy-sync
 
 policy-sync-%:
-	tools/bin/policy-sync $*
+	maceff_tools/policy-sync $*
 
 init:
-	tools/bin/maceff-init
+	maceff_tools/maceff-init
 
 build-deploy:
 	@echo "Building deployment image (framework baked in)..."
