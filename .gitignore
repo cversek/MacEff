@@ -55,3 +55,6 @@ docker/start.sh.bak.*
 tools/bin/*.bak.*
 LEGACY_POLICIES_NO_VCS/
 .git.backup-before-redaction/
+
+# Local docker-compose overrides (environment-specific)
+docker-compose.override.yml

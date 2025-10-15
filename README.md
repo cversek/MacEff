@@ -409,6 +409,102 @@ The rest of the steps are the same, but use `docker compose ...` with the Colima
 
 ---
 
+## Local Configuration: docker-compose.override.yml
+
+MacEff uses **docker-compose.override.yml** for environment-specific customization. This file is **gitignored** so each developer can configure their local environment without affecting version control.
+
+### Why Override Files?
+
+**Portability principle**: The base `docker-compose.yml` contains only portable configuration that works on any machine. Environment-specific settings (like local data source mounts, custom ports, or host paths) belong in `docker-compose.override.yml`.
+
+**Benefits**:
+- ✅ Base config remains portable across different environments
+- ✅ No host-specific paths in version control
+- ✅ Easy deployment variations (dev/CI/production)
+- ✅ Automatic merging by Docker Compose (no flags needed)
+
+### Creating Your Override File
+
+When you run `./tools/bin/maceff-init`, it creates a template `docker-compose.override.yml` with commented examples:
+
+```yaml
+# Local Docker Compose Overrides
+# This file is gitignored - customize for your development environment
+
+services:
+  maceff-sandbox:
+    # Uncomment and customize as needed:
+    # volumes:
+    #   - "/host/path/to/data:/container/mount/point:ro"
+    # ports:
+    #   - "8080:8080"
+```
+
+### Common Customizations
+
+**Mount a local data directory** (read-only):
+```yaml
+services:
+  maceff-sandbox:
+    volumes:
+      - "/Users/yourname/data:/data:ro"
+```
+
+**Add a development port** (expose container service):
+```yaml
+services:
+  maceff-sandbox:
+    ports:
+      - "8080:8080"  # host:container
+```
+
+**Environment variables** (supplement global.env):
+```yaml
+services:
+  maceff-sandbox:
+    environment:
+      - CUSTOM_VAR=value
+```
+
+### How Docker Compose Merges Files
+
+Docker Compose **automatically merges** `docker-compose.yml` + `docker-compose.override.yml`:
+
+```bash
+# This uses both files automatically
+docker compose up
+
+# Explicit base-only (CI/testing)
+docker compose -f docker-compose.yml up
+
+# Custom override for production
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up
+```
+
+### Best Practices
+
+1. **Never commit** `docker-compose.override.yml` (already in `.gitignore`)
+2. **Document requirements** in README if specific overrides are needed
+3. **Use environment variables** in override files for flexibility:
+   ```yaml
+   volumes:
+     - "${DATA_PATH:-/default/path}:/data:ro"
+   ```
+4. **Test portability** by ensuring base config works without overrides
+
+### Troubleshooting
+
+**Override not taking effect**:
+- Verify file is named exactly `docker-compose.override.yml`
+- Check YAML syntax (tabs vs spaces, indentation)
+- Restart services: `docker compose down && docker compose up`
+
+**Conflicting mounts**:
+- Override volumes **merge** with base config, they don't replace
+- Use specific mount targets to avoid conflicts
+
+---
+
 ## Make quickstart
 
 Common developer workflows are wrapped in `make` targets. These commands assume you’ve already built the images and added your SSH public keys to `keys/` (see macOS setup above).
