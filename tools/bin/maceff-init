@@ -143,6 +143,30 @@ log "  ✓ Created config/config.json.example"
 touch "$MACEFF_DIR/framework/.gitkeep"
 touch "$MACEFF_DIR/config/.gitkeep"
 
+# Create docker-compose.override.yml template (if not exists)
+OVERRIDE_FILE="$REPO_ROOT/docker-compose.override.yml"
+if [[ ! -f "$OVERRIDE_FILE" ]]; then
+    log "Creating docker-compose.override.yml template..."
+    cat > "$OVERRIDE_FILE" <<'EOF'
+# Local Docker Compose Overrides
+# This file is gitignored - customize for your development environment
+#
+# Docker Compose automatically merges this file with docker-compose.yml
+# Use this for environment-specific volumes, ports, or configuration
+
+services:
+  maceff-sandbox:
+    # Uncomment and customize as needed:
+    # volumes:
+    #   - "/host/path/to/data:/container/mount/point:ro"
+    # ports:
+    #   - "8080:8080"
+EOF
+    log "  ✓ Created docker-compose.override.yml template"
+else
+    log "  ℹ docker-compose.override.yml already exists - skipping"
+fi
+
 # Display success message
 echo ""
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
