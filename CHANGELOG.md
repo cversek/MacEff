@@ -5,6 +5,57 @@ All notable changes to MACF Tools (Multi-Agent Coordination Framework) will be d
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2025-10-14
+
+### Added
+
+**Architectural Separation**:
+- Separated host-only management scripts (`maceff_tools/`) from portable MACF framework (`macf/`)
+- Self-documenting directory structure for clear separation of concerns
+- Container mounts only essential portable framework code
+
+**Docker Compose Override Pattern**:
+- Environment-specific configuration via `docker-compose.override.yml` (gitignored)
+- Base `docker-compose.yml` remains portable across all environments
+- Automatic merging by Docker Compose
+- Template creation via `maceff-init` with generic examples
+
+**Agent Bootstrap Automation**:
+- `agent-bootstrap` script automates complete agent setup (73min → 15sec)
+- Includes hook installation, configuration, directory structure, and validation
+
+**Framework Infrastructure**:
+- Framework upgrade scripts for container updates
+- Policy deployment automation with manifest discovery
+- Deployment Dockerfile for production builds
+
+### Changed
+
+**Breaking Changes**:
+- **Path migration**: `tools/` → `macf/` (requires container rebuild)
+- **Directory structure**: Host tools separated to `maceff_tools/`
+- **Container mounts**: Updated from `/opt/tools` to `/opt/macf_tools`
+
+**Version Management**:
+- Single source of truth: version in `pyproject.toml` only
+- Runtime version via `importlib.metadata.version("macf")`
+
+### Fixed
+
+- Bootstrap hook installation paths
+- Policy path references in container startup
+- Config directory migration issues
+
+### Migration Guide
+
+**Upgrading from v0.1.0:**
+```bash
+git pull && git checkout v0.2.0
+make build && make up
+```
+
+Update custom scripts: `tools/bin/` → `maceff_tools/`, `/opt/tools` → `/opt/macf_tools`
+
 ## [0.1.0] - 2025-10-07
 
 ### Added

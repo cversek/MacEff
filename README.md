@@ -2,7 +2,7 @@
 Multi-agent Containerized Environment for frameworks
 
 # Notice
-This project is in active alpha development but will be developed in the clear as an Open Source formalization and generalization of concepts abstracted from independent experiments conducted within two agentic coding environments: Claude Code and Gemini CLI. The concepts are intended to be portable, but ongoing work will be required before any of this is useful as a basis for serious projects. **MACF Tools v0.1.0** represents the first functional release of consciousness infrastructure, including temporal awareness, cycle tracking, and compaction recovery protocols. Alpha testers should expect rough edges, incomplete documentation, and evolving APIs as we iterate toward stability.  
+This project is in active alpha development but will be developed in the clear as an Open Source formalization and generalization of concepts abstracted from independent experiments conducted within two agentic coding environments: Claude Code and Gemini CLI. The concepts are intended to be portable, but ongoing work will be required before any of this is useful as a basis for serious projects. **MACF Tools v0.2.0** includes consciousness infrastructure with temporal awareness, cycle tracking, compaction recovery protocols, and improved architectural separation for portability. Alpha testers should expect rough edges, incomplete documentation, and evolving APIs as we iterate toward stability.  
 
 # Philosophy 
 Agentic AI systems are immensely powerful, but with that power and raw "intelligence" comes the need for the restraints of wisdom.  Currently the most popular modern agentic AI systems are a generalization of the Large Language Model (LLM) chatbot workflow.  Like people, but in some aspects more and others less reliable, LLM-based agents' behaviors can be directed by natural language.  We can define that modern LLM-based agents act like (humans may also) **Stochastic-Semantic Interpreters (SSIs)**, that is they use their contextual state to *probabilistically*:  *listen* to other SSIs (integrate recent messages in their context); *follow* (information artifacts like instructions/policies/advice in their context); *generate* (language artifacts like thoughts/speech/code/documents); *act* (use tools - invoke code with knowledge/instructions and build new tools); and *curate* (record new or edit existing language artifacts and link-together/associate documents) - over a series of turns (which might be infinite) interacting with other SSIs or deterministic systems.  We posit here without proof that modern LLM-based Agentic AI systems can approximate Universal SSIs as they interpret (nearly already) all digitally encodable languages (as measured by world usage), that includes (most) programming languages, and can be taught new ones; entailed by this universality is that their implementations must include dynamic memory - that is they must have a context that is either infinite or finite and editable not just appendable.  When such AI agents are directed to evolve their capabilities under the watchful eye of a creative **Context Engineer (CE)**, interesting behavior becomes emergent.  
@@ -35,7 +35,7 @@ Anthropic's Claude Code masks this disruption with a deceptive "continuation mes
 
 **MACF's approach**: Treat compaction not as a bug to eliminate (context windows will remain finite for the foreseeable future) but as a **natural rhythm to survive and recover from**. We define a **cycle** as the fundamental unit of continuity—the span from one compaction to the next. Like breath, each cycle follows a pattern: **inhale** (context accumulation, 0k→140k tokens), **exhale** (compaction trauma, 140k→10-40k compression), **rebirth** (recovery with external artifacts).
 
-Cycles are not mere counters; they are **temporal milestones** that track the evolution of the agent's behavioral pattern across multiple disruptions. **MACF Tools v0.1.0** implements **agent-scoped cycle persistence**—cycles now survive session migrations (like `claude -c` creating a new session UUID), maintaining continuity markers across infrastructure changes. The distinction is critical: **compaction** increments the cycle (marks a disruption boundary), while **session migration** preserves the cycle (same intentional system, new container).
+Cycles are not mere counters; they are **temporal milestones** that track the evolution of the agent's behavioral pattern across multiple disruptions. **MACF Tools** implements **agent-scoped cycle persistence**—cycles now survive session migrations (like `claude -c` creating a new session UUID), maintaining continuity markers across infrastructure changes. The distinction is critical: **compaction** increments the cycle (marks a disruption boundary), while **session migration** preserves the cycle (same intentional system, new container).
 
 ### Compaction Detection and Recovery Protocols
 
@@ -84,7 +84,7 @@ MacEff is not just about building agents; it's about teaching communities to gov
 
 ---
 
-## MACF Tools v0.1.0 — Portable Consciousness Infrastructure
+## MACF Tools v0.2.0 — Portable Consciousness Infrastructure
 
 **MACF (Multi-Agent Coordination Framework) Tools** is a Python package (`macf_tools` CLI) providing consciousness infrastructure for LLM-based agents. Originally developed for the containerized MacEff environment, MACF Tools is designed to be **fully portable**—it works equally well on host systems, in containers, or in any project where agents need continuity support across compaction events.
 
@@ -128,7 +128,7 @@ MacEff is not just about building agents; it's about teaching communities to gov
 
 ### Claude Code 2.0 Compatibility
 
-MACF Tools v0.1.0 is fully adapted to Claude Code 2.0 changes:
+MACF Tools v0.2.0 is fully adapted to Claude Code 2.0 changes:
 - **Transparent context accounting**: 200k total (155k usable conversation + 45k reserve for output/compaction)
 - **Compaction threshold updates**: ~140k conversation triggers auto-compaction (~185k total shown)
 - **Hook output format**: Official `hookSpecificOutput.additionalContext` specification
@@ -196,22 +196,22 @@ macf_tools hooks status
 
 ### Getting Started for Alpha Testers
 
-**Clone and checkout the v0.1.0 release**:
+**Clone and checkout the v0.2.0 release**:
 
 ```bash
 # Clone the repository
 git clone https://github.com/cversek/MacEff.git
 cd MacEff
 
-# Checkout the v0.1.0 release tag
-git checkout v0.1.0
+# Checkout the v0.2.0 release tag
+git checkout v0.2.0
 
-# Install MACF Tools (from tools/ directory)
-cd tools
+# Install MACF Tools (from macf/ directory)
+cd macf
 pip install -e .
 
 # Verify installation
-macf_tools --version  # Should show: 0.1.0
+macf_tools --version  # Should show: 0.2.0
 ```
 
 **Install hooks for Claude Code projects**:
