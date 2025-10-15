@@ -8,7 +8,8 @@ except Exception:
     ZoneInfo = None
 
 try:
-    from . import __version__ as _ver
+    from importlib.metadata import version
+    _ver = version("macf")
 except Exception:
     _ver = "0.0.0"
 
