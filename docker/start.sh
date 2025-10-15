@@ -146,17 +146,15 @@ for pa in "${PAS[@]}"; do
     log "PA init skipped for $pa (may already exist)"
 done
 
-# Tools (maceff) in shared venv with global CLI (+ PyYAML for policy validation)
-if [[ -d /opt/tools ]]; then
-  log "Installing maceff into /opt/maceff-venv..."
+# MACF tools in shared venv with global CLI
+if [[ -d /opt/macf_tools ]]; then
+  log "Installing MACF into /opt/maceff-venv..."
   VENV="/opt/maceff-venv"
   if [[ ! -x "$VENV/bin/python" ]]; then
     python3 -m venv "$VENV"
     "$VENV/bin/python" -m pip -q install --upgrade pip
   fi
-  uv pip install --python "$VENV/bin/python" -e /opt/tools >/dev/null
-  # Ensure policyctl test can validate YAML even on a fresh boot
-  uv pip install --python "$VENV/bin/python" 'pyyaml==6.*' >/dev/null 2>&1 || true
+  uv pip install --python "$VENV/bin/python" -e /opt/macf_tools >/dev/null
   ln -sf "$VENV/bin/macf_tools" /usr/local/bin/macf_tools
 fi
 
@@ -195,11 +193,7 @@ if [ -n "${POLICY_EDITORS:-}" ]; then
   done
 fi
 
-# Expose policyctl if present on the /opt/tools bind
-if [ -f /opt/tools/bin/policyctl ] && [ ! -e /usr/local/bin/policyctl ]; then
-  ln -s /opt/tools/bin/policyctl /usr/local/bin/policyctl
-  chmod +x /opt/tools/bin/policyctl || true
-fi
+# policyctl is now a host-only tool in maceff_tools/ (not exposed in container)
 
 # ---- MacEff: propagate container env to SSH sessions (idempotent) ----
 if [ -n "${MACEFF_TZ:-}" ]; then
