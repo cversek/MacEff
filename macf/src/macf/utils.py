@@ -567,17 +567,18 @@ def get_latest_consciousness_artifacts(
             return ConsciousnessArtifacts()
 
         public_dir = agent_root / "public"
-
-        if not public_dir.exists():
-            return ConsciousnessArtifacts()
+        private_dir = agent_root / "private"
 
         # Discover artifacts with safe empty list fallbacks
-        reflections_dir = public_dir / "reflections"
-        checkpoints_dir = public_dir / "checkpoints"
-        roadmaps_dir = public_dir / "roadmaps"
+        # Reflections and checkpoints are private (consciousness preservation)
+        reflections_dir = private_dir / "reflections" if private_dir.exists() else None
+        checkpoints_dir = private_dir / "checkpoints" if private_dir.exists() else None
+
+        # Roadmaps are public (shareable planning documents)
+        roadmaps_dir = public_dir / "roadmaps" if public_dir.exists() else None
 
         reflections = []
-        if reflections_dir.exists():
+        if reflections_dir and reflections_dir.exists():
             reflections = sorted(
                 [p for p in reflections_dir.glob("*.md") if p.is_file()],
                 key=lambda p: p.stat().st_mtime,
@@ -585,7 +586,7 @@ def get_latest_consciousness_artifacts(
             )[:limit]
 
         checkpoints = []
-        if checkpoints_dir.exists():
+        if checkpoints_dir and checkpoints_dir.exists():
             checkpoints = sorted(
                 [p for p in checkpoints_dir.glob("*.md") if p.is_file()],
                 key=lambda p: p.stat().st_mtime,
@@ -593,7 +594,7 @@ def get_latest_consciousness_artifacts(
             )[:limit]
 
         roadmaps = []
-        if roadmaps_dir.exists():
+        if roadmaps_dir and roadmaps_dir.exists():
             roadmaps = sorted(
                 [p for p in roadmaps_dir.glob("*.md") if p.is_file()],
                 key=lambda p: p.stat().st_mtime,
