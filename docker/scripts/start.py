@@ -335,7 +335,16 @@ def create_workspace_symlinks(username: str, assigned_projects: List[str]) -> No
 
 
 def initialize_agents(agents_config: AgentsConfig) -> None:
-    """Initialize Primary Agent with macf_tools."""
+    """
+    Main orchestrator for agent initialization.
+
+    For each primary agent: creates user, builds directory tree,
+    installs SSH keys, configures Claude settings, sets up subagent
+    workspaces, and creates project symlinks.
+
+    Args:
+        agents_config: Validated AgentsConfig from agents.yaml
+    """
     for agent_name, agent_spec in agents_config.agents.items():
         username = agent_spec.username
 
@@ -446,7 +455,16 @@ def propagate_container_env() -> None:
 
 
 def main() -> int:
-    """Main startup orchestration."""
+    """
+    Container startup entry point.
+
+    Loads agents.yaml and projects.yaml, validates with Pydantic models,
+    creates users and directory structures, installs contexts and policies,
+    sets up shared workspace, and starts sshd.
+
+    Returns:
+        0 on success, 1 on error
+    """
     try:
         # Generate SSH host keys
         run_command(['ssh-keygen', '-A'], check=False)
