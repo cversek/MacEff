@@ -1,0 +1,34 @@
+# Test configuration for Named Agents v0.3 empirical validation
+# Tests Pydantic model parsing and startup script logic
+
+agents:
+  testpa:
+    username: pa_testpa
+    personality: ../test_configs/test_personality.md
+    subagents: [devops_eng, test_eng]
+    assigned_projects: [TestProject]
+    consciousness_artifacts:
+      private: [checkpoints, reflections, learnings]
+      public: [roadmaps, reports, observations]
+    hooks:
+      enabled: [session_start, stop]
+
+subagents:
+  devops_eng:
+    role: Infrastructure and deployment specialist
+    tool_access: "Read, Write, Edit, Bash, Glob, Grep"
+    consciousness_artifacts:
+      public: [delegation_trails]
+
+  test_eng:
+    role: Test-driven development and quality assurance
+    tool_access: "Read, Write, Edit, Bash"
+    consciousness_artifacts:
+      public: [delegation_trails]
+
+defaults:
+  consciousness_artifacts:
+    private: [checkpoints, reflections, learnings]
+    public: [roadmaps, reports, observations]
+  hooks:
+    enabled: [session_start, stop]
