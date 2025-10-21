@@ -1,0 +1,11 @@
+# Test configuration for Named Agents v0.3 empirical validation
+# Tests project workspace setup and validation
+
+projects:
+  TestProject:
+    context: ../test_configs/test_project_context.md
+    repos:
+      - url: https://github.com/cversek/MacEff.git
+        path: repos/MacEff
+    commands:
+      test_command: ../test_configs/commands/test_slash_command.md
