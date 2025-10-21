@@ -205,12 +205,14 @@ Delegate when beneficial but not required:
 - **Clear Exit Criteria**: Define success conditions SA can self-assess
 - **Sequential Fresh Delegations**: Use multiple delegations when complexity emerges
 - **Context Bridging**: Each new delegation must re-establish full context
+- **Warn About Tool Constraints**: Explicitly warn SAs about concurrent tool calls (crashes API), naked cd commands, etc.
 
 **Success Formula**:
 1. Comprehensive initial prompt (context + constraints + authority + criteria)
 2. Emergency authority grants (pre-authorize decisions SA will need)
 3. Self-verification protocols (SA can confirm completion independently)
 4. Sequential fresh pattern (new delegation with updated context if needed)
+5. Reading lists over spoon-feeding (trust SA to build context independently, saves tokens and respects autonomy)
 
 ## 3. Delegation Protocol
 
@@ -461,6 +463,7 @@ Write comprehensive tests for handle_session_start.py with 100% coverage.
 - `core_principles.md`: PA/SA roles and stateless constraints
 - `policy_awareness.md`: Discovery when feeling delegation uncertainty
 - `context_management.md`: Delegation during high token usage
+- `development/workspace_discipline.md`: Where SAs put dev scripts (delegation trails)
 
 **When to Reference This Policy**:
 - Questioning whether to delegate
