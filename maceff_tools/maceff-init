@@ -8,6 +8,13 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 MACEFF_DIR="$REPO_ROOT/.maceff"
 
+# Detect submodule context: Are we being called from a parent repo that contains MacEff as submodule?
+MACEFF_SOURCE="$REPO_ROOT"  # Default: assume running from MacEff repo itself
+if [[ -d "$REPO_ROOT/MacEff/policies" ]] && [[ -d "$REPO_ROOT/MacEff/templates" ]]; then
+    # We're in a parent repo with MacEff as submodule
+    MACEFF_SOURCE="$REPO_ROOT/MacEff"
+fi
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -67,26 +74,29 @@ log "  ✓ Created config/ directories"
 
 # Copy version-controlled defaults
 log "Copying version-controlled defaults..."
+if [[ "$MACEFF_SOURCE" != "$REPO_ROOT" ]]; then
+    log "  ℹ Detected submodule context: using MacEff/ submodule resources"
+fi
 
 # Policies
-if [[ -d "$REPO_ROOT/policies/base" ]]; then
-    cp -r "$REPO_ROOT/policies/base" "$MACEFF_DIR/framework/policies/sets/"
+if [[ -d "$MACEFF_SOURCE/policies/base" ]]; then
+    cp -r "$MACEFF_SOURCE/policies/base" "$MACEFF_DIR/framework/policies/sets/"
     log "  ✓ Copied policies/base/ → framework/policies/sets/base/"
 else
     warn "  ! policies/base/ not found - skipping"
 fi
 
 # Templates
-if [[ -d "$REPO_ROOT/templates" ]]; then
-    cp -r "$REPO_ROOT/templates/"* "$MACEFF_DIR/framework/templates/" 2>/dev/null || true
+if [[ -d "$MACEFF_SOURCE/templates" ]]; then
+    cp -r "$MACEFF_SOURCE/templates/"* "$MACEFF_DIR/framework/templates/" 2>/dev/null || true
     log "  ✓ Copied templates/ → framework/templates/"
 else
     warn "  ! templates/ not found - skipping"
 fi
 
 # Agent definitions (optional)
-if [[ -d "$REPO_ROOT/agent_defs" ]]; then
-    cp -r "$REPO_ROOT/agent_defs/"* "$MACEFF_DIR/framework/agent_defs/" 2>/dev/null || true
+if [[ -d "$MACEFF_SOURCE/agent_defs" ]]; then
+    cp -r "$MACEFF_SOURCE/agent_defs/"* "$MACEFF_DIR/framework/agent_defs/" 2>/dev/null || true
     log "  ✓ Copied agent_defs/ → framework/agent_defs/"
 else
     log "  ℹ agent_defs/ not found - skipping (optional)"
