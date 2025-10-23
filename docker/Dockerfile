@@ -9,12 +9,13 @@ RUN --mount=type=cache,target=/var/cache/apt \
     apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl wget gnupg sudo openssh-server \
       git vim less build-essential python3 python3-venv python3-pip \
+      python3-yaml python3-pydantic \
       nodejs npm \
       acl jq tini \
       tree \
  && rm -rf /var/lib/apt/lists/*
 
-# GitHub CLI (gh) for automation
+# GitHub CLI (gh)
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
  && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
@@ -58,6 +59,9 @@ RUN chmod 0755 /usr/local/bin/sa-exec
 COPY docker/start.sh /usr/local/bin/start.sh
 RUN chmod +x /usr/local/bin/start.sh
 
+COPY docker/scripts/start.py /usr/local/bin/start.py
+RUN chmod +x /usr/local/bin/start.py
+
 EXPOSE 22
 ENTRYPOINT ["/usr/bin/tini","--"]
-CMD ["/usr/local/bin/start.sh"]
+CMD ["python3", "/usr/local/bin/start.py"]

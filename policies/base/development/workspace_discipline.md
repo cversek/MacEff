@@ -50,15 +50,29 @@ agent/public/dev_scripts/YYYY-MM-DD_HHMMSS_purpose.py
 
 **For Subagents (SA) - delegated work**:
 ```
-agent/subagents/{role}/public/delegation_trails/YYYY-MM-DD_HHMMSS_{task}/dev_scripts/
-└── YYYY-MM-DD_HHMMSS_purpose.py
+agent/subagents/{role}/public/delegation_trails/YYYY-MM-DD_HHMMSS_{task}/
+├── checkpoint.md                    # REQUIRED: Operational state (what was done, deliverables, status)
+├── dev_scripts/
+│   └── YYYY-MM-DD_HHMMSS_purpose.py
+└── [other delegation artifacts]
+```
+
+**Additionally, SA creates private reflection**:
+```
+agent/subagents/{role}/private/reflections/YYYY-MM-DD_HHMMSS_{task}_reflection.md
 ```
 
 **Delegation trails structure**:
 - Each delegation gets a timestamped directory
-- Contains all artifacts from that delegation (scripts, notes, results)
+- **MUST contain checkpoint.md**: Operational state, deliverables verification, status
+- Contains all artifacts from that delegation (scripts, notes, results, checkpoint)
 - Enables forensic reconstruction of delegation work
 - Scripts within delegation trail follow same timestamp naming
+
+**Dual artifact pattern** (from delegation_guidelines.md):
+- **CCP in delegation trail**: Operational facts (what was done, validation results)
+- **Reflection in private/reflections**: Wisdom synthesis (learnings, patterns, recommendations)
+- Reflection metadata cross-links to delegation trail directory
 
 **Why public/ not private/**:
 - Development work is project-related, not personal growth
