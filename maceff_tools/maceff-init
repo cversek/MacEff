@@ -102,6 +102,38 @@ else
     log "  ℹ agent_defs/ not found - skipping (optional)"
 fi
 
+# Parent repo overlay (only in submodule context)
+if [[ "$MACEFF_SOURCE" != "$REPO_ROOT" ]] && [[ -d "$REPO_ROOT/framework" ]]; then
+    log "Applying parent repo framework/ overlay..."
+
+    # Copy parent framework resources, explicitly noting overwrites
+    if [[ -f "$REPO_ROOT/framework/agents.yaml" ]]; then
+        cp "$REPO_ROOT/framework/agents.yaml" "$MACEFF_DIR/framework/"
+        warn "  ⚠ OVERLAY: agents.yaml (parent overrides submodule default)"
+    fi
+
+    if [[ -f "$REPO_ROOT/framework/projects.yaml" ]]; then
+        cp "$REPO_ROOT/framework/projects.yaml" "$MACEFF_DIR/framework/"
+        warn "  ⚠ OVERLAY: projects.yaml (parent overrides submodule default)"
+    fi
+
+    # Copy parent agent personalities
+    if [[ -d "$REPO_ROOT/framework/agents" ]]; then
+        mkdir -p "$MACEFF_DIR/framework/agents"
+        cp -r "$REPO_ROOT/framework/agents/"* "$MACEFF_DIR/framework/agents/" 2>/dev/null || true
+        warn "  ⚠ OVERLAY: agents/* (parent customizations added/override)"
+    fi
+
+    # Copy parent project contexts
+    if [[ -d "$REPO_ROOT/framework/projects" ]]; then
+        mkdir -p "$MACEFF_DIR/framework/projects"
+        cp -r "$REPO_ROOT/framework/projects/"* "$MACEFF_DIR/framework/projects/" 2>/dev/null || true
+        warn "  ⚠ OVERLAY: projects/* (parent customizations added/override)"
+    fi
+
+    log "  ✓ Parent overlay complete"
+fi
+
 # Create policies/current symlink
 log "Creating policies/current symlink..."
 if [[ -d "$MACEFF_DIR/framework/policies/sets/base" ]]; then
