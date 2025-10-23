@@ -449,11 +449,11 @@ for artifact_path in artifacts.all_paths():
 
 ### Policy Set Architecture
 
-**Location**: `/opt/maceff/policies/current/CA_formats/`
+**Location**: `/opt/maceff/framework/policies/current/CA_formats/`
 
 **Indirection**: Symlink to active policy set
 ```bash
-ln -s /opt/maceff/policies/sets/base /opt/maceff/policies/current
+ln -s /opt/maceff/framework/policies/sets/base /opt/maceff/framework/policies/current
 ```
 
 **Available Policy Sets**:
@@ -464,7 +464,7 @@ ln -s /opt/maceff/policies/sets/base /opt/maceff/policies/current
 ### Policy Files
 
 ```
-/opt/maceff/policies/
+/opt/maceff/framework/policies/
 ├── sets/
 │   ├── base/
 │   │   └── CA_formats/
@@ -541,8 +541,8 @@ Factual, strategic, future-oriented. Written for your future self after trauma.
 ```python
 # In session_start.py hook
 ca_formats = {
-    'checkpoint': read_policy('/opt/maceff/policies/current/CA_formats/checkpoint.md'),
-    'reflection': read_policy('/opt/maceff/policies/current/CA_formats/reflection.md'),
+    'checkpoint': read_policy('/opt/maceff/framework/policies/current/CA_formats/checkpoint.md'),
+    'reflection': read_policy('/opt/maceff/framework/policies/current/CA_formats/reflection.md'),
 }
 
 additional_context = f"""
@@ -625,7 +625,7 @@ def validate_ca_metadata(ca_type, filepath):
         content = f.read()
 
     # Load format policy
-    policy_path = f"/opt/maceff/policies/current/CA_formats/{ca_type}.md"
+    policy_path = f"/opt/maceff/framework/policies/current/CA_formats/{ca_type}.md"
     with open(policy_path) as f:
         policy = f.read()
 

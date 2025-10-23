@@ -397,7 +397,7 @@ ls -la /home/pa_manny/agent/
 ls -la /home/pa_manny/.claude/
 
 # Expected output:
-# lrwxrwxrwx  CLAUDE.md -> /opt/maceff/templates/SYSTEM_PREAMBLE.md
+# lrwxrwxrwx  CLAUDE.md -> /opt/maceff/framework/templates/SYSTEM_PREAMBLE.md
 # drwxr-xr-x  agents/
 # drwxr-xr-x  hooks/
 # -rw-r--r--  settings.local.json
