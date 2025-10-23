@@ -9,11 +9,14 @@ RUN --mount=type=cache,target=/var/cache/apt \
     apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl wget gnupg sudo openssh-server \
       git vim less build-essential python3 python3-venv python3-pip \
-      python3-yaml python3-pydantic \
+      python3-yaml \
       nodejs npm \
       acl jq tini \
       tree \
  && rm -rf /var/lib/apt/lists/*
+
+# Install pydantic v2 via pip (code requires field_validator from v2)
+RUN pip3 install --break-system-packages pydantic>=2.0
 
 # GitHub CLI (gh)
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
