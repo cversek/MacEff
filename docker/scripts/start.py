@@ -115,7 +115,7 @@ def install_ssh_key(username: str) -> None:
     key_file = Path(f'/keys/{username}.pub')
 
     if key_file.exists():
-        ssh_dir.mkdir(mode=0o700, exist_ok=True)
+        ssh_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         run_command(['chown', f'{username}:{username}', str(ssh_dir)])
 
         authorized_keys = ssh_dir / 'authorized_keys'
