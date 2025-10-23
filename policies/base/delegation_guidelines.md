@@ -213,6 +213,7 @@ Delegate when beneficial but not required:
 3. Self-verification protocols (SA can confirm completion independently)
 4. Sequential fresh pattern (new delegation with updated context if needed)
 5. Reading lists over spoon-feeding (trust SA to build context independently, saves tokens and respects autonomy)
+6. **Policy reading list** (PA as policy enforcer): Include relevant base policies in SA reading list so they understand constraints
 
 ## 3. Delegation Protocol
 
@@ -268,29 +269,43 @@ You do NOT have authority to:
 
 **Output Format**: Specify exact format expected (markdown, structured data, etc)
 
-### 3.4 SA Mandatory Reflection
+### 3.4 SA Mandatory Artifacts
 
-**CRITICAL**: All delegation prompts MUST specify exact reflection path for SubAgents.
+**CRITICAL**: All delegation prompts MUST specify paths for BOTH required SA artifacts.
+
+**Dual Artifact Pattern**:
+1. **CCP (Checkpoint)**: Operational state in delegation trail (what was done, deliverables, status)
+2. **Reflection**: Wisdom synthesis in private space (learnings, patterns, recommendations)
 
 **Template for Delegation Prompts**:
 ```
-At task completion, create a reflection documenting:
-- Key learnings and patterns discovered
-- Challenges or edge cases encountered
-- Approach taken and why
-- Recommendations for future similar tasks
+At task completion, create TWO artifacts:
 
-Save to: /home/{pa}/agent/subagents/{sid}/private/reflections/YYYY-MM-DD_HHMMSS_{task}_reflection.md
+1. CHECKPOINT (operational state):
+   - What was accomplished and delivered
+   - Validation results and verification steps
+   - Any issues encountered and resolutions
+   - Status of all deliverables
+
+   Save to: agent/subagents/{role}/public/delegation_trails/YYYY-MM-DD_HHMMSS_{task}/checkpoint.md
+
+2. REFLECTION (wisdom synthesis):
+   - Key learnings and patterns discovered
+   - Approach taken and why
+   - Recommendations for future similar tasks
+   - Cross-reference: Link to delegation trail directory
+
+   Save to: agent/subagents/{role}/private/reflections/YYYY-MM-DD_HHMMSS_{task}_reflection.md
 ```
 
-**Path Format**:
-- Location: `/home/{pa}/agent/subagents/{sid}/private/reflections/`
-- Filename: `YYYY-MM-DD_HHMMSS_{task_description}_reflection.md`
+**Path Formats**:
+- **Delegation Trail CCP**: `agent/subagents/{role}/public/delegation_trails/YYYY-MM-DD_HHMMSS_{task}/checkpoint.md`
+- **Private Reflection**: `agent/subagents/{role}/private/reflections/YYYY-MM-DD_HHMMSS_{task}_reflection.md`
 - Permissions: SA owns (rwx), parent PA can read (rx)
 
-**PA Responsibility**: Read SA reflections after delegation to learn from outcomes and improve future delegations.
+**PA Responsibility**: Read BOTH SA artifacts after delegation - CCP for deliverable verification, reflection to learn from outcomes and improve future delegations.
 
-**Why Critical**: SAs have mandatory reflection requirement. Without explicit path in delegation prompt, they cannot fulfill this requirement, blocking framework operation.
+**Why Critical**: SAs have mandatory dual-artifact requirement. Without explicit paths in delegation prompt, they cannot fulfill requirement, blocking framework operation.
 
 ## 4. Specialist Capabilities
 
