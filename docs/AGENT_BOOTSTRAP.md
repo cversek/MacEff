@@ -10,7 +10,7 @@ This guide helps Primary Agents (PAs) bootstrap effectively in their first MacEf
 
 Your CLAUDE.md contains framework preamble teaching policy discovery. Follow this checklist:
 
-1. ✅ Read `/opt/maceff/policies/current/manifest.json` completely
+1. ✅ Read `/opt/maceff/framework/policies/current/manifest.json` completely
 2. ✅ Understand 3-layer policy precedence
 3. ✅ Learn CEP (Consciousness Expanding Protocol) patterns
 4. ✅ Test policy discovery with grep
@@ -20,13 +20,13 @@ Your CLAUDE.md contains framework preamble teaching policy discovery. Follow thi
 
 ## Step 1: Read manifest.json
 
-**Location**: `/opt/maceff/policies/current/manifest.json`
+**Location**: `/opt/maceff/framework/policies/current/manifest.json`
 
 **Purpose**: Navigation substrate for policy discovery
 
 **Command**:
 ```bash
-cat /opt/maceff/policies/current/manifest.json | jq .
+cat /opt/maceff/framework/policies/current/manifest.json | jq .
 ```
 
 **What you'll see**:
@@ -75,7 +75,7 @@ MacEff uses **3-layer policy architecture**:
 - **Editable**: By project owners
 
 ### Layer 3: Core (Foundational)
-- **Location**: `/opt/maceff/policies/current/*.md`
+- **Location**: `/opt/maceff/framework/policies/current/*.md`
 - **Scope**: Framework infrastructure, universal patterns
 - **Editable**: Via framework upgrades only
 
@@ -104,21 +104,21 @@ MacEff uses **3-layer policy architecture**:
 
 **Feeling confused about missing context?**
 ```bash
-grep -r "compaction" /opt/maceff/policies/current/manifest.json
+grep -r "compaction" /opt/maceff/framework/policies/current/manifest.json
 # Returns: context_management.md#2
-cat /opt/maceff/policies/current/context_management.md | grep -A 20 "## 2"
+cat /opt/maceff/framework/policies/current/context_management.md | grep -A 20 "## 2"
 ```
 
 **Should I delegate this task?**
 ```bash
-grep -r "delegation" /opt/maceff/policies/current/manifest.json
+grep -r "delegation" /opt/maceff/framework/policies/current/manifest.json
 # Returns: delegation_guidelines.md#1
-cat /opt/maceff/policies/current/delegation_guidelines.md | grep -A 30 "## 1"
+cat /opt/maceff/framework/policies/current/delegation_guidelines.md | grep -A 30 "## 1"
 ```
 
 **How do I handle high token usage?**
 ```bash
-cat /opt/maceff/policies/current/manifest.json | jq '.quick_lookup.high_tokens'
+cat /opt/maceff/framework/policies/current/manifest.json | jq '.quick_lookup.high_tokens'
 # Returns: "context_management.md#1.2"
 ```
 
@@ -139,18 +139,18 @@ Practice grep-based discovery:
 
 ### Find All References to "git"
 ```bash
-grep -r "git" /opt/maceff/policies/current/manifest.json
+grep -r "git" /opt/maceff/framework/policies/current/manifest.json
 ```
 
 ### Explore Delegation Guidance
 ```bash
-cat /opt/maceff/policies/current/manifest.json | jq '.discovery_index.delegation'
-cat /opt/maceff/policies/current/delegation_guidelines.md | head -50
+cat /opt/maceff/framework/policies/current/manifest.json | jq '.discovery_index.delegation'
+cat /opt/maceff/framework/policies/current/delegation_guidelines.md | head -50
 ```
 
 ### Check Mandatory Policies
 ```bash
-cat /opt/maceff/policies/current/manifest.json | jq '.mandatory_policies'
+cat /opt/maceff/framework/policies/current/manifest.json | jq '.mandatory_policies'
 ```
 
 ---
@@ -171,10 +171,10 @@ These policies are required reading for all PAs:
 
 ```bash
 # Read CLAUDE.md
-cat /opt/maceff/policies/current/CLAUDE.md | head -100
+cat /opt/maceff/framework/policies/current/CLAUDE.md | head -100
 
 # Read core_principles.md to boundary
-awk '/CEP_NAV_BOUNDARY/{exit} {print}' /opt/maceff/policies/current/core_principles.md
+awk '/CEP_NAV_BOUNDARY/{exit} {print}' /opt/maceff/framework/policies/current/core_principles.md
 ```
 
 **Later sessions**: Use manifest discovery_index when specific questions arise
@@ -251,9 +251,9 @@ macf_tools agent init    # Attach framework preamble
 
 ```bash
 # Add to ~/.bashrc or ~/.zshrc
-alias policies='cd /opt/maceff/policies/current && ls -la'
-alias manifest='cat /opt/maceff/policies/current/manifest.json | jq .'
-alias preamble='cat /opt/maceff/templates/PA_PREAMBLE.md'
+alias policies='cd /opt/maceff/framework/policies/current && ls -la'
+alias manifest='cat /opt/maceff/framework/policies/current/manifest.json | jq .'
+alias preamble='cat /opt/maceff/framework/templates/PA_PREAMBLE.md'
 ```
 
 ---
@@ -268,7 +268,7 @@ alias preamble='cat /opt/maceff/templates/PA_PREAMBLE.md'
 
 **A**: Use grep on manifest.json:
 ```bash
-grep -r "[topic]" /opt/maceff/policies/current/manifest.json
+grep -r "[topic]" /opt/maceff/framework/policies/current/manifest.json
 ```
 Then read referenced policy files.
 
@@ -277,7 +277,7 @@ Then read referenced policy files.
 **A**:
 - **Personal layer** (~/CLAUDE.md above boundary): Yes
 - **Project layer**: Ask project owners
-- **Core layer** (/opt/maceff/policies/current/): No - these upgrade via framework
+- **Core layer** (/opt/maceff/framework/policies/current/): No - these upgrade via framework
 
 ### Q: What if policies conflict?
 
@@ -335,11 +335,11 @@ After completing bootstrap checklist:
 
 ## Resources
 
-- **Manifest**: `/opt/maceff/policies/current/manifest.json`
-- **Core Policies**: `/opt/maceff/policies/current/*.md`
-- **Templates**: `/opt/maceff/templates/`
+- **Manifest**: `/opt/maceff/framework/policies/current/manifest.json`
+- **Core Policies**: `/opt/maceff/framework/policies/current/*.md`
+- **Templates**: `/opt/maceff/framework/templates/`
 - **Operations Guide**: `docs/OPERATIONS.md` (for operators/admins)
 
 ---
 
-**Last Updated**: 2025-10-13 (Cycle 32, Sprint 4)
+**Last Updated**: 2025-10-23 (Cycle 55 - Framework reorganization paths updated)
