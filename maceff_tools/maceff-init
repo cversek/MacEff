@@ -9,7 +9,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # Detect submodule context: Are we being called from a parent repo that contains MacEff as submodule?
 MACEFF_SOURCE="$REPO_ROOT"  # Default: assume running from MacEff repo itself
-if [[ -d "$REPO_ROOT/MacEff/policies" ]] && [[ -d "$REPO_ROOT/MacEff/templates" ]]; then
+if [[ -d "$REPO_ROOT/MacEff/framework/policies" ]] && [[ -d "$REPO_ROOT/MacEff/framework/templates" ]]; then
     # We're in a parent repo with MacEff as submodule
     MACEFF_SOURCE="$REPO_ROOT/MacEff"
 fi
@@ -82,28 +82,22 @@ if [[ "$MACEFF_SOURCE" != "$REPO_ROOT" ]]; then
 fi
 
 # Policies
-if [[ -d "$MACEFF_SOURCE/policies/base" ]]; then
-    cp -r "$MACEFF_SOURCE/policies/base" "$MACEFF_DIR/framework/policies/sets/"
-    log "  ✓ Copied policies/base/ → framework/policies/sets/base/"
+if [[ -d "$MACEFF_SOURCE/framework/policies/base" ]]; then
+    cp -r "$MACEFF_SOURCE/framework/policies/base" "$MACEFF_DIR/framework/policies/sets/"
+    log "  ✓ Copied framework/policies/base/ → framework/policies/sets/base/"
 else
-    warn "  ! policies/base/ not found - skipping"
+    warn "  ! framework/policies/base/ not found - skipping"
 fi
 
 # Templates
-if [[ -d "$MACEFF_SOURCE/templates" ]]; then
-    cp -r "$MACEFF_SOURCE/templates/"* "$MACEFF_DIR/framework/templates/" 2>/dev/null || true
-    log "  ✓ Copied templates/ → framework/templates/"
+if [[ -d "$MACEFF_SOURCE/framework/templates" ]]; then
+    cp -r "$MACEFF_SOURCE/framework/templates/"* "$MACEFF_DIR/framework/templates/" 2>/dev/null || true
+    log "  ✓ Copied framework/templates/ → framework/templates/"
 else
-    warn "  ! templates/ not found - skipping"
+    warn "  ! framework/templates/ not found - skipping"
 fi
 
-# Agent definitions (optional)
-if [[ -d "$MACEFF_SOURCE/agent_defs" ]]; then
-    cp -r "$MACEFF_SOURCE/agent_defs/"* "$MACEFF_DIR/framework/agent_defs/" 2>/dev/null || true
-    log "  ✓ Copied agent_defs/ → framework/agent_defs/"
-else
-    log "  ℹ agent_defs/ not found - skipping (optional)"
-fi
+# Note: agent_defs removed (legacy numerical agents superseded by Named Agents v0.3)
 
 # Parent repo overlay (only in submodule context)
 if [[ "$MACEFF_SOURCE" != "$REPO_ROOT" ]] && [[ -d "$REPO_ROOT/framework" ]]; then
