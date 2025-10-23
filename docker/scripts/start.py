@@ -239,9 +239,9 @@ def install_three_layer_context(username: str, agent_spec: AgentSpec) -> None:
     claude_dir = home / '.claude'
     claude_dir.mkdir(mode=0o755, exist_ok=True)
 
-    # Layer 1 (System): Symlink to framework SYSTEM_PREAMBLE.md
+    # Layer 1 (System): Symlink to framework PA_PREAMBLE.md
     system_layer = claude_dir / 'CLAUDE.md'
-    system_source = FRAMEWORK_ROOT / 'templates' / 'SYSTEM_PREAMBLE.md'
+    system_source = FRAMEWORK_ROOT / 'templates' / 'PA_PREAMBLE.md'
 
     if system_source.exists() and not system_layer.exists():
         system_layer.symlink_to(system_source)
