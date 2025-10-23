@@ -6,7 +6,6 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-MACEFF_DIR="$REPO_ROOT/.maceff"
 
 # Detect submodule context: Are we being called from a parent repo that contains MacEff as submodule?
 MACEFF_SOURCE="$REPO_ROOT"  # Default: assume running from MacEff repo itself
@@ -14,6 +13,10 @@ if [[ -d "$REPO_ROOT/MacEff/policies" ]] && [[ -d "$REPO_ROOT/MacEff/templates" 
     # We're in a parent repo with MacEff as submodule
     MACEFF_SOURCE="$REPO_ROOT/MacEff"
 fi
+
+# In submodule context, create .maceff at submodule location (where docker-compose.yml expects it)
+# In standalone context, create .maceff at repo root
+MACEFF_DIR="$MACEFF_SOURCE/.maceff"
 
 # Colors for output
 RED='\033[0;31m'
