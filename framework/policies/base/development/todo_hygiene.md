@@ -1,6 +1,6 @@
 # TODO List Hygiene Policy
 
-**Version**: 1.1
+**Version**: 1.2
 **Tier**: CORE
 **Category**: Development
 **Status**: ACTIVE
@@ -66,8 +66,24 @@ Phase 2: Next Milestone (collapsed until active)
 - 🗺️ **ROADMAP** - Active strategic plan (mission/campaign level)
 - 📋 **Nested ROADMAP** - Phase-specific detailed plan (tactical level)
 - 📜 **DELEG_PLAN** - Active delegation plan being orchestrated
+- ↪️ **DETOUR** - Temporary side work that interrupts main flow but returns to it
 
 **Pattern**: Document references stay visible with "in_progress" or "pending" status throughout work
+
+**🚨 MANDATORY READING DISCIPLINE 🚨**:
+
+**When you see embedded document references (🗺️📋📜), READ THEM FIRST before starting execution.**
+
+- **Not "if confused"** - You cannot know what context is missing until you read the documents
+- **Not "when blocked"** - By then you have already proceeded without strategic guidance
+- **FIRST** - Before beginning work on that phase/task
+
+**Why This Matters**:
+- TODO list shows **WHAT** to do
+- ROADMAP explains **WHY, HOW, WHAT COULD GO WRONG, and HOW TO THINK ABOUT IT**
+- Strategic documents exist because TODO alone cannot capture complete context
+- **Embedded filename is a prerequisite, not a suggestion**
+- Skipping reading means proceeding blind even when you believe you have sufficient context
 
 **Structure Example**:
 
@@ -79,6 +95,9 @@ Phase 3: Deployment
   📋 Phase 3 Detailed: agent/public/roadmaps/2025-10-24_Phase3_Deployment_ROADMAP.md
   → 3.1: Initialize framework
   → 3.2: Configure environment
+  ↪️ DETOUR: Fix discovered issue
+    → Debug configuration error
+    → Update documentation
   → 3.3: Deploy services
 Phase 4: Validation
 ```
@@ -96,9 +115,10 @@ Phase 1: Unit tests
 **Benefits**:
 - Post-reset recovery: Immediate visibility into driving documents
 - Strategic continuity: Mission context preserved with tactical tasks
-- Document hierarchy: Clear nesting (mission → phase → substeps)
+- Document hierarchy: Clear nesting (mission → phase → substeps → detours)
 - Bidirectional navigation: TODO ↔ ROADMAP for context switching
-- Contextual awareness triggers: Embedded filenames signal which documents to read when context is missing
+- Mandatory reading discipline: Embedded filenames are prerequisites, not suggestions
+- Detour tracking: ↪️ symbol makes temporary work visible without losing main path
 
 ### 5. Stack Discipline
 
