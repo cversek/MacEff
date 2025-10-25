@@ -61,6 +61,7 @@ Applies to Primary Agents (PA) and all Subagents (SA) managing multi-step work.
 - ✅ Deliverables verified and working
 - ✅ Tests passing if applicable
 - ✅ Changes committed if code-related
+- ✅ **Breadcrumb appended to TODO content**
 
 **DO NOT mark completed if**:
 - ❌ Tests failing
@@ -70,6 +71,23 @@ Applies to Primary Agents (PA) and all Subagents (SA) managing multi-step work.
 - ❌ Work paused due to blockers
 
 **When blocked**: Keep task status `in_progress`, create new task describing blocker resolution.
+
+**Breadcrumb Completion Workflow**:
+```bash
+# 1. Complete and verify work
+# 2. Generate fresh breadcrumb
+macf_tools breadcrumb
+# Output: c_62/s_4107604e/p_c1116f5/t_1761368640/g_5ef1146
+
+# 3. Mark TODO completed WITH breadcrumb appended
+# Example: "→ Fix bug [c_62/s_4107604e/p_c1116f5/t_1761368640/g_5ef1146]"
+```
+
+**Post-Compaction Archaeology**:
+```bash
+# Reconstruct complete conversation work unit from breadcrumb
+macf_tools dev_drv --breadcrumb c_62/s_4107604e/p_c1116f5/t_1761368640/g_5ef1146
+```
 
 ### 2. Never Clobber - Always Preserve
 

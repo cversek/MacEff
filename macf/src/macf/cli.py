@@ -573,6 +573,122 @@ def cmd_context(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_breadcrumb(args: argparse.Namespace) -> int:
+    """Generate fresh breadcrumb for current DEV_DRV."""
+    from .utils import (
+        format_breadcrumb,
+        extract_current_git_hash,
+        read_json_safely,
+        find_project_root,
+        SessionOperationalState
+    )
+    import time
+
+    try:
+        # Get session ID
+        session_id = get_current_session_id()
+
+        # Load session state for DEV_DRV prompt UUID
+        state = SessionOperationalState.load(session_id)
+
+        # Load agent state for cycle number
+        project_root = find_project_root()
+        agent_state_path = project_root / ".maceff" / "agent_state.json" if project_root else None
+        agent_state = read_json_safely(agent_state_path) if agent_state_path else {}
+        cycle_num = agent_state.get("current_cycle_number", 1)
+
+        # Get fresh timestamp (unix epoch)
+        completion_time = int(time.time())
+
+        # Get git hash (optional - may be None if not in git repo)
+        git_hash = extract_current_git_hash()
+
+        # Format breadcrumb with all components
+        breadcrumb = format_breadcrumb(
+            cycle=cycle_num,
+            session_id=session_id,
+            prompt_uuid=state.current_dev_drv_prompt_uuid,
+            completion_time=completion_time,
+            git_hash=git_hash
+        )
+
+        # Output format based on flags
+        if getattr(args, 'json_output', False):
+            # JSON output with components
+            output = {
+                "breadcrumb": breadcrumb,
+                "components": {
+                    "cycle": cycle_num,
+                    "session_id": session_id[:8] if session_id else None,
+                    "prompt_uuid": state.current_dev_drv_prompt_uuid[-7:] if state.current_dev_drv_prompt_uuid else None,
+                    "completion_time": completion_time,
+                    "git_hash": git_hash
+                }
+            }
+            print(json.dumps(output, indent=2))
+        else:
+            # Simple string output (default)
+            print(breadcrumb)
+
+        return 0
+
+    except Exception as e:
+        print(f"Error generating breadcrumb: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
+def cmd_dev_drv(args: argparse.Namespace) -> int:
+    """Extract and display DEV_DRV from JSONL using breadcrumb."""
+    from .forensics.dev_drive import extract_dev_drive, render_markdown_summary, render_raw_jsonl
+    from .utils import parse_breadcrumb
+
+    try:
+        # Parse breadcrumb
+        breadcrumb_data = parse_breadcrumb(args.breadcrumb)
+        if not breadcrumb_data:
+            print(f"Error: Invalid breadcrumb format: {args.breadcrumb}")
+            print("Expected format: c_61/s_4107604e/p_ead030a/t_1761360651/g_c3ec870")
+            return 1
+
+        # Extract DEV_DRV from JSONL
+        drive = extract_dev_drive(
+            session_id=breadcrumb_data['session_id'],
+            prompt_uuid=breadcrumb_data['prompt_uuid'],
+            breadcrumb_data=breadcrumb_data
+        )
+
+        if not drive:
+            print(f"Error: Could not extract DEV_DRV for breadcrumb: {args.breadcrumb}")
+            print(f"Session: {breadcrumb_data['session_id']}")
+            print(f"Prompt: {breadcrumb_data['prompt_uuid']}")
+            return 1
+
+        # Render output based on format flag
+        if args.raw:
+            output = render_raw_jsonl(drive)
+        else:
+            # Default: markdown
+            output = render_markdown_summary(drive)
+
+        # Write to file or stdout
+        if args.output:
+            output_path = Path(args.output)
+            output_path.write_text(output)
+            print(f"DEV_DRV written to: {output_path}")
+        else:
+            print(output)
+
+        return 0
+
+    except Exception as e:
+        print(f"Error extracting DEV_DRV: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
 def cmd_agent_init(args: argparse.Namespace) -> int:
     """Initialize agent with preamble injection (idempotent)."""
     try:
@@ -748,6 +864,23 @@ def _build_parser() -> argparse.ArgumentParser:
                                help="output as JSON")
     context_parser.add_argument("--session", help="specific session ID (default: current)")
     context_parser.set_defaults(func=cmd_context)
+
+    # Breadcrumb command
+    breadcrumb_parser = sub.add_parser("breadcrumb", help="generate fresh breadcrumb for TODO completion")
+    breadcrumb_parser.add_argument("--json", dest="json_output", action="store_true",
+                                  help="output as JSON with components")
+    breadcrumb_parser.set_defaults(func=cmd_breadcrumb)
+
+    # DEV_DRV forensic command
+    dev_drv_parser = sub.add_parser("dev_drv", help="extract and display DEV_DRV from JSONL")
+    dev_drv_parser.add_argument("--breadcrumb", required=True,
+                               help="breadcrumb string like c_61/s_4107604e/p_ead030a/t_1761360651/g_c3ec870")
+    dev_drv_parser.add_argument("--raw", action="store_true",
+                               help="output raw JSONL (default: markdown summary)")
+    dev_drv_parser.add_argument("--md", action="store_true",
+                               help="output markdown summary (default)")
+    dev_drv_parser.add_argument("--output", help="output file path (default: stdout)")
+    dev_drv_parser.set_defaults(func=cmd_dev_drv)
 
     return p
 
