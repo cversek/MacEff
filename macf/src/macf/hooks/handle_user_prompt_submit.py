@@ -12,11 +12,11 @@ from ..utils import (
     detect_execution_environment,
     get_current_session_id,
     start_dev_drv,
-    get_current_cycle_project,
     get_token_info,
     format_token_context_full,
     get_boundary_guidance,
-    detect_auto_mode
+    detect_auto_mode,
+    get_breadcrumb
 )
 
 
@@ -39,8 +39,8 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
         # Start Development Drive tracking
         start_dev_drv(session_id)
 
-        # Get cycle number from project state
-        cycle_number = get_current_cycle_project()
+        # Get breadcrumb
+        breadcrumb = get_breadcrumb()
 
         # Get temporal context
         temporal_ctx = get_temporal_context()
@@ -50,12 +50,12 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
         token_info = get_token_info(session_id)
         auto_mode, _, _ = detect_auto_mode(session_id)
 
-        # Format temporal section
+        # Format temporal section with breadcrumb
         temporal_section = f"""🏗️ MACF | DEV_DRV Started
 Current Time: {temporal_ctx['timestamp_formatted']}
 Day: {temporal_ctx['day_of_week']}
 Time of Day: {temporal_ctx['time_of_day']}
-Cycle: {cycle_number} | Session: {session_id[:8]}..."""
+Breadcrumb: {breadcrumb}"""
 
         # Format token section
         token_section = format_token_context_full(token_info)

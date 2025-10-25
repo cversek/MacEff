@@ -13,14 +13,14 @@ from ..utils import (
     get_current_session_id,
     complete_dev_drv,
     get_dev_drv_stats,
-    get_current_cycle_project,
     format_duration,
     load_agent_state,
     save_agent_state,
     get_token_info,
     format_token_context_full,
     get_boundary_guidance,
-    detect_auto_mode
+    detect_auto_mode,
+    get_breadcrumb
 )
 
 
@@ -55,6 +55,9 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
         # Get current session
         session_id = get_current_session_id()
 
+        # Get breadcrumb BEFORE completing (complete_dev_drv clears prompt_uuid)
+        breadcrumb = get_breadcrumb()
+
         # Save UUID before completing (complete_dev_drv clears it)
         from ..utils import SessionOperationalState
         state = SessionOperationalState.load(session_id)
@@ -66,9 +69,6 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
         # Get stats AFTER completing (now includes this drive)
         stats = get_dev_drv_stats(session_id)
         stats['prompt_uuid'] = prompt_uuid  # Restore UUID for display
-
-        # Get cycle number for display
-        cycle_number = get_current_cycle_project()
 
         # Get temporal context
         temporal_ctx = get_temporal_context()
@@ -104,7 +104,7 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
 Current Time: {temporal_ctx['timestamp_formatted']}
 Day: {temporal_ctx['day_of_week']}
 Time of Day: {temporal_ctx['time_of_day']}
-Cycle: {cycle_number} | Session: {session_id[:8]}...
+Breadcrumb: {breadcrumb}
 
 Development Drive Stats:
 - This Drive: {duration_str}

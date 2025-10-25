@@ -11,7 +11,8 @@ from ..utils import (
     get_current_session_id,
     start_deleg_drv,
     get_token_info,
-    format_token_context_minimal
+    format_token_context_minimal,
+    get_breadcrumb
 )
 
 
@@ -78,9 +79,10 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
         # Get token info for smoke test
         token_info = get_token_info(session_id)
 
-        # Base temporal message
+        # Base temporal message with breadcrumb
         timestamp = get_minimal_timestamp()
-        message_parts = [f"🏗️ MACF | {timestamp}"]
+        breadcrumb = get_breadcrumb()
+        message_parts = [f"🏗️ MACF | {timestamp} | {breadcrumb}"]
 
         # Enhanced context based on tool type
         if tool_name == "Task":

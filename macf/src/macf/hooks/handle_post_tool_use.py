@@ -9,10 +9,9 @@ from typing import Dict, Any
 from ..utils import (
     get_minimal_timestamp,
     get_current_session_id,
-    SessionOperationalState,
     get_token_info,
     format_token_context_minimal,
-    format_breadcrumb
+    get_breadcrumb
 )
 
 
@@ -53,29 +52,11 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
         tool_input = data.get("tool_input", {})
         session_id = get_current_session_id()
 
-        # Load session state for DEV_DRV prompt UUID
-        state = SessionOperationalState.load(session_id)
-
-        # Load agent state for cycle number (persists across sessions)
-        from pathlib import Path
-        from ..utils import read_json_safely, find_project_root
-        project_root = find_project_root()
-        agent_state_path = project_root / ".maceff" / "agent_state.json" if project_root else None
-        agent_state = read_json_safely(agent_state_path) if agent_state_path else {}
-        cycle_num = agent_state.get("current_cycle_number", 1)
-
         # Base temporal message
         timestamp = get_minimal_timestamp()
 
-        # Build stable breadcrumb from agent + session state
-        # Enhanced format (Cycle 61+): c_61/s_4107604e/p_b037708
-        # Note: No completion timestamp (t_) in PostToolUse - only added when TODO completed
-        breadcrumb = format_breadcrumb(
-            cycle=cycle_num,
-            session_id=session_id,
-            prompt_uuid=state.current_dev_drv_prompt_uuid,
-            completion_time=None  # Not completed yet, just tracking work
-        )
+        # Get full 5-component breadcrumb (auto-gathered)
+        breadcrumb = get_breadcrumb()
 
         # Token awareness (minimal for high-frequency hook)
         token_info = get_token_info(session_id)

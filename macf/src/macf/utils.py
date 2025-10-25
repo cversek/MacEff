@@ -1482,6 +1482,51 @@ def extract_current_git_hash() -> Optional[str]:
     return None
 
 
+def get_breadcrumb() -> str:
+    """
+    Get current breadcrumb with all 5 components auto-gathered.
+
+    Zero-argument convenience function for hooks - ultimate parse-don't-construct!
+    Auto-gathers: cycle, session_id, prompt_uuid, current timestamp, git_hash.
+
+    Returns:
+        Formatted breadcrumb like "c_64/s_4107604e/p_c7ad583/t_1761419389/g_abc1234"
+        Returns minimal breadcrumb on any failure (never crashes)
+
+    Example:
+        >>> breadcrumb = get_breadcrumb()
+        "c_64/s_4107604e/p_c7ad583/t_1761419389/g_b231846"
+    """
+    try:
+        # Auto-gather all 5 components
+        session_id = get_current_session_id()
+        state = SessionOperationalState.load(session_id)
+
+        # Get cycle from agent_state.json (project-scoped persistence)
+        project_root = find_project_root()
+        agent_state_path = project_root / ".maceff" / "agent_state.json"
+        agent_state = read_json_safely(agent_state_path)
+        cycle_num = agent_state.get("current_cycle_number", 1)
+
+        # Get current timestamp
+        current_time = int(time.time())
+
+        # Get git hash (can be None if not in repo)
+        git_hash = extract_current_git_hash()
+
+        # Format with all 5 components
+        return format_breadcrumb(
+            cycle=cycle_num,
+            session_id=session_id,
+            prompt_uuid=state.current_dev_drv_prompt_uuid,
+            completion_time=current_time,
+            git_hash=git_hash
+        )
+    except Exception:
+        # Safe fallback - never crash hooks
+        return "c_1/s_unknown/p_none"
+
+
 # =============================================================================
 # Token/Context Awareness Formatting (Phase 1)
 # =============================================================================
