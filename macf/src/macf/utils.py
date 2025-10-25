@@ -1327,6 +1327,57 @@ def format_macf_footer(environment: str) -> str:
 Environment: {environment}"""
 
 
+def format_breadcrumb(
+    cycle: int,
+    session_id: str,
+    prompt_uuid: Optional[str] = None,
+    completion_time: Optional[float] = None
+) -> str:
+    """
+    Format enhanced breadcrumb with self-describing components.
+
+    New format (Cycle 61+): c_61/s_4107604e/p_b037708/t_20251024_2307
+    Old format (Cycle 60): C60/4107604e/ead030a
+
+    Args:
+        cycle: Cycle number (from agent_state.json)
+        session_id: Full session ID
+        prompt_uuid: DEV_DRV prompt UUID (optional, shows 'none' if missing)
+        completion_time: Unix timestamp when TODO completed (optional, uses now if provided)
+
+    Returns:
+        Self-describing breadcrumb string like "c_61/s_4107604e/p_b037708/t_20251024_2307"
+    """
+    # Session: first 8 chars
+    session_short = session_id[:8] if session_id else "unknown"
+
+    # Prompt: last 7 chars (stable for entire DEV_DRV)
+    if prompt_uuid:
+        prompt_short = prompt_uuid[-7:] if len(prompt_uuid) >= 7 else prompt_uuid
+    else:
+        prompt_short = "none"
+
+    # Timestamp: YYYYMMDD_HHMM format (completion time or current if provided)
+    if completion_time is not None:
+        dt = datetime.fromtimestamp(completion_time)
+        timestamp_str = dt.strftime("%Y%m%d_%H%M")
+    else:
+        # No timestamp component if completion_time not provided
+        timestamp_str = None
+
+    # Build breadcrumb with self-describing prefixes
+    parts = [
+        f"c_{cycle}",
+        f"s_{session_short}",
+        f"p_{prompt_short}"
+    ]
+
+    if timestamp_str:
+        parts.append(f"t_{timestamp_str}")
+
+    return "/".join(parts)
+
+
 # =============================================================================
 # Token/Context Awareness Formatting (Phase 1)
 # =============================================================================
