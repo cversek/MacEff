@@ -14,14 +14,14 @@ from ..utils import (
     detect_auto_mode,
     get_temporal_context,
     detect_execution_environment,
-    get_current_cycle_project,
     format_duration,
     format_macf_footer,
     load_agent_state,
     increment_cycle_project,
     get_token_info,
     format_token_context_full,
-    get_boundary_guidance
+    get_boundary_guidance,
+    get_breadcrumb
 )
 from .compaction import detect_compaction
 from .recovery import format_consciousness_recovery_message
@@ -189,7 +189,9 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
         # Get temporal context
         temporal_ctx = get_temporal_context()
         environment = detect_execution_environment()
-        cycle_number = get_current_cycle_project()
+
+        # Get breadcrumb
+        breadcrumb = get_breadcrumb()
 
         # Load project state for cross-session time tracking
         project_state = load_agent_state()
@@ -217,7 +219,7 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
 Current Time: {temporal_ctx['timestamp_formatted']}
 Day: {temporal_ctx['day_of_week']}
 Time of Day: {temporal_ctx['time_of_day']}
-Cycle: {cycle_number} | Session: {session_id[:8]}...
+Breadcrumb: {breadcrumb}
 
 Session Context:
 - Time since last session: {gap_display}
