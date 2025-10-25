@@ -11,7 +11,8 @@ from ..utils import (
     get_current_session_id,
     SessionOperationalState,
     get_token_info,
-    format_token_context_minimal
+    format_token_context_minimal,
+    format_breadcrumb
 )
 
 
@@ -26,13 +27,16 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
     - Grep/Glob: Show search patterns
     - TodoWrite: Count status summary
     - Minimal timestamp for high-frequency hook
-    - Stable breadcrumb: C{cycle}/{session_short}/{prompt_short}
+    - Stable breadcrumb (enhanced format)
     - Minimal token context (CLUAC indicator)
 
-    Breadcrumb format: C60/4107604e/5539d35
-    - Cycle number from state
-    - Session ID (first 8 chars)
-    - DEV_DRV prompt UUID (last 7 chars) - stable for entire drive
+    Enhanced breadcrumb format (Cycle 61+): c_61/s_4107604e/p_b037708
+    - c_61: Cycle number from agent_state.json (self-describing prefix)
+    - s_4107604e: Session ID (first 8 chars, self-describing prefix)
+    - p_b037708: DEV_DRV prompt UUID (last 7 chars) - stable for entire drive
+    - No t_ timestamp in PostToolUse (only added when TODO completed)
+
+    Old format (Cycle 60): C60/4107604e/5539d35
 
     Args:
         stdin_json: JSON string from stdin (Claude Code hook input)
@@ -64,11 +68,14 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
         timestamp = get_minimal_timestamp()
 
         # Build stable breadcrumb from agent + session state
-        # Format: C{cycle}/{session_short}/{prompt_short}
-        session_short = session_id[:8] if session_id else "unknown"
-        prompt_uuid = state.current_dev_drv_prompt_uuid
-        prompt_short = prompt_uuid[-7:] if prompt_uuid else "none"
-        breadcrumb = f"C{cycle_num}/{session_short}/{prompt_short}"
+        # Enhanced format (Cycle 61+): c_61/s_4107604e/p_b037708
+        # Note: No completion timestamp (t_) in PostToolUse - only added when TODO completed
+        breadcrumb = format_breadcrumb(
+            cycle=cycle_num,
+            session_id=session_id,
+            prompt_uuid=state.current_dev_drv_prompt_uuid,
+            completion_time=None  # Not completed yet, just tracking work
+        )
 
         # Token awareness (minimal for high-frequency hook)
         token_info = get_token_info(session_id)

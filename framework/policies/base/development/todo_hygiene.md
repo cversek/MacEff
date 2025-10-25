@@ -1,6 +1,6 @@
 # TODO List Hygiene Policy
 
-**Version**: 1.2
+**Version**: 1.3
 **Tier**: CORE
 **Category**: Development
 **Status**: ACTIVE
@@ -19,6 +19,40 @@ Applies to Primary Agents (PA) and all Subagents (SA) managing multi-step work.
 ---
 
 ## Core Principles
+
+### 0. Breadcrumb Format (Navigation Infrastructure)
+
+**Enhanced Format** (Cycle 61+): `c_61/s_4107604e/p_b037708/t_20251024_2307`
+
+**Components**:
+- `c_61`: Cycle number (from agent state - agent-scoped, persists across sessions)
+- `s_4107604e`: Session ID (first 8 chars - session boundary marker)
+- `p_b037708`: Prompt UUID (last 7 chars - stable for entire DEV_DRV)
+- `t_20251024_2307`: Completion timestamp (YYYYMMDD_HHMM - when TODO was completed)
+
+**Old Format** (Cycle 60): `C60/4107604e/ead030a` (no timestamp, capitalized cycle)
+
+**Key Insight**: Timestamp component (`t_`) is **completion time**, not "last PostToolUse"
+- Preserves breadcrumb stability
+- Adds temporal precision for post-compaction archaeology
+- Self-describing prefixes enable programmatic parsing
+
+**Usage in Completed TODO Items**:
+```
+↪️ DETOUR: Fix configuration [c_60/s_4107604e/p_b7c4313/t_20251024_2226]
+```
+
+**Forensic Power**: Four-layer coordinates survive compaction
+- **Cycle**: Agent lifetime continuity across all sessions
+- **Session**: Conversation boundary (locate JSONL file)
+- **Prompt**: DEV_DRV start point (exact user message that began work)
+- **Timestamp**: Completion moment (when work finished)
+
+**Post-Compaction Archaeology**: Breadcrumb enables reconstruction
+1. Identify which cycle work occurred (e.g., Cycle 61)
+2. Locate session transcript file
+3. Search for prompt UUID to find exact conversation moment
+4. Know precise completion time
 
 ### 1. Completion Requires Verification
 
