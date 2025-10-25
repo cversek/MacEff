@@ -1331,22 +1331,24 @@ def format_breadcrumb(
     cycle: int,
     session_id: str,
     prompt_uuid: Optional[str] = None,
-    completion_time: Optional[float] = None
+    completion_time: Optional[float] = None,
+    git_hash: Optional[str] = None
 ) -> str:
     """
     Format enhanced breadcrumb with self-describing components.
 
-    New format (Cycle 61+): c_61/s_4107604e/p_b037708/t_20251024_2307
-    Old format (Cycle 60): C60/4107604e/ead030a
+    Full format (Cycle 61+): c_61/s_4107604e/p_b037708/t_1761360651/g_c3ec870
+    Minimal format: c_61/s_4107604e/p_b037708
 
     Args:
         cycle: Cycle number (from agent_state.json)
         session_id: Full session ID
         prompt_uuid: DEV_DRV prompt UUID (optional, shows 'none' if missing)
-        completion_time: Unix timestamp when TODO completed (optional, uses now if provided)
+        completion_time: Unix timestamp when TODO completed (optional)
+        git_hash: Current git commit hash (optional)
 
     Returns:
-        Self-describing breadcrumb string like "c_61/s_4107604e/p_b037708/t_20251024_2307"
+        Self-describing breadcrumb string
     """
     # Session: first 8 chars
     session_short = session_id[:8] if session_id else "unknown"
@@ -1357,14 +1359,6 @@ def format_breadcrumb(
     else:
         prompt_short = "none"
 
-    # Timestamp: YYYYMMDD_HHMM format (completion time or current if provided)
-    if completion_time is not None:
-        dt = datetime.fromtimestamp(completion_time)
-        timestamp_str = dt.strftime("%Y%m%d_%H%M")
-    else:
-        # No timestamp component if completion_time not provided
-        timestamp_str = None
-
     # Build breadcrumb with self-describing prefixes
     parts = [
         f"c_{cycle}",
@@ -1372,10 +1366,120 @@ def format_breadcrumb(
         f"p_{prompt_short}"
     ]
 
-    if timestamp_str:
-        parts.append(f"t_{timestamp_str}")
+    # Optional timestamp (unix epoch for TODO completion)
+    if completion_time is not None:
+        parts.append(f"t_{int(completion_time)}")
+
+    # Optional git hash
+    if git_hash:
+        parts.append(f"g_{git_hash}")
 
     return "/".join(parts)
+
+
+def parse_breadcrumb(breadcrumb: str) -> Optional[Dict[str, Any]]:
+    """
+    Parse enhanced breadcrumb into components.
+
+    Supports both old (C60/session/prompt) and new (c_61/s_session/p_prompt/t_time/g_hash) formats.
+
+    Args:
+        breadcrumb: Breadcrumb string like "c_61/s_4107604e/p_ead030a/t_1761360651/g_c3ec870"
+
+    Returns:
+        Dict with keys: cycle, session_id, prompt_uuid, timestamp, git_hash
+        Returns None if parsing fails
+
+    Example:
+        >>> parse_breadcrumb("c_61/s_4107604e/p_ead030a/t_1761360651/g_c3ec870")
+        {
+            'cycle': 61,
+            'session_id': '4107604e',
+            'prompt_uuid': 'ead030a',
+            'timestamp': 1761360651,
+            'git_hash': 'c3ec870'
+        }
+    """
+    try:
+        parts = breadcrumb.split('/')
+
+        if len(parts) < 3:
+            return None
+
+        result = {}
+
+        # Parse each component
+        for part in parts:
+            if not part:
+                continue
+
+            # New format with prefixes
+            if '_' in part:
+                prefix, value = part.split('_', 1)
+
+                if prefix == 'c':
+                    result['cycle'] = int(value)
+                elif prefix == 's':
+                    result['session_id'] = value
+                elif prefix == 'p':
+                    result['prompt_uuid'] = value if value != 'none' else None
+                elif prefix == 't':
+                    # Parse timestamp (YYYYMMDD_HHMM or unix epoch)
+                    if len(value) == 13 and value[8] == '_':
+                        # YYYYMMDD_HHMM format - convert to unix timestamp
+                        dt = datetime.strptime(value, "%Y%m%d_%H%M")
+                        result['timestamp'] = int(dt.timestamp())
+                    else:
+                        # Assume unix epoch
+                        result['timestamp'] = int(value)
+                elif prefix == 'g':
+                    result['git_hash'] = value if value != 'none' else None
+
+            # Old format without prefixes (C60/4107604e/ead030a)
+            else:
+                if part.startswith('C') and part[1:].isdigit():
+                    result['cycle'] = int(part[1:])
+                elif len(part) == 8 and not result.get('session_id'):
+                    result['session_id'] = part
+                elif len(part) == 7 and not result.get('prompt_uuid'):
+                    result['prompt_uuid'] = part
+
+        # Validate required fields
+        if 'cycle' not in result or 'session_id' not in result:
+            return None
+
+        # Set defaults for optional fields
+        result.setdefault('prompt_uuid', None)
+        result.setdefault('timestamp', None)
+        result.setdefault('git_hash', None)
+
+        return result
+
+    except Exception:
+        return None
+
+
+def extract_current_git_hash() -> Optional[str]:
+    """
+    Extract current git commit hash (short form).
+
+    Returns:
+        Short git hash (7 chars) like "c3ec870" or None if not in git repo
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short=7", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=1,
+            cwd=find_project_root(),
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+
+    return None
 
 
 # =============================================================================
