@@ -49,15 +49,22 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
         tool_input = data.get("tool_input", {})
         session_id = get_current_session_id()
 
-        # Load session state for stable breadcrumb tracking
+        # Load session state for DEV_DRV prompt UUID
         state = SessionOperationalState.load(session_id)
+
+        # Load agent state for cycle number (persists across sessions)
+        from pathlib import Path
+        from ..utils import read_json_safely, find_project_root
+        project_root = find_project_root()
+        agent_state_path = project_root / ".maceff" / "agent_state.json" if project_root else None
+        agent_state = read_json_safely(agent_state_path) if agent_state_path else {}
+        cycle_num = agent_state.get("current_cycle_number", 1)
 
         # Base temporal message
         timestamp = get_minimal_timestamp()
 
-        # Build stable breadcrumb from DEV_DRV state
+        # Build stable breadcrumb from agent + session state
         # Format: C{cycle}/{session_short}/{prompt_short}
-        cycle_num = state.current_cycle_number or 1
         session_short = session_id[:8] if session_id else "unknown"
         prompt_uuid = state.current_dev_drv_prompt_uuid
         prompt_short = prompt_uuid[-7:] if prompt_uuid else "none"
