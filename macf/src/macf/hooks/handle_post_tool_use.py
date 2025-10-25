@@ -9,6 +9,7 @@ from typing import Dict, Any
 from ..utils import (
     get_minimal_timestamp,
     get_current_session_id,
+    get_last_user_prompt_uuid,
     get_token_info,
     format_token_context_minimal
 )
@@ -25,13 +26,14 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
     - Grep/Glob: Show search patterns
     - TodoWrite: Count status summary
     - Minimal timestamp for high-frequency hook
+    - Prompt UUID (last 8 chars) for breadcrumb tracking
     - Minimal token context (CLUAC indicator)
 
     Args:
         stdin_json: JSON string from stdin (Claude Code hook input)
 
     Returns:
-        Dict with tool completion message
+        Dict with tool completion message including prompt_id breadcrumb
     """
     try:
         # Parse hook input
@@ -45,11 +47,15 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
         # Base temporal message
         timestamp = get_minimal_timestamp()
 
+        # Get prompt UUID for breadcrumb tracking
+        prompt_uuid = get_last_user_prompt_uuid(session_id)
+        prompt_short = prompt_uuid[-8:] if prompt_uuid else "unknown"
+
         # Token awareness (minimal for high-frequency hook)
         token_info = get_token_info(session_id)
         token_context_minimal = format_token_context_minimal(token_info)
 
-        message_parts = [f"🏗️ MACF | {timestamp}"]
+        message_parts = [f"🏗️ MACF | {timestamp} | Prompt: {prompt_short}"]
 
         # Enhanced context based on tool type
         if tool_name == "Task":
