@@ -9,7 +9,7 @@ from typing import Dict, Any
 from ..utils import (
     get_minimal_timestamp,
     get_current_session_id,
-    get_last_user_prompt_uuid,
+    SessionOperationalState,
     get_token_info,
     format_token_context_minimal
 )
@@ -26,14 +26,19 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
     - Grep/Glob: Show search patterns
     - TodoWrite: Count status summary
     - Minimal timestamp for high-frequency hook
-    - Prompt UUID (last 8 chars) for breadcrumb tracking
+    - Stable breadcrumb: C{cycle}/{session_short}/{prompt_short}
     - Minimal token context (CLUAC indicator)
+
+    Breadcrumb format: C60/4107604e/5539d35
+    - Cycle number from state
+    - Session ID (first 8 chars)
+    - DEV_DRV prompt UUID (last 7 chars) - stable for entire drive
 
     Args:
         stdin_json: JSON string from stdin (Claude Code hook input)
 
     Returns:
-        Dict with tool completion message including prompt_id breadcrumb
+        Dict with tool completion message including stable breadcrumb
     """
     try:
         # Parse hook input
@@ -44,18 +49,25 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
         tool_input = data.get("tool_input", {})
         session_id = get_current_session_id()
 
+        # Load session state for stable breadcrumb tracking
+        state = SessionOperationalState.load(session_id)
+
         # Base temporal message
         timestamp = get_minimal_timestamp()
 
-        # Get prompt UUID for breadcrumb tracking
-        prompt_uuid = get_last_user_prompt_uuid(session_id)
-        prompt_short = prompt_uuid[-8:] if prompt_uuid else "unknown"
+        # Build stable breadcrumb from DEV_DRV state
+        # Format: C{cycle}/{session_short}/{prompt_short}
+        cycle_num = state.current_cycle_number or 1
+        session_short = session_id[:8] if session_id else "unknown"
+        prompt_uuid = state.current_dev_drv_prompt_uuid
+        prompt_short = prompt_uuid[-7:] if prompt_uuid else "none"
+        breadcrumb = f"C{cycle_num}/{session_short}/{prompt_short}"
 
         # Token awareness (minimal for high-frequency hook)
         token_info = get_token_info(session_id)
         token_context_minimal = format_token_context_minimal(token_info)
 
-        message_parts = [f"🏗️ MACF | {timestamp} | Prompt: {prompt_short}"]
+        message_parts = [f"🏗️ MACF | {timestamp} | {breadcrumb}"]
 
         # Enhanced context based on tool type
         if tool_name == "Task":
