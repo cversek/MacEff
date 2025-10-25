@@ -17,7 +17,8 @@ from ..utils import (
     get_token_info,
     format_token_context_full,
     get_boundary_guidance,
-    detect_auto_mode
+    detect_auto_mode,
+    get_breadcrumb
 )
 
 
@@ -51,6 +52,9 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
     try:
         # Get current session
         session_id = get_current_session_id()
+
+        # Get breadcrumb BEFORE completing (complete_deleg_drv may clear tracking state)
+        breadcrumb = get_breadcrumb()
 
         # Get stats BEFORE completing (complete_deleg_drv clears current tracking!)
         stats = get_deleg_drv_stats(session_id)
@@ -89,7 +93,7 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
 Current Time: {temporal_ctx['timestamp_formatted']}
 Day: {temporal_ctx['day_of_week']}
 Time of Day: {temporal_ctx['time_of_day']}
-Session: {session_id[:8]}...
+Breadcrumb: {breadcrumb}
 
 Delegation Drive Stats:
 - This Delegation: {duration_str}
