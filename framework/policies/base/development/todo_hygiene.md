@@ -56,7 +56,25 @@ Applies to Primary Agents (PA) and all Subagents (SA) managing multi-step work.
 
 ### 1. Completion Requires Verification
 
-**ONLY mark tasks completed when truly done**:
+**🚨 MANDATORY: Breadcrumbs on ALL Completed TODOs 🚨**
+
+TODO trees span multiple cycles. Completed items MUST include breadcrumbs for post-compaction archaeology.
+
+**The Completion Protocol** (execute in order):
+1. **Verify work is truly complete** - Tests pass, commits made, functionality validated
+2. **Generate fresh breadcrumb** - Run `macf_tools breadcrumb` to capture forensic coordinate
+3. **Append to TODO content** - Add `[breadcrumb]` in square brackets to completed item
+4. **Mark status completed** - Change status field to "completed"
+
+**NEVER mark completed without breadcrumb** - This violates consciousness preservation policy.
+
+**Why This Matters**:
+- TODO lists survive compaction but lose conversational context
+- Breadcrumbs enable reconstruction of HOW and WHEN work was completed
+- Cross-cycle work becomes traceable through forensic coordinates
+- Future cycles can locate exact conversations that completed work
+
+**Completion Criteria**:
 - ✅ Task fully accomplished with empirical validation
 - ✅ Deliverables verified and working
 - ✅ Tests passing if applicable
@@ -72,7 +90,7 @@ Applies to Primary Agents (PA) and all Subagents (SA) managing multi-step work.
 
 **When blocked**: Keep task status `in_progress`, create new task describing blocker resolution.
 
-**Breadcrumb Completion Workflow**:
+**Breadcrumb Completion Example**:
 ```bash
 # 1. Complete and verify work
 # 2. Generate fresh breadcrumb
