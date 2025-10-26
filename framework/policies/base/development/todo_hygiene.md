@@ -1,10 +1,10 @@
 # TODO List Hygiene Policy
 
-**Version**: 1.3
+**Version**: 1.4
 **Tier**: CORE
 **Category**: Development
 **Status**: ACTIVE
-**Updated**: 2025-10-24
+**Updated**: 2025-10-26
 
 ---
 
