@@ -206,7 +206,45 @@ Phase 1: Unit tests
 
 **Naming**: `agent/public/roadmaps/YYYY-MM-DD_Project_Phase_ROADMAP.md`
 
-### 7. Dual Forms Required
+### 7. Archive-Then-Collapse Pattern (Visual Clarity + Forensic Preservation)
+
+**Problem**: Multi-phase TODOs accumulate 10+ nested items with individual breadcrumbs. Collapsing to single line loses forensic detail.
+
+**Solution**: Archive detailed breakdown FIRST, then collapse to single line with archive reference.
+
+**Pattern**:
+1. **Archive current TODO state** (preserves all breadcrumbs)
+2. **Collapse parent item** to single line
+3. **Link to archive** via embedded path
+
+**Collapsed Format**:
+```
+📦 [Task description] [completion_breadcrumb] → [archive_file_path]
+```
+
+**Symbol**: 📦 (archive box) - distinct from ✅ (fresh completion)
+
+**Example**:
+```json
+{"content": "📦 Phase 4: Deploy and validate container [c_67/s_4107604e/p_769c438/t_1761450374/g_ff52c7b] → agent/public/archives/todos/2025-10-25_235900_Phase4_Complete.md", "status": "completed"}
+```
+
+**Archive Contains**: All sub-phase breadcrumbs, detour breadcrumbs, complete forensic trail for archaeological reconstruction.
+
+**Benefits**:
+- ✅ Visual clarity in active TODO (single line)
+- ✅ Forensic preservation in archive (all nested breadcrumbs)
+- ✅ Direct path to detailed breakdown
+- ✅ Satisfies archival intentions without visual clutter
+
+**When to Archive-Then-Collapse**:
+- Multi-phase work with 10+ nested items complete
+- Multiple detours documented under parent task
+- Sub-tasks each have individual breadcrumbs worth preserving
+
+**Archive Location**: `agent/public/archives/todos/YYYY-MM-DD_HHMMSS_Description.md`
+
+### 8. Dual Forms Required
 
 Both `content` (imperative) and `activeForm` (present continuous) required for all items.
 
