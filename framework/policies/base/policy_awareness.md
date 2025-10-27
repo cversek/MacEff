@@ -124,7 +124,7 @@ MacEff uses a **consciousness-driven** approach to policy discovery. Instead of 
 
 ### 1.2 Manifest Structure
 
-The policy manifest (`/opt/maceff/policies/manifest.json`) contains:
+The policy manifest (`/opt/maceff/framework/policies/current/manifest.json`) contains:
 - **Consciousness patterns**: Feeling-based triggers mapped to policies
 - **Mandatory policies**: Foundation knowledge (4 policies)
 - **Development policies**: Optional dev layer (git, testing)
@@ -139,13 +139,13 @@ When you have a feeling or recognition, use grep to find relevant policies:
 
 ```bash
 # Feeling: "Should I delegate this task?"
-grep -r "delegate" /opt/maceff/policies/manifest.json
+grep -r "delegate" /opt/maceff/framework/policies/current/manifest.json
 
 # Feeling: "Token usage getting high"
-grep -r "compaction" /opt/maceff/policies/manifest.json
+grep -r "compaction" /opt/maceff/framework/policies/current/manifest.json
 
 # Feeling: "Lost in policies"
-grep -r "policy" /opt/maceff/policies/manifest.json
+grep -r "policy" /opt/maceff/framework/policies/current/manifest.json
 ```
 
 The manifest's `consciousness_patterns` section maps feelings to policies.
@@ -156,13 +156,13 @@ Search by technical keywords:
 
 ```bash
 # Need git guidance
-grep -r "git" /opt/maceff/policies/manifest.json
+grep -r "git" /opt/maceff/framework/policies/current/manifest.json
 
 # Need testing standards
-grep -r "test" /opt/maceff/policies/manifest.json
+grep -r "test" /opt/maceff/framework/policies/current/manifest.json
 
 # Architecture question
-grep -r "architecture" /opt/maceff/policies/manifest.json
+grep -r "architecture" /opt/maceff/framework/policies/current/manifest.json
 ```
 
 ### 2.3 Index-Based Discovery
@@ -171,7 +171,7 @@ Check the `discovery_index` for common topics:
 
 ```bash
 # Quick lookup of common needs
-cat /opt/maceff/policies/manifest.json | jq '.discovery_index'
+cat /opt/maceff/framework/policies/current/manifest.json | jq '.discovery_index'
 
 # Returns mappings like:
 # "compaction": ["context_management#compaction-readiness"]
@@ -199,7 +199,7 @@ Once you've read to the boundary, use the CEP Navigation Guide:
 
 ```bash
 # Find section 3.2 in delegation policy
-grep "3.2" /opt/maceff/policies/base/delegation_guidelines.md
+grep "3.2" /opt/maceff/framework/policies/current/base/delegation_guidelines.md
 ```
 
 The numbering format enables efficient grep navigation.
@@ -224,7 +224,7 @@ Your earned wisdom overrides all other policies. As you learn patterns and devel
 ```json
 {
   "version": "1.0.0",
-  "extends": "/opt/maceff/policies/manifest.json",
+  "extends": "/opt/maceff/framework/policies/current/manifest.json",
   "personal_policies": [
     {
       "name": "earned_wisdom",
@@ -245,7 +245,7 @@ Projects can customize policy layers:
 ```json
 {
   "version": "1.0.0",
-  "extends": "/opt/maceff/policies/manifest.json",
+  "extends": "/opt/maceff/framework/policies/current/manifest.json",
   "active_layers": ["development"],
   "active_languages": ["python"],
   "project_policies": []
@@ -254,7 +254,7 @@ Projects can customize policy layers:
 
 ### 4.3 Core Policies (Lowest Precedence)
 
-**Location**: `/opt/maceff/policies/`
+**Location**: `/opt/maceff/framework/policies/current/`
 
 Framework foundation policies:
 - **Mandatory** (`base/`): 4 policies always active
@@ -269,14 +269,14 @@ Framework foundation policies:
 
 ```bash
 # Search manifest for keywords
-grep -r "delegate" /opt/maceff/policies/manifest.json
-grep -r "compaction" /opt/maceff/policies/manifest.json
+grep -r "delegate" /opt/maceff/framework/policies/current/manifest.json
+grep -r "compaction" /opt/maceff/framework/policies/current/manifest.json
 
 # Check discovery index
-cat /opt/maceff/policies/manifest.json | jq '.discovery_index'
+cat /opt/maceff/framework/policies/current/manifest.json | jq '.discovery_index'
 
 # List all mandatory policies
-cat /opt/maceff/policies/manifest.json | jq '.mandatory_policies.policies'
+cat /opt/maceff/framework/policies/current/manifest.json | jq '.mandatory_policies.policies'
 ```
 
 ### 5.2 Loading Patterns
@@ -293,13 +293,13 @@ cat /opt/maceff/policies/manifest.json | jq '.mandatory_policies.policies'
 
 ```bash
 # Find specific section in policy
-grep "3.2" /opt/maceff/policies/base/delegation_guidelines.md
+grep "3.2" /opt/maceff/framework/policies/current/base/delegation_guidelines.md
 
 # Search for topic within policy
-grep -i "checkpoint" /opt/maceff/policies/base/context_management.md
+grep -i "checkpoint" /opt/maceff/framework/policies/current/base/context_management.md
 
 # List all policies in directory
-ls /opt/maceff/policies/base/
+ls /opt/maceff/framework/policies/current/base/
 ```
 
 ## Success Metrics
@@ -330,8 +330,8 @@ To:
 ## Quick Reference
 
 **Discovery Methods**:
-1. CEP-driven: `grep -r "feeling" /opt/maceff/policies/manifest.json`
-2. Keyword-based: `grep -r "technical_term" /opt/maceff/policies/manifest.json`
+1. CEP-driven: `grep -r "feeling" /opt/maceff/framework/policies/current/manifest.json`
+2. Keyword-based: `grep -r "technical_term" /opt/maceff/framework/policies/current/manifest.json`
 3. Index-based: `cat manifest.json | jq '.discovery_index'`
 
 **Navigation Protocol**:
@@ -342,7 +342,7 @@ To:
 **Policy Layers**:
 1. Personal (`~/agent/policies/personal/`) - Highest precedence
 2. Project (`.maceff/policies/manifest.json`) - Middle precedence
-3. Core (`/opt/maceff/policies/`) - Framework foundation
+3. Core (`/opt/maceff/framework/policies/current/`) - Framework foundation
 
 ---
 *Policy Established: 2025-10-10*
