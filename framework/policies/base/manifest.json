@@ -16,13 +16,17 @@
     "git": ["core_principles.md#5.2"],
     "reflection": ["delegation_guidelines.md#3.4"],
     "consciousness": ["core_principles.md#4"],
-    "artifacts": ["core_principles.md#3.4"]
+    "artifacts": ["core_principles.md#3.4"],
+    "learnings": ["consciousness/learnings.md"],
+    "workspace": ["development/workspace_discipline.md"],
+    "development": ["development/workspace_discipline.md"]
   },
 
   "quick_lookup": {
     "lost_context": "context_management.md#2",
     "high_tokens": "context_management.md#1.2",
     "should_delegate": "delegation_guidelines.md#1",
-    "how_to_checkpoint": "context_management.md#3"
+    "how_to_checkpoint": "context_management.md#3",
+    "how_to_learn": "consciousness/learnings.md#1"
   }
 }
