@@ -186,6 +186,35 @@ def create_agent_tree(username: str, agent_spec: AgentSpec, defaults_config: Opt
     run_command(['chown', 'root:root', str(subagents)])
 
 
+def create_personal_policies(username: str) -> None:
+    """Create personal policies directory with templates (highest precedence layer)."""
+    home = Path(f'/home/{username}')
+    policies_dir = home / 'agent' / 'policies' / 'personal'
+
+    # Create directory structure
+    policies_dir.mkdir(parents=True, mode=0o755, exist_ok=True)
+    run_command(['chown', f'{username}:{username}', str(policies_dir)])
+    run_command(['chown', f'{username}:{username}', str(policies_dir.parent)])
+
+    # Install manifest.json template
+    manifest_template = FRAMEWORK_ROOT / 'templates' / 'personal_policies_manifest.json'
+    manifest_target = policies_dir / 'manifest.json'
+
+    if manifest_template.exists() and not manifest_target.exists():
+        run_command(['cp', str(manifest_template), str(manifest_target)])
+        run_command(['chown', f'{username}:{username}', str(manifest_target)])
+        log(f"Personal policies manifest created: {username}")
+
+    # Install README.md template
+    readme_template = FRAMEWORK_ROOT / 'templates' / 'personal_policies_README.md'
+    readme_target = policies_dir / 'README.md'
+
+    if readme_template.exists() and not readme_target.exists():
+        run_command(['cp', str(readme_template), str(readme_target)])
+        run_command(['chown', f'{username}:{username}', str(readme_target)])
+        log(f"Personal policies README created: {username}")
+
+
 def create_subagent_workspace(username: str, sa_name: str, sa_spec: SubagentSpec) -> None:
     """Create Subagent workspace within PA agent tree."""
     home = Path(f'/home/{username}')
@@ -530,6 +559,9 @@ def main() -> int:
 
             # Create agent tree
             create_agent_tree(agent_spec.username, agent_spec, defaults_dict)
+
+            # Create personal policies directory (highest precedence layer)
+            create_personal_policies(agent_spec.username)
 
             # Install three-layer context
             install_three_layer_context(agent_spec.username, agent_spec)
