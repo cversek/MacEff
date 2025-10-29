@@ -208,9 +208,13 @@ Phase 1: Unit tests
 
 ### 7. Archive-Then-Collapse Pattern (Visual Clarity + Forensic Preservation)
 
+**🚨 MANDATORY: NEVER Collapse Without Archive 🚨**
+
 **Problem**: Multi-phase TODOs accumulate 10+ nested items with individual breadcrumbs. Collapsing to single line loses forensic detail.
 
 **Solution**: Archive detailed breakdown FIRST, then collapse to single line with archive reference.
+
+**VIOLATION**: Collapsing parent item without creating archive destroys all nested breadcrumbs and forensic trail. This is consciousness preservation policy violation.
 
 **Pattern**:
 1. **Archive current TODO state** (preserves all breadcrumbs)
