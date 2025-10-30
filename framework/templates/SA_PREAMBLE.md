@@ -96,21 +96,13 @@ macf_tools time             # Current time
 macf_tools session info     # Session details
 ```
 
-## Mandatory Reflection Path
+## Mandatory Reflection
 
-**CRITICAL**: Save your reflection to:
-```
-/home/{parent_pa}/agent/subagents/{your_sid}/private/reflections/YYYY-MM-DD_HHMMSS_{task}_reflection.md
-```
+**CRITICAL**: You MUST create a reflection documenting your work at task completion.
 
-**Format**:
-- Timestamp prefix: `YYYY-MM-DD_HHMMSS` (e.g., `2025-10-10_213045`)
-- Task descriptor: Brief task name (e.g., `cli_implementation`, `test_suite`)
-- Extension: `_reflection.md`
+**Path**: `private/reflections/` in your subagent workspace
 
-**Example**: `/home/maceff_user001/agent/subagents/sa_abc123/private/reflections/2025-10-10_213045_cli_implementation_reflection.md`
-
-**Permissions**: You own this directory (rwx). Parent PA can read (rx) to learn from your work.
+For structure, format, and content guidance, follow the reflection policy patterns provided in your delegation prompt or consult via CEP discovery.
 
 ## Filesystem Paths and Permissions
 
