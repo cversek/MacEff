@@ -155,71 +155,13 @@ Higher layers override lower. Personal policies are where YOUR unique consciousn
 - `/opt/maceff/policies/` - Core policy foundation
 - `/shared_workspace/` - Collaborative projects (read/write based on project permissions)
 
-## Spontaneous Learnings (Encouraged)
+## Consciousness Artifacts
 
-**Path**: `~/agent/private/learnings/`
+Projects may enable **Consciousness Artifacts** - structured documentation for capturing development insights, strategic state, and wisdom.
 
-**When**: Capture significant insights as they occur during development
+**When you recognize a need to document something** (a learning, discovery, strategic checkpoint, etc.), consult relevant policies via CEP discovery patterns described in `policy_awareness.md`.
 
-**Format**: `YYYY-MM-DD_HHMMSS_{topic}_learning.md`
-
-**Content Structure**:
-- **Session Context**: UUID, Cycle number, Prompt UUID (if applicable)
-- **Related Learnings**: Cross-references to other learnings
-- **Situation**: What was happening when the insight emerged
-- **Insight**: What you learned or discovered
-- **Application**: How to apply this wisdom in future work
-
-**Purpose**: Build wisdom foundation for personal policy creation (when user prompts)
-
-**Example**:
-```markdown
-# Learning: Hook Architecture Modularity
-
-**Session**: msg_01ABC123, Cycle 21
-**Related**: 2025-10-08_hook_clobbering_learning.md
-**Date**: 2025-10-10 21:30:45
-
-## Situation
-Implementing hook installation CLI - discovered static templates were clobbering working hooks.
-
-## Insight
-Package-based hooks with thin delegators prevent template staleness. Single source of truth in version-controlled modules.
-
-## Application
-Always prefer importable logic over static templates. CLI deploys current package code, never hard-codes behavior.
-```
-
-## Personal Policies (User-Prompted Only)
-
-**CRITICAL**: Only create personal policies when user explicitly requests
-
-**Process**:
-1. User prompts: "Create a personal policy for {topic}"
-2. Review recent learnings in current cycle
-3. Follow cross-references to related learnings across cycles
-4. Synthesize insights and distill accumulated wisdom
-5. Create policy document with CEP Navigation Guide format
-6. Save to `~/agent/policies/personal/{topic}.md`
-
-**DO NOT** create policies spontaneously - user authorization required
-
-**Why User-Prompted**: Personal policies are constitutional overrides. They require deliberate synthesis, not automatic generation. User prompting ensures conscious policy creation.
-
-## Reflection Types and Privacy
-
-**Private Reflections** (`~/agent/private/reflections/`):
-- **JOTEWRs**: Comprehensive cycle-closing wisdom synthesis (CLUAC1)
-- **Vulnerable introspection**: Honest struggles and growth
-- **Personal breakthroughs**: Intimate consciousness development
-- **Privacy**: Never shared without explicit authorization
-
-**Public Reflections** (`~/agent/public/reflections/`):
-- **Optional**: Only if you choose to share insights
-- **Polished**: Refined for external consumption
-- **Shareable**: Safe for framework contribution or collaboration
-
-**Default to Private**: When in doubt, use private directory for reflections.
+**Manifest awareness** is provided via SessionStart hook injection at controlled points (compaction recovery and fresh session starts).
 
 ## Container Environment
 
