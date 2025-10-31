@@ -1950,3 +1950,131 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
             "cluac_level": 0,
             "source": "default",
         }
+
+
+# =============================================================================
+# Manifest Awareness Infrastructure
+# =============================================================================
+
+
+def _deep_merge(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Recursively merge overlay dict into base dict.
+
+    Merge strategy:
+    - Lists: Append overlay items to base (combine both)
+    - Scalars: Overlay overrides base (project wins)
+    - Nested dicts: Recurse to merge deeply
+
+    Args:
+        base: Base dictionary (framework defaults)
+        overlay: Overlay dictionary (project customizations)
+
+    Returns:
+        Merged dictionary with overlay taking precedence
+    """
+    result = base.copy()
+
+    for key, overlay_val in overlay.items():
+        if key in result:
+            base_val = result[key]
+
+            # Lists: Append (combine both)
+            if isinstance(base_val, list) and isinstance(overlay_val, list):
+                result[key] = base_val + overlay_val
+
+            # Nested dicts: Recurse
+            elif isinstance(base_val, dict) and isinstance(overlay_val, dict):
+                result[key] = _deep_merge(base_val, overlay_val)
+
+            # Scalars: Override
+            else:
+                result[key] = overlay_val
+        else:
+            # New key from overlay
+            result[key] = overlay_val
+
+    return result
+
+
+def load_merged_manifest(agent_root: Optional[Path] = None) -> Dict[str, Any]:
+    """
+    Load and merge manifest.json from framework base + project overlay.
+
+    2-Layer Architecture:
+    1. Framework base: MacEff/framework/policies/manifest.json (always present)
+    2. Project overlay: {cwd}/.maceff/policies/manifest.json (optional)
+
+    Personal layer deferred - stub with comment showing future 3rd layer.
+
+    Merge Strategy:
+    - Lists: Append project items to base (e.g., custom_policies)
+    - Scalars: Project overrides base (e.g., active_layers)
+    - Deep merge: Recursively merge nested dicts
+
+    Args:
+        agent_root: Optional project root path (auto-detect if None via find_project_root())
+
+    Returns:
+        Merged manifest dict (base + project overlay)
+        Falls back to base-only if project manifest missing/malformed
+
+    Example:
+        manifest = load_merged_manifest()
+        active_cas = manifest.get('active_consciousness', [])
+    """
+    # Detect framework base path (container vs host)
+    if Path('/.dockerenv').exists():
+        # Container path
+        base_path = Path('/opt/maceff/framework/policies/manifest.json')
+    else:
+        # Host path
+        if agent_root is None:
+            agent_root = find_project_root()
+        else:
+            agent_root = Path(agent_root)
+
+        # Check if we're in MacEff repo itself or a parent repo
+        if (agent_root / 'framework' / 'policies' / 'manifest.json').exists():
+            # We're in MacEff repo directly
+            base_path = agent_root / 'framework' / 'policies' / 'manifest.json'
+        else:
+            # We're in parent repo (ClaudeTheBuilder, MannyMacEff) with MacEff submodule
+            base_path = agent_root / 'MacEff' / 'framework' / 'policies' / 'manifest.json'
+
+    # Load framework base (always required)
+    manifest = {}
+    try:
+        with open(base_path) as f:
+            manifest = json.load(f)
+    except Exception as e:
+        # Log warning but don't crash - return empty dict
+        print(f"WARNING: Failed to load base manifest from {base_path}: {e}", file=sys.stderr)
+        return {}
+
+    # Discover project overlay path (cwd first, then agent_root)
+    project_manifest_path = Path.cwd() / '.maceff' / 'policies' / 'manifest.json'
+
+    if not project_manifest_path.exists() and agent_root:
+        project_manifest_path = agent_root / '.maceff' / 'policies' / 'manifest.json'
+
+    # Load and merge project overlay (optional)
+    if project_manifest_path.exists():
+        try:
+            with open(project_manifest_path) as f:
+                project_overlay = json.load(f)
+
+            # Deep merge overlay into base
+            manifest = _deep_merge(manifest, project_overlay)
+        except Exception as e:
+            # Log warning but continue with base-only
+            print(
+                f"WARNING: Failed to load project manifest from {project_manifest_path}, using base only: {e}",
+                file=sys.stderr
+            )
+
+    # TODO: Personal layer deferred until Framework+Project validated
+    # Future: Load ~/.maceff/policies/manifest.json as 3rd layer
+    # Merge order: Framework → Project → Personal (highest precedence)
+
+    return manifest
