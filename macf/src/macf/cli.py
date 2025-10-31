@@ -801,6 +801,262 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_policy_manifest(args: argparse.Namespace) -> int:
+    """Display merged and filtered policy manifest."""
+    from .utils import load_merged_manifest, filter_active_policies
+
+    try:
+        # Load and filter manifest
+        manifest = load_merged_manifest()
+        filtered = filter_active_policies(manifest)
+
+        # Choose format
+        format_type = getattr(args, 'format', 'summary')
+
+        if format_type == 'json':
+            # Pretty-print full filtered manifest
+            print(json.dumps(filtered, indent=2))
+        else:
+            # Summary format
+            print("Policy Manifest Summary")
+            print("=" * 50)
+            print(f"Version: {filtered.get('version', 'unknown')}")
+            print(f"Description: {filtered.get('description', 'N/A')}")
+
+            # Active layers
+            active_layers = manifest.get('active_layers', [])
+            if active_layers:
+                print(f"Active Layers: {', '.join(active_layers)}")
+            else:
+                print("Active Layers: none configured")
+
+            # Active languages
+            active_languages = manifest.get('active_languages', [])
+            if active_languages:
+                print(f"Active Languages: {', '.join(active_languages)}")
+            else:
+                print("Active Languages: none configured")
+
+            # CA type count
+            discovery_index = filtered.get('discovery_index', {})
+            ca_types = set()
+            for key in discovery_index.keys():
+                # Extract CA types from discovery index keys
+                if any(ca in key for ca in ['observation', 'experiment', 'report', 'reflection', 'checkpoint', 'roadmap', 'emotion']):
+                    if 'observation' in key:
+                        ca_types.add('observations')
+                    if 'experiment' in key:
+                        ca_types.add('experiments')
+                    if 'report' in key:
+                        ca_types.add('reports')
+                    if 'reflection' in key:
+                        ca_types.add('reflections')
+                    if 'checkpoint' in key or 'ccp' in key:
+                        ca_types.add('checkpoints')
+                    if 'roadmap' in key:
+                        ca_types.add('roadmaps')
+                    if 'emotion' in key:
+                        ca_types.add('emotions')
+
+            print(f"CA Types Configured: {len(ca_types)}")
+            if ca_types:
+                print(f"  Types: {', '.join(sorted(ca_types))}")
+
+        return 0
+
+    except Exception as e:
+        print(f"Error displaying manifest: {e}")
+        return 1
+
+
+def cmd_policy_search(args: argparse.Namespace) -> int:
+    """Search for keyword in policy manifest."""
+    from .utils import load_merged_manifest, filter_active_policies
+
+    try:
+        keyword = args.keyword.lower()
+
+        # Load and filter manifest
+        manifest = load_merged_manifest()
+        filtered = filter_active_policies(manifest)
+
+        matches = []
+
+        # Search mandatory policies
+        mandatory = filtered.get('mandatory_policies', {}).get('policies', [])
+        for policy in mandatory:
+            name = policy.get('name', '')
+            desc = policy.get('description', '')
+            keywords_list = policy.get('keywords', [])
+
+            if (keyword in name.lower() or
+                keyword in desc.lower() or
+                any(keyword in kw.lower() for kw in keywords_list)):
+                matches.append(('mandatory', name, desc))
+
+        # Search development policies
+        dev = filtered.get('development_policies', {}).get('policies', [])
+        for policy in dev:
+            name = policy.get('name', '')
+            desc = policy.get('description', '')
+            keywords_list = policy.get('keywords', [])
+
+            if (keyword in name.lower() or
+                keyword in desc.lower() or
+                any(keyword in kw.lower() for kw in keywords_list)):
+                matches.append(('development', name, desc))
+
+        # Search consciousness patterns
+        patterns = filtered.get('consciousness_patterns', {}).get('triggers', [])
+        for pattern in patterns:
+            pattern_name = pattern.get('pattern', '')
+            consciousness = pattern.get('consciousness', '')
+            search_terms = pattern.get('search_terms', [])
+
+            if (keyword in pattern_name.lower() or
+                keyword in consciousness.lower() or
+                any(keyword in term.lower() for term in search_terms)):
+                matches.append(('consciousness_pattern', pattern_name, consciousness))
+
+        # Display results
+        print(f"Search results for '{keyword}': {len(matches)} matches")
+        print("=" * 50)
+
+        if matches:
+            for section, name, desc in matches:
+                print(f"[{section}] {name}: {desc}")
+        else:
+            print("No matches found")
+
+        return 0
+
+    except Exception as e:
+        print(f"Error searching manifest: {e}")
+        return 1
+
+
+def cmd_policy_list(args: argparse.Namespace) -> int:
+    """List policies by layer."""
+    from .utils import load_merged_manifest, filter_active_policies
+
+    try:
+        layer = getattr(args, 'layer', 'mandatory')
+
+        # Load and filter manifest
+        manifest = load_merged_manifest()
+        filtered = filter_active_policies(manifest)
+
+        print(f"Policies - {layer} layer")
+        print("=" * 50)
+
+        if layer == 'mandatory':
+            policies = filtered.get('mandatory_policies', {}).get('policies', [])
+            if policies:
+                for policy in policies:
+                    name = policy.get('name', 'unknown')
+                    desc = policy.get('description', 'N/A')
+                    short_name = policy.get('short_name', '')
+                    print(f"{name} ({short_name})")
+                    print(f"  {desc}")
+                    print()
+            else:
+                print("No mandatory policies found")
+
+        elif layer == 'dev':
+            policies = filtered.get('development_policies', {}).get('policies', [])
+            if policies:
+                for policy in policies:
+                    name = policy.get('name', 'unknown')
+                    desc = policy.get('description', 'N/A')
+                    short_name = policy.get('short_name', '')
+                    print(f"{name} ({short_name})")
+                    print(f"  {desc}")
+                    print()
+            else:
+                print("No development policies configured")
+
+        elif layer == 'lang':
+            lang_policies = filtered.get('language_policies', {})
+            languages = lang_policies.get('languages', {})
+            if languages:
+                for lang, policy_info in languages.items():
+                    name = policy_info.get('name', lang)
+                    short_name = policy_info.get('short_name', '')
+                    print(f"{lang}: {name} ({short_name})")
+                    print()
+            else:
+                print("No language policies configured")
+
+        else:
+            print(f"Unknown layer: {layer}")
+            print("Available layers: mandatory, dev, lang")
+            return 1
+
+        return 0
+
+    except Exception as e:
+        print(f"Error listing policies: {e}")
+        return 1
+
+
+def cmd_policy_ca_types(args: argparse.Namespace) -> int:
+    """Show CA types with emojis."""
+    from .utils import load_merged_manifest, filter_active_policies
+
+    try:
+        # CA emoji mapping
+        CA_EMOJIS = {
+            'observations': '🔬',
+            'experiments': '🧪',
+            'reports': '📊',
+            'reflections': '💭',
+            'checkpoints': '🔖',
+            'roadmaps': '🗺️',
+            'emotions': '❤️'
+        }
+
+        # Load and filter manifest
+        manifest = load_merged_manifest()
+        filtered = filter_active_policies(manifest)
+
+        # Detect active CA types from discovery_index
+        discovery_index = filtered.get('discovery_index', {})
+        active_types = set()
+
+        for key in discovery_index.keys():
+            # Map discovery keys to CA types
+            if 'observation' in key:
+                active_types.add('observations')
+            if 'experiment' in key:
+                active_types.add('experiments')
+            if 'report' in key:
+                active_types.add('reports')
+            if 'reflection' in key or 'jotewr' in key or 'wisdom' in key:
+                active_types.add('reflections')
+            if 'checkpoint' in key or 'ccp' in key:
+                active_types.add('checkpoints')
+            if 'roadmap' in key:
+                active_types.add('roadmaps')
+            if 'emotion' in key:
+                active_types.add('emotions')
+
+        print("Consciousness Artifact (CA) Types")
+        print("=" * 50)
+
+        if active_types:
+            for ca_type in sorted(active_types):
+                emoji = CA_EMOJIS.get(ca_type, '📄')
+                print(f"{emoji} {ca_type}")
+        else:
+            print("No CA types configured")
+
+        return 0
+
+    except Exception as e:
+        print(f"Error showing CA types: {e}")
+        return 1
+
+
 # -------- parser --------
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -881,6 +1137,31 @@ def _build_parser() -> argparse.ArgumentParser:
                                help="output markdown summary (default)")
     dev_drv_parser.add_argument("--output", help="output file path (default: stdout)")
     dev_drv_parser.set_defaults(func=cmd_dev_drv)
+
+    # Policy commands
+    policy_parser = sub.add_parser("policy", help="policy manifest management")
+    policy_sub = policy_parser.add_subparsers(dest="policy_cmd")
+
+    # policy manifest
+    manifest_parser = policy_sub.add_parser("manifest", help="display merged and filtered policy manifest")
+    manifest_parser.add_argument("--format", choices=["json", "summary"], default="summary",
+                                help="output format (default: summary)")
+    manifest_parser.set_defaults(func=cmd_policy_manifest)
+
+    # policy search
+    search_parser = policy_sub.add_parser("search", help="search for keyword in policy manifest")
+    search_parser.add_argument("keyword", help="keyword to search for")
+    search_parser.set_defaults(func=cmd_policy_search)
+
+    # policy list
+    list_parser = policy_sub.add_parser("list", help="list policies by layer")
+    list_parser.add_argument("--layer", choices=["mandatory", "dev", "lang"], default="mandatory",
+                            help="policy layer to display (default: mandatory)")
+    list_parser.set_defaults(func=cmd_policy_list)
+
+    # policy ca-types
+    ca_types_parser = policy_sub.add_parser("ca-types", help="show CA types with emojis")
+    ca_types_parser.set_defaults(func=cmd_policy_ca_types)
 
     return p
 
