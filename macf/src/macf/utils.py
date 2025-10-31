@@ -2078,3 +2078,104 @@ def load_merged_manifest(agent_root: Optional[Path] = None) -> Dict[str, Any]:
     # Merge order: Framework → Project → Personal (highest precedence)
 
     return manifest
+
+
+def filter_active_policies(manifest: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Filter merged manifest to active policies only (token efficiency).
+
+    Configuration Schema (project manifest .maceff/policies/manifest.json):
+    ```json
+    {
+      "version": "1.0.0",
+      "extends": "/opt/maceff/framework/policies/manifest.json",
+      "active_layers": ["development"],
+      "active_languages": ["python"],
+      "active_consciousness": ["observations", "experiments", "reports"],
+      "custom_policies": []
+    }
+    ```
+
+    Filter Rules:
+    1. Mandatory policies: Always included
+    2. Development policies: Filtered by active_layers
+    3. Language policies: Filtered by active_languages
+    4. CA types in discovery_index: Filtered by active_consciousness
+    5. Consciousness patterns: Always included
+    6. Custom policies: Always included
+
+    Args:
+        manifest: Merged manifest from load_merged_manifest()
+
+    Returns:
+        Filtered manifest with only active policies
+    """
+    # If no filtering configured, return full manifest
+    has_filters = (
+        'active_layers' in manifest or
+        'active_languages' in manifest or
+        'active_consciousness' in manifest
+    )
+
+    if not has_filters:
+        return manifest
+
+    # Start filtered dict with always-included sections
+    filtered = {
+        'version': manifest.get('version'),
+        'description': manifest.get('description'),
+        'last_updated': manifest.get('last_updated'),
+        'base_path': manifest.get('base_path'),
+        'mandatory_policies': manifest.get('mandatory_policies', {}),
+        'consciousness_patterns': manifest.get('consciousness_patterns', {})
+    }
+
+    # Filter by active_layers (development, production, etc.)
+    active_layers = manifest.get('active_layers', [])
+    if active_layers:
+        # Check for development policies
+        if 'development' in active_layers and 'development_policies' in manifest:
+            filtered['development_policies'] = manifest['development_policies']
+
+        # Future: production policies, staging policies, etc.
+        if 'production' in active_layers and 'production_policies' in manifest:
+            filtered['production_policies'] = manifest['production_policies']
+
+    # Filter by active_languages (python, go, etc.)
+    active_languages = manifest.get('active_languages', [])
+    if active_languages and 'language_policies' in manifest:
+        language_policies = {}
+        lang_section = manifest['language_policies'].get('languages', {})
+
+        for lang in active_languages:
+            if lang in lang_section:
+                language_policies[lang] = lang_section[lang]
+
+        if language_policies:
+            # Preserve structure with languages key
+            filtered['language_policies'] = {
+                'description': manifest['language_policies'].get('description'),
+                'location': manifest['language_policies'].get('location'),
+                'languages': language_policies
+            }
+
+    # Filter discovery_index by active_consciousness
+    active_ca_types = manifest.get('active_consciousness', [])
+    if active_ca_types and 'discovery_index' in manifest:
+        discovery_index = manifest['discovery_index']
+        filtered_discovery = {}
+
+        # Check each discovery key against active CA types
+        for key, value in discovery_index.items():
+            # Match if key relates to any active CA type
+            if any(ca_type in key.lower() for ca_type in active_ca_types):
+                filtered_discovery[key] = value
+
+        if filtered_discovery:
+            filtered['discovery_index'] = filtered_discovery
+
+    # Always include custom_policies if present
+    if 'custom_policies' in manifest:
+        filtered['custom_policies'] = manifest['custom_policies']
+
+    return filtered
