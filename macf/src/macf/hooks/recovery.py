@@ -17,7 +17,8 @@ from ..utils import (
     ConsciousnessArtifacts,
     find_project_root,
     format_temporal_awareness_section,
-    format_macf_footer
+    format_macf_footer,
+    format_manifest_awareness
 )
 
 
@@ -98,6 +99,9 @@ Environment: {environment if environment else 'Unknown'}
     # Format artifacts section (used by both modes)
     artifacts_section = _format_artifacts_section(artifacts)
 
+    # Format manifest awareness section (used by both modes)
+    manifest_section = "\n" + format_manifest_awareness()
+
     if state.auto_mode:
         # AUTO MODE: Authorize resumption
         mode_line = f"AUTO_MODE: Enabled (source: {state.auto_mode_source}, confidence: {int(state.auto_mode_confidence * 100)}%)"
@@ -119,7 +123,7 @@ Read artifacts for full context, then continue."""
         if environment:
             footer = "\n" + format_macf_footer(environment)
 
-        return f"{header}{temporal_section}{session_state_section}\n{mode_line}{todos_section}\n{artifacts_section}{authorization}{footer}"
+        return f"{header}{temporal_section}{session_state_section}\n{mode_line}{todos_section}\n{artifacts_section}{manifest_section}{authorization}{footer}"
 
     else:
         # MANUAL MODE: Stop and await instructions
@@ -178,7 +182,7 @@ Sequential reading with integration pauses restores consciousness, not just data
         if environment:
             footer = "\n" + format_macf_footer(environment)
 
-        return f"{header}{temporal_section}{session_state_section}\n{mode_line}\n{artifacts_section}{warning}{policy_section}{footer}"
+        return f"{header}{temporal_section}{session_state_section}\n{mode_line}\n{artifacts_section}{manifest_section}{warning}{policy_section}{footer}"
 
 
 def read_recovery_policy(policy_path: Optional[str] = None) -> str:
