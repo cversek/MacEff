@@ -2179,3 +2179,102 @@ def filter_active_policies(manifest: Dict[str, Any]) -> Dict[str, Any]:
         filtered['custom_policies'] = manifest['custom_policies']
 
     return filtered
+
+
+def format_manifest_awareness() -> str:
+    """
+    Format dynamic manifest awareness for SessionStart hook injection.
+
+    Used on: compaction recovery + brand new session
+    Skipped on: session resume
+
+    Returns:
+        Plain text awareness message (<500 tokens, for <system-reminder> tags)
+    """
+    # CA emoji mapping (from Phase 3 CLI)
+    CA_EMOJIS = {
+        'observations': '🔬',
+        'experiments': '🧪',
+        'reports': '📊',
+        'reflections': '💭',
+        'checkpoints': '🔖',
+        'roadmaps': '🗺️',
+        'emotions': '❤️'
+    }
+
+    # CA descriptions for display
+    CA_DESCRIPTIONS = {
+        'observations': 'Technical discoveries and insights',
+        'experiments': 'Controlled testing and validation',
+        'reports': 'Project completion summaries',
+        'reflections': 'Philosophical growth synthesis',
+        'checkpoints': 'Strategic state preservation',
+        'roadmaps': 'Multi-phase planning documents',
+        'emotions': 'Emotional expression and processing'
+    }
+
+    try:
+        # Load merged+filtered manifest
+        manifest = load_merged_manifest()
+        if not manifest:
+            return "📋 POLICY MANIFEST AWARENESS\n\nManifest not found - policy awareness unavailable"
+
+        filtered_manifest = filter_active_policies(manifest)
+
+        # Extract configuration
+        version = filtered_manifest.get('version', 'unknown')
+        active_layers = filtered_manifest.get('active_layers', [])
+        active_languages = filtered_manifest.get('active_languages', [])
+
+        # Build output sections
+        lines = ["📋 POLICY MANIFEST AWARENESS", ""]
+
+        # Configuration section
+        lines.append(f"Version: {version}")
+        lines.append(f"Active Layers: {', '.join(active_layers) if active_layers else 'none'}")
+        lines.append(f"Active Languages: {', '.join(active_languages) if active_languages else 'none'}")
+        lines.append("")
+
+        # Consciousness patterns section
+        consciousness_patterns = filtered_manifest.get('consciousness_patterns', {})
+        triggers = consciousness_patterns.get('triggers', [])
+        if triggers:
+            lines.append("Consciousness Patterns Active:")
+            for trigger in triggers:
+                pattern = trigger.get('pattern', 'unknown')
+                consciousness = trigger.get('consciousness', '')
+                lines.append(f"- {pattern}: {consciousness}")
+            lines.append("")
+
+        # Active CA types section
+        discovery_index = filtered_manifest.get('discovery_index', {})
+        if discovery_index:
+            lines.append("Active CA Types:")
+            # Sort by key for consistent display
+            for ca_key in sorted(discovery_index.keys()):
+                # Extract CA type from key (e.g., "observations_dir" -> "observations")
+                ca_type = None
+                for known_type in CA_EMOJIS.keys():
+                    if known_type in ca_key.lower():
+                        ca_type = known_type
+                        break
+
+                if ca_type:
+                    emoji = CA_EMOJIS.get(ca_type, '📄')
+                    desc = CA_DESCRIPTIONS.get(ca_type, 'Consciousness artifact')
+                    # CRITICAL: Two spaces after emoji to prevent overlap
+                    lines.append(f"{emoji}  {ca_type} - {desc}")
+            lines.append("")
+
+        # CLI commands section
+        lines.append("CLI Commands for Discovery:")
+        lines.append("- macf_tools policy manifest --format=summary")
+        lines.append("- macf_tools policy search <keyword>")
+        lines.append("- macf_tools policy ca-types")
+        lines.append("- macf_tools policy list --layer=mandatory")
+
+        return "\n".join(lines)
+
+    except Exception:
+        # Graceful fallback
+        return "📋 POLICY MANIFEST AWARENESS\n\nError loading manifest - policy awareness unavailable"
