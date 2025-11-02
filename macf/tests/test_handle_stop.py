@@ -156,8 +156,8 @@ def test_saves_session_end_time_to_project_state(mock_dependencies):
     from macf.hooks.handle_stop import run
     from unittest.mock import patch
 
-    with patch('macf.hooks.handle_stop.load_project_state') as mock_load, \
-         patch('macf.hooks.handle_stop.save_project_state') as mock_save, \
+    with patch('macf.hooks.handle_stop.load_agent_state') as mock_load, \
+         patch('macf.hooks.handle_stop.save_agent_state') as mock_save, \
          patch('macf.hooks.handle_stop.get_temporal_context') as mock_temporal, \
          patch('macf.hooks.handle_stop.detect_execution_environment') as mock_env, \
          patch('macf.hooks.handle_stop.get_current_cycle_project') as mock_cycle, \

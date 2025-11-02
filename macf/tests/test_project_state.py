@@ -14,9 +14,9 @@ from pathlib import Path
 import pytest
 
 from macf.utils import (
-    get_project_state_path,
-    load_project_state,
-    save_project_state,
+    get_agent_state_path,
+    load_agent_state,
+    save_agent_state,
     get_current_cycle_project,
     increment_cycle_project,
     detect_session_migration,
@@ -38,11 +38,11 @@ class TestProjectStateCore:
             'cycles_completed': 4,
             'last_session_id': 'session-abc123'
         }
-        result = save_project_state(state, agent_root)
+        result = save_agent_state(state, agent_root)
         assert result is True
 
         # Load state back
-        loaded = load_project_state(agent_root)
+        loaded = load_agent_state(agent_root)
         assert loaded['current_cycle_number'] == 5
         assert loaded['cycle_started_at'] == 1234567890.0
         assert loaded['cycles_completed'] == 4
@@ -61,14 +61,14 @@ class TestProjectStateCore:
             'cycles_completed': 9,
             'last_session_id': 'old-session'
         }
-        save_project_state(initial_state, agent_root)
+        save_agent_state(initial_state, agent_root)
 
         # Increment cycle
         new_cycle = increment_cycle_project('new-session', agent_root)
         assert new_cycle == 11
 
         # Verify state updated correctly
-        loaded = load_project_state(agent_root)
+        loaded = load_agent_state(agent_root)
         assert loaded['current_cycle_number'] == 11
         assert loaded['cycles_completed'] == 10
         assert loaded['last_session_id'] == 'new-session'
@@ -84,7 +84,7 @@ class TestProjectStateCore:
             'current_cycle_number': 16,
             'last_session_id': 'session-old-abc123'
         }
-        save_project_state(state, agent_root)
+        save_agent_state(state, agent_root)
 
         # Check with different session ID
         is_migration, old_id = detect_session_migration('session-new-xyz789', agent_root)
@@ -105,7 +105,7 @@ class TestProjectStateBackwardCompatibility:
         agent_root = tmp_path / "nonexistent"
 
         # Load should return empty dict
-        state = load_project_state(agent_root)
+        state = load_agent_state(agent_root)
         assert state == {}
 
         # get_current_cycle should return 1
@@ -133,7 +133,7 @@ class TestProjectStateBackwardCompatibility:
         assert (agent_root / ".maceff" / "project_state.json").exists()
 
         # Verify state structure
-        state = load_project_state(agent_root)
+        state = load_agent_state(agent_root)
         assert state['current_cycle_number'] == 2
         assert state['cycles_completed'] == 1
         assert state['last_session_id'] == 'first-session'
@@ -150,7 +150,7 @@ class TestProjectStateBackwardCompatibility:
 
         # Save should create it
         state = {'current_cycle_number': 1}
-        result = save_project_state(state, agent_root)
+        result = save_agent_state(state, agent_root)
         assert result is True
         assert (agent_root / ".maceff").exists()
         assert (agent_root / ".maceff" / "project_state.json").exists()
@@ -171,7 +171,7 @@ class TestProjectStateResilience:
         state_path.write_text("{ invalid json }")
 
         # Should return empty dict, not crash
-        state = load_project_state(agent_root)
+        state = load_agent_state(agent_root)
         assert state == {}
 
         # Other functions should handle gracefully
@@ -185,7 +185,7 @@ class TestProjectStateResilience:
 
         # Save state without last_session_id
         state = {'current_cycle_number': 5}
-        save_project_state(state, agent_root)
+        save_agent_state(state, agent_root)
 
         # Should not crash, should return no migration
         is_migration, old_id = detect_session_migration('any-session', agent_root)
