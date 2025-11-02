@@ -3,6 +3,7 @@ Policy manifest merge/filter/format.
 """
 
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -78,19 +79,35 @@ def load_merged_manifest(agent_root: Optional[Path] = None) -> Dict[str, Any]:
         # Container path
         base_path = Path('/opt/maceff/framework/policies/manifest.json')
     else:
-        # Host path
+        # Host path - try multiple strategies
         if agent_root is None:
             agent_root = find_project_root()
         else:
             agent_root = Path(agent_root)
 
-        # Check if we're in MacEff repo itself or a parent repo
+        # Strategy 1: Check if we're in MacEff repo itself
         if (agent_root / 'framework' / 'policies' / 'manifest.json').exists():
-            # We're in MacEff repo directly
             base_path = agent_root / 'framework' / 'policies' / 'manifest.json'
-        else:
-            # We're in parent repo (ClaudeTheBuilder, MannyMacEff) with MacEff submodule
+        # Strategy 2: Check for MacEff as submodule
+        elif (agent_root / 'MacEff' / 'framework' / 'policies' / 'manifest.json').exists():
             base_path = agent_root / 'MacEff' / 'framework' / 'policies' / 'manifest.json'
+        # Strategy 3: Check environment variable
+        elif 'MACEFF_FRAMEWORK_PATH' in os.environ:
+            base_path = Path(os.environ['MACEFF_FRAMEWORK_PATH']) / 'policies' / 'manifest.json'
+        # Strategy 4: Check known sibling locations in gitwork/
+        else:
+            # Try to find MacEff as sibling repo
+            gitwork_base = agent_root.parent.parent if 'gitwork' in str(agent_root) else None
+            if gitwork_base:
+                # Try cversek/MacEff (framework development location)
+                candidate = gitwork_base / 'cversek' / 'MacEff' / 'framework' / 'policies' / 'manifest.json'
+                if candidate.exists():
+                    base_path = candidate
+                else:
+                    # Fallback: assume submodule (will fail with warning below)
+                    base_path = agent_root / 'MacEff' / 'framework' / 'policies' / 'manifest.json'
+            else:
+                base_path = agent_root / 'MacEff' / 'framework' / 'policies' / 'manifest.json'
 
     # Load framework base (always required)
     manifest = {}
