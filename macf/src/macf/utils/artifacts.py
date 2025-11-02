@@ -77,8 +77,9 @@ def get_latest_consciousness_artifacts(
         if not agent_root.exists():
             return ConsciousnessArtifacts()
 
-        public_dir = agent_root / "public"
-        private_dir = agent_root / "private"
+        # Agent artifacts live under agent/ subdirectory
+        public_dir = agent_root / "agent" / "public"
+        private_dir = agent_root / "agent" / "private"
 
         # Discover artifacts with safe empty list fallbacks
         # Reflections and checkpoints are private (consciousness preservation)

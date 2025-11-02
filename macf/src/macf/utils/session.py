@@ -96,7 +96,17 @@ def get_last_user_prompt_uuid(session_id: Optional[str] = None) -> Optional[str]
                 data = json.loads(line)
                 message = data.get('message', {})
                 if message.get('role') == 'user':
-                    # User messages have top-level 'uuid' field, not message.id
+                    content = message.get('content', '')
+
+                    # Skip hook messages (post-tool-use-hook, user-prompt-submit-hook, etc.)
+                    if isinstance(content, str) and '-hook>' in content:
+                        continue
+
+                    # Skip tool result messages (content is list of tool_result objects)
+                    if isinstance(content, list):
+                        continue
+
+                    # Found actual user text prompt
                     return data.get('uuid')
             except json.JSONDecodeError:
                 continue
