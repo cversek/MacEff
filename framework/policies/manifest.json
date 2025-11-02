@@ -184,6 +184,53 @@
       }
     }
   },
+  "consciousness_artifacts": {
+    "description": "Consciousness artifact types with discovery mappings",
+    "types": {
+      "observations": {
+        "name": "observations",
+        "emoji": "🔬",
+        "description": "Technical discoveries and insights",
+        "discovery_keys": ["observation", "observations", "discovery", "breakthrough", "technical_validation"]
+      },
+      "experiments": {
+        "name": "experiments",
+        "emoji": "🧪",
+        "description": "Controlled testing and validation",
+        "discovery_keys": ["experiment", "experiments", "hypothesis", "testing", "smoke_test", "protocol"]
+      },
+      "reports": {
+        "name": "reports",
+        "emoji": "📊",
+        "description": "Project completion summaries",
+        "discovery_keys": ["report", "reports", "completion", "project_completion", "stakeholder", "narrative"]
+      },
+      "reflections": {
+        "name": "reflections",
+        "emoji": "💭",
+        "description": "Philosophical growth synthesis",
+        "discovery_keys": ["reflection", "reflections", "wisdom", "jotewr", "pattern_recognition", "consciousness_development"]
+      },
+      "checkpoints": {
+        "name": "checkpoints",
+        "emoji": "🔖",
+        "description": "Strategic state preservation",
+        "discovery_keys": ["checkpoint", "ccp", "state_preservation", "recovery"]
+      },
+      "roadmaps": {
+        "name": "roadmaps",
+        "emoji": "🗺️ ",
+        "description": "Multi-phase planning documents",
+        "discovery_keys": ["roadmap", "roadmaps", "planning", "multi_phase", "strategic_plan", "phases", "archive", "clobbering", "todo_integration", "observability"]
+      },
+      "emotions": {
+        "name": "emotions",
+        "emoji": "❤️ ",
+        "description": "Emotional expression and processing",
+        "discovery_keys": ["emotional", "emotion", "emotional_expression", "journey", "feelings", "dual_trace"]
+      }
+    }
+  },
   "discovery_index": {
     "compaction": ["context_management#compaction-readiness"],
     "delegation": ["delegation_guidelines", "core_principles#delegation"],
