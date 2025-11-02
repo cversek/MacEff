@@ -33,19 +33,25 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
         Dict with DEV_DRV started message + comprehensive awareness
     """
     try:
-        # Parse stdin to get session_id from Claude Code (not filesystem discovery)
+        # Parse stdin to get session_id and transcript_path from Claude Code
         try:
             hook_input = json.loads(stdin_json) if stdin_json else {}
             session_id = hook_input.get('session_id')
+            transcript_path = hook_input.get('transcript_path')
         except (json.JSONDecodeError, AttributeError):
             session_id = None
+            transcript_path = None
 
         # Fallback to filesystem discovery if stdin parsing failed
         if not session_id:
             session_id = get_current_session_id()
 
-        # Start Development Drive tracking
-        start_dev_drv(session_id)
+        # Get current message UUID from JSONL (message written before hook fires)
+        from ..utils.session import get_last_user_prompt_uuid
+        current_prompt_uuid = get_last_user_prompt_uuid(session_id)
+
+        # Start Development Drive tracking with current UUID
+        start_dev_drv(session_id, prompt_uuid=current_prompt_uuid)
 
         # Get breadcrumb
         breadcrumb = get_breadcrumb()

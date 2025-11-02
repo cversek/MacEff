@@ -7,11 +7,16 @@ from typing import Any, Dict, List, Optional
 from .session import get_last_user_prompt_uuid
 from .state import SessionOperationalState
 
-def start_dev_drv(session_id: str, agent_id: Optional[str] = None) -> bool:
+def start_dev_drv(session_id: str, agent_id: Optional[str] = None, prompt_uuid: Optional[str] = None) -> bool:
     """
     Mark Development Drive start.
 
     DEV_DRV = period from user plan approval/UserPromptSubmit to Stop hook.
+
+    Args:
+        session_id: Session identifier
+        agent_id: Agent identifier (auto-detected if None)
+        prompt_uuid: Prompt UUID (auto-detected from JSONL if None)
 
     Returns:
         True if successful, False otherwise
@@ -23,9 +28,10 @@ def start_dev_drv(session_id: str, agent_id: Optional[str] = None) -> bool:
     state = SessionOperationalState.load(session_id, agent_id)
     state.current_dev_drv_started_at = time.time()
 
-    # Capture UUID of user prompt that started this drive
-    uuid = get_last_user_prompt_uuid(session_id)
-    state.current_dev_drv_prompt_uuid = uuid
+    # Use provided UUID or capture from JSONL
+    if prompt_uuid is None:
+        prompt_uuid = get_last_user_prompt_uuid(session_id)
+    state.current_dev_drv_prompt_uuid = prompt_uuid
 
     return state.save()
 
