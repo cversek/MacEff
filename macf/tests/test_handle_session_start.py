@@ -51,7 +51,7 @@ def test_no_compaction_detected(mock_dependencies):
     with patch('macf.hooks.handle_session_start.get_temporal_context') as mock_temporal, \
          patch('macf.hooks.handle_session_start.detect_execution_environment') as mock_env, \
          patch('macf.hooks.handle_session_start.get_current_cycle_project') as mock_cycle, \
-         patch('macf.hooks.handle_session_start.load_project_state') as mock_load_proj, \
+         patch('macf.hooks.handle_session_start.load_agent_state') as mock_load_proj, \
          patch('time.time') as mock_time:
 
         mock_temporal.return_value = {
@@ -105,7 +105,7 @@ def test_first_session_no_project_state(mock_dependencies):
     with patch('macf.hooks.handle_session_start.get_temporal_context') as mock_temporal, \
          patch('macf.hooks.handle_session_start.detect_execution_environment') as mock_env, \
          patch('macf.hooks.handle_session_start.get_current_cycle_project') as mock_cycle, \
-         patch('macf.hooks.handle_session_start.load_project_state') as mock_load_proj, \
+         patch('macf.hooks.handle_session_start.load_agent_state') as mock_load_proj, \
          patch('time.time') as mock_time:
 
         mock_temporal.return_value = {
@@ -267,7 +267,7 @@ def test_source_field_startup_no_detection(mock_dependencies):
     with patch('macf.hooks.handle_session_start.get_temporal_context') as mock_temporal, \
          patch('macf.hooks.handle_session_start.detect_execution_environment') as mock_env, \
          patch('macf.hooks.handle_session_start.get_current_cycle_project') as mock_cycle, \
-         patch('macf.hooks.handle_session_start.load_project_state') as mock_load_proj, \
+         patch('macf.hooks.handle_session_start.load_agent_state') as mock_load_proj, \
          patch('time.time') as mock_time:
 
         mock_temporal.return_value = {
