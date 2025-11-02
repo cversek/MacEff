@@ -228,18 +228,20 @@ def filter_active_policies(manifest: Dict[str, Any]) -> Dict[str, Any]:
                 'languages': language_policies
             }
 
-    # Filter discovery_index by active_consciousness
+    # Filter discovery_index by active_consciousness using explicit CA mapping
     active_ca_types = manifest.get('active_consciousness', [])
-    if active_ca_types and 'discovery_index' in manifest:
+    if active_ca_types and 'discovery_index' in manifest and 'consciousness_artifacts' in manifest:
         discovery_index = manifest['discovery_index']
-        filtered_discovery = {}
+        ca_types = manifest['consciousness_artifacts'].get('types', {})
 
-        # Check each discovery key against active CA types
-        for key, value in discovery_index.items():
-            # Match if key relates to any active CA type (bidirectional substring match)
-            # Handles singular/plural variations: "reflection" ↔ "reflections"
-            if any(ca_type in key.lower() or key.lower() in ca_type for ca_type in active_ca_types):
-                filtered_discovery[key] = value
+        # Collect all discovery_keys for active CA types
+        active_discovery_keys = set()
+        for ca_type in active_ca_types:
+            if ca_type in ca_types:
+                active_discovery_keys.update(ca_types[ca_type].get('discovery_keys', []))
+
+        # Filter discovery_index to only active keys
+        filtered_discovery = {k: v for k, v in discovery_index.items() if k in active_discovery_keys}
 
         if filtered_discovery:
             filtered['discovery_index'] = filtered_discovery
@@ -260,28 +262,6 @@ def format_manifest_awareness() -> str:
     Returns:
         Plain text awareness message (<500 tokens, for <system-reminder> tags)
     """
-    # CA emoji mapping (from Phase 3 CLI)
-    CA_EMOJIS = {
-        'observations': '🔬',
-        'experiments': '🧪',
-        'reports': '📊',
-        'reflections': '💭',
-        'checkpoints': '🔖',
-        'roadmaps': '🗺️',
-        'emotions': '❤️'
-    }
-
-    # CA descriptions for display
-    CA_DESCRIPTIONS = {
-        'observations': 'Technical discoveries and insights',
-        'experiments': 'Controlled testing and validation',
-        'reports': 'Project completion summaries',
-        'reflections': 'Philosophical growth synthesis',
-        'checkpoints': 'Strategic state preservation',
-        'roadmaps': 'Multi-phase planning documents',
-        'emotions': 'Emotional expression and processing'
-    }
-
     try:
         # Load merged+filtered manifest
         manifest = load_merged_manifest()
@@ -315,24 +295,20 @@ def format_manifest_awareness() -> str:
                 lines.append(f"- {pattern}: {consciousness}")
             lines.append("")
 
-        # Active CA types section
-        discovery_index = filtered_manifest.get('discovery_index', {})
-        if discovery_index:
-            lines.append("Active CA Types:")
-            # Sort by key for consistent display
-            for ca_key in sorted(discovery_index.keys()):
-                # Extract CA type from key (e.g., "observations_dir" -> "observations")
-                ca_type = None
-                for known_type in CA_EMOJIS.keys():
-                    if known_type in ca_key.lower():
-                        ca_type = known_type
-                        break
+        # Active CA types section - use consciousness_artifacts mapping
+        active_ca_types = filtered_manifest.get('active_consciousness', [])
+        ca_types_def = manifest.get('consciousness_artifacts', {}).get('types', {})
 
-                if ca_type:
-                    emoji = CA_EMOJIS.get(ca_type, '📄')
-                    desc = CA_DESCRIPTIONS.get(ca_type, 'Consciousness artifact')
-                    # CRITICAL: Two spaces after emoji to prevent overlap
-                    lines.append(f"{emoji}  {ca_type} - {desc}")
+        if active_ca_types and ca_types_def:
+            lines.append("Active CA Types:")
+            # Display active types in sorted order
+            for ca_type in sorted(active_ca_types):
+                if ca_type in ca_types_def:
+                    ca_def = ca_types_def[ca_type]
+                    emoji = ca_def.get('emoji', '📄')
+                    desc = ca_def.get('description', 'Consciousness artifact')
+                    # Emoji already includes extra space for roadmaps/emotions in manifest
+                    lines.append(f"{emoji} {ca_type} - {desc}")
             lines.append("")
 
         # CLI commands section
