@@ -184,18 +184,20 @@ class ConsciousnessConfig:
             if agent:
                 return agent
 
-        # Host context - read from .macf/config.json
+        # Host context - read from .maceff/config.json
         if self._is_host():
-            config_file = Path.cwd() / '.macf' / 'config.json'
-            if config_file.exists():
-                try:
-                    with open(config_file) as f:
-                        config = json.load(f)
-                        moniker = config.get('agent_identity', {}).get('moniker')
-                        if moniker:
-                            return moniker
-                except Exception:
-                    pass  # Fall through to fallback
+            project_root = self._find_project_root()
+            if project_root:
+                config_file = project_root / '.maceff' / 'config.json'
+                if config_file.exists():
+                    try:
+                        with open(config_file) as f:
+                            config = json.load(f)
+                            moniker = config.get('agent_identity', {}).get('moniker')
+                            if moniker:
+                                return moniker
+                    except Exception:
+                        pass  # Fall through to fallback
 
         # Fallback - use unknown_agent
         return 'unknown_agent'

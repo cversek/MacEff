@@ -141,6 +141,34 @@ def parse_breadcrumb(breadcrumb: str) -> Optional[Dict[str, Any]]:
     except Exception:
         return None
 
+def _find_possible_agent_ids(session_id: str) -> list:
+    """
+    Find all possible agent_id values by scanning /tmp/macf/ for session directories.
+
+    Args:
+        session_id: Session ID to search for
+
+    Returns:
+        List of agent_id strings that have this session (most likely first)
+    """
+    try:
+        tmp_macf = Path("/tmp/macf")
+        if not tmp_macf.exists():
+            return []
+
+        possible_ids = []
+        for agent_dir in tmp_macf.iterdir():
+            if not agent_dir.is_dir():
+                continue
+
+            session_dir = agent_dir / session_id
+            if session_dir.exists():
+                possible_ids.append(agent_dir.name)
+
+        return possible_ids
+    except Exception:
+        return []
+
 def extract_current_git_hash() -> Optional[str]:
     """
     Extract current git commit hash (short form).
@@ -181,7 +209,25 @@ def get_breadcrumb() -> str:
     try:
         # Auto-gather all 5 components
         session_id = get_current_session_id()
-        state = SessionOperationalState.load(session_id)
+
+        # Try loading state from all possible agent_id directories
+        # Hooks may run from different CWD, so try multiple possibilities
+        state = None
+        for agent_id_attempt in _find_possible_agent_ids(session_id):
+            state_attempt = SessionOperationalState.load(session_id, agent_id=agent_id_attempt)
+            # Check if this state has actual data (not default)
+            if state_attempt.current_dev_drv_prompt_uuid is not None:
+                state = state_attempt
+                break
+
+        # Fallback to auto-detection if no state found
+        if state is None:
+            try:
+                from .config import ConsciousnessConfig
+                agent_id = ConsciousnessConfig().agent_id
+            except Exception:
+                agent_id = None
+            state = SessionOperationalState.load(session_id, agent_id=agent_id)
 
         # Get cycle from agent_state.json (project-scoped persistence)
         project_root = find_project_root()

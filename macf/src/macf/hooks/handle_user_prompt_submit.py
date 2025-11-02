@@ -33,8 +33,16 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
         Dict with DEV_DRV started message + comprehensive awareness
     """
     try:
-        # Get current session
-        session_id = get_current_session_id()
+        # Parse stdin to get session_id from Claude Code (not filesystem discovery)
+        try:
+            hook_input = json.loads(stdin_json) if stdin_json else {}
+            session_id = hook_input.get('session_id')
+        except (json.JSONDecodeError, AttributeError):
+            session_id = None
+
+        # Fallback to filesystem discovery if stdin parsing failed
+        if not session_id:
+            session_id = get_current_session_id()
 
         # Start Development Drive tracking
         start_dev_drv(session_id)
