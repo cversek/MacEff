@@ -120,6 +120,7 @@ def save_agent_state(state: dict, agent_root: Optional[Path] = None) -> bool:
     except Exception:
         return False
 
+@dataclass
 class SessionOperationalState:
     """
     Operational state that persists across compaction.
