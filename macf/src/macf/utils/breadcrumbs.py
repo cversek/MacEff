@@ -21,8 +21,8 @@ def format_breadcrumb(
     """
     Format enhanced breadcrumb with self-describing components.
 
-    Full format (Cycle 61+): c_61/s_4107604e/p_b037708/t_1761360651/g_c3ec870
-    Minimal format: c_61/s_4107604e/p_b037708
+    Full format (Cycle 61+): c_61/s_4107604e/p_b0377089/t_1761360651/g_c3ec870
+    Minimal format: c_61/s_4107604e/p_b0377089
 
     Args:
         cycle: Cycle number (from agent_state.json)
@@ -37,9 +37,9 @@ def format_breadcrumb(
     # Session: first 8 chars
     session_short = session_id[:8] if session_id else "unknown"
 
-    # Prompt: last 7 chars (stable for entire DEV_DRV)
+    # Prompt: first 8 chars (easier searching, stable for entire DEV_DRV)
     if prompt_uuid:
-        prompt_short = prompt_uuid[-7:] if len(prompt_uuid) >= 7 else prompt_uuid
+        prompt_short = prompt_uuid[:8] if len(prompt_uuid) >= 8 else prompt_uuid
     else:
         prompt_short = "none"
 
@@ -67,18 +67,18 @@ def parse_breadcrumb(breadcrumb: str) -> Optional[Dict[str, Any]]:
     Supports both old (C60/session/prompt) and new (c_61/s_session/p_prompt/t_time/g_hash) formats.
 
     Args:
-        breadcrumb: Breadcrumb string like "c_61/s_4107604e/p_ead030a/t_1761360651/g_c3ec870"
+        breadcrumb: Breadcrumb string like "c_61/s_4107604e/p_ead030a5/t_1761360651/g_c3ec870"
 
     Returns:
         Dict with keys: cycle, session_id, prompt_uuid, timestamp, git_hash
         Returns None if parsing fails
 
     Example:
-        >>> parse_breadcrumb("c_61/s_4107604e/p_ead030a/t_1761360651/g_c3ec870")
+        >>> parse_breadcrumb("c_61/s_4107604e/p_ead030a5/t_1761360651/g_c3ec870")
         {
             'cycle': 61,
             'session_id': '4107604e',
-            'prompt_uuid': 'ead030a',
+            'prompt_uuid': 'ead030a5',
             'timestamp': 1761360651,
             'git_hash': 'c3ec870'
         }
@@ -118,13 +118,14 @@ def parse_breadcrumb(breadcrumb: str) -> Optional[Dict[str, Any]]:
                 elif prefix == 'g':
                     result['git_hash'] = value if value != 'none' else None
 
-            # Old format without prefixes (C60/4107604e/ead030a)
+            # Old format without prefixes (C60/4107604e/ead030a or ead030a5)
             else:
                 if part.startswith('C') and part[1:].isdigit():
                     result['cycle'] = int(part[1:])
                 elif len(part) == 8 and not result.get('session_id'):
                     result['session_id'] = part
-                elif len(part) == 7 and not result.get('prompt_uuid'):
+                elif len(part) in (7, 8) and not result.get('prompt_uuid'):
+                    # Support both old 7-char and new 8-char formats
                     result['prompt_uuid'] = part
 
         # Validate required fields
@@ -199,12 +200,12 @@ def get_breadcrumb() -> str:
     Auto-gathers: cycle, session_id, prompt_uuid, current timestamp, git_hash.
 
     Returns:
-        Formatted breadcrumb like "c_64/s_4107604e/p_c7ad583/t_1761419389/g_abc1234"
+        Formatted breadcrumb like "c_64/s_4107604e/p_c7ad5830/t_1761419389/g_abc1234"
         Returns minimal breadcrumb on any failure (never crashes)
 
     Example:
         >>> breadcrumb = get_breadcrumb()
-        "c_64/s_4107604e/p_c7ad583/t_1761419389/g_b231846"
+        "c_64/s_4107604e/p_c7ad5830/t_1761419389/g_b231846"
     """
     try:
         # Auto-gather all 5 components
