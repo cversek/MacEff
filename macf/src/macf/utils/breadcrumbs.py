@@ -21,8 +21,8 @@ def format_breadcrumb(
     """
     Format enhanced breadcrumb with self-describing components.
 
-    Full format (Cycle 61+): c_61/s_4107604e/p_b0377089/t_1761360651/g_c3ec870
-    Minimal format: c_61/s_4107604e/p_b0377089
+    Full format (Cycle 61+): s_4107604e/c_61/g_c3ec870/p_b0377089/t_1761360651
+    Minimal format: s_4107604e/c_61/p_b0377089
 
     Args:
         cycle: Cycle number (from agent_state.json)
@@ -44,19 +44,22 @@ def format_breadcrumb(
         prompt_short = "none"
 
     # Build breadcrumb with self-describing prefixes
+    # Order: slow-changing → fast-changing (s/c/g/p/t)
     parts = [
-        f"c_{cycle}",
         f"s_{session_short}",
-        f"p_{prompt_short}"
+        f"c_{cycle}",
     ]
 
-    # Optional timestamp (unix epoch for TODO completion)
-    if completion_time is not None:
-        parts.append(f"t_{int(completion_time)}")
-
-    # Optional git hash
+    # Optional git hash (slow-changing, after cycle)
     if git_hash:
         parts.append(f"g_{git_hash}")
+
+    # Prompt UUID (work trigger)
+    parts.append(f"p_{prompt_short}")
+
+    # Optional timestamp (fastest-changing, last)
+    if completion_time is not None:
+        parts.append(f"t_{int(completion_time)}")
 
     return "/".join(parts)
 
@@ -67,14 +70,14 @@ def parse_breadcrumb(breadcrumb: str) -> Optional[Dict[str, Any]]:
     Supports both old (C60/session/prompt) and new (c_61/s_session/p_prompt/t_time/g_hash) formats.
 
     Args:
-        breadcrumb: Breadcrumb string like "c_61/s_4107604e/p_ead030a5/t_1761360651/g_c3ec870"
+        breadcrumb: Breadcrumb string like "s_4107604e/c_61/g_c3ec870/p_ead030a5/t_1761360651"
 
     Returns:
         Dict with keys: cycle, session_id, prompt_uuid, timestamp, git_hash
         Returns None if parsing fails
 
     Example:
-        >>> parse_breadcrumb("c_61/s_4107604e/p_ead030a5/t_1761360651/g_c3ec870")
+        >>> parse_breadcrumb("s_4107604e/c_61/g_c3ec870/p_ead030a5/t_1761360651")
         {
             'cycle': 61,
             'session_id': '4107604e',
@@ -200,12 +203,12 @@ def get_breadcrumb() -> str:
     Auto-gathers: cycle, session_id, prompt_uuid, current timestamp, git_hash.
 
     Returns:
-        Formatted breadcrumb like "c_64/s_4107604e/p_c7ad5830/t_1761419389/g_abc1234"
+        Formatted breadcrumb like "s_4107604e/c_64/g_abc1234/p_c7ad5830/t_1761419389"
         Returns minimal breadcrumb on any failure (never crashes)
 
     Example:
         >>> breadcrumb = get_breadcrumb()
-        "c_64/s_4107604e/p_c7ad5830/t_1761419389/g_b231846"
+        "s_4107604e/c_64/g_b231846/p_c7ad5830/t_1761419389"
     """
     try:
         # Auto-gather all 5 components
@@ -252,4 +255,4 @@ def get_breadcrumb() -> str:
         )
     except Exception:
         # Safe fallback - never crash hooks
-        return "c_1/s_unknown/p_none"
+        return "s_unknown/c_1/p_none"
