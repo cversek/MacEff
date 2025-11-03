@@ -254,6 +254,9 @@ Session Context:
 
     except Exception as e:
         # Log error and fail gracefully
+        import traceback
+        error_details = traceback.format_exc()
+
         log_hook_event({
             "hook_name": "session_start",
             "event_type": "HOOK_ERROR",
@@ -262,4 +265,8 @@ Session Context:
             "error_type": type(e).__name__
         })
 
-        return {"continue": True}
+        # Return error in systemMessage so user can see it
+        return {
+            "continue": True,
+            "systemMessage": f"⚠️ SessionStart hook error: {type(e).__name__}: {str(e)}\n\nCheck logs: macf_tools hooks logs\n\nFull traceback:\n{error_details}"
+        }

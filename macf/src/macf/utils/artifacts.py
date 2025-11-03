@@ -65,10 +65,13 @@ def get_latest_consciousness_artifacts(
         # Auto-detect agent_root if needed
         if agent_root is None:
             try:
-                from .config import ConsciousnessConfig
+                from macf.config import ConsciousnessConfig
                 config = ConsciousnessConfig()
                 agent_root = config.agent_root
-            except Exception:
+            except Exception as e:
+                # Log error to stderr for debugging (hooks can see this)
+                import sys
+                print(f"⚠️ artifact discovery: ConsciousnessConfig failed: {type(e).__name__}: {e}", file=sys.stderr)
                 return ConsciousnessArtifacts()
 
         # Ensure agent_root is a Path
@@ -77,9 +80,9 @@ def get_latest_consciousness_artifacts(
         if not agent_root.exists():
             return ConsciousnessArtifacts()
 
-        # Agent artifacts live under agent/ subdirectory
-        public_dir = agent_root / "agent" / "public"
-        private_dir = agent_root / "agent" / "private"
+        # agent_root already points to agent/ directory from ConsciousnessConfig
+        public_dir = agent_root / "public"
+        private_dir = agent_root / "private"
 
         # Discover artifacts with safe empty list fallbacks
         # Reflections and checkpoints are private (consciousness preservation)
@@ -118,7 +121,9 @@ def get_latest_consciousness_artifacts(
             checkpoints=checkpoints,
             roadmaps=roadmaps
         )
-    except Exception:
-        # NEVER crash - return empty artifacts
+    except Exception as e:
+        # NEVER crash - return empty artifacts, but log the error
+        import sys
+        print(f"⚠️ artifact discovery: unexpected error: {type(e).__name__}: {e}", file=sys.stderr)
         return ConsciousnessArtifacts()
 
