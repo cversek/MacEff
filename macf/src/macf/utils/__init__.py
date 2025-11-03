@@ -29,11 +29,8 @@ from .artifacts import (
 )
 from .cycles import (
     detect_auto_mode,
-    get_current_cycle_project,
-    increment_cycle_project,
-    start_new_cycle,
-    get_current_cycle_number,
-    get_cycle_stats,
+    get_agent_cycle_number,
+    increment_agent_cycle,
 )
 from .drives import (
     start_dev_drv,
@@ -116,10 +113,8 @@ __all__ = [
     "get_agent_state_path",
     "get_boundary_guidance",
     "get_breadcrumb",
-    "get_current_cycle_number",
-    "get_current_cycle_project",
+    "get_agent_cycle_number",
     "get_current_session_id",
-    "get_cycle_stats",
     "get_deleg_drv_stats",
     "get_delegations_this_drive",
     "get_dev_drv_stats",
@@ -134,7 +129,7 @@ __all__ = [
     "get_session_transcript_path",
     "get_temporal_context",
     "get_token_info",
-    "increment_cycle_project",
+    "increment_agent_cycle",
     "load_agent_state",
     "load_merged_manifest",
     "parse_breadcrumb",
@@ -144,6 +139,5 @@ __all__ = [
     "save_agent_state",
     "start_deleg_drv",
     "start_dev_drv",
-    "start_new_cycle",
     "write_json_safely",
 ]

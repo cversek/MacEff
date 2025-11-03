@@ -17,8 +17,8 @@ from macf.utils import (
     get_agent_state_path,
     load_agent_state,
     save_agent_state,
-    get_current_cycle_project,
-    increment_cycle_project,
+    get_agent_cycle_number,
+    increment_agent_cycle,
     detect_session_migration,
 )
 
@@ -64,7 +64,7 @@ class TestProjectStateCore:
         save_agent_state(initial_state, agent_root)
 
         # Increment cycle
-        new_cycle = increment_cycle_project('new-session', agent_root)
+        new_cycle = increment_agent_cycle('new-session', agent_root)
         assert new_cycle == 11
 
         # Verify state updated correctly
@@ -108,8 +108,8 @@ class TestProjectStateBackwardCompatibility:
         state = load_agent_state(agent_root)
         assert state == {}
 
-        # get_current_cycle should return 1
-        cycle = get_current_cycle_project(agent_root)
+        # get_agent_cycle_number should return 1
+        cycle = get_agent_cycle_number(agent_root)
         assert cycle == 1
 
         # detect_session_migration should return no migration
@@ -122,15 +122,15 @@ class TestProjectStateBackwardCompatibility:
         agent_root = tmp_path / "project"
         agent_root.mkdir()
 
-        # No project state exists yet
-        assert not (agent_root / ".maceff" / "project_state.json").exists()
+        # No agent state exists yet
+        assert not (agent_root / ".maceff" / "agent_state.json").exists()
 
         # Increment cycle on first run
-        new_cycle = increment_cycle_project('first-session', agent_root)
+        new_cycle = increment_agent_cycle('first-session', agent_root)
         assert new_cycle == 2  # Starts at 1, increments to 2
 
         # Verify state file created
-        assert (agent_root / ".maceff" / "project_state.json").exists()
+        assert (agent_root / ".maceff" / "agent_state.json").exists()
 
         # Verify state structure
         state = load_agent_state(agent_root)
@@ -153,7 +153,7 @@ class TestProjectStateBackwardCompatibility:
         result = save_agent_state(state, agent_root)
         assert result is True
         assert (agent_root / ".maceff").exists()
-        assert (agent_root / ".maceff" / "project_state.json").exists()
+        assert (agent_root / ".maceff" / "agent_state.json").exists()
 
 
 class TestProjectStateResilience:
@@ -167,7 +167,7 @@ class TestProjectStateResilience:
         maceff_dir.mkdir()
 
         # Write corrupted JSON
-        state_path = maceff_dir / "project_state.json"
+        state_path = maceff_dir / "agent_state.json"
         state_path.write_text("{ invalid json }")
 
         # Should return empty dict, not crash
@@ -175,7 +175,7 @@ class TestProjectStateResilience:
         assert state == {}
 
         # Other functions should handle gracefully
-        cycle = get_current_cycle_project(agent_root)
+        cycle = get_agent_cycle_number(agent_root)
         assert cycle == 1  # Default value
 
     def test_no_last_session_id_field(self, tmp_path):

@@ -58,18 +58,60 @@ def read_json_safely(path: Path) -> dict:
         pass
     return {}
 
-def get_agent_state_path(agent_root: Optional[Path] = None) -> Path:
+def get_session_state_path(session_id: str, agent_root: Optional[Path] = None) -> Path:
     """
-    Get path to .maceff/agent_state.json.
+    Get path to .maceff/sessions/{session_id}/session_state.json.
+
+    Co-locates session state with agent state in .maceff hierarchy.
+    Uses same environment-aware detection as agent state.
 
     Args:
-        agent_root: Project root (auto-detected if None)
+        session_id: Session identifier
+        agent_root: Agent root path (auto-detected if None)
 
     Returns:
-        Path to project state file
+        Path to session state file
     """
     if agent_root is None:
-        agent_root = find_project_root()
+        # Environment-aware detection (same logic as agent state)
+        if Path("/.dockerenv").exists():
+            # Container: Agent-scoped
+            agent_root = Path.home()
+        else:
+            # Host: Project-scoped
+            from .paths import find_project_root
+            agent_root = find_project_root()
+    else:
+        agent_root = Path(agent_root)
+
+    return agent_root / ".maceff" / "sessions" / session_id / "session_state.json"
+
+def get_agent_state_path(agent_root: Optional[Path] = None) -> Path:
+    """
+    Get path to .maceff/agent_state.json with environment-aware resolution.
+
+    Environment Detection:
+        Container (/.dockerenv exists): /home/{agent}/.maceff/agent_state.json
+            - Agent-scoped: Persists across multiple projects
+        Host (no /.dockerenv): {project_root}/.maceff/agent_state.json
+            - Project-scoped: Tied to specific project
+
+    Args:
+        agent_root: Agent root path (auto-detected if None)
+            Explicit path overrides environment detection
+
+    Returns:
+        Path to agent state file
+    """
+    if agent_root is None:
+        # Environment-aware detection
+        if Path("/.dockerenv").exists():
+            # Container: Agent-scoped (multi-project agent)
+            agent_root = Path.home()
+        else:
+            # Host: Project-scoped (single-project agent)
+            from .paths import find_project_root
+            agent_root = find_project_root()
     else:
         agent_root = Path(agent_root)
 
@@ -125,7 +167,9 @@ class SessionOperationalState:
     """
     Operational state that persists across compaction.
 
-    Stored in: /tmp/macf/{agent_id}/{session_id}/session_state.json
+    Stored in: .maceff/sessions/{session_id}/session_state.json
+        Container: /home/{agent}/.maceff/sessions/{session_id}/session_state.json
+        Host: {project_root}/.maceff/sessions/{session_id}/session_state.json
 
     This dataclass holds session-level operational configuration and state
     that should survive context compaction events.
@@ -155,17 +199,12 @@ class SessionOperationalState:
     deleg_drv_count: int = 0
     total_deleg_drv_duration: float = 0.0
 
-    # Cycle tracking (consciousness continuity unit)
-    current_cycle_number: int = 1  # 1-based, increments on compaction
-    cycle_started_at: float = field(default_factory=lambda: time.time())
-    cycles_completed: int = 0  # Total cycles finished (equivalent to compaction_count)
-
     # Delegation tracking within DEV_DRV (Phase 1F)
     delegations_this_drive: List[Dict[str, Any]] = field(default_factory=list)
 
     def save(self) -> bool:
         """
-        Atomically save state to session directory.
+        Atomically save state to .maceff/sessions/{session_id}/ directory.
 
         Returns:
             True if successful, False otherwise
@@ -174,17 +213,12 @@ class SessionOperationalState:
             # Update timestamp
             self.last_updated = time.time()
 
-            # Get session directory
-            session_dir = get_session_dir(
-                session_id=self.session_id,
-                agent_id=self.agent_id,
-                create=True
-            )
+            # Get session state path (environment-aware)
+            state_path = get_session_state_path(self.session_id)
 
-            if not session_dir:
-                return False
+            # Create directory if needed
+            state_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
 
-            state_path = session_dir / "session_state.json"
             return write_json_safely(state_path, asdict(self))
         except Exception:
             return False
@@ -192,17 +226,17 @@ class SessionOperationalState:
     @classmethod
     def load(cls, session_id: str, agent_id: Optional[str] = None) -> "SessionOperationalState":
         """
-        Load state from session directory, returning default instance on failure.
+        Load state from .maceff/sessions/{session_id}/, returning default instance on failure.
 
         Args:
             session_id: Session identifier
-            agent_id: Agent identifier (auto-detected if None)
+            agent_id: Agent identifier (auto-detected if None, used for default instance)
 
         Returns:
             SessionOperationalState instance (never crashes)
         """
         try:
-            # Auto-detect agent_id if needed
+            # Auto-detect agent_id if needed (for default instance)
             if not agent_id:
                 try:
                     from .config import ConsciousnessConfig
@@ -211,20 +245,14 @@ class SessionOperationalState:
                 except Exception:
                     agent_id = os.environ.get('MACEFF_USER') or os.environ.get('USER') or 'unknown_agent'
 
-            # Get session directory (don't create if loading)
-            session_dir = get_session_dir(
-                session_id=session_id,
-                agent_id=agent_id,
-                create=False
-            )
+            # Get session state path (environment-aware)
+            state_path = get_session_state_path(session_id)
 
-            if not session_dir:
-                return cls(session_id=session_id, agent_id=agent_id)
-
-            state_path = session_dir / "session_state.json"
+            # Read state if exists
             data = read_json_safely(state_path)
 
             if not data:
+                # Return default instance if file doesn't exist
                 return cls(session_id=session_id, agent_id=agent_id)
 
             # Restore from saved data
