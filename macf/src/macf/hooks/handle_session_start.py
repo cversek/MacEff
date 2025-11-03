@@ -29,7 +29,7 @@ from .recovery import format_consciousness_recovery_message
 from .logging import log_hook_event
 
 
-def run(stdin_json: str = "") -> Dict[str, Any]:
+def run(stdin_json: str = "", testing: bool = False) -> Dict[str, Any]:
     """
     Run SessionStart hook logic.
 
@@ -39,23 +39,17 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
     - Artifact discovery
     - Session state restoration
 
-    ⚠️  WARNING: SIDE EFFECTS - DO NOT CALL DIRECTLY FOR TESTING ⚠️
+    ⚠️  SIDE EFFECTS: This hook mutates project state on compaction detection
 
-    This hook MUTATES PROJECT STATE on every compaction detection:
-    - Increments cycle counter in .maceff/project_state.json
+    Side effects (skipped when testing=True):
+    - Increments cycle counter in .maceff/agent_state.json
     - Increments compaction count in session state
     - Updates session timestamps
 
-    Calling this hook directly (e.g., for testing) will cause:
-    - Cycle counter to increment incorrectly
-    - Project state corruption requiring manual correction
-    - Confusion about which cycle you're actually in
-
-    For testing: Mock the side-effect functions or use unit tests that
-    isolate the detection logic from the mutation logic.
-
     Args:
         stdin_json: JSON string from stdin (Claude Code hook input)
+        testing: If True, skip side-effects (state mutations). Use when testing
+                 hook logic without corrupting project state.
 
     Returns:
         Dict ready for JSON output with compaction recovery if detected
@@ -124,12 +118,18 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
             # Load session state
             state = SessionOperationalState.load(session_id)
 
-            # Increment compaction count
-            state.compaction_count += 1
-            state.save()
+            # Side-effects: Skip if testing mode
+            if not testing:
+                # Increment compaction count
+                state.compaction_count += 1
+                state.save()
 
-            # Increment cycle number in agent state (survives session boundaries)
-            cycle_number = increment_agent_cycle(session_id)
+                # Increment cycle number in agent state (survives session boundaries)
+                cycle_number = increment_agent_cycle(session_id)
+            else:
+                # Testing mode: Use current cycle without incrementing
+                agent_state = load_agent_state()
+                cycle_number = agent_state.get('current_cycle_number', 1)
 
             # Detect AUTO_MODE
             auto_mode, source, confidence = detect_auto_mode(session_id)
@@ -208,8 +208,10 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
             gap_display = format_duration(time_gap_seconds)
 
         # Update session state timestamp (for within-session tracking)
-        state.last_updated = current_time
-        state.save()
+        # Skip if testing mode to avoid side-effects
+        if not testing:
+            state.last_updated = current_time
+            state.save()
 
         # Get token context
         token_info = get_token_info(session_id)
