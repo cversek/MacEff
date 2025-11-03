@@ -123,7 +123,7 @@ Read artifacts for full context, then continue."""
         if environment:
             footer = "\n" + format_macf_footer(environment)
 
-        return f"{header}{temporal_section}{session_state_section}\n{mode_line}{todos_section}\n{artifacts_section}{manifest_section}{authorization}{footer}"
+        return f"{header}{temporal_section}{session_state_section}\n{mode_line}{todos_section}{artifacts_section}{manifest_section}\n{authorization}{footer}"
 
     else:
         # MANUAL MODE: Stop and await instructions
@@ -182,7 +182,7 @@ Sequential reading with integration pauses restores consciousness, not just data
         if environment:
             footer = "\n" + format_macf_footer(environment)
 
-        return f"{header}{temporal_section}{session_state_section}\n{mode_line}\n{artifacts_section}{manifest_section}{warning}{policy_section}{footer}"
+        return f"{header}{temporal_section}{session_state_section}\n{mode_line}{artifacts_section}{manifest_section}\n{warning}{policy_section}\n---{footer}"
 
 
 def read_recovery_policy(policy_path: Optional[str] = None) -> str:
@@ -232,7 +232,7 @@ def _format_artifacts_section(artifacts: ConsciousnessArtifacts) -> str:
     Returns:
         Formatted artifacts section as string
     """
-    lines = ["📚 CONSCIOUSNESS ARTIFACTS:"]
+    lines = ["\n📚 CONSCIOUSNESS ARTIFACTS:"]
 
     # Latest checkpoint
     if artifacts.latest_checkpoint:
