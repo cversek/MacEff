@@ -3,6 +3,37 @@ set -euo pipefail
 
 # maceff-init: Initialize .maceff/ structure for MacEff development
 # Creates framework/ (runtime content) and config/ (build-time settings)
+#
+# Usage:
+#   maceff-init                    # Interactive mode (prompts before overwriting)
+#   maceff-init --force-overwrite  # Non-interactive (backs up and overwrites existing .maceff/)
+
+FORCE_OVERWRITE=false
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --force-overwrite)
+            FORCE_OVERWRITE=true
+            shift
+            ;;
+        -h|--help)
+            echo "Usage: maceff-init [--force-overwrite]"
+            echo ""
+            echo "Initialize .maceff/ directory structure for MacEff development."
+            echo ""
+            echo "Options:"
+            echo "  --force-overwrite    Backup existing .maceff/ and create fresh (non-interactive)"
+            echo "  -h, --help           Show this help message"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Usage: maceff-init [--force-overwrite]"
+            exit 1
+            ;;
+    esac
+done
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -39,29 +70,29 @@ error() {
 
 # Check if .maceff/ already exists
 if [[ -d "$MACEFF_DIR" ]]; then
-    warn "Directory .maceff/ already exists!"
-    echo ""
-    echo "Options:"
-    echo "  1) Backup existing and create fresh (recommended)"
-    echo "  2) Exit and manually inspect"
-    echo ""
-    read -p "Enter choice (1 or 2): " choice
-
-    case "$choice" in
-        1)
-            BACKUP_DIR="${MACEFF_DIR}.backup-$(date +%Y%m%d-%H%M%S)"
-            log "Backing up to: $BACKUP_DIR"
-            mv "$MACEFF_DIR" "$BACKUP_DIR"
-            ;;
-        2)
-            log "Exiting. Please inspect .maceff/ manually."
-            exit 0
-            ;;
-        *)
-            error "Invalid choice. Exiting."
-            exit 1
-            ;;
-    esac
+    if [[ "$FORCE_OVERWRITE" == "true" ]]; then
+        # Non-interactive: backup and proceed
+        BACKUP_DIR="${MACEFF_DIR}.backup-$(date +%Y%m%d-%H%M%S)"
+        warn "Directory .maceff/ already exists! (--force-overwrite specified)"
+        log "Backing up to: $BACKUP_DIR"
+        mv "$MACEFF_DIR" "$BACKUP_DIR"
+    else
+        # Interactive: require explicit flag for safety
+        error "Directory .maceff/ already exists!"
+        echo ""
+        echo "⚠️  WARNING: Overwriting will backup existing .maceff/ but could cause data loss"
+        echo "    if you have uncommitted changes or custom configurations."
+        echo ""
+        echo "Safer alternatives:"
+        echo "  1. Backup manually: mv MacEff/.maceff MacEff/.maceff.backup"
+        echo "  2. Inspect contents: ls -la MacEff/.maceff/"
+        echo "  3. Remove if safe:  rm -rf MacEff/.maceff/"
+        echo ""
+        echo "To proceed with automatic backup, run:"
+        echo "  maceff-init --force-overwrite"
+        echo ""
+        exit 1
+    fi
 fi
 
 # Create directory structure
