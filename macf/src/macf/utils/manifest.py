@@ -254,7 +254,13 @@ def filter_active_policies(manifest: Dict[str, Any]) -> Dict[str, Any]:
 
 def format_manifest_awareness() -> str:
     """
-    Format dynamic manifest awareness for SessionStart hook injection.
+    Format directive manifest awareness for SessionStart hook injection.
+
+    Transforms passive catalog into active enforcement protocol:
+    - Emphasizes policies as project priorities (not suggestions)
+    - "Policies persist, memory doesn't" reminder
+    - Pattern-to-action mapping with immediate CLI commands
+    - BEFORE ANY WORK directive for mandatory policies
 
     Used on: compaction recovery + brand new session
     Skipped on: session resume
@@ -275,43 +281,65 @@ def format_manifest_awareness() -> str:
         active_layers = filtered_manifest.get('active_layers', [])
         active_languages = filtered_manifest.get('active_languages', [])
 
-        # Build output sections
-        lines = ["📋 POLICY MANIFEST AWARENESS", ""]
+        # Build output sections with directive tone
+        lines = [
+            "📋 POLICY MANIFEST AWARENESS",
+            "",
+            f"Version: {version}",
+            f"Active Layers: {', '.join(active_layers) if active_layers else 'none'}",
+            f"Active Languages: {', '.join(active_languages) if active_languages else 'none'}",
+            ""
+        ]
 
-        # Configuration section
-        lines.append(f"Version: {version}")
-        lines.append(f"Active Layers: {', '.join(active_layers) if active_layers else 'none'}")
-        lines.append(f"Active Languages: {', '.join(active_languages) if active_languages else 'none'}")
+        # CRITICAL: Policies persist, memory doesn't
+        lines.append("⚠️ CRITICAL: Policies persist across compaction. Your memory doesn't.")
+        lines.append("These are PROJECT PRIORITIES configured by the user, not suggestions.")
         lines.append("")
 
-        # Consciousness patterns section
+        # BEFORE ANY WORK directive
+        mandatory_policies = filtered_manifest.get('mandatory_policies', {}).get('policies', [])
+        if mandatory_policies:
+            lines.append("🔴 BEFORE ANY WORK: Check mandatory policies")
+            lines.append("")
+            for policy in mandatory_policies[:4]:  # Show top 4 for token efficiency
+                name = policy.get('name', 'unknown')
+                short_name = policy.get('short_name', '')
+                desc = policy.get('description', '')
+                lines.append(f"  {short_name}: {desc}")
+                lines.append(f"      → macf_tools policy search {name.split('_')[0]}")
+            lines.append("")
+
+        # Pattern-to-action mapping (directive, not catalog)
         consciousness_patterns = filtered_manifest.get('consciousness_patterns', {})
         triggers = consciousness_patterns.get('triggers', [])
         if triggers:
-            lines.append("Consciousness Patterns Active:")
-            for trigger in triggers:
-                pattern = trigger.get('pattern', 'unknown')
+            lines.append("🔴 WHEN YOU FEEL THESE PATTERNS → ACT IMMEDIATELY:")
+            lines.append("")
+            for trigger in triggers[:6]:  # Show top 6 for token efficiency
                 consciousness = trigger.get('consciousness', '')
-                lines.append(f"- {pattern}: {consciousness}")
+                likely_policies = trigger.get('likely_policies', [])
+                search_terms = trigger.get('search_terms', [])
+
+                lines.append(f'"{consciousness}"')
+                if likely_policies:
+                    policy_name = likely_policies[0]  # First policy is most relevant
+                    lines.append(f"   → macf_tools policy search {policy_name.split('/')[-1].replace('_', ' ')}")
+                elif search_terms:
+                    lines.append(f"   → macf_tools policy search {search_terms[0]}")
+                lines.append("")
+
+        # Project enforcement section (if configured)
+        if active_layers or active_languages:
+            lines.append("🔴 PROJECT ENFORCEMENT:")
+            if active_layers:
+                layers_str = ', '.join(active_layers)
+                lines.append(f"   Development layers MANDATORY: {layers_str}")
+            if active_languages:
+                langs_str = ', '.join(active_languages)
+                lines.append(f"   Language standards MANDATORY: {langs_str}")
             lines.append("")
 
-        # Active CA types section - use consciousness_artifacts mapping
-        active_ca_types = filtered_manifest.get('active_consciousness', [])
-        ca_types_def = manifest.get('consciousness_artifacts', {}).get('types', {})
-
-        if active_ca_types and ca_types_def:
-            lines.append("Active CA Types:")
-            # Display active types in sorted order
-            for ca_type in sorted(active_ca_types):
-                if ca_type in ca_types_def:
-                    ca_def = ca_types_def[ca_type]
-                    emoji = ca_def.get('emoji', '📄')
-                    desc = ca_def.get('description', 'Consciousness artifact')
-                    # Emoji already includes extra space for roadmaps/emotions in manifest
-                    lines.append(f"{emoji} {ca_type} - {desc}")
-            lines.append("")
-
-        # CLI commands section
+        # CLI commands for discovery
         lines.append("CLI Commands for Discovery:")
         lines.append("- macf_tools policy manifest --format=summary")
         lines.append("- macf_tools policy search <keyword>")
