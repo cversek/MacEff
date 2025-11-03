@@ -233,11 +233,9 @@ def get_breadcrumb() -> str:
                 agent_id = None
             state = SessionOperationalState.load(session_id, agent_id=agent_id)
 
-        # Get cycle from agent_state.json (project-scoped persistence)
-        project_root = find_project_root()
-        agent_state_path = project_root / ".maceff" / "agent_state.json"
-        agent_state = read_json_safely(agent_state_path)
-        cycle_num = agent_state.get("current_cycle_number", 1)
+        # Get cycle from agent_state.json (agent-scoped persistence)
+        from .cycles import get_agent_cycle_number
+        cycle_num = get_agent_cycle_number()
 
         # Get current timestamp
         current_time = int(time.time())

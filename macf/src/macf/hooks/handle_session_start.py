@@ -17,7 +17,7 @@ from ..utils import (
     format_duration,
     format_macf_footer,
     load_agent_state,
-    increment_cycle_project,
+    increment_agent_cycle,
     get_token_info,
     format_token_context_full,
     get_boundary_guidance,
@@ -128,8 +128,8 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
             state.compaction_count += 1
             state.save()
 
-            # Increment cycle number in project state (survives session boundaries)
-            cycle_number = increment_cycle_project(session_id)
+            # Increment cycle number in agent state (survives session boundaries)
+            cycle_number = increment_agent_cycle(session_id)
 
             # Detect AUTO_MODE
             auto_mode, source, confidence = detect_auto_mode(session_id)

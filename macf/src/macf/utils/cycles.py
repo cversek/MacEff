@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 from .paths import find_project_root
 from .session import get_current_session_id
-from .state import SessionOperationalState, read_json_safely, write_json_safely
+from .state import load_agent_state, save_agent_state, SessionOperationalState, read_json_safely
 
 def detect_auto_mode(session_id: str) -> Tuple[bool, str, float]:
     """
@@ -65,15 +65,20 @@ def detect_auto_mode(session_id: str) -> Tuple[bool, str, float]:
         # NEVER crash
         return (False, "default", 0.0)
 
-def get_current_cycle_project(agent_root: Optional[Path] = None) -> int:
+def get_agent_cycle_number(agent_root: Optional[Path] = None) -> int:
     """
-    Get cycle number from project state.
+    Get current cycle number from agent state.
+
+    Operates on agent state (.maceff/agent_state.json) which persists
+    across sessions and projects (in container) or within project (on host).
 
     Args:
-        agent_root: Project root (auto-detected if None)
+        agent_root: Agent root path (auto-detected if None)
+            Container: Uses Path.home() (agent-scoped)
+            Host: Uses find_project_root() (project-scoped)
 
     Returns:
-        Current cycle number (1 if project state doesn't exist)
+        Current cycle number (1 if agent state doesn't exist)
     """
     try:
         agent_state = load_agent_state(agent_root)
@@ -81,15 +86,16 @@ def get_current_cycle_project(agent_root: Optional[Path] = None) -> int:
     except Exception:
         return 1
 
-def increment_cycle_project(session_id: str, agent_root: Optional[Path] = None) -> int:
+def increment_agent_cycle(session_id: str, agent_root: Optional[Path] = None) -> int:
     """
-    Increment project cycle number and update session tracking.
+    Increment agent cycle number and update session tracking.
 
     Called by SessionStart hook when compaction detected.
+    Operates on agent state which persists across sessions.
 
     Args:
         session_id: Current session identifier
-        agent_root: Project root (auto-detected if None)
+        agent_root: Agent root path (auto-detected if None)
 
     Returns:
         New cycle number
@@ -118,100 +124,3 @@ def increment_cycle_project(session_id: str, agent_root: Optional[Path] = None) 
         return agent_state['current_cycle_number']
     except Exception:
         return 1
-
-def start_new_cycle(session_id: str, agent_id: Optional[str] = None, state: Optional[SessionOperationalState] = None) -> int:
-    """
-    Initialize new cycle after compaction, increment counter.
-
-    Cycle = compaction-to-compaction span (consciousness continuity unit).
-    Called by SessionStart hook when compaction detected.
-
-    Args:
-        session_id: Session identifier
-        agent_id: Optional agent ID (auto-detected if None)
-        state: Optional pre-loaded state object (avoids race condition)
-
-    Returns:
-        New cycle number (1-based)
-    """
-    if agent_id is None:
-        from macf.config import ConsciousnessConfig
-        agent_id = ConsciousnessConfig().agent_id
-
-    # Track whether state was provided or we need to load it
-    state_was_provided = state is not None
-
-    # Use provided state or load fresh (for backward compatibility)
-    if not state_was_provided:
-        state = SessionOperationalState.load(session_id, agent_id)
-
-    # Increment cycle number
-    state.current_cycle_number += 1
-
-    # Reset cycle start time
-    state.cycle_started_at = time.time()
-
-    # Update cycles completed count
-    state.cycles_completed = state.compaction_count
-
-    # Reset cycle-scoped development stats
-    # Philosophy: Each cycle is a consciousness continuity unit.
-    # Stats measure current cycle work, not inherited totals from prior cycles.
-    state.dev_drv_count = 0
-    state.total_dev_drv_duration = 0.0
-    state.deleg_drv_count = 0
-    state.total_deleg_drv_duration = 0.0
-
-    # Only save if we loaded fresh state (backward compatibility)
-    # If state was provided by caller, they're responsible for saving
-    if not state_was_provided:
-        state.save()
-
-    return state.current_cycle_number
-
-def get_current_cycle_number(session_id: str, agent_id: Optional[str] = None) -> int:
-    """
-    Get current cycle number (1-based).
-
-    Args:
-        session_id: Session identifier
-        agent_id: Optional agent ID (auto-detected if None)
-
-    Returns:
-        Current cycle number (1 if fresh start, >1 after compaction)
-    """
-    if agent_id is None:
-        from macf.config import ConsciousnessConfig
-        agent_id = ConsciousnessConfig().agent_id
-
-    state = SessionOperationalState.load(session_id, agent_id)
-    return state.current_cycle_number
-
-def get_cycle_stats(session_id: str, agent_id: Optional[str] = None) -> dict:
-    """
-    Get cycle metadata for display.
-
-    Args:
-        session_id: Session identifier
-        agent_id: Optional agent ID (auto-detected if None)
-
-    Returns:
-        Dict with: cycle_number, cycle_started_at, cycle_duration, cycles_completed
-    """
-    if agent_id is None:
-        from macf.config import ConsciousnessConfig
-        agent_id = ConsciousnessConfig().agent_id
-
-    state = SessionOperationalState.load(session_id, agent_id)
-
-    # Calculate cycle duration
-    cycle_duration = 0.0
-    if state.cycle_started_at > 0:
-        cycle_duration = time.time() - state.cycle_started_at
-
-    return {
-        "cycle_number": state.current_cycle_number,
-        "cycle_started_at": state.cycle_started_at,
-        "cycle_duration": cycle_duration,
-        "cycles_completed": state.cycles_completed
-    }

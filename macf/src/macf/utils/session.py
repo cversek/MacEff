@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Optional
 from .paths import find_project_root
+from .state import load_agent_state
 
 def get_current_session_id() -> str:
     """Get current session ID from newest JSONL file.
