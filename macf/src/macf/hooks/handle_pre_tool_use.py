@@ -51,7 +51,7 @@ def _is_bare_cd_command(command: str) -> bool:
     return False
 
 
-def run(stdin_json: str = "") -> Dict[str, Any]:
+def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
     """
     Run PreToolUse hook logic.
 
@@ -61,8 +61,15 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
     - Bash: Truncate long commands
     - Minimal timestamp for high-frequency hook
 
+    Side effects (ONLY when testing=False):
+    - Starts DELEG_DRV tracking when Task tool invoked
+    - Records delegation start timestamp in session state
+
     Args:
         stdin_json: JSON string from stdin (Claude Code hook input)
+        testing: If True (DEFAULT), skip side-effects (read-only safe mode).
+                 If False, apply mutations (production only).
+        **kwargs: Additional parameters for future extensibility
 
     Returns:
         Dict with tool awareness message
@@ -86,9 +93,10 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
 
         # Enhanced context based on tool type
         if tool_name == "Task":
-            # DELEG_DRV start tracking
+            # DELEG_DRV start tracking (skip if testing)
             subagent_type = tool_input.get("subagent_type", "unknown")
-            start_deleg_drv(session_id)
+            if not testing:
+                start_deleg_drv(session_id)
             message_parts.append(f"⚡ Delegating to: {subagent_type}")
 
         elif tool_name in ["Read", "Write", "Edit"]:

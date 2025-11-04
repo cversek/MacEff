@@ -29,7 +29,7 @@ from .recovery import format_consciousness_recovery_message
 from .logging import log_hook_event
 
 
-def run(stdin_json: str = "", testing: bool = False) -> Dict[str, Any]:
+def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
     """
     Run SessionStart hook logic.
 
@@ -41,15 +41,16 @@ def run(stdin_json: str = "", testing: bool = False) -> Dict[str, Any]:
 
     ⚠️  SIDE EFFECTS: This hook mutates project state on compaction detection
 
-    Side effects (skipped when testing=True):
+    Side effects (ONLY when testing=False):
     - Increments cycle counter in .maceff/agent_state.json
     - Increments compaction count in session state
     - Updates session timestamps
 
     Args:
         stdin_json: JSON string from stdin (Claude Code hook input)
-        testing: If True, skip side-effects (state mutations). Use when testing
-                 hook logic without corrupting project state.
+        testing: If True (DEFAULT), skip side-effects (read-only safe mode).
+                 If False, apply mutations (production only).
+        **kwargs: Additional parameters for future extensibility
 
     Returns:
         Dict ready for JSON output with compaction recovery if detected

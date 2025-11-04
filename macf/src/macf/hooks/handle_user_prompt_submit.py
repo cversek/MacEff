@@ -20,14 +20,22 @@ from ..utils import (
 )
 
 
-def run(stdin_json: str = "") -> Dict[str, Any]:
+def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
     """
     Run UserPromptSubmit hook logic.
 
     Tracks DEV_DRV start and injects temporal + token/CLUAC awareness.
 
+    Side effects (ONLY when testing=False):
+    - Starts DEV_DRV tracking in session state
+    - Records prompt UUID and start timestamp
+    - Updates session operational state
+
     Args:
         stdin_json: JSON string from stdin (Claude Code hook input)
+        testing: If True (DEFAULT), skip side-effects (read-only safe mode).
+                 If False, apply mutations (production only).
+        **kwargs: Additional parameters for future extensibility
 
     Returns:
         Dict with DEV_DRV started message + comprehensive awareness
@@ -50,8 +58,9 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
         from ..utils.session import get_last_user_prompt_uuid
         current_prompt_uuid = get_last_user_prompt_uuid(session_id)
 
-        # Start Development Drive tracking with current UUID
-        start_dev_drv(session_id, prompt_uuid=current_prompt_uuid)
+        # Start Development Drive tracking with current UUID (skip if testing)
+        if not testing:
+            start_dev_drv(session_id, prompt_uuid=current_prompt_uuid)
 
         # Get breadcrumb
         breadcrumb = get_breadcrumb()

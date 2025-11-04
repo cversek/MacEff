@@ -24,29 +24,22 @@ from ..utils import (
 )
 
 
-def run(stdin_json: str = "") -> Dict[str, Any]:
+def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
     """
     Run Stop hook logic.
 
     Tracks DEV_DRV completion and displays stats.
 
-    ⚠️  WARNING: SIDE EFFECTS - DO NOT CALL DIRECTLY FOR TESTING ⚠️
-
-    This hook MUTATES SESSION AND PROJECT STATE on every execution:
+    Side effects (ONLY when testing=False):
     - Increments DEV_DRV counter in session state
     - Records drive duration and aggregates stats
     - Updates last_session_ended_at timestamp in .maceff/project_state.json
 
-    Calling this hook directly (e.g., for testing) will cause:
-    - DEV_DRV counts to increment incorrectly
-    - Inaccurate session duration statistics
-    - Incorrect cross-session time gap calculations
-
-    For testing: Mock complete_dev_drv() and save_agent_state() or use
-    unit tests that isolate stat computation from state mutation.
-
     Args:
         stdin_json: JSON string from stdin (Claude Code hook input)
+        testing: If True (DEFAULT), skip side-effects (read-only safe mode).
+                 If False, apply mutations (production only).
+        **kwargs: Additional parameters for future extensibility
 
     Returns:
         Dict with DEV_DRV completion message

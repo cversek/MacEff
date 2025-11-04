@@ -22,29 +22,22 @@ from ..utils import (
 )
 
 
-def run(stdin_json: str = "") -> Dict[str, Any]:
+def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
     """
     Run SubagentStop hook logic.
 
     Tracks DELEG_DRV completion and displays delegation stats.
 
-    ⚠️  WARNING: SIDE EFFECTS - DO NOT CALL DIRECTLY FOR TESTING ⚠️
-
-    This hook MUTATES SESSION STATE on every execution:
+    Side effects (ONLY when testing=False):
     - Increments DELEG_DRV counter in session state
     - Records delegation duration and aggregates stats
     - Clears current delegation tracking variables
 
-    Calling this hook directly (e.g., for testing) will cause:
-    - DELEG_DRV counts to increment incorrectly
-    - Inaccurate delegation duration statistics
-    - Lost tracking of current delegation context
-
-    For testing: Mock complete_deleg_drv() or use unit tests that isolate
-    stat computation from state mutation.
-
     Args:
         stdin_json: JSON string from stdin (Claude Code hook input)
+        testing: If True (DEFAULT), skip side-effects (read-only safe mode).
+                 If False, apply mutations (production only).
+        **kwargs: Additional parameters for future extensibility
 
     Returns:
         Dict with DELEG_DRV completion message
@@ -59,8 +52,12 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
         # Get stats BEFORE completing (complete_deleg_drv clears current tracking!)
         stats = get_deleg_drv_stats(session_id)
 
-        # Complete Delegation Drive
-        success, duration = complete_deleg_drv(session_id)
+        # Complete Delegation Drive (skip if testing)
+        if not testing:
+            success, duration = complete_deleg_drv(session_id)
+        else:
+            # Testing mode: read-only, don't mutate state
+            success, duration = True, 0.0
 
         # Get temporal context
         temporal_ctx = get_temporal_context()
