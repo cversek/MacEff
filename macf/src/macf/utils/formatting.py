@@ -8,22 +8,23 @@ try:
 except Exception:
     __version__ = "0.0.0-dev"  # Fallback for development
 
-def format_macf_footer(environment: str) -> str:
+from .environment import get_rich_environment_string
+
+def format_macf_footer() -> str:
     """
     Standard MACF attribution footer with shortened tag.
 
     Uses importlib.metadata.version("macf") - single source of truth from pyproject.toml.
-
-    Args:
-        environment: From detect_execution_environment()
+    Gets rich environment string automatically (no parameter needed).
 
     Returns:
         ```
         ---
         🏗️ MACF Tools {__version__} (Multi-Agent Coordination Framework)
-        Environment: {environment}
+        Environment: {rich_environment}
         ```
     """
+    environment = get_rich_environment_string()
     return f"""---
 🏗️ MACF Tools {__version__} (Multi-Agent Coordination Framework)
 Environment: {environment}"""

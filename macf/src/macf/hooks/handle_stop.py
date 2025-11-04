@@ -9,7 +9,7 @@ from typing import Dict, Any
 from ..utils import (
     get_temporal_context,
     format_macf_footer,
-    detect_execution_environment,
+    get_rich_environment_string,
     get_current_session_id,
     complete_dev_drv,
     get_dev_drv_stats,
@@ -72,7 +72,7 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
 
         # Get temporal context
         temporal_ctx = get_temporal_context()
-        environment = detect_execution_environment()
+        environment = get_rich_environment_string()
 
         # Format UUID for display
         prompt_uuid = stats.get('prompt_uuid')
@@ -116,7 +116,7 @@ Development Drive Stats:
 
 {boundary_guidance if boundary_guidance else ""}
 
-{format_macf_footer(environment)}"""
+{format_macf_footer()}"""
 
         # Return with systemMessage only (Stop hook doesn't support hookSpecificOutput)
         return {

@@ -49,10 +49,13 @@ from .temporal import (
     get_temporal_context,
     format_duration,
     calculate_session_duration,
-    detect_execution_environment,
     format_temporal_awareness_section,
     get_minimal_timestamp,
     format_minimal_temporal_message,
+)
+from .environment import (
+    detect_execution_environment,
+    get_rich_environment_string,
 )
 from .breadcrumbs import (
     format_breadcrumb,
@@ -125,6 +128,7 @@ __all__ = [
     "get_latest_consciousness_artifacts",
     "get_logs_dir",
     "get_minimal_timestamp",
+    "get_rich_environment_string",
     "get_session_dir",
     "get_session_transcript_path",
     "get_temporal_context",

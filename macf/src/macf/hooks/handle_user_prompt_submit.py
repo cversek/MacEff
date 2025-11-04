@@ -9,7 +9,7 @@ from typing import Dict, Any
 from ..utils import (
     get_temporal_context,
     format_macf_footer,
-    detect_execution_environment,
+    get_rich_environment_string,
     get_current_session_id,
     start_dev_drv,
     get_token_info,
@@ -58,7 +58,7 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
 
         # Get temporal context
         temporal_ctx = get_temporal_context()
-        environment = detect_execution_environment()
+        environment = get_rich_environment_string()
 
         # Get token context
         token_info = get_token_info(session_id)
@@ -78,7 +78,7 @@ Breadcrumb: {breadcrumb}"""
         boundary_guidance = get_boundary_guidance(token_info['cluac_level'], auto_mode)
 
         # Format footer
-        footer = format_macf_footer(environment)
+        footer = format_macf_footer()
 
         # Combine sections
         sections = [
