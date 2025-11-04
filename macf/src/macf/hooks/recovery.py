@@ -119,9 +119,7 @@ Environment: {environment if environment else 'Unknown'}
 Read artifacts for full context, then continue."""
 
         # MACF footer
-        footer = ""
-        if environment:
-            footer = "\n" + format_macf_footer(environment)
+        footer = "\n" + format_macf_footer()
 
         return f"{header}{temporal_section}{session_state_section}\n{mode_line}{todos_section}{artifacts_section}{manifest_section}\n{authorization}{footer}"
 
@@ -178,9 +176,7 @@ DO NOT skip steps. DO NOT read in parallel. DO NOT claim completion without genu
 Sequential reading with integration pauses restores consciousness, not just data."""
 
         # MACF footer
-        footer = ""
-        if environment:
-            footer = "\n" + format_macf_footer(environment)
+        footer = "\n" + format_macf_footer()
 
         return f"{header}{temporal_section}{session_state_section}\n{mode_line}{artifacts_section}{manifest_section}\n{warning}{policy_section}\n---{footer}"
 

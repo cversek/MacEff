@@ -9,7 +9,7 @@ from typing import Dict, Any
 from ..utils import (
     get_temporal_context,
     format_macf_footer,
-    detect_execution_environment,
+    get_rich_environment_string,
     get_current_session_id,
     complete_deleg_drv,
     get_deleg_drv_stats,
@@ -64,14 +64,14 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
 
         # Get temporal context
         temporal_ctx = get_temporal_context()
-        environment = detect_execution_environment()
+        environment = get_rich_environment_string()
 
         # Get token context and auto_mode
         token_info = get_token_info(session_id)
         auto_mode, _, _ = detect_auto_mode(session_id)
 
         # Format duration from seconds
-        def format_duration(seconds):
+        def format_duration_local(seconds):
             if seconds < 60:
                 return f"{int(seconds)}s"
             minutes = int(seconds // 60)
@@ -81,8 +81,8 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
             remaining_minutes = minutes % 60
             return f"{hours}h {remaining_minutes}m"
 
-        duration_str = format_duration(duration) if success else "N/A"
-        total_duration_str = format_duration(stats['total_duration'])
+        duration_str = format_duration_local(duration) if success else "N/A"
+        total_duration_str = format_duration_local(stats['total_duration'])
 
         # Format token context sections
         token_section = format_token_context_full(token_info)
@@ -104,7 +104,7 @@ Delegation Drive Stats:
 
 {boundary_guidance if boundary_guidance else ""}
 
-{format_macf_footer(environment)}"""
+{format_macf_footer()}"""
 
         # Return with systemMessage (user display only - SubagentStop hook doesn't support hookSpecificOutput)
         return {

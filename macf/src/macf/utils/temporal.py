@@ -149,35 +149,6 @@ def calculate_session_duration(started_at: float, ended_at: Optional[float] = No
     # Use shared format_duration utility
     return format_duration(duration_seconds)
 
-def detect_execution_environment() -> str:
-    """
-    Detect where MACF tools are running.
-
-    Returns:
-        One of:
-        - "MacEff Container (username)" - if /.dockerenv exists
-        - "MacEff Host System" - if project has MacEff markers
-        - "Host System" - generic host
-    """
-    # Check for container environment
-    if Path("/.dockerenv").exists():
-        # Read username from environment
-        username = os.environ.get("MACEFF_USER") or os.environ.get("USER") or "unknown"
-        return f"MacEff Container ({username})"
-
-    # Check if running in MacEff project on host
-    cwd = Path.cwd()
-    current = cwd
-
-    # Walk up directory tree looking for MacEff markers
-    while current != current.parent:
-        if "MacEff" in current.name:
-            return "MacEff Host System"
-        current = current.parent
-
-    # Generic host fallback
-    return "Host System"
-
 def format_temporal_awareness_section(
     temporal_ctx: dict,
     session_duration: Optional[str] = None

@@ -13,7 +13,7 @@ from ..utils import (
     get_latest_consciousness_artifacts,
     detect_auto_mode,
     get_temporal_context,
-    detect_execution_environment,
+    get_rich_environment_string,
     format_duration,
     format_macf_footer,
     load_agent_state,
@@ -143,7 +143,7 @@ def run(stdin_json: str = "", testing: bool = False) -> Dict[str, Any]:
 
             # Get temporal context
             temporal_ctx = get_temporal_context()
-            environment = detect_execution_environment()
+            environment = get_rich_environment_string()
 
             # Get token context
             token_info = get_token_info(session_id)
@@ -189,7 +189,7 @@ def run(stdin_json: str = "", testing: bool = False) -> Dict[str, Any]:
 
         # Get temporal context
         temporal_ctx = get_temporal_context()
-        environment = detect_execution_environment()
+        environment = get_rich_environment_string()
 
         # Get breadcrumb
         breadcrumb = get_breadcrumb()
@@ -236,7 +236,7 @@ Session Context:
 
 {manifest_section}
 
-{format_macf_footer(environment)}"""
+{format_macf_footer()}"""
 
         log_hook_event({
             "hook_name": "session_start",
