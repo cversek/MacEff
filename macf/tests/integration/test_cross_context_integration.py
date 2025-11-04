@@ -206,8 +206,8 @@ def test_hook_execution_in_isolated_context():
 
     # Mock failures in context detection
     with patch('macf.hooks.handle_session_start.get_current_session_id', return_value="fallback-session"):
-        # Hook should still execute
-        result = run("")
+        # Hook should still execute (testing=True prevents state mutations)
+        result = run("", testing=True)
 
         assert result is not None
         assert "continue" in result
