@@ -101,7 +101,7 @@ class TestC84Bug2HookExecutionCrash:
 
         # Execute hook - should not raise exception
         try:
-            result = run("")
+            result = run("", testing=True)
             assert isinstance(result, dict)
             assert "continue" in result
         except Exception as e:
@@ -111,7 +111,7 @@ class TestC84Bug2HookExecutionCrash:
         """Verify SessionStart hook produces consciousness injection output."""
         from macf.hooks.handle_session_start import run
 
-        result = run("")
+        result = run("", testing=True)
 
         # Hook should produce output, not silent failure
         assert "hookSpecificOutput" in result, \
@@ -310,7 +310,7 @@ class TestRefactoringSmoke:
 
             # Execute hook - should not crash
             try:
-                result = module.run("")
+                result = module.run("", testing=True)
                 assert isinstance(result, dict)
                 assert "continue" in result
             except Exception as e:

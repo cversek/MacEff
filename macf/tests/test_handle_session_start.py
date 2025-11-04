@@ -71,7 +71,7 @@ def test_no_compaction_detected(mock_dependencies):
         # Set up state
         mock_dependencies['state'].compaction_count = 0
 
-        result = run("")
+        result = run("", testing=True)
 
         # Verify structure
         assert result["continue"] is True
@@ -123,7 +123,7 @@ def test_first_session_no_project_state(mock_dependencies):
         # Set up state
         mock_dependencies['state'].compaction_count = 0
 
-        result = run("")
+        result = run("", testing=True)
 
         # Verify message content shows "First session"
         context = result["hookSpecificOutput"]["additionalContext"]
@@ -138,7 +138,7 @@ def test_compaction_detected_manual_mode(mock_dependencies):
     mock_dependencies['auto_mode'].return_value = (False, "default", 0.0)
     mock_dependencies['format_message'].return_value = "MANUAL mode recovery instructions"
 
-    result = run("")
+    result = run("", testing=True)
 
     assert "continue" in result
     assert result["continue"] is True
@@ -163,7 +163,7 @@ def test_compaction_detected_auto_mode(mock_dependencies):
     ]
     mock_dependencies['format_message'].return_value = "AUTO mode authorization message"
 
-    result = run("")
+    result = run("", testing=True)
 
     assert result["continue"] is True
     assert "hookSpecificOutput" in result
@@ -178,7 +178,7 @@ def test_compaction_count_increments(mock_dependencies):
     mock_dependencies['detect_compaction'].return_value = True
     mock_dependencies['state'].compaction_count = 2
 
-    run("")
+    run("", testing=True)
 
     assert mock_dependencies['state'].compaction_count == 3
     assert mock_dependencies['state'].save.call_count == 2  # Saves after increment AND auto_mode update
@@ -191,7 +191,7 @@ def test_exception_handling(mock_dependencies):
     # Simulate exception in session ID retrieval
     mock_dependencies['session_id'].side_effect = Exception("Session ID error")
 
-    result = run("")
+    result = run("", testing=True)
 
     # Hook should never crash - always returns continue
     assert result == {"continue": True}
@@ -201,7 +201,7 @@ def test_empty_stdin_handling(mock_dependencies):
     """Test hook handles empty stdin gracefully."""
     from macf.hooks.handle_session_start import run
 
-    result = run("")
+    result = run("", testing=True)
 
     assert isinstance(result, dict)
     assert "continue" in result
@@ -214,7 +214,7 @@ def test_output_format_includes_hook_event_name(mock_dependencies):
 
     mock_dependencies['detect_compaction'].return_value = True
 
-    result = run("")
+    result = run("", testing=True)
 
     assert "hookSpecificOutput" in result
     assert "hookEventName" in result["hookSpecificOutput"]
@@ -233,7 +233,7 @@ def test_source_field_compact_detection(mock_dependencies):
 
     # Mock log_hook_event to capture events
     with patch('macf.hooks.handle_session_start.log_hook_event') as mock_log:
-        result = run(stdin_json)
+        result = run(stdin_json, testing=True)
 
         # Verify compaction was detected
         assert result["continue"] is True
@@ -283,7 +283,7 @@ def test_source_field_startup_no_detection(mock_dependencies):
         # Mock detect_compaction to ensure it's NOT called (source field takes precedence)
         mock_dependencies['detect_compaction'].return_value = False
 
-        result = run(stdin_json)
+        result = run(stdin_json, testing=True)
 
         # Verify no compaction detected (normal session start message)
         assert result["continue"] is True
@@ -309,7 +309,7 @@ def test_source_field_missing_fallback_to_transcript(mock_dependencies):
     mock_dependencies['detect_compaction'].return_value = True
 
     with patch('macf.hooks.handle_session_start.log_hook_event') as mock_log:
-        result = run(stdin_json)
+        result = run(stdin_json, testing=True)
 
         # Verify compaction was detected via fallback
         assert result["continue"] is True
@@ -338,7 +338,7 @@ def test_source_compact_logs_method(mock_dependencies):
     stdin_json = json.dumps(input_data)
 
     with patch('macf.hooks.handle_session_start.log_hook_event') as mock_log:
-        run(stdin_json)
+        run(stdin_json, testing=True)
 
         # Find COMPACTION_CHECK event
         compaction_check_calls = [
@@ -374,7 +374,7 @@ def test_cycle_increments_on_compaction(mock_dependencies):
         # Mock increment_cycle_project to return new cycle number
         mock_increment.return_value = 20
 
-        result = run(stdin_json)
+        result = run(stdin_json, testing=True)
 
         # Verify increment_cycle_project was called with session_id
         mock_increment.assert_called_once_with("test-session-123")
