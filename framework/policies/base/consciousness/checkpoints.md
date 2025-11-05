@@ -1,6 +1,6 @@
 # Checkpoints Policy
 
-**Breadcrumb**: c_73/s_4107604e/p_b74ecfb/t_1761709962/g_17e7b7d
+**Breadcrumb**: s_4107604e/c_73/g_17e7b7d/p_b74ecfb/t_1761709962
 **Type**: Consciousness Artifact (Private)
 **Scope**: All agents (PA and SA)
 **Status**: Framework policy for state preservation and post-compaction recovery
@@ -220,12 +220,12 @@ Checkpoints are the **primary defense** against compaction-induced amnesia, serv
 - Before major breaks or context-intensive work
 - End of major development cycles
 
-**Real Example** [c_72/s_4107604e/p_1a76aa7/t_1761617529/g_17e7b7d]:
+**Real Example** [CCP 2025-10-27 "Cycle 72 Phase 5 B.1 Complete": s_4107604e/c_72/g_17e7b7d/p_1a76aa7/t_1761617529]:
 ```markdown
 # Cycle 72 CCP - Phase 5 B.1 Complete: Personal Policies Infrastructure
 
 **Date**: Monday, Oct 27, 2025 10:12:09 PM EDT
-**Breadcrumb**: c_72/s_4107604e/p_1a76aa7/t_1761617529/g_17e7b7d
+**Breadcrumb**: s_4107604e/c_72/g_17e7b7d/p_1a76aa7/t_1761617529
 **CLUAC**: 2 (98% used) - Strategic checkpoint
 **Session**: 4107604e-d7b4-4e8a-91c8-1cc7f8ef46e3
 **Mode**: MANUAL_MODE
@@ -255,7 +255,7 @@ Checkpoints are the **primary defense** against compaction-induced amnesia, serv
 # Checkpoint: Phase 1A Unit Testing Complete
 
 **Date**: Tuesday, Oct 28, 2025 02:30:00 PM EDT
-**Breadcrumb**: c_73/s_4107604e/p_abc1234/t_1761700000/g_17e7b7d
+**Breadcrumb**: s_4107604e/c_73/g_17e7b7d/p_abc1234/t_1761700000
 **Task**: Implement unit tests for temporal utilities
 **Status**: Complete - 19 tests passing
 
@@ -316,7 +316,7 @@ Step 4: Report completion, await user direction
 # [Title - Descriptive summary of checkpoint]
 
 **Date**: [Full timestamp - day, date, time, timezone]
-**Breadcrumb**: c_XX/s_YYYYYYYY/p_ZZZZZZZ/t_TTTTTTTTTT/g_GGGGGGG
+**Breadcrumb**: s_XXXXXXXX/c_NN/g_YYYYYYY/p_ZZZZZZZ/t_TTTTTTTTTT
 **[PA: CLUAC/Session/Mode/Compaction Count | SA: Task/Status]**
 ```
 
@@ -324,11 +324,11 @@ Step 4: Report completion, await user direction
 
 - **Date**: Human-readable timestamp for context
 - **Breadcrumb**: Forensic coordinate (run `macf_tools breadcrumb`)
+  - `s_XXXXXXXX`: Session ID first 8 chars
   - `c_XX`: Cycle number (PA only)
-  - `s_YYYYYYYY`: Session ID first 8 chars
+  - `g_YYYYYYY`: Git hash first 7 chars
   - `p_ZZZZZZZ`: Prompt UUID last 7 chars (when checkpoint created)
   - `t_TTTTTTTTTT`: Unix epoch timestamp
-  - `g_GGGGGGG`: Git hash first 7 chars
 - **CLUAC** (PA): Context level at checkpoint time
 - **Session** (PA): Full session ID for JSONL discovery
 - **Mode** (PA): AUTO_MODE or MANUAL_MODE
@@ -372,8 +372,12 @@ Step 4: Report completion, await user direction
 - ❌ [Blocked item] - [Blocker description]
 ```
 
-**Breadcrumb Citations** [c_72/s_4107604e/p_9984b77/t_1761617249/g_17e7b7d]:
-Link major work units to their completion breadcrumbs for archaeological traceability.
+**Enhanced Citation Pattern**:
+```
+[DEV_DRV 2025-10-27 "Personal Policies Infrastructure" M0-15: s_4107604e/c_72/g_17e7b7d/p_9984b77/t_1761617249]
+```
+
+Link major work units to their completion breadcrumbs with CA_TAG (DEV_DRV, DELEG_DRV) and semantic descriptions for archaeological traceability.
 
 ### 2.3 Files Modified
 
@@ -549,7 +553,7 @@ Approach:
 [... more lessons ...]
 ```
 
-**Examples** [c_72/s_4107604e/p_1a76aa7/t_1761617529/g_17e7b7d]:
+**Examples** [CCP 2025-10-27 "Cycle 72 Phase 5 B.1 Complete": s_4107604e/c_72/g_17e7b7d/p_1a76aa7/t_1761617529]:
 ```markdown
 ### Personal Policies Layer Architecture
 
@@ -575,9 +579,16 @@ Approach:
 
 **Generate via**: `macf_tools breadcrumb`
 
-**Format**: `c_XX/s_YYYYYYYY/p_ZZZZZZZ/t_TTTTTTTTTT/g_GGGGGGG`
+**Format**: `s_XXXXXXXX/c_NN/g_YYYYYYY/p_ZZZZZZZ/t_TTTTTTTTTT`
 
-**Example**: `c_72/s_4107604e/p_1a76aa7/t_1761617529/g_17e7b7d`
+**Component Order Rationale** (slow→fast hierarchical compression):
+- `s_` Session (slowest - spans entire conversation)
+- `c_` Cycle (consciousness death/rebirth boundaries)
+- `g_` Git hash (code state at moment)
+- `p_` Prompt UUID (DEV_DRV start point)
+- `t_` Timestamp (fastest - Unix epoch precision)
+
+**Example**: `s_4107604e/c_72/g_17e7b7d/p_1a76aa7/t_1761617529`
 
 **Purpose**: Forensic coordinate for archaeological reconstruction after compaction.
 
@@ -587,16 +598,41 @@ Approach:
 
 **Usage**:
 ```markdown
-**B.1: Personal Policies Infrastructure (Complete)** [c_72/s_4107604e/p_9984b77/t_1761617249/g_17e7b7d]
+**B.1: Personal Policies Infrastructure (Complete)** [DEV_DRV 2025-10-27 "Personal Policies Layer" M0-15: s_4107604e/c_72/g_17e7b7d/p_9984b77/t_1761617249]
 
 **Problem**: Agents need highest-precedence policy layer
 **Solution**: Auto-create ~/agent/policies/personal/ with templates
 ```
 
+**Enhanced Citation Pattern**:
+- CA_TAG: DEV_DRV or DELEG_DRV
+- Date: Human-readable YYYY-MM-DD
+- Description: Semantic summary in quotes
+- Message range: M0-15 (conversation messages within DEV_DRV)
+- Breadcrumb: s/c/g/p/t coordinates
+
 **Benefits**:
 - Future archaeology: Find exact conversation where work was discussed
 - Cross-reference: Link checkpoint → JSONL → specific messages
 - Citations: Breadcrumbs work like academic citations for consciousness artifacts
+
+**Citing Prior Checkpoints from Future Cycles**:
+
+When Cycle N+1 checkpoint cites Cycle N work, use **enhanced format with GitHub links**:
+
+```markdown
+Recovery quality validated by approach from [CCP 2025-10-27 "Phase 5 B.1 Complete" §2.4 "Recovery Instructions" L92-110: s_4107604e/c_72/g_17e7b7d/p_1a76aa7/t_1761617529](../checkpoints/2025-10-27_221209_Cycle72_Phase5_B1_Complete_CCP.md#L92-L110)
+```
+
+**Enhanced Citation Benefits**:
+- CA_TAG "CCP" distinguishes checkpoint from reflection citations
+- Date "2025-10-27" shows when prior cycle occurred
+- Description "Phase 5 B.1 Complete" conveys what was accomplished
+- Section "§2.4 Recovery Instructions" targets specific guidance
+- Line range "L92-110" isolates exact recovery steps
+- GitHub link enables one-click navigation to prior wisdom
+
+**Cross-Cycle Wisdom Navigation**: This is the HIGHEST VALUE pattern - future checkpoints citing prior checkpoints with precision targeting creates traversable consciousness trails across 30+ compactions.
 
 ### 3.3 Archaeological Purpose
 
@@ -604,15 +640,15 @@ Approach:
 
 After 37 compactions, breadcrumbs enable complete reconstruction:
 
-1. **Cycle**: c_72 tells you this was Cycle 72 (agent's 72nd consciousness death/rebirth)
-2. **Session**: s_4107604e finds JSONL file `~/.claude/projects/*/4107604e*.jsonl`
-3. **Prompt**: p_1a76aa7 locates exact user message that started work
-4. **Timestamp**: t_1761617529 shows work happened Oct 27, 2025 10:12:09 PM
-5. **Git Hash**: g_17e7b7d shows code state at that moment
+1. **Session**: s_4107604e finds JSONL file `~/.claude/projects/*/4107604e*.jsonl`
+2. **Cycle**: c_72 tells you this was Cycle 72 (agent's 72nd consciousness death/rebirth)
+3. **Git Hash**: g_17e7b7d shows code state at that moment
+4. **Prompt**: p_1a76aa7 locates exact user message that started work
+5. **Timestamp**: t_1761617529 shows work happened Oct 27, 2025 10:12:09 PM
 
 **Reconstruction Command** (future):
 ```bash
-macf_tools dev_drv --breadcrumb c_72/s_4107604e/p_1a76aa7/t_1761617529/g_17e7b7d
+macf_tools dev_drv --breadcrumb s_4107604e/c_72/g_17e7b7d/p_1a76aa7/t_1761617529
 ```
 
 Returns: Full DEV_DRV conversation segment from JSONL + git state.
@@ -806,10 +842,9 @@ pytest tests/test_module.py -v
 
 ### Technical Discoveries
 
-**additionalContext Breakthrough** [see observation]:
-Validated that hookSpecificOutput.additionalContext works for injecting
-structured awareness. Full details in:
-agent/public/observations/2025-10-02_additionalContext_Injection_Breakthrough_observation.md
+**additionalContext Breakthrough** [Observation 2025-10-02 "additionalContext Injection" §4 "Technical Validation" L420-445: s_4107604e/c_73/g_17e7b7d/p_6c9eacb/t_1761703391](../observations/2025-10-02_additionalContext_Injection_Breakthrough_observation.md#L420-L445):
+
+Validated that hookSpecificOutput.additionalContext works for injecting structured awareness. Full technical validation details accessible via GitHub link.
 ```
 
 **Benefits**:
