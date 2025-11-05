@@ -22,24 +22,30 @@ Applies to Primary Agents (PA) and all Subagents (SA) managing multi-step work.
 
 ### 0. Breadcrumb Format (Navigation Infrastructure)
 
-**Enhanced Format** (Cycle 61+): `c_61/s_4107604e/p_b037708/t_20251024_2307`
+**Current Format**: `s_abc12345/c_42/g_def6789/p_ghi01234/t_1730000000`
 
-**Components**:
-- `c_61`: Cycle number (from agent state - agent-scoped, persists across sessions)
-- `s_4107604e`: Session ID (first 8 chars - session boundary marker)
-- `p_b037708`: Prompt UUID (last 7 chars - stable for entire DEV_DRV)
-- `t_20251024_2307`: Completion timestamp (YYYYMMDD_HHMM - when TODO was completed)
-
-**Old Format** (Cycle 60): `C60/4107604e/ead030a` (no timestamp, capitalized cycle)
+**Components** (ordered slow→fast for hierarchical compression):
+- `s_abc12345`: Session ID (first 8 chars - conversation boundary marker)
+- `c_42`: Cycle number (from agent state - compaction count)
+- `g_def6789`: Git hash (first 7 chars - code state anchor)
+- `p_ghi01234`: Prompt UUID (first 8 chars - DEV_DRV start point)
+- `t_1730000000`: Unix epoch timestamp (when breadcrumb generated)
 
 **Key Insight**: Timestamp component (`t_`) is **completion time**, not "last PostToolUse"
 - Preserves breadcrumb stability
 - Adds temporal precision for post-compaction archaeology
 - Self-describing prefixes enable programmatic parsing
 
+**Estimated/Imputed Values Convention**:
+- Prefix uncertain components with `~` to indicate estimation: `~t_1730000000`
+- **Hierarchical Compression**: When multiple breadcrumbs share components, omit redundant parts
+  - First: `[s_abc12345/c_42/g_def6789/p_ghi01234/~t_1730000000]`
+  - Next: `[~t_1730000050]` (inherits s/c/g/p from previous)
+  - Benefits: Space savings in TODO lists, clear estimation marking
+
 **Usage in Completed TODO Items**:
 ```
-↪️ DETOUR: Fix configuration [c_60/s_4107604e/p_b7c4313/t_20251024_2226]
+↪️ DETOUR: Fix configuration [s_abc12345/c_42/g_def6789/p_ghi01234/t_1730000000]
 ```
 
 **Forensic Power**: Four-layer coordinates survive compaction
