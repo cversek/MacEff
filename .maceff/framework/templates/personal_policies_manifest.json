@@ -1,0 +1,23 @@
+{
+  "version": "1.0.0",
+  "description": "Personal policies - highest precedence layer for agent-specific wisdom",
+  "extends": "/opt/maceff/framework/policies/current/manifest.json",
+
+  "personal_policies": [
+    {
+      "name": "example_wisdom",
+      "path": "~/agent/policies/personal/example.md",
+      "description": "Template for documenting earned wisdom and patterns",
+      "CEP_triggers": ["What have I learned about...?", "What patterns did I discover?"],
+      "keywords": ["experience", "learned", "pattern", "discovered"]
+    }
+  ],
+
+  "notes": [
+    "This directory contains YOUR earned wisdom - patterns you've discovered through experience",
+    "Personal policies override all other policy layers (project, framework, core)",
+    "Document decisions, patterns, and lessons that are specific to your work",
+    "CEP will check here FIRST before consulting framework policies",
+    "Examples: project-specific conventions, preferred approaches, discovered patterns"
+  ]
+}

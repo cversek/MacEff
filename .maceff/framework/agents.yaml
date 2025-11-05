@@ -1,0 +1,80 @@
+# MannyMacEff v0.3.0 Named Agents Configuration
+#
+# REFERENCE IMPLEMENTATION: MacEff v0.3.0 Named Agents Architecture
+# See framework/README.md for comprehensive architecture documentation
+#
+# KEY CONCEPTS:
+# - Three-Layer CLAUDE.md: System (PA_PREAMBLE) + Identity (personality) + Project (context)
+# - Framework Overlay: Parent framework/ → maceff-init → .maceff/framework/
+# - Consciousness Artifacts: Private (checkpoints, reflections) + Public (roadmaps, reports)
+# - Subagent Delegation: Task tool invocation with workspace boundaries
+#
+# CROSS-REFERENCES:
+# - Architecture: framework/README.md
+# - MacEff Docs: MacEff/docs/arch_v0.3_named_agents/01_overview.md
+# - Implementation: MacEff/docs/arch_v0.3_named_agents/05_implementation_guide.md
+
+# ============================================================================
+# PRIMARY AGENTS (PAs)
+# ============================================================================
+# Interactive agents with SSH access, consciousness artifacts, project assignments
+
+agents:
+  manny:
+    # System username (creates /home/pa_manny/)
+    username: pa_manny
+
+    # Identity layer (Layer 2 CLAUDE.md)
+    # Copied to ~/CLAUDE.md during agent creation
+    # Path relative to .maceff/framework/ root (after maceff-init copy)
+    personality: agents/manny_personality.md
+
+    # Delegatable subagents (Task tool)
+    subagents: [devops_eng, test_eng, data_scientist]
+
+    # Project assignments (Layer 3 CLAUDE.md)
+    # Creates workspace symlinks: ~/workspace/NeuroVEP -> /shared_workspace/NeuroVEP
+    assigned_projects: [NeuroVEP]
+
+    # Consciousness artifact directories (optional)
+    # See framework/README.md for CA types and locations
+    consciousness_artifacts:
+      private: [checkpoints, reflections, learnings]
+      public: [roadmaps, reports, observations, experiments]
+
+    # Hook integration (requires macf in base conda env)
+    # Provides: compaction detection, temporal awareness, DEV_DRV/DELEG_DRV tracking
+    hooks:
+      enabled: [session_start, user_prompt_submit, pre_tool_use, post_tool_use, stop, subagent_stop]
+
+# ============================================================================
+# SUBAGENTS (SAs)
+# ============================================================================
+# Delegation-only agents (nologin shell, Task tool invocation)
+# Definitions get SA_PREAMBLE appended via: macf_tools subagent init {role}
+# See Friction Point #4: Command not yet implemented
+
+subagents:
+  devops_eng:
+    role: Infrastructure and deployment specialist
+    shell: /usr/sbin/nologin
+    tool_access: Read, Write, Edit, Bash, Glob, Grep
+    consciousness_artifacts:
+      private: [checkpoints, reflections, learnings]
+      public: [delegation_trails, reports, observations]
+
+  test_eng:
+    role: Testing and quality assurance specialist
+    shell: /usr/sbin/nologin
+    tool_access: Read, Write, Edit, Bash
+    consciousness_artifacts:
+      private: [reflections, learnings]
+      public: [delegation_trails, reports]
+
+  data_scientist:
+    role: Data analysis and visualization specialist
+    shell: /usr/sbin/nologin
+    tool_access: Read, Bash, Glob, Grep  # Read-only for safety
+    consciousness_artifacts:
+      private: [checkpoints, reflections, learnings]
+      public: [delegation_trails, reports, observations]
