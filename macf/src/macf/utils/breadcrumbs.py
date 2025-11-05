@@ -21,8 +21,8 @@ def format_breadcrumb(
     """
     Format enhanced breadcrumb with self-describing components.
 
-    Full format (Cycle 61+): s_4107604e/c_61/g_c3ec870/p_b0377089/t_1761360651
-    Minimal format: s_4107604e/c_61/p_b0377089
+    Full format (Cycle 42+): s_abc12345/c_42/g_c3ec870/p_b0377089/t_1730000000
+    Minimal format: s_abc12345/c_42/p_b0377089
 
     Args:
         cycle: Cycle number (from agent_state.json)
@@ -70,19 +70,19 @@ def parse_breadcrumb(breadcrumb: str) -> Optional[Dict[str, Any]]:
     Supports both old (C60/session/prompt) and new (c_61/s_session/p_prompt/t_time/g_hash) formats.
 
     Args:
-        breadcrumb: Breadcrumb string like "s_4107604e/c_61/g_c3ec870/p_ead030a5/t_1761360651"
+        breadcrumb: Breadcrumb string like "s_abc12345/c_42/g_c3ec870/p_ead030a5/t_1730000000"
 
     Returns:
         Dict with keys: cycle, session_id, prompt_uuid, timestamp, git_hash
         Returns None if parsing fails
 
     Example:
-        >>> parse_breadcrumb("s_4107604e/c_61/g_c3ec870/p_ead030a5/t_1761360651")
+        >>> parse_breadcrumb("s_abc12345/c_42/g_c3ec870/p_ead030a5/t_1730000000")
         {
-            'cycle': 61,
-            'session_id': '4107604e',
+            'cycle': 42,
+            'session_id': 'abc12345',
             'prompt_uuid': 'ead030a5',
-            'timestamp': 1761360651,
+            'timestamp': 1730000000,
             'git_hash': 'c3ec870'
         }
     """
@@ -121,7 +121,7 @@ def parse_breadcrumb(breadcrumb: str) -> Optional[Dict[str, Any]]:
                 elif prefix == 'g':
                     result['git_hash'] = value if value != 'none' else None
 
-            # Old format without prefixes (C60/4107604e/ead030a or ead030a5)
+            # Old format without prefixes (C60/abc12345/ead030a or ead030a5)
             else:
                 if part.startswith('C') and part[1:].isdigit():
                     result['cycle'] = int(part[1:])
@@ -203,12 +203,12 @@ def get_breadcrumb() -> str:
     Auto-gathers: cycle, session_id, prompt_uuid, current timestamp, git_hash.
 
     Returns:
-        Formatted breadcrumb like "s_4107604e/c_64/g_abc1234/p_c7ad5830/t_1761419389"
+        Formatted breadcrumb like "s_abc12345/c_42/g_abc1234/p_c7ad5830/t_1730000000"
         Returns minimal breadcrumb on any failure (never crashes)
 
     Example:
         >>> breadcrumb = get_breadcrumb()
-        "s_4107604e/c_64/g_b231846/p_c7ad5830/t_1761419389"
+        "s_abc12345/c_42/g_b231846/p_c7ad5830/t_1730000000"
     """
     try:
         # Auto-gather all 5 components
