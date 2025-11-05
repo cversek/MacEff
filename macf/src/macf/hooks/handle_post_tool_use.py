@@ -15,7 +15,7 @@ from ..utils import (
 )
 
 
-def run(stdin_json: str = "") -> Dict[str, Any]:
+def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
     """
     Run PostToolUse hook logic.
 
@@ -37,8 +37,14 @@ def run(stdin_json: str = "") -> Dict[str, Any]:
 
     Old format (Cycle 60): C60/4107604e/5539d35
 
+    Side effects: None (PostToolUse is read-only, no state mutations)
+
     Args:
         stdin_json: JSON string from stdin (Claude Code hook input)
+        testing: If True (DEFAULT), skip side-effects (safe mode).
+                 If False, apply mutations (production only).
+                 Currently no side-effects in PostToolUse.
+        **kwargs: Additional parameters for future extensibility
 
     Returns:
         Dict with tool completion message including stable breadcrumb
