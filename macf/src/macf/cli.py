@@ -468,7 +468,7 @@ def cmd_config_init(args: argparse.Namespace) -> int:
 
     # Interactive prompts
     print("Initialize MacEff agent configuration\n")
-    moniker = input("Agent moniker (e.g., ClaudeTheBuilder): ").strip()
+    moniker = input("Agent moniker (e.g., MyAgent): ").strip()
     if not moniker:
         print("Error: Moniker required")
         return 1
@@ -649,7 +649,7 @@ def cmd_dev_drv(args: argparse.Namespace) -> int:
         breadcrumb_data = parse_breadcrumb(args.breadcrumb)
         if not breadcrumb_data:
             print(f"Error: Invalid breadcrumb format: {args.breadcrumb}")
-            print("Expected format: c_61/s_4107604e/p_ead030a/t_1761360651/g_c3ec870")
+            print("Expected format: s_abc12345/c_42/g_abc1234/p_def5678/t_1234567890")
             return 1
 
         # Extract DEV_DRV from JSONL
@@ -1130,7 +1130,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # DEV_DRV forensic command
     dev_drv_parser = sub.add_parser("dev_drv", help="extract and display DEV_DRV from JSONL")
     dev_drv_parser.add_argument("--breadcrumb", required=True,
-                               help="breadcrumb string like c_61/s_4107604e/p_ead030a/t_1761360651/g_c3ec870")
+                               help="breadcrumb string like s_abc12345/c_42/g_abc1234/p_def5678/t_1234567890")
     dev_drv_parser.add_argument("--raw", action="store_true",
                                help="output raw JSONL (default: markdown summary)")
     dev_drv_parser.add_argument("--md", action="store_true",
