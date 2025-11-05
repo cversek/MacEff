@@ -29,13 +29,13 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
     - Stable breadcrumb (enhanced format)
     - Minimal token context (CLUAC indicator)
 
-    Enhanced breadcrumb format (Cycle 61+): c_61/s_4107604e/p_b037708
-    - c_61: Cycle number from agent_state.json (self-describing prefix)
-    - s_4107604e: Session ID (first 8 chars, self-describing prefix)
-    - p_b037708: DEV_DRV prompt UUID (last 7 chars) - stable for entire drive
+    Enhanced breadcrumb format (Cycle 42+): c_42/s_abc12345/p_def6789
+    - c_42: Cycle number from agent_state.json (self-describing prefix)
+    - s_abc12345: Session ID (first 8 chars, self-describing prefix)
+    - p_def6789: DEV_DRV prompt UUID (last 7 chars) - stable for entire drive
     - No t_ timestamp in PostToolUse (only added when TODO completed)
 
-    Old format (Cycle 60): C60/4107604e/5539d35
+    Old format (Cycle 40): C40/abc12345/5539d35
 
     Side effects: None (PostToolUse is read-only, no state mutations)
 
