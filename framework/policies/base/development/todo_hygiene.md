@@ -1,10 +1,10 @@
 # TODO List Hygiene Policy
 
-**Version**: 1.4
+**Version**: 1.5
 **Tier**: CORE
 **Category**: Development
 **Status**: ACTIVE
-**Updated**: 2025-10-26
+**Updated**: 2025-11-06
 
 ---
 
@@ -196,12 +196,90 @@ Phase 1: Unit tests
 - Mandatory reading discipline: Embedded filenames are prerequisites, not suggestions
 - Detour tracking: ↪️ symbol makes temporary work visible without losing main path
 
-### 5. Stack Discipline
+### 5. Stack Discipline & FTI Priority Signaling
 
-**Task ordering**:
-1. **Top**: Currently active/in-progress tasks
-2. **Middle**: Pending tasks in priority order
-3. **Bottom**: Deferred tasks (prefix with DEFERRED)
+**Purpose**: TODO stack position communicates priority through visual ordering. Stack organization should be checked and reorganized at **session start** and **after archive manipulations**.
+
+**FTI Definition** (First Tier Items):
+- **FTI**: Top-level items with no indentation (missions, campaigns, detours)
+- **Nested items**: Indented children under FTIs (phases, substeps, sub-detours)
+
+**FTI Priority Ordering** (Top → Bottom):
+
+1. **ACTIVE FTIs** (most recent first)
+   - Currently in-progress work
+   - Order by cycle/recency: newest interruptions float to top
+   - Communicates: "Current focus area"
+
+2. **DEFERRED FTIs** (most recent first)
+   - Work postponed but not abandoned
+   - Order by cycle: more recent deferrals have higher re-engagement priority
+   - Communicates: "Not forgotten, awaiting bandwidth"
+
+3. **COMPLETED FTIs** (most recent first)
+   - Finished work serving as archaeological reference
+   - Order by cycle: recent completions stay visible longer
+   - Communicates: "Historical context only"
+
+**Nested Item Ordering**:
+- **Sub-phases**: Maintain chronological order within parent FTI
+- **Sub-detours**: Nest under parent task, don't promote to FTI level
+- Rationale: Phase sequence matters for understanding, not priority signaling
+
+**Visual Priority Example**:
+
+```
+TOP STACK (ACTIVE - most recent first):
+↪️ DETOUR: Fix Infrastructure [Cycle 112 active]
+  📜 DELEG_PLAN: Ready for delegation
+🗺️ MISSION: Platform Migration [Cycles 109-111 ongoing]
+  📦 Phase 4: Complete [c_109/...]
+  Phase 5: Pending
+
+MIDDLE STACK (DEFERRED - most recent first):
+📦 DETOUR DEFERRED: Policy Integration [Cycle 107]
+📦 DETOUR DEFERRED: CLI Enhancements [Cycle 105]
+
+BOTTOM STACK (COMPLETED - most recent first):
+📦 DETOUR COMPLETED: Memory Research [Cycle 103]
+```
+
+**Priority Signals**:
+- **Current interruption** (DETOUR) at top → "Finish this first before returning to mission"
+- **Main mission** below active DETOUR → "Resume here after interruption resolves"
+- **Deferred work** in middle → "Awaiting resources/bandwidth, not forgotten"
+- **Completed work** at bottom → "Archaeological reference for context"
+
+**When to Reorganize**:
+
+1. **Session start** (post-compaction recovery):
+   - Review entire stack for priority accuracy
+   - Float newly active work to top
+   - Sink completed/deferred work appropriately
+
+2. **Archive manipulation**:
+   - After marking FTI completed with archive
+   - After deferring active work
+   - After resuming deferred work (moves DEFERRED → ACTIVE stack)
+
+**Reorganization Protocol**:
+
+```bash
+# 1. Identify FTI status distribution
+#    - How many ACTIVE, DEFERRED, COMPLETED?
+#    - What are their cycle numbers?
+
+# 2. Sort within each status tier (most recent first)
+#    ACTIVE: Cycle 112 DETOUR > Cycle 109 MISSION
+#    DEFERRED: Cycle 107 > Cycle 105
+#    COMPLETED: Cycle 103
+
+# 3. Stack them: ACTIVE (top) → DEFERRED (middle) → COMPLETED (bottom)
+
+# 4. Preserve nested item chronology within each FTI parent
+```
+
+**Anti-Pattern**: Stale stack with old completed items at top or recent active work at bottom obscures current priorities and violates visual communication principle.
 
 ### 6. Elaborate Plans to Disk
 
