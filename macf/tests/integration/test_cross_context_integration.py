@@ -4,9 +4,9 @@ Integration tests for cross-context functionality.
 Tests that critical infrastructure works across different execution contexts:
 - Direct MacEff repository
 - MacEff as submodule (MannyMacEff)
-- Sibling repository (ClaudeTheBuilder)
+- Sibling repository (AgentA)
 
-References C84 Bug 2: Path resolution failed when running from ClaudeTheBuilder
+References C84 Bug 2: Path resolution failed when running from sibling repository
 because code assumed MacEff was always a submodule.
 """
 
@@ -50,7 +50,7 @@ def test_manifest_loading_with_sibling_repo_context():
     """
     Test manifest loading when operating from sibling repository.
 
-    C84 Bug 2: ClaudeTheBuilder is sibling to MacEff (both in ~/gitwork/).
+    C84 Bug 2: AgentA is sibling to MacEff (both in ~/gitwork/).
     Original code assumed MacEff as submodule and failed.
 
     Fixed version uses multi-strategy fallback path resolution.
@@ -61,12 +61,12 @@ def test_manifest_loading_with_sibling_repo_context():
     with tempfile.TemporaryDirectory() as tmpdir:
         tmppath = Path(tmpdir)
 
-        # Create structure: gitwork/ClaudeTheBuilder and gitwork/MacEff
+        # Create structure: gitwork/AgentA and gitwork/MacEff
         gitwork = tmppath / "gitwork"
         gitwork.mkdir()
 
-        ctb_repo = gitwork / "ClaudeTheBuilder"
-        ctb_repo.mkdir()
+        agent_repo = gitwork / "AgentA"
+        agent_repo.mkdir()
 
         maceff_repo = gitwork / "MacEff" / "macf"
         maceff_repo.mkdir(parents=True)
@@ -75,8 +75,8 @@ def test_manifest_loading_with_sibling_repo_context():
         manifest_path = maceff_repo / "manifest.json"
         manifest_path.write_text('{"discovery_index": {"test": "value"}}')
 
-        # Mock find_project_root to return ClaudeTheBuilder path
-        with patch('macf.utils.manifest.find_project_root', return_value=ctb_repo):
+        # Mock find_project_root to return AgentA path
+        with patch('macf.utils.manifest.find_project_root', return_value=agent_repo):
             # Should still find manifest via gitwork sibling search
             manifest = load_merged_manifest()
 
@@ -123,7 +123,7 @@ def test_consciousness_artifacts_discovery_cross_context():
     Test consciousness artifact discovery works from different contexts.
 
     Artifacts use agent_root-relative paths which should resolve correctly
-    whether running from MacEff, MannyMacEff, or ClaudeTheBuilder.
+    whether running from MacEff, MannyMacEff, or sibling agent repositories.
     """
     from macf.utils.artifacts import get_latest_consciousness_artifacts
 

@@ -4,7 +4,7 @@ Regression tests for C84 bugs.
 These tests explicitly validate the three C84 bugs are fixed and won't regress:
 1. Missing @dataclass decorator on SessionOperationalState
 2. Hook execution crashes silently
-3. Path resolution fails in ClaudeTheBuilder context
+3. Path resolution fails in sibling repository context
 
 If any C84 bug reappears, these tests fail immediately and loudly.
 """
@@ -177,7 +177,7 @@ class TestC84Bug2HookExecutionCrash:
 
 class TestC84Bug3PathResolution:
     """
-    C84 Bug 3: Path resolution failed when running from ClaudeTheBuilder.
+    C84 Bug 3: Path resolution failed when running from sibling repository.
 
     Symptom: Failed to load base manifest
     Root cause: Assumed MacEff always exists as submodule
