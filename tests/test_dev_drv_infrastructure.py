@@ -60,10 +60,11 @@ def test_format_minimal_temporal_message():
 
 def test_format_macf_footer_shortened_tag():
     """Test MACF footer uses shortened 🏗️ tag."""
-    footer = format_macf_footer("Test Environment")
+    footer = format_macf_footer()
 
     assert "🏗️ MACF Tools" in footer
-    assert "Test Environment" in footer
+    # Should include auto-detected environment
+    assert "Environment:" in footer
     # Should NOT contain old long tag
     assert "🔴 MACF CONSCIOUSNESS INFRASTRUCTURE 🔴" not in footer
 
