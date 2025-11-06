@@ -38,7 +38,7 @@ def test_agent_spec_valid_full():
         username="pa_builder",
         personality="../custom/agents/builder.md",
         subagents=["devops_eng", "test_eng"],
-        assigned_projects=["MacEff", "ClaudeTheBuilder"],
+        assigned_projects=["MacEff", "TestProject"],
         consciousness_artifacts=ConsciousnessArtifactsConfig(
             private=["checkpoints", "reflections"],
             public=["roadmaps", "reports"]

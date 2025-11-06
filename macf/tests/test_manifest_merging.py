@@ -46,7 +46,7 @@ class TestDeepMerge:
         overlay = {
             "consciousness_patterns": {
                 "triggers": ["pattern2"],
-                "metadata": {"author": "ClaudeTheBuilder"}
+                "metadata": {"author": "TestAgent"}
             }
         }
 
@@ -56,7 +56,7 @@ class TestDeepMerge:
         assert result["consciousness_patterns"]["triggers"] == ["pattern1", "pattern2"]
         # Nested dicts merge
         assert result["consciousness_patterns"]["metadata"]["version"] == "1.0"
-        assert result["consciousness_patterns"]["metadata"]["author"] == "ClaudeTheBuilder"
+        assert result["consciousness_patterns"]["metadata"]["author"] == "TestAgent"
 
     def test_new_keys_from_overlay(self):
         """New keys from overlay are added."""
@@ -200,7 +200,7 @@ class TestLoadMergedManifest:
             "consciousness_patterns": {
                 "triggers": ["trigger3"],
                 "metadata": {
-                    "project_name": "ClaudeTheBuilder"
+                    "project_name": "TestProject"
                 }
             }
         }
@@ -221,7 +221,7 @@ class TestLoadMergedManifest:
         metadata = result["consciousness_patterns"]["metadata"]
         assert metadata["version"] == "1.0"
         assert metadata["base_setting"] is True
-        assert metadata["project_name"] == "ClaudeTheBuilder"
+        assert metadata["project_name"] == "TestProject"
 
     def test_missing_project_manifest_graceful(self, tmp_path, monkeypatch):
         """Missing project manifest should fall back to base without crashing."""
