@@ -156,18 +156,18 @@ class TestFormatMacfFooter:
 
     def test_returns_non_empty_string(self):
         """Footer returns non-empty string."""
-        footer = format_macf_footer("Host System")
+        footer = format_macf_footer()
         assert isinstance(footer, str)
         assert len(footer) > 0
 
     def test_includes_version_number(self):
         """Footer includes version information."""
-        footer = format_macf_footer("Host System")
+        footer = format_macf_footer()
         # Should contain version-like pattern
         assert 'v' in footer.lower() or '.' in footer
 
     def test_includes_environment_string(self):
         """Footer includes environment identification."""
-        env_str = "MacEff Container"
-        footer = format_macf_footer(env_str)
-        assert env_str in footer
+        footer = format_macf_footer()
+        # Should auto-detect and include environment
+        assert "Environment:" in footer
