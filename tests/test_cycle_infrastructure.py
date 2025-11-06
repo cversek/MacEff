@@ -2,6 +2,9 @@
 Pragmatic unit tests for cycle tracking infrastructure.
 
 Testing philosophy: 4-6 tests per component, core functionality only.
+
+NOTE: Cycle tracking refactored from session-based to agent-based.
+Uses agent_state.json (persists across sessions) instead of session state.
 """
 
 import pytest
@@ -12,127 +15,130 @@ import tempfile
 import shutil
 
 # Add macf to path
-sys.path.insert(0, str(Path(__file__).parent.parent / "tools" / "src"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "macf" / "src"))
 
 from macf.utils import (
-    start_new_cycle,
-    get_current_cycle_number,
-    get_cycle_stats,
-    SessionOperationalState
+    get_agent_cycle_number,
+    increment_agent_cycle,
+    load_agent_state,
+    save_agent_state,
 )
 
 
 class TestCycleTracking:
-    """Test cycle number management."""
+    """Test agent-based cycle number management."""
 
     @pytest.fixture
-    def test_session(self):
-        """Create temporary test session."""
-        session_id = "test_cycle_session"
-        agent_id = "test_agent"
-        yield session_id, agent_id
-        # Cleanup - remove session state file
+    def test_agent_root(self):
+        """Create temporary agent root for testing."""
+        # Create temp directory for agent state
+        temp_dir = Path(tempfile.mkdtemp())
+        agent_root = temp_dir / "test_agent"
+        agent_root.mkdir(parents=True, exist_ok=True)
+
+        yield agent_root
+
+        # Cleanup
         try:
-            state = SessionOperationalState.load(session_id, agent_id)
-            state_file = Path(f"/tmp/macf/{agent_id}/{session_id}/session_state.json")
-            if state_file.exists():
-                state_file.unlink()
-            # Clean up session directory
-            session_dir = state_file.parent
-            if session_dir.exists():
-                shutil.rmtree(session_dir)
+            shutil.rmtree(temp_dir)
         except:
             pass
 
-    def test_start_new_cycle_increments_number(self, test_session):
-        """Starting new cycle increments from current."""
-        session_id, agent_id = test_session
+    def test_increment_agent_cycle_increments_number(self, test_agent_root):
+        """Incrementing agent cycle increments from current."""
+        session_id = "test_session_001"
 
         # Get initial cycle number (should be 1)
-        initial_cycle = get_current_cycle_number(session_id, agent_id)
+        initial_cycle = get_agent_cycle_number(test_agent_root)
         assert initial_cycle == 1
 
-        # Start new cycle - should increment to 2
-        new_cycle = start_new_cycle(session_id, agent_id)
+        # Increment cycle - should go to 2
+        new_cycle = increment_agent_cycle(session_id, test_agent_root)
         assert new_cycle == 2
 
         # Verify state persisted
-        current_cycle = get_current_cycle_number(session_id, agent_id)
+        current_cycle = get_agent_cycle_number(test_agent_root)
         assert current_cycle == 2
 
-    def test_cycle_persists_across_session_restart(self, test_session):
-        """Cycle number persists when session restarts without compaction."""
-        session_id, agent_id = test_session
+    def test_cycle_persists_across_sessions(self, test_agent_root):
+        """Cycle number persists across multiple sessions (agent-scoped)."""
+        session_id_1 = "session_001"
+        session_id_2 = "session_002"
 
-        # Set cycle to 47
-        state = SessionOperationalState.load(session_id, agent_id)
-        state.current_cycle_number = 47
-        state.save()
+        # First session increments to cycle 2
+        increment_agent_cycle(session_id_1, test_agent_root)
+        assert get_agent_cycle_number(test_agent_root) == 2
 
-        # Simulate session restart (new load)
-        reloaded_cycle = get_current_cycle_number(session_id, agent_id)
-        assert reloaded_cycle == 47
+        # Second session increments to cycle 3
+        increment_agent_cycle(session_id_2, test_agent_root)
+        assert get_agent_cycle_number(test_agent_root) == 3
 
-    def test_cycle_resets_on_compaction(self, test_session):
-        """Cycle increments when compaction detected."""
-        session_id, agent_id = test_session
+        # Cycle persists (agent-scoped, not session-scoped)
+        final_cycle = get_agent_cycle_number(test_agent_root)
+        assert final_cycle == 3
 
-        # Set up initial state
-        state = SessionOperationalState.load(session_id, agent_id)
-        state.current_cycle_number = 5
-        state.compaction_count = 4
-        state.save()
+    def test_cycle_increments_on_compaction(self, test_agent_root):
+        """Cycle increments when SessionStart hook detects compaction."""
+        session_id = "compaction_session"
 
-        # Simulate compaction: increment compaction_count and start new cycle
-        state = SessionOperationalState.load(session_id, agent_id)
-        state.compaction_count += 1
-        state.save()
-        new_cycle = start_new_cycle(session_id, agent_id)
+        # Simulate multiple compactions
+        cycle_1 = increment_agent_cycle(session_id, test_agent_root)
+        assert cycle_1 == 2  # First compaction: 1 -> 2
 
-        # Cycle should increment to 6
-        assert new_cycle == 6
+        cycle_2 = increment_agent_cycle(session_id, test_agent_root)
+        assert cycle_2 == 3  # Second compaction: 2 -> 3
 
-    def test_get_cycle_stats_returns_valid_dict(self, test_session):
-        """Cycle stats dict has required keys."""
-        session_id, agent_id = test_session
+        cycle_3 = increment_agent_cycle(session_id, test_agent_root)
+        assert cycle_3 == 4  # Third compaction: 3 -> 4
 
-        stats = get_cycle_stats(session_id, agent_id)
-
-        # Verify required keys
-        required_keys = ['cycle_number', 'cycle_started_at', 'cycle_duration', 'cycles_completed']
-        for key in required_keys:
-            assert key in stats, f"Missing required key: {key}"
-
-        # Verify types
-        assert isinstance(stats['cycle_number'], int)
-        assert isinstance(stats['cycle_started_at'], float)
-        assert isinstance(stats['cycle_duration'], float)
-        assert isinstance(stats['cycles_completed'], int)
-
-    def test_first_cycle_is_one_not_zero(self, test_session):
+    def test_first_cycle_is_one_not_zero(self, test_agent_root):
         """Fresh start begins at Cycle 1, not Cycle 0."""
-        session_id, agent_id = test_session
-
-        # Fresh state should have cycle 1
-        cycle = get_current_cycle_number(session_id, agent_id)
+        # Fresh agent state should start at cycle 1
+        cycle = get_agent_cycle_number(test_agent_root)
         assert cycle == 1
 
-        # Verify via stats as well
-        stats = get_cycle_stats(session_id, agent_id)
-        assert stats['cycle_number'] == 1
+    def test_agent_state_tracks_metadata(self, test_agent_root):
+        """Agent state includes cycle metadata (timestamps, counts)."""
+        session_id = "metadata_session"
 
-    def test_cycle_duration_calculation(self, test_session):
-        """Cycle duration calculated correctly."""
-        session_id, agent_id = test_session
+        # Increment cycle
+        increment_agent_cycle(session_id, test_agent_root)
 
-        # Set cycle_started_at to 60 seconds ago
-        state = SessionOperationalState.load(session_id, agent_id)
-        state.cycle_started_at = time.time() - 60
-        state.save()
+        # Load state and verify metadata
+        state = load_agent_state(test_agent_root)
 
-        # Get stats and verify duration is approximately 60 seconds
-        stats = get_cycle_stats(session_id, agent_id)
-        duration = stats['cycle_duration']
+        assert 'current_cycle_number' in state
+        assert 'cycle_started_at' in state
+        assert 'cycles_completed' in state
+        assert 'last_session_id' in state
 
-        # Allow 2 second tolerance for test execution time
-        assert 58 <= duration <= 62, f"Duration {duration} not in expected range [58-62]"
+        # Verify types
+        assert isinstance(state['current_cycle_number'], int)
+        assert isinstance(state['cycle_started_at'], float)
+        assert isinstance(state['cycles_completed'], int)
+        assert isinstance(state['last_session_id'], str)
+
+        # Verify values
+        assert state['current_cycle_number'] == 2
+        assert state['cycles_completed'] == 1
+        assert state['last_session_id'] == session_id
+
+    def test_cycle_started_at_timestamp_updates(self, test_agent_root):
+        """cycle_started_at timestamp updates on increment."""
+        session_id = "timestamp_session"
+
+        # Record time before increment
+        before = time.time()
+
+        # Increment cycle
+        increment_agent_cycle(session_id, test_agent_root)
+
+        # Record time after increment
+        after = time.time()
+
+        # Load state and check timestamp
+        state = load_agent_state(test_agent_root)
+        cycle_started_at = state['cycle_started_at']
+
+        # Timestamp should be between before and after
+        assert before <= cycle_started_at <= after
