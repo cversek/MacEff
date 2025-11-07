@@ -49,9 +49,13 @@ def test_no_compaction_detected(mock_dependencies):
 
     # Mock temporal context and environment
     with patch('macf.hooks.handle_session_start.get_temporal_context') as mock_temporal, \
-         patch('macf.hooks.handle_session_start.detect_execution_environment') as mock_env, \
-         patch('macf.hooks.handle_session_start.get_current_cycle_project') as mock_cycle, \
+         patch('macf.hooks.handle_session_start.get_rich_environment_string') as mock_env, \
+         patch('macf.hooks.handle_session_start.get_breadcrumb') as mock_breadcrumb, \
          patch('macf.hooks.handle_session_start.load_agent_state') as mock_load_proj, \
+         patch('macf.hooks.handle_session_start.get_token_info') as mock_token, \
+         patch('macf.hooks.handle_session_start.format_token_context_full') as mock_token_fmt, \
+         patch('macf.hooks.handle_session_start.format_manifest_awareness') as mock_manifest, \
+         patch('macf.hooks.handle_session_start.format_macf_footer') as mock_footer, \
          patch('time.time') as mock_time:
 
         mock_temporal.return_value = {
@@ -60,7 +64,11 @@ def test_no_compaction_detected(mock_dependencies):
             'time_of_day': 'Afternoon'
         }
         mock_env.return_value = 'Host System'
-        mock_cycle.return_value = 17
+        mock_breadcrumb.return_value = 's_4107604e/c_17/g_abc1234/p_def5678/t_1728400000'
+        mock_token.return_value = {}
+        mock_token_fmt.return_value = 'Token: 50k/200k (25%)'
+        mock_manifest.return_value = 'Manifest awareness'
+        mock_footer.return_value = 'MACF Tools'
         mock_time.return_value = 1728400000.0
 
         # Mock project state with last session ended 5 minutes ago
@@ -84,13 +92,13 @@ def test_no_compaction_detected(mock_dependencies):
         context = result["hookSpecificOutput"]["additionalContext"]
         assert "🏗️ MACF | Session Start" in context
         assert "Wednesday, October 8, 2025 at 12:26:43 PM EDT" in context
-        assert "Session: test-ses..." in context
         assert "5m" in context  # 300 seconds formatted
         assert "Compaction count: 0" in context
+        assert "Host System" in context
         assert "MACF Tools" in context
 
-        # Verify state was updated
-        assert mock_dependencies['state'].save.called
+        # In testing mode, state.save() may not be called (safe-by-default)
+        # Just verify format_message wasn't called (not compaction path)
         mock_dependencies['format_message'].assert_not_called()
 
 
@@ -103,9 +111,13 @@ def test_first_session_no_project_state(mock_dependencies):
 
     # Mock temporal context and environment
     with patch('macf.hooks.handle_session_start.get_temporal_context') as mock_temporal, \
-         patch('macf.hooks.handle_session_start.detect_execution_environment') as mock_env, \
-         patch('macf.hooks.handle_session_start.get_current_cycle_project') as mock_cycle, \
+         patch('macf.hooks.handle_session_start.get_rich_environment_string') as mock_env, \
+         patch('macf.hooks.handle_session_start.get_breadcrumb') as mock_breadcrumb, \
          patch('macf.hooks.handle_session_start.load_agent_state') as mock_load_proj, \
+         patch('macf.hooks.handle_session_start.get_token_info') as mock_token, \
+         patch('macf.hooks.handle_session_start.format_token_context_full') as mock_token_fmt, \
+         patch('macf.hooks.handle_session_start.format_manifest_awareness') as mock_manifest, \
+         patch('macf.hooks.handle_session_start.format_macf_footer') as mock_footer, \
          patch('time.time') as mock_time:
 
         mock_temporal.return_value = {
@@ -114,7 +126,11 @@ def test_first_session_no_project_state(mock_dependencies):
             'time_of_day': 'Afternoon'
         }
         mock_env.return_value = 'Host System'
-        mock_cycle.return_value = 17
+        mock_breadcrumb.return_value = 's_4107604e/c_17/g_abc1234/p_def5678/t_1728400000'
+        mock_token.return_value = {}
+        mock_token_fmt.return_value = 'Token: 50k/200k (25%)'
+        mock_manifest.return_value = 'Manifest awareness'
+        mock_footer.return_value = 'MACF Tools'
         mock_time.return_value = 1728400000.0
 
         # Mock empty project state (no previous session)
@@ -172,16 +188,29 @@ def test_compaction_detected_auto_mode(mock_dependencies):
 
 
 def test_compaction_count_increments(mock_dependencies):
-    """Test compaction count increments and state saves."""
+    """Test compaction count does NOT increment in testing mode (safe-by-default)."""
     from macf.hooks.handle_session_start import run
+    from unittest.mock import patch
 
     mock_dependencies['detect_compaction'].return_value = True
     mock_dependencies['state'].compaction_count = 2
 
-    run("", testing=True)
+    with patch('macf.hooks.handle_session_start.increment_agent_cycle') as mock_increment, \
+         patch('macf.hooks.handle_session_start.get_temporal_context') as mock_temporal, \
+         patch('macf.hooks.handle_session_start.get_rich_environment_string') as mock_env, \
+         patch('macf.hooks.handle_session_start.get_token_info') as mock_token:
 
-    assert mock_dependencies['state'].compaction_count == 3
-    assert mock_dependencies['state'].save.call_count == 2  # Saves after increment AND auto_mode update
+        mock_increment.return_value = 17
+        mock_temporal.return_value = {'timestamp_formatted': 'Test', 'day_of_week': 'Monday', 'time_of_day': 'Morning'}
+        mock_env.return_value = 'Host'
+        mock_token.return_value = {}
+
+        run("", testing=True)
+
+        # In testing=True mode, compaction_count should NOT increment
+        assert mock_dependencies['state'].compaction_count == 2
+        # State still saves for auto_mode update
+        assert mock_dependencies['state'].save.called
 
 
 def test_exception_handling(mock_dependencies):
@@ -193,8 +222,10 @@ def test_exception_handling(mock_dependencies):
 
     result = run("", testing=True)
 
-    # Hook should never crash - always returns continue
-    assert result == {"continue": True}
+    # Hook should never crash - always returns continue with systemMessage
+    assert result["continue"] is True
+    assert "systemMessage" in result
+    assert "SessionStart hook error" in result["systemMessage"]
 
 
 def test_empty_stdin_handling(mock_dependencies):
@@ -265,9 +296,13 @@ def test_source_field_startup_no_detection(mock_dependencies):
 
     # Mock temporal context and environment for non-compaction path
     with patch('macf.hooks.handle_session_start.get_temporal_context') as mock_temporal, \
-         patch('macf.hooks.handle_session_start.detect_execution_environment') as mock_env, \
-         patch('macf.hooks.handle_session_start.get_current_cycle_project') as mock_cycle, \
+         patch('macf.hooks.handle_session_start.get_rich_environment_string') as mock_env, \
+         patch('macf.hooks.handle_session_start.get_breadcrumb') as mock_breadcrumb, \
          patch('macf.hooks.handle_session_start.load_agent_state') as mock_load_proj, \
+         patch('macf.hooks.handle_session_start.get_token_info') as mock_token, \
+         patch('macf.hooks.handle_session_start.format_token_context_full') as mock_token_fmt, \
+         patch('macf.hooks.handle_session_start.format_manifest_awareness') as mock_manifest, \
+         patch('macf.hooks.handle_session_start.format_macf_footer') as mock_footer, \
          patch('time.time') as mock_time:
 
         mock_temporal.return_value = {
@@ -276,7 +311,11 @@ def test_source_field_startup_no_detection(mock_dependencies):
             'time_of_day': 'Afternoon'
         }
         mock_env.return_value = 'Host System'
-        mock_cycle.return_value = 17
+        mock_breadcrumb.return_value = 's_4107604e/c_17/g_abc1234/p_def5678/t_1728400000'
+        mock_token.return_value = {}
+        mock_token_fmt.return_value = 'Token: 50k/200k (25%)'
+        mock_manifest.return_value = 'Manifest awareness'
+        mock_footer.return_value = 'MACF Tools'
         mock_time.return_value = 1728400000.0
         mock_load_proj.return_value = {}
 
@@ -370,14 +409,21 @@ def test_cycle_increments_on_compaction(mock_dependencies):
 
     mock_dependencies['detect_compaction'].return_value = True
 
-    with patch('macf.hooks.handle_session_start.increment_cycle_project') as mock_increment:
-        # Mock increment_cycle_project to return new cycle number
+    with patch('macf.hooks.handle_session_start.increment_agent_cycle') as mock_increment, \
+         patch('macf.hooks.handle_session_start.get_temporal_context') as mock_temporal, \
+         patch('macf.hooks.handle_session_start.get_rich_environment_string') as mock_env, \
+         patch('macf.hooks.handle_session_start.get_token_info') as mock_token:
+
+        # Mock increment_agent_cycle to return new cycle number
         mock_increment.return_value = 20
+        mock_temporal.return_value = {'timestamp_formatted': 'Test', 'day_of_week': 'Monday', 'time_of_day': 'Morning'}
+        mock_env.return_value = 'Host'
+        mock_token.return_value = {}
 
         result = run(stdin_json, testing=True)
 
-        # Verify increment_cycle_project was called with session_id
-        mock_increment.assert_called_once_with("test-session-123")
+        # Verify increment_agent_cycle was called with session_id and testing=True
+        mock_increment.assert_called_once_with("test-session-123", testing=True)
 
         # Verify hook continues successfully
         assert result["continue"] is True

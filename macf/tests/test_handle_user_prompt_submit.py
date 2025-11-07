@@ -9,7 +9,11 @@ def mock_dependencies():
     with patch('macf.hooks.handle_user_prompt_submit.get_current_session_id') as mock_session, \
          patch('macf.hooks.handle_user_prompt_submit.get_temporal_context') as mock_temporal, \
          patch('macf.hooks.handle_user_prompt_submit.start_dev_drv') as mock_start_drv, \
-         patch('macf.hooks.handle_user_prompt_submit.get_current_cycle_project') as mock_cycle:
+         patch('macf.hooks.handle_user_prompt_submit.get_token_info') as mock_token, \
+         patch('macf.hooks.handle_user_prompt_submit.detect_auto_mode') as mock_auto, \
+         patch('macf.hooks.handle_user_prompt_submit.get_breadcrumb') as mock_breadcrumb, \
+         patch('macf.hooks.handle_user_prompt_submit.get_rich_environment_string') as mock_env, \
+         patch('macf.hooks.handle_user_prompt_submit.get_last_user_prompt_uuid') as mock_prompt_uuid:
 
         mock_session.return_value = "test-session-123"
         mock_temporal.return_value = {
@@ -17,14 +21,26 @@ def mock_dependencies():
             "day_of_week": "Wednesday",
             "time_of_day": "12:45:30 AM"
         }
-        mock_start_drv.return_value = "prompt-uuid-abc123"
-        mock_cycle.return_value = 18
+        mock_start_drv.return_value = None
+        mock_token.return_value = {
+            'cluac_level': 50,
+            'tokens_used': 100000,
+            'tokens_remaining': 100000
+        }
+        mock_auto.return_value = (False, "default", 0.0)
+        mock_breadcrumb.return_value = "s_test/c_1/g_abc1234/p_def5678/t_1234567890"
+        mock_env.return_value = "Host System"
+        mock_prompt_uuid.return_value = "prompt-uuid-abc123"
 
         yield {
             'session_id': mock_session,
             'temporal': mock_temporal,
             'start_drv': mock_start_drv,
-            'cycle': mock_cycle
+            'token_info': mock_token,
+            'auto_mode': mock_auto,
+            'breadcrumb': mock_breadcrumb,
+            'environment': mock_env,
+            'prompt_uuid': mock_prompt_uuid
         }
 
 
@@ -70,16 +86,14 @@ def test_dual_visibility_output_format(mock_dependencies):
     assert additional == system
 
 
-def test_cycle_number_displayed(mock_dependencies):
-    """Test cycle number is displayed in output."""
+def test_breadcrumb_displayed(mock_dependencies):
+    """Test breadcrumb is displayed in output."""
     from macf.hooks.handle_user_prompt_submit import run
-
-    mock_dependencies['cycle'].return_value = 18
 
     result = run("")
 
     context = result["hookSpecificOutput"]["additionalContext"]
-    assert "Cycle: 18" in context or "Cycle 18" in context
+    assert "s_test/c_1/g_abc1234/p_def5678/t_1234567890" in context
 
 
 def test_exception_handling(mock_dependencies):
