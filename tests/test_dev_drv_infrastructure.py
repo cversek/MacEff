@@ -159,7 +159,7 @@ def test_dev_drv_stats_accumulation(mock_config, mock_get_session_dir, tmp_path)
     mock_config.return_value.agent_id = "test_agent"
     mock_get_session_dir.return_value = tmp_path
 
-    session_id = "test_session"
+    session_id = "test_session_accumulation"  # Unique session ID
 
     # Run 3 DEV_DRVs
     for _ in range(3):
@@ -246,7 +246,7 @@ def test_deleg_drv_stats_accumulation(mock_config, mock_get_session_dir, tmp_pat
     mock_config.return_value.agent_id = "test_agent"
     mock_get_session_dir.return_value = tmp_path
 
-    session_id = "test_session"
+    session_id = "test_session_deleg_accumulation"  # Unique session ID
 
     # Run 3 DELEG_DRVs
     for _ in range(3):
@@ -290,7 +290,7 @@ def test_dev_drv_stats_with_zero_count(mock_config, mock_get_session_dir, tmp_pa
     mock_config.return_value.agent_id = "test_agent"
     mock_get_session_dir.return_value = tmp_path
 
-    session_id = "test_session"
+    session_id = "test_session_zero_count"  # Unique session ID
 
     stats = get_dev_drv_stats(session_id)
 
@@ -308,7 +308,7 @@ def test_deleg_drv_stats_with_zero_count(mock_config, mock_get_session_dir, tmp_
     mock_config.return_value.agent_id = "test_agent"
     mock_get_session_dir.return_value = tmp_path
 
-    session_id = "test_session"
+    session_id = "test_session_deleg_zero_count"  # Unique session ID
 
     stats = get_deleg_drv_stats(session_id)
 
