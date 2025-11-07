@@ -86,24 +86,38 @@ def get_agent_cycle_number(agent_root: Optional[Path] = None) -> int:
     except Exception:
         return 1
 
-def increment_agent_cycle(session_id: str, agent_root: Optional[Path] = None) -> int:
+def increment_agent_cycle(
+    session_id: str,
+    agent_root: Optional[Path] = None,
+    testing: bool = True
+) -> int:
     """
     Increment agent cycle number and update session tracking.
 
     Called by SessionStart hook when compaction detected.
     Operates on agent state which persists across sessions.
 
+    Side effects (ONLY when testing=False):
+    - Increments cycle counter in .maceff/agent_state.json
+    - Updates cycle_started_at, cycles_completed, last_session_id
+
     Args:
         session_id: Current session identifier
         agent_root: Agent root path (auto-detected if None)
+        testing: If True, return current+1 without mutating state (safe-by-default)
 
     Returns:
-        New cycle number
+        New cycle number (or current+1 if testing=True, without saving)
     """
     try:
         agent_state = load_agent_state(agent_root)
 
-        # Initialize if empty
+        # Testing mode: Return what would be the new value, but don't mutate
+        if testing:
+            current = agent_state.get('current_cycle_number', 1) if agent_state else 1
+            return current + 1
+
+        # Production mode: Initialize if empty
         if not agent_state:
             agent_state = {
                 'current_cycle_number': 1,
