@@ -280,6 +280,7 @@ def format_manifest_awareness() -> str:
         version = filtered_manifest.get('version', 'unknown')
         active_layers = filtered_manifest.get('active_layers', [])
         active_languages = filtered_manifest.get('active_languages', [])
+        active_ca_types = filtered_manifest.get('active_consciousness', [])
 
         # Build output sections with directive tone
         lines = [
@@ -290,6 +291,32 @@ def format_manifest_awareness() -> str:
             f"Active Languages: {', '.join(active_languages) if active_languages else 'none'}",
             ""
         ]
+
+        # Consciousness patterns summary
+        consciousness_patterns = filtered_manifest.get('consciousness_patterns', {})
+        pattern_count = len(consciousness_patterns.get('triggers', []))
+        lines.append(f"Consciousness Patterns Active: {pattern_count}")
+
+        # Active CA types with emoji mapping
+        if active_ca_types:
+            lines.append("Active CA Types:")
+            # Emoji mapping from DELEG_PLAN
+            ca_emoji_map = {
+                'observations': '🔬',
+                'experiments': '🧪',
+                'reports': '📊',
+                'reflections': '💭',
+                'checkpoints': '🔖',
+                'roadmaps': '🗺️',
+                'learnings': '❤️'
+            }
+            for ca_type in active_ca_types:
+                emoji = ca_emoji_map.get(ca_type, '📝')
+                lines.append(f"  {emoji}  {ca_type}")
+        else:
+            lines.append("Active CA Types: none")
+
+        lines.append("")
 
         # CRITICAL: Policies persist, memory doesn't
         lines.append("⚠️ CRITICAL: Policies persist across compaction. Your memory doesn't.")
