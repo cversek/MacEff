@@ -44,6 +44,8 @@ keys/*
 # MacEff customization layer (user-specific, created by maceff-init)
 .maceff/framework/         # All framework content (policies, templates, agent_defs)
 .maceff/config/            # All configuration (env files, config.json)
+.maceff/sessions/          # Session state files (runtime artifacts)
+.maceff/agent_state.json   # Agent cycle/state tracking (runtime artifact)
 
 # Optional: Keep example templates in git if needed
 # !.maceff/config/config.json.example
