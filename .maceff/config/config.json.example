@@ -1,0 +1,7 @@
+{
+  "moniker": "YourAgentName",
+  "agent_id": "your_agent_id",
+  "session_id": "auto-detected",
+  "agent_root": "auto-detected",
+  "temp_root": "/tmp/macf"
+}
