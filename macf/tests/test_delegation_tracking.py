@@ -99,6 +99,9 @@ class TestSessionStateDelegations:
         """
         state = SessionOperationalState.load(test_session_id, "test_agent")
 
+        # Clear any pre-existing delegations from previous tests
+        state.delegations_this_drive = []
+
         # Add 3 delegations in specific order
         delegations = [
             {

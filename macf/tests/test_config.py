@@ -17,8 +17,8 @@ from pathlib import Path
 from unittest.mock import Mock, patch, mock_open
 import pytest
 
-# Import will be added when config module is implemented
-# from macf.config import ConsciousnessConfig, ConfigurationError
+# Import consciousness config classes
+from macf.config import ConsciousnessConfig, ConfigurationError
 
 
 class TestConsciousnessConfig:
@@ -58,7 +58,7 @@ class TestConsciousnessConfig:
 class TestAgentDetection:
     """Test suite for agent name detection logic."""
 
-    def test_detect_agent_from_claude_project_dir(self, temp_claude_project):
+    def test_detect_agent_from_claude_project_dir(self, temp_claude_project, monkeypatch):
         """
         Test agent detection from .claude project directory.
 
@@ -66,10 +66,15 @@ class TestAgentDetection:
         - Extract agent name from directory structure
         - Use project-specific configuration
         """
-        config = ConsciousnessConfig()
-        with patch.object(config, '_find_claude_project_root') as mock_find:
-            mock_find.return_value = temp_claude_project
-            agent_name = config._detect_agent()
+        # Clear MACF_AGENT to ensure project detection is used
+        monkeypatch.delenv("MACF_AGENT", raising=False)
+        monkeypatch.delenv("MACF_AGENT_ROOT", raising=False)
+
+        # Mock both _find_claude_project_root and _find_project_root
+        with patch.object(ConsciousnessConfig, '_find_claude_project_root', return_value=temp_claude_project):
+            with patch.object(ConsciousnessConfig, '_find_project_root', return_value=temp_claude_project):
+                config = ConsciousnessConfig()
+                agent_name = config.agent_name
 
         assert agent_name == "test-project-agent"
 
@@ -109,7 +114,7 @@ class TestAgentDetection:
 class TestPathResolution:
     """Test suite for path resolution in different environments."""
 
-    def test_find_agent_root_in_container_environment(self, mock_container_env):
+    def test_find_agent_root_in_container_environment(self, monkeypatch):
         """
         Test path resolution in container environment.
 
@@ -118,36 +123,37 @@ class TestPathResolution:
         - Create directories if they don't exist
         - Return absolute path
         """
-        config = ConsciousnessConfig(agent_name="test-agent")
+        monkeypatch.setenv("USER", "testuser")
+        monkeypatch.delenv("MACF_AGENT_ROOT", raising=False)
 
-        with patch('os.path.exists') as mock_exists:
-            mock_exists.side_effect = lambda p: p == "/.dockerenv"
-            with patch('os.getenv') as mock_getenv:
-                mock_getenv.return_value = "testuser"
-
-                agent_root = config._find_agent_root()
+        # Mock _is_container to return True and _find_project_root to return None
+        with patch.object(ConsciousnessConfig, '_is_container', return_value=True):
+            with patch.object(ConsciousnessConfig, '_find_project_root', return_value=None):
+                config = ConsciousnessConfig(agent_name="testuser")
+                agent_root = config.agent_root
 
         expected_path = Path("/home/testuser/agent")
         assert agent_root == expected_path
 
-    def test_find_agent_root_in_host_environment(self, temp_claude_project):
+    def test_find_agent_root_in_host_environment(self, temp_claude_project, monkeypatch):
         """
         Test path resolution in host environment with .claude ancestor.
 
         When running in host with .claude project directory, should:
         - Find .claude directory in ancestors
-        - Use .claude/{agent}/agent/ structure
+        - Use project_root/agent/ structure
         - Return project-relative path
         """
-        config = ConsciousnessConfig(agent_name="test-agent")
+        monkeypatch.delenv("MACF_AGENT_ROOT", raising=False)
 
-        with patch('os.path.exists') as mock_exists:
-            mock_exists.side_effect = lambda p: p != "/.dockerenv" and ".claude" in p
+        with patch.object(ConsciousnessConfig, '_is_container', return_value=False):
+            with patch.object(ConsciousnessConfig, '_find_project_root', return_value=temp_claude_project):
+                config = ConsciousnessConfig(agent_name="test-agent")
+                agent_root = config.agent_root
 
-            agent_root = config._find_agent_root()
-
-        assert ".claude" in str(agent_root)
-        assert "test-agent/agent" in str(agent_root)
+        # Should use project_root/agent structure
+        expected_path = temp_claude_project / "agent"
+        assert agent_root == expected_path
 
     def test_find_agent_root_fallback_to_home(self, monkeypatch):
         """
@@ -158,13 +164,13 @@ class TestPathResolution:
         - Create in user home directory
         - Ensure path is writable
         """
-        config = ConsciousnessConfig(agent_name="test-agent")
+        monkeypatch.delenv("MACF_AGENT_ROOT", raising=False)
 
-        with patch('os.path.exists', return_value=False):
-            with patch.object(Path, 'home') as mock_home:
-                mock_home.return_value = Path("/home/testuser")
-
-                agent_root = config._find_agent_root()
+        with patch.object(ConsciousnessConfig, '_is_container', return_value=False):
+            with patch.object(ConsciousnessConfig, '_find_project_root', return_value=None):
+                with patch.object(Path, 'home', return_value=Path("/home/testuser")):
+                    config = ConsciousnessConfig(agent_name="test-agent")
+                    agent_root = config.agent_root
 
         expected_path = Path("/home/testuser/.macf/test-agent/agent")
         assert agent_root == expected_path
@@ -240,7 +246,7 @@ class TestTOMLSettingsLoading:
         assert "paths" in settings
         assert settings["consciousness"]["session_retention_days"] == 7
 
-    def test_load_settings_with_invalid_toml(self, temp_dir):
+    def test_load_settings_with_invalid_toml(self, temp_dir, monkeypatch):
         """
         Test loading settings with malformed TOML.
 
@@ -254,11 +260,18 @@ class TestTOMLSettingsLoading:
         missing_closing_bracket = true
         """
 
+        # Ensure tomllib is available for this test
+        import macf.config
+        if macf.config.tomllib is None:
+            pytest.skip("tomllib not available - cannot test TOML parsing errors")
+
         config = ConsciousnessConfig(agent_name="test-agent")
 
-        with patch("builtins.open", mock_open(read_data=invalid_content)):
-            with pytest.raises(ConfigurationError) as exc_info:
-                config._load_settings()
+        # Mock the config file to exist and contain invalid TOML
+        with patch.object(Path, 'exists', return_value=True):
+            with patch("builtins.open", mock_open(read_data=invalid_content)):
+                with pytest.raises(ConfigurationError) as exc_info:
+                    config._load_settings()
 
         assert "Invalid TOML" in str(exc_info.value)
         assert "config.toml" in str(exc_info.value)
@@ -365,7 +378,7 @@ def temp_claude_project(tmp_path):
     agent_dir = claude_dir / "test-project-agent"
     agent_dir.mkdir()
 
-    return claude_dir
+    return tmp_path  # Return project root, not .claude directory
 
 @pytest.fixture
 def mock_container_env(monkeypatch):

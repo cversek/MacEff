@@ -52,11 +52,12 @@ class TestGetTokenInfo:
         CC 2.0 shows 200k total (155k usable + 45k autocompact buffer).
         """
         # Mock to force default fallback (no session data)
-        with patch('macf.utils.get_current_session_id', return_value='unknown'):
-            with patch('macf.utils.find_project_root') as mock_root:
-                mock_root.return_value = Path('/tmp/nonexistent')
+        with patch('macf.utils.tokens.get_current_session_id', return_value='unknown'):
+            with patch('macf.utils.tokens.get_session_transcript_path', return_value=None):
+                with patch('macf.utils.tokens.find_project_root') as mock_root:
+                    mock_root.return_value = Path('/tmp/nonexistent')
 
-                result = get_token_info()
+                    result = get_token_info()
 
         # Verify max_tokens constant is 200000 (CC 2.0 transparent accounting)
         assert result['tokens_remaining'] == 200000
@@ -111,11 +112,12 @@ class TestGetTokenInfo:
 
         Should return default values without crashing.
         """
-        with patch('macf.utils.get_current_session_id', return_value='unknown'):
-            with patch('macf.utils.find_project_root') as mock_root:
-                mock_root.return_value = Path('/tmp/nonexistent')
+        with patch('macf.utils.tokens.get_current_session_id', return_value='unknown'):
+            with patch('macf.utils.tokens.get_session_transcript_path', return_value=None):
+                with patch('macf.utils.tokens.find_project_root') as mock_root:
+                    mock_root.return_value = Path('/tmp/nonexistent')
 
-                result = get_token_info()
+                    result = get_token_info()
 
         # Should return default values (CC 2.0: 200k total)
         assert result['tokens_used'] == 0
@@ -133,7 +135,7 @@ class TestGetTokenInfo:
         """
         test_session_id = 'test-session-12345'
 
-        with patch('macf.utils.get_session_transcript_path') as mock_path:
+        with patch('macf.utils.tokens.get_session_transcript_path') as mock_path:
             mock_path.return_value = None  # Simulate not found
 
             result = get_token_info(session_id=test_session_id)
@@ -322,16 +324,16 @@ class TestTokenInfoEdgeCases:
     def test_zero_tokens_used(self):
         """Test behavior when no tokens used yet (fresh session)."""
         # Mock to force default fallback (zero tokens used)
-        with patch('macf.utils.get_current_session_id', return_value='unknown'):
-            with patch('macf.utils.find_project_root') as mock_root:
-                mock_root.return_value = Path('/tmp/nonexistent')
+        with patch('macf.utils.tokens.get_current_session_id', return_value='unknown'):
+            with patch('macf.utils.tokens.get_session_transcript_path', return_value=None):
+                with patch('macf.utils.tokens.find_project_root') as mock_root:
+                    mock_root.return_value = Path('/tmp/nonexistent')
 
-                result = get_token_info()
+                    result = get_token_info()
 
-        # Fresh session should have CLUAC = 0 (special case) or 100
-        # Default source returns cluac_level: 0
+        # Fresh session should have CLUAC = 0 or 100 for zero tokens
         assert result['cluac_level'] in [0, 100]
-        assert result['tokens_used'] >= 0
+        assert result['tokens_used'] == 0
 
     def test_near_compaction_tokens(self):
         """Test CLUAC calculation near compaction threshold."""

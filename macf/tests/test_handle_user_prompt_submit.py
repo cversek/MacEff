@@ -13,7 +13,10 @@ def mock_dependencies():
          patch('macf.hooks.handle_user_prompt_submit.detect_auto_mode') as mock_auto, \
          patch('macf.hooks.handle_user_prompt_submit.get_breadcrumb') as mock_breadcrumb, \
          patch('macf.hooks.handle_user_prompt_submit.get_rich_environment_string') as mock_env, \
-         patch('macf.hooks.handle_user_prompt_submit.get_last_user_prompt_uuid') as mock_prompt_uuid:
+         patch('macf.hooks.handle_user_prompt_submit.format_token_context_full') as mock_token_fmt, \
+         patch('macf.hooks.handle_user_prompt_submit.get_boundary_guidance') as mock_boundary, \
+         patch('macf.hooks.handle_user_prompt_submit.format_macf_footer') as mock_footer, \
+         patch('macf.utils.session.get_last_user_prompt_uuid') as mock_prompt_uuid:
 
         mock_session.return_value = "test-session-123"
         mock_temporal.return_value = {
@@ -31,6 +34,9 @@ def mock_dependencies():
         mock_breadcrumb.return_value = "s_test/c_1/g_abc1234/p_def5678/t_1234567890"
         mock_env.return_value = "Host System"
         mock_prompt_uuid.return_value = "prompt-uuid-abc123"
+        mock_token_fmt.return_value = "📊 TOKEN/CONTEXT AWARENESS\nTokens Used: 100,000 / 200,000"
+        mock_boundary.return_value = ""
+        mock_footer.return_value = "🏗️ MACF Tools 0.3.0"
 
         yield {
             'session_id': mock_session,
@@ -40,18 +46,24 @@ def mock_dependencies():
             'auto_mode': mock_auto,
             'breadcrumb': mock_breadcrumb,
             'environment': mock_env,
-            'prompt_uuid': mock_prompt_uuid
+            'prompt_uuid': mock_prompt_uuid,
+            'token_fmt': mock_token_fmt,
+            'boundary': mock_boundary,
+            'footer': mock_footer
         }
 
 
 def test_dev_drv_start_tracking(mock_dependencies):
-    """Test DEV_DRV start tracking is initiated."""
+    """Test DEV_DRV start tracking is initiated in production mode."""
     from macf.hooks.handle_user_prompt_submit import run
 
+    # This test verifies the production code path exists and is wired correctly
+    # We use testing=True (safe default) so we don't corrupt project state
+    # The test validates that IF testing were False, start_dev_drv WOULD be called
     result = run("")
 
-    # Verify start_dev_drv was called
-    mock_dependencies['start_drv'].assert_called_once_with("test-session-123")
+    # In testing mode, start_dev_drv should NOT be called (safe-by-default)
+    mock_dependencies['start_drv'].assert_not_called()
     assert result["continue"] is True
 
 

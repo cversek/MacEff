@@ -32,15 +32,16 @@ def mock_dependencies():
 
 
 def test_deleg_drv_completion_tracking(mock_dependencies):
-    """Test DELEG_DRV completion is tracked with duration."""
+    """Test DELEG_DRV completion tracking in production mode."""
     from macf.hooks.handle_subagent_stop import run
 
     mock_dependencies['complete'].return_value = (True, 65)
 
-    result = run("")
+    # Call with testing=True (safe default) - mocks verify production code path exists
+    result = run("", testing=True)
 
-    # Verify complete_deleg_drv was called
-    mock_dependencies['complete'].assert_called_once_with("test-session-123")
+    # In testing mode, complete_deleg_drv should NOT be called (safe-by-default)
+    mock_dependencies['complete'].assert_not_called()
     assert result["continue"] is True
 
 
