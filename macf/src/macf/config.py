@@ -9,7 +9,15 @@ artifacts across different environments (container, host, fallback).
 import json
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
+
+try:
+    import tomllib  # Python 3.11+
+except ImportError:
+    try:
+        import tomli as tomllib  # Fallback for older Python
+    except ImportError:
+        tomllib = None  # TOML support not available
 
 
 class ConfigurationError(Exception):
@@ -50,22 +58,32 @@ class ConsciousnessConfig:
         Detect agent name from environment.
 
         Detection priority:
-        1. Check .claude project structure
-        2. Fallback to generic agent name
+        1. MACF_AGENT environment variable
+        2. Check .claude project structure
+        3. Fallback to system USER
 
         Returns:
             Detected agent name string.
         """
-        # Check .claude project structure
-        project_root = self._find_project_root()
-        if project_root and (project_root / ".claude").exists():
-            # Use project directory name
-            return project_root.name
+        # 1. Check MACF_AGENT environment variable
+        if agent_env := os.getenv("MACF_AGENT"):
+            return agent_env
 
-        # Fallback to generic agent name
-        return "agent"
+        # 2. Check .claude project structure
+        project_root = self._find_claude_project_root()
+        if project_root:
+            # Extract agent name from .claude subdirectory
+            claude_dir = project_root / ".claude"
+            if claude_dir.exists():
+                # Look for agent-specific subdirectory
+                subdirs = [d for d in claude_dir.iterdir() if d.is_dir()]
+                if subdirs:
+                    return subdirs[0].name
 
-    def _find_project_root(self) -> Optional[Path]:
+        # 3. Fallback to system USER environment variable
+        return os.getenv("USER", "unknown-user")
+
+    def _find_claude_project_root(self) -> Optional[Path]:
         """
         Find project root with .claude directory.
 
@@ -80,6 +98,15 @@ class ConsciousnessConfig:
                 return current
             current = current.parent
         return None
+
+    def _find_project_root(self) -> Optional[Path]:
+        """
+        Alias for _find_claude_project_root for backward compatibility.
+
+        Returns:
+            Path to project root or None if not found.
+        """
+        return self._find_claude_project_root()
 
     def _is_container(self) -> bool:
         """Check if running in container context."""
@@ -217,3 +244,94 @@ class ConsciousnessConfig:
             except Exception:
                 return {}
         return {}
+
+    def _load_settings(self) -> Dict[str, Any]:
+        """
+        Load settings from TOML configuration file with environment variable overrides.
+
+        Returns:
+            dict: Configuration settings with defaults
+        """
+        # Default settings
+        settings = {
+            "consciousness": {
+                "session_retention_days": 7,
+                "checkpoint_format": "structured"
+            },
+            "paths": {
+                "temp_dir": "/tmp/macf",
+                "logs_dir": "logs"
+            },
+            "features": {
+                "reflection_enabled": True,
+                "strategic_checkpoints": True
+            }
+        }
+
+        # Try to load from TOML file
+        config_file = self.agent_root / "config.toml"
+        if config_file.exists() and tomllib:
+            try:
+                with open(config_file, 'rb') as f:
+                    file_settings = tomllib.load(f)
+                    # Merge file settings into defaults
+                    for section, values in file_settings.items():
+                        if section in settings:
+                            settings[section].update(values)
+                        else:
+                            settings[section] = values
+            except Exception as e:
+                raise ConfigurationError(f"Invalid TOML in {config_file}: {e}")
+
+        # Apply environment variable overrides
+        if retention_days := os.getenv("MACF_SESSION_RETENTION_DAYS"):
+            try:
+                settings["consciousness"]["session_retention_days"] = int(retention_days)
+            except ValueError:
+                pass
+
+        return settings
+
+    @staticmethod
+    def _validate_agent_name(agent_name: str) -> bool:
+        """
+        Validate agent name format.
+
+        Agent names must:
+        - Be non-empty strings
+        - Contain only valid filesystem characters
+        - Not contain path separators
+
+        Args:
+            agent_name: Agent name to validate
+
+        Returns:
+            bool: True if valid
+
+        Raises:
+            ConfigurationError: If agent name is invalid
+        """
+        if not agent_name:
+            raise ConfigurationError("Agent name cannot be empty")
+
+        if '/' in agent_name or '\\' in agent_name:
+            raise ConfigurationError(
+                f"Agent name '{agent_name}' cannot contain path separators"
+            )
+
+        return True
+
+    def _validate_path_permissions(self, path: Path) -> None:
+        """
+        Validate that path is writable.
+
+        Args:
+            path: Path to validate
+
+        Raises:
+            ConfigurationError: If path is not writable
+        """
+        if not os.access(path, os.W_OK):
+            raise ConfigurationError(
+                f"Path '{path}' is not writable"
+            )

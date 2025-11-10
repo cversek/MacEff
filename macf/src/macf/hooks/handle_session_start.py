@@ -125,11 +125,9 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
                 state.compaction_count += 1
                 state.save()
 
-                # Increment cycle number in agent state (survives session boundaries)
-                cycle_number = increment_agent_cycle(session_id, testing=False)
-            else:
-                # Testing mode: Return what cycle would be without mutating state
-                cycle_number = increment_agent_cycle(session_id, testing=True)
+            # Increment cycle number in agent state (survives session boundaries)
+            # Pass testing parameter through (respects safe-by-default)
+            cycle_number = increment_agent_cycle(session_id, testing=testing)
 
             # Detect AUTO_MODE
             auto_mode, source, confidence = detect_auto_mode(session_id)
