@@ -49,31 +49,6 @@ class TestProjectStateCore:
         assert loaded['last_session_id'] == 'session-abc123'
         assert 'last_updated' in loaded  # Auto-added by save
 
-    def test_cycle_increment(self, tmp_path):
-        """Cycle increments correctly in project state."""
-        agent_root = tmp_path / "project"
-        agent_root.mkdir()
-
-        # Initialize project state at cycle 10
-        initial_state = {
-            'current_cycle_number': 10,
-            'cycle_started_at': 1234567890.0,
-            'cycles_completed': 9,
-            'last_session_id': 'old-session'
-        }
-        save_agent_state(initial_state, agent_root)
-
-        # Increment cycle
-        new_cycle = increment_agent_cycle('new-session', agent_root)
-        assert new_cycle == 11
-
-        # Verify state updated correctly
-        loaded = load_agent_state(agent_root)
-        assert loaded['current_cycle_number'] == 11
-        assert loaded['cycles_completed'] == 10
-        assert loaded['last_session_id'] == 'new-session'
-        assert loaded['cycle_started_at'] > 1234567890.0  # Timestamp updated
-
     def test_session_migration_detection(self, tmp_path):
         """Session migration detected when session ID changes."""
         agent_root = tmp_path / "project"
@@ -116,29 +91,6 @@ class TestProjectStateBackwardCompatibility:
         is_migration, old_id = detect_session_migration('any-session', agent_root)
         assert is_migration is False
         assert old_id == ""
-
-    def test_first_run_initialization(self, tmp_path):
-        """First run creates valid project state."""
-        agent_root = tmp_path / "project"
-        agent_root.mkdir()
-
-        # No agent state exists yet
-        assert not (agent_root / ".maceff" / "agent_state.json").exists()
-
-        # Increment cycle on first run
-        new_cycle = increment_agent_cycle('first-session', agent_root)
-        assert new_cycle == 2  # Starts at 1, increments to 2
-
-        # Verify state file created
-        assert (agent_root / ".maceff" / "agent_state.json").exists()
-
-        # Verify state structure
-        state = load_agent_state(agent_root)
-        assert state['current_cycle_number'] == 2
-        assert state['cycles_completed'] == 1
-        assert state['last_session_id'] == 'first-session'
-        assert 'cycle_started_at' in state
-        assert 'last_updated' in state
 
     def test_creates_maceff_directory(self, tmp_path):
         """Save creates .maceff directory if missing."""

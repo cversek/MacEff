@@ -154,14 +154,25 @@ def test_exception_handling(mock_dependencies):
 def test_saves_session_end_time_to_project_state(mock_dependencies):
     """Test Stop hook saves end time to project state for cross-session tracking."""
     from macf.hooks.handle_stop import run
-    from unittest.mock import patch
+    from unittest.mock import patch, MagicMock
 
     with patch('macf.hooks.handle_stop.load_agent_state') as mock_load, \
          patch('macf.hooks.handle_stop.save_agent_state') as mock_save, \
          patch('macf.hooks.handle_stop.get_temporal_context') as mock_temporal, \
-         patch('macf.hooks.handle_stop.detect_execution_environment') as mock_env, \
-         patch('macf.hooks.handle_stop.get_current_cycle_project') as mock_cycle, \
+         patch('macf.hooks.handle_stop.get_rich_environment_string') as mock_env, \
+         patch('macf.hooks.handle_stop.get_breadcrumb') as mock_breadcrumb, \
+         patch('macf.hooks.handle_stop.get_token_info') as mock_token, \
+         patch('macf.hooks.handle_stop.detect_auto_mode') as mock_auto, \
+         patch('macf.hooks.handle_stop.format_token_context_full') as mock_token_fmt, \
+         patch('macf.hooks.handle_stop.get_boundary_guidance') as mock_boundary, \
+         patch('macf.hooks.handle_stop.format_macf_footer') as mock_footer, \
+         patch('macf.utils.SessionOperationalState.load') as mock_state_load, \
          patch('time.time') as mock_time:
+
+        # Mock state for UUID preservation
+        mock_state = MagicMock()
+        mock_state.current_dev_drv_prompt_uuid = 'abc123'
+        mock_state_load.return_value = mock_state
 
         mock_load.return_value = {}
         mock_time.return_value = 1728400000.0
@@ -171,11 +182,17 @@ def test_saves_session_end_time_to_project_state(mock_dependencies):
             'time_of_day': 'Afternoon'
         }
         mock_env.return_value = 'Host System'
-        mock_cycle.return_value = 17
+        mock_breadcrumb.return_value = 's/c/g/p/t'
+        mock_token.return_value = {'cluac_level': 50, 'tokens_used': 100000, 'tokens_remaining': 100000}
+        mock_auto.return_value = (False, "default", 0.0)
+        mock_token_fmt.return_value = "Token context"
+        mock_boundary.return_value = ""
+        mock_footer.return_value = "Footer"
 
-        result = run("")
+        result = run("", testing=True)  # SAFE: testing=True prevents state corruption
 
-        # Verify project state was loaded and saved
+        # In testing mode, verify the code paths exist and are wired correctly
+        # The mocks allow us to verify load/save are called without actual file I/O
         mock_load.assert_called_once()
         mock_save.assert_called_once()
 
