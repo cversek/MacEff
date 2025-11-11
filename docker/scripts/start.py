@@ -177,6 +177,14 @@ def create_agent_tree(username: str, agent_spec: AgentSpec, defaults_config: Opt
     run_command(['chown', f'{username}:{username}', str(private)])
     run_command(['chown', f'{username}:{username}', str(public)])
 
+    # Explicitly enforce permissions (mkdir mode= is unreliable due to umask)
+    if immutable:
+        run_command(['chmod', '555', str(private)])
+        run_command(['chmod', '555', str(public)])
+    else:
+        run_command(['chmod', '750', str(private)])
+        run_command(['chmod', '755', str(public)])
+
     if ca_config:
         # Private artifacts
         if ca_config.private:
@@ -267,6 +275,15 @@ def create_subagent_workspace(username: str, sa_name: str, sa_spec: SubagentSpec
     run_command(['chown', f'{username}:{username}', str(private)])
     run_command(['chown', f'{username}:{username}', str(public)])
     run_command(['chown', f'{username}:{username}', str(assigned)])
+
+    # Explicitly enforce permissions (mkdir mode= is unreliable due to umask)
+    if immutable:
+        run_command(['chmod', '555', str(private)])
+        run_command(['chmod', '555', str(public)])
+    else:
+        run_command(['chmod', '750', str(private)])
+        run_command(['chmod', '750', str(public)])
+    run_command(['chmod', '755', str(assigned)])
 
     if ca_config:
         # Private artifacts
