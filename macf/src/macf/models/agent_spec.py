@@ -20,6 +20,10 @@ class ConsciousnessArtifactsConfig(BaseModel):
         default=None,
         description="Public artifact types (roadmaps, reports, observations, experiments, delegation_trails)"
     )
+    immutable_structure: bool = Field(
+        default=True,
+        description="Prevent creation of new CA types via read-only parent directories (555 permissions)"
+    )
 
 
 class AgentSpec(BaseModel):
