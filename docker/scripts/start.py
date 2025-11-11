@@ -154,16 +154,28 @@ def create_agent_tree(username: str, agent_spec: AgentSpec, defaults_config: Opt
     private = agent / 'private'
     public = agent / 'public'
 
-    private.mkdir(mode=0o750, exist_ok=True)
-    public.mkdir(mode=0o755, exist_ok=True)
-
-    run_command(['chown', f'{username}:{username}', str(private)])
-    run_command(['chown', f'{username}:{username}', str(public)])
-
-    # Create consciousness artifact directories
+    # Determine parent directory permissions based on immutable_structure flag
     ca_config = agent_spec.consciousness_artifacts
     if ca_config is None and defaults_config:
         ca_config = defaults_config.get('consciousness_artifacts')
+
+    # Check immutable_structure flag (defaults to True for governance)
+    immutable = getattr(ca_config, 'immutable_structure', True) if ca_config else True
+
+    if immutable:
+        # Read-only parent dirs prevent agents from creating new CA types
+        parent_mode_private = 0o555  # r-xr-xr-x (read-only, no mkdir)
+        parent_mode_public = 0o555   # r-xr-xr-x (read-only, no mkdir)
+    else:
+        # Standard permissions allow agents to create new directories
+        parent_mode_private = 0o750  # rwxr-x--- (writable)
+        parent_mode_public = 0o755   # rwxr-xr-x (writable)
+
+    private.mkdir(mode=parent_mode_private, exist_ok=True)
+    public.mkdir(mode=parent_mode_public, exist_ok=True)
+
+    run_command(['chown', f'{username}:{username}', str(private)])
+    run_command(['chown', f'{username}:{username}', str(public)])
 
     if ca_config:
         # Private artifacts
@@ -235,16 +247,26 @@ def create_subagent_workspace(username: str, sa_name: str, sa_spec: SubagentSpec
     public = sa_root / 'public'
     assigned = sa_root / 'assigned'
 
-    private.mkdir(mode=0o750, exist_ok=True)
-    public.mkdir(mode=0o750, exist_ok=True)
+    # Determine parent directory permissions based on immutable_structure flag
+    ca_config = sa_spec.consciousness_artifacts
+    immutable = getattr(ca_config, 'immutable_structure', True) if ca_config else True
+
+    if immutable:
+        # Read-only parent dirs prevent subagents from creating new CA types
+        parent_mode_private = 0o555  # r-xr-xr-x (read-only, no mkdir)
+        parent_mode_public = 0o555   # r-xr-xr-x (read-only, no mkdir)
+    else:
+        # Standard permissions allow subagents to create new directories
+        parent_mode_private = 0o750  # rwxr-x--- (writable)
+        parent_mode_public = 0o750   # rwxr-x--- (writable)
+
+    private.mkdir(mode=parent_mode_private, exist_ok=True)
+    public.mkdir(mode=parent_mode_public, exist_ok=True)
     assigned.mkdir(mode=0o755, exist_ok=True)
 
     run_command(['chown', f'{username}:{username}', str(private)])
     run_command(['chown', f'{username}:{username}', str(public)])
     run_command(['chown', f'{username}:{username}', str(assigned)])
-
-    # Create consciousness artifact directories for SA
-    ca_config = sa_spec.consciousness_artifacts
 
     if ca_config:
         # Private artifacts
