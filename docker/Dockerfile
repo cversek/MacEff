@@ -62,8 +62,9 @@ RUN chmod 0755 /usr/local/bin/sa-exec
 COPY docker/start.sh /usr/local/bin/start.sh
 RUN chmod +x /usr/local/bin/start.sh
 
-COPY docker/scripts/start.py /usr/local/bin/start.py
-RUN chmod +x /usr/local/bin/start.py
+# NOTE: start.py moved to derived images (volatile file in volatile layer)
+# Each deployment's Dockerfile should COPY start.py after this base layer
+# This optimization prevents base image rebuilds when start.py changes
 
 EXPOSE 22
 ENTRYPOINT ["/usr/bin/tini","--"]
