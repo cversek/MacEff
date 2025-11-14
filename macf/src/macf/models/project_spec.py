@@ -22,6 +22,16 @@ class RepoMount(BaseModel):
         description="Relative path within project workspace (e.g., repos/backend)"
     )
 
+    worktree: bool = Field(
+        default=True,
+        description="Create git worktree (True) or plain clone (False). Worktrees enable multi-agent collaboration without race conditions."
+    )
+
+    default_branch: str = Field(
+        default="main",
+        description="Default branch for worktree creation (e.g., 'main', 'master', 'develop')"
+    )
+
 
 class DataMount(BaseModel):
     """Data directory mount configuration."""
