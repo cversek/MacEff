@@ -387,19 +387,148 @@ def create_project_workspace(project_name: str, project_spec: ProjectSpec) -> No
                 run_command(['cp', str(cmd_source), str(cmd_target)])
 
 
-def create_workspace_symlinks(username: str, assigned_projects: List[str]) -> None:
-    """Create workspace symlinks to shared projects."""
+def setup_git_worktree(username: str, shared_repo_path: Path, agent_repo_path: Path,
+                       repo_url: str, default_branch: str) -> None:
+    """
+    Create git worktree for agent with dedicated branch.
+
+    Worktrees enable multi-agent collaboration without race conditions:
+    - Shared .git repository (commits visible to all)
+    - Independent working trees per agent (isolated file edits)
+    - Agent-specific branches prevent conflicts
+
+    Idempotent: Safe to run multiple times.
+
+    Args:
+        username: Agent username (e.g., 'pa_manny')
+        shared_repo_path: Path to shared .git repository
+        agent_repo_path: Path where agent's worktree will be created
+        repo_url: Git repository URL (for initial clone if needed)
+        default_branch: Base branch (e.g., 'main')
+    """
+    # Configure git to trust shared_workspace repos (bypass ownership security)
+    run_command(['git', 'config', '--global', '--add', 'safe.directory', str(shared_repo_path)], check=False)
+
+    agent_branch = f"{username}/{default_branch}"
+
+    # Check if worktree already exists and is healthy
+    if agent_repo_path.exists():
+        git_file = agent_repo_path / '.git'
+        if git_file.is_file():
+            # Worktree exists, verify it's valid
+            try:
+                run_command(['git', '-C', str(agent_repo_path), 'status'], check=True, capture=True)
+                log(f"Worktree already exists: {agent_repo_path}")
+                return
+            except:
+                # Worktree broken, remove and recreate
+                log(f"Removing broken worktree: {agent_repo_path}")
+                run_command(['rm', '-rf', str(agent_repo_path)], check=False)
+
+    # Ensure shared repository exists
+    if not shared_repo_path.exists():
+        log(f"Shared repo missing, cannot create worktree: {shared_repo_path}")
+        return
+
+    # Create agent-specific branch if it doesn't exist
+    try:
+        run_command(['git', '-C', str(shared_repo_path), 'show-ref', '--verify',
+                    f'refs/heads/{agent_branch}'], check=True, capture=True)
+        log(f"Branch exists: {agent_branch}")
+    except:
+        # Branch doesn't exist, create from default_branch
+        log(f"Creating branch: {agent_branch} from {default_branch}")
+        run_command(['git', '-C', str(shared_repo_path), 'branch',
+                    agent_branch, default_branch], check=False)
+
+    # Create worktree
+    agent_repo_path.parent.mkdir(parents=True, exist_ok=True)
+    log(f"Creating worktree: {agent_repo_path} on branch {agent_branch}")
+    run_command(['git', '-C', str(shared_repo_path), 'worktree', 'add',
+                '-B', agent_branch, str(agent_repo_path), default_branch], check=False)
+
+
+def create_workspace_structure(username: str, assigned_projects: List[str],
+                               projects_config: Optional[ProjectsConfig]) -> None:
+    """
+    Create workspace with real directories and git worktrees (replaces symlinks).
+
+    This preserves 3-layer CLAUDE.md discovery by avoiding symlinks that
+    break upward path traversal.
+
+    Args:
+        username: Agent username
+        assigned_projects: List of project names assigned to this agent
+        projects_config: Validated ProjectsConfig (needed for repo details)
+    """
     home = Path(f'/home/{username}')
     workspace = home / 'workspace'
     workspace.mkdir(mode=0o755, exist_ok=True)
 
     for project_name in assigned_projects:
-        project_link = workspace / project_name
-        project_target = SHARED_WORKSPACE / project_name
+        project_workspace = workspace / project_name
+        shared_project = SHARED_WORKSPACE / project_name
 
-        if project_target.exists() and not project_link.exists():
-            project_link.symlink_to(project_target)
-            log(f"Workspace symlink created: {username} -> {project_name}")
+        if not shared_project.exists():
+            log(f"Shared project missing: {project_name}")
+            continue
+
+        # Create real workspace directory (not symlink)
+        project_workspace.mkdir(mode=0o755, exist_ok=True)
+        run_command(['chown', f'{username}:{username}', str(project_workspace)])
+
+        # Copy project CLAUDE.md (Layer 3 context)
+        shared_context = shared_project / 'CLAUDE.md'
+        agent_context = project_workspace / 'CLAUDE.md'
+        if shared_context.exists() and not agent_context.exists():
+            run_command(['cp', str(shared_context), str(agent_context)])
+            run_command(['chown', f'{username}:{username}', str(agent_context)])
+
+        # Get project spec for repo details
+        if not projects_config or project_name not in projects_config.projects:
+            log(f"Project spec not found: {project_name}")
+            continue
+
+        project_spec = projects_config.projects[project_name]
+
+        # Setup git worktrees for repos
+        if project_spec.repos:
+            for repo_mount in project_spec.repos:
+                shared_repo = shared_project / repo_mount.path
+                agent_repo = project_workspace / repo_mount.path
+
+                if not shared_repo.exists():
+                    log(f"Shared repo missing: {shared_repo}")
+                    continue
+
+                # Use worktree if enabled (default=True)
+                if repo_mount.worktree:
+                    setup_git_worktree(
+                        username=username,
+                        shared_repo_path=shared_repo,
+                        agent_repo_path=agent_repo,
+                        repo_url=repo_mount.url,
+                        default_branch=repo_mount.default_branch
+                    )
+                else:
+                    # Plain directory structure (no worktree)
+                    agent_repo.mkdir(parents=True, exist_ok=True)
+                    run_command(['chown', '-R', f'{username}:{username}', str(agent_repo)])
+
+        # Create data and outputs symlinks (if shared directories exist)
+        shared_data = shared_project / 'data'
+        agent_data = project_workspace / 'data'
+        if shared_data.exists() and not agent_data.exists():
+            agent_data.symlink_to(shared_data)
+            log(f"Data symlink: {username}/{project_name}/data → {shared_data}")
+
+        shared_outputs = shared_project / 'outputs'
+        agent_outputs = project_workspace / 'outputs'
+        if shared_outputs.exists() and not agent_outputs.exists():
+            agent_outputs.symlink_to(shared_outputs)
+            log(f"Outputs symlink: {username}/{project_name}/outputs → {shared_outputs}")
+
+        log(f"Workspace structure created: {username} -> {project_name}")
 
 
 def initialize_agents(agents_config: AgentsConfig) -> None:
@@ -625,10 +754,10 @@ def main() -> int:
                 log(f"Setting up project: {project_name}")
                 create_project_workspace(project_name, project_spec)
 
-        # Create workspace symlinks for assigned projects
+        # Create workspace structure with worktrees for assigned projects
         for agent_name, agent_spec in agents_config.agents.items():
             if agent_spec.assigned_projects:
-                create_workspace_symlinks(agent_spec.username, agent_spec.assigned_projects)
+                create_workspace_structure(agent_spec.username, agent_spec.assigned_projects, projects_config)
 
         # Install MACF tools
         install_macf_tools()
