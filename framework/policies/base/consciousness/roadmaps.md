@@ -197,6 +197,13 @@ Roadmaps are **strategic planning artifacts** that preserve complex development 
 - Verification methods?
 - Evidence requirements?
 
+**6.3 Friction Points Documentation**
+- When to document friction?
+- Friction points file structure?
+- How to cite friction points?
+- FP citation format?
+- Archaeological benefits?
+
 **7 PA vs SA Distinctions**
 - PA roadmap scope?
 - SA roadmap scope?
@@ -249,6 +256,8 @@ roadmaps/YYYY-MM-DD_Descriptive_Name/
 ├── delegation_plans/               # DELEG_PLANs for SA work (optional)
 │   ├── YYYY-MM-DD_DELEG_PLAN_Task_Agent.md
 │   └── ...
+├── friction_points/                # Friction documentation (optional)
+│   └── friction_points.md
 └── archived_todos/                 # Collapsed TODO hierarchies (MANDATORY)
     ├── YYYY-MM-DD_HHMMSS_Plan_Description_COMPLETED.md
     ├── YYYY-MM-DD_HHMMSS_Plan_Description_PARTIAL.md
@@ -812,6 +821,152 @@ All 13 validation checks passed. Container deployed successfully.
 - File paths (confirm existence)
 - Verification commands (show how to check)
 - Git commit hashes (prove completion)
+
+---
+
+## 6.3 Friction Points Documentation
+
+**Purpose**: Friction points are **learning artifacts** that document unexpected obstacles, their solutions, and prevention strategies. They transform painful blockers into reusable knowledge.
+
+### When to Document Friction
+
+**Create friction_points.md when**:
+- Blocked >30 minutes by unexpected issue
+- Discovered critical gotcha or footgun
+- Found documentation gap or misleading docs
+- Encountered tool/framework quirk worth noting
+- Pattern emerges (3+ similar issues)
+
+**Don't Document**:
+- Expected complexity (use roadmap risk assessment)
+- User errors from skipping docs
+- One-time typos or trivial mistakes
+
+### Friction Points Structure
+
+**Location**: `friction_points/friction_points.md` (subdirectory of roadmap folder)
+
+**File Format**:
+```markdown
+# [Roadmap Name] - Friction Points
+
+**Date**: [Full timestamp]
+**Roadmap**: [Relative path to ../roadmap.md]
+**Status**: Active | Archived
+
+---
+
+## How to Cite Friction Points
+
+[Citation guidance section - see template]
+
+---
+
+## FP#1: Brief Descriptive Title {#fp1-anchor}
+
+**Breadcrumb**: s_XXXXXXXX/c_NN/g_YYYYYYY/p_ZZZZZZZ/t_TTTTTTTTTT (FP discovery moment)
+**Phase**: [Phase where encountered]
+**Severity**: HIGH | MEDIUM | LOW
+
+**Issue**: [One sentence description]
+
+**Symptoms**:
+- Observable behavior
+- Error messages
+
+**Root Cause**:
+[Technical explanation]
+
+**Fix Applied**:
+[Resolution steps]
+
+**Prevention**:
+[How to avoid this]
+
+**Lessons Learned**:
+[Key insights]
+```
+
+### Citing Friction Points
+
+**FP Citation Format** (subclass of Roadmap citations):
+```
+[Roadmap YYYY-MM-DD "Roadmap Title" FP#{N} "FP Brief Title": s/c/g/p/t](friction_points/friction_points.md#fpN-anchor)
+```
+
+**Components**:
+- **Roadmap** + date + title: Parent roadmap identification
+- **FP#{N}**: Friction point number within roadmap (e.g., FP#1, FP#2)
+- **FP title**: Brief descriptor (3-5 words, quoted)
+- **Breadcrumb**: FP discovery moment (s/c/g/p/t format)
+- **Link**: Relative path to friction_points.md + GitHub anchor
+
+**GitHub Anchor Rules**:
+- Lowercase FP title: `FP#1: Docker Override Discovery` → `#fp1-docker-override-discovery`
+- Include FP number prefix in anchor for uniqueness
+- Use explicit anchor IDs in headers: `{#fp1-anchor}`
+
+### Citation Examples
+
+**In Checkpoints** (summarizing cycle friction):
+```markdown
+## Friction This Cycle
+
+Encountered docker-compose working directory dependency [Roadmap 2025-11-11 "Docker DETOUR" FP#1 "Override Discovery": s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890](../roadmaps/2025-11-11_Docker_Start_Script/friction_points/friction_points.md#fp1-docker-override-discovery) which blocked volume mounting for 25 minutes.
+```
+
+**In Reflections** (deep pattern analysis):
+```markdown
+## Wisdom: Documentation vs Discipline
+
+Building on [Roadmap 2025-11-11 "Docker DETOUR" FP#1 "Override Discovery": s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890](../../public/roadmaps/2025-11-11_Docker_Start_Script/friction_points/friction_points.md#fp1-docker-override-discovery), this friction reveals systematic pattern: documentation teaches mechanism, experience teaches discipline.
+```
+
+**In Future Roadmaps** (referencing prior friction):
+```markdown
+## Risk Assessment
+
+**Known Friction Patterns**:
+- [Roadmap 2025-10-24 "MannyMacEff Deploy" FP#2 "SSH Key Location": s_.../c_.../t_...](../2025-10-24_MannyMacEff_Deploy/friction_points/friction_points.md#fp2-ssh-key-location)
+- [Roadmap 2025-11-11 "Docker DETOUR" FP#1: s_.../c_.../t_...](../2025-11-11_Docker_Start_Script/friction_points/friction_points.md#fp1-docker-override-discovery)
+```
+
+**Cross-Roadmap Pattern Recognition**:
+```markdown
+Both [Roadmap 2025-10-23 "TestMacEff Deploy" FP#3: s_.../t_...] and [Roadmap 2025-11-11 "Docker DETOUR" FP#1: s_.../t_...] share root cause: tools assume standard conventions, operational reality requires auto-detection.
+```
+
+### Archaeological Benefits
+
+**Enhanced citations enable**:
+- **Forensic navigation**: Breadcrumb → exact discovery conversation
+- **Pattern discovery**: Find all friction citing similar root causes
+- **Wisdom synthesis**: Trace how friction insights influenced future work
+- **Prevention transfer**: Share friction knowledge across projects/agents
+- **Knowledge graphs**: Friction citations create edges in learning network
+
+**Query Examples** (future memory system):
+```bash
+# Find all friction points from Cycle 90-100
+macf_tools memory query --ca-tag Roadmap --fp-only --cycle-range 90-100
+
+# Find friction citing docker-compose patterns
+macf_tools memory query --cited-desc "docker-compose" --ca-tag Roadmap --fp-only
+
+# Build friction pattern graph
+macf_tools memory graph --root-fp "FP#1" --depth 2 --pattern-clustering
+```
+
+### Integration with Scholarship Policy
+
+Friction Point citations follow enhanced citation format from scholarship.md:
+- CA_TAG: Use "Roadmap" (friction belongs to parent roadmap)
+- FP#{N}: Unique identifier within roadmap
+- Full breadcrumb: s/c/g/p/t discovery coordinates
+- GitHub links: Enable one-click navigation to specific FP
+- Sanitization: Use generic breadcrumbs in framework examples
+
+See `scholarship.md` for complete enhanced citation guidelines.
 
 ---
 
