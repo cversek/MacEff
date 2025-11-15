@@ -424,6 +424,67 @@ DevOpsEng's implementation in [DELEG_DRV 2025-11-05 "Phase2 Citation Integration
 
 **Note**: `d_abc12345` component identifies delegation chain (optional but recommended for DELEG_DRV citations)
 
+### 4.8 Citing Friction Points (Roadmap Subartifacts)
+
+**Use Case**: Referencing specific obstacles, solutions, and learnings documented during roadmap execution
+
+**FP Citation Format** (subclass of Roadmap citations):
+```
+[Roadmap YYYY-MM-DD "Roadmap Title" FP#{N} "FP Brief Title": s/c/g/p/t](friction_points/friction_points.md#fpN-anchor)
+```
+
+**Components**:
+- **Roadmap** + date + title: Parent roadmap identification (friction belongs to roadmap)
+- **FP#{N}**: Friction point number within roadmap (e.g., FP#1, FP#2, FP#3)
+- **FP title**: Brief descriptor of friction (3-5 words, quoted)
+- **Breadcrumb**: FP discovery moment (when friction documented)
+- **Link**: Relative path to friction_points/friction_points.md + GitHub anchor
+
+**GitHub Anchor Rules for FPs**:
+- Lowercase FP title with number prefix: `FP#1: Docker Override Discovery` → `#fp1-docker-override-discovery`
+- Include FP number in anchor for uniqueness (multiple FPs in same file)
+- Use explicit anchor IDs in headers: `{#fp1-anchor}`
+
+**Example (in Checkpoint)**:
+```markdown
+## Friction This Cycle
+
+Encountered docker-compose working directory dependency [Roadmap 2025-11-11 "Docker DETOUR" FP#1 "Override Discovery": s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890](../roadmaps/2025-11-11_Docker_Start_Script/friction_points/friction_points.md#fp1-docker-override-discovery) which blocked volume mounting for 25 minutes until user shared prior deployment wisdom.
+```
+
+**Example (in Reflection - pattern analysis)**:
+```markdown
+## Wisdom: Documentation vs Discipline
+
+Building on [Roadmap 2025-11-11 "Docker DETOUR" FP#1 "Override Discovery": s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890](../../public/roadmaps/2025-11-11_Docker_Start_Script/friction_points/friction_points.md#fp1-docker-override-discovery), this friction reveals systematic pattern: documentation teaches mechanism, experience teaches discipline.
+```
+
+**Example (cross-roadmap pattern recognition)**:
+```markdown
+Both [Roadmap 2025-10-23 "TestMacEff Deploy" FP#3 "SSH Port Variance": s_xxx/c_40/g_yyy/p_zzz/t_1234567890](../2025-10-23_TestMacEff_Deploy/friction_points/friction_points.md#fp3-ssh-port-variance) and [Roadmap 2025-11-11 "Docker DETOUR" FP#1 "Override Discovery": s_abc/c_42/g_def/p_ghi/t_1234567890](../2025-11-11_Docker_Start_Script/friction_points/friction_points.md#fp1-docker-override-discovery) share root cause: tools assume standard conventions, operational reality requires auto-detection.
+```
+
+**Why FP Citations Matter**:
+- **Forensic navigation**: Breadcrumb → exact discovery conversation
+- **Pattern recognition**: Find all friction citing similar root causes
+- **Prevention transfer**: Share friction knowledge across projects/agents
+- **Wisdom synthesis**: Trace how friction insights influenced future architectural decisions
+- **Knowledge graphs**: FP citations create edges in learning network, enabling friction pattern discovery
+
+**FP-Specific Query Patterns** (future memory system):
+```bash
+# Find all friction points from Cycle 90-100
+macf_tools memory query --ca-tag Roadmap --fp-only --cycle-range 90-100
+
+# Find friction citing docker-compose patterns
+macf_tools memory query --cited-desc "docker-compose" --ca-tag Roadmap --fp-only
+
+# Build friction pattern graph (cluster similar friction)
+macf_tools memory graph --root-fp "FP#1" --depth 2 --pattern-clustering
+```
+
+**Integration**: See roadmaps.md §6.3 for complete friction points documentation guidelines.
+
 ---
 
 ## 5 Integration with Other Policies
