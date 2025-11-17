@@ -307,14 +307,17 @@ BOTTOM STACK (COMPLETED - most recent first):
 
 **Collapsed Format**:
 ```
-📦 [Task description] [completion_breadcrumb] → [archive_file_path]
+📦 [Task description] [completion_breadcrumb]
+  → [archive_file_path]
 ```
+
+**Format Rule**: Archive path MUST be on separate indented line for readability (breadcrumbs + long path = unreadable single line)
 
 **Symbol**: 📦 (archive box) - distinct from ✅ (fresh completion)
 
 **Example**:
 ```json
-{"content": "📦 Phase 4: Deploy and validate container [c_67/s_4107604e/p_769c438/t_1761450374/g_ff52c7b] → agent/public/archives/todos/2025-10-25_235900_Phase4_Complete.md", "status": "completed"}
+{"content": "📦 Phase 4: Deploy and validate container [c_67/s_4107604e/p_769c438/t_1761450374/g_ff52c7b]\n  → agent/public/archives/todos/2025-10-25_235900_Phase4_Complete.md", "status": "completed"}
 ```
 
 **Archive Contains**: All sub-phase breadcrumbs, detour breadcrumbs, complete forensic trail for archaeological reconstruction.
