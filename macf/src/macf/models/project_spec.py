@@ -6,7 +6,7 @@ docs/arch_v0.3_named_agents/05_implementation_guide.md (lines 127+)
 """
 
 from typing import Dict, List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class RepoMount(BaseModel):
@@ -17,9 +17,9 @@ class RepoMount(BaseModel):
         description="Git repository URL (e.g., git@github.com:user/repo.git)"
     )
 
-    path: str = Field(
-        ...,
-        description="Relative path within project workspace (e.g., repos/backend)"
+    name: Optional[str] = Field(
+        default=None,
+        description="Repository name (optional, defaults to name extracted from URL)"
     )
 
     worktree: bool = Field(
@@ -31,6 +31,26 @@ class RepoMount(BaseModel):
         default="main",
         description="Default branch for worktree creation (e.g., 'main', 'master', 'develop')"
     )
+
+    @field_validator('name', mode='before')
+    @classmethod
+    def extract_name_from_url(cls, v, info):
+        """Extract repository name from URL if name not provided."""
+        if v is not None:
+            return v
+
+        # Extract from URL
+        url = info.data.get('url', '')
+        if not url:
+            return None
+
+        # Handle git@github.com:user/repo.git or https://github.com/user/repo.git
+        if url.endswith('.git'):
+            url = url[:-4]
+
+        # Extract last component (repo name)
+        name = url.rstrip('/').split('/')[-1]
+        return name
 
 
 class DataMount(BaseModel):
@@ -91,7 +111,8 @@ class ProjectsConfig(BaseModel):
             context: ../custom/projects/NeuroVEP_context.md
             repos:
               - url: git@github.com:user/neurovep_analysis.git
-                path: repos/neurovep_analysis
+                name: neurovep_analysis  # Optional, defaults to 'neurovep_analysis' from URL
+                worktree: true  # Default, creates git worktree
             data_mounts:
               - type: bind
                 source: /Users/user/Dropbox/NeuroVEP

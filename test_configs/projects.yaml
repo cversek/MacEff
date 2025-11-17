@@ -6,6 +6,7 @@ projects:
     context: ../test_configs/test_project_context.md
     repos:
       - url: https://github.com/cversek/MacEff.git
-        path: repos/MacEff
+        # name: MacEff (optional, defaults to 'MacEff' from URL)
+        # worktree: true (default, creates git worktree in ~/workspace/TestProject/git-worktrees/MacEff)
     commands:
       test_command: ../test_configs/commands/test_slash_command.md
