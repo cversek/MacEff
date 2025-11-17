@@ -368,10 +368,9 @@ def create_project_workspace(project_name: str, project_spec: ProjectSpec) -> No
 
         # Clone repositories
         for repo_mount in project_spec.repos:
-            repo_path = project_dir / repo_mount.path
+            repo_path = repos_dir / repo_mount.name
             if not repo_path.exists():
                 log(f"Cloning {repo_mount.url} to {repo_path}")
-                repo_path.parent.mkdir(parents=True, exist_ok=True)
                 run_command(['git', 'clone', repo_mount.url, str(repo_path)], check=False)
 
     # Create .claude/commands directory for project-specific commands
@@ -491,18 +490,20 @@ def create_workspace_structure(username: str, assigned_projects: List[str],
 
         project_spec = projects_config.projects[project_name]
 
-        # Setup git worktrees for repos
+        # Setup repos (worktrees or symlinks)
         if project_spec.repos:
             for repo_mount in project_spec.repos:
-                shared_repo = shared_project / repo_mount.path
-                agent_repo = project_workspace / repo_mount.path
+                # Shared repo always in /shared_workspace/{project}/repos/{name}
+                shared_repo = shared_project / 'repos' / repo_mount.name
 
                 if not shared_repo.exists():
                     log(f"Shared repo missing: {shared_repo}")
                     continue
 
-                # Use worktree if enabled (default=True)
+                # Compute agent path based on worktree flag
                 if repo_mount.worktree:
+                    # Worktree: ~/workspace/{project}/git-worktrees/{name}
+                    agent_repo = project_workspace / 'git-worktrees' / repo_mount.name
                     setup_git_worktree(
                         username=username,
                         shared_repo_path=shared_repo,
@@ -511,9 +512,12 @@ def create_workspace_structure(username: str, assigned_projects: List[str],
                         default_branch=repo_mount.default_branch
                     )
                 else:
-                    # Plain directory structure (no worktree)
-                    agent_repo.mkdir(parents=True, exist_ok=True)
-                    run_command(['chown', '-R', f'{username}:{username}', str(agent_repo)])
+                    # Symlink: ~/workspace/{project}/repos/{name} -> shared
+                    agent_repo = project_workspace / 'repos' / repo_mount.name
+                    agent_repo.parent.mkdir(parents=True, exist_ok=True)
+                    if not agent_repo.exists():
+                        agent_repo.symlink_to(shared_repo)
+                        log(f"Repo symlink: {agent_repo} -> {shared_repo}")
 
         # Create data and outputs symlinks (if shared directories exist)
         shared_data = shared_project / 'data'
