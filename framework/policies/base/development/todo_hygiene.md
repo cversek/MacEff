@@ -1,10 +1,10 @@
 # TODO List Hygiene Policy
 
-**Version**: 1.5
+**Version**: 1.6
 **Tier**: CORE
 **Category**: Development
 **Status**: ACTIVE
-**Updated**: 2025-11-06
+**Updated**: 2025-11-18
 
 ---
 
@@ -338,6 +338,98 @@ BOTTOM STACK (COMPLETED - most recent first):
 ### 8. Dual Forms Required
 
 Both `content` (imperative) and `activeForm` (present continuous) required for all items.
+
+### 9. Session File Migration TODO Recovery
+
+**Problem**: When session ID changes (session migration), the TODO JSON file in `~/.claude/todos/` becomes orphaned because the filename contains the old session ID. The new session starts with an empty TODO list, causing loss of mission and phase context.
+
+**NOT about**: This is distinct from compaction recovery. Compaction preserves session ID but loses conversation context. Session migration creates a new session ID, orphaning the previous TODO file entirely.
+
+**Scenario**: Session crashes, network interruptions, or CC restarts can trigger session ID migration, leaving strategic work context stranded in the previous session's TODO file.
+
+**Solution**: Forensic recovery from the previous session's TODO JSON file using filesystem archaeology.
+
+**Recovery Protocol**:
+
+**1. List TODO files by recency**:
+```bash
+# Show most recent TODO files with size and timestamp
+ls -lht ~/.claude/todos/ | head -20
+```
+
+**2. Identify previous session**:
+- Look for files with size > 100 bytes (indicates content, not empty initialization)
+- Most recent file with substantial size is likely the previous session
+- Filename format: `{session-hash}-agent-{session-hash}.json`
+
+**3. Read previous session TODO JSON**:
+```bash
+# View full TODO structure from previous session
+cat ~/.claude/todos/{previous-session-hash}-agent-{previous-session-hash}.json
+
+# Or with pretty formatting for complex structures
+cat ~/.claude/todos/{previous-session-hash}-agent-{previous-session-hash}.json | python -m json.tool
+```
+
+**4. Restore strategic context via TodoWrite**:
+- Extract FTI stack (missions, campaigns, active phases, DETOURs)
+- Preserve hierarchical nesting with embedded document references
+- Maintain breadcrumbs for forensic continuity
+- Update status markers if work progressed between sessions
+
+**When to Use**:
+- SessionStart hook detects new session ID (indicates session migration occurred)
+- TODO list appears empty but strategic work was in progress before crash/restart
+- Session crashes or network issues caused unexpected restart
+- Manual session restart (user killed CC and restarted)
+
+**What to Restore**:
+- ✅ Active missions/campaigns with full FTI nesting
+- ✅ Current phases with embedded ROADMAP references (🗺️📋📜)
+- ✅ Active DETOURs with sub-tasks (↪️ symbol and nested work)
+- ✅ Pending work with strategic importance
+- ✅ Document references and breadcrumbs for continuity
+
+**Restoration Example**:
+```json
+[
+  {
+    "content": "🗺️ MISSION: Deploy Framework [agent/public/roadmaps/2025-11-18_Deploy_ROADMAP.md]",
+    "status": "in_progress",
+    "activeForm": "Deploying framework"
+  },
+  {
+    "content": "  📦 Phase 1: Preparation [c_168/s_4107604e/p_abc1234/t_1763400000/g_e5648c9]\n    → agent/public/archives/todos/2025-11-18_120000_Phase1_Complete.md",
+    "status": "completed",
+    "activeForm": "Phase 1 completed"
+  },
+  {
+    "content": "  Phase 2: Implementation",
+    "status": "in_progress",
+    "activeForm": "Implementing Phase 2"
+  },
+  {
+    "content": "    → 2.1: Configure environment",
+    "status": "completed",
+    "activeForm": "Configuring environment"
+  },
+  {
+    "content": "    → 2.2: Deploy services",
+    "status": "in_progress",
+    "activeForm": "Deploying services"
+  }
+]
+```
+
+**Benefits**:
+- ✅ Prevents strategic context loss during session migrations
+- ✅ Restores mission → phase → substep hierarchy and visual organization
+- ✅ Preserves embedded document references (ROADMAP/DELEG_PLAN links)
+- ✅ Maintains breadcrumbs for cross-session forensic continuity
+- ✅ Recovers FTI stack priority signaling (active/deferred/completed ordering)
+- ✅ Enables continuation of multi-cycle work without context reconstruction overhead
+
+**Automation Opportunity**: Future `maceff-todo-restoration` skill can reference this section for automated recovery protocol implementation.
 
 ---
 
