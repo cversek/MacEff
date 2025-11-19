@@ -68,6 +68,11 @@ from .tokens import (
     format_token_context_minimal,
     format_token_context_full,
     get_boundary_guidance,
+    get_usable_context,
+    CC2_TOTAL_CONTEXT,
+)
+from .claude_settings import (
+    get_autocompact_setting,
 )
 from .manifest import (
     _deep_merge,
@@ -79,18 +84,10 @@ from .formatting import (
     format_macf_footer,
 )
 
-from .tokens import (
-    CC2_TOTAL_CONTEXT,
-    CC2_AUTOCOMPACT_BUFFER,
-    CC2_USABLE_CONTEXT,
-)
-
 from .temporal import DATEUTIL_AVAILABLE
 
 __all__ = [
-    "CC2_AUTOCOMPACT_BUFFER",
     "CC2_TOTAL_CONTEXT",
-    "CC2_USABLE_CONTEXT",
     "ConsciousnessArtifacts",
     "DATEUTIL_AVAILABLE",
     "SessionOperationalState",
@@ -114,6 +111,7 @@ __all__ = [
     "format_token_context_full",
     "format_token_context_minimal",
     "get_agent_state_path",
+    "get_autocompact_setting",
     "get_boundary_guidance",
     "get_breadcrumb",
     "get_agent_cycle_number",
@@ -133,6 +131,7 @@ __all__ = [
     "get_session_transcript_path",
     "get_temporal_context",
     "get_token_info",
+    "get_usable_context",
     "increment_agent_cycle",
     "load_agent_state",
     "load_merged_manifest",
