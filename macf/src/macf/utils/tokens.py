@@ -9,10 +9,23 @@ from typing import Any, Dict, Optional
 from .paths import find_project_root, get_session_dir, get_session_transcript_path
 from .session import get_current_session_id
 from .state import read_json_safely, write_json_safely
+from .claude_settings import get_autocompact_setting
 
 CC2_TOTAL_CONTEXT = 200000
-CC2_AUTOCOMPACT_BUFFER = 45000
-CC2_USABLE_CONTEXT = CC2_TOTAL_CONTEXT - CC2_AUTOCOMPACT_BUFFER
+
+
+def get_usable_context() -> int:
+    """
+    Calculate usable context based on autocompact setting.
+
+    Returns:
+        Usable context in tokens:
+        - 155k (200k - 45k buffer) if autocompact enabled
+        - 200k (full) if autocompact disabled
+    """
+    autocompact_enabled = get_autocompact_setting()
+    buffer = 45000 if autocompact_enabled else 0
+    return CC2_TOTAL_CONTEXT - buffer
 
 def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
     """Get current token usage information from session JSONL or hooks state.
@@ -142,9 +155,11 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
                         current_tokens = last_assistant_tokens
 
                 if current_tokens > 0:
-                    # Add autocompact buffer to match /context display
-                    # /context shows: actual_usage + buffer = total_displayed
-                    tokens_used_with_buffer = current_tokens + CC2_AUTOCOMPACT_BUFFER
+                    # Add autocompact buffer dynamically based on settings
+                    # Buffer is 45k if autocompact enabled, 0 if disabled
+                    autocompact_enabled = get_autocompact_setting()
+                    buffer = 45000 if autocompact_enabled else 0
+                    tokens_used_with_buffer = current_tokens + buffer
                     tokens_remaining = max_tokens - tokens_used_with_buffer
 
                     # CLUAC is percentage REMAINING (not used)
