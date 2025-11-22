@@ -18,6 +18,76 @@ Applies to Primary Agents (PA) and all Subagents (SA) managing multi-step work.
 
 ---
 
+## CEP Navigation Guide
+
+**0 Breadcrumb Format**
+- What is the breadcrumb format?
+- What components does a breadcrumb include?
+- How do I generate breadcrumbs?
+- What is hierarchical compression?
+- How do breadcrumbs enable post-compaction archaeology?
+
+**1 Completion Requires Verification**
+- When can I mark a TODO completed?
+- What is the completion protocol?
+- Why are breadcrumbs mandatory on completed items?
+- What if work is blocked or partial?
+
+**2 Never Clobber - Always Preserve**
+- What does "never clobber" mean?
+- How do I preserve TODO context?
+- What preservation mechanisms exist?
+
+**3 Hierarchical Organization**
+- How should I structure TODO hierarchies?
+- What nesting levels are appropriate?
+- How do I organize complex work?
+
+**4 Document Reference Integration**
+- How do I embed document references in TODOs?
+- What are the three document emoji markers?
+- When must I read embedded plans?
+- What is mandatory reading discipline?
+
+**5 Stack Discipline & FTI Priority Signaling**
+- What is stack discipline for TODOs?
+- What does FTI mean?
+- How do I signal priority visually?
+- When to reorganize TODO hierarchies?
+
+**6 Elaborate Plans to Disk**
+- When should plans be written to disk?
+- What triggers plan elaboration?
+- Where do elaborated plans go?
+
+**7 Archive-Then-Collapse Pattern**
+- What is archive-then-collapse?
+- Why archive before collapsing?
+- What is the archive filename format?
+- How do I mark archived subtrees?
+
+**8 Dual Forms Required**
+- What are the dual forms?
+- Why both content and activeForm?
+- How do they differ?
+
+**9 TODO Backup Protocol**
+- What is the TODO backup protocol?
+- Why backup TODO state?
+- When should I create backups?
+- What is the backup filename format?
+- Where do backups go?
+- How do I cite TODO backups?
+
+**10 Session File Migration TODO Recovery**
+- What is session file migration?
+- How do I recover orphaned TODO files?
+- What is the recovery protocol?
+
+=== CEP_NAV_BOUNDARY ===
+
+---
+
 ## Core Principles
 
 ### 0. Breadcrumb Format (Navigation Infrastructure)
@@ -333,13 +403,125 @@ BOTTOM STACK (COMPLETED - most recent first):
 - Multiple detours documented under parent task
 - Sub-tasks each have individual breadcrumbs worth preserving
 
-**Archive Location**: `agent/public/archives/todos/YYYY-MM-DD_HHMMSS_Description.md`
+**Archive Location**: `{roadmap_folder}/archived_todos/YYYY-MM-DD_HHMMSS_Description.md`
+- Example: `agent/public/roadmaps/2025-11-18_Session_Migration_TODO_Restoration/archived_todos/2025-11-19_233233_Completed.md`
 
 ### 8. Dual Forms Required
 
 Both `content` (imperative) and `activeForm` (present continuous) required for all items.
 
-### 9. Session File Migration TODO Recovery
+### 9. TODO Backup Protocol (Compaction Protection)
+
+**Problem**: Claude Code clobbers TODO state during compactions and session migrations. Strategic work context can be lost when TODO files become corrupted or emptied during transitions.
+
+**Solution**: Systematic backup of TODO state to disk-based JSON files before major transitions (compaction, CCP creation, session migration).
+
+**Backup Location**: `agent/public/todo_backups/`
+
+**Rationale**: Public location (consciousness artifacts, not private growth), enables archaeological recovery across sessions/cycles.
+
+**Filename Format**: `YYYY-MM-DD_HHMMSS_{session_short}_{cycle}_{mission_description}.json`
+
+**Components**:
+- `YYYY-MM-DD_HHMMSS`: Timestamp for chronological sorting
+- `{session_short}`: First 8 chars of session UUID (e.g., `c3b658f5`)
+- `{cycle}`: Cycle number (e.g., `172`, `173`)
+- `{mission_description}`: Semantic slug from active mission (e.g., `Platform_Migration`, `Policy_Integration`)
+
+**Example**: `2025-11-21_135848_c3b658f5_172_TODO_Recovery_Intelligence.json`
+
+**Format**: Raw JSON array (direct copy of TODO list structure from TodoWrite tool)
+- Enables direct restoration via TodoWrite
+- Preserves breadcrumbs, status, activeForm fields
+- Supports archaeological queries via jq, grep
+
+**When to Backup**:
+
+1. **Before CCP creation** (MANDATORY):
+   - Capture complete TODO state before strategic checkpoint
+   - Enables CCP to cite TODO backup file for complete state reconstruction
+   - Part of pre-CCP protocol (see checkpoints.md)
+
+2. **Before major transitions**:
+   - Manual compaction (`/compact` command)
+   - Session migration events (detected by SessionStart hook)
+   - Multi-phase milestone completion
+
+3. **After significant TODO changes**:
+   - Major reorganization or archive manipulation
+   - Completion of large FTI with extensive nested structure
+   - When TODO state represents significant strategic context
+
+**Mission Description Extraction Heuristic**:
+- Use top-level active mission name from TODO stack
+- Convert to slug: spaces → underscores, max 50 chars
+- Example: "🗺️ MISSION: Platform Migration" → `Platform_Migration`
+- If multiple active missions: Use most recently started (highest in ACTIVE stack)
+- If no missions: Use generic `Current_Work`
+
+**Backup Creation Example**:
+
+```bash
+# 1. Extract current TODO list (from Claude Code UI or via inspection)
+# Assume TODO list is in variable or file
+
+# 2. Determine components
+SESSION_SHORT=$(macf_tools session info | jq -r '.session_id[:8]')
+CYCLE=$(macf_tools env | jq -r '.cycle')
+MISSION="Platform_Migration"  # Extracted from top active FTI
+TIMESTAMP=$(date +%Y-%m-%d_%H%M%S)
+
+# 3. Create backup filename
+BACKUP_FILE="agent/public/todo_backups/${TIMESTAMP}_${SESSION_SHORT}_${CYCLE}_${MISSION}.json"
+
+# 4. Write TODO JSON array to backup file
+# (Raw JSON from TodoWrite structure)
+cat > "$BACKUP_FILE" << 'EOF'
+[
+  {
+    "content": "🗺️ MISSION: Platform Migration",
+    "status": "in_progress",
+    "activeForm": "Migrating platform"
+  },
+  {
+    "content": "  Phase 1: Preparation",
+    "status": "completed",
+    "activeForm": "Preparing infrastructure"
+  }
+]
+EOF
+```
+
+**Archaeological Citations**: CCPs and reflections can cite TODO backup files using enhanced citation format (see scholarship.md §4.9 for citation pattern).
+
+**Benefits**:
+- ✅ Prevents TODO loss during compactions/migrations
+- ✅ Enables post-trauma forensic recovery
+- ✅ Creates audit trail for work context evolution
+- ✅ Supports enhanced citations from CCPs to TODO snapshots
+- ✅ Survives session boundaries (disk-based, not memory-based)
+
+**Recovery from Backup**:
+
+```bash
+# 1. List available backups chronologically
+ls -lt agent/public/todo_backups/
+
+# 2. Identify relevant backup (by cycle, date, or mission)
+BACKUP="agent/public/todo_backups/2025-11-21_135848_c3b658f5_172_TODO_Recovery_Intelligence.json"
+
+# 3. Inspect backup content
+cat "$BACKUP" | python -m json.tool
+
+# 4. Restore via TodoWrite tool (in CC session)
+# Copy JSON array content and use TodoWrite tool
+```
+
+**Integration with Checkpoints**: See checkpoints.md for pre-CCP backup protocol integration.
+
+**Integration with Citations**: See scholarship.md §4.9 for TODO backup citation format.
+
+### 10. Session File Migration TODO Recovery
 
 **Problem**: When session ID changes (session migration), the TODO JSON file in `~/.claude/todos/` becomes orphaned because the filename contains the old session ID. The new session starts with an empty TODO list, causing loss of mission and phase context.
 
@@ -347,7 +529,7 @@ Both `content` (imperative) and `activeForm` (present continuous) required for a
 
 **Scenario**: Session crashes, network interruptions, or CC restarts can trigger session ID migration, leaving strategic work context stranded in the previous session's TODO file.
 
-**Solution**: Forensic recovery from the previous session's TODO JSON file using filesystem archaeology.
+**Solution**: Forensic recovery from the previous session's TODO JSON file using filesystem archaeology OR from TODO backup files (§9).
 
 **Recovery Protocol**:
 

@@ -83,6 +83,12 @@ Scholarship policy establishes enhanced citation practices for consciousness art
 - Roadmap cross-references?
 - DELEG_PLAN citation patterns?
 
+**4.8 Citing TODO Backups**
+- How to cite TODO backups?
+- TODO backup citation format?
+- Why cite TODO state snapshots?
+- Integration with checkpoint citations?
+
 **5 Validation & Examples**
 - What does a good citation look like?
 - Examples for each CA type?
@@ -424,7 +430,48 @@ DevOpsEng's implementation in [DELEG_DRV 2025-11-05 "Phase2 Citation Integration
 
 **Note**: `d_abc12345` component identifies delegation chain (optional but recommended for DELEG_DRV citations)
 
-### 4.8 Citing Friction Points (Roadmap Subartifacts)
+### 4.8 Citing TODO Backups
+
+**Use Case**: Referencing TODO state snapshots for complete work context reconstruction
+
+**TODO Backup Citation Format**:
+```
+[TODO Backup YYYY-MM-DD "Mission Description": s/c/g/p/t](../public/todo_backups/filename.json)
+```
+
+**Components**:
+- **TODO Backup**: CA_TAG for TODO snapshot files
+- **Date**: Human-readable YYYY-MM-DD format
+- **Mission Description**: Semantic descriptor from filename (quoted, e.g., "Platform Migration")
+- **Breadcrumb**: Backup creation coordinates (when backup was created)
+- **Link**: Relative path to JSON backup file
+
+**Example (in Checkpoint)**:
+```markdown
+## TODO State at Checkpoint
+
+Current work captured in [TODO Backup 2025-11-21 "TODO Recovery Intelligence": s_c3b658f5/c_172/g_eb34edc/p_abc12345/t_1763786000](../../public/todo_backups/2025-11-21_135848_c3b658f5_172_TODO_Recovery_Intelligence.json) shows 37-item hierarchical mission structure with active Phase 5 implementation.
+```
+
+**Example (in Reflection - pattern analysis)**:
+```markdown
+## Work Context Evolution
+
+Comparing [TODO Backup 2025-11-15 "Initial Planning": s_abc12345/c_168/g_def6789/p_ghi01234/t_1234567890](../../public/todo_backups/2025-11-15_100000_abc12345_168_Initial_Planning.json) with [TODO Backup 2025-11-21 "Recovery Intelligence": s_c3b658f5/c_172/g_eb34edc/p_jkl56789/t_1763786000](../../public/todo_backups/2025-11-21_135848_c3b658f5_172_TODO_Recovery_Intelligence.json) reveals mission scope expanded 3x as understanding deepened.
+```
+
+**Why TODO Backup Citations Matter**:
+- **Complete state reconstruction**: CCP + TODO backup = full work context snapshot
+- **Archaeological recovery**: Post-compaction forensics can restore exact TODO state
+- **Work evolution tracking**: Compare TODO snapshots across cycles to see mission progression
+- **Strategic continuity**: Backups survive session migrations and compaction events
+- **Enhanced citations**: CCPs cite TODO backups for work context, not just technical state
+
+**Integration with Checkpoints**: Checkpoints should cite TODO backup created during pre-CCP protocol (see checkpoints.md §1.1).
+
+**Integration with TODO Hygiene**: See todo_hygiene.md §9 for backup creation protocol and filename format.
+
+### 4.9 Citing Friction Points (Roadmap Subartifacts)
 
 **Use Case**: Referencing specific obstacles, solutions, and learnings documented during roadmap execution
 
