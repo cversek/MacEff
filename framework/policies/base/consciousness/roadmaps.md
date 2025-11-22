@@ -1192,6 +1192,7 @@ Investigate [problem/opportunity], understand root causes, propose solutions.
 - **checkpoints.md**: Strategic state preservation at phase boundaries
 - **reflections.md**: Wisdom synthesis from roadmap execution
 - **delegation_guidelines.md**: DELEG_PLAN integration with roadmaps
+- **meta/policy_writing.md** (External References): How external tools (like `/ctb_roadmap` command) should reference this policy's folder structure requirements and phase formatting using timeless content categories
 
 ### Personal Policies Connection
 

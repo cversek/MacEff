@@ -594,6 +594,10 @@ When referencing prior checkpoints for strategic continuity:
 - Memory system queries leverage enhanced format attributes
 - Breadcrumb coordinates provide stable identifiers across filesystem changes
 
+### 5.6 See Also
+
+- `meta/policy_writing.md` (External References) - How external tools should reference this policy's enhanced citation format using timeless content categories (e.g., "citation format requirements", "breadcrumb structure"), not brittle section numbers
+
 ---
 
 ## 6 Validation & Quality Criteria

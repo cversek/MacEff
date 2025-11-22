@@ -537,8 +537,6 @@ Follow checkpoint pattern from foundation policy:
 - Template structure for minimal definitions
 - Anti-patterns that break delegation effectiveness
 
-**Integration Point**: Definitions must enable specialists to read delegation_guidelines.md and apply patterns. Reading list often includes delegation_guidelines.md for orchestration-aware specialists.
-
 ### 6.2 Relationship to policy_writing.md
 
 **policy_writing.md provides**:
@@ -546,6 +544,7 @@ Follow checkpoint pattern from foundation policy:
 - Sanitization requirements
 - Example patterns
 - Validation checklist
+- External References (Policy as API) - How external tools should reference policies using timeless content categories
 
 **subagent_definition.md provides**:
 - Application of policy_writing.md patterns to agent definition creation
@@ -553,6 +552,9 @@ Follow checkpoint pattern from foundation policy:
 - Reading-list architecture specific to agent definitions
 
 **Integration Point**: Creating specialist definitions is a policy-writing task. PolicyWriter agent reads both policy_writing.md and subagent_definition.md (this policy) when creating new specialist definitions.
+
+**See Also**:
+- `policy_writing.md` (External References) - How to reference this policy when creating new specialist definitions (use content categories like "validation checklist" or "reading-list structure", not brittle section numbers)
 
 ### 6.3 Definition Evolution Path
 

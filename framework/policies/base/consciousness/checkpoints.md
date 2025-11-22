@@ -912,6 +912,12 @@ Validated that hookSpecificOutput.additionalContext works for injecting structur
 
 ---
 
+## See Also
+
+- `meta/policy_writing.md` (External References) - How external tools (like `/maceff_ccp` command) should reference this policy's preparation steps and format requirements
+
+---
+
 ## Integration with Personal Policies
 
 Agents may develop **personal checkpoint conventions** in `~/agent/policies/personal/` if they:
