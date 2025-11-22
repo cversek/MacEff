@@ -17,6 +17,7 @@ from ..utils import (
     format_duration,
     format_macf_footer,
     load_agent_state,
+    save_agent_state,
     increment_agent_cycle,
     get_token_info,
     format_token_context_full,
@@ -25,56 +26,62 @@ from ..utils import (
     format_manifest_awareness
 )
 from .compaction import detect_compaction
-from .recovery import format_consciousness_recovery_message
+from .recovery import format_consciousness_recovery_message, format_session_migration_message
 from .logging import log_hook_event
 
 
-def detect_session_migration(current_session_id: str, state: SessionOperationalState) -> tuple[bool, str]:
+def detect_session_migration(current_session_id: str) -> tuple[bool, str, str]:
     """
     Detect session migration (new session ID without compaction).
 
     Session migration occurs when Claude Code creates a new session (crash recovery,
     manual restart) which orphans the previous TODO file in ~/.claude/todos/.
 
+    Reads last_session_id from PROJECT-SCOPED agent_state.json (not session-scoped).
+
     Args:
         current_session_id: Current session ID
-        state: SessionOperationalState with last_session_id tracking
 
     Returns:
-        Tuple of (migration_detected: bool, orphaned_todo_path: str)
+        Tuple of (migration_detected: bool, orphaned_todo_path: str, previous_session_id: str)
         - migration_detected: True if session ID changed
         - orphaned_todo_path: Path to orphaned TODO file (empty if not found)
+        - previous_session_id: Previous session ID from agent_state
     """
+    # Load project-scoped agent state
+    project_state = load_agent_state()
+    previous_session_id = project_state.get('last_session_id', '')
+
     # Check if we have a previous session ID to compare
-    if not state.last_session_id:
+    if not previous_session_id:
         # First run - no previous session to migrate from
-        return False, ""
+        return False, "", ""
 
     # Detect session ID change
-    if state.last_session_id == current_session_id:
+    if previous_session_id == current_session_id:
         # Same session - no migration
-        return False, ""
+        return False, "", previous_session_id
 
     # Session ID changed - look for orphaned TODO file
     from pathlib import Path
 
     todos_dir = Path.home() / ".claude" / "todos"
     if not todos_dir.exists():
-        return True, ""  # Migration detected but no todos dir
+        return True, "", previous_session_id  # Migration detected but no todos dir
 
     # Look for previous session's TODO file
     # Format: {session_id}-agent-{session_id}.json
-    previous_todo_pattern = f"{state.last_session_id}-agent-{state.last_session_id}.json"
+    previous_todo_pattern = f"{previous_session_id}-agent-{previous_session_id}.json"
     previous_todo_path = todos_dir / previous_todo_pattern
 
     if previous_todo_path.exists():
         # Check file size (>100 bytes indicates content, not empty placeholder)
         file_size = previous_todo_path.stat().st_size
         if file_size > 100:
-            return True, str(previous_todo_path)
+            return True, str(previous_todo_path), previous_session_id
 
     # Migration detected but no substantial TODO file found
-    return True, ""
+    return True, "", previous_session_id
 
 
 def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
@@ -119,36 +126,19 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
             "session_id": session_id
         })
 
-        # Load session state EARLY for session migration detection
+        # Load session state EARLY for detection
         state = SessionOperationalState.load(session_id)
 
-        # Detect session migration (new session ID without compaction)
-        migration_detected, orphaned_todo_path = detect_session_migration(session_id, state)
-
-        if migration_detected:
-            log_hook_event({
-                "hook_name": "session_start",
-                "event_type": "SESSION_MIGRATION_DETECTED",
-                "session_id": session_id,
-                "previous_session_id": state.last_session_id,
-                "orphaned_todo_path": orphaned_todo_path
-            })
-
-            # Update state with current session ID for next detection
-            if not testing:
-                state.last_session_id = session_id
-                state.save()
-
-            # Session migration recovery will be handled below
-            # (continue to compaction detection which may also be true)
-
-        # Primary detection: Check source field from Claude Code API
+        # PHASE 1: Check source field FIRST (highest priority)
+        # This distinguishes user-initiated /compact from crash-based session migration
         source = data.get('source')
         compaction_detected = False
         detection_method = None
 
         if source == 'compact':
-            # Primary detection via source field
+            # User-initiated compaction via /compact command
+            # This creates new session ID (expected) + context loss (trauma)
+            # Use compaction recovery, NOT migration recovery
             compaction_detected = True
             detection_method = "source_field"
 
@@ -160,7 +150,50 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
                 "detection_method": "source_field",
                 "source": source
             })
+            # Fall through to compaction recovery (skip migration check)
         else:
+            # PHASE 2: Check for session migration (new session ID without compaction)
+            # This handles crash/restart scenarios where TODO file orphaned
+            migration_detected, orphaned_todo_path, previous_session_id = detect_session_migration(session_id)
+
+            if migration_detected:
+                log_hook_event({
+                    "hook_name": "session_start",
+                    "event_type": "SESSION_MIGRATION_DETECTED",
+                    "session_id": session_id,
+                    "previous_session_id": previous_session_id,
+                    "orphaned_todo_path": orphaned_todo_path
+                })
+
+                # Update project-scoped agent_state with current session ID for next detection
+                if not testing:
+                    project_state = load_agent_state()
+                    project_state['last_session_id'] = session_id
+                    save_agent_state(project_state)
+
+                # Get temporal context for migration message
+                temporal_ctx = get_temporal_context()
+                environment = get_rich_environment_string()
+
+                # Format session migration recovery message
+                migration_msg = format_session_migration_message(
+                    previous_session_id=previous_session_id,
+                    current_session_id=session_id,
+                    orphaned_todo_path=orphaned_todo_path,
+                    temporal_ctx=temporal_ctx,
+                    environment=environment
+                )
+
+                # Return migration recovery message (calm TODO restoration)
+                return {
+                    "continue": True,
+                    "hookSpecificOutput": {
+                        "hookEventName": "SessionStart",
+                        "additionalContext": f"<system-reminder>\n{migration_msg}\n</system-reminder>"
+                    }
+                }
+
+            # PHASE 3: Fallback detection via JSONL transcript scanning
             # Fallback: JSONL transcript scanning for backward compatibility
             claude_dir = Path.home() / ".claude" / "projects"
 
@@ -250,10 +283,13 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
         # No compaction detected - provide temporal awareness message
         import time
 
-        # Update last_session_id for future migration detection
+        # Load project state for cross-session time tracking
+        project_state = load_agent_state()
+
+        # Update last_session_id in project-scoped state for future migration detection
         if not testing:
-            state.last_session_id = session_id
-            state.save()
+            project_state['last_session_id'] = session_id
+            save_agent_state(project_state)
 
         # Get temporal context
         temporal_ctx = get_temporal_context()
@@ -261,9 +297,6 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
 
         # Get breadcrumb
         breadcrumb = get_breadcrumb()
-
-        # Load project state for cross-session time tracking
-        project_state = load_agent_state()
         last_session_ended = project_state.get('last_session_ended_at', None)
 
         # Calculate time gap since last session

@@ -267,6 +267,79 @@ def _format_artifacts_section(artifacts: ConsciousnessArtifacts) -> str:
     return "\n".join(lines)
 
 
+def format_session_migration_message(
+    previous_session_id: str,
+    current_session_id: str,
+    orphaned_todo_path: str,
+    temporal_ctx: Optional[dict] = None,
+    session_duration: Optional[str] = None,
+    environment: Optional[str] = None
+) -> str:
+    """
+    Format session migration recovery message (calm directive, not traumatic).
+
+    Session migration occurs when session ID changes (crashes, restarts) orphaning
+    the TODO file in ~/.claude/todos/. This is distinct from compaction (same session
+    ID, context loss).
+
+    Message directs agent to invoke maceff-todo-restoration skill immediately.
+
+    Args:
+        previous_session_id: Old session ID (orphaned TODO file)
+        current_session_id: New session ID (current session)
+        orphaned_todo_path: Path to orphaned TODO JSON file
+        temporal_ctx: Optional temporal context dictionary
+        session_duration: Optional session duration string
+        environment: Optional execution environment string
+
+    Returns:
+        Formatted session migration message (plain text)
+    """
+    # Temporal awareness section
+    temporal_section = ""
+    if temporal_ctx:
+        temporal_section = "\n" + format_temporal_awareness_section(temporal_ctx, session_duration) + "\n"
+
+    # Session state section
+    session_state_section = f"""
+📍 SESSION STATE
+Previous Session: {previous_session_id[:8]}...
+Current Session: {current_session_id[:8]}...
+Environment: {environment if environment else 'Unknown'}
+"""
+
+    # Orphaned file info
+    file_info = ""
+    if orphaned_todo_path:
+        file_info = f"\n📁 Orphaned TODO file: {orphaned_todo_path}"
+    else:
+        file_info = "\n📁 No orphaned TODO file found (empty or missing)"
+
+    # Recovery directive (concise, not prescriptive)
+    directive = """
+⚠️ RECOVERY REQUIRED:
+
+Session ID changed - previous TODO file orphaned.
+
+CRITICAL: The user has lost UI access to the TODO list even though Claude Code
+may show TODOs in system-reminders to you (the agent). The user CANNOT see them.
+
+🔧 You MUST invoke maceff-todo-restoration skill immediately to restore user's TODO access.
+
+DO NOT proceed with new work until TODOs are restored.
+DO NOT rely on Claude Code's TODO system-reminders - those are invisible to the user."""
+
+    # MACF footer
+    footer = "\n" + format_macf_footer()
+
+    return f"""🔄 SESSION MIGRATION DETECTED
+
+🏗️ MACF
+{temporal_section}{session_state_section}{file_info}
+{directive}
+---{footer}"""
+
+
 def _format_todo_list(todos: List[dict]) -> str:
     """
     Format todos for display in recovery message.
