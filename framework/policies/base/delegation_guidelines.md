@@ -479,6 +479,7 @@ Write comprehensive tests for handle_session_start.py with 100% coverage.
 - `policy_awareness.md`: Discovery when feeling delegation uncertainty
 - `context_management.md`: Delegation during high token usage
 - `development/workspace_discipline.md`: Where SAs put dev scripts (delegation trails)
+- `meta/policy_writing.md` (External References) - How external tools (maceff-delegation skill, agent definitions) should reference this policy's delegation criteria and constraints
 
 **When to Reference This Policy**:
 - Questioning whether to delegate

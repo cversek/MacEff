@@ -330,6 +330,8 @@ Permission absence isn't restriction - it's structural governance. What you cann
 
 **This Policy's Role**: When agents read structure_governance.md, they learn not just WHAT the structure is, but WHY chronology beats taxonomy, HOW to use breadcrumbs for discovery, and WHEN compound structures are appropriate. The policy shapes thinking, not just behavior.
 
+**See Also**: `meta/policy_writing.md` (External References) - Formalization of how external tools should reference policies using timeless content categories rather than brittle section numbers
+
 ### Governance Fractals: Same Pattern, Different Scales
 
 **The Recognition**: Governance pattern repeats at multiple scales.

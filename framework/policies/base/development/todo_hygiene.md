@@ -637,3 +637,4 @@ cat ~/.claude/todos/{previous-session-hash}-agent-{previous-session-hash}.json |
 - `workspace_discipline.md` - Development artifact organization
 - `context_management.md` - Session boundaries
 - `delegation_guidelines.md` - Subagent task management
+- `meta/policy_writing.md` (External References) - How external tools should reference this policy's backup protocol and restoration steps

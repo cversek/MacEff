@@ -590,6 +590,11 @@ Read `delegation_guidelines.md` to understand delegation patterns.
 
 **Parallel Patterns**:
 - Both use pointer architecture (reading lists / policy paths)
+
+### 10.2 Relationship to policy_writing.md
+
+**See Also**:
+- `policy_writing.md` (External References) - Formalization of Policy as API principle that skills_writing.md demonstrates: external tools reference policies using timeless content categories, not brittle section numbers
 - Both avoid embedding (instructions / policy content)
 - Both adapt automatically (policy evolution)
 - Both emphasize minimalism (50 / 40 lines)

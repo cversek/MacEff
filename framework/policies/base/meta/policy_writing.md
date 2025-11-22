@@ -38,6 +38,12 @@ Policy writing guidelines ensure MacEff framework policies follow consistent str
 - CEP alignment required?
 - Maximum nesting depth?
 
+**1.4 External References (Policy as API)**
+- How should external tools reference policies?
+- Why are section numbers brittle in external references?
+- What's the Policy as API principle?
+- Timeless vs brittle references?
+
 **2 Content Best Practices**
 - How verbose should policies be?
 - When to use examples vs prose?
@@ -173,6 +179,71 @@ Policy writing guidelines ensure MacEff framework policies follow consistent str
 4. Integration with Other Policies (near end)
 5. Anti-Patterns (near end, shows what NOT to do)
 6. Evolution & Feedback (final section)
+
+### 1.4 External References (Policy as API)
+
+**Critical Distinction**:
+- **Internal structure** (sections 1.2-1.3): CEP sections match content section numbers within same policy
+- **External references** (this section): Skills, agents, and commands reference policies using timeless content categories
+
+**The Brittleness Problem**:
+
+When skills or agent definitions embed section numbers, policy reorganization breaks all external references:
+
+```markdown
+❌ BRITTLE (breaks when policy reorganizes):
+"What does todo_hygiene.md §9 specify?"
+"Extract from policy_writing.md §5.1"
+
+✅ TIMELESS (works regardless of structure):
+"What backup protocol does todo_hygiene.md specify?"
+"What validation checklist does policy_writing.md provide?"
+```
+
+**Why Section Numbers Are Brittle in External References**:
+- Policies evolve and reorganize (§5.1 becomes §6.1 after restructuring)
+- External references with embedded section numbers point to wrong content
+- Requires manual updates to all skills/definitions/commands that reference policies
+- Violates separation of interface (questions) from implementation (structure)
+
+**Policy as API Principle**:
+
+Treat policies as stable interfaces with evolving implementation:
+- **Interface**: Content categories (backup protocol, validation checklist, recovery steps)
+- **Implementation**: Section structure (can reorganize freely)
+- **External tools**: Query the interface (content), not the implementation (sections)
+
+**Examples**:
+
+**Skills** (maceff-todo-restoration, maceff-delegation):
+```markdown
+✅ "What backup protocol does the policy specify?"
+✅ "What recovery steps does the policy document?"
+✅ "Where does the policy specify backup location?"
+❌ "What does §9 say about backups?"
+```
+
+**Agent Definitions** (PolicyWriter, DevOpsEng):
+```markdown
+✅ "What validation checklist does policy_writing.md provide?"
+✅ "What infrastructure LAYERS does the foundation policy specify?"
+❌ "What requirements are in §5.1?"
+```
+
+**Commands** (/maceff_ccp, /maceff_start_todo):
+```markdown
+✅ "What backup protocols should be completed before creating this CCP?"
+✅ "What preparation steps does the checkpoint policy specify?"
+❌ "What TODO backup file should this CCP cite per §9?"
+```
+
+**Benefits**:
+- ✅ Policies reorganize freely without breaking external dependents
+- ✅ Questions remain valid as policy content evolves
+- ✅ Reduced maintenance burden (no manual reference updates)
+- ✅ Semantic extraction (WHAT) over location encoding (WHERE)
+
+**Note**: This principle does NOT apply to internal CEP Nav Guide organization (sections 1.2-1.3), which intentionally uses matching section numbers for within-policy navigation.
 
 ---
 
