@@ -62,6 +62,9 @@ Checkpoints are the **primary defense** against compaction-induced amnesia, serv
 - What's a CCP?
 - When to create CCPs (CLUAC5)?
 - How comprehensive should CCPs be?
+- What preparation steps before CCP creation?
+- Pre-CCP protocol requirements?
+- TODO backup before checkpoints?
 
 **1.2 SA Generic Checkpoints**
 - What's an SA checkpoint?
@@ -219,6 +222,23 @@ Checkpoints are the **primary defense** against compaction-induced amnesia, serv
 - ~147k conversation tokens used (~192k total with 45k reserve shown)
 - Before major breaks or context-intensive work
 - End of major development cycles
+
+**Pre-CCP Preparation Protocol**:
+
+Before creating a CCP, complete these preparatory steps:
+
+1. **Backup TODO state** (MANDATORY - see todo_hygiene.md §9):
+   - Create timestamped JSON backup of current TODO list
+   - Location: `agent/public/todo_backups/YYYY-MM-DD_HHMMSS_{session}_{cycle}_{mission}.json`
+   - Enables TODO snapshot citation in CCP and post-compaction recovery
+
+2. **Generate breadcrumb**:
+   - Run `macf_tools breadcrumb` to capture forensic coordinates
+   - Include in CCP header metadata
+
+3. **Gather consciousness artifacts**:
+   - Identify latest reflection, roadmap, observations to cite
+   - Prepare relative paths for GitHub links
 
 **Real Example** [CCP 2025-10-27 "Cycle 72 Phase 5 B.1 Complete": s_4107604e/c_72/g_17e7b7d/p_1a76aa7/t_1761617529]:
 ```markdown
