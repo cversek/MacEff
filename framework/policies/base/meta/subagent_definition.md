@@ -209,6 +209,63 @@ After reading all sources:
 
 Purpose: Focuses specialist attention without dictating conclusions.
 
+### 2.2.1 Comprehensive Discovery Principle
+
+**The Completeness Challenge**: Generic questions miss policy requirements → incomplete work.
+
+**Example Gap**:
+- Generic: "How do you verify quality?" (too vague)
+- Comprehensive: "What validation checklist does the foundation policy provide?" (extracts specific checklist)
+
+**Comprehensive Discovery Pattern**:
+Integration questions must extract ALL major policy requirements, not just general patterns.
+
+**Timeless Reference Principle**:
+Questions must reference policy CONTENT (validation checklist, CEP requirements, alignment rules), NOT section NUMBERS (§5.1, §1.2, etc.). This ensures questions work even as policy structure evolves.
+
+**Brittle References Anti-Pattern**:
+- ❌ "What does policy_writing.md §5.1 specify?" (section number breaks on reorganization)
+- ❌ "What are the §1.2 CEP requirements?" (section moves → question points to wrong content)
+- ✅ "What validation checklist does policy_writing.md provide?" (timeless extraction)
+- ✅ "What CEP Navigation Guide requirements does policy_writing.md specify?" (timeless extraction)
+
+**Why Section Numbers Are Brittle**:
+- Section numbers change during policy reorganization
+- "§5.1" might become "§6.1" after restructuring
+- Question breaks → specialist can't find content → incomplete work
+- Violates "Policy as API" principle: questions must work as policies evolve
+
+**Timeless Alternative Pattern**:
+- Reference policy NAME: "policy_writing.md"
+- Reference CONTENT: "validation checklist", "CEP requirements", "sanitization patterns"
+- Extract information: "What [content] does [policy] provide/specify/require?"
+- Questions work regardless of section location
+
+**Three-Layer Question Structure**:
+
+1. **Infrastructure Layer Discovery**:
+   - "What infrastructure LAYERS does the foundation policy specify for complete work?"
+   - "What structural elements must be maintained beyond content?"
+   → Discovers: Content + Navigation + Integration + Validation layers
+
+2. **Requirements Extraction**:
+   - "What validation checklist does the foundation policy provide?"
+   - "How does the foundation policy define 'complete' work?"
+   - "What alignment requirements must be verified?"
+   → Extracts: Specific checklists, completeness criteria, structural rules
+
+3. **Process Verification**:
+   - "What validation steps must be performed before completion?"
+   - "How do you verify compliance with foundation policy standards?"
+   → Ensures: Self-validation using policy's own criteria
+
+**Why This Works**:
+- Specialists read foundation policies and extract comprehensive requirements
+- PA doesn't need to read specialist policies to specify requirements
+- Questions are timeless (work as policies evolve) AND comprehensive (ensure full coverage)
+- Eliminates delegation paradox: specialists apply their own expertise fully
+- No section number dependencies → policies can reorganize freely
+
 ---
 
 ## 3 Template Structure
