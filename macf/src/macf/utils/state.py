@@ -202,9 +202,6 @@ class SessionOperationalState:
     # Delegation tracking within DEV_DRV (Phase 1F)
     delegations_this_drive: List[Dict[str, Any]] = field(default_factory=list)
 
-    # Session migration detection (Session Migration DETOUR Phase 3)
-    last_session_id: str = ""
-
     def save(self) -> bool:
         """
         Atomically save state to .maceff/sessions/{session_id}/ directory.
