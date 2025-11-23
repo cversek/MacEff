@@ -126,7 +126,7 @@
   "development_policies": {
     "description": "Optional development policies",
     "opt_in": true,
-    "location": "dev/",
+    "location": "base/development/",
     "policies": [
       {
         "name": "git_discipline",
@@ -144,14 +144,17 @@
       {
         "name": "testing_standards",
         "short_name": "TEST_STD",
-        "path": "dev/testing_standards.md",
+        "path": "base/development/testing.md",
         "CEP_triggers": [
           "How to test this?",
           "TDD approach?",
-          "Test coverage?",
-          "What tests needed?"
+          "How many tests per feature?",
+          "When to run tests?",
+          "What's progressive verbosity?",
+          "Foundation vs integration testing?",
+          "Test running discipline?"
         ],
-        "keywords": ["test", "TDD", "coverage", "quality"]
+        "keywords": ["test", "TDD", "4-6 tests", "progressive verbosity", "foundation", "integration", "pragmatic"]
       }
     ]
   },
@@ -160,16 +163,20 @@
     "location": "lang/",
     "languages": {
       "python": {
-        "name": "python_development",
-        "short_name": "PY_DEV",
-        "path": "lang/python.md",
-        "CEP_triggers": [
-          "Python standards?",
-          "Virtual environments?",
-          "Import structure?",
-          "Pythonic patterns?"
-        ],
-        "keywords": ["python", "venv", "pip", "pythonic"]
+        "testing": {
+          "name": "python_testing",
+          "short_name": "PY_TEST",
+          "path": "lang/python/testing_python.md",
+          "CEP_triggers": [
+            "pytest patterns?",
+            "Python test fixtures?",
+            "pytest parametrization?",
+            "pytest flags?",
+            "How to run pytest?",
+            "Python testing anti-patterns?"
+          ],
+          "keywords": ["pytest", "python", "fixtures", "parametrize", "conftest", "marks"]
+        }
       },
       "go": {
         "name": "go_development",
