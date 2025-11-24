@@ -155,6 +155,50 @@
           "Test running discipline?"
         ],
         "keywords": ["test", "TDD", "4-6 tests", "progressive verbosity", "foundation", "integration", "pragmatic"]
+      },
+      {
+        "name": "cli_development",
+        "short_name": "CLI_DEV",
+        "path": "base/development/cli_development.md",
+        "CEP_triggers": [
+          "CLI design patterns?",
+          "How to structure commands?",
+          "Help text standards?",
+          "Command naming conventions?",
+          "Error message formatting?",
+          "Configuration file patterns?",
+          "CLI user experience?"
+        ],
+        "keywords": ["CLI", "command", "flags", "help text", "error messages", "configuration", "UX"]
+      },
+      {
+        "name": "communication",
+        "short_name": "COMM",
+        "path": "base/development/communication.md",
+        "CEP_triggers": [
+          "How to report completion?",
+          "What evidence format?",
+          "Error reporting standards?",
+          "Code-first communication?",
+          "Deliverable documentation?",
+          "Completion report template?",
+          "Show code not prose?"
+        ],
+        "keywords": ["communication", "reporting", "completion", "evidence", "code-first", "deliverables"]
+      },
+      {
+        "name": "container_operations",
+        "short_name": "CONTAINER",
+        "path": "tech/docker/container_operations.md",
+        "CEP_triggers": [
+          "Docker best practices?",
+          "Container volume patterns?",
+          "Multi-stage builds?",
+          "Platform awareness ARM64/x86_64?",
+          "Container security?",
+          "MacEff container integration?"
+        ],
+        "keywords": ["docker", "container", "volumes", "multi-stage", "ARM64", "x86_64", "security"]
       }
     ]
   },
