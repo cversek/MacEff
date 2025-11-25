@@ -51,6 +51,12 @@ def _get_log_path() -> Path:
     if _TEST_LOG_PATH is not None:
         return _TEST_LOG_PATH
 
+    # Check for environment variable override (for CLI testing)
+    import os
+    env_path = os.getenv("MACF_EVENTS_LOG_PATH")
+    if env_path:
+        return Path(env_path)
+
     try:
         project_root = find_project_root()
         maceff_dir = project_root / ".maceff"

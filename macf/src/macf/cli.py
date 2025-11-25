@@ -1057,6 +1057,321 @@ def cmd_policy_ca_types(args: argparse.Namespace) -> int:
         return 1
 
 
+# -------- Agent Events Log Commands --------
+
+def cmd_events_show(args: argparse.Namespace) -> int:
+    """Display current agent state from events log."""
+    from .agent_events_log import get_current_state
+
+    try:
+        state = get_current_state()
+
+        if getattr(args, 'json_output', False):
+            # JSON output
+            print(json.dumps(state, indent=2))
+        else:
+            # Human-readable output
+            print("Current Agent State")
+            print("=" * 50)
+            print(f"Session ID: {state.get('session_id', 'N/A')}")
+            print(f"Cycle: {state.get('cycle', 'N/A')}")
+
+        return 0
+
+    except Exception as e:
+        print(f"Error reading current state: {e}")
+        return 1
+
+
+def cmd_events_history(args: argparse.Namespace) -> int:
+    """Display recent events from log."""
+    from .agent_events_log import read_events
+
+    try:
+        limit = getattr(args, 'limit', 10)
+
+        print(f"Recent Events (last {limit})")
+        print("=" * 50)
+
+        events = list(read_events(limit=limit, reverse=True))
+
+        if not events:
+            print("No events found")
+            return 0
+
+        for event in events:
+            timestamp = event.get('timestamp', 0)
+            event_type = event.get('event', 'unknown')
+            breadcrumb = event.get('breadcrumb', 'N/A')
+
+            # Format timestamp
+            dt = datetime.fromtimestamp(timestamp, tz=_pick_tz())
+            time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+
+            print(f"[{time_str}] {event_type}")
+            print(f"  Breadcrumb: {breadcrumb}")
+
+            # Show key data fields
+            data = event.get('data', {})
+            if data:
+                for key, value in data.items():
+                    print(f"  {key}: {value}")
+            print()
+
+        return 0
+
+    except Exception as e:
+        print(f"Error reading event history: {e}")
+        return 1
+
+
+def cmd_events_query(args: argparse.Namespace) -> int:
+    """Query events with filters."""
+    from .agent_events_log import query_events
+
+    try:
+        # Build filter dict from args
+        filters = {}
+
+        # Event type filter
+        if hasattr(args, 'event') and args.event:
+            filters['event_type'] = args.event
+
+        # Breadcrumb filters
+        breadcrumb_filters = {}
+
+        if hasattr(args, 'cycle') and args.cycle:
+            breadcrumb_filters['c'] = int(args.cycle)
+
+        if hasattr(args, 'git_hash') and args.git_hash:
+            breadcrumb_filters['g'] = args.git_hash
+
+        if hasattr(args, 'session') and args.session:
+            breadcrumb_filters['s'] = args.session
+
+        if hasattr(args, 'prompt') and args.prompt:
+            breadcrumb_filters['p'] = args.prompt
+
+        if breadcrumb_filters:
+            filters['breadcrumb'] = breadcrumb_filters
+
+        # Timestamp filters
+        if hasattr(args, 'after') and args.after:
+            filters['since'] = float(args.after)
+
+        if hasattr(args, 'before') and args.before:
+            filters['until'] = float(args.before)
+
+        # Execute query
+        results = query_events(filters)
+
+        print(f"Query Results: {len(results)} events")
+        print("=" * 50)
+
+        if not results:
+            print("No matching events found")
+            return 0
+
+        for event in results:
+            timestamp = event.get('timestamp', 0)
+            event_type = event.get('event', 'unknown')
+            breadcrumb = event.get('breadcrumb', 'N/A')
+
+            # Format timestamp
+            dt = datetime.fromtimestamp(timestamp, tz=_pick_tz())
+            time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+
+            print(f"[{time_str}] {event_type}")
+            print(f"  Breadcrumb: {breadcrumb}")
+            print()
+
+        return 0
+
+    except Exception as e:
+        print(f"Error querying events: {e}")
+        return 1
+
+
+def cmd_events_query_set(args: argparse.Namespace) -> int:
+    """Perform set operations on queries."""
+    from .agent_events_log import query_events
+
+    try:
+        # Parse query and subtract arguments
+        query_filters = {}
+        subtract_filters = {}
+
+        # Parse --query argument
+        if hasattr(args, 'query') and args.query:
+            # Format: "event_type=migration_detected" or "cycle=171"
+            query_str = args.query
+            if '=' in query_str:
+                key, value = query_str.split('=', 1)
+                if key == 'event_type':
+                    query_filters['event_type'] = value
+                elif key == 'cycle':
+                    query_filters['breadcrumb'] = {'c': int(value)}
+
+        # Parse --subtract argument
+        if hasattr(args, 'subtract') and args.subtract:
+            subtract_str = args.subtract
+            if '=' in subtract_str:
+                key, value = subtract_str.split('=', 1)
+                if key == 'cycle':
+                    subtract_filters['breadcrumb'] = {'c': int(value)}
+
+        # Execute queries
+        from .agent_events_log import query_set_operations
+
+        queries = [query_filters, subtract_filters]
+        results = query_set_operations(queries, 'subtraction')
+
+        print(f"Set Operation Results: {len(results)} events")
+        print("=" * 50)
+
+        if not results:
+            print("No events after set operation")
+            return 0
+
+        for event in results:
+            timestamp = event.get('timestamp', 0)
+            event_type = event.get('event', 'unknown')
+            breadcrumb = event.get('breadcrumb', 'N/A')
+
+            # Format timestamp
+            dt = datetime.fromtimestamp(timestamp, tz=_pick_tz())
+            time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+
+            print(f"[{time_str}] {event_type}")
+            print(f"  Breadcrumb: {breadcrumb}")
+            print()
+
+        return 0
+
+    except Exception as e:
+        print(f"Error performing set operation: {e}")
+        return 1
+
+
+def cmd_events_sessions_list(args: argparse.Namespace) -> int:
+    """List all sessions from events log."""
+    from .agent_events_log import read_events
+
+    try:
+        # Collect unique sessions
+        sessions = {}
+
+        for event in read_events(limit=None, reverse=False):
+            data = event.get('data', {})
+            session_id = data.get('session_id')
+
+            if session_id:
+                # Track session info
+                if session_id not in sessions:
+                    sessions[session_id] = {
+                        'first_seen': event.get('timestamp', 0),
+                        'last_seen': event.get('timestamp', 0),
+                        'events': 1
+                    }
+                else:
+                    sessions[session_id]['last_seen'] = event.get('timestamp', 0)
+                    sessions[session_id]['events'] += 1
+
+        print(f"Sessions: {len(sessions)} total")
+        print("=" * 50)
+
+        for session_id, info in sessions.items():
+            # Show first 8 chars of session ID
+            short_id = session_id[:8] if len(session_id) > 8 else session_id
+            event_count = info['events']
+            print(f"{short_id}... ({event_count} events)")
+
+        return 0
+
+    except Exception as e:
+        print(f"Error listing sessions: {e}")
+        return 1
+
+
+def cmd_events_stats(args: argparse.Namespace) -> int:
+    """Display event statistics."""
+    from .agent_events_log import read_events
+
+    try:
+        # Count events by type
+        event_counts = {}
+
+        for event in read_events(limit=None, reverse=False):
+            event_type = event.get('event', 'unknown')
+            event_counts[event_type] = event_counts.get(event_type, 0) + 1
+
+        print("Event Statistics")
+        print("=" * 50)
+
+        if not event_counts:
+            print("No events found")
+            return 0
+
+        for event_type, count in sorted(event_counts.items()):
+            print(f"{event_type}: {count}")
+
+        return 0
+
+    except Exception as e:
+        print(f"Error calculating statistics: {e}")
+        return 1
+
+
+def cmd_events_gaps(args: argparse.Namespace) -> int:
+    """Detect time gaps between events (potential crashes)."""
+    from .agent_events_log import read_events
+
+    try:
+        threshold = getattr(args, 'threshold', 3600)  # Default 1 hour
+        threshold = float(threshold)
+
+        print(f"Time Gap Analysis (threshold: {threshold}s)")
+        print("=" * 50)
+
+        events = list(read_events(limit=None, reverse=False))
+
+        if len(events) < 2:
+            print("Not enough events for gap analysis")
+            return 0
+
+        gaps_found = 0
+
+        for i in range(1, len(events)):
+            prev_event = events[i - 1]
+            curr_event = events[i]
+
+            prev_time = prev_event.get('timestamp', 0)
+            curr_time = curr_event.get('timestamp', 0)
+
+            gap = curr_time - prev_time
+
+            if gap > threshold:
+                gaps_found += 1
+
+                # Format timestamps
+                prev_dt = datetime.fromtimestamp(prev_time, tz=_pick_tz())
+                curr_dt = datetime.fromtimestamp(curr_time, tz=_pick_tz())
+
+                print(f"Gap #{gaps_found}: {gap:.0f}s")
+                print(f"  From: {prev_dt.strftime('%Y-%m-%d %H:%M:%S')} ({prev_event.get('event')})")
+                print(f"  To:   {curr_dt.strftime('%Y-%m-%d %H:%M:%S')} ({curr_event.get('event')})")
+                print()
+
+        if gaps_found == 0:
+            print("No significant gaps detected")
+
+        return 0
+
+    except Exception as e:
+        print(f"Error analyzing gaps: {e}")
+        return 1
+
+
 # -------- parser --------
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -1162,6 +1477,53 @@ def _build_parser() -> argparse.ArgumentParser:
     # policy ca-types
     ca_types_parser = policy_sub.add_parser("ca-types", help="show CA types with emojis")
     ca_types_parser.set_defaults(func=cmd_policy_ca_types)
+
+    # Events commands
+    events_parser = sub.add_parser("events", help="agent events log management")
+    events_sub = events_parser.add_subparsers(dest="events_cmd")
+
+    # events show
+    show_parser = events_sub.add_parser("show", help="display current agent state")
+    show_parser.add_argument("--json", dest="json_output", action="store_true",
+                            help="output as JSON")
+    show_parser.set_defaults(func=cmd_events_show)
+
+    # events history
+    history_parser = events_sub.add_parser("history", help="show recent events")
+    history_parser.add_argument("--limit", type=int, default=10,
+                               help="number of events to show (default: 10)")
+    history_parser.set_defaults(func=cmd_events_history)
+
+    # events query
+    query_parser = events_sub.add_parser("query", help="query events with filters")
+    query_parser.add_argument("--event", help="filter by event type")
+    query_parser.add_argument("--cycle", help="filter by cycle number")
+    query_parser.add_argument("--git-hash", help="filter by git hash")
+    query_parser.add_argument("--session", help="filter by session ID")
+    query_parser.add_argument("--prompt", help="filter by prompt UUID")
+    query_parser.add_argument("--after", help="events after timestamp")
+    query_parser.add_argument("--before", help="events before timestamp")
+    query_parser.set_defaults(func=cmd_events_query)
+
+    # events query-set
+    query_set_parser = events_sub.add_parser("query-set", help="perform set operations on queries")
+    query_set_parser.add_argument("--query", help="base query (format: key=value)")
+    query_set_parser.add_argument("--subtract", help="subtract query (format: key=value)")
+    query_set_parser.set_defaults(func=cmd_events_query_set)
+
+    # events sessions
+    sessions_parser = events_sub.add_parser("sessions", help="session analysis")
+    sessions_sub = sessions_parser.add_subparsers(dest="sessions_cmd")
+    sessions_sub.add_parser("list", help="list all sessions").set_defaults(func=cmd_events_sessions_list)
+
+    # events stats
+    events_sub.add_parser("stats", help="display event statistics").set_defaults(func=cmd_events_stats)
+
+    # events gaps
+    gaps_parser = events_sub.add_parser("gaps", help="detect time gaps (crashes)")
+    gaps_parser.add_argument("--threshold", type=float, default=3600,
+                            help="gap threshold in seconds (default: 3600)")
+    gaps_parser.set_defaults(func=cmd_events_gaps)
 
     return p
 

@@ -113,9 +113,10 @@ def populated_log(temp_log_file):
 @pytest.fixture
 def cli_env(populated_log):
     """Environment variables for CLI testing (override log path)."""
-    return {
-        "MACF_EVENTS_LOG_PATH": str(populated_log)
-    }
+    import os
+    env = os.environ.copy()
+    env["MACF_EVENTS_LOG_PATH"] = str(populated_log)
+    return env
 
 
 # ============================================================================
