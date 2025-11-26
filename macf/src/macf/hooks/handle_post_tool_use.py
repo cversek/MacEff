@@ -66,10 +66,23 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
             "success": True  # PostToolUse means tool completed (may have errors in output but call completed)
         }
 
+        # Sanitize hook_input: replace large content with size metadata
+        sanitized_data = data.copy()
+        if "tool_response" in sanitized_data:
+            tr = sanitized_data["tool_response"]
+            if isinstance(tr, dict) and "stdout" in tr:
+                stdout = tr.get("stdout", "")
+                if len(stdout) > 500:  # Threshold for "large" content
+                    sanitized_data["tool_response"] = {
+                        **tr,
+                        "stdout": f"[{len(stdout)} bytes]",
+                        "stdout_size": len(stdout)
+                    }
+
         append_event(
             event="tool_call_completed",
             data=event_data,
-            hook_input=data
+            hook_input=sanitized_data
         )
 
         # Base temporal message
