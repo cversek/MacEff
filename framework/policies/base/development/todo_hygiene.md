@@ -420,7 +420,7 @@ Both `content` (imperative) and `activeForm` (present continuous) required for a
 
 **Rationale**: Public location (consciousness artifacts, not private growth), enables archaeological recovery across sessions/cycles.
 
-**Filename Format**: `YYYY-MM-DD_HHMMSS_{session_short}_{cycle}_{mission_description}.json`
+**Filename Format**: `YYYY-MM-DD_HHMMSS_S{session_short}_C{cycle}_{mission_description}.json`
 
 **Components**:
 - `YYYY-MM-DD_HHMMSS`: Timestamp for chronological sorting
@@ -472,7 +472,7 @@ MISSION="Platform_Migration"  # Extracted from top active FTI
 TIMESTAMP=$(date +%Y-%m-%d_%H%M%S)
 
 # 3. Create backup filename
-BACKUP_FILE="agent/public/todo_backups/${TIMESTAMP}_${SESSION_SHORT}_${CYCLE}_${MISSION}.json"
+BACKUP_FILE="agent/public/todo_backups/${TIMESTAMP}_S${SESSION_SHORT}_C${CYCLE}_${MISSION}.json"
 
 # 4. Write TODO JSON array to backup file
 # (Raw JSON from TodoWrite structure)
