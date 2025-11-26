@@ -14,6 +14,7 @@ from ..utils import (
     format_token_context_minimal,
     get_breadcrumb
 )
+from ..agent_events_log import append_event
 
 
 def _is_bare_cd_command(command: str) -> bool:
@@ -82,6 +83,21 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
         tool_name = data.get("tool_name", "unknown")
         tool_input = data.get("tool_input", {})
         session_id = get_current_session_id()
+
+        # Append tool_call_started event
+        event_data = {
+            "tool": tool_name,
+            "session_id": session_id
+        }
+        # Add file_path if it's a file operation
+        if "file_path" in tool_input:
+            event_data["file_path"] = tool_input["file_path"]
+
+        append_event(
+            event="tool_call_started",
+            data=event_data,
+            hook_input=data
+        )
 
         # Get token info for smoke test
         token_info = get_token_info(session_id)

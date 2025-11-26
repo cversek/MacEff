@@ -20,6 +20,7 @@ from ..utils import (
     detect_auto_mode,
     get_breadcrumb
 )
+from ..agent_events_log import append_event
 
 
 def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
@@ -46,6 +47,14 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
         # Get current session
         session_id = get_current_session_id()
 
+        # Parse stdin to get subagent type
+        try:
+            hook_input = json.loads(stdin_json) if stdin_json else {}
+            subagent_type = hook_input.get('subagent_type', 'unknown')
+        except Exception:
+            hook_input = {}
+            subagent_type = 'unknown'
+
         # Get breadcrumb BEFORE completing (complete_deleg_drv may clear tracking state)
         breadcrumb = get_breadcrumb()
 
@@ -58,6 +67,18 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
         else:
             # Testing mode: read-only, don't mutate state
             success, duration = True, 0.0
+
+        # Append delegation_completed event
+        append_event(
+            event="delegation_completed",
+            data={
+                "session_id": session_id,
+                "agent_type": subagent_type,
+                "success": success,
+                "duration_seconds": duration
+            },
+            hook_input=hook_input
+        )
 
         # Get temporal context
         temporal_ctx = get_temporal_context()
