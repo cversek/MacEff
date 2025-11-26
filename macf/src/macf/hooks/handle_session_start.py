@@ -28,6 +28,7 @@ from ..utils import (
 from .compaction import detect_compaction
 from .recovery import format_consciousness_recovery_message, format_session_migration_message
 from .logging import log_hook_event
+from ..agent_events_log import append_event
 
 
 def detect_session_migration(current_session_id: str) -> tuple[bool, str, str]:
@@ -165,6 +166,29 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
                     "orphaned_todo_path": orphaned_todo_path
                 })
 
+                # Append migration_detected event with orphaned TODO file size
+                orphaned_todo_size = 0
+                if orphaned_todo_path:
+                    try:
+                        orphaned_todo_size = Path(orphaned_todo_path).stat().st_size
+                    except Exception:
+                        orphaned_todo_size = 0
+
+                # Get current cycle from agent state
+                agent_state = load_agent_state()
+                current_cycle = agent_state.get('current_cycle_number', 0)
+
+                append_event(
+                    event="migration_detected",
+                    data={
+                        "previous_session": previous_session_id,
+                        "current_session": session_id,
+                        "orphaned_todo_size": orphaned_todo_size,
+                        "current_cycle": current_cycle
+                    },
+                    hook_input=data
+                )
+
                 # Update project-scoped agent_state with current session ID for next detection
                 if not testing:
                     project_state = load_agent_state()
@@ -230,6 +254,18 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
             # Pass testing parameter through (respects safe-by-default)
             cycle_number = increment_agent_cycle(session_id, testing=testing)
 
+            # Append compaction_detected event
+            append_event(
+                event="compaction_detected",
+                data={
+                    "session_id": session_id,
+                    "cycle": cycle_number,
+                    "detection_method": detection_method,
+                    "compaction_count": state.compaction_count
+                },
+                hook_input=data
+            )
+
             # Detect AUTO_MODE
             auto_mode, source, confidence = detect_auto_mode(session_id)
             state.auto_mode = auto_mode
@@ -285,6 +321,17 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
 
         # Load project state for cross-session time tracking
         project_state = load_agent_state()
+
+        # Append session_started event (normal startup without compaction)
+        current_cycle = project_state.get('current_cycle_number', 0)
+        append_event(
+            event="session_started",
+            data={
+                "session_id": session_id,
+                "cycle": current_cycle
+            },
+            hook_input=data
+        )
 
         # Update last_session_id in project-scoped state for future migration detection
         if not testing:

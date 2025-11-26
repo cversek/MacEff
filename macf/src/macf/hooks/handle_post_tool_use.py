@@ -13,6 +13,7 @@ from ..utils import (
     format_token_context_minimal,
     get_breadcrumb
 )
+from ..agent_events_log import append_event
 
 
 def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
@@ -57,6 +58,19 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
         tool_name = data.get("tool_name", "unknown")
         tool_input = data.get("tool_input", {})
         session_id = get_current_session_id()
+
+        # Append tool_call_completed event
+        event_data = {
+            "tool": tool_name,
+            "session_id": session_id,
+            "success": True  # PostToolUse means tool completed (may have errors in output but call completed)
+        }
+
+        append_event(
+            event="tool_call_completed",
+            data=event_data,
+            hook_input=data
+        )
 
         # Base temporal message
         timestamp = get_minimal_timestamp()

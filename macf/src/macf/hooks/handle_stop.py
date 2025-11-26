@@ -22,6 +22,7 @@ from ..utils import (
     detect_auto_mode,
     get_breadcrumb
 )
+from ..agent_events_log import append_event
 
 
 def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
@@ -58,6 +59,17 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
 
         # Complete Development Drive (increments count, adds duration)
         success, duration = complete_dev_drv(session_id)
+
+        # Append dev_drv_ended event
+        append_event(
+            event="dev_drv_ended",
+            data={
+                "session_id": session_id,
+                "prompt_uuid": prompt_uuid if prompt_uuid else "unknown",
+                "duration_seconds": duration if success else 0
+            },
+            hook_input=json.loads(stdin_json) if stdin_json else {}
+        )
 
         # Get stats AFTER completing (now includes this drive)
         stats = get_dev_drv_stats(session_id)

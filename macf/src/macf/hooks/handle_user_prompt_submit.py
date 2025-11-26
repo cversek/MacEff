@@ -18,6 +18,7 @@ from ..utils import (
     detect_auto_mode,
     get_breadcrumb
 )
+from ..agent_events_log import append_event
 
 
 def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
@@ -61,6 +62,16 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
         # Start Development Drive tracking with current UUID (skip if testing)
         if not testing:
             start_dev_drv(session_id, prompt_uuid=current_prompt_uuid)
+
+        # Append dev_drv_started event
+        append_event(
+            event="dev_drv_started",
+            data={
+                "session_id": session_id,
+                "prompt_uuid": current_prompt_uuid if current_prompt_uuid else "unknown"
+            },
+            hook_input=hook_input
+        )
 
         # Get breadcrumb
         breadcrumb = get_breadcrumb()
