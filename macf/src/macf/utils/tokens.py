@@ -84,9 +84,23 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
                         f.seek(-scan_size, os.SEEK_END)
                         content = f.read().decode("utf-8", errors="ignore")
 
+                        # Find compact_boundary marker (compaction detection)
+                        # After compaction, pre-compaction messages have stale token counts
+                        lines = content.split("\n")
+                        last_boundary_idx = -1
+                        for i, line in enumerate(lines):
+                            if not line.strip():
+                                continue
+                            # Detect compact_boundary or summary markers
+                            if '"compact_boundary"' in line or '"type":"summary"' in line:
+                                last_boundary_idx = i
+
+                        # Only scan lines AFTER the boundary (if found)
+                        search_lines = lines[last_boundary_idx + 1:] if last_boundary_idx >= 0 else lines
+
                         # Find the LAST assistant message with token data (most recent)
                         assistant_messages = []
-                        for line in content.split("\n"):
+                        for line in search_lines:
                             if not line.strip():
                                 continue
                             try:
@@ -120,6 +134,18 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
                         if assistant_messages:
                             current_tokens = assistant_messages[-1]["tokens"]
                             last_timestamp = assistant_messages[-1]["timestamp"]
+                        elif last_boundary_idx >= 0:
+                            # Compaction detected but no post-boundary messages yet
+                            # Return conservative estimate (~30% usage)
+                            return {
+                                "tokens_used": 60000,
+                                "tokens_remaining": max_tokens - 60000,
+                                "percentage_used": 30.0,
+                                "percentage_remaining": 70.0,
+                                "cluac_level": 70,
+                                "last_updated": "post_compaction",
+                                "source": "post_compaction_estimate",
+                            }
 
                     # If tail scan didn't find any data, do a full scan
                     if current_tokens == 0:
