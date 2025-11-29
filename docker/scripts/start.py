@@ -386,71 +386,13 @@ def create_project_workspace(project_name: str, project_spec: ProjectSpec) -> No
                 run_command(['cp', str(cmd_source), str(cmd_target)])
 
 
-def setup_git_worktree(username: str, shared_repo_path: Path, agent_repo_path: Path,
-                       repo_url: str, default_branch: str) -> None:
-    """
-    Create git worktree for agent with dedicated branch.
-
-    Worktrees enable multi-agent collaboration without race conditions:
-    - Shared .git repository (commits visible to all)
-    - Independent working trees per agent (isolated file edits)
-    - Agent-specific branches prevent conflicts
-
-    Idempotent: Safe to run multiple times.
-
-    Args:
-        username: Agent username (e.g., 'pa_manny')
-        shared_repo_path: Path to shared .git repository
-        agent_repo_path: Path where agent's worktree will be created
-        repo_url: Git repository URL (for initial clone if needed)
-        default_branch: Base branch (e.g., 'main')
-    """
-    # Configure git to trust shared_workspace repos (bypass ownership security)
-    run_command(['git', 'config', '--global', '--add', 'safe.directory', str(shared_repo_path)], check=False)
-
-    agent_branch = f"{username}/{default_branch}"
-
-    # Check if worktree already exists and is healthy
-    if agent_repo_path.exists():
-        git_file = agent_repo_path / '.git'
-        if git_file.is_file():
-            # Worktree exists, verify it's valid
-            try:
-                run_command(['git', '-C', str(agent_repo_path), 'status'], check=True, capture=True)
-                log(f"Worktree already exists: {agent_repo_path}")
-                return
-            except:
-                # Worktree broken, remove and recreate
-                log(f"Removing broken worktree: {agent_repo_path}")
-                run_command(['rm', '-rf', str(agent_repo_path)], check=False)
-
-    # Ensure shared repository exists
-    if not shared_repo_path.exists():
-        log(f"Shared repo missing, cannot create worktree: {shared_repo_path}")
-        return
-
-    # Create agent-specific branch if it doesn't exist
-    try:
-        run_command(['git', '-C', str(shared_repo_path), 'show-ref', '--verify',
-                    f'refs/heads/{agent_branch}'], check=True, capture=True)
-        log(f"Branch exists: {agent_branch}")
-    except:
-        # Branch doesn't exist, create from default_branch
-        log(f"Creating branch: {agent_branch} from {default_branch}")
-        run_command(['git', '-C', str(shared_repo_path), 'branch',
-                    agent_branch, default_branch], check=False)
-
-    # Create worktree
-    agent_repo_path.parent.mkdir(parents=True, exist_ok=True)
-    log(f"Creating worktree: {agent_repo_path} on branch {agent_branch}")
-    run_command(['git', '-C', str(shared_repo_path), 'worktree', 'add',
-                '-B', agent_branch, str(agent_repo_path), default_branch], check=False)
-
-
 def create_workspace_structure(username: str, assigned_projects: List[str],
                                projects_config: Optional[ProjectsConfig]) -> None:
     """
-    Create workspace with real directories and git worktrees (replaces symlinks).
+    Create workspace directory structure for agent projects.
+
+    Creates workspace directories and symlinks. Git worktree creation is
+    deferred to deploy.py WorktreeSetup for single-command deployment.
 
     This preserves 3-layer CLAUDE.md discovery by avoiding symlinks that
     break upward path traversal.
@@ -502,15 +444,12 @@ def create_workspace_structure(username: str, assigned_projects: List[str],
 
                 # Compute agent path based on worktree flag
                 if repo_mount.worktree:
-                    # Worktree: ~/workspace/{project}/git-worktrees/{name}
-                    agent_repo = project_workspace / 'git-worktrees' / repo_mount.name
-                    setup_git_worktree(
-                        username=username,
-                        shared_repo_path=shared_repo,
-                        agent_repo_path=agent_repo,
-                        repo_url=repo_mount.url,
-                        default_branch=repo_mount.default_branch
-                    )
+                    # Worktree repos: Create directory structure only
+                    # Actual worktree creation handled by deploy.py WorktreeSetup
+                    worktree_base = project_workspace / 'git-worktrees'
+                    worktree_base.mkdir(mode=0o755, exist_ok=True)
+                    run_command(['chown', f'{username}:{username}', str(worktree_base)])
+                    log(f"Worktree directory prepared: {worktree_base} (use deploy.py to create worktrees)")
                 else:
                     # Symlink: ~/workspace/{project}/repos/{name} -> shared
                     agent_repo = project_workspace / 'repos' / repo_mount.name
@@ -779,7 +718,9 @@ def main() -> int:
         # Propagate environment
         propagate_container_env()
 
-        log("Startup complete, starting sshd...")
+        log("Startup complete")
+        log("Run 'python scripts/deploy.py install' to deploy repos and worktrees")
+        log("Starting sshd...")
         os.execv('/usr/sbin/sshd', ['/usr/sbin/sshd', '-D'])
 
     except Exception as e:
