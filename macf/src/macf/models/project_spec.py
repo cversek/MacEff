@@ -6,7 +6,7 @@ docs/arch_v0.3_named_agents/05_implementation_guide.md (lines 127+)
 """
 
 from typing import Dict, List, Optional
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, model_validator
 
 
 class RepoMount(BaseModel):
@@ -32,25 +32,30 @@ class RepoMount(BaseModel):
         description="Default branch for worktree creation (e.g., 'main', 'master', 'develop')"
     )
 
-    @field_validator('name', mode='before')
-    @classmethod
-    def extract_name_from_url(cls, v, info):
+    @model_validator(mode='after')
+    def extract_name_from_url(self):
         """Extract repository name from URL if name not provided."""
-        if v is not None:
-            return v
+        if self.name is not None:
+            return self
 
         # Extract from URL
-        url = info.data.get('url', '')
+        url = self.url
         if not url:
-            return None
+            return self
 
         # Handle git@github.com:user/repo.git or https://github.com/user/repo.git
         if url.endswith('.git'):
             url = url[:-4]
 
         # Extract last component (repo name)
-        name = url.rstrip('/').split('/')[-1]
-        return name
+        # Handle both git@github.com:user/repo and https://github.com/user/repo
+        if ':' in url and '@' in url:
+            # SSH format: git@github.com:user/repo
+            self.name = url.split(':')[-1].split('/')[-1]
+        else:
+            # HTTPS format: https://github.com/user/repo
+            self.name = url.rstrip('/').split('/')[-1]
+        return self
 
 
 class DataMount(BaseModel):
