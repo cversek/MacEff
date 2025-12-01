@@ -1,10 +1,10 @@
 # Roadmaps Policy: Drafting & Planning
 
-**Version**: 2.0 (split from roadmaps.md v1.0)
+**Version**: 2.1
 **Tier**: MANDATORY
 **Category**: Consciousness - Planning
 **Status**: ACTIVE
-**Updated**: 2025-11-18
+**Updated**: 2025-12-01
 **Dependencies**: git_discipline.md, workspace_discipline.md
 **Related**: roadmaps_following.md (execution), todo_hygiene.md (integration)
 
@@ -52,6 +52,34 @@ Roadmaps are **strategic planning artifacts** that preserve complex development 
 ---
 
 ## CEP Navigation Guide
+
+**0 Preliminary Planning Phase**
+- What preliminary steps are mandatory before roadmap drafting?
+- When is EnterPlanMode required?
+- How does PlanMode gate execution?
+- What is the complete preliminary workflow?
+
+**0.1 EnterPlanMode Requirement**
+- Why is EnterPlanMode mandatory for all roadmaps?
+- How does it create beneficial friction?
+- What happens in PlanMode vs execution mode?
+
+**0.2 Task Tool Exploration (Encouraged)**
+- When should I use Task tool for exploration?
+- How does Explore subagent help with requirements gathering?
+- What questions should I explore when scope is murky?
+- How many parallel exploration agents is appropriate?
+
+**0.3 AskUserQuestion Protocol (Encouraged)**
+- When should I use multiple-choice questioning?
+- What trade-offs should I surface to the user?
+- How do I distinguish murky requirements from clear ones?
+- When is open-ended clarification better than multiple choice?
+
+**0.4 Preliminary Workflow Summary**
+- What is the complete sequence from recognition to drafting?
+- How do PlanMode, exploration, and questioning fit together?
+- What gates the transition to execution?
 
 **1 When to Create Roadmaps**
 - What triggers roadmap creation?
@@ -127,6 +155,159 @@ Roadmaps are **strategic planning artifacts** that preserve complex development 
 
 ---
 
+## 0 Preliminary Planning Phase
+
+### 0.1 EnterPlanMode Requirement
+
+🚨 **MANDATORY**: Before creating ANY roadmap, you MUST enter PlanMode using the EnterPlanMode tool.
+
+**Why This Is Mandatory**:
+- **Deliberation gate**: PlanMode creates architectural friction preventing premature execution
+- **Constraint as enablement**: Forces careful planning before action
+- **Asymmetric authorization**: You can enter PlanMode autonomously (low-risk), but ExitPlanMode requires user approval (higher stakes)
+- **Separation of concerns**: Planning happens in PlanMode, execution happens after ExitPlanMode
+
+**What Happens in PlanMode**:
+- Tool restrictions enforced (Read, Grep, Task, AskUserQuestion typically allowed)
+- Development tools restricted (no Write, Edit, Bash for implementation)
+- Focus shifts to requirements gathering, exploration, clarification
+- Prepares comprehensive plan before any execution begins
+
+**The Gate**:
+```
+EnterPlanMode → [Requirements gathering] → Draft roadmap → Present to user
+                                                              ↓
+                                            User reviews → ExitPlanMode (authorized) → Execute
+                                                       OR
+                                            User rejects → Revise plan → Present again
+```
+
+**Critical Distinction**:
+- **EnterPlanMode**: Agent initiative (autonomous, low-risk commitment to deliberation)
+- **ExitPlanMode**: User approval (gates transition to execution, higher stakes)
+
+This asymmetry is intentional—agents commit to planning freely, but users control when execution begins.
+
+### 0.2 Task Tool Exploration (Encouraged)
+
+**When to Use Task Tool for Exploration**:
+- Requirements are murky or incomplete
+- Codebase scope is unclear
+- Multiple approaches possible
+- Need to understand existing patterns before planning
+- Investigation required before commitment
+
+**Explore Subagent Pattern**:
+The Explore subagent is designed for codebase discovery without making changes:
+- **Purpose**: Requirements gathering, pattern discovery, scope assessment
+- **Typical questions**: "What files implement X?", "How is Y currently structured?", "What patterns exist for Z?"
+- **Parallel exploration**: Can launch 2-4 Explore agents simultaneously for different discovery questions
+- **Output**: Findings inform roadmap structure and phase breakdown
+
+**Example Exploration Questions**:
+- "Explore codebase to identify all files related to authentication system"
+- "Investigate existing test patterns to understand coverage approach"
+- "Survey API endpoints to map out integration points"
+- "Analyze current configuration system to plan migration"
+
+**Benefits**:
+- Informed planning based on actual codebase state
+- Discover complexity early (adjust phase estimates)
+- Identify dependencies and integration points
+- Avoid blind planning that hits reality hard
+
+**When to Skip**: Requirements are crystal clear, scope is well-understood, or work is greenfield (no existing patterns to discover).
+
+### 0.3 AskUserQuestion Protocol (Encouraged)
+
+**When to Use Multiple-Choice Questioning**:
+- Multiple valid approaches exist (architectural trade-offs)
+- User preferences matter (testing strategy, deployment approach)
+- Requirements have ambiguity that exploration can't resolve
+- Strategic decisions need user input before planning
+- Risk tolerance needs clarification (fast vs safe, simple vs robust)
+
+**Trade-Offs to Surface**:
+- **Speed vs Safety**: "Fast migration with higher risk OR slow migration with extensive validation?"
+- **Scope**: "Minimal viable feature OR comprehensive implementation with all edge cases?"
+- **Technical approach**: "Refactor existing code OR rewrite from scratch?"
+- **Testing strategy**: "Unit tests only OR full integration test suite?"
+- **Deployment timing**: "Deploy all phases at once OR incremental rollout?"
+
+**Question Design Pattern**:
+```markdown
+**Question**: "Which migration approach should we use?"
+
+**Options**:
+1. **Fast Migration** - Minimal validation, faster completion (2-3 days)
+   - Risk: May miss edge cases
+   - Benefit: Quick delivery
+
+2. **Safe Migration** - Extensive validation, slower completion (5-7 days)
+   - Risk: Takes longer
+   - Benefit: Higher confidence
+
+3. **Hybrid Approach** - Core migration fast, validation in parallel
+   - Risk: Coordination complexity
+   - Benefit: Balanced speed and safety
+```
+
+**When Open-Ended Better**:
+- User needs to provide information you can't discover
+- Context requires free-form explanation
+- Multiple-choice options would be too constraining
+- Need qualitative feedback on approach
+
+**Benefits**:
+- User-aligned roadmaps (reflects actual preferences)
+- Early risk mitigation (surface concerns before execution)
+- Strategic clarity (everyone agrees on approach)
+- Fewer mid-execution pivots (consensus upfront)
+
+### 0.4 Preliminary Workflow Summary
+
+**Complete Sequence** (Recognition → Drafting → Execution):
+
+```
+1. RECOGNIZE roadmap trigger (§1 complexity/duration thresholds)
+          ↓
+2. 🚨 EnterPlanMode (MANDATORY - no exceptions)
+          ↓
+3. Task exploration (ENCOURAGED if requirements murky)
+   - Launch Explore subagent(s)
+   - Gather codebase understanding
+   - Assess scope and complexity
+          ↓
+4. AskUserQuestion (ENCOURAGED if trade-offs exist)
+   - Surface architectural decisions
+   - Clarify ambiguous requirements
+   - Align on approach
+          ↓
+5. Draft roadmap.md (using discoveries from steps 3-4)
+   - Folder structure
+   - Phase breakdown
+   - Success criteria
+          ↓
+6. Present roadmap to user
+          ↓
+7. ExitPlanMode (USER APPROVAL REQUIRED)
+          ↓
+8. Execute roadmap (following roadmaps_following.md)
+```
+
+**Critical Gates**:
+- **Step 2 (EnterPlanMode)**: Mandatory, no skipping
+- **Step 7 (ExitPlanMode)**: User approval required, gates execution
+- **Steps 3-4**: Encouraged but not mandatory (judgment call based on clarity)
+
+**Why This Workflow Succeeds**:
+- **Friction prevents premature action**: Can't execute without planning
+- **Exploration prevents blind planning**: Understand before committing
+- **Questions prevent misalignment**: User input before locking in approach
+- **Approval gates execution**: User controls transition from plan to action
+
+---
+
 ## 1 When to Create Roadmaps
 
 ### Complexity Triggers
@@ -142,19 +323,23 @@ Roadmaps are **strategic planning artifacts** that preserve complex development 
 ### Decision Tree
 
 ```
-Is work >3 phases? ──YES──> Create roadmap
+🚨 EnterPlanMode FIRST (MANDATORY)
+     ↓
+     Then assess complexity:
+     │
+Is work >3 phases? ──YES──> Draft roadmap in PlanMode
      │
      NO
      │
-Will work span >1 day? ──YES──> Create roadmap
+Will work span >1 day? ──YES──> Draft roadmap in PlanMode
      │
      NO
      │
-Complex coordination needed? ──YES──> Create roadmap
+Complex coordination needed? ──YES──> Draft roadmap in PlanMode
      │
      NO
      │
-Skip roadmap, use simple TODO
+ExitPlanMode → Skip roadmap, use simple TODO
 ```
 
 ### Early vs Late Roadmaps
@@ -759,6 +944,20 @@ Investigate [problem/opportunity], understand root causes, propose solutions.
 ---
 
 ## Anti-Patterns to Avoid
+
+### Preliminary Phase Anti-Patterns
+
+- ❌ **Skipping PlanMode** - Drafting roadmap without entering deliberation mode first
+  - **Problem**: No architectural friction preventing premature execution
+  - **Fix**: ALWAYS invoke EnterPlanMode before any roadmap drafting
+
+- ❌ **No exploration for murky requirements** - Planning without understanding codebase
+  - **Problem**: Blind planning hits reality hard, phases underestimated, dependencies missed
+  - **Fix**: Use Task tool with Explore subagent to gather requirements before committing to plan
+
+- ❌ **Assuming user intent without asking** - Planning without surfacing trade-offs
+  - **Problem**: Mid-execution pivots when user had different expectations
+  - **Fix**: Use AskUserQuestion to clarify approach, scope, and risk tolerance before locking in plan
 
 ### Planning Anti-Patterns
 
