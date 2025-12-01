@@ -801,6 +801,23 @@ Read `checkpoints.md` and `scholarship.md` to understand checkpoint creation and
 **See Also**:
 - `subagent_definition.md` - Comprehensive discovery principle and three-layer questions
 
+### 10.4 Relationship to path_portability.md
+
+**path_portability.md provides**:
+- `{FRAMEWORK_ROOT}` placeholder convention
+- Context-dependent resolution (container/host)
+- Portability requirements for `/maceff_*` commands
+- Anti-patterns (hardcoded absolute paths)
+
+**slash_command_writing.md provides**:
+- How commands reference policies using portable paths
+- Integration of portability into command templates
+
+**Integration Point**: All `/maceff_*` commands MUST use `{FRAMEWORK_ROOT}` placeholders for policy references. Commands are framework artifacts that must work across all deployment contexts.
+
+**See Also**:
+- `path_portability.md` - Portable path conventions for framework artifacts
+
 ---
 
 ## 11 Key Lessons from Pattern Discovery
