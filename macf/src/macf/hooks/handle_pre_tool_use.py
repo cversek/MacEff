@@ -4,6 +4,7 @@ handle_pre_tool_use - PreToolUse hook runner.
 DELEG_DRV start tracking + tool operation awareness.
 """
 import json
+import traceback
 from typing import Dict, Any
 
 from ..utils import (
@@ -15,6 +16,7 @@ from ..utils import (
     get_breadcrumb
 )
 from ..agent_events_log import append_event
+from .logging import log_hook_event
 
 
 def _is_bare_cd_command(command: str) -> bool:
@@ -111,8 +113,28 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
         if tool_name == "Task":
             # DELEG_DRV start tracking (skip if testing)
             subagent_type = tool_input.get("subagent_type", "unknown")
+            description = tool_input.get("description", "")
+            prompt = tool_input.get("prompt", "")
             if not testing:
                 start_deleg_drv(session_id)
+
+            # Truncate long fields for event log (similar to tool output handling)
+            MAX_DESC_LEN = 100
+            MAX_PROMPT_LEN = 500
+            desc_truncated = description[:MAX_DESC_LEN] + f" [...{len(description)} chars]" if len(description) > MAX_DESC_LEN else description
+            prompt_truncated = prompt[:MAX_PROMPT_LEN] + f" [...{len(prompt)} chars]" if len(prompt) > MAX_PROMPT_LEN else prompt
+
+            # Append delegation_started event for forensic reconstruction
+            append_event(
+                event="delegation_started",
+                data={
+                    "session_id": session_id,
+                    "subagent_type": subagent_type,
+                    "description": desc_truncated,
+                    "prompt_preview": prompt_truncated
+                },
+                hook_input=data
+            )
             message_parts.append(f"⚡ Delegating to: {subagent_type}")
 
         elif tool_name in ["Read", "Write", "Edit"]:
@@ -162,11 +184,15 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
             }
         }
 
-    except Exception:
-        # Silent failure - never disrupt session
+    except Exception as e:
+        # Log error for debugging
+        log_hook_event({
+            "hook_name": "pre_tool_use",
+            "event_type": "ERROR",
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        })
         return {
             "continue": True,
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse"
-            }
+            "systemMessage": f"🏗️ MACF | ❌ PreToolUse hook error: {e}"
         }

@@ -4,6 +4,7 @@ handle_stop - Stop hook runner.
 DEV_DRV completion tracking + stats display.
 """
 import json
+import traceback
 from typing import Dict, Any
 
 from ..utils import (
@@ -23,6 +24,7 @@ from ..utils import (
     get_breadcrumb
 )
 from ..agent_events_log import append_event
+from .logging import log_hook_event
 
 
 def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
@@ -129,6 +131,15 @@ Development Drive Stats:
             "systemMessage": message
         }
 
-    except Exception:
-        # Silent failure
-        return {"continue": True}
+    except Exception as e:
+        # Log error for debugging
+        log_hook_event({
+            "hook_name": "stop",
+            "event_type": "ERROR",
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        })
+        return {
+            "continue": True,
+            "systemMessage": f"🏗️ MACF | ❌ Stop hook error: {e}"
+        }

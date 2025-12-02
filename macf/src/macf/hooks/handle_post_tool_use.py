@@ -4,6 +4,7 @@ handle_post_tool_use - PostToolUse hook runner.
 Tool completion awareness + TodoWrite tracking.
 """
 import json
+import traceback
 from typing import Dict, Any
 
 from ..utils import (
@@ -14,6 +15,7 @@ from ..utils import (
     get_breadcrumb
 )
 from ..agent_events_log import append_event
+from .logging import log_hook_event
 
 
 def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
@@ -152,11 +154,15 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
             }
         }
 
-    except Exception:
-        # Silent failure - never disrupt session
+    except Exception as e:
+        # Log error for debugging
+        log_hook_event({
+            "hook_name": "post_tool_use",
+            "event_type": "ERROR",
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        })
         return {
             "continue": True,
-            "hookSpecificOutput": {
-                "hookEventName": "PostToolUse"
-            }
+            "systemMessage": f"🏗️ MACF | ❌ PostToolUse hook error: {e}"
         }

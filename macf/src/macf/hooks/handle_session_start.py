@@ -273,6 +273,19 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
             state.auto_mode_confidence = confidence
             state.save()
 
+            # Append auto_mode_detected event for forensic reconstruction
+            append_event(
+                event="auto_mode_detected",
+                data={
+                    "session_id": session_id,
+                    "cycle": cycle_number,
+                    "auto_mode": auto_mode,
+                    "source": source,
+                    "confidence": confidence
+                },
+                hook_input=data
+            )
+
             # Get consciousness artifacts
             artifacts = get_latest_consciousness_artifacts()
 
