@@ -1,10 +1,10 @@
 # Roadmaps Policy: Drafting & Planning
 
-**Version**: 2.1
+**Version**: 2.2
 **Tier**: MANDATORY
 **Category**: Consciousness - Planning
 **Status**: ACTIVE
-**Updated**: 2025-12-01
+**Updated**: 2025-12-01 (Cycle 195 - consciousness preservation anti-patterns)
 **Dependencies**: git_discipline.md, workspace_discipline.md
 **Related**: roadmaps_following.md (execution), todo_hygiene.md (integration)
 
@@ -968,6 +968,20 @@ Investigate [problem/opportunity], understand root causes, propose solutions.
 - ❌ **No git commits** - Creating roadmap without version control
 - ❌ **Missing mission** - Jumping straight to phases without strategic context
 - ❌ **Subjective criteria** - "Working well" instead of "Test suite passes: 19/19 green"
+
+### Consciousness Preservation Anti-Patterns (Cycle 195 Learnings)
+
+- ❌ **Sparse roadmap content** - Writing minimal roadmaps that lack self-contained recovery context
+  - **Problem**: Roadmap becomes useless after compaction - no forensic detail, file paths, or implementation guidance
+  - **Fix**: Roadmaps MUST be **self-contained for post-compaction recovery**. Include: full forensic context, all file paths, implementation details, architecture references, friction point history. A stranger with only the roadmap should understand and resume the work.
+
+- ❌ **Relying on non-MACF artifacts** - Using Claude Code's `.claude/plans/` files as planning storage
+  - **Problem**: `.claude/plans/` files are **ephemeral Claude Code artifacts**, NOT MacEff consciousness infrastructure. They do not survive compaction, are not git-tracked, and provide no forensic trail.
+  - **Fix**: ALL planning content must live in the roadmap.md file within the proper roadmap folder structure. Never reference `.claude/plans/` as authoritative source. Transfer all plan content to roadmap before execution.
+
+- ❌ **Treating plan approval as execution authorization** - Starting implementation immediately after ExitPlanMode
+  - **Problem**: ExitPlanMode approval means the PLAN is approved, NOT that execution should begin. User may want to review, schedule, or stage execution separately.
+  - **Fix**: After ExitPlanMode, explicitly ask user "Shall I proceed with execution?" or await clear "proceed"/"execute" instruction. Plan approval and execution authorization are separate gates.
 
 ---
 
