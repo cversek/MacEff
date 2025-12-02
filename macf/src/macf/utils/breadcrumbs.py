@@ -11,6 +11,34 @@ from .paths import find_project_root
 from .session import get_current_session_id
 from .state import SessionOperationalState, read_json_safely
 
+
+def get_current_dev_drv_prompt_uuid() -> Optional[str]:
+    """
+    Get prompt UUID from most recent DEV_DRV start event in JSONL log.
+
+    This queries the append-only event log instead of mutable session_state.json,
+    providing reliable forensic data that survives state synchronization issues.
+
+    Returns:
+        Prompt UUID string (8+ chars) or None if no DEV_DRV events found
+    """
+    try:
+        # Import here to avoid circular dependency
+        from ..agent_events_log import read_events
+
+        # Get most recent dev_drv_started event
+        for event in read_events(limit=50, reverse=True):
+            if event.get("event") == "dev_drv_started":
+                data = event.get("data", {})
+                prompt_uuid = data.get("prompt_uuid")
+                if prompt_uuid and prompt_uuid != "unknown":
+                    return prompt_uuid
+                break  # Found event but no valid UUID
+
+        return None
+    except Exception:
+        return None
+
 def format_breadcrumb(
     cycle: int,
     session_id: str,
@@ -202,6 +230,9 @@ def get_breadcrumb() -> str:
     Zero-argument convenience function for hooks - ultimate parse-don't-construct!
     Auto-gathers: cycle, session_id, prompt_uuid, current timestamp, git_hash.
 
+    Note: prompt_uuid is now sourced from append-only JSONL event log instead of
+    mutable session_state.json, ensuring forensic reliability.
+
     Returns:
         Formatted breadcrumb like "s_abc12345/c_42/g_abc1234/p_c7ad5830/t_1730000000"
         Returns minimal breadcrumb on any failure (never crashes)
@@ -214,24 +245,9 @@ def get_breadcrumb() -> str:
         # Auto-gather all 5 components
         session_id = get_current_session_id()
 
-        # Try loading state from all possible agent_id directories
-        # Hooks may run from different CWD, so try multiple possibilities
-        state = None
-        for agent_id_attempt in _find_possible_agent_ids(session_id):
-            state_attempt = SessionOperationalState.load(session_id, agent_id=agent_id_attempt)
-            # Check if this state has actual data (not default)
-            if state_attempt.current_dev_drv_prompt_uuid is not None:
-                state = state_attempt
-                break
-
-        # Fallback to auto-detection if no state found
-        if state is None:
-            try:
-                from .config import ConsciousnessConfig
-                agent_id = ConsciousnessConfig().agent_id
-            except Exception:
-                agent_id = None
-            state = SessionOperationalState.load(session_id, agent_id=agent_id)
+        # Get prompt UUID from JSONL event log (append-only truth source)
+        # This replaces the old mutable session_state.json approach which could desync
+        prompt_uuid = get_current_dev_drv_prompt_uuid()
 
         # Get cycle from agent_state.json (agent-scoped persistence)
         from .cycles import get_agent_cycle_number
@@ -247,7 +263,7 @@ def get_breadcrumb() -> str:
         return format_breadcrumb(
             cycle=cycle_num,
             session_id=session_id,
-            prompt_uuid=state.current_dev_drv_prompt_uuid,
+            prompt_uuid=prompt_uuid,
             completion_time=current_time,
             git_hash=git_hash
         )
