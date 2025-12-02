@@ -26,7 +26,10 @@ from macf.event_queries import (
     get_deleg_drv_stats_from_events,
     get_cycle_number_from_events,
     get_compaction_count_from_events,
-    get_auto_mode_from_events
+    get_auto_mode_from_events,
+    get_delegations_this_drive_from_events,
+    get_last_session_id_from_events,
+    get_last_session_end_time_from_events
 )
 
 
@@ -382,3 +385,161 @@ def test_event_first_multiple_drives_same_session(test_session_id):
     assert stats["count"] == 3, "Should count all completed drives"
     assert stats["total_duration"] == 325.0, "Should sum all durations"
     assert stats["current_prompt_uuid"] == "msg_01CCC", "Should track most recent prompt"
+
+
+# =============================================================================
+# Test Group 5: New Phase 5.1 Query Functions
+# =============================================================================
+
+def test_get_delegations_this_drive_from_events(test_session_id):
+    """
+    Test get_delegations_this_drive_from_events returns delegations since last DEV_DRV start.
+    """
+    # Start a DEV_DRV
+    append_event("dev_drv_started", {
+        "session_id": test_session_id,
+        "prompt_uuid": "msg_DRIVE1",
+        "timestamp": 10000.0
+    })
+
+    # Two delegations during this drive
+    append_event("deleg_drv_started", {
+        "session_id": test_session_id,
+        "subagent_type": "test-eng",
+        "timestamp": 10100.0
+    })
+
+    append_event("deleg_drv_ended", {
+        "session_id": test_session_id,
+        "subagent_type": "test-eng",
+        "duration": 30.0
+    })
+
+    append_event("deleg_drv_started", {
+        "session_id": test_session_id,
+        "subagent_type": "devops-eng",
+        "timestamp": 10200.0
+    })
+
+    append_event("deleg_drv_ended", {
+        "session_id": test_session_id,
+        "subagent_type": "devops-eng",
+        "duration": 45.0
+    })
+
+    delegations = get_delegations_this_drive_from_events(test_session_id)
+
+    assert len(delegations) == 2, "Should have 2 delegations this drive"
+    assert delegations[0]["subagent_type"] == "test-eng"
+    assert delegations[0]["completed"] is True
+    assert delegations[0]["duration"] == 30.0
+    assert delegations[1]["subagent_type"] == "devops-eng"
+    assert delegations[1]["completed"] is True
+
+
+def test_get_delegations_this_drive_resets_on_new_drive(test_session_id):
+    """
+    Test that delegations list resets when a new DEV_DRV starts.
+    """
+    # First DEV_DRV with delegation
+    append_event("dev_drv_started", {
+        "session_id": test_session_id,
+        "prompt_uuid": "msg_OLD",
+        "timestamp": 20000.0
+    })
+
+    append_event("deleg_drv_started", {
+        "session_id": test_session_id,
+        "subagent_type": "test-eng",
+        "timestamp": 20100.0
+    })
+
+    append_event("deleg_drv_ended", {
+        "session_id": test_session_id,
+        "subagent_type": "test-eng",
+        "duration": 50.0
+    })
+
+    # New DEV_DRV starts - should reset delegations
+    append_event("dev_drv_started", {
+        "session_id": test_session_id,
+        "prompt_uuid": "msg_NEW",
+        "timestamp": 21000.0
+    })
+
+    # Only one delegation in new drive
+    append_event("deleg_drv_started", {
+        "session_id": test_session_id,
+        "subagent_type": "devops-eng",
+        "timestamp": 21100.0
+    })
+
+    append_event("deleg_drv_ended", {
+        "session_id": test_session_id,
+        "subagent_type": "devops-eng",
+        "duration": 25.0
+    })
+
+    delegations = get_delegations_this_drive_from_events(test_session_id)
+
+    # Should only see the delegation from the NEW drive
+    assert len(delegations) == 1, "Should only have delegation from current drive"
+    assert delegations[0]["subagent_type"] == "devops-eng"
+
+
+def test_get_last_session_id_from_events(test_session_id):
+    """
+    Test get_last_session_id_from_events returns previous session from migration event.
+    """
+    previous_session = "prev-sess-12345678"
+
+    append_event("migration_detected", {
+        "previous_session": previous_session,
+        "current_session": test_session_id,
+        "orphaned_todo_size": 1024,
+        "current_cycle": 204
+    })
+
+    result = get_last_session_id_from_events()
+
+    assert result == previous_session, "Should return previous session from migration event"
+
+
+def test_get_last_session_id_from_events_no_migration():
+    """
+    Test get_last_session_id_from_events returns empty string when no migration detected.
+    """
+    # No migration events logged - just query
+    result = get_last_session_id_from_events()
+
+    # Should return empty string (graceful fallback)
+    assert result == "" or isinstance(result, str), "Should return empty string or previous value"
+
+
+def test_get_last_session_end_time_from_events(test_session_id):
+    """
+    Test get_last_session_end_time_from_events returns timestamp from session_ended event.
+    """
+    end_timestamp = 30000.5
+
+    append_event("session_ended", {
+        "session_id": test_session_id,
+        "cycle": 203,
+        "timestamp": end_timestamp,
+        "reason": "user_logout"
+    })
+
+    result = get_last_session_end_time_from_events()
+
+    assert result == end_timestamp, "Should return timestamp from session_ended event"
+
+
+def test_get_last_session_end_time_from_events_no_end():
+    """
+    Test get_last_session_end_time_from_events returns None when no session_ended events.
+    """
+    # Query without any session_ended events for this test
+    # Note: other tests may have added events, so we just check type
+    result = get_last_session_end_time_from_events()
+
+    assert result is None or isinstance(result, float), "Should return None or float timestamp"

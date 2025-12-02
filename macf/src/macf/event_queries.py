@@ -189,6 +189,113 @@ def get_compaction_count_from_events(session_id: str) -> int:
     return count
 
 
+def get_delegations_this_drive_from_events(session_id: str) -> List[Dict]:
+    """
+    Get list of delegations that occurred during the current DEV_DRV.
+
+    Reconstructs the delegations_this_drive list from deleg_drv_started/ended events
+    that occurred after the most recent dev_drv_started event.
+
+    Args:
+        session_id: Session ID to filter events (uses first 8 chars for matching)
+
+    Returns:
+        List of delegation dicts with keys:
+        - subagent_type: Type of subagent (e.g., "devops-eng", "test-eng")
+        - started_at: Timestamp when delegation started
+        - duration: Duration in seconds (if completed, else None)
+        - completed: Whether delegation finished
+    """
+    delegations = []
+    last_dev_drv_start_time = 0.0
+
+    # Use first 8 chars of session_id for matching
+    session_prefix = session_id[:8] if session_id else ""
+
+    # First pass: find most recent dev_drv_started timestamp
+    for event in read_events(limit=None, reverse=False):
+        event_type = event.get("event")
+        data = event.get("data", {})
+        event_session = data.get("session_id", "")
+
+        # Session isolation
+        if session_prefix and event_session and not event_session.startswith(session_prefix):
+            continue
+
+        if event_type == "dev_drv_started":
+            timestamp = data.get("timestamp", 0.0)
+            if timestamp > last_dev_drv_start_time:
+                last_dev_drv_start_time = timestamp
+                delegations = []  # Reset - new DEV_DRV started
+
+        elif event_type == "deleg_drv_started" and last_dev_drv_start_time > 0:
+            timestamp = data.get("timestamp", 0.0)
+            if timestamp >= last_dev_drv_start_time:
+                delegations.append({
+                    "subagent_type": data.get("subagent_type", "unknown"),
+                    "started_at": timestamp,
+                    "duration": None,
+                    "completed": False
+                })
+
+        elif event_type == "deleg_drv_ended" and delegations:
+            subagent_type = data.get("subagent_type")
+            duration = data.get("duration", 0.0)
+
+            # Find matching uncompleted delegation
+            for deleg in reversed(delegations):
+                if deleg["subagent_type"] == subagent_type and not deleg["completed"]:
+                    deleg["duration"] = duration
+                    deleg["completed"] = True
+                    break
+
+    return delegations
+
+
+def get_last_session_id_from_events() -> str:
+    """
+    Get the previous session ID from most recent migration_detected event.
+
+    This is used for session migration recovery - finding the session that
+    was active before the current one started.
+
+    Returns:
+        Previous session ID string, or empty string if no migration detected
+    """
+    # Read most recent events first
+    for event in read_events(limit=100, reverse=True):
+        if event.get("event") == "migration_detected":
+            data = event.get("data", {})
+            previous_session = data.get("previous_session", "")
+            if previous_session:
+                return previous_session
+
+    # Fallback: check session_started events for session_id continuity
+    # (older events might have previous session info)
+    return ""
+
+
+def get_last_session_end_time_from_events() -> Optional[float]:
+    """
+    Get timestamp of most recent session_ended event.
+
+    Used to determine when the previous session ended, useful for
+    calculating session gaps and recovery timing.
+
+    Returns:
+        Unix timestamp of last session end, or None if no session_ended events
+    """
+    # Read most recent events first
+    for event in read_events(limit=100, reverse=True):
+        if event.get("event") == "session_ended":
+            data = event.get("data", {})
+            timestamp = data.get("timestamp")
+            if timestamp:
+                return float(timestamp)
+
+    return None
+
+
 def get_auto_mode_from_events(session_id: str) -> Tuple[bool, str, float]:
     """
     Get auto_mode setting from most recent auto_mode_detected event.
