@@ -202,7 +202,7 @@ def _update_settings_file(settings_path: Path, hooks_prefix: str) -> bool:
         if "hooks" not in settings:
             settings["hooks"] = {}
 
-        # All 6 hooks with their script names
+        # All 10 hooks with their script names
         hook_configs = [
             ("SessionStart", "session_start.py"),
             ("UserPromptSubmit", "user_prompt_submit.py"),
@@ -210,6 +210,10 @@ def _update_settings_file(settings_path: Path, hooks_prefix: str) -> bool:
             ("SubagentStop", "subagent_stop.py"),
             ("PreToolUse", "pre_tool_use.py"),
             ("PostToolUse", "post_tool_use.py"),
+            ("SessionEnd", "session_end.py"),
+            ("PreCompact", "pre_compact.py"),
+            ("PermissionRequest", "permission_request.py"),
+            ("Notification", "notification.py"),
         ]
 
         # Register all hooks
@@ -273,7 +277,7 @@ def cmd_hook_install(args: argparse.Namespace) -> int:
         # Create hooks directory
         hooks_dir.mkdir(parents=True, exist_ok=True)
 
-        # All 6 hooks with their handler module names
+        # All 10 hooks with their handler module names
         hooks_to_install = [
             ("session_start.py", "handle_session_start"),
             ("user_prompt_submit.py", "handle_user_prompt_submit"),
@@ -281,6 +285,10 @@ def cmd_hook_install(args: argparse.Namespace) -> int:
             ("subagent_stop.py", "handle_subagent_stop"),
             ("pre_tool_use.py", "handle_pre_tool_use"),
             ("post_tool_use.py", "handle_post_tool_use"),
+            ("session_end.py", "handle_session_end"),
+            ("pre_compact.py", "handle_pre_compact"),
+            ("permission_request.py", "handle_permission_request"),
+            ("notification.py", "handle_notification"),
         ]
 
         # Create all hook scripts
@@ -306,7 +314,7 @@ sys.exit(0)
 
         # Update settings file
         if _update_settings_file(settings_file, hooks_prefix):
-            print(f"\n✅ All 6 hooks installed successfully!")
+            print(f"\n✅ All 10 hooks installed successfully!")
             print(f"   Mode: {mode}")
             print(f"   Directory: {hooks_dir}")
             print(f"   Settings: {settings_file}")
