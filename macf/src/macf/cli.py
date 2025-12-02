@@ -584,55 +584,19 @@ def cmd_context(args: argparse.Namespace) -> int:
 
 def cmd_breadcrumb(args: argparse.Namespace) -> int:
     """Generate fresh breadcrumb for current DEV_DRV."""
-    from .utils import (
-        format_breadcrumb,
-        extract_current_git_hash,
-        read_json_safely,
-        find_project_root,
-        SessionOperationalState
-    )
-    import time
+    from .utils import get_breadcrumb, parse_breadcrumb
 
     try:
-        # Get session ID
-        session_id = get_current_session_id()
-
-        # Load session state for DEV_DRV prompt UUID
-        state = SessionOperationalState.load(session_id)
-
-        # Load agent state for cycle number
-        project_root = find_project_root()
-        agent_state_path = project_root / ".maceff" / "agent_state.json" if project_root else None
-        agent_state = read_json_safely(agent_state_path) if agent_state_path else {}
-        cycle_num = agent_state.get("current_cycle_number", 1)
-
-        # Get fresh timestamp (unix epoch)
-        completion_time = int(time.time())
-
-        # Get git hash (optional - may be None if not in git repo)
-        git_hash = extract_current_git_hash()
-
-        # Format breadcrumb with all components
-        breadcrumb = format_breadcrumb(
-            cycle=cycle_num,
-            session_id=session_id,
-            prompt_uuid=state.current_dev_drv_prompt_uuid,
-            completion_time=completion_time,
-            git_hash=git_hash
-        )
+        # Use the canonical get_breadcrumb() utility (DRY - single source of truth)
+        breadcrumb = get_breadcrumb()
 
         # Output format based on flags
         if getattr(args, 'json_output', False):
-            # JSON output with components
+            # Parse breadcrumb to extract components
+            components = parse_breadcrumb(breadcrumb) or {}
             output = {
                 "breadcrumb": breadcrumb,
-                "components": {
-                    "cycle": cycle_num,
-                    "session_id": session_id[:8] if session_id else None,
-                    "prompt_uuid": state.current_dev_drv_prompt_uuid[-7:] if state.current_dev_drv_prompt_uuid else None,
-                    "completion_time": completion_time,
-                    "git_hash": git_hash
-                }
+                "components": components
             }
             print(json.dumps(output, indent=2))
         else:
@@ -642,9 +606,7 @@ def cmd_breadcrumb(args: argparse.Namespace) -> int:
         return 0
 
     except Exception as e:
-        print(f"Error generating breadcrumb: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"🏗️ MACF | ❌ Breadcrumb error: {e}", file=sys.stderr)
         return 1
 
 
