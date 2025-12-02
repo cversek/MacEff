@@ -596,6 +596,8 @@ cat "$BACKUP" | python -m json.tool
 
 ### 11. Session File Migration TODO Recovery
 
+**User Trustworthiness Principle**: When user reports TODO accessibility issues, **TRUST THEM UNCONDITIONALLY**. System-reminders may show TODOs to the agent but user's UI is DISCONNECTED after session migration. The agent sees cached state; the user sees an empty list. **Immediately invoke TodoWrite** when user reports loss—this reconnects their UI regardless of what system-reminders show.
+
 **Problem**: When session ID changes (session migration), the TODO JSON file in `~/.claude/todos/` becomes orphaned because the filename contains the old session ID. The new session starts with an empty TODO list, causing loss of mission and phase context.
 
 **NOT about**: This is distinct from compaction recovery. Compaction preserves session ID but loses conversation context. Session migration creates a new session ID, orphaning the previous TODO file entirely.
