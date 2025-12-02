@@ -4,6 +4,7 @@ handle_user_prompt_submit - UserPromptSubmit hook runner.
 DEV_DRV start tracking + full temporal + token/CLUAC awareness injection.
 """
 import json
+import traceback
 from typing import Dict, Any
 
 from ..utils import (
@@ -19,6 +20,7 @@ from ..utils import (
     get_breadcrumb
 )
 from ..agent_events_log import append_event
+from .logging import log_hook_event
 
 
 def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
@@ -119,11 +121,15 @@ Breadcrumb: {breadcrumb}"""
             }
         }
 
-    except Exception:
-        # Silent failure
+    except Exception as e:
+        # Log error for debugging
+        log_hook_event({
+            "hook_name": "user_prompt_submit",
+            "event_type": "ERROR",
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        })
         return {
             "continue": True,
-            "hookSpecificOutput": {
-                "hookEventName": "UserPromptSubmit"
-            }
+            "systemMessage": f"🏗️ MACF | ❌ UserPromptSubmit hook error: {e}"
         }
