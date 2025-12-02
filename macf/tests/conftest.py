@@ -57,6 +57,36 @@ def clean_temp_dir(tmp_path):
     # Cleanup happens automatically with tmp_path
 
 
+@pytest.fixture(autouse=True)
+def isolated_events_log(tmp_path):
+    """
+    Isolate event logging to prevent test pollution of production JSONL.
+
+    This fixture automatically applies to ALL tests (autouse=True) to ensure
+    test events never pollute the production agent_events_log.jsonl file.
+
+    The isolation prevents issues like:
+    - Test session_ids appearing in production queries
+    - Test prompt_uuids corrupting breadcrumb generation
+    - Cross-test event pollution
+
+    Yields:
+        Path to isolated test events log
+    """
+    from macf.agent_events_log import set_log_path
+
+    # Create isolated log path
+    test_log = tmp_path / "test_events_log.jsonl"
+
+    # Redirect all event logging to test file
+    set_log_path(test_log)
+
+    yield test_log
+
+    # Reset to default (production) path after test
+    set_log_path(None)
+
+
 @pytest.fixture
 def mock_environment_detection():
     """Mock environment detection utilities."""
