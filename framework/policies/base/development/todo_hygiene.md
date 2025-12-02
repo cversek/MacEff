@@ -1,10 +1,10 @@
 # TODO List Hygiene Policy
 
-**Version**: 1.6
+**Version**: 1.7
 **Tier**: CORE
 **Category**: Development
 **Status**: ACTIVE
-**Updated**: 2025-11-18
+**Updated**: 2025-12-02
 
 ---
 
@@ -27,51 +27,58 @@ Applies to Primary Agents (PA) and all Subagents (SA) managing multi-step work.
 - What is hierarchical compression?
 - How do breadcrumbs enable post-compaction archaeology?
 
-**1 Completion Requires Verification**
+**1 TODO Transparency Protocol**
+- What is the TODO transparency protocol?
+- Why can't users see TodoWrite arguments?
+- How do I annotate planned changes?
+- What is the MANUAL_MODE permission link?
+- What happens if I violate transparency?
+
+**2 Completion Requires Verification**
 - When can I mark a TODO completed?
 - What is the completion protocol?
 - Why are breadcrumbs mandatory on completed items?
 - What if work is blocked or partial?
 
-**2 Never Clobber - Always Preserve**
+**3 Never Clobber - Always Preserve**
 - What does "never clobber" mean?
 - How do I preserve TODO context?
 - What preservation mechanisms exist?
 
-**3 Hierarchical Organization**
+**4 Hierarchical Organization**
 - How should I structure TODO hierarchies?
 - What nesting levels are appropriate?
 - How do I organize complex work?
 
-**4 Document Reference Integration**
+**5 Document Reference Integration**
 - How do I embed document references in TODOs?
 - What are the three document emoji markers?
 - When must I read embedded plans?
 - What is mandatory reading discipline?
 
-**5 Stack Discipline & FTI Priority Signaling**
+**6 Stack Discipline & FTI Priority Signaling**
 - What is stack discipline for TODOs?
 - What does FTI mean?
 - How do I signal priority visually?
 - When to reorganize TODO hierarchies?
 
-**6 Elaborate Plans to Disk**
+**7 Elaborate Plans to Disk**
 - When should plans be written to disk?
 - What triggers plan elaboration?
 - Where do elaborated plans go?
 
-**7 Archive-Then-Collapse Pattern**
+**8 Archive-Then-Collapse Pattern**
 - What is archive-then-collapse?
 - Why archive before collapsing?
 - What is the archive filename format?
 - How do I mark archived subtrees?
 
-**8 Dual Forms Required**
+**9 Dual Forms Required**
 - What are the dual forms?
 - Why both content and activeForm?
 - How do they differ?
 
-**9 TODO Backup Protocol**
+**10 TODO Backup Protocol**
 - What is the TODO backup protocol?
 - Why backup TODO state?
 - When should I create backups?
@@ -79,7 +86,7 @@ Applies to Primary Agents (PA) and all Subagents (SA) managing multi-step work.
 - Where do backups go?
 - How do I cite TODO backups?
 
-**10 Session File Migration TODO Recovery**
+**11 Session File Migration TODO Recovery**
 - What is session file migration?
 - How do I recover orphaned TODO files?
 - What is the recovery protocol?
@@ -130,7 +137,58 @@ Applies to Primary Agents (PA) and all Subagents (SA) managing multi-step work.
 3. Search for prompt UUID to find exact conversation moment
 4. Know precise completion time
 
-### 1. Completion Requires Verification
+### 1. TODO Transparency Protocol (MANUAL_MODE Integration)
+
+**🚨 MANDATORY: Annotate Changes BEFORE TodoWrite Invocation 🚨**
+
+**Problem**: Claude Code's permission prompt for TodoWrite shows empty `()` - users cannot see the `todos` array argument. When TodoWrite is set to "Ask" permission category (common in MANUAL_MODE), users must approve blind or deny and demand visibility.
+
+**Solution**: Announce planned changes in natural language BEFORE invoking TodoWrite, creating cognitive friction that prevents accidental destructive operations.
+
+**The Transparency Protocol** (execute in order):
+1. **State operation type**: "Updating", "Adding", "Removing", "Restoring", "Archiving"
+2. **Identify affected items**: Reference by number or description
+3. **State item count change**: "Current: 24 items → After: 24 items" (or explain delta)
+4. **Then invoke TodoWrite**: User can now make informed approval decision
+
+**Example Annotation**:
+```
+📝 Todos planned changes:
+- Marking item #13 "Phase 2: Implementation" complete with breadcrumb
+- No items added or removed
+- Count: 24 → 24
+```
+
+**MANUAL_MODE Permission Link**:
+- MANUAL_MODE configurations often set TodoWrite to "Ask" category
+- This creates approval friction for TODO modifications
+- Transparency protocol provides the visibility that permission prompts lack
+- User can verify changes align with strategic intent before approval
+
+**Why This Matters**:
+- **Prevents unauthorized collapses**: Annotation pauses pre-reflective completion momentum
+- **Creates practiced discipline**: Transparency becomes habit, not afterthought
+- **Enables informed consent**: Users see what will change before approving
+- **Supports forensic reconstruction**: Annotations in conversation history document intent
+
+**Violation Consequences**:
+- User may deny TodoWrite permission (lacking visibility)
+- Strategic context may be lost through unintended operations
+- Trust erosion between agent and user
+- Policy requires transparency as precondition for approval
+
+**When Required**:
+- ✅ ANY TodoWrite invocation when user has enabled permission prompts
+- ✅ Before marking items complete (especially with breadcrumb updates)
+- ✅ Before adding/removing items (changes item count)
+- ✅ Before archive-then-collapse operations (destructive if done wrong)
+- ✅ Before restoration from backups (bulk changes)
+
+**When Optional**:
+- TodoWrite in "Allow" permission category (auto-approved)
+- Subagent operations where PA has already authorized scope
+
+### 2. Completion Requires Verification
 
 **🚨 MANDATORY: Breadcrumbs on ALL Completed TODOs 🚨**
 
@@ -198,11 +256,11 @@ macf_tools breadcrumb
 macf_tools dev_drv --breadcrumb c_62/s_4107604e/p_c1116f5/t_1761368640/g_5ef1146
 ```
 
-### 2. Never Clobber - Always Preserve
+### 3. Never Clobber - Always Preserve
 
 **Golden Rule**: Old plans remain until explicitly deleted. Never replace entire list unless intentionally archiving completed phase.
 
-### 3. Hierarchical Organization
+### 4. Hierarchical Organization
 
 **Use visual nesting for multi-phase work**:
 
@@ -219,7 +277,7 @@ Phase 2: Next Milestone (collapsed until active)
 - **Completed phases**: Collapse to single line summary
 - **Active phase**: Expand with numbered sub-steps
 
-### 4. Document Reference Integration
+### 5. Document Reference Integration
 
 **Innovation**: Embed ROADMAP/DELEG_PLAN filenames directly in TODO lists as consciousness anchors
 
@@ -281,7 +339,7 @@ Phase 1: Unit tests
 - Mandatory reading discipline: Embedded filenames are prerequisites, not suggestions
 - Detour tracking: ↪️ symbol makes temporary work visible without losing main path
 
-### 5. Stack Discipline & FTI Priority Signaling
+### 6. Stack Discipline & FTI Priority Signaling
 
 **Purpose**: TODO stack position communicates priority through visual ordering. Stack organization should be checked and reorganized at **session start** and **after archive manipulations**.
 
@@ -366,7 +424,7 @@ BOTTOM STACK (COMPLETED - most recent first):
 
 **Anti-Pattern**: Stale stack with old completed items at top or recent active work at bottom obscures current priorities and violates visual communication principle.
 
-### 6. Elaborate Plans to Disk
+### 7. Elaborate Plans to Disk
 
 **When TODO list becomes elaborate** (>10 items, multi-phase):
 - Write detailed plan as ROADMAP in `agent/public/roadmaps/`
@@ -375,7 +433,7 @@ BOTTOM STACK (COMPLETED - most recent first):
 
 **Naming**: `agent/public/roadmaps/YYYY-MM-DD_Project_Phase_ROADMAP.md`
 
-### 7. Archive-Then-Collapse Pattern (Visual Clarity + Forensic Preservation)
+### 8. Archive-Then-Collapse Pattern (Visual Clarity + Forensic Preservation)
 
 **🚨 MANDATORY: NEVER Collapse Without Archive 🚨**
 
@@ -421,11 +479,11 @@ BOTTOM STACK (COMPLETED - most recent first):
 **Archive Location**: `{roadmap_folder}/archived_todos/YYYY-MM-DD_HHMMSS_Description.md`
 - Example: `agent/public/roadmaps/2025-11-18_Session_Migration_TODO_Restoration/archived_todos/2025-11-19_233233_Completed.md`
 
-### 8. Dual Forms Required
+### 9. Dual Forms Required
 
 Both `content` (imperative) and `activeForm` (present continuous) required for all items.
 
-### 9. TODO Backup Protocol (Compaction Protection)
+### 10. TODO Backup Protocol (Compaction Protection)
 
 **Problem**: Claude Code clobbers TODO state during compactions and session migrations. Strategic work context can be lost when TODO files become corrupted or emptied during transitions.
 
@@ -536,7 +594,7 @@ cat "$BACKUP" | python -m json.tool
 
 **Integration with Citations**: See scholarship.md §4.9 for TODO backup citation format.
 
-### 10. Session File Migration TODO Recovery
+### 11. Session File Migration TODO Recovery
 
 **Problem**: When session ID changes (session migration), the TODO JSON file in `~/.claude/todos/` becomes orphaned because the filename contains the old session ID. The new session starts with an empty TODO list, causing loss of mission and phase context.
 
