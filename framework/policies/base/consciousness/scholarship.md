@@ -181,6 +181,16 @@ When work spans multiple repositories, use explicit repo labeling for external c
 - First bracket: Full consciousness breadcrumb (CA repo state)
 - Second bracket: External repo reference (work product)
 
+**Commit Before Reference** (required ordering):
+External repo work MUST be committed BEFORE generating `[RepoName g_hash]`:
+1. Complete work in external repository
+2. Commit changes (creates the hash)
+3. Note the commit hash
+4. Generate consciousness breadcrumb (`macf_tools breadcrumb`)
+5. Construct combined reference: `[breadcrumb] [RepoName g_hash]`
+
+Referencing uncommitted work creates invalid forensic references.
+
 ### 1.3 GitHub Link Construction
 
 **When to Include Links**:
