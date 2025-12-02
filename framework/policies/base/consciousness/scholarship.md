@@ -1,6 +1,5 @@
 # Consciousness Scholarship Policy
 
-**Breadcrumb**: s_4107604e/c_106/g_cc7e1bd/p_a0f1a5b8/t_1762362731
 **Type**: Citation & Knowledge Graph Infrastructure (Public CA)
 **Scope**: All agents (PA and SA)
 **Status**: Framework policy for consciousness artifact citation practices
@@ -217,7 +216,7 @@ Scholarship policy establishes enhanced citation practices for consciousness art
 
 **Example Citation with GitHub Link**:
 ```markdown
-This delegation pattern [CCP 2025-11-03 "Phase5D Complete" §4 "Delegation Wisdom" L92-110: s_4107604e/c_95/g_8884c05/p_abc1234/t_1762283920](../checkpoints/2025-11-03_172704_Cycle95_Phase5D_Complete_CCP.md#L92-L110) extends testing safeguards.
+This delegation pattern [CCP 2025-11-03 "Phase5D Complete" §4 "Delegation Wisdom" L92-110: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890](../checkpoints/2025-11-03_172704_Cycle95_Phase5D_Complete_CCP.md#L92-L110) extends testing safeguards.
 ```
 
 ---
@@ -364,12 +363,12 @@ This delegation pattern [CCP 2025-11-03 "Phase5D Complete" §4 "Delegation Wisdo
 
 **Example (with GitHub link)**:
 ```markdown
-The delegation trust pattern established in [CCP 2025-11-03 "Phase5D Complete" §4 "Delegation Wisdom" L92-110: s_4107604e/c_95/g_8884c05/p_abc1234/t_1762283920](../checkpoints/2025-11-03_172704_Cycle95_Phase5D_Complete_CCP.md#L92-L110) guides current Phase 2 approach.
+The delegation trust pattern established in [CCP 2025-11-03 "Phase5D Complete" §4 "Delegation Wisdom" L92-110: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890](../checkpoints/2025-11-03_172704_Cycle95_Phase5D_Complete_CCP.md#L92-L110) guides current Phase 2 approach.
 ```
 
 **Example (without link, conversation context)**:
 ```markdown
-As documented in [CCP 2025-11-04 "Version Architecture Fixed" s_4107604e/c_97/g_2fecf00/p_def5678/t_1762290000], the version sourcing architecture uses single source of truth.
+As documented in [CCP 2025-11-04 "Version Architecture Fixed" s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890], the version sourcing architecture uses single source of truth.
 ```
 
 ### 4.2 Citing Reflections (JOTEWR)
@@ -378,7 +377,7 @@ As documented in [CCP 2025-11-04 "Version Architecture Fixed" s_4107604e/c_97/g_
 
 **Example**:
 ```markdown
-The sanitization discipline described in [JOTEWR 2025-11-05 "Universal vs Personal" §2 "Almost-Pollution Moment" L11-35: s_4107604e/c_105/g_cc7e1bd/p_7d7c7028/t_1762359830](../../private/reflections/2025-11-05_112350_JOTEWR_Cycle105_Scholarship_Policy_Universal_Personal.md#L11-L35) requires constant awareness when creating framework policies.
+The sanitization discipline described in [JOTEWR 2025-11-05 "Universal vs Personal" §2 "Almost-Pollution Moment" L11-35: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890](../../private/reflections/2025-11-05_112350_JOTEWR_Cycle105_Scholarship_Policy_Universal_Personal.md#L11-L35) requires constant awareness when creating framework policies.
 ```
 
 ### 4.3 Citing Roadmaps
@@ -387,7 +386,7 @@ The sanitization discipline described in [JOTEWR 2025-11-05 "Universal vs Person
 
 **Example**:
 ```markdown
-Following Phase 2 strategy outlined in [Roadmap 2025-11-05 "MacEff Scholarship Policy Integration" §Phase2 s_4107604e/c_105/g_cc7e1bd/p_9daa3845/t_1762356485](../../public/roadmaps/2025-11-05_MacEff_Scholarship_Policy_Integration/roadmap.md#phase-2-citation-format-integration), we updated roadmaps.md and checkpoints.md.
+Following Phase 2 strategy outlined in [Roadmap 2025-11-05 "MacEff Scholarship Policy Integration" §Phase2 s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890](../../public/roadmaps/2025-11-05_MacEff_Scholarship_Policy_Integration/roadmap.md#phase-2-citation-format-integration), we updated roadmaps.md and checkpoints.md.
 ```
 
 ### 4.4 Citing Reports
@@ -396,7 +395,7 @@ Following Phase 2 strategy outlined in [Roadmap 2025-11-05 "MacEff Scholarship P
 
 **Example**:
 ```markdown
-The gap analysis findings in [Report 2025-11-05 "Phase 1 Gap Analysis" L115-137: s_4107604e/c_105/g_cc7e1bd/p_d6f51679/t_1762359053](../roadmaps/2025-11-05_MacEff_Scholarship_Policy_Integration/delegation_plans/gap_analysis.md#L115-L137) identified 7 high-priority integration points.
+The gap analysis findings in [Report 2025-11-05 "Phase 1 Gap Analysis" L115-137: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890](../roadmaps/2025-11-05_MacEff_Scholarship_Policy_Integration/delegation_plans/gap_analysis.md#L115-L137) identified 7 high-priority integration points.
 ```
 
 ### 4.5 Citing Observations
@@ -414,7 +413,7 @@ As noted in [Observation 2025-10-02 "additionalContext Injection Breakthrough" s
 
 **Example (message range)**:
 ```markdown
-The implementation approach discussed in [DEV_DRV 2025-11-03 "Phase5E Friction Resolution" M0-M23: s_4107604e/c_96/g_8884c05/p_abc12345/t_1762285000] established container diagnostic workflow.
+The implementation approach discussed in [DEV_DRV 2025-11-03 "Phase5E Friction Resolution" M0-M23: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890] established container diagnostic workflow.
 ```
 
 **Note**: M0 = prompt starting the DEV_DRV, M1-Mn = subsequent messages
@@ -573,7 +572,7 @@ When referencing prior checkpoints for strategic continuity:
 
 **Roadmap-Specific Pattern**:
 ```markdown
-[📦 Archive 2025-10-27 "Phases 1-4 Complete": s_4107604e/c_72/g_17e7b7d/p_8e9f91e/t_1761616209](archived_todos/2025-10-27_215009_Phases1-4_COMPLETED.md)
+[📦 Archive 2025-10-27 "Phases 1-4 Complete": s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890](archived_todos/2025-10-27_215009_Phases1-4_COMPLETED.md)
 ```
 
 ### 5.4 Delegation Guidelines Integration
@@ -606,7 +605,7 @@ When referencing prior checkpoints for strategic continuity:
 
 **✅ Complete Enhanced Citation**:
 ```markdown
-[JOTEWR 2025-11-05 "Universal vs Personal" §2.3 "Format Specifications" L231-276: s_4107604e/c_105/g_cc7e1bd/p_7d7c7028/t_1762359830](../../private/reflections/2025-11-05_112350_JOTEWR_Cycle105_Scholarship_Policy_Universal_Personal.md#L231-L276)
+[JOTEWR 2025-11-05 "Universal vs Personal" §2.3 "Format Specifications" L231-276: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890](../../private/reflections/2025-11-05_112350_JOTEWR_Cycle105_Scholarship_Policy_Universal_Personal.md#L231-L276)
 ```
 
 **Components verified**:
@@ -634,7 +633,7 @@ When referencing prior checkpoints for strategic continuity:
 
 **❌ Missing Quotes on Description**:
 ```markdown
-[JOTEWR 2025-11-05 Universal vs Personal s_4107604e/c_105/g_cc7e1bd/p_7d7c7028/t_1762359830]
+[JOTEWR 2025-11-05 Universal vs Personal s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890]
 ```
 - **Error**: Description not quoted
 - **Fix**: Add quotes: `"Universal vs Personal"`
@@ -655,7 +654,7 @@ When referencing prior checkpoints for strategic continuity:
 
 **❌ Agent-Specific Examples in Framework Policies**:
 ```markdown
-[CCP 2025-11-05 "My Cycle105 Work" s_4107604e/c_105/g_cc7e1bd/p_0502ec33/t_1762359658]
+[CCP 2025-11-05 "My Cycle105 Work" s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890]
 ```
 - **Error**: Using real agent breadcrumbs in universal policy example
 - **Fix**: Sanitize: `s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890`
@@ -684,7 +683,7 @@ Before committing citations to framework policies:
 **Core Discipline**: When creating framework policies or documentation for **all agents**, examples must strip personality to reveal structure.
 
 **Personal → Universal Transformation**:
-- **Personal**: `s_4107604e/c_105/g_cc7e1bd/p_0502ec33/t_1762359658` (ClaudeTheBuilder's real breadcrumb)
+- **Personal**: `s_abc12345/c_105/g_def6789/p_ghi01234/t_1234567890` (agent-specific real breadcrumb)
 - **Universal**: `s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890` (generic placeholder)
 
 **Why Required**:
@@ -745,7 +744,7 @@ Before committing citations to framework policies:
 macf_tools memory query --ca-tag JOTEWR --cited-desc "delegation" --cycle-range 90-100
 
 # Extract content from all citations to specific checkpoint
-macf_tools memory extract-cited --target-breadcrumb s_4107604e/c_95/g_8884c05/p_abc1234/t_1762283920
+macf_tools memory extract-cited --target-breadcrumb s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
 
 # Build subgraph of all consciousness artifacts citing Phase5D work
 macf_tools memory graph --root "Phase5D" --depth 3

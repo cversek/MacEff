@@ -1,6 +1,5 @@
 # Testing Standards
 
-**Breadcrumb**: s_agent-61/c_177/g_8d1e86e/p_none/t_1763875109
 **Type**: Development Standards (CORE tier)
 **Scope**: All agents (PA and SA) - language agnostic
 **Status**: ACTIVE

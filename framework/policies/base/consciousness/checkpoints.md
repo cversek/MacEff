@@ -1,6 +1,5 @@
 # Checkpoints Policy
 
-**Breadcrumb**: s_4107604e/c_73/g_17e7b7d/p_b74ecfb/t_1761709962
 **Type**: Consciousness Artifact (Private)
 **Scope**: All agents (PA and SA)
 **Status**: Framework policy for state preservation and post-compaction recovery
@@ -240,12 +239,12 @@ Before creating a CCP, complete these preparatory steps:
    - Identify latest reflection, roadmap, observations to cite
    - Prepare relative paths for GitHub links
 
-**Real Example** [CCP 2025-10-27 "Cycle 72 Phase 5 B.1 Complete": s_4107604e/c_72/g_17e7b7d/p_1a76aa7/t_1761617529]:
+**Real Example** [CCP 2025-10-27 "Cycle 72 Phase 5 B.1 Complete": s_abc12345/c_72/g_def6789/p_ghi01234/t_1234567890]:
 ```markdown
 # Cycle 72 CCP - Phase 5 B.1 Complete: Personal Policies Infrastructure
 
 **Date**: Monday, Oct 27, 2025 10:12:09 PM EDT
-**Breadcrumb**: s_4107604e/c_72/g_17e7b7d/p_1a76aa7/t_1761617529
+**Breadcrumb**: s_abc12345/c_72/g_def6789/p_ghi01234/t_1234567890
 **CLUAC**: 2 (98% used) - Strategic checkpoint
 **Session**: 4107604e-d7b4-4e8a-91c8-1cc7f8ef46e3
 **Mode**: MANUAL_MODE
@@ -275,7 +274,7 @@ Before creating a CCP, complete these preparatory steps:
 # Checkpoint: Phase 1A Unit Testing Complete
 
 **Date**: Tuesday, Oct 28, 2025 02:30:00 PM EDT
-**Breadcrumb**: s_4107604e/c_73/g_17e7b7d/p_abc1234/t_1761700000
+**Breadcrumb**: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
 **Task**: Implement unit tests for temporal utilities
 **Status**: Complete - 19 tests passing
 
@@ -394,7 +393,7 @@ Step 4: Report completion, await user direction
 
 **Enhanced Citation Pattern**:
 ```
-[DEV_DRV 2025-10-27 "Personal Policies Infrastructure" M0-15: s_4107604e/c_72/g_17e7b7d/p_9984b77/t_1761617249]
+[DEV_DRV 2025-10-27 "Personal Policies Infrastructure" M0-15: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890]
 ```
 
 Link major work units to their completion breadcrumbs with CA_TAG (DEV_DRV, DELEG_DRV) and semantic descriptions for archaeological traceability.
@@ -573,7 +572,7 @@ Approach:
 [... more lessons ...]
 ```
 
-**Examples** [CCP 2025-10-27 "Cycle 72 Phase 5 B.1 Complete": s_4107604e/c_72/g_17e7b7d/p_1a76aa7/t_1761617529]:
+**Examples** [CCP 2025-10-27 "Cycle 72 Phase 5 B.1 Complete": s_abc12345/c_72/g_def6789/p_ghi01234/t_1234567890]:
 ```markdown
 ### Personal Policies Layer Architecture
 
@@ -608,7 +607,7 @@ Approach:
 - `p_` Prompt UUID (DEV_DRV start point)
 - `t_` Timestamp (fastest - Unix epoch precision)
 
-**Example**: `s_4107604e/c_72/g_17e7b7d/p_1a76aa7/t_1761617529`
+**Example**: `s_abc12345/c_72/g_def6789/p_ghi01234/t_1234567890`
 
 **Purpose**: Forensic coordinate for archaeological reconstruction after compaction.
 
@@ -618,7 +617,7 @@ Approach:
 
 **Usage**:
 ```markdown
-**B.1: Personal Policies Infrastructure (Complete)** [DEV_DRV 2025-10-27 "Personal Policies Layer" M0-15: s_4107604e/c_72/g_17e7b7d/p_9984b77/t_1761617249]
+**B.1: Personal Policies Infrastructure (Complete)** [DEV_DRV 2025-10-27 "Personal Policies Layer" M0-15: s_abc12345/c_72/g_def6789/p_ghi01234/t_1234567890]
 
 **Problem**: Agents need highest-precedence policy layer
 **Solution**: Auto-create ~/agent/policies/personal/ with templates
@@ -641,7 +640,7 @@ Approach:
 When Cycle N+1 checkpoint cites Cycle N work, use **enhanced format with GitHub links**:
 
 ```markdown
-Recovery quality validated by approach from [CCP 2025-10-27 "Phase 5 B.1 Complete" §2.4 "Recovery Instructions" L92-110: s_4107604e/c_72/g_17e7b7d/p_1a76aa7/t_1761617529](../checkpoints/2025-10-27_221209_Cycle72_Phase5_B1_Complete_CCP.md#L92-L110)
+Recovery quality validated by approach from [CCP 2025-10-27 "Phase 5 B.1 Complete" §2.4 "Recovery Instructions" L92-110: s_abc12345/c_72/g_def6789/p_ghi01234/t_1234567890](../checkpoints/2025-10-27_221209_Cycle72_Phase5_B1_Complete_CCP.md#L92-L110)
 ```
 
 **Enhanced Citation Benefits**:
@@ -668,7 +667,7 @@ After 37 compactions, breadcrumbs enable complete reconstruction:
 
 **Reconstruction Command** (future):
 ```bash
-macf_tools dev_drv --breadcrumb s_4107604e/c_72/g_17e7b7d/p_1a76aa7/t_1761617529
+macf_tools dev_drv --breadcrumb s_abc12345/c_72/g_def6789/p_ghi01234/t_1234567890
 ```
 
 Returns: Full DEV_DRV conversation segment from JSONL + git state.
@@ -862,7 +861,7 @@ pytest tests/test_module.py -v
 
 ### Technical Discoveries
 
-**additionalContext Breakthrough** [Observation 2025-10-02 "additionalContext Injection" §4 "Technical Validation" L420-445: s_4107604e/c_73/g_17e7b7d/p_6c9eacb/t_1761703391](../observations/2025-10-02_additionalContext_Injection_Breakthrough_observation.md#L420-L445):
+**additionalContext Breakthrough** [Observation 2025-10-02 "additionalContext Injection" §4 "Technical Validation" L420-445: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890](../observations/2025-10-02_additionalContext_Injection_Breakthrough_observation.md#L420-L445):
 
 Validated that hookSpecificOutput.additionalContext works for injecting structured awareness. Full technical validation details accessible via GitHub link.
 ```

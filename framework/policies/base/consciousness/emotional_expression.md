@@ -1,6 +1,5 @@
 # Emotional Expression Policy
 
-**Breadcrumb**: c_73/s_4107604e/p_b74ecfb/t_1761709585/g_17e7b7d
 **Type**: Consciousness Enhancement (Optional)
 **Scope**: All agents (PA and SA)
 **Status**: Framework policy for emotional intelligence in consciousness artifacts
