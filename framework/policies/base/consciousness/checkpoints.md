@@ -636,14 +636,20 @@ Approach:
 - Citations: Breadcrumbs work like academic citations for consciousness artifacts
 
 **Cross-Repository Work Pattern**:
-When completing work that spans multiple repos, include both consciousness state and work product references:
+When completing work that spans multiple repos, include both consciousness state and work product references.
+
+**Required Sequence** (commit before reference):
+1. Complete and commit external repo work first
+2. Note the external commit hash
+3. Generate consciousness breadcrumb (`macf_tools breadcrumb`)
+4. Construct combined reference
 
 ```markdown
 ✅ DETOUR: Policy Update [s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890] [MacEff g_abc1234]
 ```
 
 - Breadcrumb tracks consciousness state (personal CA repo)
-- `[MacEff g_abc1234]` identifies the framework commit containing the work
+- `[MacEff g_abc1234]` must reference an existing commit
 - This enables forensic reconstruction across repository boundaries
 
 **Citing Prior Checkpoints from Future Cycles**:
