@@ -980,8 +980,13 @@ Investigate [problem/opportunity], understand root causes, propose solutions.
   - **Fix**: ALL planning content must live in the roadmap.md file within the proper roadmap folder structure. Never reference `.claude/plans/` as authoritative source. Transfer all plan content to roadmap before execution.
 
 - ❌ **Treating plan approval as execution authorization** - Starting implementation immediately after ExitPlanMode
-  - **Problem**: ExitPlanMode approval means the PLAN is approved, NOT that execution should begin. User may want to review, schedule, or stage execution separately.
-  - **Fix**: After ExitPlanMode, explicitly ask user "Shall I proceed with execution?" or await clear "proceed"/"execute" instruction. Plan approval and execution authorization are separate gates.
+  - **Problem**: ExitPlanMode approval means the PLAN is approved, NOT that execution should begin. User may want to review, schedule, or stage execution separately. Execution is often deferred to the next cycle.
+  - **What roadmap approval DOES authorize**:
+    1. Create the roadmap CA structure and files (folder + roadmap.md)
+    2. Update the TODO list with the roadmap path pointer and phase items
+  - **What roadmap approval does NOT authorize**:
+    - Execution of TODO items (requires explicit "proceed"/"execute" instruction)
+  - **Required sequence**: Plan approval → Create roadmap artifacts → Update TODOs → STOP → Await execution authorization
 
 ---
 
