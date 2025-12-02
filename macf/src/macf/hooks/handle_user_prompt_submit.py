@@ -100,25 +100,22 @@ Breadcrumb: {breadcrumb}"""
         # Format footer
         footer = format_macf_footer()
 
-        # Combine sections
+        # Combine sections into plain content (DRY - single source)
         sections = [
             temporal_section,
             token_section,
             boundary_guidance if boundary_guidance else "",
             footer
         ]
+        plain_content = chr(10).join([s for s in sections if s])
 
-        message = f"""<system-reminder>
-{chr(10).join([s for s in sections if s])}
-</system-reminder>"""
-
-        # Return with both additionalContext (agent) and systemMessage (user)
+        # Pattern C: top-level systemMessage for user + hookSpecificOutput for agent
         return {
             "continue": True,
+            "systemMessage": plain_content,  # TOP LEVEL - user sees this
             "hookSpecificOutput": {
                 "hookEventName": "UserPromptSubmit",
-                "additionalContext": message,
-                "systemMessage": message
+                "additionalContext": f"<system-reminder>\n{plain_content}\n</system-reminder>"
             }
         }
 
