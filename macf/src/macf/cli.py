@@ -15,6 +15,7 @@ except Exception:
 
 from .config import ConsciousnessConfig
 from .hooks.compaction import detect_compaction, inject_recovery
+from .agent_events_log import append_event
 from .utils import (
     get_current_session_id,
     get_dev_scripts_dir,
@@ -1539,6 +1540,24 @@ def main(argv=None) -> None:
     parser = _build_parser()
     args = parser.parse_args(argv)
     if getattr(args, "cmd", None):
+        # Log CLI command invocation for forensic reconstruction
+        try:
+            session_id = get_current_session_id()
+            cmd = getattr(args, "cmd", "unknown")
+            subcmd = getattr(args, "subcmd", None)
+            command_str = f"{cmd} {subcmd}" if subcmd else cmd
+            append_event(
+                event="cli_command_invoked",
+                data={
+                    "session_id": session_id,
+                    "command": command_str,
+                    "argv": argv if argv else sys.argv[1:]
+                }
+            )
+        except Exception as e:
+            # Log error but don't break CLI functionality
+            import traceback
+            print(f"🏗️ MACF | ❌ CLI event logging error: {e}", file=sys.stderr)
         exit(args.func(args))
     parser.print_help()
 
