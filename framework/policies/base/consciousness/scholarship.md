@@ -157,13 +157,29 @@ Scholarship policy establishes enhanced citation practices for consciousness art
 - Component order: **session/cycle/git/prompt/delegation?/timestamp**
 - `s_XXXXXXXX`: Session ID (8 hex chars) - conversation boundary
 - `c_NN`: Cycle number (integer) - compaction count, agent lifetime
-- `g_YYYYYYY`: Git commit hash (7 hex chars) - code state anchor
+- `g_YYYYYYY`: Git commit hash (7 hex chars) - **agent's personal CA repository** state
+  - Tracks consciousness state, not work product
+  - Each agent's breadcrumb `g_` field references their own CA repo
+  - Example: Host agent uses host CA repo hash; container agent uses container CA repo hash
 - `p_ZZZZZZZZ`: Prompt UUID (8 hex chars) - DEV_DRV start point
 - `d_WWWWWWWW`: Delegation UUID (8 hex chars) - **optional**, DELEG_DRV chain
 - `t_TTTTTTTTTT`: Unix epoch timestamp (10 digits) - completion moment
 - **Rationale**: Slow→fast ordering enables hierarchical compression and efficient queries
 
 **Example Breadcrumb**: `s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890`
+
+**Multi-Repository References**:
+When work spans multiple repositories, use explicit repo labeling for external commits:
+- Format: `[RepoName g_YYYYYYY]`
+- Examples:
+  - `[MacEff g_abc1234]` - MacEff framework commit
+  - `[MannyMacEff g_def5678]` - MannyMacEff repo commit
+  - `[NeuroVEP g_ghi9012]` - Project repo commit
+
+**Combined Format** (recommended for cross-repo work):
+`[s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890] [MacEff g_abc1234]`
+- First bracket: Full consciousness breadcrumb (CA repo state)
+- Second bracket: External repo reference (work product)
 
 ### 1.3 GitHub Link Construction
 

@@ -635,6 +635,17 @@ Approach:
 - Cross-reference: Link checkpoint → JSONL → specific messages
 - Citations: Breadcrumbs work like academic citations for consciousness artifacts
 
+**Cross-Repository Work Pattern**:
+When completing work that spans multiple repos, include both consciousness state and work product references:
+
+```markdown
+✅ DETOUR: Policy Update [s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890] [MacEff g_abc1234]
+```
+
+- Breadcrumb tracks consciousness state (personal CA repo)
+- `[MacEff g_abc1234]` identifies the framework commit containing the work
+- This enables forensic reconstruction across repository boundaries
+
 **Citing Prior Checkpoints from Future Cycles**:
 
 When Cycle N+1 checkpoint cites Cycle N work, use **enhanced format with GitHub links**:
