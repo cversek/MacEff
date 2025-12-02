@@ -19,6 +19,9 @@ def get_current_dev_drv_prompt_uuid() -> Optional[str]:
     This queries the append-only event log instead of mutable session_state.json,
     providing reliable forensic data that survives state synchronization issues.
 
+    CRITICAL: Filters by current session_id to avoid picking up test data or
+    events from other sessions that may have polluted the shared JSONL log.
+
     Returns:
         Prompt UUID string (8+ chars) or None if no DEV_DRV events found
     """
@@ -26,10 +29,19 @@ def get_current_dev_drv_prompt_uuid() -> Optional[str]:
         # Import here to avoid circular dependency
         from ..agent_events_log import read_events
 
-        # Get most recent dev_drv_started event
+        # Get current session to filter events
+        current_session = get_current_session_id()
+
+        # Get most recent dev_drv_started event FOR THIS SESSION
         for event in read_events(limit=50, reverse=True):
             if event.get("event") == "dev_drv_started":
                 data = event.get("data", {})
+
+                # Filter by current session - skip test data and other sessions
+                event_session = data.get("session_id", "")
+                if current_session and event_session and not event_session.startswith(current_session[:8]):
+                    continue  # Skip events from other sessions
+
                 prompt_uuid = data.get("prompt_uuid")
                 if prompt_uuid and prompt_uuid != "unknown":
                     return prompt_uuid
