@@ -166,6 +166,15 @@ TODO trees span multiple cycles. Completed items MUST include breadcrumbs for po
 
 **When blocked**: Keep task status `in_progress`, create new task describing blocker resolution.
 
+**Multi-Repo Completion References**:
+When completing TODO items that modify external repositories, include:
+1. Full consciousness breadcrumb: `s/c/g/p/t` (CA repo state)
+2. Explicit external repo reference: `[RepoName g_hash]`
+
+Example: `✅ DETOUR: Policy Update [s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890] [MacEff g_abc1234]`
+
+This enables forensic reconstruction across repository boundaries.
+
 **Breadcrumb Completion Example**:
 ```bash
 # 1. Complete and verify work
