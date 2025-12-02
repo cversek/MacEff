@@ -142,8 +142,10 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
         # Append token context
         message = f"{message} | {token_context_minimal}"
 
+        # Pattern C test: top-level systemMessage for user + hookSpecificOutput for agent
         return {
             "continue": True,
+            "systemMessage": message,  # TOP LEVEL - test if user sees this
             "hookSpecificOutput": {
                 "hookEventName": "PostToolUse",
                 "additionalContext": f"<system-reminder>\n{message}\n</system-reminder>"

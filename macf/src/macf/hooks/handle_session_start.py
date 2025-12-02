@@ -307,9 +307,10 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
                 "compaction_count": state.compaction_count
             })
 
-            # Return recovery message with hookSpecificOutput
+            # Pattern C: top-level systemMessage for user + hookSpecificOutput for agent
             return {
                 "continue": True,
+                "systemMessage": recovery_msg,  # TOP LEVEL - user sees this
                 "hookSpecificOutput": {
                     "hookEventName": "SessionStart",
                     "additionalContext": f"<system-reminder>\n{recovery_msg}\n</system-reminder>"
@@ -394,8 +395,10 @@ Session Context:
             "time_gap": gap_display
         })
 
+        # Pattern C: top-level systemMessage for user + hookSpecificOutput for agent
         return {
             "continue": True,
+            "systemMessage": message,  # TOP LEVEL - user sees this
             "hookSpecificOutput": {
                 "hookEventName": "SessionStart",
                 "additionalContext": f"<system-reminder>\n{message}\n</system-reminder>"

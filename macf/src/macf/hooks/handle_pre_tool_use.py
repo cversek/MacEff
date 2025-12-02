@@ -151,11 +151,14 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
         # Add minimal token context (high-frequency hook = minimal overhead)
         token_context_minimal = format_token_context_minimal(token_info)
 
+        # Pattern C: top-level systemMessage for user + hookSpecificOutput for agent
+        user_message = f"{message} | {token_context_minimal}"
         return {
             "continue": True,
+            "systemMessage": user_message,  # TOP LEVEL - user sees this
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
-                "additionalContext": f"<system-reminder>\n{message} | {token_context_minimal}\n</system-reminder>"
+                "additionalContext": f"<system-reminder>\n{user_message}\n</system-reminder>"
             }
         }
 
