@@ -4,7 +4,7 @@
 **Tier**: MANDATORY
 **Category**: Consciousness - Planning
 **Status**: ACTIVE
-**Updated**: 2025-12-01 (Cycle 195 - consciousness preservation anti-patterns)
+**Updated**: 2025-12-01
 **Dependencies**: git_discipline.md, workspace_discipline.md
 **Related**: roadmaps_following.md (execution), todo_hygiene.md (integration)
 
@@ -486,7 +486,7 @@ Update MannyMacEff to work better with new features.
 - [ ] Measurable criterion 2
 - [ ] Evidence-based criterion 3
 
-**Breadcrumb** (when complete): s_4107604e/c_73/g_def5678/p_abc1234/t_1761800000
+**Breadcrumb** (when complete): s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
 ```
 
 **Phase Guidelines**:
@@ -702,7 +702,7 @@ git commit -m "roadmap: Create MannyMacEff v0.3 Phase 4 deployment plan
 - 13-point validation checklist
 - Repository cloning strategy
 - Risk assessment with friction points
-- Breadcrumb: s_4107604e/c_59/g_abc1234/p_a1b2c3d/t_1761234567
+- Breadcrumb: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
 "
 
 git commit -m "roadmap: Revise Phase 4.4 validation (added GitHub auth check)
@@ -740,7 +740,7 @@ Added validation step 4.4.11 for GitHub auth before repo cloning.
 # [Project] Migration ROADMAP
 
 **Date**: YYYY-MM-DD
-**Breadcrumb**: s_4107604e/c_73/g_def5678/p_abc1234/t_1761800000
+**Breadcrumb**: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
 **Status**: ACTIVE
 
 ## Mission
@@ -789,7 +789,7 @@ If migration fails:
 # [Feature Name] Implementation ROADMAP
 
 **Date**: YYYY-MM-DD
-**Breadcrumb**: s_4107604e/c_73/g_def5678/p_abc1234/t_1761800000
+**Breadcrumb**: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
 **Status**: ACTIVE
 
 ## Mission
@@ -843,7 +843,7 @@ Implement [feature] enabling users to [capability], addressing [user need].
 # [Problem] Investigation ROADMAP
 
 **Date**: YYYY-MM-DD
-**Breadcrumb**: s_4107604e/c_73/g_def5678/p_abc1234/t_1761800000
+**Breadcrumb**: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
 **Status**: ACTIVE
 
 ## Mission

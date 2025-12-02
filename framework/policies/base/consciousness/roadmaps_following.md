@@ -354,7 +354,7 @@ TODO: 📋 2: Docker Infrastructure [subplans/phase_2_docker.md]
 2. **Generate breadcrumb**
    ```bash
    macf_tools breadcrumb
-   # Output: s_4107604e/c_73/g_def5678/p_abc1234/t_1761800000
+   # Output: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
    ```
 
 3. **Update TODO**
@@ -370,7 +370,7 @@ TODO: 📋 2: Docker Infrastructure [subplans/phase_2_docker.md]
 5. **Commit changes**
    ```bash
    git add agent/public/roadmaps/2025-10-27_Name/roadmap.md
-   git commit -m "roadmap: Complete Phase 2 Docker Infrastructure [s_4107604e/c_73/g_def5678/p_abc1234/t_1761800000]"
+   git commit -m "roadmap: Complete Phase 2 Docker Infrastructure [s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890]"
    ```
 
 **Example Phase Completion Update** (in roadmap.md):
@@ -389,7 +389,7 @@ TODO: 📋 2: Docker Infrastructure [subplans/phase_2_docker.md]
 - ✅ Platform detection logs show correct arch
 
 **Status**: COMPLETE
-**Breadcrumb**: s_4107604e/c_73/g_def5678/p_abc1234/t_1761800000
+**Breadcrumb**: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
 
 All platform tests passing. ARM64 builds 23% faster than x86_64 emulation.
 ```
@@ -457,7 +457,7 @@ Use abbreviation pattern: `/{first_difference}/{any_more_differences}/{dots_for_
 
 **Full breadcrumbs** (first in sequence):
 ```markdown
-Research and synthesis [s_4107604e/c_73/g_17e7b7d/p_6c9eacb/t_1761703391]
+Research and synthesis [s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890]
 ```
 
 **Abbreviated** (timestamp only changed):
@@ -666,14 +666,14 @@ Encountered docker-compose working directory dependency [Roadmap 2025-11-11 "Doc
 # Phases 1-4 Config Cleanup - COMPLETED
 
 **Archived**: 2025-10-27 21:50:09
-**Breadcrumb**: s_4107604e/c_72/g_17e7b7d/p_8e9f91e/t_1761616209
+**Breadcrumb**: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
 **Original Plan**: 2025-10-24_MannyMacEff_v0.3_Migration/roadmap.md
 **Status**: COMPLETED
 
 ## Hierarchical TODO Content
 
 🗺️ MISSION: MannyMacEff v0.3.0 Migration [2025-10-24_MannyMacEff_v0.3_Migration/roadmap.md]
-  1: Safe Preparation [s_4107604e/c_70/g_5ecab69/p_a0b3b00/t_1761584403]
+  1: Safe Preparation [s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890]
     1.1: Backup volume (4.1GB complete)
     1.2: Update submodule to v0.3.0
   2: Docker Infrastructure [/t_1761588000/.]
@@ -700,7 +700,7 @@ Encountered docker-compose working directory dependency [Roadmap 2025-11-11 "Doc
 
 **Commit Message Format**:
 ```bash
-git commit -m "roadmap: Archive Phases 1-4 completion [s_4107604e/c_72/g_17e7b7d/p_8e9f91e/t_1761616209]
+git commit -m "roadmap: Archive Phases 1-4 completion [s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890]
 
 Archived hierarchical TODO tree to:
 2025-10-24_MannyMacEff_v0.3_Migration/archived_todos/2025-10-27_215009_Phases1-4_COMPLETED.md
@@ -719,7 +719,7 @@ After archiving, replace the collapsed subtree with **📦 package emoji** and r
 
 ```markdown
 🗺️ MISSION: MannyMacEff v0.3.0 Migration [2025-10-24_MannyMacEff_v0.3_Migration/roadmap.md]
-  [📦 Archive 2025-10-27 "Phases 1-4 Complete": s_4107604e/c_72/g_17e7b7d/p_8e9f91e/t_1761616209](archived_todos/2025-10-27_215009_Phases1-4_COMPLETED.md)
+  [📦 Archive 2025-10-27 "Phases 1-4 Complete": s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890](archived_todos/2025-10-27_215009_Phases1-4_COMPLETED.md)
   📋 5: CEP Fixes & Bootstrap [subplans/phase_5_cep.md]
     → 5.1: Critical path fixes
     → 5.2: Infrastructure improvements
