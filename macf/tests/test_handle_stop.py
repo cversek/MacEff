@@ -8,7 +8,8 @@ def mock_dependencies():
     """Mock all external dependencies for stop handler."""
     with patch('macf.hooks.handle_stop.get_current_session_id') as mock_session, \
          patch('macf.hooks.handle_stop.complete_dev_drv') as mock_complete, \
-         patch('macf.hooks.handle_stop.get_dev_drv_stats') as mock_stats:
+         patch('macf.hooks.handle_stop.get_dev_drv_stats') as mock_stats, \
+         patch('macf.event_queries.get_dev_drv_stats_from_events') as mock_event_stats:
 
         mock_session.return_value = "test-session-123"
         mock_complete.return_value = (True, 45)  # (success, duration) tuple
@@ -17,11 +18,19 @@ def mock_dependencies():
             'total_duration': 3600,
             'prompt_uuid': 'dda5c541-e66d-4c55-ad30-68d54d6a73cb'
         }
+        # Mock event query to return prompt_uuid (event-first pattern)
+        mock_event_stats.return_value = {
+            'count': 5,
+            'total_duration': 3600,
+            'current_prompt_uuid': 'dda5c541-e66d-4c55-ad30-68d54d6a73cb',
+            'from_snapshot': False
+        }
 
         yield {
             'session_id': mock_session,
             'complete': mock_complete,
-            'stats': mock_stats
+            'stats': mock_stats,
+            'event_stats': mock_event_stats
         }
 
 
@@ -147,8 +156,10 @@ def test_exception_handling(mock_dependencies):
 
     result = run("")
 
-    # Should never crash
-    assert result == {"continue": True}
+    # Should never crash - returns continue=True with error in systemMessage
+    assert result["continue"] is True
+    assert "systemMessage" in result
+    assert "error" in result["systemMessage"].lower()
 
 
 def test_saves_session_end_time_to_project_state(mock_dependencies):

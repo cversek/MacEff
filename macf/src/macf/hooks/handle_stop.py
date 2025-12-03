@@ -54,10 +54,20 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
         # Get breadcrumb BEFORE completing (complete_dev_drv clears prompt_uuid)
         breadcrumb = get_breadcrumb()
 
-        # Save UUID before completing (complete_dev_drv clears it)
-        from ..utils import SessionOperationalState
-        state = SessionOperationalState.load(session_id)
-        prompt_uuid = state.current_dev_drv_prompt_uuid
+        # EVENT-FIRST: Get prompt_uuid from event log (lazy import to avoid circular)
+        prompt_uuid = None
+        try:
+            from ..event_queries import get_dev_drv_stats_from_events
+            stats = get_dev_drv_stats_from_events(session_id)
+            prompt_uuid = stats.get("current_prompt_uuid")
+        except Exception:
+            pass
+
+        # FALLBACK: State file if event query failed
+        if not prompt_uuid:
+            from ..utils import SessionOperationalState
+            state = SessionOperationalState.load(session_id)
+            prompt_uuid = state.current_dev_drv_prompt_uuid
 
         # Complete Development Drive (increments count, adds duration)
         success, duration = complete_dev_drv(session_id)

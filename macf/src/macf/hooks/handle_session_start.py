@@ -38,7 +38,7 @@ def detect_session_migration(current_session_id: str) -> tuple[bool, str, str]:
     Session migration occurs when Claude Code creates a new session (crash recovery,
     manual restart) which orphans the previous TODO file in ~/.claude/todos/.
 
-    Reads last_session_id from PROJECT-SCOPED agent_state.json (not session-scoped).
+    EVENT-FIRST: Queries event log for last_session_id, falls back to agent_state.json.
 
     Args:
         current_session_id: Current session ID
@@ -47,11 +47,19 @@ def detect_session_migration(current_session_id: str) -> tuple[bool, str, str]:
         Tuple of (migration_detected: bool, orphaned_todo_path: str, previous_session_id: str)
         - migration_detected: True if session ID changed
         - orphaned_todo_path: Path to orphaned TODO file (empty if not found)
-        - previous_session_id: Previous session ID from agent_state
+        - previous_session_id: Previous session ID from events or agent_state
     """
-    # Load project-scoped agent state
-    project_state = load_agent_state()
-    previous_session_id = project_state.get('last_session_id', '')
+    # EVENT-FIRST: Query event log for last session ID (lazy import to avoid circular)
+    try:
+        from ..event_queries import get_last_session_id_from_events
+        previous_session_id = get_last_session_id_from_events()
+    except Exception:
+        previous_session_id = ""
+
+    # FALLBACK: Agent state file if event query returned empty
+    if not previous_session_id:
+        project_state = load_agent_state()
+        previous_session_id = project_state.get('last_session_id', '')
 
     # Check if we have a previous session ID to compare
     if not previous_session_id:

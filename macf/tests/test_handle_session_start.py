@@ -11,11 +11,17 @@ def mock_dependencies():
          patch('macf.hooks.handle_session_start.detect_auto_mode') as mock_auto, \
          patch('macf.hooks.handle_session_start.SessionOperationalState') as mock_state_class, \
          patch('macf.hooks.handle_session_start.get_latest_consciousness_artifacts') as mock_artifacts, \
-         patch('macf.hooks.handle_session_start.format_consciousness_recovery_message') as mock_format:
+         patch('macf.hooks.handle_session_start.format_consciousness_recovery_message') as mock_format, \
+         patch('macf.hooks.handle_session_start.load_agent_state') as mock_load_agent, \
+         patch('macf.hooks.handle_session_start.detect_session_migration') as mock_detect_migration:
 
         mock_session.return_value = "test-session-123"
         mock_detect.return_value = False
         mock_auto.return_value = (False, "default", 0.0)
+        # Mock load_agent_state to return empty last_session_id (no migration)
+        mock_load_agent.return_value = {'last_session_id': '', 'current_cycle_number': 100}
+        # Mock detect_session_migration to return no migration by default
+        mock_detect_migration.return_value = (False, "", "")
 
         # Mock state instance
         mock_state = MagicMock()
@@ -35,7 +41,9 @@ def mock_dependencies():
             'state_class': mock_state_class,
             'state': mock_state,
             'artifacts': mock_artifacts,
-            'format_message': mock_format
+            'format_message': mock_format,
+            'load_agent_state': mock_load_agent,
+            'detect_migration': mock_detect_migration
         }
 
 
