@@ -375,19 +375,19 @@ def test_compaction_count_basic(populated_compaction_events):
     """Test compaction count with multiple compaction events."""
     from macf.event_queries import get_compaction_count_from_events
 
-    count = get_compaction_count_from_events(populated_compaction_events)
+    result = get_compaction_count_from_events(populated_compaction_events)
 
     # Should count 2 compaction events
-    assert count == 2
+    assert result["count"] == 2
 
 
 def test_compaction_count_empty_log(test_session_id):
     """Test compaction count with no events."""
     from macf.event_queries import get_compaction_count_from_events
 
-    count = get_compaction_count_from_events(test_session_id)
+    result = get_compaction_count_from_events(test_session_id)
 
-    assert count == 0
+    assert result["count"] == 0
 
 
 def test_compaction_count_session_isolation(populated_compaction_events, different_session_id):
@@ -402,9 +402,9 @@ def test_compaction_count_session_isolation(populated_compaction_events, differe
         })
 
     # Query original session - should NOT include other session's compactions
-    count = get_compaction_count_from_events(populated_compaction_events)
+    result = get_compaction_count_from_events(populated_compaction_events)
 
-    assert count == 2  # Only original session's compactions
+    assert result["count"] == 2  # Only original session's compactions
 
 
 def test_compaction_count_distinguishes_sources(test_session_id):
@@ -423,10 +423,10 @@ def test_compaction_count_distinguishes_sources(test_session_id):
         "source": "auto"
     })
 
-    count = get_compaction_count_from_events(test_session_id)
+    result = get_compaction_count_from_events(test_session_id)
 
     # Should count both (implementation may filter by source)
-    assert count >= 1  # At least the user-initiated one
+    assert result["count"] >= 1  # At least the user-initiated one
 
 
 # =============================================================================
