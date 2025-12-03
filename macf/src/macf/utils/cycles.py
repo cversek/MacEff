@@ -9,6 +9,8 @@ from typing import Optional, Tuple
 from .paths import find_project_root
 from .session import get_current_session_id
 from .state import load_agent_state, save_agent_state, SessionOperationalState, read_json_safely
+# NOTE: event_queries imported lazily inside functions to avoid circular import
+# (cycles.py -> event_queries -> agent_events_log -> utils -> cycles.py)
 
 def detect_auto_mode(session_id: str) -> Tuple[bool, str, float]:
     """
@@ -50,12 +52,13 @@ def detect_auto_mode(session_id: str) -> Tuple[bool, str, float]:
         except Exception:
             pass
 
-        # 4. Session state (previous setting)
+        # 4. Event log (previous setting) - EVENT-FIRST: Query events instead of mutable state
         try:
-            state = SessionOperationalState.load(session_id)
-            if state.auto_mode_source != "default":
-                # Only use session state if it was set explicitly before
-                return (state.auto_mode, "session", 0.5)
+            from ..event_queries import get_auto_mode_from_events
+            auto_mode, source, confidence = get_auto_mode_from_events(session_id)
+            if source != "default":
+                # Only use if it was set explicitly before
+                return (auto_mode, "session", 0.5)
         except Exception:
             pass
 
@@ -67,7 +70,10 @@ def detect_auto_mode(session_id: str) -> Tuple[bool, str, float]:
 
 def get_agent_cycle_number(agent_root: Optional[Path] = None) -> int:
     """
-    Get current cycle number from agent state.
+    Get current cycle number from event log (primary) or agent state (fallback).
+
+    EVENT-FIRST: Queries event log for cycle number. Falls back to agent_state.json
+    if no events exist (historical data predating event logging).
 
     Operates on agent state (.maceff/agent_state.json) which persists
     across sessions and projects (in container) or within project (on host).
@@ -78,9 +84,16 @@ def get_agent_cycle_number(agent_root: Optional[Path] = None) -> int:
             Host: Uses find_project_root() (project-scoped)
 
     Returns:
-        Current cycle number (1 if agent state doesn't exist)
+        Current cycle number (1 if no events or agent state exist)
     """
     try:
+        # EVENT-FIRST: Try event log query (lazy import to avoid circular)
+        from ..event_queries import get_cycle_number_from_events
+        cycle_from_events = get_cycle_number_from_events()
+        if cycle_from_events > 0:
+            return cycle_from_events
+
+        # FALLBACK: Agent state file (historical data predating event log)
         agent_state = load_agent_state(agent_root)
         return agent_state.get('current_cycle_number', 1)
     except Exception:

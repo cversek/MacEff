@@ -67,28 +67,50 @@ def complete_dev_drv(session_id: str, agent_id: Optional[str] = None) -> tuple[b
 
 def get_dev_drv_stats(session_id: str, agent_id: Optional[str] = None) -> dict:
     """
-    Get current Development Drive statistics.
+    Get current Development Drive statistics from event log.
+
+    EVENT-FIRST: Queries event log for DEV_DRV stats with snapshot baseline.
 
     Returns:
-        Dict with keys: count, total_duration, current_started_at, avg_duration
+        Dict with keys: count, total_duration, current_started_at, avg_duration, prompt_uuid
     """
-    if agent_id is None:
-        from macf.config import ConsciousnessConfig
-        agent_id = ConsciousnessConfig().agent_id
+    try:
+        # EVENT-FIRST: Query event log (lazy import to avoid circular)
+        from ..event_queries import get_dev_drv_stats_from_events
+        stats = get_dev_drv_stats_from_events(session_id)
 
-    state = SessionOperationalState.load(session_id, agent_id)
+        count = stats.get("count", 0)
+        total_duration = stats.get("total_duration", 0.0)
+        avg_duration = total_duration / count if count > 0 else 0.0
 
-    avg_duration = 0.0
-    if state.dev_drv_count > 0:
-        avg_duration = state.total_dev_drv_duration / state.dev_drv_count
+        return {
+            "count": count,
+            "total_duration": total_duration,
+            "current_started_at": None,  # Not tracked in events (would need in-progress query)
+            "prompt_uuid": stats.get("current_prompt_uuid"),
+            "avg_duration": avg_duration,
+            "from_snapshot": stats.get("from_snapshot", False)
+        }
+    except Exception:
+        # FALLBACK: State file (if event queries fail)
+        if agent_id is None:
+            from macf.config import ConsciousnessConfig
+            agent_id = ConsciousnessConfig().agent_id
 
-    return {
-        "count": state.dev_drv_count,
-        "total_duration": state.total_dev_drv_duration,
-        "current_started_at": state.current_dev_drv_started_at,
-        "prompt_uuid": state.current_dev_drv_prompt_uuid,
-        "avg_duration": avg_duration
-    }
+        state = SessionOperationalState.load(session_id, agent_id)
+
+        avg_duration = 0.0
+        if state.dev_drv_count > 0:
+            avg_duration = state.total_dev_drv_duration / state.dev_drv_count
+
+        return {
+            "count": state.dev_drv_count,
+            "total_duration": state.total_dev_drv_duration,
+            "current_started_at": state.current_dev_drv_started_at,
+            "prompt_uuid": state.current_dev_drv_prompt_uuid,
+            "avg_duration": avg_duration,
+            "from_snapshot": False
+        }
 
 def start_deleg_drv(session_id: str, agent_id: Optional[str] = None) -> bool:
     """
@@ -136,27 +158,48 @@ def complete_deleg_drv(session_id: str, agent_id: Optional[str] = None) -> tuple
 
 def get_deleg_drv_stats(session_id: str, agent_id: Optional[str] = None) -> dict:
     """
-    Get current Delegation Drive statistics.
+    Get current Delegation Drive statistics from event log.
+
+    EVENT-FIRST: Queries event log for DELEG_DRV stats.
 
     Returns:
-        Dict with keys: count, total_duration, current_started_at, avg_duration
+        Dict with keys: count, total_duration, current_started_at, avg_duration, subagent_types
     """
-    if agent_id is None:
-        from macf.config import ConsciousnessConfig
-        agent_id = ConsciousnessConfig().agent_id
+    try:
+        # EVENT-FIRST: Query event log (lazy import to avoid circular)
+        from ..event_queries import get_deleg_drv_stats_from_events
+        stats = get_deleg_drv_stats_from_events(session_id)
 
-    state = SessionOperationalState.load(session_id, agent_id)
+        count = stats.get("count", 0)
+        total_duration = stats.get("total_duration", 0.0)
+        avg_duration = total_duration / count if count > 0 else 0.0
 
-    avg_duration = 0.0
-    if state.deleg_drv_count > 0:
-        avg_duration = state.total_deleg_drv_duration / state.deleg_drv_count
+        return {
+            "count": count,
+            "total_duration": total_duration,
+            "current_started_at": None,  # Not tracked in events
+            "avg_duration": avg_duration,
+            "subagent_types": stats.get("subagent_types", [])
+        }
+    except Exception:
+        # FALLBACK: State file (if event queries fail)
+        if agent_id is None:
+            from macf.config import ConsciousnessConfig
+            agent_id = ConsciousnessConfig().agent_id
 
-    return {
-        "count": state.deleg_drv_count,
-        "total_duration": state.total_deleg_drv_duration,
-        "current_started_at": state.current_deleg_drv_started_at,
-        "avg_duration": avg_duration
-    }
+        state = SessionOperationalState.load(session_id, agent_id)
+
+        avg_duration = 0.0
+        if state.deleg_drv_count > 0:
+            avg_duration = state.total_deleg_drv_duration / state.deleg_drv_count
+
+        return {
+            "count": state.deleg_drv_count,
+            "total_duration": state.total_deleg_drv_duration,
+            "current_started_at": state.current_deleg_drv_started_at,
+            "avg_duration": avg_duration,
+            "subagent_types": []
+        }
 
 def record_delegation_start(
     session_id: str,
@@ -230,7 +273,9 @@ def get_delegations_this_drive(
     agent_id: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """
-    Get all delegations for current DEV_DRV.
+    Get all delegations for current DEV_DRV from event log.
+
+    EVENT-FIRST: Queries event log for delegations since last dev_drv_started.
 
     Args:
         session_id: Session identifier
@@ -240,10 +285,16 @@ def get_delegations_this_drive(
         List of delegation dicts (empty list on failure)
     """
     try:
-        state = SessionOperationalState.load(session_id, agent_id)
-        return state.delegations_this_drive
+        # EVENT-FIRST: Query event log (lazy import to avoid circular)
+        from ..event_queries import get_delegations_this_drive_from_events
+        return get_delegations_this_drive_from_events(session_id)
     except Exception:
-        return []
+        # FALLBACK: State file (if event queries fail)
+        try:
+            state = SessionOperationalState.load(session_id, agent_id)
+            return state.delegations_this_drive
+        except Exception:
+            return []
 
 def clear_delegations_this_drive(
     session_id: str,
