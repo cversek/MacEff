@@ -1,14 +1,24 @@
 """
 State utilities.
+
+DEPRECATION NOTICE (Phase 6 - Mutable State Deprecation):
+State file writes are deprecated in favor of append-only JSONL event sourcing.
+- Reads: Use event_queries.py functions (event-first with state fallback)
+- Writes: Will be removed in Phase 7; events are the source of truth
+See: agent/public/roadmaps/2025-12-02_DETOUR_Mutable_State_Deprecation/roadmap.md
 """
 
 import json
 import os
 import time
+import warnings
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from .paths import get_session_dir
+
+# Deprecation flag - set to True to emit warnings on state writes
+_DEPRECATION_WARNINGS_ENABLED = True
 
 def write_json_safely(path: Path, data: dict) -> bool:
     """
@@ -140,6 +150,9 @@ def save_agent_state(state: dict, agent_root: Optional[Path] = None) -> bool:
     """
     Save project state atomically (write-rename pattern).
 
+    DEPRECATED: State file writes are deprecated. Events are now the source of truth.
+    This function will be removed in Phase 7. Use emit_event() instead.
+
     Create .maceff/ directory if needed.
 
     Args:
@@ -149,6 +162,13 @@ def save_agent_state(state: dict, agent_root: Optional[Path] = None) -> bool:
     Returns:
         True if successful, False otherwise
     """
+    if _DEPRECATION_WARNINGS_ENABLED:
+        warnings.warn(
+            "save_agent_state() is deprecated. Events are now the source of truth. "
+            "This function will be removed in Phase 7.",
+            DeprecationWarning,
+            stacklevel=2
+        )
     try:
         state_path = get_agent_state_path(agent_root)
 
@@ -206,9 +226,19 @@ class SessionOperationalState:
         """
         Atomically save state to .maceff/sessions/{session_id}/ directory.
 
+        DEPRECATED: State file writes are deprecated. Events are now the source of truth.
+        This method will be removed in Phase 7. Use emit_event() instead.
+
         Returns:
             True if successful, False otherwise
         """
+        if _DEPRECATION_WARNINGS_ENABLED:
+            warnings.warn(
+                "SessionOperationalState.save() is deprecated. Events are the source of truth. "
+                "This method will be removed in Phase 7.",
+                DeprecationWarning,
+                stacklevel=2
+            )
         try:
             # Update timestamp
             self.last_updated = time.time()
