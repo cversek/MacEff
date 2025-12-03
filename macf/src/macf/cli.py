@@ -301,7 +301,7 @@ import json, sys
 from macf.hooks.{handler_module} import run
 
 try:
-    output = run(sys.stdin.read())
+    output = run(sys.stdin.read(), testing=False)
     print(json.dumps(output))
 except Exception as e:
     print(json.dumps({{"continue": True}}))
