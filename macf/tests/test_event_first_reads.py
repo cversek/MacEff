@@ -192,8 +192,8 @@ def test_event_first_with_missing_events(test_session_id):
     assert isinstance(cycle, int)
     assert cycle >= 0
 
-    count = get_compaction_count_from_events(test_session_id)
-    assert count == 0
+    result = get_compaction_count_from_events(test_session_id)
+    assert result["count"] == 0
 
     auto_mode, source, confidence = get_auto_mode_from_events(test_session_id)
     assert auto_mode is False
@@ -296,9 +296,9 @@ def test_event_first_session_isolation_compaction(test_session_id, other_session
         })
 
     # Query should only count test_session_id compactions
-    count = get_compaction_count_from_events(test_session_id)
+    result = get_compaction_count_from_events(test_session_id)
 
-    assert count == 1, "Should NOT count other session's compactions"
+    assert result["count"] == 1, "Should NOT count other session's compactions"
 
 
 # =============================================================================

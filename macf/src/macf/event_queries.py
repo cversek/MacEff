@@ -13,12 +13,33 @@ from typing import Tuple, Dict, List, Optional
 from .agent_events_log import read_events
 
 
+def get_latest_state_snapshot() -> Optional[dict]:
+    """
+    Find most recent state_snapshot event.
+
+    State snapshots capture accumulated values as immutable baseline for
+    event-first queries. Query functions use: baseline + incremental = accurate total.
+
+    Returns:
+        Most recent state_snapshot event dict, or None if no snapshots exist
+
+    Example:
+        >>> snapshot = get_latest_state_snapshot()
+        >>> if snapshot:
+        ...     baseline = snapshot["data"]["event_tallies"].get("dev_drv_ended", 0)
+    """
+    for event in read_events(limit=100, reverse=True):
+        if event.get("event") == "state_snapshot":
+            return event
+    return None
+
+
 def get_dev_drv_stats_from_events(session_id: str) -> dict:
     """
-    Query dev_drv_started/ended events, return stats.
+    Query dev_drv_started/ended events, return stats with snapshot baseline.
 
-    Counts completed DEV_DRVs (started+ended pairs) and sums their durations.
-    Also tracks the current in-progress prompt UUID if drive started but not ended.
+    Uses snapshot baseline + incremental events after snapshot = accurate total.
+    This preserves historical data from before event logging began.
 
     Args:
         session_id: Session ID to filter events (uses first 8 chars for matching)
@@ -28,24 +49,64 @@ def get_dev_drv_stats_from_events(session_id: str) -> dict:
         - count: Number of completed DEV_DRVs (int)
         - total_duration: Sum of all completed drive durations (float)
         - current_prompt_uuid: UUID of in-progress drive or most recent ended (str|None)
+        - from_snapshot: Whether baseline came from snapshot (bool)
     """
-    count = 0
-    total_duration = 0.0
-    current_prompt_uuid = None
-    started_prompts = {}  # Track started but not ended prompts
+    # Get snapshot baseline
+    snapshot = get_latest_state_snapshot()
+    snapshot_timestamp = snapshot.get("timestamp", 0) if snapshot else 0
 
-    # Use first 8 chars of session_id for matching
+    # Baseline from snapshot
+    baseline_count = 0
+    baseline_duration = 0.0
+    from_snapshot = False
+
+    if snapshot:
+        snapshot_data = snapshot.get("data", {})
+        # Try derived_values first (from state files)
+        derived = snapshot_data.get("derived_values", {})
+        if "completed_dev_drvs" in derived:
+            baseline_count = derived["completed_dev_drvs"]
+            from_snapshot = True
+        else:
+            # Fallback to event_tallies
+            tallies = snapshot_data.get("event_tallies", {})
+            baseline_count = tallies.get("dev_drv_ended", 0)
+            from_snapshot = True
+
+        # Duration from accumulated_durations
+        durations = snapshot_data.get("accumulated_durations", {})
+        baseline_duration = durations.get("total_dev_drv_duration_seconds", 0.0)
+
+    # Collect incremental events AFTER snapshot (reverse scan, stop at snapshot)
+    incremental_events = []
     session_prefix = session_id[:8] if session_id else ""
 
-    # Read events in chronological order to track state correctly
-    for event in read_events(limit=None, reverse=False):
+    for event in read_events(limit=None, reverse=True):
+        event_timestamp = event.get("timestamp", 0)
+        # Stop when we reach snapshot timestamp (efficient for long logs)
+        if snapshot_timestamp > 0 and event_timestamp <= snapshot_timestamp:
+            break
+
         event_type = event.get("event")
+        if event_type not in ("dev_drv_started", "dev_drv_ended"):
+            continue
+
         data = event.get("data", {})
         event_session = data.get("session_id", "")
-
-        # Session isolation - skip events from other sessions
         if session_prefix and event_session and not event_session.startswith(session_prefix):
             continue
+
+        incremental_events.append(event)
+
+    # Process in chronological order (reverse the reversed list)
+    count = baseline_count
+    total_duration = baseline_duration
+    current_prompt_uuid = None
+    started_prompts = {}
+
+    for event in reversed(incremental_events):
+        event_type = event.get("event")
+        data = event.get("data", {})
 
         if event_type == "dev_drv_started":
             prompt_uuid = data.get("prompt_uuid")
@@ -57,7 +118,6 @@ def get_dev_drv_stats_from_events(session_id: str) -> dict:
             prompt_uuid = data.get("prompt_uuid")
             duration = data.get("duration", 0.0)
 
-            # Only count if this drive was started
             if prompt_uuid and prompt_uuid in started_prompts:
                 count += 1
                 total_duration += duration
@@ -67,7 +127,8 @@ def get_dev_drv_stats_from_events(session_id: str) -> dict:
     return {
         "count": count,
         "total_duration": total_duration,
-        "current_prompt_uuid": current_prompt_uuid
+        "current_prompt_uuid": current_prompt_uuid,
+        "from_snapshot": from_snapshot
     }
 
 
@@ -159,34 +220,50 @@ def get_cycle_number_from_events() -> int:
     return 0
 
 
-def get_compaction_count_from_events(session_id: str) -> int:
+def get_compaction_count_from_events(session_id: str) -> dict:
     """
-    Count compaction_detected events for session.
+    Count compaction_detected events with snapshot baseline.
+
+    Uses reverse scan, stopping at snapshot timestamp for efficiency.
 
     Args:
         session_id: Session ID to filter events (uses first 8 chars for matching)
 
     Returns:
-        Number of compactions detected (0 if none)
+        Dictionary with keys:
+        - count: Number of compactions detected (int)
+        - from_snapshot: Whether baseline came from snapshot (bool)
     """
-    count = 0
+    snapshot = get_latest_state_snapshot()
+    snapshot_timestamp = snapshot.get("timestamp", 0) if snapshot else 0
 
-    # Use first 8 chars of session_id for matching
+    baseline_count = 0
+    from_snapshot = False
+
+    if snapshot:
+        tallies = snapshot.get("data", {}).get("event_tallies", {})
+        baseline_count = tallies.get("compaction_detected", 0)
+        from_snapshot = True
+
+    # Count incremental events after snapshot (reverse scan, stop at snapshot)
+    count = baseline_count
     session_prefix = session_id[:8] if session_id else ""
 
-    # Count all compaction_detected events for this session
-    for event in read_events(limit=None, reverse=False):
+    for event in read_events(limit=None, reverse=True):
+        event_timestamp = event.get("timestamp", 0)
+        if snapshot_timestamp > 0 and event_timestamp <= snapshot_timestamp:
+            break
+
         if event.get("event") == "compaction_detected":
             data = event.get("data", {})
             event_session = data.get("session_id", "")
 
-            # Session isolation
             if session_prefix and event_session and not event_session.startswith(session_prefix):
                 continue
 
             count += 1
 
-    return count
+    return {"count": count, "from_snapshot": from_snapshot}
 
 
 def get_delegations_this_drive_from_events(session_id: str) -> List[Dict]:
