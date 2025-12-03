@@ -246,6 +246,21 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
         if compaction_detected:
             # Side-effects: Skip if testing mode
             if not testing:
+                # Emit state snapshot BEFORE modifications (preserves historical baseline)
+                from ..agent_events_log import emit_state_snapshot
+                agent_state = load_agent_state()
+                emit_state_snapshot(
+                    session_id=session_id,
+                    snapshot_type="compaction_recovery",
+                    source="state_files",
+                    state_file_values={
+                        "cycle_number": agent_state.get("current_cycle_number", 1),
+                        "compaction_count": state.compaction_count,
+                        "auto_mode": state.auto_mode,
+                        "auto_mode_source": state.auto_mode_source
+                    }
+                )
+
                 # Increment compaction count
                 state.compaction_count += 1
                 state.save()
