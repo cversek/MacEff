@@ -432,6 +432,169 @@ def get_current_state() -> dict:
     return reconstruct_state_at(time.time())
 
 
+def tally_all_events() -> dict:
+    """
+    Scan event log and count ALL event types for snapshot baseline.
+
+    Counts every unique event type found in the log, sums durations from
+    *_ended events, and captures metadata about the scan. Designed for
+    future extensibility - new event types automatically included.
+
+    Returns:
+        {
+            "event_tallies": {"session_started": 50, "dev_drv_ended": 148, ...},
+            "accumulated_durations": {
+                "total_dev_drv_duration_seconds": 12345.67,
+                "total_deleg_drv_duration_seconds": 5678.90
+            },
+            "metadata": {
+                "events_scanned": 6500,
+                "earliest_timestamp": 1760000000.0,
+                "latest_timestamp": 1764719000.0,
+                "unique_event_types": 15
+            }
+        }
+
+    Example:
+        >>> tallies = tally_all_events()
+        >>> print(f"Total sessions: {tallies['event_tallies'].get('session_started', 0)}")
+    """
+    event_tallies: Dict[str, int] = {}
+    accumulated_durations = {
+        "total_dev_drv_duration_seconds": 0.0,
+        "total_deleg_drv_duration_seconds": 0.0,
+    }
+    events_scanned = 0
+    earliest_timestamp = float('inf')
+    latest_timestamp = 0.0
+
+    for event in read_events(limit=None, reverse=False):
+        events_scanned += 1
+
+        # Track timestamps
+        event_time = event.get('timestamp', 0)
+        if event_time > 0:
+            earliest_timestamp = min(earliest_timestamp, event_time)
+            latest_timestamp = max(latest_timestamp, event_time)
+
+        # Count by event type
+        event_type = event.get('event', 'unknown')
+        event_tallies[event_type] = event_tallies.get(event_type, 0) + 1
+
+        # Sum durations from *_ended events
+        event_data = event.get('data', {})
+        if event_type == 'dev_drv_ended':
+            duration = event_data.get('duration_seconds', 0)
+            if isinstance(duration, (int, float)):
+                accumulated_durations['total_dev_drv_duration_seconds'] += duration
+        elif event_type == 'deleg_drv_ended':
+            duration = event_data.get('duration_seconds', 0)
+            if isinstance(duration, (int, float)):
+                accumulated_durations['total_deleg_drv_duration_seconds'] += duration
+
+    # Handle empty log case
+    if earliest_timestamp == float('inf'):
+        earliest_timestamp = 0.0
+
+    return {
+        "event_tallies": event_tallies,
+        "accumulated_durations": accumulated_durations,
+        "metadata": {
+            "events_scanned": events_scanned,
+            "earliest_timestamp": earliest_timestamp,
+            "latest_timestamp": latest_timestamp,
+            "unique_event_types": len(event_tallies),
+        }
+    }
+
+
+def emit_state_snapshot(
+    session_id: str,
+    snapshot_type: str,
+    source: str,
+    state_file_values: Optional[dict] = None,
+) -> bool:
+    """
+    Emit state_snapshot event with comprehensive tallies for historical baseline.
+
+    Creates immutable baseline that query functions use: baseline + incremental
+    events after snapshot = accurate total. Enables safe migration from mutable
+    state files to event-first queries without losing historical data.
+
+    Args:
+        session_id: Current session identifier
+        snapshot_type: "initialization" | "compaction_recovery" | "manual"
+        source: "state_files" | "event_log_scan" | "command_line"
+        state_file_values: Optional dict with values from state files to merge
+            {
+                "cycle_number": 205,
+                "dev_drv_count": 50,
+                "deleg_drv_count": 25,
+                "compaction_count": 13,
+                "auto_mode": False,
+                "auto_mode_source": "default"
+            }
+
+    Returns:
+        True if snapshot emitted successfully, False on failure
+
+    Example:
+        >>> emit_state_snapshot(
+        ...     session_id="abc123",
+        ...     snapshot_type="initialization",
+        ...     source="state_files",
+        ...     state_file_values={"cycle_number": 205, "dev_drv_count": 50}
+        ... )
+        True
+    """
+    # Tally all events in the log
+    tallies = tally_all_events()
+
+    # Merge state file values for historical data predating the log
+    derived_values = {}
+    current_state = {}
+
+    if state_file_values:
+        # Derived values from state files
+        if 'cycle_number' in state_file_values:
+            derived_values['cycle_number'] = state_file_values['cycle_number']
+
+        if 'dev_drv_count' in state_file_values:
+            derived_values['completed_dev_drvs'] = state_file_values['dev_drv_count']
+
+        if 'deleg_drv_count' in state_file_values:
+            derived_values['completed_deleg_drvs'] = state_file_values['deleg_drv_count']
+
+        # Current state from state files
+        if 'auto_mode' in state_file_values:
+            current_state['auto_mode'] = state_file_values['auto_mode']
+
+        if 'auto_mode_source' in state_file_values:
+            current_state['auto_mode_source'] = state_file_values['auto_mode_source']
+
+        if 'compaction_count' in state_file_values:
+            # Override event tally with state file value if higher (historical data)
+            event_count = tallies['event_tallies'].get('compaction_detected', 0)
+            state_count = state_file_values['compaction_count']
+            if state_count > event_count:
+                tallies['event_tallies']['compaction_detected'] = state_count
+
+    # Build snapshot data
+    snapshot_data = {
+        "session_id": session_id,
+        "snapshot_type": snapshot_type,
+        "source": source,
+        "event_tallies": tallies['event_tallies'],
+        "accumulated_durations": tallies['accumulated_durations'],
+        "derived_values": derived_values,
+        "current_state": current_state,
+        "snapshot_metadata": tallies['metadata'],
+    }
+
+    # Emit the snapshot event
+    return append_event("state_snapshot", snapshot_data)
+
+
 __all__ = [
     "append_event",
     "read_events",
@@ -439,4 +602,6 @@ __all__ = [
     "query_set_operations",
     "reconstruct_state_at",
     "get_current_state",
+    "tally_all_events",
+    "emit_state_snapshot",
 ]
