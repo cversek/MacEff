@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 handle_session_start - SessionStart hook runner.
 
@@ -7,7 +8,7 @@ import json
 from pathlib import Path
 from typing import Dict, Any
 
-from ..utils import (
+from macf.utils import (
     get_current_session_id,
     SessionOperationalState,
     get_latest_consciousness_artifacts,
@@ -25,10 +26,10 @@ from ..utils import (
     get_breadcrumb,
     format_manifest_awareness
 )
-from .compaction import detect_compaction
-from .recovery import format_consciousness_recovery_message, format_session_migration_message
-from .logging import log_hook_event
-from ..agent_events_log import append_event
+from macf.hooks.compaction import detect_compaction
+from macf.hooks.recovery import format_consciousness_recovery_message, format_session_migration_message
+from macf.hooks.hook_logging import log_hook_event
+from macf.agent_events_log import append_event
 
 
 def detect_session_migration(current_session_id: str) -> tuple[bool, str, str]:
@@ -51,7 +52,7 @@ def detect_session_migration(current_session_id: str) -> tuple[bool, str, str]:
     """
     # EVENT-FIRST: Query event log for last session ID (lazy import to avoid circular)
     try:
-        from ..event_queries import get_last_session_id_from_events
+        from macf.event_queries import get_last_session_id_from_events
         previous_session_id = get_last_session_id_from_events()
     except Exception:
         previous_session_id = ""
@@ -255,7 +256,7 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
             # Side-effects: Skip if testing mode
             if not testing:
                 # Emit state snapshot BEFORE modifications (preserves historical baseline)
-                from ..agent_events_log import emit_state_snapshot
+                from macf.agent_events_log import emit_state_snapshot
                 agent_state = load_agent_state()
                 emit_state_snapshot(
                     session_id=session_id,
@@ -459,3 +460,17 @@ Session Context:
             "continue": True,
             "systemMessage": f"⚠️ SessionStart hook error: {type(e).__name__}: {str(e)}\n\nCheck logs: macf_tools hooks logs\n\nFull traceback:\n{error_details}"
         }
+
+
+
+if __name__ == "__main__":
+    import json
+    import sys
+    try:
+        output = run(sys.stdin.read(), testing=False)
+        print(json.dumps(output))
+    except Exception as e:
+        print(json.dumps({"continue": True}))
+        print(f"Hook error: {e}", file=sys.stderr)
+    sys.exit(0)
+

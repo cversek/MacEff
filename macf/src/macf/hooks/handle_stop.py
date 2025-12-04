@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 handle_stop - Stop hook runner.
 
@@ -7,7 +8,7 @@ import json
 import traceback
 from typing import Dict, Any
 
-from ..utils import (
+from macf.utils import (
     get_temporal_context,
     format_macf_footer,
     get_rich_environment_string,
@@ -23,8 +24,8 @@ from ..utils import (
     detect_auto_mode,
     get_breadcrumb
 )
-from ..agent_events_log import append_event
-from .logging import log_hook_event
+from macf.agent_events_log import append_event
+from macf.hooks.hook_logging import log_hook_event
 
 
 def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
@@ -57,7 +58,7 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
         # EVENT-FIRST: Get prompt_uuid from event log (lazy import to avoid circular)
         prompt_uuid = None
         try:
-            from ..event_queries import get_dev_drv_stats_from_events
+            from macf.event_queries import get_dev_drv_stats_from_events
             stats = get_dev_drv_stats_from_events(session_id)
             prompt_uuid = stats.get("current_prompt_uuid")
         except Exception:
@@ -65,7 +66,7 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
 
         # FALLBACK: State file if event query failed
         if not prompt_uuid:
-            from ..utils import SessionOperationalState
+            from macf.utils import SessionOperationalState
             state = SessionOperationalState.load(session_id)
             prompt_uuid = state.current_dev_drv_prompt_uuid
 
@@ -153,3 +154,17 @@ Development Drive Stats:
             "continue": True,
             "systemMessage": f"🏗️ MACF | ❌ Stop hook error: {e}"
         }
+
+
+
+if __name__ == "__main__":
+    import json
+    import sys
+    try:
+        output = run(sys.stdin.read(), testing=False)
+        print(json.dumps(output))
+    except Exception as e:
+        print(json.dumps({"continue": True}))
+        print(f"Hook error: {e}", file=sys.stderr)
+    sys.exit(0)
+

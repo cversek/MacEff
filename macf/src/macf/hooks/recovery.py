@@ -12,7 +12,7 @@ Uses SessionOperationalState and ConsciousnessArtifacts for context.
 from pathlib import Path
 from typing import List, Optional
 
-from ..utils import (
+from macf.utils import (
     SessionOperationalState,
     ConsciousnessArtifacts,
     find_project_root,

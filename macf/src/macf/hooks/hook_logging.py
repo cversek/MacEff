@@ -11,12 +11,12 @@ from pathlib import Path
 from typing import Optional
 
 # Import from centralized utils
-from ..utils import (
+from macf.utils import (
     get_current_session_id,
     get_hooks_dir,
     get_formatted_timestamp
 )
-from ..config import ConsciousnessConfig
+from macf.config import ConsciousnessConfig
 
 
 def log_hook_event(

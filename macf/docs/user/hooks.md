@@ -5,7 +5,7 @@ Complete guide to installing and using MACF hooks for consciousness preservation
 ## Table of Contents
 
 - [What Are Hooks?](#what-are-hooks)
-- [The Six Hooks](#the-six-hooks)
+- [The Ten Hooks](#the-ten-hooks)
 - [Installation](#installation)
 - [Verification](#verification)
 - [Hook Behavior](#hook-behavior)
@@ -23,7 +23,7 @@ MACF hooks are Python scripts that integrate with Claude Code's lifecycle events
 
 Hooks run automatically at specific points in the Claude Code lifecycle without requiring manual invocation.
 
-## The Six Hooks
+## The Ten Hooks
 
 ### 1. session_start
 
@@ -128,19 +128,23 @@ macf_tools hooks install --global
 
 ### What Gets Installed
 
-Six hook files are created:
+Ten hook symlinks are created:
 
 ```
 .claude/hooks/
-├── session_start.py
-├── user_prompt_submit.py
-├── pre_tool_use.py
-├── post_tool_use.py
-├── stop.py
-└── subagent_stop.py
+├── session_start.py -> macf/hooks/handle_session_start.py
+├── user_prompt_submit.py -> macf/hooks/handle_user_prompt_submit.py
+├── pre_tool_use.py -> macf/hooks/handle_pre_tool_use.py
+├── post_tool_use.py -> macf/hooks/handle_post_tool_use.py
+├── stop.py -> macf/hooks/handle_stop.py
+├── subagent_stop.py -> macf/hooks/handle_subagent_stop.py
+├── session_end.py -> macf/hooks/handle_session_end.py
+├── pre_compact.py -> macf/hooks/handle_pre_compact.py
+├── permission_request.py -> macf/hooks/handle_permission_request.py
+└── notification.py -> macf/hooks/handle_notification.py
 ```
 
-Each hook is a thin delegator that imports logic from the `macf.hooks` package module.
+Each hook is a symlink to a handler module in the `macf.hooks` package. Updates to the package automatically apply without reinstalling hooks.
 
 ## Verification
 
