@@ -209,6 +209,21 @@ cat > "$MACEFF_DIR/config/config.json.example" <<'EOF'
 EOF
 log "  ✓ Created config/config.json.example"
 
+# Parent config overlay (copies AFTER templates, so parent overrides defaults)
+# Only applies in submodule context where parent may have project-specific configs
+log "DEBUG: MACEFF_SOURCE=$MACEFF_SOURCE"
+log "DEBUG: REPO_ROOT=$REPO_ROOT"
+log "DEBUG: Checking if '$MACEFF_SOURCE' != '$REPO_ROOT': $([[ "$MACEFF_SOURCE" != "$REPO_ROOT" ]] && echo TRUE || echo FALSE)"
+log "DEBUG: Checking if -d '$REPO_ROOT/framework/config': $([[ -d "$REPO_ROOT/framework/config" ]] && echo TRUE || echo FALSE)"
+
+if [[ "$MACEFF_SOURCE" != "$REPO_ROOT" ]] && [[ -d "$REPO_ROOT/framework/config" ]]; then
+    log "Applying parent config/ overlay..."
+    cp -r "$REPO_ROOT/framework/config/"* "$MACEFF_DIR/config/" 2>/dev/null || true
+    warn "  ⚠ OVERLAY: config/* (parent config files override defaults)"
+else
+    log "  ℹ No parent config/ overlay (standalone or no parent config/)"
+fi
+
 # Create .gitkeep files to maintain structure
 touch "$MACEFF_DIR/framework/.gitkeep"
 touch "$MACEFF_DIR/config/.gitkeep"
