@@ -140,7 +140,12 @@ Delegation Drive Stats:
             "error": str(e),
             "traceback": traceback.format_exc()
         })
+        error_msg = f"🏗️ MACF | ❌ SubagentStop hook error: {e}"
         return {
             "continue": True,
-            "systemMessage": f"🏗️ MACF | ❌ SubagentStop hook error: {e}"
+            "systemMessage": error_msg,
+            "hookSpecificOutput": {
+                "hookEventName": "SubagentStop",
+                "additionalContext": f"<system-reminder>\n{error_msg}\n</system-reminder>"
+            }
         }

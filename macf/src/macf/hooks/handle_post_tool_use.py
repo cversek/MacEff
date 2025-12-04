@@ -162,7 +162,12 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
             "error": str(e),
             "traceback": traceback.format_exc()
         })
+        error_msg = f"🏗️ MACF | ❌ PostToolUse hook error: {e}"
         return {
             "continue": True,
-            "systemMessage": f"🏗️ MACF | ❌ PostToolUse hook error: {e}"
+            "systemMessage": error_msg,
+            "hookSpecificOutput": {
+                "hookEventName": "PostToolUse",
+                "additionalContext": f"<system-reminder>\n{error_msg}\n</system-reminder>"
+            }
         }
