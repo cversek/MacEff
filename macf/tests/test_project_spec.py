@@ -17,27 +17,32 @@ from macf.models.project_spec import (
 
 
 def test_repo_mount_valid():
-    """Valid RepoMount with required fields."""
+    """Valid RepoMount with required url field."""
     repo = RepoMount(
         url="git@github.com:user/neurovep_analysis.git",
-        path="repos/neurovep_analysis"
+        name="neurovep_analysis"
     )
 
     assert repo.url == "git@github.com:user/neurovep_analysis.git"
-    assert repo.path == "repos/neurovep_analysis"
+    assert repo.name == "neurovep_analysis"
+    assert repo.worktree is True  # Default value
+
+
+def test_repo_mount_url_only():
+    """RepoMount works with only url (name auto-extracted from URL)."""
+    repo = RepoMount(url="git@github.com:user/my-repo.git")
+
+    assert repo.url == "git@github.com:user/my-repo.git"
+    assert repo.name == "my-repo"  # Auto-extracted from URL
+    assert repo.worktree is True
 
 
 def test_repo_mount_missing_required_fields():
-    """RepoMount fails when required fields missing."""
-    # Missing url
+    """RepoMount fails when url is missing."""
+    # Missing url - should fail
     with pytest.raises(ValidationError) as exc_info:
-        RepoMount(path="repos/backend")
+        RepoMount(name="backend")
     assert "url" in str(exc_info.value)
-
-    # Missing path
-    with pytest.raises(ValidationError) as exc_info:
-        RepoMount(url="git@github.com:user/repo.git")
-    assert "path" in str(exc_info.value)
 
 
 def test_data_mount_valid():

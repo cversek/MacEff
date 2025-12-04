@@ -105,5 +105,6 @@ def test_exception_handling(mock_dependencies):
 
     result = run("")
 
-    # Should never crash
-    assert result == {"continue": True}
+    # Should never crash, and should include hookSpecificOutput for Pattern C
+    assert result["continue"] is True
+    assert "hookSpecificOutput" in result

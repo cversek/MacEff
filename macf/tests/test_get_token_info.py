@@ -97,11 +97,11 @@ class TestGetTokenInfo:
 
                         result = get_token_info()
 
-        # Verify calculation: 100000 actual + 45000 buffer = 145000 displayed
-        expected_tokens_used = 145000  # 100k actual + 45k buffer
-        expected_tokens_remaining = 200000 - 145000  # 55000
-        expected_percentage_remaining = (55000 / 200000) * 100  # 27.5%
-        expected_cluac = round(expected_percentage_remaining)  # 28
+        # Verify calculation: 100000 actual tokens used
+        expected_tokens_used = 100000  # actual tokens from JSONL
+        expected_tokens_remaining = 200000 - 100000  # 100000
+        expected_percentage_remaining = (100000 / 200000) * 100  # 50%
+        expected_cluac = round(expected_percentage_remaining)  # 50
 
         assert result['tokens_used'] == expected_tokens_used
         assert result['cluac_level'] == expected_cluac
@@ -147,19 +147,13 @@ class TestGetTokenInfo:
         assert 'tokens_used' in result
         assert 'cluac_level' in result
 
-    def test_autocompact_buffer_assumption(self):
+    def test_tokens_used_reflects_actual_jsonl(self):
         """
-        Test that autocompact buffer (45k) is added to match /context display.
+        Test that tokens_used reflects actual JSONL usage without any buffer added.
 
-        ASSUMPTION: CC 2.0 displays actual_usage + 45k buffer as total.
-        This test validates that our calculation includes this buffer.
-        May require reverification in future Claude Code versions.
+        NOTE: tokens_used returns the actual token count from JSONL parsing.
+        Any buffer considerations are handled at display layer, not in raw data.
         """
-        from macf.utils import CC2_AUTOCOMPACT_BUFFER
-
-        # Verify constant value
-        assert CC2_AUTOCOMPACT_BUFFER == 45000, "Buffer assumption changed - update tests"
-
         # Mock JSONL with 80k actual usage
         mock_jsonl = json.dumps({
             "type": "assistant",
@@ -186,9 +180,9 @@ class TestGetTokenInfo:
 
                         result = get_token_info()
 
-        # Verify buffer is added: 80k actual + 45k buffer = 125k displayed
-        assert result['tokens_used'] == 125000, "Buffer not added to tokens_used"
-        assert result['tokens_remaining'] == 75000, "Remaining calculation incorrect"
+        # tokens_used reflects actual JSONL tokens (no buffer added)
+        assert result['tokens_used'] == 80000, "tokens_used should be actual tokens"
+        assert result['tokens_remaining'] == 120000, "Remaining = 200k - 80k actual"
 
 
 class TestContextCLI:
@@ -363,7 +357,8 @@ class TestTokenInfoEdgeCases:
 
                         result = get_token_info()
 
-        # 160k actual + 45k buffer = 205k displayed, -5k remaining (over limit)
-        # This scenario shows tokens exceeding usable space (entered buffer zone)
-        assert result['tokens_used'] == 205000  # 160k actual + 45k buffer
-        assert result['cluac_level'] == -2  # Negative CLUAC (over usable limit)
+        # 160k actual tokens used (no buffer added)
+        # tokens_remaining = 200k - 160k = 40k
+        # percentage_remaining = (40k / 200k) * 100 = 20%
+        assert result['tokens_used'] == 160000  # actual tokens from JSONL
+        assert result['cluac_level'] == 20  # 20% remaining

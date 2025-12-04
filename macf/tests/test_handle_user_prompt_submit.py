@@ -82,20 +82,20 @@ def test_temporal_awareness_included(mock_dependencies):
 
 
 def test_dual_visibility_output_format(mock_dependencies):
-    """Test output uses dual visibility (additionalContext + systemMessage)."""
+    """Test output uses Pattern C dual visibility (top-level systemMessage + hookSpecificOutput.additionalContext)."""
     from macf.hooks.handle_user_prompt_submit import run
 
     result = run("")
 
-    # Both fields should be present with same content
+    # Pattern C: systemMessage at top level, additionalContext in hookSpecificOutput
+    assert "systemMessage" in result  # Top level for user visibility
     assert "hookSpecificOutput" in result
-    assert "additionalContext" in result["hookSpecificOutput"]
-    assert "systemMessage" in result["hookSpecificOutput"]
+    assert "additionalContext" in result["hookSpecificOutput"]  # For agent via system-reminder
 
-    # Content should match
+    # additionalContext should wrap systemMessage content in system-reminder tags
     additional = result["hookSpecificOutput"]["additionalContext"]
-    system = result["hookSpecificOutput"]["systemMessage"]
-    assert additional == system
+    assert "<system-reminder>" in additional
+    assert "🏗️ MACF" in additional
 
 
 def test_breadcrumb_displayed(mock_dependencies):
