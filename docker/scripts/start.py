@@ -385,7 +385,7 @@ def create_subagent_definition_symlinks(username: str, subagent_names: List[str]
 def create_project_workspace(project_name: str, project_spec: ProjectSpec) -> None:
     """Create shared project workspace with repos and context."""
     project_dir = SHARED_WORKSPACE / project_name
-    project_dir.mkdir(mode=0o775, exist_ok=True)
+    project_dir.mkdir(mode=0o2775, exist_ok=True)
 
     # Install project CLAUDE.md (Layer 3 context)
     project_context = project_dir / 'CLAUDE.md'
@@ -397,7 +397,7 @@ def create_project_workspace(project_name: str, project_spec: ProjectSpec) -> No
     # Create repos directory
     if project_spec.repos:
         repos_dir = project_dir / 'repos'
-        repos_dir.mkdir(mode=0o775, exist_ok=True)
+        repos_dir.mkdir(mode=0o2775, exist_ok=True)
 
         # Clone repositories
         for repo_mount in project_spec.repos:
