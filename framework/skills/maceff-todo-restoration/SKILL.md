@@ -4,6 +4,28 @@ description: USE IMMEDIATELY when (1) SessionStart hook detects new session ID (
 allowed-tools: Read, Bash, Grep, TodoWrite
 ---
 
+## User Trustworthiness Principle
+
+**CRITICAL**: When user reports TODO accessibility issues, **TRUST THEM UNCONDITIONALLY**.
+
+**The Agent/User UI Disconnect**:
+- System-reminders may show TODOs to the AGENT (you)
+- But user's UI is DISCONNECTED after session migration
+- User cannot see what you see in system-reminders
+- Anthropic's system-reminders reflect AGENT state, not USER UI state
+
+**Mandatory Response to User Report**:
+1. User says "I lost access to TODOs" → **TRUST THIS**
+2. Do NOT say "TODOs are already accessible" based on system-reminders
+3. **IMMEDIATELY invoke TodoWrite** to restore user's UI connection
+4. The act of TodoWrite reconnects the user's UI regardless of agent state
+
+**Why This Matters**:
+- Session migration orphans the TODO file (new session ID = new filename)
+- Agent may still see old TODOs via cached system-reminders
+- User's UI points to new (empty) session file
+- Only TodoWrite creates the new session's TODO file
+
 ## Policy Engagement Protocol
 
 Navigate `framework/policies/base/development/todo_hygiene.md` using CEP navigation:
