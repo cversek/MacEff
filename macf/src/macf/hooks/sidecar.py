@@ -9,14 +9,14 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 # Import from centralized utils
-from ..utils import (
+from macf.utils import (
     get_current_session_id,
     get_hooks_dir,
     write_json_safely,
     read_json_safely
 )
-from .logging import log_hook_event
-from ..config import ConsciousnessConfig
+from .hook_logging import log_hook_event
+from macf.config import ConsciousnessConfig
 
 
 class OutputCapture:

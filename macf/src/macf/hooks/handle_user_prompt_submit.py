@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 handle_user_prompt_submit - UserPromptSubmit hook runner.
 
@@ -7,7 +8,7 @@ import json
 import traceback
 from typing import Dict, Any
 
-from ..utils import (
+from macf.utils import (
     get_temporal_context,
     format_macf_footer,
     get_rich_environment_string,
@@ -19,8 +20,8 @@ from ..utils import (
     detect_auto_mode,
     get_breadcrumb
 )
-from ..agent_events_log import append_event
-from .logging import log_hook_event
+from macf.agent_events_log import append_event
+from macf.hooks.hook_logging import log_hook_event
 
 
 def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
@@ -58,7 +59,7 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
             session_id = get_current_session_id()
 
         # Get current message UUID from JSONL (message written before hook fires)
-        from ..utils.session import get_last_user_prompt_uuid
+        from macf.utils.session import get_last_user_prompt_uuid
         current_prompt_uuid = get_last_user_prompt_uuid(session_id)
 
         # Start Development Drive tracking with current UUID (skip if testing)
@@ -138,3 +139,17 @@ Breadcrumb: {breadcrumb}"""
                 "additionalContext": f"<system-reminder>\n{error_msg}\n</system-reminder>"
             }
         }
+
+
+
+if __name__ == "__main__":
+    import json
+    import sys
+    try:
+        output = run(sys.stdin.read(), testing=False)
+        print(json.dumps(output))
+    except Exception as e:
+        print(json.dumps({"continue": True}))
+        print(f"Hook error: {e}", file=sys.stderr)
+    sys.exit(0)
+

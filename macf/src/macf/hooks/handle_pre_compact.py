@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 handle_pre_compact - PreCompact hook runner.
 
@@ -7,7 +8,7 @@ import json
 import traceback
 from typing import Dict, Any
 
-from ..utils import (
+from macf.utils import (
     get_temporal_context,
     format_macf_footer,
     get_current_session_id,
@@ -15,8 +16,8 @@ from ..utils import (
     get_token_info,
     get_breadcrumb
 )
-from ..agent_events_log import append_event
-from .logging import log_hook_event
+from macf.agent_events_log import append_event
+from macf.hooks.hook_logging import log_hook_event
 
 
 def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
@@ -96,3 +97,17 @@ CLUAC: {token_info.get('cluac_level', 'N/A')}
             "continue": True,
             "systemMessage": f"🏗️ MACF | ❌ PreCompact hook error: {e}"
         }
+
+
+
+if __name__ == "__main__":
+    import json
+    import sys
+    try:
+        output = run(sys.stdin.read(), testing=False)
+        print(json.dumps(output))
+    except Exception as e:
+        print(json.dumps({"continue": True}))
+        print(f"Hook error: {e}", file=sys.stderr)
+    sys.exit(0)
+

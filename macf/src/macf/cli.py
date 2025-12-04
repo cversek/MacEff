@@ -292,26 +292,21 @@ def cmd_hook_install(args: argparse.Namespace) -> int:
             ("notification.py", "handle_notification"),
         ]
 
-        # Create all hook scripts
+        # Find installed package location for handler modules
+        import macf.hooks as hooks_package
+        package_hooks_dir = Path(hooks_package.__file__).parent
+
+        # Create symlinks to handler modules
         for script_name, handler_module in hooks_to_install:
             hook_script = hooks_dir / script_name
+            handler_path = package_hooks_dir / f"{handler_module}.py"
 
-            hook_content = f'''#!/usr/bin/env python3
-import json, sys
-from macf.hooks.{handler_module} import run
+            # Remove existing file/symlink if present
+            if hook_script.exists() or hook_script.is_symlink():
+                hook_script.unlink()
 
-try:
-    output = run(sys.stdin.read(), testing=False)
-    print(json.dumps(output))
-except Exception as e:
-    print(json.dumps({{"continue": True}}))
-    print(f"Hook error: {{e}}", file=sys.stderr)
-sys.exit(0)
-'''
-
-            # Write hook script
-            hook_script.write_text(hook_content)
-            hook_script.chmod(0o755)
+            # Create symlink to handler module
+            hook_script.symlink_to(handler_path)
 
         # Update settings file
         if _update_settings_file(settings_file, hooks_prefix):

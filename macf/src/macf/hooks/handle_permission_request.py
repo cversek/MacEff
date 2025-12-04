@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 handle_permission_request - PermissionRequest hook runner.
 
@@ -7,13 +8,13 @@ import json
 import traceback
 from typing import Dict, Any
 
-from ..utils import (
+from macf.utils import (
     get_minimal_timestamp,
     get_current_session_id,
     get_breadcrumb
 )
-from ..agent_events_log import append_event
-from .logging import log_hook_event
+from macf.agent_events_log import append_event
+from macf.hooks.hook_logging import log_hook_event
 
 
 def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
@@ -88,3 +89,17 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
             "continue": True,
             "systemMessage": f"🏗️ MACF | ❌ PermissionRequest hook error: {e}"
         }
+
+
+
+if __name__ == "__main__":
+    import json
+    import sys
+    try:
+        output = run(sys.stdin.read(), testing=False)
+        print(json.dumps(output))
+    except Exception as e:
+        print(json.dumps({"continue": True}))
+        print(f"Hook error: {e}", file=sys.stderr)
+    sys.exit(0)
+

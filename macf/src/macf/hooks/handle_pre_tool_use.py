@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 handle_pre_tool_use - PreToolUse hook runner.
 
@@ -7,7 +8,7 @@ import json
 import traceback
 from typing import Dict, Any
 
-from ..utils import (
+from macf.utils import (
     get_minimal_timestamp,
     get_current_session_id,
     start_deleg_drv,
@@ -15,8 +16,8 @@ from ..utils import (
     format_token_context_minimal,
     get_breadcrumb
 )
-from ..agent_events_log import append_event
-from .logging import log_hook_event
+from macf.agent_events_log import append_event
+from macf.hooks.hook_logging import log_hook_event
 
 
 def _is_bare_cd_command(command: str) -> bool:
@@ -201,3 +202,17 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
                 "additionalContext": f"<system-reminder>\n{error_msg}\n</system-reminder>"
             }
         }
+
+
+
+if __name__ == "__main__":
+    import json
+    import sys
+    try:
+        output = run(sys.stdin.read(), testing=False)
+        print(json.dumps(output))
+    except Exception as e:
+        print(json.dumps({"continue": True}))
+        print(f"Hook error: {e}", file=sys.stderr)
+    sys.exit(0)
+
