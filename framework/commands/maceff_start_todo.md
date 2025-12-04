@@ -37,11 +37,15 @@ After reading policies, you should be able to answer:
 
 ## Execution
 
+🚨 **CRITICAL: Invoking this command IS execution authorization.**
+
+The command name is `start_todo`, not `review_todo`. User running this command grants permission to BEGIN WORK immediately after policy reading completes.
+
 Using answers from policy reading:
 - Restore archived context if needed
 - Read embedded plans per mandatory reading discipline
 - Create roadmap/DELEG_PLAN if policy requires
-- Mark TODO in_progress and engage appropriately
+- Mark TODO in_progress and **BEGIN EXECUTION** - do not ask for further permission
 
 ---
 
