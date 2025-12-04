@@ -192,7 +192,12 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
             "error": str(e),
             "traceback": traceback.format_exc()
         })
+        error_msg = f"🏗️ MACF | ❌ PreToolUse hook error: {e}"
         return {
             "continue": True,
-            "systemMessage": f"🏗️ MACF | ❌ PreToolUse hook error: {e}"
+            "systemMessage": error_msg,
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "additionalContext": f"<system-reminder>\n{error_msg}\n</system-reminder>"
+            }
         }

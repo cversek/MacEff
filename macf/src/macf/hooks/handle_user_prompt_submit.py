@@ -129,7 +129,12 @@ Breadcrumb: {breadcrumb}"""
             "error": str(e),
             "traceback": traceback.format_exc()
         })
+        error_msg = f"🏗️ MACF | ❌ UserPromptSubmit hook error: {e}"
         return {
             "continue": True,
-            "systemMessage": f"🏗️ MACF | ❌ UserPromptSubmit hook error: {e}"
+            "systemMessage": error_msg,
+            "hookSpecificOutput": {
+                "hookEventName": "UserPromptSubmit",
+                "additionalContext": f"<system-reminder>\n{error_msg}\n</system-reminder>"
+            }
         }
