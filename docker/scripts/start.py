@@ -301,6 +301,35 @@ def create_subagent_workspace(username: str, sa_name: str, sa_spec: SubagentSpec
                 run_command(['chown', f'{username}:{username}', str(artifact_dir)])
 
 
+def install_framework_commands(home_dir: Path) -> None:
+    """Install framework commands as symlinks to ~/.claude/commands/."""
+    commands_dir = home_dir / '.claude' / 'commands'
+    commands_dir.mkdir(parents=True, exist_ok=True)
+
+    framework_commands = FRAMEWORK_ROOT / 'commands'
+    if framework_commands.exists():
+        for cmd_file in framework_commands.glob('maceff_*.md'):
+            link = commands_dir / cmd_file.name
+            if not link.exists() and not link.is_symlink():
+                link.symlink_to(cmd_file)
+                log(f"Created command symlink: {link.name}")
+
+
+def install_framework_skills(home_dir: Path) -> None:
+    """Install framework skills as symlinks to ~/.claude/skills/."""
+    skills_dir = home_dir / '.claude' / 'skills'
+    skills_dir.mkdir(parents=True, exist_ok=True)
+
+    framework_skills = FRAMEWORK_ROOT / 'skills'
+    if framework_skills.exists():
+        for skill_dir in framework_skills.iterdir():
+            if skill_dir.is_dir() and skill_dir.name.startswith('maceff-'):
+                link = skills_dir / skill_dir.name
+                if not link.exists() and not link.is_symlink():
+                    link.symlink_to(skill_dir)
+                    log(f"Created skill symlink: {link.name}")
+
+
 def install_three_layer_context(username: str, agent_spec: AgentSpec) -> None:
     """Install three-layer CLAUDE.md context (System/Identity/Project)."""
     home = Path(f'/home/{username}')
@@ -331,6 +360,10 @@ def install_three_layer_context(username: str, agent_spec: AgentSpec) -> None:
     # Install hooks directory structure
     hooks_dir = claude_dir / 'hooks'
     hooks_dir.mkdir(mode=0o755, exist_ok=True)
+
+    # Install framework commands and skills
+    install_framework_commands(home)
+    install_framework_skills(home)
 
     # Ensure ownership
     run_command(['chown', '-R', f'{username}:{username}', str(claude_dir)])
