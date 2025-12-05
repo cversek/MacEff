@@ -386,6 +386,7 @@ def create_project_workspace(project_name: str, project_spec: ProjectSpec) -> No
     """Create shared project workspace with repos and context."""
     project_dir = SHARED_WORKSPACE / project_name
     project_dir.mkdir(mode=0o2775, exist_ok=True)
+    os.chmod(project_dir, 0o2775)  # Override umask to ensure group write
 
     # Install project CLAUDE.md (Layer 3 context)
     project_context = project_dir / 'CLAUDE.md'
@@ -398,6 +399,7 @@ def create_project_workspace(project_name: str, project_spec: ProjectSpec) -> No
     if project_spec.repos:
         repos_dir = project_dir / 'repos'
         repos_dir.mkdir(mode=0o2775, exist_ok=True)
+        os.chmod(repos_dir, 0o2775)  # Override umask to ensure group write
 
         # Clone repositories
         for repo_mount in project_spec.repos:
