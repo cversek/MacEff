@@ -655,6 +655,130 @@ def cmd_dev_drv(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_backup_create(args: argparse.Namespace) -> int:
+    """Create consciousness backup archive."""
+    from .backup import get_backup_paths, collect_backup_sources, create_archive
+    paths = get_backup_paths(output_dir=args.output)
+    sources = collect_backup_sources(
+        paths,
+        include_transcripts=not args.no_transcripts,
+        quick_mode=args.quick
+    )
+    archive_path = create_archive(sources, paths)
+    print(f"Created: {archive_path}")
+    return 0
+
+
+def cmd_backup_list(args: argparse.Namespace) -> int:
+    """List backup archives in directory."""
+    from pathlib import Path
+    import json
+    scan_dir = args.dir or Path.cwd()
+    archives = list(scan_dir.glob("*_consciousness.tar.xz"))
+    if args.json_output:
+        print(json.dumps([str(a) for a in archives], indent=2))
+    else:
+        for a in sorted(archives):
+            print(a.name)
+    return 0
+
+
+def cmd_backup_info(args: argparse.Namespace) -> int:
+    """Show backup archive info."""
+    from .backup.archive import get_archive_manifest
+    import json
+    manifest = get_archive_manifest(args.archive)
+    if manifest:
+        if args.json_output:
+            print(json.dumps(manifest, indent=2))
+        else:
+            print(f"Project: {manifest.get('project_name')}")
+            print(f"Created: {manifest.get('created_at')}")
+            print(f"Files: {manifest['totals']['file_count']}")
+            print(f"Size: {manifest['totals']['total_bytes']} bytes")
+    return 0
+
+
+def cmd_restore_verify(args: argparse.Namespace) -> int:
+    """Verify archive integrity."""
+    from .backup.archive import get_archive_manifest, extract_archive
+    from .backup.manifest import verify_manifest
+    import tempfile
+    manifest = get_archive_manifest(args.archive)
+    if not manifest:
+        print("No manifest found in archive")
+        return 1
+    with tempfile.TemporaryDirectory() as tmpdir:
+        extract_archive(args.archive, Path(tmpdir))
+        result = verify_manifest(manifest, Path(tmpdir))
+    if result["valid"]:
+        print(f"Archive valid: {result['checked']} files verified")
+        return 0
+    print(f"Archive INVALID: {len(result['corrupted'])} corrupted, {len(result['missing'])} missing")
+    return 1
+
+
+def cmd_restore_install(args: argparse.Namespace) -> int:
+    """Install backup to target directory with optional transplant."""
+    from .backup.archive import extract_archive, get_archive_manifest, list_archive
+    from .backup.integrity import (
+        has_existing_consciousness,
+        detect_existing_consciousness,
+        create_recovery_checkpoint,
+        format_safety_warning,
+    )
+
+    target = args.target or Path.cwd()
+
+    # Safety check: detect existing consciousness
+    if has_existing_consciousness(target) and not args.force:
+        checks = detect_existing_consciousness(target)
+        print(format_safety_warning(checks))
+        return 1
+
+    if args.dry_run:
+        contents = list_archive(args.archive)
+        print(f"Would extract {len(contents)} items to {target}")
+
+        if has_existing_consciousness(target):
+            print("\nWould create recovery checkpoint before overwriting")
+
+        if args.transplant:
+            manifest = get_archive_manifest(args.archive)
+            if manifest:
+                from .backup.transplant import create_transplant_mapping
+                maceff_root = args.maceff_root or (target.parent / "MacEff")
+                mapping = create_transplant_mapping(manifest, target, maceff_root)
+                print(f"\nTransplant would rewrite paths:")
+                print(f"  Project: {mapping.source_project_root} -> {mapping.target_project_root}")
+                print(f"  MacEff:  {mapping.source_maceff_root} -> {mapping.target_maceff_root}")
+                print(f"  Home:    {mapping.source_home} -> {mapping.target_home}")
+        return 0
+
+    # Create recovery checkpoint if overwriting existing consciousness
+    if has_existing_consciousness(target):
+        checkpoint = create_recovery_checkpoint(target)
+        if checkpoint:
+            print(f"Recovery checkpoint created: {checkpoint}")
+
+    # Extract archive
+    manifest = extract_archive(args.archive, target)
+    print(f"Extracted to: {target}")
+
+    # Run transplant if requested
+    if args.transplant:
+        from .backup.transplant import create_transplant_mapping, run_transplant, transplant_summary
+        maceff_root = args.maceff_root or (target.parent / "MacEff")
+        mapping = create_transplant_mapping(manifest, target, maceff_root)
+        changes = run_transplant(target, mapping, dry_run=False)
+        print(f"\n{transplant_summary(changes)}")
+
+        # Suggest running hooks install
+        print("\nNext step: Run 'macf_tools hooks install' to complete setup")
+
+    return 0
+
+
 def cmd_agent_init(args: argparse.Namespace) -> int:
     """Initialize agent with preamble injection (idempotent)."""
     try:
@@ -1394,6 +1518,43 @@ def _build_parser() -> argparse.ArgumentParser:
     agent_sub = agent_parser.add_subparsers(dest="agent_cmd")
 
     agent_sub.add_parser("init", help="initialize agent with PA preamble").set_defaults(func=cmd_agent_init)
+
+    # Agent backup subcommands
+    backup_parser = agent_sub.add_parser("backup", help="consciousness backup operations")
+    backup_sub = backup_parser.add_subparsers(dest="backup_cmd")
+
+    backup_create = backup_sub.add_parser("create", help="create consciousness backup archive")
+    backup_create.add_argument("--output", "-o", type=Path, help="output directory (default: CWD)")
+    backup_create.add_argument("--no-transcripts", action="store_true", help="exclude transcripts")
+    backup_create.add_argument("--quick", action="store_true", help="only recent transcripts (7 days)")
+    backup_create.set_defaults(func=cmd_backup_create)
+
+    backup_list = backup_sub.add_parser("list", help="list backup archives")
+    backup_list.add_argument("--dir", type=Path, help="directory to scan (default: CWD)")
+    backup_list.add_argument("--json", dest="json_output", action="store_true", help="output as JSON")
+    backup_list.set_defaults(func=cmd_backup_list)
+
+    backup_info = backup_sub.add_parser("info", help="show backup archive info")
+    backup_info.add_argument("archive", type=Path, help="path to archive")
+    backup_info.add_argument("--json", dest="json_output", action="store_true", help="output as JSON")
+    backup_info.set_defaults(func=cmd_backup_info)
+
+    # Agent restore subcommands
+    restore_parser = agent_sub.add_parser("restore", help="consciousness restore operations")
+    restore_sub = restore_parser.add_subparsers(dest="restore_cmd")
+
+    restore_verify = restore_sub.add_parser("verify", help="verify archive integrity")
+    restore_verify.add_argument("archive", type=Path, help="path to archive")
+    restore_verify.set_defaults(func=cmd_restore_verify)
+
+    restore_install = restore_sub.add_parser("install", help="install backup to target")
+    restore_install.add_argument("archive", type=Path, help="path to archive")
+    restore_install.add_argument("--target", type=Path, help="target directory (default: CWD)")
+    restore_install.add_argument("--transplant", action="store_true", help="rewrite paths for new system")
+    restore_install.add_argument("--maceff-root", type=Path, help="MacEff location (default: sibling of target)")
+    restore_install.add_argument("--force", action="store_true", help="overwrite existing consciousness (creates checkpoint)")
+    restore_install.add_argument("--dry-run", action="store_true", help="show what would be done")
+    restore_install.set_defaults(func=cmd_restore_install)
 
     # Context command
     context_parser = sub.add_parser("context", help="show token usage and CLUAC level")
