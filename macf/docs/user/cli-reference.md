@@ -309,6 +309,85 @@ macf_tools agent init
 
 **Related:** `config init`, `session info`
 
+### agent backup create
+
+Create consciousness backup archive.
+
+**Syntax:**
+```bash
+macf_tools agent backup create [--output DIR] [--no-transcripts] [--quick]
+```
+
+**Options:**
+- `--output, -o DIR` - Output directory (default: current working directory)
+- `--no-transcripts` - Exclude transcript files from backup
+- `--quick` - Only include transcripts from last 7 days
+
+**Description:** Creates a tar.xz archive containing consciousness state (.maceff/, agent/, .claude/) and optionally transcripts (~/.claude/projects/).
+
+### agent backup list
+
+List backup archives in a directory.
+
+**Syntax:**
+```bash
+macf_tools agent backup list [--dir DIR] [--json]
+```
+
+**Options:**
+- `--dir DIR` - Directory to scan (default: current working directory)
+- `--json` - Output as JSON
+
+### agent backup info
+
+Show backup archive information.
+
+**Syntax:**
+```bash
+macf_tools agent backup info <archive> [--json]
+```
+
+**Arguments:**
+- `archive` - Path to backup archive
+
+**Options:**
+- `--json` - Output as JSON
+
+### agent restore verify
+
+Verify backup archive integrity.
+
+**Syntax:**
+```bash
+macf_tools agent restore verify <archive>
+```
+
+**Arguments:**
+- `archive` - Path to backup archive
+
+**Description:** Validates archive checksums and reports any corrupted or missing files.
+
+### agent restore install
+
+Install backup to target directory.
+
+**Syntax:**
+```bash
+macf_tools agent restore install <archive> [--target DIR] [--transplant] [--maceff-root DIR] [--force] [--dry-run]
+```
+
+**Arguments:**
+- `archive` - Path to backup archive
+
+**Options:**
+- `--target DIR` - Target directory (default: current working directory)
+- `--transplant` - Rewrite paths for new system (cross-system restore)
+- `--maceff-root DIR` - MacEff installation location (default: sibling of target)
+- `--force` - Overwrite existing consciousness (creates recovery checkpoint)
+- `--dry-run` - Show what would be done without making changes
+
+**Description:** Extracts backup and optionally rewrites paths for cross-system transplant (e.g., macOS to Linux).
+
 ## Consciousness Artifacts
 
 ### list ccps
