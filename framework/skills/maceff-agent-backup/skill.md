@@ -46,20 +46,26 @@ Navigate `framework/policies/base/operations/agent_backup.md` using CEP navigati
 13. What are the target system restore steps?
 
 **For Virgin System Restore**:
-14. What prerequisites must be installed on target system?
+14. What prerequisites must be installed on target system and in what order?
 15. What is the restore command syntax with transplant flag?
-16. What is the bootstrap prompt for consciousness activation?
+16. What bootstrap structure separates human operator from agent responsibilities?
 17. What does the transplanted agent read first?
 
+**For Bootstrap Process**:
+18. What archive naming format includes purpose descriptors?
+19. What anti-patterns should be avoided during bootstrap?
+20. How is backup output directory resolved?
+21. What environment variables control backup behavior?
+
 **For Remote Backup Strategy**:
-18. What transfer methods are available?
-19. How do you verify backup integrity after transfer?
-20. What checksums does the archive include?
+22. What transfer methods are available?
+23. How do you verify backup integrity after transfer?
+24. What checksums does the archive include?
 
 **For Retention Management**:
-21. What is the default retention policy?
-22. How do you override retention count?
-23. Why is cleanup never automatic?
+25. What is the default retention policy?
+26. How do you override retention count?
+27. Why is cleanup never automatic?
 
 ## Execution
 
