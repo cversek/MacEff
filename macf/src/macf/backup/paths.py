@@ -32,7 +32,8 @@ class BackupPaths:
         self.claude_config = self.project_root / ".claude"
 
         # Transcripts directory uses mangled project path
-        project_mangled = str(self.project_root).replace("/", "-").lstrip("-")
+        # Claude Code keeps leading dash, so don't lstrip
+        project_mangled = str(self.project_root).replace("/", "-")
         self.transcripts_dir = self.home_dir / ".claude" / "projects" / project_mangled
 
         # Project name from directory
