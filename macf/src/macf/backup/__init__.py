@@ -8,7 +8,7 @@ Provides backup/restore functionality for agent consciousness state:
 - Transcripts (~/.claude/projects/)
 """
 
-from .paths import BackupPaths, collect_backup_sources
+from .paths import BackupPaths, collect_backup_sources, get_backup_paths
 from .manifest import create_manifest, verify_manifest
 from .archive import create_archive, extract_archive
 from .transplant import (
@@ -28,6 +28,7 @@ from .integrity import (
 __all__ = [
     "BackupPaths",
     "collect_backup_sources",
+    "get_backup_paths",
     "create_manifest",
     "verify_manifest",
     "create_archive",
