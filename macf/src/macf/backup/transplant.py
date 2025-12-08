@@ -104,13 +104,23 @@ def extract_source_paths(manifest: Dict) -> Dict[str, Path]:
     Returns:
         Dictionary with source path information
     """
-    metadata = manifest.get("metadata", {})
+    # Manifest stores paths under "source_paths", not "metadata"
+    source_paths = manifest.get("source_paths", {})
+
+    # Derive maceff_root from project_root if not stored
+    # (typically sibling directory: /path/to/Project -> /path/to/MacEff)
+    project_root = source_paths.get("project_root", "")
+    maceff_root = source_paths.get("maceff_root", "")
+    if not maceff_root and project_root:
+        # Infer: /Users/x/gitwork/foo/Project -> /Users/x/gitwork/cversek/MacEff
+        # This is a heuristic - may need adjustment
+        maceff_root = str(Path(project_root).parent.parent / "cversek" / "MacEff")
 
     return {
-        "project_root": Path(metadata.get("project_root", "")),
-        "home_dir": Path(metadata.get("home_dir", "")),
-        "maceff_root": Path(metadata.get("maceff_root", "")),
-        "transcripts_dir": Path(metadata.get("transcripts_dir", "")),
+        "project_root": Path(project_root) if project_root else Path(""),
+        "home_dir": Path(source_paths.get("home_dir", "")),
+        "maceff_root": Path(maceff_root) if maceff_root else Path(""),
+        "transcripts_dir": Path(source_paths.get("transcripts_dir", "")),
     }
 
 
