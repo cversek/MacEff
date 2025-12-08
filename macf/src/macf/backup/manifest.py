@@ -137,6 +137,7 @@ def verify_manifest(
         "missing": [],
         "corrupted": [],
         "size_mismatch": [],
+        "broken_symlinks": [],  # Symlinks that exist but point to non-existent targets
     }
 
     for file_entry in manifest.get("files", []):
@@ -146,6 +147,16 @@ def verify_manifest(
 
         file_path = extract_dir / archive_path
         result["checked"] += 1
+
+        # Check for broken symlinks separately
+        if file_path.is_symlink():
+            if not file_path.exists():  # Symlink target doesn't exist
+                result["broken_symlinks"].append({
+                    "path": archive_path,
+                    "target": str(file_path.readlink()),
+                })
+            # Skip size/checksum validation for symlinks
+            continue
 
         if not file_path.exists():
             result["missing"].append(archive_path)
