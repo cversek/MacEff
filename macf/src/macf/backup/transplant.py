@@ -56,6 +56,9 @@ class TransplantMapping:
 
         result = path
         for source, target in mappings:
+            # Skip empty or trivial paths that would match too broadly
+            if not source or source == "." or len(source) < 3:
+                continue
             if source in result:
                 result = result.replace(source, target)
                 break  # Only apply first matching rule
@@ -82,6 +85,10 @@ class TransplantMapping:
 
         result = text
         for source, target in mappings:
+            # Skip empty or trivial paths that would match too broadly
+            # Path("") becomes "." which would match every dot in text
+            if not source or source == "." or len(source) < 3:
+                continue
             result = result.replace(source, target)
 
         return result
