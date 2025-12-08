@@ -715,6 +715,15 @@ def cmd_restore_verify(args: argparse.Namespace) -> int:
         print(f"Archive valid: {result['checked']} files verified")
         return 0
     print(f"Archive INVALID: {len(result['corrupted'])} corrupted, {len(result['missing'])} missing")
+    if hasattr(args, 'verbose') and args.verbose:
+        if result['missing']:
+            print("\nMissing files:")
+            for f in result['missing']:
+                print(f"  - {f}")
+        if result['corrupted']:
+            print("\nCorrupted files:")
+            for f in result['corrupted']:
+                print(f"  - {f['path']}: expected {f['expected'][:8]}... got {f['actual'][:8]}...")
     return 1
 
 
@@ -1545,6 +1554,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     restore_verify = restore_sub.add_parser("verify", help="verify archive integrity")
     restore_verify.add_argument("archive", type=Path, help="path to archive")
+    restore_verify.add_argument("-v", "--verbose", action="store_true", help="show missing/corrupted file details")
     restore_verify.set_defaults(func=cmd_restore_verify)
 
     restore_install = restore_sub.add_parser("install", help="install backup to target")
