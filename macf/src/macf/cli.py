@@ -711,10 +711,31 @@ def cmd_restore_verify(args: argparse.Namespace) -> int:
     with tempfile.TemporaryDirectory() as tmpdir:
         extract_archive(args.archive, Path(tmpdir))
         result = verify_manifest(manifest, Path(tmpdir))
-    if result["valid"]:
+
+    broken_symlinks = result.get("broken_symlinks", [])
+    has_errors = not result["valid"]
+    has_symlink_warnings = len(broken_symlinks) > 0
+
+    if not has_errors and not has_symlink_warnings:
         print(f"Archive valid: {result['checked']} files verified")
         return 0
-    print(f"Archive INVALID: {len(result['corrupted'])} corrupted, {len(result['missing'])} missing")
+
+    if has_errors:
+        print(f"Archive INVALID: {len(result['corrupted'])} corrupted, {len(result['missing'])} missing")
+    else:
+        print(f"Archive valid: {result['checked']} files verified")
+
+    # Report broken symlinks (warning, not error)
+    if has_symlink_warnings:
+        print(f"\n⚠️  {len(broken_symlinks)} broken symlinks (targets don't exist on this system)")
+        print("   These are hooks/commands pointing to source system paths.")
+        print("   Use --transplant with 'restore install' to rewrite paths for this system:")
+        print("   macf_tools agent restore install <archive> --target <dir> --transplant")
+        if hasattr(args, 'verbose') and args.verbose:
+            print("\n   Broken symlinks:")
+            for s in broken_symlinks:
+                print(f"     {s['path']} -> {s['target']}")
+
     if hasattr(args, 'verbose') and args.verbose:
         if result['missing']:
             print("\nMissing files:")
@@ -724,7 +745,8 @@ def cmd_restore_verify(args: argparse.Namespace) -> int:
             print("\nCorrupted files:")
             for f in result['corrupted']:
                 print(f"  - {f['path']}: expected {f['expected'][:8]}... got {f['actual'][:8]}...")
-    return 1
+
+    return 1 if has_errors else 0
 
 
 def cmd_restore_install(args: argparse.Namespace) -> int:
