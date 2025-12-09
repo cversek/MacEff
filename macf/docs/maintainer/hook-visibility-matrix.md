@@ -63,7 +63,7 @@ All hooks log events to `.maceff/agent_events_log.jsonl` for forensic reconstruc
 | SubagentStop       | `delegation_completed`| agent_id, duration, success |
 | PreCompact         | `pre_compact`         | breadcrumb, cluac_level |
 | SessionEnd         | `session_ended`       | reason, tokens_used |
-| Notification       | `notification_received`| title, message |
+| Notification       | `notification_received`| notification_type, message |
 | PermissionRequest  | `permission_requested`| tool_name, permission_type |
 
 **Total Events**: 14 distinct event types across 10 hooks
@@ -94,6 +94,20 @@ macf_tools events query --event delegation_completed --fields success,duration
 2. **Pattern C limitation**: The "top-level for user + hookSpecificOutput for agent" pattern only works for 3 hooks
 3. **SessionStart special case**: Uses direct system-reminder injection in output string rather than hookSpecificOutput
 4. **Event logging comprehensive**: All 10 hooks log events; 14 total event types provide complete forensic coverage
+5. **Notification field name**: Claude Code uses `notification_type` (not `type`) in Notification hook stdin
+
+---
+
+## Notification Types Reference
+
+Known `notification_type` values from Claude Code:
+
+| Type | Description | Timing |
+|------|-------------|--------|
+| `permission_prompt` | Tool permission request shown to user | Immediate when permission needed |
+| `idle_prompt` | "Claude is waiting for your input" | ~5 seconds after agent stops |
+
+More types may exist (e.g., `auth_success`) but haven't been observed yet in this deployment
 
 ---
 
