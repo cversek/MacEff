@@ -18,7 +18,7 @@ Claude Code supports different output schemas for different hook types. Only 3 o
 | UserPromptSubmit  | ✅ Yes        | ✅ **SUPPORTED**  | ✅ Confirmed    | additionalContext |
 | Stop              | ✅ Yes        | ❌ Not supported  | ✅ Confirmed    | systemMessage only |
 | SubagentStop      | ✅ Yes        | ❌ Not supported  | ❓ Unknown      | systemMessage only |
-| PreCompact        | ✅ Yes        | ❌ Not supported  | ❓ Unknown      | systemMessage only |
+| PreCompact        | ✅ Yes        | ❌ Not supported  | ✅ Confirmed*   | systemMessage only |
 | SessionEnd        | ✅ Yes        | ❌ Not supported  | ❓ Unknown      | systemMessage only |
 | Notification      | ✅ Yes        | ❌ Not supported  | ✅ Confirmed    | systemMessage only |
 | PermissionRequest | ✅ Yes        | ❌ Not supported  | ❓ Unknown      | systemMessage only |
@@ -26,6 +26,8 @@ Claude Code supports different output schemas for different hook types. Only 3 o
 **Summary**:
 - **3 hooks** support `hookSpecificOutput`: PreToolUse, PostToolUse, UserPromptSubmit
 - **7 hooks** must use `systemMessage` only
+
+**\* PreCompact Rendering Note**: Unlike other hooks that display as `{HookName} says:` with rendered markdown, PreCompact output appears verbatim with raw JSON (escaped unicode like `\ud83c\udfd7\ufe0f` and literal `\n` characters). The content is visible but not formatted.
 
 ---
 

@@ -82,6 +82,7 @@ from .manifest import (
 )
 from .formatting import (
     format_macf_footer,
+    get_claude_code_version,
 )
 
 from .temporal import DATEUTIL_AVAILABLE
@@ -105,6 +106,7 @@ __all__ = [
     "format_breadcrumb",
     "format_duration",
     "format_macf_footer",
+    "get_claude_code_version",
     "format_manifest_awareness",
     "format_minimal_temporal_message",
     "format_temporal_awareness_section",
