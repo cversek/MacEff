@@ -5,6 +5,8 @@ Archive creation and extraction for consciousness backups.
 import tarfile
 import tempfile
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Callable
 
@@ -88,6 +90,9 @@ def extract_archive(
     """
     Extract archive to output directory.
 
+    Uses pipeline extraction (xz -d | tar -xf) for cross-platform compatibility.
+    Python's tarfile module has issues with BSD-created xz archives on Linux.
+
     Args:
         archive_path: Path to tar.xz archive
         output_dir: Directory to extract to
@@ -98,14 +103,32 @@ def extract_archive(
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    with tarfile.open(archive_path, "r:xz") as tar:
-        members = tar.getmembers()
-        total = len(members)
+    # Use pipeline extraction for cross-platform compatibility
+    # Python's tarfile.open("r:xz") fails on Linux with BSD-created archives
+    try:
+        result = subprocess.run(
+            f'xz -d < "{archive_path}" | tar -xf - -C "{output_dir}"',
+            shell=True,
+            capture_output=True,
+            text=True
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"Pipeline extraction failed: {result.stderr}")
 
-        for i, member in enumerate(members):
-            if progress_callback:
-                progress_callback(member.name, i + 1, total)
-            tar.extract(member, output_dir)
+        if progress_callback:
+            progress_callback("extraction complete", 1, 1)
+
+    except FileNotFoundError:
+        # Fallback to Python tarfile if xz/tar not available
+        print("Warning: xz/tar not found, using Python tarfile (may fail cross-platform)",
+              file=sys.stderr)
+        with tarfile.open(archive_path, "r:xz") as tar:
+            members = tar.getmembers()
+            total = len(members)
+            for i, member in enumerate(members):
+                if progress_callback:
+                    progress_callback(member.name, i + 1, total)
+                tar.extract(member, output_dir)
 
     # Load and return manifest
     manifest_path = output_dir / "manifest.json"

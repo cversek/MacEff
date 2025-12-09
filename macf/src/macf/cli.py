@@ -329,6 +329,98 @@ def cmd_hook_install(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_framework_install(args: argparse.Namespace) -> int:
+    """Install framework artifacts (hooks, commands, skills) to .claude directory."""
+    try:
+        import subprocess
+
+        # Determine what to install
+        hooks_only = getattr(args, 'hooks_only', False)
+        skip_hooks = getattr(args, 'skip_hooks', False)
+
+        # Find framework root (git repo root + /framework)
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, cwd=Path.cwd()
+        )
+        if result.returncode != 0:
+            print("Error: Not in a git repository")
+            return 1
+
+        framework_root = Path(result.stdout.strip()) / "framework"
+        if not framework_root.exists():
+            print(f"Error: Framework directory not found at {framework_root}")
+            return 1
+
+        claude_dir = Path.cwd() / ".claude"
+        commands_dir = claude_dir / "commands"
+        skills_dir = claude_dir / "skills"
+
+        installed_count = {"hooks": 0, "commands": 0, "skills": 0}
+
+        # Install hooks (unless skip_hooks or already done via hooks_only)
+        if not skip_hooks:
+            print("\n📦 Installing hooks...")
+            # Reuse existing hook install logic
+            hooks_args = argparse.Namespace(local_install=True, global_install=False)
+            hook_result = cmd_hook_install(hooks_args)
+            if hook_result == 0:
+                installed_count["hooks"] = 10
+            else:
+                print("   Warning: Hook installation had issues")
+
+        if hooks_only:
+            print(f"\n✅ Hooks-only installation complete")
+            return 0
+
+        # Install commands (symlink maceff_*.md files)
+        print("\n📦 Installing commands...")
+        commands_src = framework_root / "commands"
+        if commands_src.exists():
+            commands_dir.mkdir(parents=True, exist_ok=True)
+            for cmd_file in commands_src.glob("maceff_*.md"):
+                target = commands_dir / cmd_file.name
+                if target.exists() or target.is_symlink():
+                    target.unlink()
+                target.symlink_to(cmd_file)
+                installed_count["commands"] += 1
+                print(f"   ✓ {cmd_file.name}")
+        else:
+            print(f"   No commands directory at {commands_src}")
+
+        # Install skills (symlink maceff-*/ directories)
+        print("\n📦 Installing skills...")
+        skills_src = framework_root / "skills"
+        if skills_src.exists():
+            skills_dir.mkdir(parents=True, exist_ok=True)
+            for skill_dir in skills_src.glob("maceff-*/"):
+                if skill_dir.is_dir():
+                    target = skills_dir / skill_dir.name
+                    if target.exists() or target.is_symlink():
+                        if target.is_symlink():
+                            target.unlink()
+                        else:
+                            import shutil
+                            shutil.rmtree(target)
+                    target.symlink_to(skill_dir)
+                    installed_count["skills"] += 1
+                    print(f"   ✓ {skill_dir.name}/")
+        else:
+            print(f"   No skills directory at {skills_src}")
+
+        # Summary
+        print(f"\n✅ Framework installation complete!")
+        print(f"   Hooks: {installed_count['hooks']}")
+        print(f"   Commands: {installed_count['commands']}")
+        print(f"   Skills: {installed_count['skills']}")
+
+        return 0
+
+    except Exception as e:
+        print(f"Error installing framework: {e}")
+        return 1
+
+
 def cmd_hook_test(args: argparse.Namespace) -> int:
     """Test compaction detection on current session."""
     try:
@@ -1533,6 +1625,17 @@ def _build_parser() -> argparse.ArgumentParser:
     logs_parser.set_defaults(func=cmd_hook_logs)
 
     hook_sub.add_parser("status", help="display current hook states").set_defaults(func=cmd_hook_status)
+
+    # Framework commands (unified installation of hooks, commands, skills)
+    framework_parser = sub.add_parser("framework", help="framework artifact management")
+    framework_sub = framework_parser.add_subparsers(dest="framework_cmd")
+
+    fw_install = framework_sub.add_parser("install", help="install framework artifacts (hooks, commands, skills)")
+    fw_install.add_argument("--hooks-only", dest="hooks_only", action="store_true",
+                           help="install only hooks (backward compatibility)")
+    fw_install.add_argument("--skip-hooks", dest="skip_hooks", action="store_true",
+                           help="skip hook installation (commands and skills only)")
+    fw_install.set_defaults(func=cmd_framework_install)
 
     # Config commands
     config_parser = sub.add_parser("config", help="agent configuration management")
