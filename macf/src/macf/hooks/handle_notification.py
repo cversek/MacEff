@@ -39,7 +39,8 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
         session_id = get_current_session_id()
 
         # Extract notification details
-        notification_type = data.get("type", "unknown")
+        # Claude Code uses "notification_type" field, not "type"
+        notification_type = data.get("notification_type", "unknown")
         message_content = data.get("message", "")
 
         # Truncate long messages
