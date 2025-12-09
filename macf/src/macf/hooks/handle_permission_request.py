@@ -62,18 +62,16 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
             hook_input=data
         )
 
-        # Format message (Pattern C: top-level for user + hookSpecificOutput for agent)
+        # Format message
+        # Note: PermissionRequest hook doesn't support hookSpecificOutput
+        # (only PreToolUse, UserPromptSubmit, PostToolUse do)
         timestamp = get_minimal_timestamp()
         breadcrumb = get_breadcrumb()
         message = f"🏗️ MACF | {timestamp} | {breadcrumb} | 🔐 Permission: {tool_name}"
 
         return {
             "continue": True,
-            "systemMessage": message,  # User sees this
-            "hookSpecificOutput": {
-                "hookEventName": "PermissionRequest",
-                "additionalContext": f"<system-reminder>\n{message}\n</system-reminder>"
-            }
+            "systemMessage": message
         }
 
     except Exception as e:

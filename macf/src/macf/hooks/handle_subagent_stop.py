@@ -141,14 +141,12 @@ Delegation Drive Stats:
             "error": str(e),
             "traceback": traceback.format_exc()
         })
+        # Note: SubagentStop hook doesn't support hookSpecificOutput
+        # (only PreToolUse, UserPromptSubmit, PostToolUse do)
         error_msg = f"🏗️ MACF | ❌ SubagentStop hook error: {e}"
         return {
             "continue": True,
-            "systemMessage": error_msg,
-            "hookSpecificOutput": {
-                "hookEventName": "SubagentStop",
-                "additionalContext": f"<system-reminder>\n{error_msg}\n</system-reminder>"
-            }
+            "systemMessage": error_msg
         }
 
 

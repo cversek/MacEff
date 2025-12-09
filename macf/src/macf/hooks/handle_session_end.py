@@ -65,7 +65,9 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
             hook_input=data
         )
 
-        # Format message (Pattern C: top-level for user + hookSpecificOutput for agent)
+        # Format message
+        # Note: SessionEnd hook doesn't support hookSpecificOutput
+        # (only PreToolUse, UserPromptSubmit, PostToolUse do)
         message = f"""🏗️ MACF | Session Ended
 Time: {temporal_ctx['timestamp_formatted']}
 Session: {session_id[:8]}...
@@ -74,11 +76,7 @@ Breadcrumb: {breadcrumb}
 
         return {
             "continue": True,
-            "systemMessage": message,  # User sees this
-            "hookSpecificOutput": {
-                "hookEventName": "SessionEnd",
-                "additionalContext": f"<system-reminder>\n{message}\n</system-reminder>"
-            }
+            "systemMessage": message
         }
 
     except Exception as e:
