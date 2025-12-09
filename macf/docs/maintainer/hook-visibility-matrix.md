@@ -13,9 +13,9 @@ Claude Code supports different output schemas for different hook types. Only 3 o
 | Hook Type         | systemMessage | hookSpecificOutput | User Visibility | Agent Visibility |
 |-------------------|---------------|-------------------|-----------------|------------------|
 | SessionStart      | ✅ Yes        | ❌ Not supported  | ✅ Confirmed    | Via system-reminder in output |
-| PreToolUse        | ✅ Yes        | ✅ **SUPPORTED**  | ❓ Unknown      | additionalContext, can block/modify |
-| PostToolUse       | ✅ Yes        | ✅ **SUPPORTED**  | ❓ Unknown      | additionalContext |
-| UserPromptSubmit  | ✅ Yes        | ✅ **SUPPORTED**  | ❓ Unknown      | additionalContext |
+| PreToolUse        | ✅ Yes        | ✅ **SUPPORTED**  | ✅ Confirmed    | additionalContext, can block/modify |
+| PostToolUse       | ✅ Yes        | ✅ **SUPPORTED**  | ✅ Confirmed    | additionalContext |
+| UserPromptSubmit  | ✅ Yes        | ✅ **SUPPORTED**  | ✅ Confirmed    | additionalContext |
 | Stop              | ✅ Yes        | ❌ Not supported  | ✅ Confirmed    | systemMessage only |
 | SubagentStop      | ✅ Yes        | ❌ Not supported  | ❓ Unknown      | systemMessage only |
 | PreCompact        | ✅ Yes        | ❌ Not supported  | ❓ Unknown      | systemMessage only |
