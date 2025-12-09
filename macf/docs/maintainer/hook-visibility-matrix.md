@@ -105,7 +105,12 @@ Known `notification_type` values from Claude Code:
 | Type | Description | Timing |
 |------|-------------|--------|
 | `permission_prompt` | Tool permission request shown to user | Immediate when permission needed |
-| `idle_prompt` | "Claude is waiting for your input" | ~5 seconds after agent stops |
+| `idle_prompt` | "Claude is waiting for your input" | 60 seconds after input idle (default) |
+
+**idle_prompt Caveats** (from GitHub issues #8320, #12048):
+- **False positives**: May fire after EVERY response, not just when genuinely idle
+- **False negatives**: Some users report it never triggers even after 60+ seconds
+- **Known reliability issues**: Feature may need fundamental redesign to distinguish genuine idle waiting vs normal operation completion
 
 More types may exist (e.g., `auth_success`) but haven't been observed yet in this deployment
 
