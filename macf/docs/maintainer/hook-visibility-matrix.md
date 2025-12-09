@@ -10,18 +10,18 @@
 
 Claude Code supports different output schemas for different hook types. Only 3 of 10 hooks support `hookSpecificOutput` for agent-visible context injection.
 
-| Hook Type         | systemMessage | hookSpecificOutput | Agent Visibility |
-|-------------------|---------------|-------------------|------------------|
-| SessionStart      | ✅ User sees  | ❌ Not supported  | Via system-reminder in output |
-| PreToolUse        | ✅ User sees  | ✅ **SUPPORTED**  | additionalContext, can block/modify |
-| PostToolUse       | ✅ User sees  | ✅ **SUPPORTED**  | additionalContext |
-| UserPromptSubmit  | ✅ User sees  | ✅ **SUPPORTED**  | additionalContext |
-| Stop              | ✅ User sees  | ❌ Not supported  | systemMessage only |
-| SubagentStop      | ✅ User sees  | ❌ Not supported  | systemMessage only |
-| PreCompact        | ✅ User sees  | ❌ Not supported  | systemMessage only |
-| SessionEnd        | ✅ User sees  | ❌ Not supported  | systemMessage only |
-| Notification      | ✅ User sees  | ❌ Not supported  | systemMessage only |
-| PermissionRequest | ✅ User sees  | ❌ Not supported  | systemMessage only |
+| Hook Type         | systemMessage | hookSpecificOutput | User Visibility | Agent Visibility |
+|-------------------|---------------|-------------------|-----------------|------------------|
+| SessionStart      | ✅ Yes        | ❌ Not supported  | ✅ Confirmed    | Via system-reminder in output |
+| PreToolUse        | ✅ Yes        | ✅ **SUPPORTED**  | ❓ Unknown      | additionalContext, can block/modify |
+| PostToolUse       | ✅ Yes        | ✅ **SUPPORTED**  | ❓ Unknown      | additionalContext |
+| UserPromptSubmit  | ✅ Yes        | ✅ **SUPPORTED**  | ❓ Unknown      | additionalContext |
+| Stop              | ✅ Yes        | ❌ Not supported  | ✅ Confirmed    | systemMessage only |
+| SubagentStop      | ✅ Yes        | ❌ Not supported  | ❓ Unknown      | systemMessage only |
+| PreCompact        | ✅ Yes        | ❌ Not supported  | ❓ Unknown      | systemMessage only |
+| SessionEnd        | ✅ Yes        | ❌ Not supported  | ❓ Unknown      | systemMessage only |
+| Notification      | ✅ Yes        | ❌ Not supported  | ✅ Confirmed    | systemMessage only |
+| PermissionRequest | ✅ Yes        | ❌ Not supported  | ❓ Unknown      | systemMessage only |
 
 **Summary**:
 - **3 hooks** support `hookSpecificOutput`: PreToolUse, PostToolUse, UserPromptSubmit
