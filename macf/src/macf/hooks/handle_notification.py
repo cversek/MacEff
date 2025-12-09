@@ -66,13 +66,11 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
         breadcrumb = get_breadcrumb()
         message = f"🏗️ MACF | {timestamp} | {breadcrumb} | 📢 Notification: {notification_type}"
 
+        # Note: Notification hook doesn't support hookSpecificOutput
+        # (only PreToolUse, UserPromptSubmit, PostToolUse do)
         return {
             "continue": True,
-            "systemMessage": message,  # User sees this
-            "hookSpecificOutput": {
-                "hookEventName": "Notification",
-                "additionalContext": f"<system-reminder>\n{message}\n</system-reminder>"
-            }
+            "systemMessage": message
         }
 
     except Exception as e:
