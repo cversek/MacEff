@@ -28,12 +28,22 @@ allowed-tools: Read, Bash, Grep, TodoWrite
 
 ## Policy Engagement Protocol
 
-Navigate `framework/policies/base/development/todo_hygiene.md` using CEP navigation:
+Navigate todo_hygiene policy using CLI tools:
 
-1. **First access**: Read from beginning to `=== CEP_NAV_BOUNDARY ===` marker
+1. **First access**: Get CEP navigation guide
+   ```bash
+   macf_tools policy navigate todo_hygiene
+   ```
+
 2. **Locate sections**: Scan navigation guide for BOTH "TODO Backup Protocol" AND "Session File Migration TODO Recovery"
-3. **Grep navigation**: Find section headers + boundaries for each
-4. **Selective read**: Read backup protocol first (official backups), then forensic recovery (fallback) using offset/limit
+
+3. **Selective read**: Read backup protocol first (official backups), then forensic recovery (fallback)
+   ```bash
+   macf_tools policy read todo_hygiene --section 9   # TODO Backup Protocol
+   macf_tools policy read todo_hygiene --section 10  # Session File Migration
+   ```
+
+**Why CLI tools**: Caching prevents redundant reads, line numbers enable precise citations.
 
 ## Questions to Extract from Policy Reading
 
@@ -90,7 +100,7 @@ skips = query_events({'event_type': 'todo_restoration_skipped'})
 
 ## Critical Meta-Pattern
 
-**Policy as API**: Skill uses CEP navigation for selective policy reading. As sections reorganize or content evolves, navigation guide adapts automatically.
+**Policy as API**: This skill uses `macf_tools policy` CLI commands for reading policies. CLI tools handle framework path resolution, provide caching, and output line numbers for citations.
 
 ## Version History
 
