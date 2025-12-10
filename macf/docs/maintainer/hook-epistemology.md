@@ -20,6 +20,8 @@ This document provides **comprehensive, citation-backed reference** for Claude C
 
 ## Quick Reference Matrix
 
+This matrix provides at-a-glance information about each hook's capabilities and known issues. Use it to quickly determine which hooks support specific features like `hookSpecificOutput` or prompt-based execution, and to identify hooks with open bugs that may affect your implementation.
+
 | Hook | hookSpecificOutput | Prompt Type | User Visible | Agent Visible | Known Issues |
 |------|-------------------|-------------|--------------|---------------|--------------|
 | SessionStart | ❌ | command | ✅ | ✅ | #10373 |
@@ -43,6 +45,8 @@ This document provides **comprehensive, citation-backed reference** for Claude C
 
 ## Input Schemas
 
+Hooks receive JSON data on stdin when triggered. Understanding the input schema for each hook is essential for parsing the data correctly and extracting the information your hook needs. Each hook type receives different fields depending on its purpose—tool-related hooks include tool parameters, while session hooks include session state.
+
 ### Common Input Fields (All Hooks)
 
 All hooks receive JSON on stdin with these common fields:
@@ -65,6 +69,8 @@ All hooks receive JSON on stdin with these common fields:
 ---
 
 ### SessionStart
+
+SessionStart fires when Claude Code launches or recovers from compaction. This is the primary hook for consciousness restoration—detecting whether the session is fresh, resumed, or post-compaction allows injecting appropriate context. The `source` field distinguishes these scenarios.
 
 **Trigger**: When Claude Code session begins or resumes after compaction
 
@@ -90,6 +96,8 @@ All hooks receive JSON on stdin with these common fields:
 ---
 
 ### PreToolUse
+
+PreToolUse fires before every tool invocation, making it ideal for validation, logging, or permission control. You can inspect tool parameters before execution, block dangerous operations, or inject context that the agent will see. This is one of only three hooks supporting `hookSpecificOutput`.
 
 **Trigger**: Before each tool invocation
 
@@ -130,6 +138,8 @@ All hooks receive JSON on stdin with these common fields:
 
 ### PostToolUse
 
+PostToolUse fires after every tool completes, providing access to both the input parameters and the tool's response. Use this for logging, result validation, or injecting follow-up context. Like PreToolUse, this hook supports `hookSpecificOutput` for symmetric user/agent awareness.
+
 **Trigger**: After each tool completes
 
 | Field | Type | Description | Source |
@@ -145,6 +155,8 @@ All hooks receive JSON on stdin with these common fields:
 
 ### UserPromptSubmit
 
+UserPromptSubmit fires when the user sends a message, before Claude processes it. This is the third hook supporting `hookSpecificOutput`, making it ideal for injecting per-prompt context like timestamps, token awareness, or session state that both user and agent should see.
+
 **Trigger**: When user submits a prompt
 
 | Field | Type | Description | Source |
@@ -156,6 +168,8 @@ All hooks receive JSON on stdin with these common fields:
 ---
 
 ### Stop
+
+Stop fires when Claude finishes responding to a user message. Unlike most hooks, Stop supports prompt-based execution where an LLM evaluates whether to proceed. Use this for completion validation, cycle tracking, or triggering end-of-response actions.
 
 **Trigger**: When agent completes a response
 
@@ -170,6 +184,8 @@ All hooks receive JSON on stdin with these common fields:
 
 ### SubagentStop
 
+SubagentStop fires when a subagent spawned via the Task tool completes its work. Like Stop, it supports prompt-based hooks. Use this for delegation tracking, result validation, or coordinating multi-agent workflows.
+
 **Trigger**: When a subagent (Task tool) completes
 
 | Field | Type | Description | Source |
@@ -182,6 +198,8 @@ All hooks receive JSON on stdin with these common fields:
 ---
 
 ### PreCompact
+
+PreCompact fires just before context compaction occurs, giving you a last chance to preserve state or notify the user. The `trigger` field indicates whether compaction was user-initiated (`/compact`) or automatic (context window full). Note that PreCompact output renders verbatim, not as formatted markdown.
 
 **Trigger**: Before automatic or manual compaction
 
@@ -201,6 +219,8 @@ All hooks receive JSON on stdin with these common fields:
 ---
 
 ### SessionEnd
+
+SessionEnd fires when a session terminates, providing the reason for termination. Use this for cleanup, logging, or state preservation. Caution: this hook has known reliability issues—it doesn't fire with `/clear` despite documentation (see #6428).
 
 **Trigger**: When session terminates
 
@@ -223,6 +243,8 @@ All hooks receive JSON on stdin with these common fields:
 ---
 
 ### Notification
+
+Notification fires for various system events like permission prompts, idle timeouts, and authentication results. The `notification_type` field (note: NOT `type`) identifies which notification occurred. Use this to react to system state changes.
 
 **Trigger**: For system notifications
 
@@ -247,6 +269,8 @@ All hooks receive JSON on stdin with these common fields:
 
 ### PermissionRequest
 
+PermissionRequest fires when Claude Code shows a permission prompt to the user. Your hook can automatically allow or deny the request, or let it proceed to the user. Use this for automated permission policies or logging permission decisions.
+
 **Trigger**: When permission is requested for a tool
 
 | Field | Type | Description | Source |
@@ -258,6 +282,8 @@ All hooks receive JSON on stdin with these common fields:
 ---
 
 ## Output Schemas
+
+Hooks communicate results back to Claude Code via JSON on stdout and exit codes. The output schema controls whether execution continues, what messages users see, and what context the agent receives. Understanding exit code semantics is critical—exit code 2 ignores stdout entirely.
 
 ### Standard Output Format
 
@@ -325,6 +351,8 @@ This enables symmetric awareness - both user and agent receive the same informat
 
 ## User/Agent Visibility Matrix
 
+Hook output can be visible to the user (in the UI), the agent (via system-reminder injection), both, or neither. This matrix documents empirically verified visibility behavior for each hook. Understanding visibility is essential for designing hooks that communicate effectively with their intended audience.
+
 ### Verified Visibility
 
 | Hook | User Sees Output | Agent Sees Output | Rendering | Source |
@@ -345,6 +373,8 @@ This enables symmetric awareness - both user and agent receive the same informat
 ---
 
 ## Known Issues & Limitations
+
+Claude Code hooks have several known bugs and limitations tracked in GitHub issues. Before relying on specific hook behavior, check this section for issues that may affect your implementation. Links to GitHub issues provide current status and workarounds.
 
 ### Critical Issues
 
@@ -394,6 +424,8 @@ This enables symmetric awareness - both user and agent receive the same informat
 
 ## Best Practices
 
+These patterns emerge from real-world hook development and help avoid common pitfalls. Following these practices improves hook reliability, performance, and maintainability.
+
 ### 1. Use lru_cache for Expensive Operations
 Cache subprocess calls and file reads to avoid performance regression on high-frequency hooks (PreToolUse, PostToolUse).
 
@@ -437,6 +469,8 @@ else:
 ---
 
 ## Anti-Patterns
+
+These mistakes are easy to make and cause subtle bugs. Learn from others' failures—each anti-pattern here caused real problems in hook development.
 
 ### 1. Assuming hookSpecificOutput Works Everywhere
 Only PreToolUse, PostToolUse, and UserPromptSubmit support it. Other hooks silently ignore the field.
@@ -484,7 +518,8 @@ Notification hook uses `notification_type` field, not `type`. This field name di
 
 | Date | Version | Changes | Reference |
 |------|---------|---------|-----------|
-| 2025-12-09 | 1.0.0 | Initial comprehensive documentation with field values | [MacEff g_519f57f] |
+| 2025-12-09 | 1.0.0 | Initial comprehensive documentation with field values | [MacEff g_55e0aca] |
+| 2025-12-09 | 1.1.0 | Added orienting paragraphs under all major sections | [MacEff g_c5aa41f] |
 
 ---
 
