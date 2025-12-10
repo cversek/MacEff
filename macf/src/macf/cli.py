@@ -1135,22 +1135,31 @@ def cmd_policy_read(args: argparse.Namespace) -> int:
         # Handle --section option
         elif hasattr(args, 'section') and args.section:
             section_num = str(args.section)
-            # Find section by heading number (### N. or ## N.)
+            # Find section by heading number, include subsections
+            # Stop only at same-or-higher level heading (not subsections)
             in_section = False
             section_lines = []
             section_start = 0
+            section_level = 0  # Track heading level (## = 2, ### = 3, etc.)
 
             for i, line in enumerate(lines):
-                # Match section headers like "### 5. Document Reference" or "## 5 Document"
                 if line.startswith('#'):
-                    # Extract any number at start of heading text
+                    # Count heading level
+                    level = len(line) - len(line.lstrip('#'))
                     heading_text = line.lstrip('#').strip()
-                    if heading_text and heading_text.split()[0].rstrip('.') == section_num:
-                        in_section = True
-                        section_start = i + 1
-                    elif in_section and heading_text:
-                        # New section, stop capturing
-                        break
+
+                    if heading_text:
+                        heading_num = heading_text.split()[0].rstrip('.')
+
+                        if heading_num == section_num:
+                            # Found target section
+                            in_section = True
+                            section_start = i + 1
+                            section_level = level
+                        elif in_section and level <= section_level:
+                            # Same or higher level heading = new section, stop
+                            break
+                        # else: subsection (deeper level), keep capturing
 
                 if in_section:
                     section_lines.append(line)

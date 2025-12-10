@@ -27,10 +27,21 @@ Create a consciousness checkpoint (CCP) following MacEff framework policies for 
 **You MUST follow these steps IN ORDER before any CCP work**:
 
 1. Identify which CA types you intend to cite in this CCP.
-2. Locate citation format sections for EACH CA type in the 
-   policy `{FRAMEWORK_ROOT}/policies/base/consciousness/scholarship.md`.
-3. Selectively read citation format details for your specific needs.
-4. Finally, read `{FRAMEWORK_ROOT}/policies/base/consciousness/checkpoints.md` with a scholarship informed mindset.
+2. Navigate scholarship policy for orientation:
+   ```bash
+   macf_tools policy navigate scholarship
+   ```
+3. Read citation format sections for your specific CA types:
+   ```bash
+   macf_tools policy read scholarship --section 4  # Citation formats
+   ```
+4. Navigate then read checkpoints policy with scholarship-informed mindset:
+   ```bash
+   macf_tools policy navigate checkpoints
+   macf_tools policy read checkpoints
+   ```
+
+**Why CLI tools**: Caching prevents redundant reads, line numbers enable precise citations, CEP navigation guides cognitive framing before content.
 
 ---
 
@@ -87,4 +98,4 @@ After performing the PEP, you MUST report answers to these questions to the user
 
 ---
 
-**Meta-Pattern**: Policy as API - this command references policies with `{FRAMEWORK_ROOT}` placeholder, not hardcoded paths. Agent resolves paths at runtime.
+**Meta-Pattern**: Policy as API - this command uses `macf_tools policy` CLI commands for reading policies. CLI tools handle framework path resolution for both container and host environments, provide caching to prevent redundant reads, and output line numbers for precise citations.
