@@ -1570,10 +1570,13 @@ def cmd_events_query(args: argparse.Namespace) -> int:
             print("No matching events found")
             return 0
 
+        verbose = getattr(args, 'verbose', False)
+
         for event in results:
             timestamp = event.get('timestamp', 0)
             event_type = event.get('event', 'unknown')
             breadcrumb = event.get('breadcrumb', 'N/A')
+            data = event.get('data', {})
 
             # Format timestamp
             dt = datetime.fromtimestamp(timestamp, tz=_pick_tz())
@@ -1581,6 +1584,17 @@ def cmd_events_query(args: argparse.Namespace) -> int:
 
             print(f"[{time_str}] {event_type}")
             print(f"  Breadcrumb: {breadcrumb}")
+
+            # Show command details for cli_command_invoked
+            if event_type == 'cli_command_invoked' and 'argv' in data:
+                argv = data.get('argv', [])
+                print(f"  Command: {' '.join(argv)}")
+
+            # Verbose mode: show all data
+            if verbose and data:
+                import json
+                print(f"  Data: {json.dumps(data, indent=4)}")
+
             print()
 
         return 0
@@ -1964,6 +1978,7 @@ def _build_parser() -> argparse.ArgumentParser:
     query_parser.add_argument("--prompt", help="filter by prompt UUID")
     query_parser.add_argument("--after", help="events after timestamp")
     query_parser.add_argument("--before", help="events before timestamp")
+    query_parser.add_argument("--verbose", "-v", action="store_true", help="show full event data")
     query_parser.set_defaults(func=cmd_events_query)
 
     # events query-set
