@@ -30,6 +30,7 @@ from macf.hooks.compaction import detect_compaction
 from macf.hooks.recovery import format_consciousness_recovery_message, format_session_migration_message
 from macf.hooks.hook_logging import log_hook_event
 from macf.agent_events_log import append_event
+from macf.utils.state import get_session_state_path, read_json_safely, write_json_safely
 
 
 def detect_session_migration(current_session_id: str) -> tuple[bool, str, str]:
@@ -144,6 +145,23 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
         source = data.get('source')
         compaction_detected = False
         detection_method = None
+
+        # PHASE 0.5: Clear policy_reads cache for non-resume sources
+        # New cycle = new consciousness = fresh policy engagement required
+        # Only 'resume' preserves cache (continuing same conversation)
+        if source != 'resume' and not testing:
+            state_path = get_session_state_path(session_id)
+            session_state = read_json_safely(state_path)
+            if 'policy_reads' in session_state:
+                session_state['policy_reads'] = {}
+                write_json_safely(state_path, session_state)
+                log_hook_event({
+                    "hook_name": "session_start",
+                    "event_type": "POLICY_CACHE_CLEARED",
+                    "session_id": session_id,
+                    "source": source,
+                    "reason": "epistemological_humility"
+                })
 
         if source == 'compact':
             # User-initiated compaction via /compact command
