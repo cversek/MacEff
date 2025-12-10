@@ -71,4 +71,4 @@ Using answers from policy reading:
 
 ---
 
-**Meta-Pattern**: Policy as API - policies guide WHEN to delegate, WHEN to create roadmaps, HOW to restore context. When policies evolve, command stays current.
+**Meta-Pattern**: Policy as API - this command uses `macf_tools policy` CLI commands for reading policies. CLI tools handle framework path resolution, provide caching, and output line numbers for citations.

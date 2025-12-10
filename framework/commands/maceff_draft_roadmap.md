@@ -8,13 +8,18 @@ Create a MacEff-compliant roadmap by reading policies for structure guidelines, 
 
 Before drafting, read these policies to understand requirements:
 
-1. **Roadmap Drafting Guidelines**:
-   - `{FRAMEWORK_ROOT}/policies/base/consciousness/roadmaps_drafting.md`
-   - Extracts: Structure requirements, phase patterns, success criteria format
+1. **Roadmap Drafting Guidelines** - Structure, phases, success criteria:
+   ```bash
+   macf_tools policy navigate roadmaps_drafting
+   macf_tools policy read roadmaps_drafting --from-nav-boundary
+   ```
 
-2. **Path Portability** (for framework roadmaps):
-   - `{FRAMEWORK_ROOT}/policies/base/meta/path_portability.md`
-   - Extracts: Portable path conventions, `{FRAMEWORK_ROOT}` placeholder usage
+2. **Path Portability** (for framework roadmaps) - Portable path conventions:
+   ```bash
+   macf_tools policy read path_portability
+   ```
+
+**Why CLI tools**: Caching prevents redundant reads, line numbers enable precise citations.
 
 ---
 
@@ -60,4 +65,4 @@ After reporting policy-extracted answers:
 
 ---
 
-**Meta-Pattern**: This command points to policies, doesn't embed them. When policies evolve, command stays current through Policy as API approach.
+**Meta-Pattern**: Policy as API - this command uses `macf_tools policy` CLI commands for reading policies. CLI tools handle framework path resolution, provide caching, and output line numbers for citations.
