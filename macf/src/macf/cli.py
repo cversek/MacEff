@@ -1115,13 +1115,27 @@ def cmd_policy_read(args: argparse.Namespace) -> int:
         session_id = get_current_session_id()
         cache_key = policy_path.stem  # Use stem for cache key
 
-        # Check if this is a partial read (--lines or --section)
-        is_partial = (hasattr(args, 'lines') and args.lines) or (hasattr(args, 'section') and args.section)
+        # Check if this is a partial read (--lines or --section or --from-nav-boundary)
+        from_nav = hasattr(args, 'from_nav_boundary') and args.from_nav_boundary
+        is_partial = (hasattr(args, 'lines') and args.lines) or (hasattr(args, 'section') and args.section) or from_nav
         force_read = hasattr(args, 'force') and args.force
         line_offset = 1
 
+        # Handle --from-nav-boundary option (skip CEP navigation guide)
+        if from_nav:
+            boundary_marker = "=== CEP_NAV_BOUNDARY ==="
+            boundary_idx = None
+            for i, line in enumerate(lines):
+                if boundary_marker in line:
+                    boundary_idx = i
+                    break
+            if boundary_idx is not None:
+                lines = lines[boundary_idx + 1:]  # Start after boundary
+                line_offset = boundary_idx + 2  # +2 for 1-indexed and skip boundary line
+            # If no boundary found, read full file (no-op)
+
         # Handle --lines option (e.g., "50:100")
-        if hasattr(args, 'lines') and args.lines:
+        elif hasattr(args, 'lines') and args.lines:
             try:
                 parts = args.lines.split(':')
                 start = int(parts[0]) - 1  # Convert to 0-indexed
@@ -1912,6 +1926,7 @@ def _build_parser() -> argparse.ArgumentParser:
     read_parser.add_argument("--lines", help="line range START:END (e.g., 50:100)")
     read_parser.add_argument("--section", help="section number to read (e.g., 5)")
     read_parser.add_argument("--force", action="store_true", help="bypass cache for full read")
+    read_parser.add_argument("--from-nav-boundary", action="store_true", help="start after CEP_NAV_BOUNDARY (use after navigate)")
     read_parser.set_defaults(func=cmd_policy_read)
 
     # policy list
