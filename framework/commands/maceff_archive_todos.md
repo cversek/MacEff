@@ -16,8 +16,18 @@ Archive completed TODO hierarchies by reading and following MacEff framework pol
 
 **Read MacEff framework policies to understand archival requirements**:
 
-1. `framework/policies/base/development/todo_hygiene.md` - TODO archival patterns
-2. `framework/policies/base/development/workspace_discipline.md` - Artifact naming conventions
+1. TODO hygiene - Archival patterns:
+   ```bash
+   macf_tools policy navigate todo_hygiene
+   macf_tools policy read todo_hygiene --from-nav-boundary
+   ```
+
+2. Workspace discipline - Artifact naming conventions:
+   ```bash
+   macf_tools policy read workspace_discipline
+   ```
+
+**Why CLI tools**: Caching prevents redundant reads, line numbers enable precise citations.
 
 ---
 
@@ -49,4 +59,4 @@ Using answers from policy reading, execute the archival pattern as policy descri
 
 ---
 
-**Meta-Pattern**: Policy as API - read current policy state, apply dynamically. When policy evolves, command stays current without updates.
+**Meta-Pattern**: Policy as API - this command uses `macf_tools policy` CLI commands for reading policies. CLI tools handle framework path resolution, provide caching, and output line numbers for citations.
