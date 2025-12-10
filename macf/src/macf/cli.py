@@ -1563,6 +1563,18 @@ def cmd_events_query(args: argparse.Namespace) -> int:
         # Execute query
         results = query_events(filters)
 
+        # Post-filter by command if specified (for cli_command_invoked events)
+        command_filter = getattr(args, 'command', None)
+        if command_filter:
+            filtered = []
+            for event in results:
+                if event.get('event') == 'cli_command_invoked':
+                    argv = event.get('data', {}).get('argv', [])
+                    cmd_str = ' '.join(argv)
+                    if command_filter in cmd_str:
+                        filtered.append(event)
+            results = filtered
+
         print(f"Query Results: {len(results)} events")
         print("=" * 50)
 
@@ -1978,6 +1990,7 @@ def _build_parser() -> argparse.ArgumentParser:
     query_parser.add_argument("--prompt", help="filter by prompt UUID")
     query_parser.add_argument("--after", help="events after timestamp")
     query_parser.add_argument("--before", help="events before timestamp")
+    query_parser.add_argument("--command", help="filter cli_command_invoked by command (e.g., 'policy read')")
     query_parser.add_argument("--verbose", "-v", action="store_true", help="show full event data")
     query_parser.set_defaults(func=cmd_events_query)
 
