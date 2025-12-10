@@ -229,7 +229,7 @@ def recreate_symlinks(
     changes = []
 
     # Directories containing symlinks to MacEff framework
-    symlink_dirs = ["hooks", "commands", "agents"]
+    symlink_dirs = ["hooks", "commands", "skills", "agents"]
 
     for dir_name in symlink_dirs:
         dir_path = claude_dir / dir_name
