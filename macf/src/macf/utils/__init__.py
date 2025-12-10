@@ -79,6 +79,9 @@ from .manifest import (
     load_merged_manifest,
     filter_active_policies,
     format_manifest_awareness,
+    get_framework_policies_path,
+    find_policy_file,
+    list_policy_files,
 )
 from .formatting import (
     format_macf_footer,
@@ -102,6 +105,7 @@ __all__ = [
     "detect_session_migration",
     "extract_current_git_hash",
     "filter_active_policies",
+    "find_policy_file",
     "find_project_root",
     "format_breadcrumb",
     "format_duration",
@@ -109,6 +113,7 @@ __all__ = [
     "get_claude_code_version",
     "format_manifest_awareness",
     "format_minimal_temporal_message",
+    "get_framework_policies_path",
     "format_temporal_awareness_section",
     "format_token_context_full",
     "format_token_context_minimal",
@@ -135,6 +140,7 @@ __all__ = [
     "get_token_info",
     "get_usable_context",
     "increment_agent_cycle",
+    "list_policy_files",
     "load_agent_state",
     "load_merged_manifest",
     "parse_breadcrumb",

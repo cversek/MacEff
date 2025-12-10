@@ -1,0 +1,1 @@
+{"timestamp": 1765343222.1145039, "event": "cli_command_invoked", "breadcrumb": "s_1b969d39/c_1/g_a74cf99/p_none/t_1765343222", "data": {"session_id": "1b969d39-6075-4547-9b4b-7c349eaa0a9a", "command": "policy", "argv": ["policy", "list"]}, "hook_input": {}}

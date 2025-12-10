@@ -6,8 +6,177 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from .paths import find_project_root
+
+
+def get_framework_policies_path(agent_root: Optional[Path] = None) -> Optional[Path]:
+    """
+    Get the framework policies base path for container or host.
+
+    Resolution Strategy:
+        Container (/.dockerenv exists): /opt/maceff/framework/policies/base
+        Host:
+            1. Check if we're in MacEff repo itself: {agent_root}/framework/policies/base
+            2. Check for MacEff as submodule: {agent_root}/MacEff/framework/policies/base
+            3. Check MACEFF_FRAMEWORK_PATH env var: ${MACEFF_FRAMEWORK_PATH}/policies/base
+            4. Check known sibling locations in gitwork/
+
+    Args:
+        agent_root: Optional project root (auto-detected if None)
+
+    Returns:
+        Path to framework/policies/base directory, or None if not found
+    """
+    # Container path
+    if Path('/.dockerenv').exists():
+        base = Path('/opt/maceff/framework/policies/base')
+        return base if base.exists() else None
+
+    # Host path resolution
+    if agent_root is None:
+        agent_root = find_project_root()
+
+    if agent_root is None:
+        return None
+
+    agent_root = Path(agent_root)
+
+    # Strategy 1: Check if we're in MacEff repo itself
+    candidate = agent_root / 'framework' / 'policies' / 'base'
+    if candidate.exists():
+        return candidate
+
+    # Strategy 2: Check for MacEff as submodule
+    candidate = agent_root / 'MacEff' / 'framework' / 'policies' / 'base'
+    if candidate.exists():
+        return candidate
+
+    # Strategy 3: Check environment variable
+    if 'MACEFF_FRAMEWORK_PATH' in os.environ:
+        candidate = Path(os.environ['MACEFF_FRAMEWORK_PATH']) / 'policies' / 'base'
+        if candidate.exists():
+            return candidate
+
+    # Strategy 4: Check known sibling locations in gitwork/
+    gitwork_base = agent_root.parent.parent if 'gitwork' in str(agent_root) else None
+    if gitwork_base:
+        candidate = gitwork_base / 'cversek' / 'MacEff' / 'framework' / 'policies' / 'base'
+        if candidate.exists():
+            return candidate
+
+    return None
+
+
+def find_policy_file(
+    policy_name: str,
+    parents: Optional[List[str]] = None,
+    agent_root: Optional[Path] = None
+) -> Optional[Path]:
+    """
+    Find policy file by name, walking the framework policies tree.
+
+    Args:
+        policy_name: Policy filename (with or without .md extension)
+                    e.g., 'todo_hygiene', 'todo_hygiene.md'
+        parents: Optional list of parent directory names to match
+                e.g., ['development'] to find development/todo_hygiene.md
+        agent_root: Optional project root (auto-detected if None)
+
+    Returns:
+        Path to policy file, or None if not found
+
+    Examples:
+        find_policy_file('todo_hygiene')
+            → .../framework/policies/base/development/todo_hygiene.md
+
+        find_policy_file('todo_hygiene', parents=['development'])
+            → .../framework/policies/base/development/todo_hygiene.md
+
+        find_policy_file('checkpoints', parents=['consciousness'])
+            → .../framework/policies/base/consciousness/checkpoints.md
+    """
+    base_path = get_framework_policies_path(agent_root)
+    if not base_path:
+        return None
+
+    # Normalize: ensure .md extension
+    name = policy_name if policy_name.endswith('.md') else f"{policy_name}.md"
+
+    # Walk the tree looking for matching files
+    for md_file in base_path.rglob('*.md'):
+        if md_file.name == name:
+            # If parents specified, check path contains them
+            if parents:
+                rel_path = md_file.relative_to(base_path)
+                path_parts = rel_path.parts[:-1]  # Exclude filename
+                # Check all parent requirements are in path
+                if all(p in path_parts for p in parents):
+                    return md_file
+            else:
+                return md_file
+
+    return None
+
+
+def list_policy_files(
+    tier: Optional[str] = None,
+    category: Optional[str] = None,
+    agent_root: Optional[Path] = None
+) -> List[Dict[str, Any]]:
+    """
+    List all policy files with optional filtering.
+
+    Args:
+        tier: Filter by tier (CORE, optional) - reads from file metadata
+        category: Filter by subdirectory (development, consciousness, meta)
+        agent_root: Optional project root (auto-detected if None)
+
+    Returns:
+        List of dicts with keys: name, path, relative_path, category
+    """
+    base_path = get_framework_policies_path(agent_root)
+    if not base_path:
+        return []
+
+    policies = []
+    for md_file in base_path.rglob('*.md'):
+        rel_path = md_file.relative_to(base_path)
+        path_parts = rel_path.parts
+
+        # Determine category from path
+        file_category = path_parts[0] if len(path_parts) > 1 else 'root'
+
+        # Apply category filter
+        if category and file_category != category:
+            continue
+
+        # Read tier from file if filtering by tier
+        file_tier = None
+        if tier:
+            try:
+                content = md_file.read_text()
+                # Look for **Tier**: CORE or similar in first 500 chars
+                for line in content[:500].split('\n'):
+                    if 'Tier' in line and ':' in line:
+                        file_tier = line.split(':')[1].strip().upper()
+                        break
+            except Exception:
+                pass
+
+            if file_tier != tier.upper():
+                continue
+
+        policies.append({
+            'name': md_file.stem,
+            'path': str(md_file),
+            'relative_path': str(rel_path),
+            'category': file_category,
+            'tier': file_tier
+        })
+
+    return sorted(policies, key=lambda p: p['relative_path'])
+
 
 def _deep_merge(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]:
     """
