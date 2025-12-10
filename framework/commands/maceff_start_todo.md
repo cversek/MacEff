@@ -14,9 +14,23 @@ Start work on a TODO item (new or archived) by reading policy to understand cont
 
 **Read MacEff framework policies to understand engagement patterns**:
 
-1. `framework/policies/base/development/todo_hygiene.md` - Archive patterns, breadcrumb discipline
-2. `framework/policies/base/delegation_guidelines.md` - When to delegate, specialist capabilities
-3. `framework/policies/base/consciousness/roadmaps_following.md` - When roadmaps required, structure patterns
+1. TODO hygiene - Archive patterns, breadcrumb discipline:
+   ```bash
+   macf_tools policy navigate todo_hygiene
+   macf_tools policy read todo_hygiene
+   ```
+
+2. Delegation guidelines - When to delegate, specialist capabilities:
+   ```bash
+   macf_tools policy read delegation_guidelines
+   ```
+
+3. Roadmaps following - When roadmaps required, structure patterns:
+   ```bash
+   macf_tools policy read roadmaps_following
+   ```
+
+**Why CLI tools**: Caching prevents redundant reads, line numbers enable precise citations, navigate guides cognitive framing before content.
 
 ---
 
