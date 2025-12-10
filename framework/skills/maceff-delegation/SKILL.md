@@ -12,8 +12,19 @@ Prepare effective delegation to MacEff subagents by reading policy to understand
 
 **Read MacEff framework policies to understand delegation patterns**:
 
-1. `framework/policies/base/delegation_guidelines.md` - Complete delegation architecture
-2. `framework/policies/base/meta/subagent_definition.md` (§2-3) - Reading-list patterns
+1. Delegation guidelines - Complete delegation architecture:
+   ```bash
+   macf_tools policy navigate delegation_guidelines
+   macf_tools policy read delegation_guidelines --from-nav-boundary
+   ```
+
+2. Subagent definition - Reading-list patterns:
+   ```bash
+   macf_tools policy read subagent_definition --section 2
+   macf_tools policy read subagent_definition --section 3
+   ```
+
+**Why CLI tools**: Caching prevents redundant reads, line numbers enable precise citations.
 
 ---
 
@@ -40,4 +51,4 @@ Apply patterns discovered from policy reading to current delegation context.
 
 ## Critical Meta-Pattern
 
-**Policy as API**: This skill points to policies without encoding their current contents. As delegation practices evolve, policy updates automatically update behavior without skill changes.
+**Policy as API**: This skill uses `macf_tools policy` CLI commands for reading policies. CLI tools handle framework path resolution, provide caching, and output line numbers for citations.
