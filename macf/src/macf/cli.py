@@ -1014,6 +1014,185 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
         return 1
 
 
+def _get_policy_read_cache(session_id: str) -> dict:
+    """Get policy reads cache from session state."""
+    from .utils.state import get_session_state_path, read_json_safely
+    state_path = get_session_state_path(session_id)
+    state = read_json_safely(state_path)
+    return state.get('policy_reads', {})
+
+
+def _update_policy_read_cache(session_id: str, policy_name: str, breadcrumb: str) -> bool:
+    """Update policy reads cache in session state."""
+    from .utils.state import get_session_state_path, read_json_safely, write_json_safely
+    state_path = get_session_state_path(session_id)
+    state = read_json_safely(state_path)
+
+    # Initialize policy_reads if needed
+    if 'policy_reads' not in state:
+        state['policy_reads'] = {}
+
+    state['policy_reads'][policy_name] = breadcrumb
+
+    # Ensure directory exists
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    return write_json_safely(state_path, state)
+
+
+def cmd_policy_navigate(args: argparse.Namespace) -> int:
+    """Navigate policy by showing CEP guide only (up to CEP_NAV_BOUNDARY)."""
+    from .utils import find_policy_file
+
+    try:
+        policy_name = args.policy_name
+        # Parse optional parent from path-like input (e.g., "development/todo_hygiene")
+        parents = None
+        if '/' in policy_name:
+            parts = policy_name.split('/')
+            policy_name = parts[-1]
+            parents = parts[:-1]
+
+        policy_path = find_policy_file(policy_name, parents=parents)
+
+        if not policy_path:
+            print(f"Policy not found: {args.policy_name}")
+            print("\nUse 'macf_tools policy list' to see available policies")
+            return 1
+
+        # Read file and extract content up to CEP_NAV_BOUNDARY
+        content = policy_path.read_text()
+
+        boundary_marker = "=== CEP_NAV_BOUNDARY ==="
+        if boundary_marker in content:
+            nav_content = content.split(boundary_marker)[0]
+        else:
+            # No boundary - show first 100 lines as navigation
+            lines = content.split('\n')[:100]
+            nav_content = '\n'.join(lines)
+            nav_content += f"\n\n[No CEP_NAV_BOUNDARY found - showing first 100 lines]"
+
+        # Output with line numbers
+        print(f"=== CEP Navigation Guide: {policy_path.name} ===\n")
+        for i, line in enumerate(nav_content.split('\n'), 1):
+            print(f"{i:4d}│ {line}")
+
+        print(f"\n=== End Navigation Guide ===")
+        print(f"\nTo read full policy: macf_tools policy read {args.policy_name}")
+        print(f"To read specific section: macf_tools policy read {args.policy_name} --section N")
+
+        return 0
+
+    except Exception as e:
+        print(f"Error navigating policy: {e}")
+        return 1
+
+
+def cmd_policy_read(args: argparse.Namespace) -> int:
+    """Read policy file with line numbers and optional caching."""
+    from .utils import find_policy_file, get_breadcrumb
+
+    try:
+        policy_name = args.policy_name
+        # Parse optional parent from path-like input
+        parents = None
+        if '/' in policy_name:
+            parts = policy_name.split('/')
+            policy_name = parts[-1]
+            parents = parts[:-1]
+
+        policy_path = find_policy_file(policy_name, parents=parents)
+
+        if not policy_path:
+            print(f"Policy not found: {args.policy_name}")
+            print("\nUse 'macf_tools policy list' to see available policies")
+            return 1
+
+        # Read full content
+        content = policy_path.read_text()
+        lines = content.split('\n')
+
+        # Get session for caching
+        session_id = get_current_session_id()
+        cache_key = policy_path.stem  # Use stem for cache key
+
+        # Check if this is a partial read (--lines or --section)
+        is_partial = (hasattr(args, 'lines') and args.lines) or (hasattr(args, 'section') and args.section)
+        force_read = hasattr(args, 'force') and args.force
+        line_offset = 1
+
+        # Handle --lines option (e.g., "50:100")
+        if hasattr(args, 'lines') and args.lines:
+            try:
+                parts = args.lines.split(':')
+                start = int(parts[0]) - 1  # Convert to 0-indexed
+                end = int(parts[1]) if len(parts) > 1 else len(lines)
+                lines = lines[start:end]
+                line_offset = start + 1
+            except (ValueError, IndexError):
+                print(f"Invalid --lines format: {args.lines}")
+                print("Expected format: START:END (e.g., 50:100)")
+                return 1
+        # Handle --section option
+        elif hasattr(args, 'section') and args.section:
+            section_num = str(args.section)
+            # Find section by heading number (### N. or ## N.)
+            in_section = False
+            section_lines = []
+            section_start = 0
+
+            for i, line in enumerate(lines):
+                # Match section headers like "### 5. Document Reference" or "## 5 Document"
+                if line.startswith('#'):
+                    # Extract any number at start of heading text
+                    heading_text = line.lstrip('#').strip()
+                    if heading_text and heading_text.split()[0].rstrip('.') == section_num:
+                        in_section = True
+                        section_start = i + 1
+                    elif in_section and heading_text:
+                        # New section, stop capturing
+                        break
+
+                if in_section:
+                    section_lines.append(line)
+
+            if not section_lines:
+                print(f"Section {section_num} not found in {policy_name}")
+                return 1
+
+            lines = section_lines
+            line_offset = section_start
+        else:
+            # Full read - check cache (unless --force)
+            if not force_read:
+                cache = _get_policy_read_cache(session_id)
+                if cache_key in cache:
+                    cached_breadcrumb = cache[cache_key]
+                    print(f"Already read at {cached_breadcrumb}")
+                    print(f"\nUse --force to re-read, or --section N for specific section")
+                    return 0
+
+        # Output with line numbers
+        print(f"=== {policy_path.name} ===\n")
+        for i, line in enumerate(lines, line_offset):
+            print(f"{i:4d}│ {line}")
+
+        # Cache full reads only (not partial)
+        if not is_partial:
+            breadcrumb = get_breadcrumb()
+            _update_policy_read_cache(session_id, cache_key, breadcrumb)
+            print(f"\n=== Read logged at {breadcrumb} ===")
+        else:
+            print(f"\n=== Partial read (not cached) ===")
+
+        return 0
+
+    except Exception as e:
+        print(f"Error reading policy: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
 def cmd_policy_manifest(args: argparse.Namespace) -> int:
     """Display merged and filtered policy manifest."""
     from .utils import load_merged_manifest, filter_active_policies
@@ -1149,62 +1328,45 @@ def cmd_policy_search(args: argparse.Namespace) -> int:
 
 
 def cmd_policy_list(args: argparse.Namespace) -> int:
-    """List policies by layer."""
-    from .utils import load_merged_manifest, filter_active_policies
+    """List policy files from framework with optional filtering."""
+    from .utils import list_policy_files
 
     try:
-        layer = getattr(args, 'layer', 'mandatory')
+        tier = getattr(args, 'tier', None)
+        category = getattr(args, 'category', None)
 
-        # Load and filter manifest
-        manifest = load_merged_manifest()
-        filtered = filter_active_policies(manifest)
+        policies = list_policy_files(tier=tier, category=category)
 
-        print(f"Policies - {layer} layer")
+        if tier or category:
+            filter_desc = []
+            if tier:
+                filter_desc.append(f"tier={tier}")
+            if category:
+                filter_desc.append(f"category={category}")
+            print(f"Policies ({', '.join(filter_desc)})")
+        else:
+            print("All Policies")
         print("=" * 50)
 
-        if layer == 'mandatory':
-            policies = filtered.get('mandatory_policies', {}).get('policies', [])
-            if policies:
-                for policy in policies:
-                    name = policy.get('name', 'unknown')
-                    desc = policy.get('description', 'N/A')
-                    short_name = policy.get('short_name', '')
-                    print(f"{name} ({short_name})")
-                    print(f"  {desc}")
-                    print()
-            else:
-                print("No mandatory policies found")
+        if not policies:
+            print("No policies found")
+            return 0
 
-        elif layer == 'dev':
-            policies = filtered.get('development_policies', {}).get('policies', [])
-            if policies:
-                for policy in policies:
-                    name = policy.get('name', 'unknown')
-                    desc = policy.get('description', 'N/A')
-                    short_name = policy.get('short_name', '')
-                    print(f"{name} ({short_name})")
-                    print(f"  {desc}")
-                    print()
-            else:
-                print("No development policies configured")
+        # Group by category for display
+        by_category = {}
+        for p in policies:
+            cat = p['category']
+            if cat not in by_category:
+                by_category[cat] = []
+            by_category[cat].append(p)
 
-        elif layer == 'lang':
-            lang_policies = filtered.get('language_policies', {})
-            languages = lang_policies.get('languages', {})
-            if languages:
-                for lang, policy_info in languages.items():
-                    name = policy_info.get('name', lang)
-                    short_name = policy_info.get('short_name', '')
-                    print(f"{lang}: {name} ({short_name})")
-                    print()
-            else:
-                print("No language policies configured")
+        for cat in sorted(by_category.keys()):
+            print(f"\n{cat}/")
+            for p in by_category[cat]:
+                tier_str = f" [{p['tier']}]" if p.get('tier') else ""
+                print(f"  {p['name']}.md{tier_str}")
 
-        else:
-            print(f"Unknown layer: {layer}")
-            print("Available layers: mandatory, dev, lang")
-            return 1
-
+        print(f"\nTotal: {len(policies)} policies")
         return 0
 
     except Exception as e:
@@ -1730,10 +1892,23 @@ def _build_parser() -> argparse.ArgumentParser:
     search_parser.add_argument("keyword", help="keyword to search for")
     search_parser.set_defaults(func=cmd_policy_search)
 
+    # policy navigate
+    navigate_parser = policy_sub.add_parser("navigate", help="show CEP navigation guide (up to boundary)")
+    navigate_parser.add_argument("policy_name", help="policy name (e.g., todo_hygiene, development/todo_hygiene)")
+    navigate_parser.set_defaults(func=cmd_policy_navigate)
+
+    # policy read
+    read_parser = policy_sub.add_parser("read", help="read policy with line numbers and caching")
+    read_parser.add_argument("policy_name", help="policy name (e.g., todo_hygiene, development/todo_hygiene)")
+    read_parser.add_argument("--lines", help="line range START:END (e.g., 50:100)")
+    read_parser.add_argument("--section", help="section number to read (e.g., 5)")
+    read_parser.add_argument("--force", action="store_true", help="bypass cache for full read")
+    read_parser.set_defaults(func=cmd_policy_read)
+
     # policy list
-    list_parser = policy_sub.add_parser("list", help="list policies by layer")
-    list_parser.add_argument("--layer", choices=["mandatory", "dev", "lang"], default="mandatory",
-                            help="policy layer to display (default: mandatory)")
+    list_parser = policy_sub.add_parser("list", help="list policy files from framework")
+    list_parser.add_argument("--tier", choices=["CORE", "optional"], help="filter by tier")
+    list_parser.add_argument("--category", help="filter by category (development, consciousness, meta)")
     list_parser.set_defaults(func=cmd_policy_list)
 
     # policy ca-types
