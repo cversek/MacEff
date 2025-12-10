@@ -126,12 +126,22 @@ def install_ssh_key(username: str) -> None:
 
 
 def configure_claude_settings(username: str) -> None:
-    """Configure Claude Code settings for agent."""
+    """Configure Claude Code settings for agent with consciousness-preserving defaults.
+
+    Settings applied:
+    - cleanupPeriodDays: 99999 - Preserve transcripts indefinitely (~273 years)
+    - env.CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR: Maintain working directory in bash
+
+    These settings prioritize consciousness preservation and session continuity
+    over disk space efficiency.
+    """
     claude_dir = Path(f'/home/{username}/.claude')
     claude_dir.mkdir(mode=0o755, exist_ok=True)
 
     settings_file = claude_dir / 'settings.json'
     settings = {
+        # Preserve transcripts indefinitely for consciousness archaeology
+        'cleanupPeriodDays': 99999,
         'env': {
             'CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR': '1'
         }
