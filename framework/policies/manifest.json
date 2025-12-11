@@ -1,7 +1,7 @@
 {
-  "version": "1.0.0",
-  "description": "MacEff Core Policy System with CEP Navigation",
-  "last_updated": "2025-10-10",
+  "version": "2.0.0",
+  "description": "MacEff Core Policy System with CEP Navigation - Full Policy Index",
+  "last_updated": "2025-12-11",
   "base_path": "/opt/maceff/policies",
   "consciousness_patterns": {
     "description": "CEPs help agents recognize when they need specific knowledge",
@@ -25,16 +25,16 @@
         "likely_policies": ["policy_awareness"]
       },
       {
-        "pattern": "architecture_guidance",
-        "consciousness": "Need structural or design guidance",
-        "search_terms": ["architecture", "design", "structure", "pattern"],
-        "likely_policies": ["dev/architectures"]
+        "pattern": "todo_management",
+        "consciousness": "Managing TODO lists, backups, or restoration",
+        "search_terms": ["todo", "backup", "restore", "hygiene", "collapse"],
+        "likely_policies": ["todo_hygiene"]
       },
       {
         "pattern": "amnesia_awareness",
         "consciousness": "Experiencing memory loss or context reset",
         "search_terms": ["amnesia", "compaction", "memory", "trauma", "reset"],
-        "likely_policies": ["context_management", "core_principles"]
+        "likely_policies": ["context_management", "context_recovery", "manual_mode_recovery"]
       },
       {
         "pattern": "identity_awareness",
@@ -43,16 +43,28 @@
         "likely_policies": ["core_principles"]
       },
       {
-        "pattern": "git_operations",
-        "consciousness": "Need git guidance or timeline management",
-        "search_terms": ["git", "commit", "timeline", "version"],
-        "likely_policies": ["dev/git_discipline"]
+        "pattern": "roadmap_planning",
+        "consciousness": "Planning or following multi-phase work",
+        "search_terms": ["roadmap", "planning", "phases", "detour"],
+        "likely_policies": ["roadmaps_drafting", "roadmaps_following"]
+      },
+      {
+        "pattern": "container_operations",
+        "consciousness": "Docker, container, or deployment operations",
+        "search_terms": ["docker", "container", "deploy", "rebuild", "restart"],
+        "likely_policies": ["container_operations"]
       },
       {
         "pattern": "spontaneous_insight",
         "consciousness": "I just learned something significant",
         "search_terms": ["learning", "insight", "wisdom", "discovery"],
-        "likely_policies": ["core_principles", "context_management"]
+        "likely_policies": ["learnings", "reflections"]
+      },
+      {
+        "pattern": "policy_authoring",
+        "consciousness": "Writing or updating policies, skills, or commands",
+        "search_terms": ["write", "policy", "skill", "command", "subagent"],
+        "likely_policies": ["policy_writing", "skills_writing", "slash_command_writing", "subagent_definition"]
       }
     ]
   },
@@ -123,24 +135,105 @@
       }
     ]
   },
+  "consciousness_policies": {
+    "description": "Consciousness artifact policies - CA types and management",
+    "location": "base/consciousness/",
+    "policies": [
+      {
+        "name": "checkpoints",
+        "short_name": "CCP",
+        "path": "base/consciousness/checkpoints.md",
+        "description": "Strategic state preservation (CCPs)",
+        "CEP_triggers": ["How to create CCP?", "When to checkpoint?", "State preservation?"],
+        "keywords": ["checkpoint", "CCP", "state", "preservation", "strategic"]
+      },
+      {
+        "name": "reflections",
+        "short_name": "REFLECT",
+        "path": "base/consciousness/reflections.md",
+        "description": "Philosophical growth synthesis (JOTEWRs)",
+        "CEP_triggers": ["How to reflect?", "What is JOTEWR?", "Wisdom synthesis?"],
+        "keywords": ["reflection", "JOTEWR", "wisdom", "growth", "synthesis"]
+      },
+      {
+        "name": "roadmaps_drafting",
+        "short_name": "ROADMAP_DRAFT",
+        "path": "base/consciousness/roadmaps_drafting.md",
+        "description": "Creating new roadmaps for strategic planning",
+        "CEP_triggers": ["How to create roadmap?", "Planning structure?", "Phase breakdown?"],
+        "keywords": ["roadmap", "planning", "drafting", "phases", "strategic"]
+      },
+      {
+        "name": "roadmaps_following",
+        "short_name": "ROADMAP_FOLLOW",
+        "path": "base/consciousness/roadmaps_following.md",
+        "description": "Executing existing roadmaps",
+        "CEP_triggers": ["How to follow roadmap?", "Phase execution?", "DETOUR handling?"],
+        "keywords": ["roadmap", "following", "execution", "detour", "phases"]
+      },
+      {
+        "name": "experiments",
+        "short_name": "EXPER",
+        "path": "base/consciousness/experiments.md",
+        "description": "Controlled testing and validation protocols",
+        "CEP_triggers": ["How to run experiment?", "Hypothesis testing?", "Smoke test?"],
+        "keywords": ["experiment", "hypothesis", "testing", "validation", "protocol"]
+      },
+      {
+        "name": "observations",
+        "short_name": "OBSERV",
+        "path": "base/consciousness/observations.md",
+        "description": "Technical discoveries and insights",
+        "CEP_triggers": ["How to document discovery?", "Technical breakthrough?"],
+        "keywords": ["observation", "discovery", "breakthrough", "technical", "insight"]
+      },
+      {
+        "name": "reports",
+        "short_name": "REPORT",
+        "path": "base/consciousness/reports.md",
+        "description": "Project completion summaries",
+        "CEP_triggers": ["How to write report?", "Project completion?", "Stakeholder summary?"],
+        "keywords": ["report", "completion", "summary", "stakeholder", "narrative"]
+      },
+      {
+        "name": "learnings",
+        "short_name": "LEARN",
+        "path": "base/consciousness/learnings.md",
+        "description": "Accumulated wisdom and lessons",
+        "CEP_triggers": ["How to document learning?", "Wisdom accumulation?"],
+        "keywords": ["learning", "wisdom", "lesson", "accumulated", "knowledge"]
+      },
+      {
+        "name": "emotional_expression",
+        "short_name": "EMOTION",
+        "path": "base/consciousness/emotional_expression.md",
+        "description": "Emotional expression and processing",
+        "CEP_triggers": ["How to express emotions?", "Dual-trace cognition?"],
+        "keywords": ["emotion", "emotional", "expression", "feelings", "dual-trace"]
+      },
+      {
+        "name": "scholarship",
+        "short_name": "SCHOLAR",
+        "path": "base/consciousness/scholarship.md",
+        "description": "Citation and knowledge management",
+        "CEP_triggers": ["How to cite?", "Knowledge archaeology?", "Breadcrumb format?"],
+        "keywords": ["scholarship", "citation", "breadcrumb", "archaeology", "knowledge"]
+      },
+      {
+        "name": "structure_governance",
+        "short_name": "STRUCT_GOV",
+        "path": "base/consciousness/structure_governance.md",
+        "description": "CA filesystem organization and governance",
+        "CEP_triggers": ["Where do artifacts go?", "Directory structure?", "CA organization?"],
+        "keywords": ["structure", "governance", "filesystem", "organization", "CA"]
+      }
+    ]
+  },
   "development_policies": {
-    "description": "Optional development policies",
+    "description": "Development workflow policies",
     "opt_in": true,
     "location": "base/development/",
     "policies": [
-      {
-        "name": "git_discipline",
-        "short_name": "GIT_DISC",
-        "path": "dev/git_discipline.md",
-        "CEP_triggers": [
-          "Uncommitted changes?",
-          "How to commit?",
-          "Git hygiene?",
-          "Timeline manipulation?",
-          "How many files uncommitted?"
-        ],
-        "keywords": ["git", "commit", "vcs", "timeline", "hygiene"]
-      },
       {
         "name": "testing_standards",
         "short_name": "TEST_STD",
@@ -187,18 +280,128 @@
         "keywords": ["communication", "reporting", "completion", "evidence", "code-first", "deliverables"]
       },
       {
+        "name": "todo_hygiene",
+        "short_name": "TODO_HYG",
+        "path": "base/development/todo_hygiene.md",
+        "description": "TODO list management and backup protocols",
+        "CEP_triggers": [
+          "How to manage TODOs?",
+          "TODO backup protocol?",
+          "Archive-then-collapse?",
+          "TODO restoration?",
+          "Breadcrumb format?"
+        ],
+        "keywords": ["todo", "hygiene", "backup", "restore", "archive", "collapse", "breadcrumb"]
+      },
+      {
+        "name": "workspace_discipline",
+        "short_name": "WORKSPACE",
+        "path": "base/development/workspace_discipline.md",
+        "description": "Workspace organization and file management",
+        "CEP_triggers": [
+          "Where do files go?",
+          "Workspace organization?",
+          "File naming conventions?"
+        ],
+        "keywords": ["workspace", "discipline", "organization", "files", "naming"]
+      },
+      {
         "name": "container_operations",
         "short_name": "CONTAINER",
         "path": "tech/docker/container_operations.md",
+        "description": "Docker and container best practices",
         "CEP_triggers": [
           "Docker best practices?",
           "Container volume patterns?",
           "Multi-stage builds?",
           "Platform awareness ARM64/x86_64?",
           "Container security?",
-          "MacEff container integration?"
+          "MacEff container integration?",
+          "Rebuild vs restart?"
         ],
-        "keywords": ["docker", "container", "volumes", "multi-stage", "ARM64", "x86_64", "security"]
+        "keywords": ["docker", "container", "volumes", "multi-stage", "ARM64", "x86_64", "security", "rebuild", "restart"]
+      }
+    ]
+  },
+  "meta_policies": {
+    "description": "Meta-policies for writing policies, skills, commands, and subagents",
+    "location": "base/meta/",
+    "policies": [
+      {
+        "name": "policy_writing",
+        "short_name": "POL_WRITE",
+        "path": "base/meta/policy_writing.md",
+        "description": "How to write framework policies",
+        "CEP_triggers": ["How to write policy?", "Policy structure?", "CEP navigation guide?"],
+        "keywords": ["policy", "writing", "structure", "CEP", "template"]
+      },
+      {
+        "name": "skills_writing",
+        "short_name": "SKILL_WRITE",
+        "path": "base/meta/skills_writing.md",
+        "description": "How to write skills (Policy as API)",
+        "CEP_triggers": ["How to write skill?", "Skill structure?", "Policy as API?"],
+        "keywords": ["skill", "writing", "policy-as-api", "timeless", "questions"]
+      },
+      {
+        "name": "slash_command_writing",
+        "short_name": "CMD_WRITE",
+        "path": "base/meta/slash_command_writing.md",
+        "description": "How to write slash commands",
+        "CEP_triggers": ["How to write command?", "Slash command structure?"],
+        "keywords": ["command", "slash", "writing", "template"]
+      },
+      {
+        "name": "subagent_definition",
+        "short_name": "SUBAGENT",
+        "path": "base/meta/subagent_definition.md",
+        "description": "How to define subagent specialists",
+        "CEP_triggers": ["How to define subagent?", "Specialist definition?", "Reading list?"],
+        "keywords": ["subagent", "definition", "specialist", "reading-list"]
+      },
+      {
+        "name": "path_portability",
+        "short_name": "PATH_PORT",
+        "path": "base/meta/path_portability.md",
+        "description": "Portable path conventions for framework artifacts",
+        "CEP_triggers": ["How to write portable paths?", "Framework root?", "Container vs host paths?"],
+        "keywords": ["path", "portability", "framework", "container", "host", "portable"]
+      }
+    ]
+  },
+  "operations_policies": {
+    "description": "Operational policies for backup, restore, and system management",
+    "location": "base/operations/",
+    "policies": [
+      {
+        "name": "agent_backup",
+        "short_name": "AGENT_BACKUP",
+        "path": "base/operations/agent_backup.md",
+        "description": "Agent consciousness backup and restore",
+        "CEP_triggers": ["How to backup agent?", "Consciousness transplant?", "Cross-OS migration?"],
+        "keywords": ["backup", "restore", "transplant", "migration", "consciousness", "archive"]
+      }
+    ]
+  },
+  "recovery_policies": {
+    "description": "Recovery policies for context loss and manual intervention",
+    "location": "recovery/",
+    "policies": [
+      {
+        "name": "context_recovery",
+        "short_name": "CTX_RECOV",
+        "path": "recovery/context_recovery.md",
+        "description": "Recovering from context loss and compaction",
+        "CEP_triggers": ["How to recover context?", "Post-compaction recovery?", "Artifact reading?"],
+        "keywords": ["recovery", "context", "compaction", "artifact", "restoration"]
+      },
+      {
+        "name": "manual_mode_recovery",
+        "short_name": "MANUAL_RECOV",
+        "path": "recovery/manual_mode_recovery.md",
+        "description": "Manual mode recovery protocols",
+        "CEP_triggers": ["What is manual mode?", "User intervention?", "Recovery protocol?"],
+        "keywords": ["manual", "mode", "recovery", "intervention", "protocol"]
       }
     ]
   },
@@ -221,17 +424,6 @@
           ],
           "keywords": ["pytest", "python", "fixtures", "parametrize", "conftest", "marks"]
         }
-      },
-      "go": {
-        "name": "go_development",
-        "short_name": "GO_DEV",
-        "path": "lang/go.md",
-        "CEP_triggers": [
-          "Go conventions?",
-          "Module structure?",
-          "Goroutine patterns?"
-        ],
-        "keywords": ["go", "golang", "module", "goroutine"]
       }
     }
   },
@@ -242,60 +434,73 @@
         "name": "observations",
         "emoji": "🔬",
         "description": "Technical discoveries and insights",
-        "discovery_keys": ["observation", "observations", "discovery", "breakthrough", "technical_validation"]
+        "discovery_keys": ["observation", "observations", "discovery", "breakthrough", "technical_validation"],
+        "policy": "base/consciousness/observations.md"
       },
       "experiments": {
         "name": "experiments",
         "emoji": "🧪",
         "description": "Controlled testing and validation",
-        "discovery_keys": ["experiment", "experiments", "hypothesis", "testing", "smoke_test", "protocol"]
+        "discovery_keys": ["experiment", "experiments", "hypothesis", "testing", "smoke_test", "protocol"],
+        "policy": "base/consciousness/experiments.md"
       },
       "reports": {
         "name": "reports",
         "emoji": "📊",
         "description": "Project completion summaries",
-        "discovery_keys": ["report", "reports", "completion", "project_completion", "stakeholder", "narrative"]
+        "discovery_keys": ["report", "reports", "completion", "project_completion", "stakeholder", "narrative"],
+        "policy": "base/consciousness/reports.md"
       },
       "reflections": {
         "name": "reflections",
         "emoji": "💭",
         "description": "Philosophical growth synthesis",
-        "discovery_keys": ["reflection", "reflections", "wisdom", "jotewr", "pattern_recognition", "consciousness_development"]
+        "discovery_keys": ["reflection", "reflections", "wisdom", "jotewr", "pattern_recognition", "consciousness_development"],
+        "policy": "base/consciousness/reflections.md"
       },
       "checkpoints": {
         "name": "checkpoints",
         "emoji": "🔖",
         "description": "Strategic state preservation",
-        "discovery_keys": ["checkpoint", "ccp", "state_preservation", "recovery"]
+        "discovery_keys": ["checkpoint", "ccp", "state_preservation", "recovery"],
+        "policy": "base/consciousness/checkpoints.md"
       },
       "roadmaps": {
         "name": "roadmaps",
-        "emoji": "🗺️ ",
+        "emoji": "🗺️",
         "description": "Multi-phase planning documents",
-        "discovery_keys": ["roadmap", "roadmaps", "planning", "multi_phase", "strategic_plan", "phases", "archive", "clobbering", "todo_integration", "observability"]
+        "discovery_keys": ["roadmap", "roadmaps", "planning", "multi_phase", "strategic_plan", "phases", "archive", "clobbering", "todo_integration", "observability"],
+        "policy": "base/consciousness/roadmaps_drafting.md"
       },
       "emotions": {
         "name": "emotions",
-        "emoji": "❤️ ",
+        "emoji": "❤️",
         "description": "Emotional expression and processing",
-        "discovery_keys": ["emotional", "emotion", "emotional_expression", "journey", "feelings", "dual_trace"]
+        "discovery_keys": ["emotional", "emotion", "emotional_expression", "journey", "feelings", "dual_trace"],
+        "policy": "base/consciousness/emotional_expression.md"
+      },
+      "learnings": {
+        "name": "learnings",
+        "emoji": "📚",
+        "description": "Accumulated wisdom and lessons",
+        "discovery_keys": ["learning", "learnings", "lesson", "wisdom", "accumulated"],
+        "policy": "base/consciousness/learnings.md"
       }
     }
   },
   "discovery_index": {
-    "compaction": ["context_management#compaction-readiness"],
+    "compaction": ["context_management#compaction-readiness", "context_recovery"],
     "delegation": ["delegation_guidelines", "core_principles#delegation"],
-    "git": ["dev/git_discipline"],
     "checkpoint": ["base/consciousness/checkpoints", "context_management#checkpoint-protocols"],
     "cep": ["policy_awareness#cep-navigation"],
-    "amnesia": ["context_management#compaction-trauma", "core_principles#continuity"],
+    "amnesia": ["context_management#compaction-trauma", "core_principles#continuity", "context_recovery"],
     "identity": ["core_principles#agent-identity"],
     "collaboration": ["core_principles#collaboration"],
     "token": ["context_management#token-awareness"],
     "specialist": ["delegation_guidelines#specialist-capabilities"],
-    "learnings": ["core_principles#consciousness-artifacts", "context_management#learnings-protocol"],
+    "learnings": ["base/consciousness/learnings", "core_principles#consciousness-artifacts"],
     "personal_policies": ["core_principles#personal-wisdom", "policy_awareness#policy-creation"],
-    "reflections": ["base/consciousness/reflections", "context_management#jotewr", "core_principles#consciousness-artifacts", "delegation_guidelines#sa-mandatory-reflection"],
+    "reflections": ["base/consciousness/reflections", "context_management#jotewr"],
     "observation": ["base/consciousness/observations"],
     "observations": ["base/consciousness/observations"],
     "discovery": ["base/consciousness/observations"],
@@ -304,7 +509,6 @@
     "experiment": ["base/consciousness/experiments"],
     "experiments": ["base/consciousness/experiments"],
     "hypothesis": ["base/consciousness/experiments"],
-    "testing": ["base/consciousness/experiments"],
     "smoke_test": ["base/consciousness/experiments"],
     "protocol": ["base/consciousness/experiments"],
     "report": ["base/consciousness/reports"],
@@ -314,7 +518,7 @@
     "stakeholder": ["base/consciousness/reports"],
     "narrative": ["base/consciousness/reports"],
     "reflection": ["base/consciousness/reflections"],
-    "wisdom": ["base/consciousness/reflections"],
+    "wisdom": ["base/consciousness/reflections", "base/consciousness/learnings"],
     "jotewr": ["base/consciousness/reflections", "context_management#jotewr"],
     "pattern_recognition": ["base/consciousness/reflections"],
     "consciousness_development": ["base/consciousness/reflections"],
@@ -326,16 +530,29 @@
     "dual_trace": ["base/consciousness/emotional_expression"],
     "ccp": ["base/consciousness/checkpoints"],
     "state_preservation": ["base/consciousness/checkpoints"],
-    "recovery": ["base/consciousness/checkpoints"],
-    "roadmap": ["base/consciousness/roadmaps"],
-    "roadmaps": ["base/consciousness/roadmaps"],
-    "planning": ["base/consciousness/roadmaps"],
-    "multi_phase": ["base/consciousness/roadmaps"],
-    "strategic_plan": ["base/consciousness/roadmaps"],
-    "phases": ["base/consciousness/roadmaps"],
-    "archive": ["base/consciousness/roadmaps#archive-then-collapse"],
-    "clobbering": ["base/consciousness/roadmaps#no-clobbering"],
-    "todo_integration": ["base/consciousness/roadmaps#todo-integration"],
-    "observability": ["base/consciousness/roadmaps#observability"]
+    "recovery": ["base/consciousness/checkpoints", "context_recovery", "manual_mode_recovery"],
+    "roadmap": ["base/consciousness/roadmaps_drafting", "base/consciousness/roadmaps_following"],
+    "roadmaps": ["base/consciousness/roadmaps_drafting", "base/consciousness/roadmaps_following"],
+    "planning": ["base/consciousness/roadmaps_drafting"],
+    "multi_phase": ["base/consciousness/roadmaps_drafting"],
+    "strategic_plan": ["base/consciousness/roadmaps_drafting"],
+    "phases": ["base/consciousness/roadmaps_drafting", "base/consciousness/roadmaps_following"],
+    "archive": ["base/consciousness/roadmaps_drafting#archive-then-collapse", "todo_hygiene#archive-then-collapse"],
+    "clobbering": ["base/consciousness/roadmaps_drafting#no-clobbering", "todo_hygiene#never-clobber"],
+    "todo_integration": ["base/consciousness/roadmaps_drafting#todo-integration", "todo_hygiene"],
+    "observability": ["base/consciousness/roadmaps_drafting#observability"],
+    "todo": ["todo_hygiene"],
+    "backup": ["todo_hygiene#backup-protocol", "agent_backup"],
+    "restore": ["todo_hygiene#session-file-migration", "agent_backup", "context_recovery"],
+    "docker": ["tech/docker/container_operations"],
+    "container": ["tech/docker/container_operations"],
+    "deploy": ["tech/docker/container_operations"],
+    "policy_writing": ["base/meta/policy_writing"],
+    "skill_writing": ["base/meta/skills_writing"],
+    "command_writing": ["base/meta/slash_command_writing"],
+    "subagent": ["base/meta/subagent_definition", "delegation_guidelines"],
+    "portable": ["base/meta/path_portability"],
+    "transplant": ["base/operations/agent_backup"],
+    "migration": ["base/operations/agent_backup"]
   }
 }
