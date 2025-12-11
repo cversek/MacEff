@@ -12,26 +12,26 @@ from .paths import find_project_root
 
 def get_framework_policies_path(agent_root: Optional[Path] = None) -> Optional[Path]:
     """
-    Get the framework policies base path for container or host.
+    Get the framework policies root path for container or host.
 
     Resolution Strategy:
-        Container (/.dockerenv exists): /opt/maceff/framework/policies/base
+        Container (/.dockerenv exists): /opt/maceff/framework/policies
         Host:
-            1. Check if we're in MacEff repo itself: {agent_root}/framework/policies/base
-            2. Check for MacEff as submodule: {agent_root}/MacEff/framework/policies/base
-            3. Check MACEFF_FRAMEWORK_PATH env var: ${MACEFF_FRAMEWORK_PATH}/policies/base
+            1. Check if we're in MacEff repo itself: {agent_root}/framework/policies
+            2. Check for MacEff as submodule: {agent_root}/MacEff/framework/policies
+            3. Check MACEFF_FRAMEWORK_PATH env var: ${MACEFF_FRAMEWORK_PATH}/policies
             4. Check known sibling locations in gitwork/
 
     Args:
         agent_root: Optional project root (auto-detected if None)
 
     Returns:
-        Path to framework/policies/base directory, or None if not found
+        Path to framework/policies directory (root, includes base/, tech/, lang/, recovery/)
     """
     # Container path
     if Path('/.dockerenv').exists():
-        base = Path('/opt/maceff/framework/policies/base')
-        return base if base.exists() else None
+        policies_root = Path('/opt/maceff/framework/policies')
+        return policies_root if policies_root.exists() else None
 
     # Host path resolution
     if agent_root is None:
@@ -43,25 +43,25 @@ def get_framework_policies_path(agent_root: Optional[Path] = None) -> Optional[P
     agent_root = Path(agent_root)
 
     # Strategy 1: Check if we're in MacEff repo itself
-    candidate = agent_root / 'framework' / 'policies' / 'base'
+    candidate = agent_root / 'framework' / 'policies'
     if candidate.exists():
         return candidate
 
     # Strategy 2: Check for MacEff as submodule
-    candidate = agent_root / 'MacEff' / 'framework' / 'policies' / 'base'
+    candidate = agent_root / 'MacEff' / 'framework' / 'policies'
     if candidate.exists():
         return candidate
 
     # Strategy 3: Check environment variable
     if 'MACEFF_FRAMEWORK_PATH' in os.environ:
-        candidate = Path(os.environ['MACEFF_FRAMEWORK_PATH']) / 'policies' / 'base'
+        candidate = Path(os.environ['MACEFF_FRAMEWORK_PATH']) / 'policies'
         if candidate.exists():
             return candidate
 
     # Strategy 4: Check known sibling locations in gitwork/
     gitwork_base = agent_root.parent.parent if 'gitwork' in str(agent_root) else None
     if gitwork_base:
-        candidate = gitwork_base / 'cversek' / 'MacEff' / 'framework' / 'policies' / 'base'
+        candidate = gitwork_base / 'cversek' / 'MacEff' / 'framework' / 'policies'
         if candidate.exists():
             return candidate
 
