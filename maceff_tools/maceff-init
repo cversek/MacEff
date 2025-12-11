@@ -106,29 +106,27 @@ mkdir -p "$MACEFF_DIR/config/projects"
 log "  ✓ Created framework/ directories"
 log "  ✓ Created config/ directories"
 
-# Copy version-controlled defaults
-log "Copying version-controlled defaults..."
+# Copy entire framework directory (generic - future-proof for new components)
+log "Copying framework/ contents..."
 if [[ "$MACEFF_SOURCE" != "$REPO_ROOT" ]]; then
     log "  ℹ Detected submodule context: using MacEff/ submodule resources"
 fi
 
-# Policies
-if [[ -d "$MACEFF_SOURCE/framework/policies/base" ]]; then
-    cp -r "$MACEFF_SOURCE/framework/policies/base" "$MACEFF_DIR/framework/policies/sets/"
-    log "  ✓ Copied framework/policies/base/ → framework/policies/sets/base/"
-else
-    warn "  ! framework/policies/base/ not found - skipping"
-fi
+if [[ -d "$MACEFF_SOURCE/framework" ]]; then
+    # Copy all framework contents recursively
+    cp -r "$MACEFF_SOURCE/framework/"* "$MACEFF_DIR/framework/" 2>/dev/null || true
+    log "  ✓ Copied all framework/ contents (policies, templates, commands, skills, etc.)"
 
-# Templates
-if [[ -d "$MACEFF_SOURCE/framework/templates" ]]; then
-    cp -r "$MACEFF_SOURCE/framework/templates/"* "$MACEFF_DIR/framework/templates/" 2>/dev/null || true
-    log "  ✓ Copied framework/templates/ → framework/templates/"
+    # Special handling: policies/base goes to policies/sets/base for symlink pattern
+    if [[ -d "$MACEFF_DIR/framework/policies/base" ]]; then
+        mkdir -p "$MACEFF_DIR/framework/policies/sets"
+        mv "$MACEFF_DIR/framework/policies/base" "$MACEFF_DIR/framework/policies/sets/"
+        log "  ✓ Moved policies/base → policies/sets/base (for symlink pattern)"
+    fi
 else
-    warn "  ! framework/templates/ not found - skipping"
+    error "framework/ directory not found in $MACEFF_SOURCE"
+    exit 1
 fi
-
-# Note: agent_defs removed (legacy numerical agents superseded by Named Agents v0.3)
 
 # Parent repo overlay (only in submodule context)
 if [[ "$MACEFF_SOURCE" != "$REPO_ROOT" ]] && [[ -d "$REPO_ROOT/framework" ]]; then
