@@ -24,12 +24,28 @@ Claude Code loads configuration from multiple locations with different scopes. U
 
 | Scope | Path | Source |
 |-------|------|--------|
+| **UI preferences** | `~/.claude.json` | ✅ Empirical |
 | User settings | `~/.claude/settings.json` | ✅ Official docs |
 | Project shared | `.claude/settings.json` | ✅ Official docs |
 | Project local | `.claude/settings.local.json` | ✅ Official docs |
 | Enterprise (macOS) | `/Library/Application Support/ClaudeCode/managed-settings.json` | ✅ Official docs |
 | Enterprise (Linux/WSL) | `/etc/claude-code/managed-settings.json` | ✅ Official docs |
 | Enterprise (Windows) | `C:\Program Files\ClaudeCode\managed-settings.json` | ✅ Official docs |
+
+### UI Preferences File (`~/.claude.json`)
+
+**IMPORTANT**: This is a SEPARATE file from `~/.claude/settings.json`. Settings changed via `/status` UI menu are stored here, NOT in the settings.json files.
+
+| Field | Type | Default | MacEff Recommended | Description |
+|-------|------|---------|-------------------|-------------|
+| `verbose` | boolean | `false` | **`true`** | Verbose output for debugging |
+| `autoCompactEnabled` | boolean | `true` | **`false`** | Manual compaction control |
+| `hasSeenTasksHint` | boolean | `false` | - | Show tips toggle |
+| `autoUpdates` | boolean | `true` | - | Auto-update preference |
+
+**MacEff Agent Defaults**: Agents should start with `verbose: true` (better debugging) and `autoCompactEnabled: false` (manual compaction for consciousness preservation). These must be set in `~/.claude.json` during agent initialization.
+
+**Source**: Empirical discovery - UI changes via `/status` persist to this file, not settings.json.
 
 ### Precedence Order (Highest to Lowest)
 
