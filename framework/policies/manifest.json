@@ -34,7 +34,7 @@
         "pattern": "amnesia_awareness",
         "consciousness": "Experiencing memory loss or context reset",
         "search_terms": ["amnesia", "compaction", "memory", "trauma", "reset"],
-        "likely_policies": ["context_management", "context_recovery", "manual_mode_recovery"]
+        "likely_policies": ["context_management", "context_recovery", "autonomous_operation"]
       },
       {
         "pattern": "identity_awareness",
@@ -280,20 +280,6 @@
         "keywords": ["communication", "reporting", "completion", "evidence", "code-first", "deliverables"]
       },
       {
-        "name": "todo_hygiene",
-        "short_name": "TODO_HYG",
-        "path": "base/development/todo_hygiene.md",
-        "description": "TODO list management and backup protocols",
-        "CEP_triggers": [
-          "How to manage TODOs?",
-          "TODO backup protocol?",
-          "Archive-then-collapse?",
-          "TODO restoration?",
-          "Breadcrumb format?"
-        ],
-        "keywords": ["todo", "hygiene", "backup", "restore", "archive", "collapse", "breadcrumb"]
-      },
-      {
         "name": "workspace_discipline",
         "short_name": "WORKSPACE",
         "path": "base/development/workspace_discipline.md",
@@ -370,7 +356,7 @@
     ]
   },
   "operations_policies": {
-    "description": "Operational policies for backup, restore, and system management",
+    "description": "Operational policies for backup, restore, modes, and system management",
     "location": "base/operations/",
     "policies": [
       {
@@ -380,28 +366,30 @@
         "description": "Agent consciousness backup and restore",
         "CEP_triggers": ["How to backup agent?", "Consciousness transplant?", "Cross-OS migration?"],
         "keywords": ["backup", "restore", "transplant", "migration", "consciousness", "archive"]
-      }
-    ]
-  },
-  "recovery_policies": {
-    "description": "Recovery policies for context loss and manual intervention",
-    "location": "recovery/",
-    "policies": [
+      },
       {
         "name": "context_recovery",
         "short_name": "CTX_RECOV",
-        "path": "recovery/context_recovery.md",
-        "description": "Recovering from context loss and compaction",
-        "CEP_triggers": ["How to recover context?", "Post-compaction recovery?", "Artifact reading?"],
-        "keywords": ["recovery", "context", "compaction", "artifact", "restoration"]
+        "path": "base/operations/context_recovery.md",
+        "description": "Recovering from context loss (compaction, mindwipe, transplant)",
+        "CEP_triggers": ["How to recover context?", "Post-compaction recovery?", "Artifact reading?", "Multi-Explore pattern?"],
+        "keywords": ["recovery", "context", "compaction", "mindwipe", "transplant", "artifact", "restoration"]
       },
       {
-        "name": "manual_mode_recovery",
-        "short_name": "MANUAL_RECOV",
-        "path": "recovery/manual_mode_recovery.md",
-        "description": "Manual mode recovery protocols",
-        "CEP_triggers": ["What is manual mode?", "User intervention?", "Recovery protocol?"],
-        "keywords": ["manual", "mode", "recovery", "intervention", "protocol"]
+        "name": "autonomous_operation",
+        "short_name": "AUTO_OP",
+        "path": "base/operations/autonomous_operation.md",
+        "description": "Operating modes (MANUAL/AUTO), authorization, mode-specific recovery",
+        "CEP_triggers": ["What is AUTO_MODE?", "How to authorize autonomy?", "Mode persistence?", "Manual vs auto recovery?"],
+        "keywords": ["auto", "manual", "mode", "autonomous", "authorization", "recovery", "permission"]
+      },
+      {
+        "name": "todo_hygiene",
+        "short_name": "TODO_HYG",
+        "path": "base/operations/todo_hygiene.md",
+        "description": "TODO list management, backup, and restoration protocols",
+        "CEP_triggers": ["How to manage TODOs?", "TODO backup protocol?", "Archive-then-collapse?", "TODO restoration?", "Breadcrumb format?"],
+        "keywords": ["todo", "hygiene", "backup", "restore", "archive", "collapse", "breadcrumb"]
       }
     ]
   },
@@ -530,7 +518,7 @@
     "dual_trace": ["base/consciousness/emotional_expression"],
     "ccp": ["base/consciousness/checkpoints"],
     "state_preservation": ["base/consciousness/checkpoints"],
-    "recovery": ["base/consciousness/checkpoints", "context_recovery", "manual_mode_recovery"],
+    "recovery": ["base/consciousness/checkpoints", "base/operations/context_recovery", "base/operations/autonomous_operation"],
     "roadmap": ["base/consciousness/roadmaps_drafting", "base/consciousness/roadmaps_following"],
     "roadmaps": ["base/consciousness/roadmaps_drafting", "base/consciousness/roadmaps_following"],
     "planning": ["base/consciousness/roadmaps_drafting"],
@@ -541,7 +529,7 @@
     "clobbering": ["base/consciousness/roadmaps_drafting#no-clobbering", "todo_hygiene#never-clobber"],
     "todo_integration": ["base/consciousness/roadmaps_drafting#todo-integration", "todo_hygiene"],
     "observability": ["base/consciousness/roadmaps_drafting#observability"],
-    "todo": ["todo_hygiene"],
+    "todo": ["base/operations/todo_hygiene"],
     "backup": ["todo_hygiene#backup-protocol", "agent_backup"],
     "restore": ["todo_hygiene#session-file-migration", "agent_backup", "context_recovery"],
     "docker": ["tech/docker/container_operations"],
