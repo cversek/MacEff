@@ -88,3 +88,96 @@ def _read_autocompact_from_file(settings_path: Path) -> Optional[bool]:
         return None
     except Exception:
         return None
+
+
+def set_autocompact_enabled(enabled: bool) -> bool:
+    """
+    Set Claude Code autocompact setting in ~/.claude.json.
+
+    This modifies the global Claude Code UI settings file to enable or
+    disable automatic compaction. Required for AUTO_MODE operation.
+
+    Args:
+        enabled: True to enable autocompact, False to disable
+
+    Returns:
+        True if successfully updated, False on error
+
+    Note:
+        Modifies ~/.claude.json (Claude Code UI settings).
+        Changes take effect on next Claude Code session.
+    """
+    try:
+        settings_path = Path.home() / ".claude.json"
+
+        # Read existing settings or create new
+        if settings_path.exists():
+            with open(settings_path, 'r') as f:
+                settings = json.load(f)
+        else:
+            settings = {}
+
+        # Update autocompact setting (use camelCase to match CC convention)
+        settings['autoCompactEnabled'] = enabled
+
+        # Write atomically via temp file
+        temp_path = settings_path.with_suffix('.tmp')
+        with open(temp_path, 'w') as f:
+            json.dump(settings, f, indent=2)
+        temp_path.replace(settings_path)
+
+        return True
+    except Exception:
+        return False
+
+
+def set_permission_mode(mode: str, project_root: Optional[Path] = None) -> bool:
+    """
+    Set Claude Code default permission mode in project settings.
+
+    This modifies .claude/settings.local.json to change how Claude Code
+    handles permission requests (accept-edits, plan, bypassPermissions, etc.).
+
+    Args:
+        mode: Permission mode string (e.g., "accept-edits", "plan", "default")
+        project_root: Project root path. If None, attempts auto-detection.
+
+    Returns:
+        True if successfully updated, False on error
+
+    Note:
+        Modifies project-local .claude/settings.local.json.
+        Common modes: "default", "accept-edits", "plan", "bypassPermissions"
+    """
+    try:
+        if project_root is None:
+            from .paths import find_project_root
+            project_root = find_project_root()
+
+        settings_dir = project_root / ".claude"
+        settings_dir.mkdir(parents=True, exist_ok=True)
+        settings_path = settings_dir / "settings.local.json"
+
+        # Read existing settings or create new
+        if settings_path.exists():
+            with open(settings_path, 'r') as f:
+                settings = json.load(f)
+        else:
+            settings = {}
+
+        # Ensure permissions dict exists
+        if 'permissions' not in settings:
+            settings['permissions'] = {}
+
+        # Update default mode
+        settings['permissions']['defaultMode'] = mode
+
+        # Write atomically via temp file
+        temp_path = settings_path.with_suffix('.tmp')
+        with open(temp_path, 'w') as f:
+            json.dump(settings, f, indent=2)
+        temp_path.replace(settings_path)
+
+        return True
+    except Exception:
+        return False

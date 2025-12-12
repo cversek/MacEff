@@ -113,6 +113,15 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
         token_info = get_token_info(session_id)
         auto_mode, _, _ = detect_auto_mode(session_id)
 
+        # TODO v0.3.1: AUTO_MODE task verification
+        # When in AUTO_MODE, verify completed work against roadmap validation checklist
+        # _check_auto_mode_completion(session_id, auto_mode)
+
+        # TODO v0.3.1: AUTO_MODE notification system
+        # When in AUTO_MODE with significant milestone, send notification
+        # (configurable channels: system notification, webhook, etc.)
+        # _send_auto_mode_notification(session_id, auto_mode, stats)
+
         # Format token context using DRY utility
         token_section = format_token_context_full(token_info)
         boundary_guidance = get_boundary_guidance(token_info['cluac_level'], auto_mode)

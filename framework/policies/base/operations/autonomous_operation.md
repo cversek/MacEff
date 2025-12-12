@@ -177,9 +177,31 @@ macf_tools mode set AUTO_MODE --auth-token "$(python3 -c "import json; print(jso
 The auth token is stored in `.maceff/settings.json`:
 ```json
 {
-  "auto_mode_auth_token": "YOLO BOZO!"
+  "auto_mode_auth_token": "your-unique-token-here"
 }
 ```
+
+### Security Model Limitations
+
+**Important**: The current authorization mechanism is **policy-enforced, not cryptographically enforced**.
+
+**What this means**:
+- Agents have file read access to `.maceff/settings.json`
+- An agent could theoretically read the token and self-authorize
+- The CLI token validation provides audit trail and defense-in-depth, not cryptographic security
+
+**Actual enforcement relies on**:
+1. **Policy compliance** - Agents are trained via CLAUDE.md and policies to only activate when user explicitly authorizes
+2. **Skill design** - The `maceff-enter-auto-mode` skill instructs agents to request authorization without hinting at the phrase
+3. **Audit logging** - Mode changes are logged to agent events for forensic review
+4. **Human oversight** - User can review logs and revoke autonomy
+
+**Possible future enhancements** (not currently implemented):
+- Token stored outside agent's read permissions (user keychain)
+- External verification service
+- Hardware token / OTP mechanism
+
+**Current posture**: Suitable for trusted development environments where agent compliance with policy is expected. Not suitable for adversarial scenarios.
 
 ---
 

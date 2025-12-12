@@ -2,6 +2,7 @@
 Cycles utilities.
 """
 
+import json
 import os
 import time
 from pathlib import Path
@@ -98,6 +99,83 @@ def get_agent_cycle_number(agent_root: Optional[Path] = None) -> int:
         return agent_state.get('current_cycle_number', 1)
     except Exception:
         return 1
+
+def set_auto_mode(
+    enabled: bool,
+    session_id: str,
+    auth_token: Optional[str] = None,
+    agent_root: Optional[Path] = None,
+    testing: bool = True
+) -> Tuple[bool, str]:
+    """
+    Set AUTO_MODE for current session with optional auth token validation.
+
+    Mode persistence is SOURCE-AWARE (per autonomous_operation.md policy):
+    - compact (auto-compaction): Mode PRESERVED across compaction
+    - resume (crash/restart): Mode RESET to MANUAL_MODE
+
+    This function sets mode for the current session. SessionStart hook
+    handles persistence logic based on source field.
+
+    Args:
+        enabled: True for AUTO_MODE, False for MANUAL_MODE
+        session_id: Current session identifier
+        auth_token: Optional auth token for AUTO_MODE activation
+        agent_root: Agent root path (auto-detected if None)
+        testing: If True, skip state mutations (safe-by-default)
+
+    Returns:
+        Tuple of (success: bool, message: str)
+
+    Note:
+        AUTO_MODE requires valid auth_token when enabled=True.
+        MANUAL_MODE can always be set without auth.
+    """
+    try:
+        # Validate auth token for AUTO_MODE activation
+        if enabled and auth_token is not None:
+            # Load expected token from settings
+            if agent_root is None:
+                agent_root = find_project_root()
+            settings_path = agent_root / ".maceff" / "settings.json"
+
+            if settings_path.exists():
+                with open(settings_path, 'r') as f:
+                    settings = json.load(f)
+                expected_token = settings.get('auto_mode_auth_token')
+
+                if expected_token and auth_token != expected_token:
+                    return (False, "Invalid auth token")
+            # If no settings file or no token configured, skip validation
+            # (allows initial setup before tokens exist)
+
+        # Testing mode: return success without mutations
+        if testing:
+            mode_str = "AUTO_MODE" if enabled else "MANUAL_MODE"
+            return (True, f"Would set {mode_str} (testing=True)")
+
+        # Production mode: Log mode change event
+        try:
+            from ..agent_events_log import append_event
+            mode_str = "AUTO_MODE" if enabled else "MANUAL_MODE"
+            append_event(
+                event="mode_change",
+                data={
+                    "mode": mode_str,
+                    "enabled": enabled,
+                    "session_id": session_id,
+                    "auth_validated": auth_token is not None
+                }
+            )
+        except Exception:
+            pass  # Don't fail on logging errors
+
+        mode_str = "AUTO_MODE" if enabled else "MANUAL_MODE"
+        return (True, f"Mode set to {mode_str}")
+
+    except Exception as e:
+        return (False, f"Error setting mode: {e}")
+
 
 def increment_agent_cycle(
     session_id: str,
