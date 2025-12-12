@@ -14,7 +14,8 @@ from macf.utils import (
     start_deleg_drv,
     get_token_info,
     format_token_context_minimal,
-    get_breadcrumb
+    get_breadcrumb,
+    detect_auto_mode
 )
 from macf.agent_events_log import append_event
 from macf.hooks.hook_logging import log_hook_event
@@ -150,20 +151,28 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
             # Command tracking (first 40 chars)
             command = tool_input.get("command", "")
             if command:
-                # Block bare 'cd' commands that change working directory
-                # Allow cd in subshells: (cd dir && cmd) or $(...) contexts
+                # Mode-aware bare cd detection (per autonomous_operation.md policy)
+                # AUTO_MODE: warn but continue (safeguards warn, don't block)
+                # MANUAL_MODE: block violation
                 if _is_bare_cd_command(command):
-                    return {
-                        "continue": False,
-                        "hookSpecificOutput": {
-                            "hookEventName": "PreToolUse",
-                            "message": (
-                                "❌ Bare 'cd' command blocked - changes working directory and breaks hook paths.\n"
-                                "Use subshell instead: (cd /path && command)\n"
-                                "Or use absolute paths without cd."
-                            )
+                    auto_mode, _, _ = detect_auto_mode(session_id)
+                    violation_msg = (
+                        "Bare 'cd' command detected - changes working directory and breaks hook paths.\n"
+                        "Use subshell instead: (cd /path && command)\n"
+                        "Or use absolute paths without cd."
+                    )
+                    if auto_mode:
+                        # AUTO_MODE: warn but continue
+                        message_parts.append(f"⚠️ {violation_msg}")
+                    else:
+                        # MANUAL_MODE: block
+                        return {
+                            "continue": False,
+                            "hookSpecificOutput": {
+                                "hookEventName": "PreToolUse",
+                                "message": f"❌ {violation_msg}"
+                            }
                         }
-                    }
 
                 short_cmd = command[:40] + "..." if len(command) > 40 else command
                 message_parts.append(f"⚙️ {short_cmd}")

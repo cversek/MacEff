@@ -1455,6 +1455,101 @@ def cmd_policy_ca_types(args: argparse.Namespace) -> int:
         return 1
 
 
+# -------- Mode Commands --------
+
+def cmd_mode_get(args: argparse.Namespace) -> int:
+    """Get current operating mode."""
+    from .utils.cycles import detect_auto_mode
+
+    try:
+        session_id = get_current_session_id()
+        enabled, source, confidence = detect_auto_mode(session_id)
+
+        mode = "AUTO_MODE" if enabled else "MANUAL_MODE"
+
+        if getattr(args, 'json_output', False):
+            data = {
+                "mode": mode,
+                "enabled": enabled,
+                "source": source,
+                "confidence": confidence,
+                "session_id": session_id
+            }
+            print(json.dumps(data, indent=2))
+        else:
+            print(f"Mode: {mode}")
+            print(f"Source: {source} (confidence: {confidence})")
+
+        return 0
+
+    except Exception as e:
+        print(f"Error getting mode: {e}")
+        return 1
+
+
+def cmd_mode_set(args: argparse.Namespace) -> int:
+    """Set operating mode (requires auth token for AUTO_MODE)."""
+    from .utils.cycles import set_auto_mode
+
+    try:
+        mode = args.mode.upper()
+        auth_token = getattr(args, 'auth_token', None)
+
+        # Validate mode argument
+        if mode not in ('AUTO_MODE', 'MANUAL_MODE'):
+            print(f"Invalid mode: {mode}")
+            print("Valid modes: AUTO_MODE, MANUAL_MODE")
+            return 1
+
+        enabled = (mode == 'AUTO_MODE')
+        session_id = get_current_session_id()
+
+        # AUTO_MODE requires auth token
+        if enabled and not auth_token:
+            print("Error: AUTO_MODE requires --auth-token")
+            print("\nTo activate AUTO_MODE:")
+            print("  macf_tools mode set AUTO_MODE --auth-token \"$(python3 -c \"import json; print(json.load(open('.maceff/settings.json'))['auto_mode_auth_token'])\")\"\n")
+            return 1
+
+        # Set mode (testing=False for real effect)
+        success, message = set_auto_mode(
+            enabled=enabled,
+            session_id=session_id,
+            auth_token=auth_token,
+            testing=False
+        )
+
+        if success:
+            print(f"✅ {message}")
+
+            # If enabling AUTO_MODE, also enable autocompact and bypass permissions
+            if enabled:
+                from .utils.claude_settings import set_autocompact_enabled, set_permission_mode
+                if set_autocompact_enabled(True):
+                    print("✅ autoCompactEnabled set to true in ~/.claude.json")
+                else:
+                    print("⚠️  Could not update autoCompactEnabled setting")
+                if set_permission_mode("bypassPermissions"):
+                    print("✅ permissions.defaultMode set to bypassPermissions")
+                else:
+                    print("⚠️  Could not update permissions.defaultMode setting")
+            else:
+                # Returning to MANUAL_MODE - restore default permissions
+                from .utils.claude_settings import set_autocompact_enabled, set_permission_mode
+                set_autocompact_enabled(False)
+                set_permission_mode("default")
+                print("✅ Restored default settings (autocompact disabled, default permissions)")
+        else:
+            print(f"❌ {message}")
+            return 1
+
+        return 0
+
+    except Exception as e:
+        print(f"Error setting mode: {e}")
+        return 1
+
+
 # -------- Agent Events Log Commands --------
 
 def cmd_events_show(args: argparse.Namespace) -> int:
@@ -1964,6 +2059,21 @@ def _build_parser() -> argparse.ArgumentParser:
     # policy ca-types
     ca_types_parser = policy_sub.add_parser("ca-types", help="show CA types with emojis")
     ca_types_parser.set_defaults(func=cmd_policy_ca_types)
+
+    # Mode commands
+    mode_parser = sub.add_parser("mode", help="operating mode management (MANUAL_MODE/AUTO_MODE)")
+    mode_sub = mode_parser.add_subparsers(dest="mode_cmd")
+
+    mode_get = mode_sub.add_parser("get", help="get current operating mode")
+    mode_get.add_argument("--json", dest="json_output", action="store_true",
+                         help="output as JSON")
+    mode_get.set_defaults(func=cmd_mode_get)
+
+    mode_set = mode_sub.add_parser("set", help="set operating mode")
+    mode_set.add_argument("mode", help="mode to set (AUTO_MODE or MANUAL_MODE)")
+    mode_set.add_argument("--auth-token", dest="auth_token",
+                         help="auth token for AUTO_MODE activation")
+    mode_set.set_defaults(func=cmd_mode_set)
 
     # Events commands
     events_parser = sub.add_parser("events", help="agent events log management")

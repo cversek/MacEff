@@ -650,6 +650,42 @@ Command-line arguments override settings.json values. This table maps CLI flags 
 
 ---
 
+## MACF Settings (.maceff/settings.json)
+
+MACF maintains its own settings file at `.maceff/settings.json` in the project root. These settings control MACF-specific behavior separate from Claude Code settings.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `auto_mode_auth_token` | string | Authorization token for AUTO_MODE activation |
+| `description` | string | Human-readable description of the settings file |
+
+### AUTO_MODE Authorization
+
+AUTO_MODE enables autonomous agent operation without permission prompts. Requires two-factor authorization:
+
+1. **User phrase**: Message must contain `YOLO BOZO!` + `AUTO_MODE`
+2. **CLI token**: Valid token from `.maceff/settings.json`
+
+**CLI Usage**:
+```bash
+# Get current mode
+macf_tools mode get
+
+# Set AUTO_MODE (requires auth token)
+macf_tools mode set AUTO_MODE --auth-token "$(python3 -c "import json; print(json.load(open('.maceff/settings.json'))['auto_mode_auth_token'])")"
+
+# Return to MANUAL_MODE (no auth required)
+macf_tools mode set MANUAL_MODE
+```
+
+**Mode Persistence**: Mode is source-aware across sessions:
+- `compact` (auto-compaction): Mode PRESERVED
+- `resume` (crash/restart): Mode RESET to MANUAL_MODE
+
+**Related Policy**: See `framework/policies/base/operations/autonomous_operation.md`
+
+---
+
 ## MacEff Configuration Recommendations
 
 ### Consciousness Preservation
