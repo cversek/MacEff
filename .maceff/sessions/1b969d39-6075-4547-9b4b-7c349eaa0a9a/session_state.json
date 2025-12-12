@@ -1,0 +1,23 @@
+{
+  "session_id": "1b969d39-6075-4547-9b4b-7c349eaa0a9a",
+  "agent_id": "cversek",
+  "auto_mode": false,
+  "auto_mode_source": "default",
+  "auto_mode_confidence": 0.0,
+  "pending_todos": [],
+  "recovery_policy_path": null,
+  "compaction_count": 0,
+  "started_at": 1765382080.6140501,
+  "last_updated": 1765382081.707459,
+  "session_started_at": 0.0,
+  "last_compaction_at": null,
+  "total_session_duration": 0.0,
+  "current_dev_drv_started_at": null,
+  "current_dev_drv_prompt_uuid": null,
+  "dev_drv_count": 0,
+  "total_dev_drv_duration": 0.0,
+  "current_deleg_drv_started_at": null,
+  "deleg_drv_count": 0,
+  "total_deleg_drv_duration": 0.0,
+  "delegations_this_drive": []
+}
