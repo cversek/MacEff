@@ -508,6 +508,16 @@ Both `content` (imperative) and `activeForm` (present continuous) required for a
 - Preserves breadcrumbs, status, activeForm fields
 - Supports archaeological queries via jq, grep
 
+**🚨 ANTI-PATTERN: Collapse-on-Backup**
+
+NEVER create a "backup" that summarizes or collapses the TODO state. A backup that loses information is destruction disguised as preservation.
+
+- ❌ WRONG: Writing a condensed 10-item summary of a 25-item TODO list
+- ❌ WRONG: Collapsing archived items into single lines during backup
+- ✅ CORRECT: Raw JSON copy of complete TODO structure, every field preserved
+
+The purpose of backup is FULL STATE RECONSTRUCTION, not documentation. If you can't restore the exact TODO state from the backup file via TodoWrite, it's not a backup.
+
 **When to Backup**:
 
 1. **Before CCP creation** (MANDATORY):
