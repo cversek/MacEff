@@ -27,7 +27,11 @@ from macf.utils import (
     format_manifest_awareness
 )
 from macf.hooks.compaction import detect_compaction
-from macf.hooks.recovery import format_consciousness_recovery_message, format_session_migration_message
+from macf.hooks.recovery import (
+    format_consciousness_recovery_message,
+    format_session_migration_message,
+    format_fresh_session_manual_recovery_message
+)
 from macf.hooks.hook_logging import log_hook_event
 from macf.agent_events_log import append_event
 from macf.utils.state import get_session_state_path, read_json, write_json_safely
@@ -237,16 +241,42 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
                 temporal_ctx = get_temporal_context()
                 environment = get_rich_environment_string()
 
-                # Format session migration recovery message
-                migration_msg = format_session_migration_message(
-                    previous_session_id=previous_session_id,
-                    current_session_id=session_id,
-                    orphaned_todo_path=orphaned_todo_path,
-                    temporal_ctx=temporal_ctx,
-                    environment=environment
-                )
+                # Detect AUTO_MODE for fresh sessions
+                auto_mode, mode_source, mode_confidence = detect_auto_mode(session_id)
 
-                # Return migration recovery message (calm TODO restoration)
+                # Log mode detection for fresh session
+                log_hook_event({
+                    "hook_name": "session_start",
+                    "event_type": "FRESH_SESSION_MODE_DETECTED",
+                    "session_id": session_id,
+                    "auto_mode": auto_mode,
+                    "mode_source": mode_source,
+                    "mode_confidence": mode_confidence
+                })
+
+                # Branch based on mode
+                if auto_mode:
+                    # AUTO_MODE: Brief message, skill invocation, continue
+                    migration_msg = format_session_migration_message(
+                        previous_session_id=previous_session_id,
+                        current_session_id=session_id,
+                        orphaned_todo_path=orphaned_todo_path,
+                        temporal_ctx=temporal_ctx,
+                        environment=environment
+                    )
+                else:
+                    # MANUAL_MODE: Require artifact review, await user authorization
+                    artifacts = get_latest_consciousness_artifacts()
+                    migration_msg = format_fresh_session_manual_recovery_message(
+                        previous_session_id=previous_session_id,
+                        current_session_id=session_id,
+                        orphaned_todo_path=orphaned_todo_path,
+                        artifacts=artifacts,
+                        temporal_ctx=temporal_ctx,
+                        environment=environment
+                    )
+
+                # Return migration recovery message
                 return {
                     "continue": True,
                     "hookSpecificOutput": {
