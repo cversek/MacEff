@@ -59,7 +59,6 @@ def detect_session_migration(current_session_id: str) -> tuple[bool, str, str]:
         import sys
         print(f"⚠️ MACF: Event query for last session failed: {e}", file=sys.stderr)
         try:
-            from macf.agent_events_log import append_event
             append_event("error", {
                 "source": "handle_session_start.detect_session_migration",
                 "error": str(e),
