@@ -222,9 +222,9 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
                         "last_updated": last_timestamp,
                         "source": "jsonl",
                     }
-            except Exception:
-                # Fall through to hooks_state fallback
-                pass
+            except Exception as e:
+                import sys
+                print(f"⚠️ MACF: Token cache JSONL read failed (fallback: hooks_state): {e}", file=sys.stderr)
 
     # Fallback to hooks_state.json (original implementation)
     project_root = find_project_root()

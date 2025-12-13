@@ -230,8 +230,9 @@ def extract_current_git_hash() -> Optional[str]:
         )
         if result.returncode == 0:
             return result.stdout.strip()
-    except Exception:
-        pass
+    except Exception as e:
+        import sys
+        print(f"⚠️ MACF: Git command failed (fallback: no prompt_uuid): {e}", file=sys.stderr)
 
     return None
 

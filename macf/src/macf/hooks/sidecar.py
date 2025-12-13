@@ -120,7 +120,18 @@ def update_sidecar(
         write_json_safely(sidecar_path, new_state)
 
     except Exception as e:
-        print(f"Sidecar update error: {e}", file=sys.stderr)
+        print(f"⚠️ MACF: Sidecar update error: {e}", file=sys.stderr)
+        try:
+            from macf.agent_events_log import append_event
+            append_event("error", {
+                "source": "sidecar.update_sidecar",
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "hook_name": hook_name,
+                "fallback": "sidecar_not_updated"
+            })
+        except Exception as log_e:
+            print(f"⚠️ MACF: Event logging also failed: {log_e}", file=sys.stderr)
 
 
 def read_sidecar(
@@ -148,5 +159,17 @@ def read_sidecar(
         sidecar_path = hooks_dir / f"sidecar_{hook_name}.json"
         return read_json_safely(sidecar_path)
 
-    except Exception:
+    except Exception as e:
+        print(f"⚠️ MACF: Sidecar read failed ({hook_name}): {e}", file=sys.stderr)
+        try:
+            from macf.agent_events_log import append_event
+            append_event("error", {
+                "source": "sidecar.read_sidecar",
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "hook_name": hook_name,
+                "fallback": "empty_dict"
+            })
+        except Exception as log_e:
+            print(f"⚠️ MACF: Event logging also failed: {log_e}", file=sys.stderr)
         return {}

@@ -160,8 +160,9 @@ def extract_dev_drive(
                 start_dt = datetime.fromisoformat(started_at.replace('Z', '+00:00'))
                 end_dt = datetime.fromisoformat(ended_at.replace('Z', '+00:00'))
                 duration = (end_dt - start_dt).total_seconds()
-            except:
-                pass
+            except (ValueError, TypeError) as e:
+                import sys
+                print(f"⚠️ MACF: DateTime parsing failed: {e}", file=sys.stderr)
 
         # Build DevelopmentDrive object
         drive = DevelopmentDrive(

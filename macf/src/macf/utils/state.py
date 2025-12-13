@@ -46,8 +46,9 @@ def write_json_safely(path: Path, data: dict) -> bool:
         if temp_path.exists():
             try:
                 temp_path.unlink()
-            except:
-                pass
+            except OSError as e:
+                import sys
+                print(f"⚠️ MACF: Temp file cleanup failed: {e}", file=sys.stderr)
         return False
 
 def read_json_safely(path: Path) -> dict:
@@ -64,8 +65,9 @@ def read_json_safely(path: Path) -> dict:
         if path.exists():
             with open(path, 'r') as f:
                 return json.load(f)
-    except Exception:
-        pass
+    except (OSError, json.JSONDecodeError) as e:
+        import sys
+        print(f"⚠️ MACF: JSON read failed ({path.name}): {e}", file=sys.stderr)
     return {}
 
 def get_session_state_path(session_id: str, agent_root: Optional[Path] = None) -> Path:

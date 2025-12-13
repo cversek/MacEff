@@ -112,8 +112,9 @@ def get_last_user_prompt_uuid(session_id: Optional[str] = None) -> Optional[str]
             except json.JSONDecodeError:
                 continue
 
-    except Exception:
-        pass
+    except Exception as e:
+        import sys
+        print(f"⚠️ MACF: Session file read failed (fallback: no prompt_uuid): {e}", file=sys.stderr)
 
     return None
 

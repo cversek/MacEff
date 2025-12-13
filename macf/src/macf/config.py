@@ -223,8 +223,9 @@ class ConsciousnessConfig:
                             moniker = config.get('agent_identity', {}).get('moniker')
                             if moniker:
                                 return moniker
-                    except Exception:
-                        pass  # Fall through to fallback
+                    except Exception as e:
+                        import sys
+                        print(f"⚠️ MACF: Config parse failed (fallback: unknown_agent): {e}", file=sys.stderr)
 
         # Fallback - use unknown_agent
         return 'unknown_agent'
@@ -241,7 +242,9 @@ class ConsciousnessConfig:
             try:
                 with open(config_file) as f:
                     return json.load(f)
-            except Exception:
+            except Exception as e:
+                import sys
+                print(f"⚠️ MACF: Config load failed (fallback: empty config): {e}", file=sys.stderr)
                 return {}
         return {}
 

@@ -161,8 +161,9 @@ def list_policy_files(
                     if 'Tier' in line and ':' in line:
                         file_tier = line.split(':')[1].strip().upper()
                         break
-            except Exception:
-                pass
+            except Exception as e:
+                import sys
+                print(f"⚠️ MACF: Policy tier parse failed ({md_file.name}): {e}", file=sys.stderr)
 
             if file_tier != tier.upper():
                 continue
