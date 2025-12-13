@@ -5,6 +5,7 @@ handle_stop - Stop hook runner.
 DEV_DRV completion tracking + stats display.
 """
 import json
+import sys
 import traceback
 from typing import Dict, Any
 
@@ -64,7 +65,6 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
         except Exception as e:
             print(f"⚠️ MACF: DEV_DRV stats query failed: {e}", file=sys.stderr)
             try:
-                from macf.agent_events_log import append_event
                 append_event("error", {
                     "source": "handle_stop.run",
                     "error": str(e),
