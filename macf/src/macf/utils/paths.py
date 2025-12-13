@@ -51,8 +51,9 @@ def find_project_root() -> Path:
             git_root = Path(result.stdout.strip())
             if (git_root / "tools").exists() or (git_root / ".git").exists():
                 return git_root
-    except Exception:
-        pass
+    except (subprocess.CalledProcessError, OSError, FileNotFoundError) as e:
+        import sys
+        print(f"⚠️ MACF: Git root detection failed (using fallback): {e}", file=sys.stderr)
 
     # Fall back to discovery method from __file__ location
     current = Path(__file__).resolve().parent
@@ -115,8 +116,10 @@ def get_session_dir(
             from .config import ConsciousnessConfig
             config = ConsciousnessConfig()
             agent_id = config.agent_id
-        except Exception:
+        except (ImportError, OSError, KeyError) as e:
             # Fallback if config unavailable
+            import sys
+            print(f"⚠️ MACF: Config load failed (using env fallback): {e}", file=sys.stderr)
             agent_id = os.environ.get('MACEFF_USER') or os.environ.get('USER') or 'unknown_agent'
 
     # Build unified path: /tmp/macf/{agent_id}/{session_id}/{subdir}/
@@ -129,7 +132,9 @@ def get_session_dir(
         try:
             base_path.mkdir(parents=True, exist_ok=True, mode=0o755)
             return base_path
-        except Exception:
+        except OSError as e:
+            import sys
+            print(f"⚠️ MACF: Session dir creation failed: {e}", file=sys.stderr)
             return None
     else:
         return base_path if base_path.exists() else None
