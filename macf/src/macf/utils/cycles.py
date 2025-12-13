@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 from .paths import find_project_root
 from .session import get_current_session_id
-from .state import load_agent_state, save_agent_state, SessionOperationalState, read_json_safely
+from .state import load_agent_state, save_agent_state, SessionOperationalState, read_json
 # NOTE: event_queries imported lazily inside functions to avoid circular import
 # (cycles.py -> event_queries -> agent_events_log -> utils -> cycles.py)
 
@@ -45,7 +45,7 @@ def detect_auto_mode(session_id: str) -> Tuple[bool, str, float]:
         try:
             project_root = find_project_root()
             config_path = project_root / ".maceff" / "config.json"
-            config_data = read_json_safely(config_path)
+            config_data = read_json(config_path)
 
             if "auto_mode" in config_data:
                 auto_mode = bool(config_data["auto_mode"])

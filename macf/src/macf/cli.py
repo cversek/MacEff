@@ -1016,17 +1016,23 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
 
 def _get_policy_read_cache(session_id: str) -> dict:
     """Get policy reads cache from session state."""
-    from .utils.state import get_session_state_path, read_json_safely
+    from .utils.state import get_session_state_path, read_json
     state_path = get_session_state_path(session_id)
-    state = read_json_safely(state_path)
-    return state.get('policy_reads', {})
+    try:
+        state = read_json(state_path)
+        return state.get('policy_reads', {})
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return {}  # Cache miss - return empty
 
 
 def _update_policy_read_cache(session_id: str, policy_name: str, breadcrumb: str) -> bool:
     """Update policy reads cache in session state."""
-    from .utils.state import get_session_state_path, read_json_safely, write_json_safely
+    from .utils.state import get_session_state_path, read_json, write_json_safely
     state_path = get_session_state_path(session_id)
-    state = read_json_safely(state_path)
+    try:
+        state = read_json(state_path)
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        state = {}  # Start fresh if read fails
 
     # Initialize policy_reads if needed
     if 'policy_reads' not in state:

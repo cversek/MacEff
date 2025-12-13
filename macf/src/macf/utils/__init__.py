@@ -17,7 +17,7 @@ from .session import (
 )
 from .state import (
     write_json_safely,
-    read_json_safely,
+    read_json,
     get_agent_state_path,
     load_agent_state,
     save_agent_state,
