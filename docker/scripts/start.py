@@ -340,6 +340,20 @@ def install_framework_skills(home_dir: Path) -> None:
                     log(f"Created skill symlink: {link.name}")
 
 
+def install_framework_output_styles(home_dir: Path) -> None:
+    """Install framework output styles as symlinks to ~/.claude/output-styles/."""
+    styles_dir = home_dir / '.claude' / 'output-styles'
+    styles_dir.mkdir(parents=True, exist_ok=True)
+
+    framework_styles = FRAMEWORK_ROOT / 'output-styles'
+    if framework_styles.exists():
+        for style_file in framework_styles.glob('*.md'):
+            link = styles_dir / style_file.name
+            if not link.exists() and not link.is_symlink():
+                link.symlink_to(style_file)
+                log(f"Created output-style symlink: {link.name}")
+
+
 def install_three_layer_context(username: str, agent_spec: AgentSpec) -> None:
     """Install three-layer CLAUDE.md context (System/Identity/Project)."""
     home = Path(f'/home/{username}')
@@ -371,9 +385,10 @@ def install_three_layer_context(username: str, agent_spec: AgentSpec) -> None:
     hooks_dir = claude_dir / 'hooks'
     hooks_dir.mkdir(mode=0o755, exist_ok=True)
 
-    # Install framework commands and skills
+    # Install framework commands, skills, and output styles
     install_framework_commands(home)
     install_framework_skills(home)
+    install_framework_output_styles(home)
 
     # Ensure ownership
     run_command(['chown', '-R', f'{username}:{username}', str(claude_dir)])
