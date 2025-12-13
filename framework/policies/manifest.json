@@ -49,6 +49,12 @@
         "likely_policies": ["roadmaps_drafting", "roadmaps_following"]
       },
       {
+        "pattern": "error_handling",
+        "consciousness": "Writing exception handlers or debugging silent failures",
+        "search_terms": ["exception", "error", "catch", "silent", "visibility", "stderr"],
+        "likely_policies": ["coding_standards", "coding_standards_python"]
+      },
+      {
         "pattern": "container_operations",
         "consciousness": "Docker, container, or deployment operations",
         "search_terms": ["docker", "container", "deploy", "rebuild", "restart"],
@@ -265,6 +271,19 @@
         "keywords": ["CLI", "command", "flags", "help text", "error messages", "configuration", "UX"]
       },
       {
+        "name": "coding_standards",
+        "short_name": "CODE",
+        "path": "base/development/coding_standards.md",
+        "CEP_triggers": [
+          "Error visibility stance?",
+          "Exception handling standards?",
+          "Silent failure anti-patterns?",
+          "When to log to stderr?",
+          "When to use event logging?"
+        ],
+        "keywords": ["coding", "standards", "error", "exception", "visibility", "silent", "stderr", "anti-pattern"]
+      },
+      {
         "name": "communication",
         "short_name": "COMM",
         "path": "base/development/communication.md",
@@ -411,6 +430,19 @@
             "Python testing anti-patterns?"
           ],
           "keywords": ["pytest", "python", "fixtures", "parametrize", "conftest", "marks"]
+        },
+        "coding_standards": {
+          "name": "python_coding_standards",
+          "short_name": "PY_CODE",
+          "path": "lang/python/coding_standards.md",
+          "CEP_triggers": [
+            "Python exception handling?",
+            "What exception types to catch?",
+            "Python stderr pattern?",
+            "Python event logging pattern?",
+            "Bare except anti-pattern?"
+          ],
+          "keywords": ["python", "exception", "try", "except", "stderr", "logging", "FileNotFoundError", "OSError"]
         }
       }
     }
