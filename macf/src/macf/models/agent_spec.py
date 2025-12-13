@@ -9,6 +9,33 @@ from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field, field_validator
 
 
+class ClaudeCodeConfig(BaseModel):
+    """Claude Code settings for container agents.
+
+    Controls thinking mode, output style, cleanup period, and environment variables.
+    Per-agent settings override deployment-level defaults.
+    """
+
+    cleanupPeriodDays: int = Field(
+        default=99999,
+        description="Days before Claude Code cleans up old sessions (99999 = effectively never)"
+    )
+    thinking: Optional[str] = Field(
+        default=None,
+        description="Thinking mode: 'enabled' for extended thinking, None for default"
+    )
+    outputStyle: Optional[str] = Field(
+        default=None,
+        description="Output style name (e.g., 'maceff-compliance'). Must match file in output-styles/"
+    )
+    env: Dict[str, str] = Field(
+        default_factory=lambda: {
+            "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR": "1"
+        },
+        description="Environment variables for Claude Code"
+    )
+
+
 class ConsciousnessArtifactsConfig(BaseModel):
     """Configuration for consciousness artifacts directories."""
 
@@ -59,6 +86,11 @@ class AgentSpec(BaseModel):
         description="Hook configuration (enabled list, etc.)"
     )
 
+    claude_config: Optional[ClaudeCodeConfig] = Field(
+        default=None,
+        description="Claude Code settings override for this agent"
+    )
+
 
 class SubagentSpec(BaseModel):
     """Specification for a Subagent (SA)."""
@@ -103,6 +135,11 @@ class DefaultsConfig(BaseModel):
     hooks: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Default hook configuration"
+    )
+
+    claude_config: Optional[ClaudeCodeConfig] = Field(
+        default=None,
+        description="Default Claude Code settings for all agents"
     )
 
 

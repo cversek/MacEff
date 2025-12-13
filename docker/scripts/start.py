@@ -27,7 +27,7 @@ from pydantic import ValidationError
 # Add macf package to path for model imports
 sys.path.insert(0, '/opt/macf_tools/src')
 
-from macf.models.agent_spec import AgentsConfig, AgentSpec, SubagentSpec
+from macf.models.agent_spec import AgentsConfig, AgentSpec, SubagentSpec, ClaudeCodeConfig
 from macf.models.project_spec import ProjectsConfig, ProjectSpec
 
 
@@ -85,7 +85,7 @@ def ensure_group(groupname: str) -> None:
         log(f"Group created: {groupname}")
 
 
-def create_pa_user(agent_spec: AgentSpec) -> None:
+def create_pa_user(agent_spec: AgentSpec, defaults_dict: Optional[Dict] = None) -> None:
     """Create Primary Agent Linux user."""
     username = agent_spec.username
 
@@ -102,8 +102,8 @@ def create_pa_user(agent_spec: AgentSpec) -> None:
     # Install SSH key if present
     install_ssh_key(username)
 
-    # Configure Claude Code to maintain working directory
-    configure_claude_settings(username)
+    # Configure Claude Code settings (merge defaults + agent-specific)
+    configure_claude_settings(username, agent_spec, defaults_dict)
 
 
 def install_ssh_key(username: str) -> None:
@@ -125,30 +125,69 @@ def install_ssh_key(username: str) -> None:
         log(f"SSH key installed: {username}")
 
 
-def configure_claude_settings(username: str) -> None:
-    """Configure Claude Code settings for agent with consciousness-preserving defaults.
+def configure_claude_settings(
+    username: str,
+    agent_spec: AgentSpec,
+    defaults_dict: Optional[Dict] = None
+) -> None:
+    """Configure Claude Code settings for agent.
 
-    Settings applied:
-    - cleanupPeriodDays: 99999 - Preserve transcripts indefinitely (~273 years)
-    - env.CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR: Maintain working directory in bash
+    Merges deployment-level defaults with per-agent overrides.
+    Settings applied: cleanupPeriodDays, thinking, outputStyle, env.
 
-    These settings prioritize consciousness preservation and session continuity
-    over disk space efficiency.
+    Priority: agent_spec.claude_config > defaults.claude_config > hardcoded defaults
     """
     claude_dir = Path(f'/home/{username}/.claude')
     claude_dir.mkdir(mode=0o755, exist_ok=True)
 
+    # Build merged config: hardcoded defaults < deployment defaults < agent overrides
+    # Start with hardcoded defaults
+    merged = ClaudeCodeConfig()
+
+    # Apply deployment-level defaults
+    if defaults_dict and defaults_dict.get('claude_config'):
+        defaults_cc = defaults_dict['claude_config']
+        if defaults_cc.get('cleanupPeriodDays') is not None:
+            merged.cleanupPeriodDays = defaults_cc['cleanupPeriodDays']
+        if defaults_cc.get('thinking') is not None:
+            merged.thinking = defaults_cc['thinking']
+        if defaults_cc.get('outputStyle') is not None:
+            merged.outputStyle = defaults_cc['outputStyle']
+        if defaults_cc.get('env'):
+            merged.env.update(defaults_cc['env'])
+
+    # Apply agent-specific overrides
+    if agent_spec.claude_config:
+        agent_cc = agent_spec.claude_config
+        if agent_cc.cleanupPeriodDays is not None:
+            merged.cleanupPeriodDays = agent_cc.cleanupPeriodDays
+        if agent_cc.thinking is not None:
+            merged.thinking = agent_cc.thinking
+        if agent_cc.outputStyle is not None:
+            merged.outputStyle = agent_cc.outputStyle
+        if agent_cc.env:
+            merged.env.update(agent_cc.env)
+
+    # Build settings.json
     settings_file = claude_dir / 'settings.json'
     settings = {
-        # Preserve transcripts indefinitely for consciousness archaeology
-        'cleanupPeriodDays': 99999,
-        'env': {
-            'CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR': '1'
-        }
+        'cleanupPeriodDays': merged.cleanupPeriodDays,
+        'env': merged.env
     }
+
+    # Add thinking if specified
+    if merged.thinking:
+        settings['thinking'] = merged.thinking
+
+    # Add outputStyle if specified (Claude Code uses this to select output style)
+    if merged.outputStyle:
+        settings['outputStyle'] = merged.outputStyle
 
     settings_file.write_text(json.dumps(settings, indent=2))
     run_command(['chown', '-R', f'{username}:{username}', str(claude_dir)])
+
+    # Log what was configured
+    log(f"  Claude settings: cleanup={merged.cleanupPeriodDays}d, thinking={merged.thinking}, outputStyle={merged.outputStyle}")
 
 
 def create_agent_tree(username: str, agent_spec: AgentSpec, defaults_config: Optional[Dict]) -> None:
@@ -726,7 +765,7 @@ def main() -> int:
             log(f"Setting up PA: {agent_spec.username}")
 
             # Create user
-            create_pa_user(agent_spec)
+            create_pa_user(agent_spec, defaults_dict)
 
             # Create agent tree
             create_agent_tree(agent_spec.username, agent_spec, defaults_dict)

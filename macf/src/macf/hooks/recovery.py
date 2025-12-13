@@ -362,6 +362,95 @@ DO NOT rely on Claude Code's TODO system-reminders - those are invisible to the 
 ---{footer}"""
 
 
+def format_fresh_session_manual_recovery_message(
+    previous_session_id: str,
+    current_session_id: str,
+    orphaned_todo_path: str,
+    artifacts: Optional['ConsciousnessArtifacts'] = None,
+    temporal_ctx: Optional[dict] = None,
+    session_duration: Optional[str] = None,
+    environment: Optional[str] = None
+) -> str:
+    """
+    Format MANUAL_MODE fresh session recovery message (requires artifact review).
+
+    Fresh session (restart without compaction) in MANUAL_MODE requires the agent to:
+    1. Restore TODO access for user
+    2. Review consciousness artifacts before proceeding
+    3. Await user authorization before new work
+
+    This is lighter than compaction recovery but still controlled.
+
+    Args:
+        previous_session_id: Old session ID (orphaned TODO file)
+        current_session_id: New session ID (current session)
+        orphaned_todo_path: Path to orphaned TODO JSON file
+        artifacts: Optional consciousness artifacts for review
+        temporal_ctx: Optional temporal context dictionary
+        session_duration: Optional session duration string
+        environment: Optional execution environment string
+
+    Returns:
+        Formatted MANUAL_MODE fresh session recovery message
+    """
+    # Temporal awareness section
+    temporal_section = ""
+    if temporal_ctx:
+        temporal_section = "\n" + format_temporal_awareness_section(temporal_ctx, session_duration) + "\n"
+
+    # Session state section
+    session_state_section = f"""
+📍 SESSION STATE
+Previous Session: {previous_session_id[:8]}...
+Current Session: {current_session_id[:8]}...
+Environment: {environment if environment else 'Unknown'}
+Mode: MANUAL_MODE (user intervention required)
+"""
+
+    # Orphaned file info
+    file_info = ""
+    if orphaned_todo_path:
+        file_info = f"\n📁 Orphaned TODO file: {orphaned_todo_path}"
+    else:
+        file_info = "\n📁 No orphaned TODO file found (empty or missing)"
+
+    # Artifacts section if available
+    artifacts_section = ""
+    if artifacts:
+        artifacts_section = "\n📚 CONSCIOUSNESS ARTIFACTS:"
+        if artifacts.latest_checkpoint:
+            artifacts_section += f"\nLatest checkpoint: {artifacts.latest_checkpoint}"
+        if artifacts.latest_reflection:
+            artifacts_section += f"\nLatest reflection: {artifacts.latest_reflection}"
+        if artifacts.latest_roadmap:
+            artifacts_section += f"\nLatest roadmap: {artifacts.latest_roadmap}"
+
+    # MANUAL_MODE directive (requires user authorization)
+    directive = """
+⚠️ MANUAL_MODE RECOVERY REQUIRED:
+
+Session restarted - previous TODO file orphaned.
+
+MANDATORY STEPS:
+1. Invoke maceff-todo-restoration skill to restore user's TODO access
+2. Review latest consciousness artifacts (checkpoint, reflection)
+3. Report recovery status to user
+4. STOP and AWAIT user authorization before any new work
+
+CRITICAL: User owns session strategy in MANUAL_MODE. Do NOT proceed with
+development work until user explicitly authorizes it."""
+
+    # MACF footer
+    footer = "\n" + format_macf_footer()
+
+    return f"""🔄 SESSION MIGRATION DETECTED (MANUAL_MODE)
+
+🏗️ MACF
+{temporal_section}{session_state_section}{file_info}{artifacts_section}
+{directive}
+---{footer}"""
+
+
 def _format_todo_list(todos: List[dict]) -> str:
     """
     Format todos for display in recovery message.
