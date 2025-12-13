@@ -39,6 +39,11 @@ Applies to all code written within MacEff framework projects.
 - What patterns are explicitly forbidden?
 - How do I recognize silent failure patterns?
 
+**4 Utility Function Pattern: Warn + Reraise**
+- How should utility functions handle errors?
+- Why not swallow errors in utility functions?
+- What is the "masked error" anti-pattern?
+
 ---
 
 ## 0 Error Visibility Stance
@@ -111,6 +116,38 @@ Catching all exceptions indiscriminately hides unexpected failures. It may also 
 ### Logging Without Fallback Description
 
 Logging that an error occurred without explaining what fallback was taken leaves future debuggers confused about what the system actually did.
+
+### Masked Errors (Utility Functions)
+
+When a utility function catches an error, returns a fallback value, and the caller cannot distinguish success from failure - this is a "masked error." The function completes, but the caller has no way to know something went wrong.
+
+---
+
+## 4 Utility Function Pattern: Warn + Reraise
+
+### The Problem with Swallowing in Utilities
+
+Utility functions that catch errors and return fallback values create masked errors. The caller receives a valid-looking return value but cannot know an error occurred. This prevents callers from:
+- Logging errors to event systems
+- Making informed fallback decisions
+- Debugging unexpected behavior
+
+### The Warn + Reraise Pattern
+
+Utility functions should:
+1. **Warn to stderr** - Ensure visibility regardless of what caller does
+2. **Re-raise the exception** - Let caller decide fallback behavior
+
+This separates concerns:
+- **Utility**: Ensures visibility (stderr)
+- **Caller**: Decides fallback behavior (try/except with own logic)
+
+### Benefits
+
+- Errors always visible (stderr at minimum)
+- Callers can add event logging when appropriate
+- Fallback decisions are explicit and visible in calling code
+- No masked errors - caller always knows when something failed
 
 ---
 

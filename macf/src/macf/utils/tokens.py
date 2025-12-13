@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from .paths import find_project_root, get_session_dir, get_session_transcript_path
 from .session import get_current_session_id
-from .state import read_json_safely, write_json_safely
+from .state import read_json, write_json_safely
 from .claude_settings import get_autocompact_setting
 
 CC2_TOTAL_CONTEXT = 200000
@@ -60,9 +60,12 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
 
         if sidecar_dir:
             cache_path = sidecar_dir / "token_cache.json"
-            cache_data = read_json_safely(cache_path)
-            if cache_data and cache_data.get("session_id") == session_id:
-                cached_max = cache_data.get("max_tokens_used", 0)
+            try:
+                cache_data = read_json(cache_path)
+                if cache_data and cache_data.get("session_id") == session_id:
+                    cached_max = cache_data.get("max_tokens_used", 0)
+            except (FileNotFoundError, OSError, json.JSONDecodeError):
+                pass  # Cache miss is non-critical, continue with cached_max = 0
 
         jsonl_path = get_session_transcript_path(session_id)
 

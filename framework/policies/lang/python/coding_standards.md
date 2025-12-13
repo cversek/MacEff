@@ -160,6 +160,37 @@ except OSError as e:
 
 ---
 
+## 4 Warn + Reraise Pattern (Utility Functions)
+
+### Implementation
+
+```python
+def read_json(path: Path) -> dict:
+    """Utility function with warn + reraise pattern."""
+    import sys
+    try:
+        if not path.exists():
+            print(f"⚠️ MACF: JSON file not found ({path.name})", file=sys.stderr)
+            raise FileNotFoundError(f"JSON file not found: {path}")
+        with open(path, 'r') as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"⚠️ MACF: JSON read failed ({path.name}): {e}", file=sys.stderr)
+        raise  # Caller decides fallback
+```
+
+### Caller Pattern
+
+```python
+# Caller wraps with try/except and provides fallback
+try:
+    data = read_json(config_path)
+except (FileNotFoundError, OSError, json.JSONDecodeError):
+    data = {}  # Caller's explicit fallback decision
+```
+
+---
+
 ## Anti-Pattern Examples
 
 ### Silent Pass

@@ -51,24 +51,34 @@ def write_json_safely(path: Path, data: dict) -> bool:
                 print(f"⚠️ MACF: Temp file cleanup failed: {e}", file=sys.stderr)
         return False
 
-def read_json_safely(path: Path) -> dict:
+def read_json(path: Path) -> dict:
     """
-    Safe JSON read with error handling.
+    JSON read with warn + reraise error handling.
+
+    Warns to stderr on error, then re-raises for caller to handle.
+    Caller decides fallback behavior; this function ensures visibility.
 
     Args:
         path: Path to JSON file
 
     Returns:
-        Dict contents or empty dict if error
+        Dict contents if successful
+
+    Raises:
+        FileNotFoundError: File doesn't exist (after warning to stderr)
+        OSError: File access errors (after warning to stderr)
+        json.JSONDecodeError: Invalid JSON (after warning to stderr)
     """
+    import sys
     try:
-        if path.exists():
-            with open(path, 'r') as f:
-                return json.load(f)
+        if not path.exists():
+            print(f"⚠️ MACF: JSON file not found ({path.name})", file=sys.stderr)
+            raise FileNotFoundError(f"JSON file not found: {path}")
+        with open(path, 'r') as f:
+            return json.load(f)
     except (OSError, json.JSONDecodeError) as e:
-        import sys
         print(f"⚠️ MACF: JSON read failed ({path.name}): {e}", file=sys.stderr)
-    return {}
+        raise  # Caller decides fallback; we ensure visibility
 
 def get_session_state_path(session_id: str, agent_root: Optional[Path] = None) -> Path:
     """
@@ -144,7 +154,7 @@ def load_agent_state(agent_root: Optional[Path] = None) -> dict:
     """
     try:
         state_path = get_agent_state_path(agent_root)
-        return read_json_safely(state_path)
+        return read_json(state_path)
     except Exception:
         return {}
 
@@ -281,7 +291,7 @@ class SessionOperationalState:
             state_path = get_session_state_path(session_id)
 
             # Read state if exists
-            data = read_json_safely(state_path)
+            data = read_json(state_path)
 
             if not data:
                 # Return default instance if file doesn't exist

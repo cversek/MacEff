@@ -13,7 +13,7 @@ from macf.utils import (
     get_current_session_id,
     get_hooks_dir,
     write_json_safely,
-    read_json_safely
+    read_json
 )
 from .hook_logging import log_hook_event
 from macf.config import ConsciousnessConfig
@@ -93,7 +93,7 @@ def update_sidecar(
         sidecar_path = hooks_dir / f"sidecar_{hook_name}.json"
 
         # Load previous state for logging
-        previous_state = read_json_safely(sidecar_path)
+        previous_state = read_json(sidecar_path)
 
         # Log state change
         if previous_state:
@@ -157,7 +157,7 @@ def read_sidecar(
             return {}
 
         sidecar_path = hooks_dir / f"sidecar_{hook_name}.json"
-        return read_json_safely(sidecar_path)
+        return read_json(sidecar_path)
 
     except Exception as e:
         print(f"⚠️ MACF: Sidecar read failed ({hook_name}): {e}", file=sys.stderr)
