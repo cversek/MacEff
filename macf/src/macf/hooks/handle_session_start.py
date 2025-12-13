@@ -55,7 +55,19 @@ def detect_session_migration(current_session_id: str) -> tuple[bool, str, str]:
     try:
         from macf.event_queries import get_last_session_id_from_events
         previous_session_id = get_last_session_id_from_events()
-    except Exception:
+    except Exception as e:
+        import sys
+        print(f"⚠️ MACF: Event query for last session failed: {e}", file=sys.stderr)
+        try:
+            from macf.agent_events_log import append_event
+            append_event("error", {
+                "source": "handle_session_start.detect_session_migration",
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "fallback": "empty_previous_session"
+            })
+        except Exception as log_e:
+            print(f"⚠️ MACF: Event logging also failed: {log_e}", file=sys.stderr)
         previous_session_id = ""
 
     # FALLBACK: Agent state file if event query returned empty

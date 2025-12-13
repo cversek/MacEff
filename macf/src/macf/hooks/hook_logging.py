@@ -128,7 +128,17 @@ def setup_hook_logger(hook_name: str, session_id: str) -> logging.Logger:
             )
             file_handler.setFormatter(file_formatter)
             logger.addHandler(file_handler)
-    except Exception:
-        pass  # Silent failure on file handler
+    except Exception as e:
+        print(f"⚠️ MACF: Hook file handler setup failed: {e}", file=sys.stderr)
+        try:
+            from macf.agent_events_log import append_event
+            append_event("error", {
+                "source": "hook_logging.get_hook_logger",
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "fallback": "console_only_logging"
+            })
+        except Exception as log_e:
+            print(f"⚠️ MACF: Event logging also failed: {log_e}", file=sys.stderr)
 
     return logger

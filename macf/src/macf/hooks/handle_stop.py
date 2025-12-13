@@ -61,8 +61,18 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
             from macf.event_queries import get_dev_drv_stats_from_events
             stats = get_dev_drv_stats_from_events(session_id)
             prompt_uuid = stats.get("current_prompt_uuid")
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"⚠️ MACF: DEV_DRV stats query failed: {e}", file=sys.stderr)
+            try:
+                from macf.agent_events_log import append_event
+                append_event("error", {
+                    "source": "handle_stop.run",
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                    "fallback": "state_file_lookup"
+                })
+            except Exception as log_e:
+                print(f"⚠️ MACF: Event logging also failed: {log_e}", file=sys.stderr)
 
         # FALLBACK: State file if event query failed
         if not prompt_uuid:
