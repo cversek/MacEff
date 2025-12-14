@@ -44,6 +44,11 @@ Applies to all code written within MacEff framework projects.
 - Why not swallow errors in utility functions?
 - What is the "masked error" anti-pattern?
 
+**5 Path Resolution Anti-patterns**
+- Why is parent chain navigation fragile?
+- What is dynamic discovery?
+- What discovery priority should I use?
+
 ---
 
 ## 0 Error Visibility Stance
@@ -148,6 +153,48 @@ This separates concerns:
 - Callers can add event logging when appropriate
 - Fallback decisions are explicit and visible in calling code
 - No masked errors - caller always knows when something failed
+
+---
+
+## 5 Path Resolution Anti-patterns
+
+### Parent Chain Navigation is Fragile
+
+**Never use** chains of `.parent` calls to navigate to project locations:
+
+```
+# ANTI-PATTERN - breaks when file moves or refactors
+project_root = Path(__file__).parent.parent.parent
+config_dir = Path(__file__).parent.parent / "config"
+```
+
+**Why it's fragile:**
+- Hardcodes directory depth assumptions
+- Breaks silently when files move during refactoring
+- Different behavior when run from different contexts
+- No validation that destination is correct
+
+### Dynamic Discovery is Robust
+
+**Always use** discovery functions that find locations dynamically:
+
+```
+# CORRECT - robust to file movement and context changes
+project_root = find_project_root()  # Uses env vars → git root → markers
+config_dir = project_root / "config"
+```
+
+### Discovery Priority Pattern
+
+Robust discovery functions should check in priority order:
+1. **Environment variables** (`$PROJECT_ROOT`, `$CLAUDE_PROJECT_DIR`)
+2. **Git repository root** (`git rev-parse --show-toplevel`)
+3. **Marker-based discovery** (look for `CLAUDE.md`, `.git`, `pyproject.toml`)
+4. **Fallback with warning** (cwd, with stderr notice)
+
+### Real-World Consequence
+
+The `.parent` chain pattern caused 9 integration tests to silently skip for months in the MACF test suite. The tests looked for hooks at `Path(__file__).parent.parent.parent / '.claude' / 'hooks'` but the path calculation was wrong by one level. The tests skipped without failure, hiding the fact that hook integration was never validated.
 
 ---
 

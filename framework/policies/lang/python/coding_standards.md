@@ -40,6 +40,11 @@ Applies to all Python code written within MacEff framework projects.
 - Subprocess calls?
 - Network/socket operations?
 
+**5 Path Resolution in Python**
+- What is the `.parent` chain anti-pattern?
+- When is single `.parent` acceptable?
+- What MACF discovery functions exist?
+
 ---
 
 ## 0 Exception Type Selection
@@ -187,6 +192,56 @@ try:
     data = read_json(config_path)
 except (FileNotFoundError, OSError, json.JSONDecodeError):
     data = {}  # Caller's explicit fallback decision
+```
+
+---
+
+## 5 Path Resolution in Python
+
+### The `.parent` Chain Anti-pattern
+
+```python
+# FRAGILE - hardcodes directory structure
+base_dir = Path(__file__).parent.parent.parent
+hooks_dir = Path(__file__).parent.parent.parent / '.claude' / 'hooks'
+
+# ROBUST - uses discovery
+from macf.utils import find_project_root
+project_root = find_project_root()
+hooks_dir = project_root / '.claude' / 'hooks'
+```
+
+### Why This Matters
+
+The `.parent` chain pattern caused 9 integration tests to silently skip for months:
+- Test file at: `macf/tests/integration/test_hook_execution.py`
+- Expected: `parent.parent.parent` → project root
+- Actual: `parent.parent.parent` → `macf/` (one level too deep)
+- Result: Tests skipped, hooks never validated
+
+### MACF Discovery Functions
+
+```python
+from macf.utils import find_project_root, get_session_dir, get_hooks_dir
+
+# Project root with multi-priority detection
+project_root = find_project_root()
+
+# Session-scoped directories
+session_dir = get_session_dir(session_id)
+hooks_log_dir = get_hooks_dir(session_id)
+```
+
+### When `.parent` Is Acceptable
+
+Single `.parent` for sibling file access within same package is acceptable:
+
+```python
+# OK - accessing sibling in same directory
+sibling_path = Path(__file__).parent / "config.json"
+
+# NOT OK - navigating up multiple levels
+project_root = Path(__file__).parent.parent.parent  # FRAGILE
 ```
 
 ---
