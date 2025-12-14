@@ -90,36 +90,39 @@ class TestPolicySearchCommand:
 class TestPolicyListCommand:
     """Test macf_tools policy list command."""
 
-    def test_list_mandatory_default(self):
-        """Test list command defaults to mandatory layer."""
+    def test_list_all_policies(self):
+        """Test list command shows all policies by default."""
         result = subprocess.run(
             ['macf_tools', 'policy', 'list'],
             capture_output=True, text=True
         )
 
         assert result.returncode == 0
-        assert 'mandatory' in result.stdout.lower()
+        assert 'policies' in result.stdout.lower()
+        # Should show base/ and lang/ directories
+        assert 'base/' in result.stdout.lower()
 
-    def test_list_explicit_layer(self):
-        """Test list with explicit layer argument."""
+    def test_list_with_category_filter(self):
+        """Test list with category filter argument."""
         result = subprocess.run(
-            ['macf_tools', 'policy', 'list', '--layer=dev'],
+            ['macf_tools', 'policy', 'list', '--category=development'],
             capture_output=True, text=True
         )
 
         assert result.returncode == 0
-        assert 'dev' in result.stdout.lower()
+        # Should filter to development category policies
+        assert 'policies' in result.stdout.lower()
 
-    def test_list_language_layer(self):
-        """Test list with language layer."""
+    def test_list_lang_directory(self):
+        """Test list shows language directory."""
         result = subprocess.run(
-            ['macf_tools', 'policy', 'list', '--layer=lang'],
+            ['macf_tools', 'policy', 'list'],
             capture_output=True, text=True
         )
 
         assert result.returncode == 0
-        # Should show language layer header
-        assert 'lang' in result.stdout.lower()
+        # Should show lang/ directory in output
+        assert 'lang/' in result.stdout.lower()
 
 
 class TestPolicyCaTypesCommand:

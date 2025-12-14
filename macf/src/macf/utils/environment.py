@@ -59,16 +59,17 @@ def get_rich_environment_string() -> str:
     base_env = detect_execution_environment()
 
     # Gather system details with safe fallbacks
+    # Catch all exceptions to ensure "never crashes" guarantee
     try:
         hostname = socket.gethostname()
-    except (socket.error, OSError) as e:
+    except Exception as e:
         import sys
         print(f"⚠️ MACF: Hostname detection failed: {e}", file=sys.stderr)
         hostname = "unknown-host"
 
     try:
         os_name = platform.system()  # "Darwin", "Linux", "Windows"
-    except OSError as e:
+    except Exception as e:
         import sys
         print(f"⚠️ MACF: OS detection failed: {e}", file=sys.stderr)
         os_name = "Unknown"
@@ -76,7 +77,7 @@ def get_rich_environment_string() -> str:
     try:
         # platform.release() gives kernel version on Mac/Linux, Windows version on Windows
         os_version = platform.release()
-    except OSError as e:
+    except Exception as e:
         import sys
         print(f"⚠️ MACF: OS version detection failed: {e}", file=sys.stderr)
         os_version = "unknown"
