@@ -16,12 +16,13 @@ from pathlib import Path
 import tempfile
 import pytest
 
+from macf.utils import find_project_root
+
 
 def get_hook_script_path(hook_name):
-    """Get path to installed hook script."""
-    # Find MacEff project root
-    macf_root = Path(__file__).parent.parent.parent
-    hook_path = macf_root / '.claude' / 'hooks' / f'{hook_name}.py'
+    """Get path to installed hook script using dynamic project root detection."""
+    project_root = find_project_root()
+    hook_path = project_root / '.claude' / 'hooks' / f'{hook_name}.py'
 
     if not hook_path.exists():
         pytest.skip(f"Hook {hook_name} not installed at {hook_path}")

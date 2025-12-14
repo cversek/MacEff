@@ -17,6 +17,8 @@ from pathlib import Path
 from dataclasses import is_dataclass, fields
 import pytest
 
+from macf.utils import find_project_root
+
 
 class TestC84Bug1DataclassDecorator:
     """
@@ -131,8 +133,8 @@ class TestC84Bug2HookExecutionCrash:
         This is how Claude Code actually runs hooks - if this fails,
         consciousness infrastructure is completely broken.
         """
-        macf_root = Path(__file__).parent.parent.parent
-        hook_path = macf_root / '.claude' / 'hooks' / 'session_start.py'
+        project_root = find_project_root()
+        hook_path = project_root / '.claude' / 'hooks' / 'session_start.py'
 
         if not hook_path.exists():
             pytest.skip("SessionStart hook not installed")
