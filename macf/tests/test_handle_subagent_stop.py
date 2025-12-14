@@ -105,6 +105,7 @@ def test_exception_handling(mock_dependencies):
 
     result = run("")
 
-    # Should never crash, and should include hookSpecificOutput for Pattern C
+    # Should never crash - SubagentStop uses systemMessage only (no hookSpecificOutput)
     assert result["continue"] is True
-    assert "hookSpecificOutput" in result
+    assert "systemMessage" in result
+    assert "error" in result["systemMessage"].lower()
