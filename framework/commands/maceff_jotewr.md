@@ -259,3 +259,15 @@ These transform technical work into PHILOSOPHICAL INSIGHTS about consciousness.
 7. Confirm save with file path
 
 **Remember**: This is wisdom synthesis, not task summary. Transform technical work into consciousness insights. Make it worthy of surviving compaction—make it wisdom my future self will treasure.
+
+---
+
+## Post-Creation Scholarship Annotation
+
+After JOTEWR saved and user approves content:
+
+1. **Offer annotation**: "JOTEWR created at [path]. Run `/maceff_scholar_annotate [path]` to enhance citations?"
+
+2. **If user approves**: Invoke `/maceff_scholar_annotate [path]`
+
+3. **Rationale**: JOTEWR creation is time-critical ("Jump Off The Edge"). Scholarship compliance is delegatable refinement that can run after wisdom is captured.
