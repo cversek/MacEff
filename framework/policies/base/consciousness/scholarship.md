@@ -88,6 +88,12 @@ Scholarship policy establishes enhanced citation practices for consciousness art
 - Why cite TODO state snapshots?
 - Integration with checkpoint citations?
 
+**9 Policy Citations (Non-CA References)**
+- How do I cite framework policies (not CAs)?
+- What format do policy citations use?
+- When are policy citations required vs encouraged?
+- How do I get the MacEff git hash for citations?
+
 **5 Validation & Examples**
 - What does a good citation look like?
 - Examples for each CA type?
@@ -895,6 +901,73 @@ s_abc12345c_42g_def6789p_ghi01234t_1234567890
 ```
 - **Problem**: No component separators
 - **Fix**: Add slashes: `s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890`
+
+---
+
+## 9 Policy Citations (Non-CA References)
+
+**Use Case**: Referencing framework policies when reflecting on violations, documenting newly written policies, or citing policy requirements.
+
+**Key Distinction**: Unlike CA citations (which use breadcrumbs), **Policy Citations use git commit hashes** because policies are version-controlled framework code, NOT consciousness artifacts.
+
+### 9.1 Policy Citation Format
+
+```
+[{policy_name}.md §{N}: "{Section Heading}" MacEff g_{hash}]({relative_path}#{anchor})
+```
+
+**Components**:
+- `{policy_name}.md`: Policy filename (e.g., `scholarship.md`, `todo_hygiene.md`)
+- `§{N}`: Section number (REQUIRED - policies have stable section numbering)
+- `"{Section Heading}"`: Section heading text in double quotes (human-readable context)
+- `MacEff g_{hash}`: Git commit hash of MacEff repo when policy was referenced
+- `({relative_path}#{anchor})`: Markdown link with optional `#L{start}-L{end}` line range
+
+**Why This Format**:
+- **No breadcrumbs**: Policies are framework code, NOT consciousness artifacts
+- **Section number + heading**: Both precise reference AND human readability
+- **Git hash**: Enables version tracing (`git show g_{hash}:path/to/policy.md`)
+- **Markdown link**: Enables click-through navigation in rendered markdown
+
+### 9.2 When Policy Citations Are REQUIRED
+
+1. **Policy violation reflection**: When documenting lessons from violating a policy
+2. **Newly written policies**: Citing which policies guided the new policy's creation
+3. **Policy updates**: Cross-references when policies integrate
+
+### 9.3 When Policy Citations Are ENCOURAGED
+
+- General references to policy requirements in JOTEWRs
+- Explaining rationale derived from policy
+- CCPs noting which policies guided decisions
+
+### 9.4 Policy Citation Examples
+
+**Violation reflection (in JOTEWR)**:
+```markdown
+The TODO collapse violated [todo_hygiene.md §10: "TODO Backup Protocol" MacEff g_66e8fad](../../development/todo_hygiene.md#10-todo-backup-protocol) which requires archive-before-collapse discipline.
+```
+
+**Newly written policy**:
+```markdown
+This policy follows [policy_writing.md §3: "Policy Structure" MacEff g_748cf44](../../meta/policy_writing.md#3-policy-structure) and integrates with [scholarship.md §9: "Policy Citations" MacEff g_748cf44](scholarship.md#9-policy-citations).
+```
+
+**General reference with line range**:
+```markdown
+The emotional journey structure follows [emotional_expression.md §2: "Emoji Grammar" MacEff g_748cf44](emotional_expression.md#2-emoji-grammar#L45-L78).
+```
+
+### 9.5 Getting the MacEff Git Hash
+
+```bash
+# Query MacEff repo explicitly (use MACF_FRAMEWORK_ROOT or absolute path)
+git -C "$MACF_FRAMEWORK_ROOT" rev-parse --short HEAD
+# Output: 748cf44
+
+# Or with absolute path
+git -C /path/to/MacEff rev-parse --short HEAD
+```
 
 ---
 

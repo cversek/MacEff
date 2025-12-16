@@ -44,6 +44,10 @@ After reading policies, **report answers to user before any state-changing tools
    - How should policies be referenced?
    - What patterns are prohibited?
 
+5. **What TODO integration does roadmaps_following.md require?**
+   - How must new roadmaps be pinned to the TODO list?
+   - What emoji/format distinguishes roadmap items?
+
 ---
 
 ## Execution
