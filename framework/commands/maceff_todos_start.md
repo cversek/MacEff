@@ -40,12 +40,14 @@ After reading policies, you should be able to answer:
 
 1. **Is this TODO archived?** How do I recognize and restore archived context?
 2. **Does this TODO reference a roadmap/plan?** What's the mandatory reading discipline?
-3. **Should I delegate this work?** What signals mandatory vs optional delegation?
-4. **Does this need a detailed roadmap?** What triggers roadmap creation?
-5. **Does this need a DELEG_PLAN?** What must delegation plans contain?
-6. **Can I just execute?** When is simple execution appropriate?
-7. **When work encounters unexpected friction, what documentation practices preserve learnings for future cycles?**
-8. **What breadcrumb discipline applies?** When and how to generate breadcrumbs?
+3. **How should roadmap phases appear in the TODO list?** What structure and numbering does the policy require for multi-phase work?
+4. **Should I delegate this work?** What signals mandatory vs optional delegation?
+5. **Does this need a detailed roadmap?** What triggers roadmap creation?
+6. **Does this need a DELEG_PLAN?** What must delegation plans contain?
+7. **Can I just execute?** When is simple execution appropriate?
+8. **When work encounters unexpected friction, what documentation practices preserve learnings for future cycles?**
+9. **What breadcrumb discipline applies?** When and how to generate breadcrumbs?
+10. **When marking items complete, what forensic traceability does the policy require?** What format for completion breadcrumbs?
 
 ---
 

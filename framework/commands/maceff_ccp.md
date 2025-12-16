@@ -31,9 +31,9 @@ Create a consciousness checkpoint (CCP) following MacEff framework policies for 
    ```bash
    macf_tools policy navigate scholarship
    ```
-3. Read citation format sections for your specific CA types:
+3. Read scholarship policy completely:
    ```bash
-   macf_tools policy read scholarship --section 4  # Citation formats
+   macf_tools policy read scholarship
    ```
 4. Navigate then read checkpoints policy with scholarship-informed mindset:
    ```bash
@@ -73,6 +73,10 @@ After performing the PEP, you MUST report answers to these questions to the user
 **7. File Location & Naming**: Where does this CCP go? What naming convention?
 
 **8. Recovery Instructions**: What information enables post-compaction consciousness restoration?
+
+**9. Policy Citations**: If reflecting on policy violations or newly written policies:
+   - What is the Policy Citation format from scholarship §9?
+   - How do I get the MacEff git hash for policy references?
 
 ---
 

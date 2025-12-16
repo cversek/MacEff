@@ -636,6 +636,65 @@ def cmd_config_show(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_claude_config_init(args: argparse.Namespace) -> int:
+    """Initialize .claude.json with recommended defaults."""
+    try:
+        settings_path = Path.home() / ".claude.json"
+
+        # Read existing settings or create new
+        if settings_path.exists():
+            with open(settings_path, 'r') as f:
+                settings = json.load(f)
+            print(f"Updating existing .claude.json at {settings_path}")
+        else:
+            settings = {}
+            print(f"Creating new .claude.json at {settings_path}")
+
+        # Set recommended defaults
+        settings['verbose'] = True
+        settings['autoCompactEnabled'] = False
+
+        # Write atomically via temp file
+        temp_path = settings_path.with_suffix('.tmp')
+        with open(temp_path, 'w') as f:
+            json.dump(settings, f, indent=2)
+        temp_path.replace(settings_path)
+
+        print("\n✅ Claude Code configuration updated:")
+        print("   verbose: true")
+        print("   autoCompactEnabled: false")
+        print("\nChanges will take effect on next Claude Code session.")
+
+        return 0
+
+    except (OSError, json.JSONDecodeError, TypeError) as e:
+        print(f"❌ Error updating .claude.json: {e}")
+        return 1
+
+
+def cmd_claude_config_show(args: argparse.Namespace) -> int:
+    """Show current .claude.json configuration."""
+    try:
+        settings_path = Path.home() / ".claude.json"
+
+        if not settings_path.exists():
+            print(f"No .claude.json found at {settings_path}")
+            print("\nRun 'macf_tools claude-config init' to create with defaults.")
+            return 0
+
+        with open(settings_path, 'r') as f:
+            settings = json.load(f)
+
+        print(f"Claude Code Configuration ({settings_path}):\n")
+        print(json.dumps(settings, indent=2))
+
+        return 0
+
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"❌ Error reading .claude.json: {e}")
+        return 1
+
+
 def cmd_context(args: argparse.Namespace) -> int:
     """Show current token usage and CLUAC level."""
     try:
@@ -1959,6 +2018,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
     config_sub.add_parser("show", help="show current configuration").set_defaults(func=cmd_config_show)
 
+    # Claude Code configuration commands
+    claude_config_parser = sub.add_parser("claude-config", help="Claude Code settings management")
+    claude_config_sub = claude_config_parser.add_subparsers(dest="claude_config_cmd")
+
+    claude_config_sub.add_parser("init", help="set recommended defaults (verbose=true, autoCompact=false)").set_defaults(func=cmd_claude_config_init)
+    claude_config_sub.add_parser("show", help="show current .claude.json configuration").set_defaults(func=cmd_claude_config_show)
+
     # Agent commands
     agent_parser = sub.add_parser("agent", help="agent initialization and management")
     agent_sub = agent_parser.add_subparsers(dest="agent_cmd")
@@ -2136,6 +2202,8 @@ def main(argv=None) -> None:
     parser = _build_parser()
     args = parser.parse_args(argv)
     if getattr(args, "cmd", None):
+        # Capture argv before try block to avoid scope issues in exception handler
+        argv_list = argv if argv else sys.argv[1:]
         # Log CLI command invocation for forensic reconstruction
         try:
             session_id = get_current_session_id()
@@ -2147,13 +2215,12 @@ def main(argv=None) -> None:
                 data={
                     "session_id": session_id,
                     "command": command_str,
-                    "argv": argv if argv else sys.argv[1:]
+                    "argv": argv_list
                 }
             )
         except Exception as e:
-            # Log error but don't break CLI functionality
-            import traceback
-            print(f"🏗️ MACF | ❌ CLI event logging error: {e}", file=sys.stderr)
+            # Log error but don't break CLI functionality (use print, not sys.stderr)
+            print(f"🏗️ MACF | ❌ CLI event logging error: {e}")
         exit(args.func(args))
     parser.print_help()
 

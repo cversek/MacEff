@@ -596,6 +596,16 @@ def initialize_agents(agents_config: AgentsConfig) -> None:
         else:
             log(f"PA init skipped for {username} (may already exist)")
 
+        # Install hooks (agent init doesn't do this)
+        log(f"Installing hooks for {username}...")
+        cmd = f'su - {username} -c "macf_tools hooks install --local"'
+        result = subprocess.run(cmd, shell=True, capture_output=True)
+
+        if result.returncode == 0:
+            log(f"Hooks installed: {username}")
+        else:
+            log(f"Hook installation failed for {username}: {result.stderr.decode()}")
+
 
 def install_macf_tools() -> None:
     """Install MACF tools in shared venv."""
