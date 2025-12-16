@@ -10,6 +10,7 @@ execute real hooks and catch real failures.
 """
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -30,18 +31,35 @@ def get_hook_script_path(hook_name):
     return hook_path
 
 
-def execute_hook(hook_path, stdin_data=""):
+def execute_hook(hook_path, stdin_data="", tmp_project_root=None):
     """
     Execute hook as subprocess the way Claude Code does.
 
+    SAFETY: Uses MACF_TESTING_MODE=true to prevent state mutations,
+    and optionally MACF_PROJECT_ROOT to isolate state files.
+
+    Args:
+        hook_path: Path to hook script
+        stdin_data: JSON input for hook
+        tmp_project_root: If provided, isolates state to this temp directory
+
     Returns (stdout, stderr, returncode)
     """
+    # Belt & suspenders: testing mode + project isolation
+    env = {
+        **os.environ,
+        'MACF_TESTING_MODE': 'true',  # Prevents state mutations
+    }
+    if tmp_project_root:
+        env['MACF_PROJECT_ROOT'] = str(tmp_project_root)
+
     result = subprocess.run(
         [sys.executable, str(hook_path)],
         input=stdin_data,
         capture_output=True,
         text=True,
-        timeout=10
+        timeout=10,
+        env=env
     )
     return result.stdout, result.stderr, result.returncode
 
