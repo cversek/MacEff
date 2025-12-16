@@ -92,9 +92,12 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
 
 if __name__ == "__main__":
     import json
+    import os
     import sys
+    # MACF_TESTING_MODE env var enables safe testing via subprocess
+    testing_mode = os.environ.get('MACF_TESTING_MODE', '').lower() in ('true', '1', 'yes')
     try:
-        output = run(sys.stdin.read(), testing=False)
+        output = run(sys.stdin.read(), testing=testing_mode)
         print(json.dumps(output))
     except Exception as e:
         print(json.dumps({"continue": True}))

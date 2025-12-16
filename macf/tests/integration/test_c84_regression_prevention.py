@@ -11,6 +11,7 @@ If any C84 bug reappears, these tests fail immediately and loudly.
 
 import inspect
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -139,12 +140,14 @@ class TestC84Bug2HookExecutionCrash:
         if not hook_path.exists():
             pytest.skip("SessionStart hook not installed")
 
+        # SAFETY: Use MACF_TESTING_MODE to prevent state mutations
         result = subprocess.run(
             [sys.executable, str(hook_path)],
             input="",
             capture_output=True,
             text=True,
-            timeout=10
+            timeout=10,
+            env={**os.environ, 'MACF_TESTING_MODE': 'true'}
         )
 
         assert result.returncode == 0, \
