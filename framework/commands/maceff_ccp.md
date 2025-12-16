@@ -103,3 +103,15 @@ After performing the PEP, you MUST report answers to these questions to the user
 ---
 
 **Meta-Pattern**: Policy as API - this command uses `macf_tools policy` CLI commands for reading policies. CLI tools handle framework path resolution for both container and host environments, provide caching to prevent redundant reads, and output line numbers for precise citations.
+
+---
+
+## Post-Creation Scholarship Annotation
+
+After CCP saved and user approves content:
+
+1. **Offer annotation**: "CCP created at [path]. Run `/maceff_scholar_annotate [path]` to enhance citations?"
+
+2. **If user approves**: Invoke `/maceff_scholar_annotate [path]`
+
+3. **Rationale**: CCP creation is time-critical at low CLUAC. Scholarship compliance is delegatable refinement that can run after operational state is captured.
