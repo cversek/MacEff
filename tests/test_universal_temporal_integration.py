@@ -464,7 +464,7 @@ class TestCrossComponentIntegration:
         assert dev_stats["total_duration"] >= 0.05
         assert deleg_stats["total_duration"] >= 0.05
 
-    @patch("macf.utils.get_last_user_prompt_uuid")
+    @patch("macf.utils.drives.get_last_user_prompt_uuid")
     def test_dev_drv_uuid_lifecycle(self, mock_get_uuid):
         """Verify complete UUID tracking from start to stats display (Phase 1C)."""
         mock_get_uuid.return_value = "msg_01TestUUID123"
