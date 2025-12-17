@@ -1,11 +1,27 @@
 """
 Drives utilities.
+
+Event-first architecture: All drive operations emit events to the append-only
+JSONL log. Event queries reconstruct state from these events. State files are
+deprecated fallback (Phase 6) and will be removed (Phase 7).
 """
 
 import time
+import uuid
 from typing import Any, Dict, List, Optional
 from .session import get_last_user_prompt_uuid
 from .state import SessionOperationalState
+
+
+def _emit_event(event: str, data: dict) -> bool:
+    """
+    Lazy import wrapper to avoid circular import.
+
+    agent_events_log imports from utils, utils imports drives,
+    drives importing from agent_events_log creates a cycle.
+    """
+    from ..agent_events_log import append_event
+    return append_event(event, data)
 
 def start_dev_drv(session_id: str, agent_id: Optional[str] = None, prompt_uuid: Optional[str] = None) -> bool:
     """
@@ -28,10 +44,20 @@ def start_dev_drv(session_id: str, agent_id: Optional[str] = None, prompt_uuid: 
     state = SessionOperationalState.load(session_id, agent_id)
     state.current_dev_drv_started_at = time.time()
 
-    # Use provided UUID or capture from JSONL
+    # Use provided UUID or capture from JSONL or generate new
     if prompt_uuid is None:
         prompt_uuid = get_last_user_prompt_uuid(session_id)
+    if prompt_uuid is None:
+        # Generate UUID for test/isolated environments where JSONL isn't available
+        prompt_uuid = f"gen_{uuid.uuid4().hex[:8]}"
     state.current_dev_drv_prompt_uuid = prompt_uuid
+
+    # EVENT-FIRST: Emit dev_drv_started event
+    _emit_event("dev_drv_started", {
+        "session_id": session_id,
+        "prompt_uuid": prompt_uuid,
+        "timestamp": state.current_dev_drv_started_at
+    })
 
     return state.save()
 
@@ -58,9 +84,19 @@ def complete_dev_drv(session_id: str, agent_id: Optional[str] = None) -> tuple[b
     state.dev_drv_count += 1
     state.total_dev_drv_duration += duration
 
+    # Get prompt_uuid before clearing (needed for event)
+    prompt_uuid = state.current_dev_drv_prompt_uuid
+
     # Clear current drive tracking
     state.current_dev_drv_started_at = None
     state.current_dev_drv_prompt_uuid = None
+
+    # EVENT-FIRST: Emit dev_drv_ended event
+    _emit_event("dev_drv_ended", {
+        "session_id": session_id,
+        "prompt_uuid": prompt_uuid,
+        "duration": duration
+    })
 
     success = state.save()
     return (success, duration)
@@ -112,11 +148,16 @@ def get_dev_drv_stats(session_id: str, agent_id: Optional[str] = None) -> dict:
             "from_snapshot": False
         }
 
-def start_deleg_drv(session_id: str, agent_id: Optional[str] = None) -> bool:
+def start_deleg_drv(session_id: str, agent_id: Optional[str] = None, subagent_type: Optional[str] = None) -> bool:
     """
     Mark Delegation Drive start.
 
     DELEG_DRV = period from Task tool invocation to SubagentStop hook.
+
+    Args:
+        session_id: Session identifier
+        agent_id: Agent identifier (auto-detected if None)
+        subagent_type: Type of subagent being delegated to (for event tracking)
 
     Returns:
         True if successful, False otherwise
@@ -126,12 +167,26 @@ def start_deleg_drv(session_id: str, agent_id: Optional[str] = None) -> bool:
         agent_id = ConsciousnessConfig().agent_id
 
     state = SessionOperationalState.load(session_id, agent_id)
-    state.current_deleg_drv_started_at = time.time()
+    started_at = time.time()
+    state.current_deleg_drv_started_at = started_at
+
+    # EVENT-FIRST: Emit deleg_drv_started event
+    _emit_event("deleg_drv_started", {
+        "session_id": session_id,
+        "subagent_type": subagent_type or "unknown",
+        "timestamp": started_at
+    })
+
     return state.save()
 
-def complete_deleg_drv(session_id: str, agent_id: Optional[str] = None) -> tuple[bool, float]:
+def complete_deleg_drv(session_id: str, agent_id: Optional[str] = None, subagent_type: Optional[str] = None) -> tuple[bool, float]:
     """
     Mark Delegation Drive completion and update stats.
+
+    Args:
+        session_id: Session identifier
+        agent_id: Agent identifier (auto-detected if None)
+        subagent_type: Type of subagent that was delegated to (for event tracking)
 
     Returns:
         Tuple of (success: bool, duration_seconds: float)
@@ -152,6 +207,13 @@ def complete_deleg_drv(session_id: str, agent_id: Optional[str] = None) -> tuple
     state.deleg_drv_count += 1
     state.total_deleg_drv_duration += duration
     state.current_deleg_drv_started_at = None  # Clear current
+
+    # EVENT-FIRST: Emit deleg_drv_ended event
+    _emit_event("deleg_drv_ended", {
+        "session_id": session_id,
+        "subagent_type": subagent_type or "unknown",
+        "duration": duration
+    })
 
     success = state.save()
     return (success, duration)
