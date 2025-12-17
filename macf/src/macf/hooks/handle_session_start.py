@@ -166,7 +166,11 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
         # Only 'resume' preserves cache (continuing same conversation)
         if source != 'resume' and not testing:
             state_path = get_session_state_path(session_id)
-            session_state = read_json(state_path)
+            try:
+                session_state = read_json(state_path)
+            except FileNotFoundError:
+                # First run - no session state yet, nothing to clear
+                session_state = {}
             if 'policy_reads' in session_state:
                 session_state['policy_reads'] = {}
                 write_json_safely(state_path, session_state)
