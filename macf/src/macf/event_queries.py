@@ -121,8 +121,8 @@ def get_dev_drv_stats_from_events(session_id: str) -> dict:
             if prompt_uuid and prompt_uuid in started_prompts:
                 count += 1
                 total_duration += duration
-                current_prompt_uuid = prompt_uuid
-                del started_prompts[prompt_uuid]
+                del started_prompts[prompt_uuid]  # Drive completed
+                current_prompt_uuid = prompt_uuid  # Track most recent ended UUID
 
     return {
         "count": count,

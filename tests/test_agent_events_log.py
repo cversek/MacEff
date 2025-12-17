@@ -233,6 +233,8 @@ def test_append_returns_failure_on_error(temp_log_file):
     WHEN: append_event() called
     THEN: Returns False (graceful failure, no exception)
     """
+    # Create the file first (fixture only sets path, doesn't create file)
+    temp_log_file.touch()
     # Make file read-only
     temp_log_file.chmod(0o444)
 

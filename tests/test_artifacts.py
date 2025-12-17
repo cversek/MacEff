@@ -93,10 +93,13 @@ def test_bool_returns_false_for_empty_true_for_nonempty(tmp_path):
 def test_artifact_discovery_with_real_files(tmp_path):
     """Artifact discovery with real files."""
     # Create agent directory structure
+    # agent_root IS the agent directory (ConsciousnessConfig.agent_root pattern)
     agent_root = tmp_path / "agent_root"
-    public_dir = agent_root / "agent" / "public"
-    reflections_dir = public_dir / "reflections"
-    checkpoints_dir = public_dir / "checkpoints"
+    private_dir = agent_root / "private"
+    public_dir = agent_root / "public"
+    # Reflections and checkpoints are private, roadmaps are public
+    reflections_dir = private_dir / "reflections"
+    checkpoints_dir = private_dir / "checkpoints"
     roadmaps_dir = public_dir / "roadmaps"
 
     reflections_dir.mkdir(parents=True)
