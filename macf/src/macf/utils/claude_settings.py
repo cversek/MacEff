@@ -6,6 +6,7 @@ to user's Claude Code settings (autocompact, etc.).
 """
 
 import json
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -44,7 +45,6 @@ def get_autocompact_setting(project_root: Optional[Path] = None) -> bool:
             from .paths import find_project_root
             project_root = find_project_root()
         except (ImportError, OSError) as e:
-            import sys
             print(f"⚠️ MACF: Project root detection failed (using None): {e}", file=sys.stderr)
             project_root = None
 
@@ -89,7 +89,6 @@ def _read_autocompact_from_file(settings_path: Path) -> Optional[bool]:
 
         return None
     except (FileNotFoundError, json.JSONDecodeError, KeyError, OSError) as e:
-        import sys
         print(f"⚠️ MACF: Settings read failed (returning None): {e}", file=sys.stderr)
         return None
 
@@ -132,7 +131,6 @@ def set_autocompact_enabled(enabled: bool) -> bool:
 
         return True
     except (OSError, json.JSONDecodeError, TypeError) as e:
-        import sys
         print(f"⚠️ MACF: Settings write failed (autocompact): {e}", file=sys.stderr)
         return False
 
@@ -186,6 +184,5 @@ def set_permission_mode(mode: str, project_root: Optional[Path] = None) -> bool:
 
         return True
     except (OSError, json.JSONDecodeError, TypeError, KeyError) as e:
-        import sys
         print(f"⚠️ MACF: Settings write failed (permission mode): {e}", file=sys.stderr)
         return False

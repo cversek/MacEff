@@ -4,6 +4,7 @@ Tokens utilities.
 
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 from .paths import find_project_root, get_session_dir, get_session_transcript_path
@@ -226,7 +227,6 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
                         "source": "jsonl",
                     }
             except Exception as e:
-                import sys
                 print(f"⚠️ MACF: Token cache JSONL read failed (fallback: hooks_state): {e}", file=sys.stderr)
 
     # Fallback to hooks_state.json (original implementation)

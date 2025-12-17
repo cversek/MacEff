@@ -2,6 +2,7 @@
 Artifacts utilities.
 """
 
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
@@ -70,7 +71,6 @@ def get_latest_consciousness_artifacts(
                 agent_root = config.agent_root
             except Exception as e:
                 # Log error to stderr for debugging (hooks can see this)
-                import sys
                 print(f"⚠️ artifact discovery: ConsciousnessConfig failed: {type(e).__name__}: {e}", file=sys.stderr)
                 return ConsciousnessArtifacts()
 
@@ -123,7 +123,6 @@ def get_latest_consciousness_artifacts(
         )
     except Exception as e:
         # NEVER crash - return empty artifacts, but log the error
-        import sys
         print(f"⚠️ artifact discovery: unexpected error: {type(e).__name__}: {e}", file=sys.stderr)
         return ConsciousnessArtifacts()
 
