@@ -4,6 +4,7 @@ Cycles utilities.
 
 import json
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Optional, Tuple
@@ -51,7 +52,6 @@ def detect_auto_mode(session_id: str) -> Tuple[bool, str, float]:
                 auto_mode = bool(config_data["auto_mode"])
                 return (auto_mode, "config", 0.7)
         except Exception as e:
-            import sys
             print(f"⚠️ MACF: Config auto_mode read failed: {e}", file=sys.stderr)
 
         # 4. Event log (previous setting) - EVENT-FIRST: Query events instead of mutable state
@@ -62,13 +62,11 @@ def detect_auto_mode(session_id: str) -> Tuple[bool, str, float]:
                 # Only use if it was set explicitly before
                 return (auto_mode, "session", 0.5)
         except Exception as e:
-            import sys
             print(f"⚠️ MACF: Event log auto_mode query failed: {e}", file=sys.stderr)
 
         # 5. Default
         return (False, "default", 0.0)
     except Exception as e:
-        import sys
         print(f"⚠️ MACF: Auto-mode detection failed (fallback: MANUAL): {e}", file=sys.stderr)
         return (False, "default", 0.0)
 

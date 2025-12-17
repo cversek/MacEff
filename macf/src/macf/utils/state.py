@@ -10,6 +10,7 @@ See: agent/public/roadmaps/2025-12-02_DETOUR_Mutable_State_Deprecation/roadmap.m
 
 import json
 import os
+import sys
 import time
 import warnings
 from dataclasses import asdict, dataclass, field
@@ -47,7 +48,6 @@ def write_json_safely(path: Path, data: dict) -> bool:
             try:
                 temp_path.unlink()
             except OSError as e:
-                import sys
                 print(f"⚠️ MACF: Temp file cleanup failed: {e}", file=sys.stderr)
         return False
 
@@ -69,7 +69,6 @@ def read_json(path: Path) -> dict:
         OSError: File access errors (after warning to stderr)
         json.JSONDecodeError: Invalid JSON (after warning to stderr)
     """
-    import sys
     try:
         if not path.exists():
             print(f"⚠️ MACF: JSON file not found ({path.name})", file=sys.stderr)
