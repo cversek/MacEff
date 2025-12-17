@@ -41,16 +41,13 @@ from macf.agent_events_log import (
 # ============================================================================
 
 @pytest.fixture
-def temp_log_file():
-    """Create temporary log file for testing."""
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as f:
-        log_path = Path(f.name)
+def temp_log_file(isolate_event_log):
+    """
+    Return the isolated log path from conftest's autouse fixture.
 
-    yield log_path
-
-    # Cleanup
-    if log_path.exists():
-        log_path.unlink()
+    This ensures append_event() writes to the same file we read from.
+    """
+    return isolate_event_log
 
 
 @pytest.fixture
