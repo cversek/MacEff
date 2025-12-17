@@ -80,8 +80,10 @@ except (FileNotFoundError, json.JSONDecodeError, KeyError) as e:
 ### Standard Pattern
 
 ```python
+import sys  # Module-level import REQUIRED
+
+# ...later in code...
 except SpecificError as e:
-    import sys
     print(f"⚠️ MACF: {operation} failed ({fallback}): {e}", file=sys.stderr)
     return fallback_value
 ```
@@ -102,8 +104,10 @@ Example: `⚠️ MACF: Config read failed (using default): [Errno 2] No such fil
 ### Critical Operations
 
 ```python
+import sys  # Module-level import REQUIRED
+
+# ...later in code...
 except Exception as e:
-    import sys
     print(f"⚠️ MACF: {operation} failed: {e}", file=sys.stderr)
     try:
         from macf.agent_events_log import append_event
@@ -267,9 +271,11 @@ except Exception:
 ### Correct Alternative
 
 ```python
+import sys  # Module-level import REQUIRED
+
+# ...later in code...
 # CORRECT
 except FileNotFoundError as e:
-    import sys
     print(f"⚠️ MACF: File not found (using None): {e}", file=sys.stderr)
     return None
 ```
