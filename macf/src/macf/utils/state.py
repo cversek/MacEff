@@ -290,6 +290,9 @@ class SessionOperationalState:
             # Get session state path (environment-aware)
             state_path = get_session_state_path(session_id)
 
+            # Ensure session directory exists on first run (FP#27 Issue 4)
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+
             # Read state if exists
             data = read_json(state_path)
 
