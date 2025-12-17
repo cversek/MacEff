@@ -252,8 +252,8 @@ def _update_settings_file(settings_path: Path, hooks_prefix: str) -> bool:
 def cmd_hook_install(args: argparse.Namespace) -> int:
     """Install all 10 consciousness hooks with local/global mode selection."""
     try:
-        # Container detection (FP#27 fix - use existing config._is_container())
-        in_container = config._is_container()
+        # Container detection (FP#27 fix - check /.dockerenv directly)
+        in_container = Path("/.dockerenv").exists()
 
         # Determine installation mode
         if in_container:
