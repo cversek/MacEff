@@ -413,7 +413,7 @@ def test_uuid_cleared_on_completion(mock_config, mock_get_uuid, mock_get_session
 @patch("macf.utils.get_last_user_prompt_uuid")
 @patch("macf.config.ConsciousnessConfig")
 def test_uuid_handles_missing_gracefully(mock_config, mock_get_uuid, mock_get_session_dir, tmp_path):
-    """Verify None UUID when get_last_user_prompt_uuid() fails."""
+    """Verify generated UUID when get_last_user_prompt_uuid() returns None."""
     mock_config.return_value.agent_id = "test_agent"
     mock_get_session_dir.return_value = tmp_path
     mock_get_uuid.return_value = None  # Simulate failure
@@ -424,6 +424,7 @@ def test_uuid_handles_missing_gracefully(mock_config, mock_get_uuid, mock_get_se
     success = start_dev_drv(session_id)
     assert success is True  # Should not crash
 
-    # Verify UUID is None (not crash)
+    # Verify UUID is generated (gen_XXXXXXXX format) for event matching
     state = SessionOperationalState.load(session_id, "test_agent")
-    assert state.current_dev_drv_prompt_uuid is None
+    assert state.current_dev_drv_prompt_uuid is not None
+    assert state.current_dev_drv_prompt_uuid.startswith("gen_")
