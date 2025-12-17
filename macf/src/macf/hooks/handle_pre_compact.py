@@ -5,6 +5,7 @@ handle_pre_compact - PreCompact hook runner.
 Tracks imminent compaction before it occurs.
 """
 import json
+import sys
 import traceback
 from typing import Dict, Any
 

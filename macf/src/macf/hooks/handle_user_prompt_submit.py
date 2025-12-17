@@ -5,6 +5,7 @@ handle_user_prompt_submit - UserPromptSubmit hook runner.
 DEV_DRV start tracking + full temporal + token/CLUAC awareness injection.
 """
 import json
+import sys
 import traceback
 from typing import Dict, Any
 

@@ -6,6 +6,7 @@ representing a complete unit of work with user request, thinking, tool calls, an
 """
 
 import json
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -161,7 +162,6 @@ def extract_dev_drive(
                 end_dt = datetime.fromisoformat(ended_at.replace('Z', '+00:00'))
                 duration = (end_dt - start_dt).total_seconds()
             except (ValueError, TypeError) as e:
-                import sys
                 print(f"⚠️ MACF: DateTime parsing failed: {e}", file=sys.stderr)
 
         # Build DevelopmentDrive object

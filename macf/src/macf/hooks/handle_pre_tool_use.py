@@ -5,6 +5,7 @@ handle_pre_tool_use - PreToolUse hook runner.
 DELEG_DRV start tracking + tool operation awareness.
 """
 import json
+import sys
 import traceback
 from typing import Dict, Any
 

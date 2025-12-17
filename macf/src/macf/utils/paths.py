@@ -52,7 +52,6 @@ def find_project_root() -> Path:
             if (git_root / "tools").exists() or (git_root / ".git").exists():
                 return git_root
     except (subprocess.CalledProcessError, OSError, FileNotFoundError) as e:
-        import sys
         print(f"⚠️ MACF: Git root detection failed (using fallback): {e}", file=sys.stderr)
 
     # Fall back to discovery method from __file__ location
@@ -118,7 +117,6 @@ def get_session_dir(
             agent_id = config.agent_id
         except (ImportError, OSError, KeyError) as e:
             # Fallback if config unavailable
-            import sys
             print(f"⚠️ MACF: Config load failed (using env fallback): {e}", file=sys.stderr)
             agent_id = os.environ.get('MACEFF_USER') or os.environ.get('USER') or 'unknown_agent'
 
@@ -133,7 +131,6 @@ def get_session_dir(
             base_path.mkdir(parents=True, exist_ok=True, mode=0o755)
             return base_path
         except OSError as e:
-            import sys
             print(f"⚠️ MACF: Session dir creation failed: {e}", file=sys.stderr)
             return None
     else:

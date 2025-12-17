@@ -8,6 +8,7 @@ artifacts across different environments (container, host, fallback).
 
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -224,7 +225,6 @@ class ConsciousnessConfig:
                             if moniker:
                                 return moniker
                     except Exception as e:
-                        import sys
                         print(f"⚠️ MACF: Config parse failed (fallback: unknown_agent): {e}", file=sys.stderr)
 
         # Fallback - use unknown_agent
@@ -243,7 +243,6 @@ class ConsciousnessConfig:
                 with open(config_file) as f:
                     return json.load(f)
             except Exception as e:
-                import sys
                 print(f"⚠️ MACF: Config load failed (fallback: empty config): {e}", file=sys.stderr)
                 return {}
         return {}
