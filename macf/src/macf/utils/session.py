@@ -3,6 +3,7 @@ Session utilities.
 """
 
 import json
+import sys
 from pathlib import Path
 from typing import Optional
 from .paths import find_project_root
@@ -113,7 +114,6 @@ def get_last_user_prompt_uuid(session_id: Optional[str] = None) -> Optional[str]
                 continue
 
     except Exception as e:
-        import sys
         print(f"⚠️ MACF: Session file read failed (fallback: no prompt_uuid): {e}", file=sys.stderr)
 
     return None
