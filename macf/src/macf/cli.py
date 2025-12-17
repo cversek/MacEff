@@ -250,27 +250,38 @@ def _update_settings_file(settings_path: Path, hooks_prefix: str) -> bool:
 
 
 def cmd_hook_install(args: argparse.Namespace) -> int:
-    """Install all 6 consciousness hooks with local/global mode selection."""
+    """Install all 10 consciousness hooks with local/global mode selection."""
     try:
+        # Container detection (FP#27 fix - use existing config._is_container())
+        in_container = config._is_container()
+
         # Determine installation mode
-        if hasattr(args, 'global_install') and args.global_install:
+        if in_container:
+            # Container: force global mode, no interactive prompt (FP#27)
+            mode = 'global'
+        elif hasattr(args, 'global_install') and args.global_install:
             mode = 'global'
         elif hasattr(args, 'local_install') and args.local_install:
             mode = 'local'
         else:
-            # Interactive mode
+            # Interactive mode (host only)
             print("\nWhere do you want to install hooks?")
             print("[1] Local project (.claude/hooks/) [DEFAULT]")
             print("[2] Global user directory (~/.claude/hooks/)")
             choice = input("\nPress Enter for [1], or enter choice: ").strip() or "1"
             mode = 'global' if choice == '2' else 'local'
 
-        # Set paths based on mode
+        # Set paths based on mode and environment
         if mode == 'global':
             hooks_dir = Path.home() / ".claude" / "hooks"
             settings_file = Path.home() / ".claude" / "settings.json"
-            hooks_prefix = "python ~/.claude/hooks"
+            if in_container:
+                # Container: absolute venv Python + absolute hook paths (FP#27)
+                hooks_prefix = f"/opt/maceff-venv/bin/python {Path.home()}/.claude/hooks"
+            else:
+                hooks_prefix = "python ~/.claude/hooks"
         else:
+            # Local mode (host only - container always uses global)
             hooks_dir = Path.cwd() / ".claude" / "hooks"
             settings_file = Path.cwd() / ".claude" / "settings.local.json"
             hooks_prefix = "python .claude/hooks"

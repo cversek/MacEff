@@ -5,6 +5,7 @@ handle_session_start - SessionStart hook runner.
 Compaction detection and consciousness recovery with mode-aware branching.
 """
 import json
+import sys
 from pathlib import Path
 from typing import Dict, Any
 
