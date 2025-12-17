@@ -3,7 +3,7 @@ Pytest configuration for MacEff integration tests.
 
 CRITICAL: All tests MUST be isolated from production state.
 - Event log: Auto-isolated via set_log_path() for ALL tests
-- State files: Tests should use temp directories or explicit agent_root params
+- State files: Auto-isolated via set_state_root() for ALL tests
 """
 
 import pytest
@@ -30,6 +30,30 @@ def isolate_event_log(tmp_path):
 
     # Reset to default after test
     set_log_path(None)
+
+
+@pytest.fixture(autouse=True)
+def isolate_state_files(tmp_path):
+    """
+    Auto-use fixture that isolates state files for ALL tests.
+
+    This prevents tests from reading/writing the real .maceff/ state files.
+    Every test gets a fresh, isolated agent root directory.
+    """
+    from macf.utils.state import set_state_root
+
+    # Create isolated agent root with .maceff structure
+    agent_root = tmp_path / "test_agent"
+    maceff_dir = agent_root / ".maceff"
+    maceff_dir.mkdir(parents=True, exist_ok=True)
+
+    # Set isolation path
+    set_state_root(agent_root)
+
+    yield agent_root
+
+    # Reset to default after test
+    set_state_root(None)
 
 
 @pytest.fixture
