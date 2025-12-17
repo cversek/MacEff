@@ -61,7 +61,6 @@ def detect_session_migration(current_session_id: str) -> tuple[bool, str, str]:
         from macf.event_queries import get_last_session_id_from_events
         previous_session_id = get_last_session_id_from_events()
     except Exception as e:
-        import sys
         print(f"⚠️ MACF: Event query for last session failed: {e}", file=sys.stderr)
         try:
             append_event("error", {

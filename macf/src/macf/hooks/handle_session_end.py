@@ -5,6 +5,7 @@ handle_session_end - SessionEnd hook runner.
 Tracks session termination (clear, logout, etc.).
 """
 import json
+import sys
 import traceback
 from typing import Dict, Any
 

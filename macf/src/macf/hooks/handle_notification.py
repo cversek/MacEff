@@ -5,6 +5,7 @@ handle_notification - Notification hook runner.
 Tracks Claude Code notifications (permission prompts, idle prompts, auth success, etc.).
 """
 import json
+import sys
 import traceback
 from typing import Dict, Any
 

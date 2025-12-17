@@ -5,6 +5,7 @@ handle_permission_request - PermissionRequest hook runner.
 Tracks when permission dialogs are shown to user.
 """
 import json
+import sys
 import traceback
 from typing import Dict, Any
 

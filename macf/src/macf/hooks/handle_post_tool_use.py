@@ -5,6 +5,7 @@ handle_post_tool_use - PostToolUse hook runner.
 Tool completion awareness + TodoWrite tracking.
 """
 import json
+import sys
 import traceback
 from typing import Dict, Any
 

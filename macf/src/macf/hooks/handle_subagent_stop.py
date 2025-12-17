@@ -5,6 +5,7 @@ handle_subagent_stop - SubagentStop hook runner.
 DELEG_DRV completion tracking + delegation stats.
 """
 import json
+import sys
 import traceback
 from typing import Dict, Any
 
