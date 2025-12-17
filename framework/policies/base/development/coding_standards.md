@@ -198,6 +198,44 @@ The `.parent` chain pattern caused 9 integration tests to silently skip for mont
 
 ---
 
+## 6 Import Placement Anti-patterns
+
+### Module-Level Imports Required
+
+**Never place** `import` statements inside except blocks or functions when the module is used elsewhere:
+
+```
+# ANTI-PATTERN - import inside except block
+except SomeError as e:
+    import sys  # WRONG - causes scoping issues
+    print(f"Error: {e}", file=sys.stderr)
+```
+
+**Why it's fragile:**
+- Python determines variable scope at compile time
+- If ANY reference to `sys` exists before the import in the same scope, you get "cannot access local variable 'sys' where it is not associated with a value"
+- Error only manifests when the except block actually executes (latent bug)
+- Container environments exercise error paths more often, exposing these bugs
+
+**Always use** module-level imports:
+
+```
+# CORRECT - module-level import
+import sys
+
+def some_function():
+    try:
+        ...
+    except SomeError as e:
+        print(f"Error: {e}", file=sys.stderr)  # sys already available
+```
+
+### Real-World Consequence
+
+This anti-pattern caused FP#28 in the MACF codebase - 17+ instances across hooks and utilities that only failed when error paths executed in container environments. The container doesn't enforce stricter Python; it exercises code paths that expose latent bugs.
+
+---
+
 ## Language-Specific Implementation
 
 This policy defines the philosophy. Implementation patterns are language-specific:
