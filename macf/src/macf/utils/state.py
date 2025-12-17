@@ -21,6 +21,32 @@ from .paths import get_session_dir
 # Deprecation flag - set to True to emit warnings on state writes
 _DEPRECATION_WARNINGS_ENABLED = True
 
+# Test isolation: Override agent root for state file path resolution
+# Set via set_state_root() to isolate tests from production state
+_TEST_STATE_ROOT: Optional[Path] = None
+
+
+def set_state_root(path: Optional[Path]) -> None:
+    """
+    Set test isolation path for state files.
+
+    When set, all state file path resolution uses this path as agent_root
+    instead of auto-detecting project root. Use in test fixtures.
+
+    Args:
+        path: Path to use as agent_root, or None to reset to auto-detection
+
+    Example:
+        @pytest.fixture(autouse=True)
+        def isolate_state(tmp_path):
+            from macf.utils.state import set_state_root
+            set_state_root(tmp_path)
+            yield
+            set_state_root(None)
+    """
+    global _TEST_STATE_ROOT
+    _TEST_STATE_ROOT = Path(path) if path else None
+
 def write_json_safely(path: Path, data: dict) -> bool:
     """
     Atomic JSON write with error handling.
@@ -93,7 +119,10 @@ def get_session_state_path(session_id: str, agent_root: Optional[Path] = None) -
     Returns:
         Path to session state file
     """
-    if agent_root is None:
+    # Test isolation check - highest priority
+    if _TEST_STATE_ROOT is not None:
+        agent_root = _TEST_STATE_ROOT
+    elif agent_root is None:
         # Environment-aware detection (same logic as agent state)
         if Path("/.dockerenv").exists():
             # Container: Agent-scoped
@@ -124,7 +153,10 @@ def get_agent_state_path(agent_root: Optional[Path] = None) -> Path:
     Returns:
         Path to agent state file
     """
-    if agent_root is None:
+    # Test isolation check - highest priority
+    if _TEST_STATE_ROOT is not None:
+        agent_root = _TEST_STATE_ROOT
+    elif agent_root is None:
         # Environment-aware detection
         if Path("/.dockerenv").exists():
             # Container: Agent-scoped (multi-project agent)
