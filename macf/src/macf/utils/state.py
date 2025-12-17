@@ -280,7 +280,7 @@ class SessionOperationalState:
             # Auto-detect agent_id if needed (for default instance)
             if not agent_id:
                 try:
-                    from .config import ConsciousnessConfig
+                    from ..config import ConsciousnessConfig
                     config = ConsciousnessConfig()
                     agent_id = config.agent_id
                 except Exception:
