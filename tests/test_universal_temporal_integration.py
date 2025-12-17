@@ -100,8 +100,7 @@ class TestTemporalUtilitiesIntegration:
 
     def test_macf_footer_format(self):
         """Test MACF footer format correctness."""
-        environment = detect_execution_environment()
-        footer = format_macf_footer(environment)
+        footer = format_macf_footer()  # No args - auto-detects environment
 
         # Should include version and shortened tag
         assert "MACF" in footer
@@ -415,8 +414,7 @@ class TestCrossComponentIntegration:
         assert "Current Time" in full
 
         # Footer format
-        environment = detect_execution_environment()
-        footer = format_macf_footer(environment)
+        footer = format_macf_footer()  # No args - auto-detects environment
         assert len(footer) > 0
         assert "MACF" in footer
 
@@ -481,12 +479,13 @@ class TestCrossComponentIntegration:
         stats = get_dev_drv_stats(session_id, agent_id)
         assert stats["prompt_uuid"] == "msg_01TestUUID123"
 
-        # Complete DEV_DRV → verify UUID cleared
+        # Complete DEV_DRV → verify UUID cleared in state (drive ended)
         time.sleep(0.01)
         complete_dev_drv(session_id, agent_id)
         state = SessionOperationalState.load(session_id, agent_id)
-        assert state.current_dev_drv_prompt_uuid is None
+        assert state.current_dev_drv_prompt_uuid is None  # State clears on completion
 
-        # Get stats → verify UUID is None
+        # Get stats → verify UUID shows most recent ended (event-first tracks history)
+        # Note: get_dev_drv_stats uses events which track "most recent ended" UUID
         stats = get_dev_drv_stats(session_id, agent_id)
-        assert stats["prompt_uuid"] is None
+        assert stats["prompt_uuid"] == "msg_01TestUUID123"  # Most recent ended UUID
