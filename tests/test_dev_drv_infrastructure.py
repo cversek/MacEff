@@ -324,7 +324,7 @@ def test_deleg_drv_stats_with_zero_count(mock_config, mock_get_session_dir, tmp_
 
 
 @patch("macf.utils.get_session_dir")
-@patch("macf.utils.get_last_user_prompt_uuid")
+@patch("macf.utils.drives.get_last_user_prompt_uuid")
 @patch("macf.config.ConsciousnessConfig")
 def test_uuid_captured_on_dev_drv_start(mock_config, mock_get_uuid, mock_get_session_dir, tmp_path):
     """Verify UUID captured when DEV_DRV starts."""
@@ -344,7 +344,7 @@ def test_uuid_captured_on_dev_drv_start(mock_config, mock_get_uuid, mock_get_ses
 
 
 @patch("macf.utils.get_session_dir")
-@patch("macf.utils.get_last_user_prompt_uuid")
+@patch("macf.utils.drives.get_last_user_prompt_uuid")
 @patch("macf.config.ConsciousnessConfig")
 def test_uuid_persists_in_state(mock_config, mock_get_uuid, mock_get_session_dir, tmp_path):
     """Verify UUID survives state save/load cycle."""
@@ -365,7 +365,7 @@ def test_uuid_persists_in_state(mock_config, mock_get_uuid, mock_get_session_dir
 
 
 @patch("macf.utils.get_session_dir")
-@patch("macf.utils.get_last_user_prompt_uuid")
+@patch("macf.utils.drives.get_last_user_prompt_uuid")
 @patch("macf.config.ConsciousnessConfig")
 def test_uuid_included_in_stats(mock_config, mock_get_uuid, mock_get_session_dir, tmp_path):
     """Verify get_dev_drv_stats() includes prompt_uuid."""
@@ -387,7 +387,7 @@ def test_uuid_included_in_stats(mock_config, mock_get_uuid, mock_get_session_dir
 
 
 @patch("macf.utils.get_session_dir")
-@patch("macf.utils.get_last_user_prompt_uuid")
+@patch("macf.utils.drives.get_last_user_prompt_uuid")
 @patch("macf.config.ConsciousnessConfig")
 def test_uuid_cleared_on_completion(mock_config, mock_get_uuid, mock_get_session_dir, tmp_path):
     """Verify UUID cleared when DEV_DRV completes."""
@@ -410,7 +410,7 @@ def test_uuid_cleared_on_completion(mock_config, mock_get_uuid, mock_get_session
 
 
 @patch("macf.utils.get_session_dir")
-@patch("macf.utils.get_last_user_prompt_uuid")
+@patch("macf.utils.drives.get_last_user_prompt_uuid")
 @patch("macf.config.ConsciousnessConfig")
 def test_uuid_handles_missing_gracefully(mock_config, mock_get_uuid, mock_get_session_dir, tmp_path):
     """Verify generated UUID when get_last_user_prompt_uuid() returns None."""
