@@ -112,7 +112,7 @@ def get_session_dir(
     # Auto-detect agent_id using ConsciousnessConfig
     if not agent_id:
         try:
-            from .config import ConsciousnessConfig
+            from ..config import ConsciousnessConfig
             config = ConsciousnessConfig()
             agent_id = config.agent_id
         except (ImportError, OSError, KeyError) as e:
