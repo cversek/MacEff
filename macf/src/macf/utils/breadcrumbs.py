@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from .paths import find_project_root
 from .session import get_current_session_id
-from .state import read_json
+from .json_io import read_json
 
 
 def get_current_dev_drv_prompt_uuid() -> Optional[str]:

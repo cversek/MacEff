@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from .paths import find_project_root, get_session_dir, get_session_transcript_path
 from .session import get_current_session_id
-from .state import read_json, write_json_safely
+from .json_io import read_json, write_json_safely
 from .claude_settings import get_autocompact_setting
 
 CC2_TOTAL_CONTEXT = 200000
