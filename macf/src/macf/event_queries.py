@@ -203,20 +203,28 @@ def get_deleg_drv_stats_from_events(session_id: str) -> dict:
 
 def get_cycle_number_from_events() -> int:
     """
-    Get cycle number from most recent session_started event.
+    Get cycle number from state_snapshot baseline.
+
+    Uses most recent state_snapshot's derived_values.cycle_number.
+    This is reliable because snapshots capture accumulated state.
 
     Returns:
-        Current cycle number (0 if no events found)
+        Current cycle number (0 if no snapshot found)
     """
-    # Read most recent events first
-    for event in read_events(limit=100, reverse=True):
-        if event.get("event") == "session_started":
+    # Find most recent state_snapshot (reliable baseline)
+    for event in read_events(limit=500, reverse=True):
+        if event.get("event") == "state_snapshot":
             data = event.get("data", {})
-            cycle = data.get("cycle")
-            if cycle is not None:
-                return cycle
+            # Check derived_values first (from state file captures)
+            derived = data.get("derived_values", {})
+            if "cycle_number" in derived:
+                return derived["cycle_number"]
+            # Fallback to event_tallies
+            tallies = data.get("event_tallies", {})
+            if "compaction_detected" in tallies:
+                return tallies["compaction_detected"] + 1
 
-    # Default if no session_started events found
+    # No snapshot - return 0 (first run)
     return 0
 
 
