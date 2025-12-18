@@ -27,7 +27,6 @@ from .artifacts import (
 )
 from .cycles import (
     detect_auto_mode,
-    get_agent_cycle_number,
 )
 from .drives import (
     start_dev_drv,
@@ -118,7 +117,6 @@ __all__ = [
     "get_autocompact_setting",
     "get_boundary_guidance",
     "get_breadcrumb",
-    "get_agent_cycle_number",
     "get_current_session_id",
     "get_deleg_drv_stats",
     "get_delegations_this_drive",

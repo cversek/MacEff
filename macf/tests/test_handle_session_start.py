@@ -12,7 +12,7 @@ def mock_dependencies():
          patch('macf.hooks.handle_session_start.get_latest_consciousness_artifacts') as mock_artifacts, \
          patch('macf.hooks.handle_session_start.format_consciousness_recovery_message') as mock_format, \
          patch('macf.hooks.handle_session_start.detect_session_migration') as mock_detect_migration, \
-         patch('macf.hooks.handle_session_start.get_agent_cycle_number') as mock_get_cycle:
+         patch('macf.hooks.handle_session_start.get_cycle_number_from_events') as mock_get_cycle:
 
         mock_session.return_value = "test-session-123"
         mock_detect.return_value = False

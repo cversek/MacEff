@@ -17,9 +17,7 @@ import shutil
 # Add macf to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "macf" / "src"))
 
-from macf.utils import (
-    get_agent_cycle_number,
-)
+from macf.event_queries import get_cycle_number_from_events
 
 
 class TestCycleTracking:
@@ -41,15 +39,15 @@ class TestCycleTracking:
         except:
             pass
 
-    def test_get_cycle_number_returns_one_for_fresh_state(self, test_agent_root):
-        """Fresh agent state returns cycle 1."""
-        cycle = get_agent_cycle_number(test_agent_root)
+    def test_get_cycle_number_returns_one_for_fresh_state(self, test_agent_root, isolated_events_log):
+        """Fresh event log returns cycle 1."""
+        cycle = get_cycle_number_from_events()
         assert cycle == 1
 
-    def test_first_cycle_is_one_not_zero(self, test_agent_root):
+    def test_first_cycle_is_one_not_zero(self, test_agent_root, isolated_events_log):
         """Fresh start begins at Cycle 1, not Cycle 0."""
-        # Fresh agent state should start at cycle 1
-        cycle = get_agent_cycle_number(test_agent_root)
+        # Fresh event log should start at cycle 1
+        cycle = get_cycle_number_from_events()
         assert cycle == 1
 
     # NOTE: Persistence/metadata tests removed - they require testing=False
