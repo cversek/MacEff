@@ -19,7 +19,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "macf" / "src"))
 
 from macf.utils import (
     get_agent_cycle_number,
-    increment_agent_cycle,
 )
 
 
@@ -41,32 +40,6 @@ class TestCycleTracking:
             shutil.rmtree(temp_dir)
         except:
             pass
-
-    def test_increment_agent_cycle_returns_incremented_value(self, test_agent_root):
-        """Increment function returns current+1 (safe-by-default, no persistence)."""
-        session_id = "test_session_001"
-
-        # Get initial cycle number (should be 1)
-        initial_cycle = get_agent_cycle_number(test_agent_root)
-        assert initial_cycle == 1
-
-        # Increment cycle returns what WOULD be the new value
-        new_cycle = increment_agent_cycle(session_id, test_agent_root)
-        assert new_cycle == 2  # Returns current+1
-
-    def test_increment_returns_consistent_value_without_persistence(self, test_agent_root):
-        """Multiple increments return same value when testing=True (no state mutation)."""
-        session_id = "test_session"
-
-        # Each call returns current+1 without mutating state
-        result_1 = increment_agent_cycle(session_id, test_agent_root)
-        result_2 = increment_agent_cycle(session_id, test_agent_root)
-        result_3 = increment_agent_cycle(session_id, test_agent_root)
-
-        # All return 2 because state is never mutated (testing=True default)
-        assert result_1 == 2
-        assert result_2 == 2
-        assert result_3 == 2
 
     def test_get_cycle_number_returns_one_for_fresh_state(self, test_agent_root):
         """Fresh agent state returns cycle 1."""
