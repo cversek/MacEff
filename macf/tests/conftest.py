@@ -58,7 +58,7 @@ def clean_temp_dir(tmp_path):
 
 
 @pytest.fixture(autouse=True)
-def isolated_events_log(tmp_path):
+def isolated_events_log(tmp_path, monkeypatch):
     """
     Isolate event logging to prevent test pollution of production JSONL.
 
@@ -69,6 +69,11 @@ def isolated_events_log(tmp_path):
     - Test session_ids appearing in production queries
     - Test prompt_uuids corrupting breadcrumb generation
     - Cross-test event pollution
+    - Subprocess hooks writing to production log (CRITICAL)
+
+    CRITICAL: Sets BOTH in-process path AND environment variable.
+    - set_log_path(): For in-process code
+    - MACF_EVENTS_LOG_PATH: For subprocess hooks (inherited by child processes)
 
     Yields:
         Path to isolated test events log
@@ -78,12 +83,15 @@ def isolated_events_log(tmp_path):
     # Create isolated log path
     test_log = tmp_path / "test_events_log.jsonl"
 
-    # Redirect all event logging to test file
+    # Set in-process isolation
     set_log_path(test_log)
+
+    # Set environment variable for subprocess isolation (CRITICAL for hook tests)
+    monkeypatch.setenv("MACF_EVENTS_LOG_PATH", str(test_log))
 
     yield test_log
 
-    # Reset to default (production) path after test
+    # Reset to default (production) path after test (monkeypatch auto-resets env vars)
     set_log_path(None)
 
 

@@ -205,18 +205,26 @@ def get_cycle_number_from_events() -> int:
     """
     Get cycle number from events.
 
-    Priority:
-    1. Most recent compaction_detected event's 'cycle' field (current cycle)
-    2. state_snapshot's derived_values.cycle_number (baseline)
-    3. Default to 1 for first run
+    Priority (last-write-wins semantics):
+    1. Most recent cycle_correction event's 'cycle' field (manual correction)
+    2. Most recent compaction_detected event's 'cycle' field (current cycle)
+    3. state_snapshot's derived_values.cycle_number (baseline)
+    4. Default to 1 for first run
 
     Returns:
         Current cycle number (1 if no events found)
     """
-    # Reverse scan - find most recent compaction_detected or state_snapshot
+    # Reverse scan - find most recent cycle source
     # Self-limiting: exits on first match
     for event in read_events(limit=None, reverse=True):
         event_type = event.get("event")
+
+        # Highest priority: cycle_correction (manual fix for test pollution)
+        if event_type == "cycle_correction":
+            data = event.get("data", {})
+            cycle = data.get("cycle")
+            if cycle is not None and cycle > 0:
+                return cycle
 
         # Primary: compaction_detected has authoritative cycle number
         if event_type == "compaction_detected":
