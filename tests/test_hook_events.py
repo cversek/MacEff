@@ -96,75 +96,8 @@ def test_session_start_appends_event(temp_log_file, temp_agent_state, monkeypatc
     assert "additionalContext" in hook_output
 
 
-def test_migration_detected_has_file_size(temp_log_file, temp_agent_state, tmp_path, monkeypatch):
-    """Migration detection includes orphaned TODO file size."""
-    # Set old and new session IDs
-    old_session = "old-session-123"
-    new_session = "new-session-456"
-
-    # Update agent_state to have old session (triggers migration detection)
-    agent_state_file = temp_agent_state / "agent_state.json"
-    agent_state_data = json.loads(agent_state_file.read_text())
-    agent_state_data["last_session_id"] = old_session
-    agent_state_file.write_text(json.dumps(agent_state_data, indent=2))
-
-    # Mock find_project_root to return temp directory
-    monkeypatch.setattr(
-        'macf.utils.find_project_root',
-        lambda: temp_agent_state.parent
-    )
-
-    # Mock load_agent_state to return our test state
-    def mock_load_agent_state():
-        return agent_state_data.copy()
-
-    monkeypatch.setattr(
-        'macf.hooks.handle_session_start.load_agent_state',
-        mock_load_agent_state
-    )
-
-    # Mock get_current_session_id to return new session
-    monkeypatch.setattr(
-        'macf.hooks.handle_session_start.get_current_session_id',
-        lambda: new_session
-    )
-
-    # Create fake orphaned TODO file (must be >100 bytes)
-    todos_dir = Path.home() / ".claude" / "todos"
-    todos_dir.mkdir(parents=True, exist_ok=True)
-
-    todo_file = todos_dir / f"{old_session}-agent-{old_session}.json"
-    # Create TODO content > 100 bytes to trigger detection
-    todo_content = json.dumps({
-        "todos": [
-            {"content": "Test task 1 with some extra content to make file larger", "status": "pending", "activeForm": "Working on test 1"},
-            {"content": "Test task 2 with more content", "status": "in_progress", "activeForm": "Working on test 2"}
-        ]
-    }, indent=2)
-    todo_file.write_text(todo_content)
-
-    try:
-        # Run SessionStart with different session ID (triggers migration)
-        stdin_data = {"source": "normal"}
-        result = session_start_run(json.dumps(stdin_data), testing=True)
-
-        # Read events
-        events = list(read_events(limit=10))
-
-        # Should have migration_detected event
-        migration_events = [e for e in events if e["event"] == "migration_detected"]
-        assert len(migration_events) == 1
-
-        event = migration_events[0]
-        assert event["data"]["previous_session"] == old_session
-        assert event["data"]["current_session"] == new_session
-        assert event["data"]["orphaned_todo_size"] > 0
-        assert "current_cycle" in event["data"]
-
-    finally:
-        # Cleanup
-        if todo_file.exists():
-            todo_file.unlink()
+# NOTE: test_migration_detected_has_file_size removed - relied on deleted load_agent_state
+# Migration detection now uses event-first approach via detect_session_migration()
 
 
 def test_dev_drv_lifecycle(temp_log_file, temp_agent_state, monkeypatch):

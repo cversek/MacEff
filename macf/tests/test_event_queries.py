@@ -328,14 +328,14 @@ def test_deleg_drv_stats_session_isolation(populated_deleg_drv_events, different
 # Tests for get_cycle_number_from_events()
 # =============================================================================
 
-def test_cycle_number_from_session_started():
-    """Test cycle number extraction from most recent session_started event."""
+def test_cycle_number_from_compaction_detected():
+    """Test cycle number extraction from most recent compaction_detected event."""
     from macf.event_queries import get_cycle_number_from_events
 
-    # Simulate session progression
-    append_event("session_started", {"cycle": 200})
-    append_event("session_started", {"cycle": 201})
-    append_event("session_started", {"cycle": 202})
+    # Simulate compaction progression (compaction_detected carries cycle number)
+    append_event("compaction_detected", {"cycle": 200})
+    append_event("compaction_detected", {"cycle": 201})
+    append_event("compaction_detected", {"cycle": 202})
 
     cycle = get_cycle_number_from_events()
 
