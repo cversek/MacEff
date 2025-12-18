@@ -203,17 +203,30 @@ def get_deleg_drv_stats_from_events(session_id: str) -> dict:
 
 def get_cycle_number_from_events() -> int:
     """
-    Get cycle number from state_snapshot baseline.
+    Get cycle number from events.
 
-    Uses most recent state_snapshot's derived_values.cycle_number.
-    This is reliable because snapshots capture accumulated state.
+    Priority:
+    1. Most recent compaction_detected event's 'cycle' field (current cycle)
+    2. state_snapshot's derived_values.cycle_number (baseline)
+    3. Default to 1 for first run
 
     Returns:
-        Current cycle number (0 if no snapshot found)
+        Current cycle number (1 if no events found)
     """
-    # Find most recent state_snapshot (reliable baseline)
-    for event in read_events(limit=500, reverse=True):
-        if event.get("event") == "state_snapshot":
+    # Reverse scan - find most recent compaction_detected or state_snapshot
+    # Self-limiting: exits on first match
+    for event in read_events(limit=None, reverse=True):
+        event_type = event.get("event")
+
+        # Primary: compaction_detected has authoritative cycle number
+        if event_type == "compaction_detected":
+            data = event.get("data", {})
+            cycle = data.get("cycle")
+            if cycle is not None and cycle > 0:
+                return cycle
+
+        # Fallback: state_snapshot baseline
+        if event_type == "state_snapshot":
             data = event.get("data", {})
             # Check derived_values first (from state file captures)
             derived = data.get("derived_values", {})
@@ -224,8 +237,8 @@ def get_cycle_number_from_events() -> int:
             if "compaction_detected" in tallies:
                 return tallies["compaction_detected"] + 1
 
-    # No snapshot - return 0 (first run)
-    return 0
+    # No events - return 1 (first run default)
+    return 1
 
 
 def get_compaction_count_from_events(session_id: str) -> dict:
