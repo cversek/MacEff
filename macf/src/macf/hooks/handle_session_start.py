@@ -35,6 +35,7 @@ from macf.hooks.recovery import (
 from macf.hooks.hook_logging import log_hook_event
 from macf.agent_events_log import append_event
 from macf.utils.state import get_session_state_path, read_json, write_json_safely
+from macf.event_queries import get_last_session_end_time_from_events
 
 
 def detect_session_migration(current_session_id: str) -> tuple[bool, str, str]:
@@ -428,7 +429,9 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
 
         # Get breadcrumb
         breadcrumb = get_breadcrumb()
-        last_session_ended = project_state.get('last_session_ended_at', None)
+
+        # Get last session end time from events (Phase 7: events are sole source)
+        last_session_ended = get_last_session_end_time_from_events()
 
         # Calculate time gap since last session
         current_time = time.time()

@@ -9,25 +9,18 @@ def mock_dependencies():
     with patch('macf.hooks.handle_session_start.get_current_session_id') as mock_session, \
          patch('macf.hooks.handle_session_start.detect_compaction') as mock_detect, \
          patch('macf.hooks.handle_session_start.detect_auto_mode') as mock_auto, \
-         patch('macf.hooks.handle_session_start.SessionOperationalState') as mock_state_class, \
          patch('macf.hooks.handle_session_start.get_latest_consciousness_artifacts') as mock_artifacts, \
          patch('macf.hooks.handle_session_start.format_consciousness_recovery_message') as mock_format, \
-         patch('macf.hooks.handle_session_start.load_agent_state') as mock_load_agent, \
-         patch('macf.hooks.handle_session_start.detect_session_migration') as mock_detect_migration:
+         patch('macf.hooks.handle_session_start.detect_session_migration') as mock_detect_migration, \
+         patch('macf.hooks.handle_session_start.get_agent_cycle_number') as mock_get_cycle:
 
         mock_session.return_value = "test-session-123"
         mock_detect.return_value = False
         mock_auto.return_value = (False, "default", 0.0)
-        # Mock load_agent_state to return empty last_session_id (no migration)
-        mock_load_agent.return_value = {'last_session_id': '', 'current_cycle_number': 100}
         # Mock detect_session_migration to return no migration by default
         mock_detect_migration.return_value = (False, "", "")
-
-        # Mock state instance
-        mock_state = MagicMock()
-        mock_state.compaction_count = 0
-        mock_state.save.return_value = True
-        mock_state_class.load.return_value = mock_state
+        # Mock cycle number (event-first)
+        mock_get_cycle.return_value = 100
 
         # Mock artifacts
         mock_artifacts.return_value = MagicMock()
@@ -38,12 +31,10 @@ def mock_dependencies():
             'session_id': mock_session,
             'detect_compaction': mock_detect,
             'auto_mode': mock_auto,
-            'state_class': mock_state_class,
-            'state': mock_state,
             'artifacts': mock_artifacts,
             'format_message': mock_format,
-            'load_agent_state': mock_load_agent,
-            'detect_migration': mock_detect_migration
+            'detect_migration': mock_detect_migration,
+            'get_cycle_number': mock_get_cycle
         }
 
 
@@ -59,11 +50,12 @@ def test_no_compaction_detected(mock_dependencies):
     with patch('macf.hooks.handle_session_start.get_temporal_context') as mock_temporal, \
          patch('macf.hooks.handle_session_start.get_rich_environment_string') as mock_env, \
          patch('macf.hooks.handle_session_start.get_breadcrumb') as mock_breadcrumb, \
-         patch('macf.hooks.handle_session_start.load_agent_state') as mock_load_proj, \
+         patch('macf.hooks.handle_session_start.get_last_session_end_time_from_events') as mock_last_end, \
          patch('macf.hooks.handle_session_start.get_token_info') as mock_token, \
          patch('macf.hooks.handle_session_start.format_token_context_full') as mock_token_fmt, \
          patch('macf.hooks.handle_session_start.format_manifest_awareness') as mock_manifest, \
          patch('macf.hooks.handle_session_start.format_macf_footer') as mock_footer, \
+         patch('macf.hooks.handle_session_start.get_compaction_count_from_events') as mock_compact_count, \
          patch('time.time') as mock_time:
 
         mock_temporal.return_value = {
@@ -79,13 +71,10 @@ def test_no_compaction_detected(mock_dependencies):
         mock_footer.return_value = 'MACF Tools'
         mock_time.return_value = 1728400000.0
 
-        # Mock project state with last session ended 5 minutes ago
-        mock_load_proj.return_value = {
-            'last_session_ended_at': 1728400000.0 - 300.0  # 5 minutes ago
-        }
-
-        # Set up state
-        mock_dependencies['state'].compaction_count = 0
+        # Mock event queries for last session end time (5 minutes ago)
+        mock_last_end.return_value = 1728400000.0 - 300.0
+        # Mock compaction count from events
+        mock_compact_count.return_value = {'count': 0, 'from_snapshot': True}
 
         result = run("", testing=True)
 
@@ -121,11 +110,12 @@ def test_first_session_no_project_state(mock_dependencies):
     with patch('macf.hooks.handle_session_start.get_temporal_context') as mock_temporal, \
          patch('macf.hooks.handle_session_start.get_rich_environment_string') as mock_env, \
          patch('macf.hooks.handle_session_start.get_breadcrumb') as mock_breadcrumb, \
-         patch('macf.hooks.handle_session_start.load_agent_state') as mock_load_proj, \
+         patch('macf.hooks.handle_session_start.get_last_session_end_time_from_events') as mock_last_end, \
          patch('macf.hooks.handle_session_start.get_token_info') as mock_token, \
          patch('macf.hooks.handle_session_start.format_token_context_full') as mock_token_fmt, \
          patch('macf.hooks.handle_session_start.format_manifest_awareness') as mock_manifest, \
          patch('macf.hooks.handle_session_start.format_macf_footer') as mock_footer, \
+         patch('macf.hooks.handle_session_start.get_compaction_count_from_events') as mock_compact_count, \
          patch('time.time') as mock_time:
 
         mock_temporal.return_value = {
@@ -141,11 +131,10 @@ def test_first_session_no_project_state(mock_dependencies):
         mock_footer.return_value = 'MACF Tools'
         mock_time.return_value = 1728400000.0
 
-        # Mock empty project state (no previous session)
-        mock_load_proj.return_value = {}
-
-        # Set up state
-        mock_dependencies['state'].compaction_count = 0
+        # Mock no previous session (first session)
+        mock_last_end.return_value = None
+        # Mock compaction count from events
+        mock_compact_count.return_value = {'count': 0, 'from_snapshot': True}
 
         result = run("", testing=True)
 
@@ -306,11 +295,12 @@ def test_source_field_startup_no_detection(mock_dependencies):
     with patch('macf.hooks.handle_session_start.get_temporal_context') as mock_temporal, \
          patch('macf.hooks.handle_session_start.get_rich_environment_string') as mock_env, \
          patch('macf.hooks.handle_session_start.get_breadcrumb') as mock_breadcrumb, \
-         patch('macf.hooks.handle_session_start.load_agent_state') as mock_load_proj, \
+         patch('macf.hooks.handle_session_start.get_last_session_end_time_from_events') as mock_last_end, \
          patch('macf.hooks.handle_session_start.get_token_info') as mock_token, \
          patch('macf.hooks.handle_session_start.format_token_context_full') as mock_token_fmt, \
          patch('macf.hooks.handle_session_start.format_manifest_awareness') as mock_manifest, \
          patch('macf.hooks.handle_session_start.format_macf_footer') as mock_footer, \
+         patch('macf.hooks.handle_session_start.get_compaction_count_from_events') as mock_compact_count, \
          patch('time.time') as mock_time:
 
         mock_temporal.return_value = {
@@ -325,7 +315,8 @@ def test_source_field_startup_no_detection(mock_dependencies):
         mock_manifest.return_value = 'Manifest awareness'
         mock_footer.return_value = 'MACF Tools'
         mock_time.return_value = 1728400000.0
-        mock_load_proj.return_value = {}
+        mock_last_end.return_value = None
+        mock_compact_count.return_value = {'count': 0, 'from_snapshot': True}
 
         # Mock detect_compaction to ensure it's NOT called (source field takes precedence)
         mock_dependencies['detect_compaction'].return_value = False
