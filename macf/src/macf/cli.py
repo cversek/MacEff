@@ -1086,7 +1086,7 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
 
 def _get_policy_read_cache(session_id: str) -> dict:
     """Get policy reads cache from session state."""
-    from .utils.state import get_session_state_path, read_json
+    from .utils.json_io import get_session_state_path, read_json
     state_path = get_session_state_path(session_id)
     try:
         state = read_json(state_path)
@@ -1097,7 +1097,7 @@ def _get_policy_read_cache(session_id: str) -> dict:
 
 def _update_policy_read_cache(session_id: str, policy_name: str, breadcrumb: str) -> bool:
     """Update policy reads cache in session state."""
-    from .utils.state import get_session_state_path, read_json, write_json_safely
+    from .utils.json_io import get_session_state_path, read_json, write_json_safely
     state_path = get_session_state_path(session_id)
     try:
         state = read_json(state_path)

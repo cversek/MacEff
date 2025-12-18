@@ -15,11 +15,10 @@ from .session import (
     get_last_user_prompt_uuid,
     detect_session_migration,
 )
-from .state import (
+from .json_io import (
     write_json_safely,
     read_json,
     get_agent_state_path,
-    SessionOperationalState,
 )
 from .artifacts import (
     get_latest_consciousness_artifacts,
@@ -90,7 +89,6 @@ __all__ = [
     "CC2_TOTAL_CONTEXT",
     "ConsciousnessArtifacts",
     "DATEUTIL_AVAILABLE",
-    "SessionOperationalState",
     "_deep_merge",
     "calculate_session_duration",
     "clear_delegations_this_drive",

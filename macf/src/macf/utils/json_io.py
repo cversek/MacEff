@@ -165,42 +165,5 @@ def get_agent_state_path(agent_root: Optional[Path] = None) -> Path:
 
     return agent_root / ".maceff" / "agent_state.json"
 
-@dataclass
-class SessionOperationalState:
-    """
-    Operational state that persists across compaction.
-
-    Stored in: .maceff/sessions/{session_id}/session_state.json
-        Container: /home/{agent}/.maceff/sessions/{session_id}/session_state.json
-        Host: {project_root}/.maceff/sessions/{session_id}/session_state.json
-
-    This dataclass holds session-level operational configuration and state
-    that should survive context compaction events.
-    """
-    session_id: str
-    agent_id: str
-    auto_mode: bool = False
-    auto_mode_source: str = "default"  # CLI, env, config, session, default
-    auto_mode_confidence: float = 0.0  # 0.0-1.0
-    pending_todos: List[dict] = field(default_factory=list)
-    recovery_policy_path: Optional[str] = None
-    compaction_count: int = 0
-    started_at: float = field(default_factory=lambda: time.time())
-    last_updated: float = field(default_factory=lambda: time.time())
-    session_started_at: float = 0.0
-    last_compaction_at: Optional[float] = None
-    total_session_duration: float = 0.0
-
-    # Development Drive (DEV_DRV) tracking
-    current_dev_drv_started_at: Optional[float] = None
-    current_dev_drv_prompt_uuid: Optional[str] = None
-    dev_drv_count: int = 0
-    total_dev_drv_duration: float = 0.0
-
-    # Delegation Drive (DELEG_DRV) tracking
-    current_deleg_drv_started_at: Optional[float] = None
-    deleg_drv_count: int = 0
-    total_deleg_drv_duration: float = 0.0
-
-    # Delegation tracking within DEV_DRV (Phase 1F)
-    delegations_this_drive: List[Dict[str, Any]] = field(default_factory=list)
+# NOTE: SessionOperationalState DELETED in Phase 7 (Radical State API Purge)
+# Events are the sole source of truth. See: event_queries.py
