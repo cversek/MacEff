@@ -35,7 +35,8 @@ def test_save_and_load_roundtrip(tmp_path, monkeypatch):
         {"content": "Task 2", "status": "in_progress"}
     ]
 
-    assert state.save()
+    with pytest.warns(DeprecationWarning):
+        assert state.save()
 
     # Load and verify
     loaded = SessionOperationalState.load(session_id, agent_id)
@@ -110,7 +111,8 @@ def test_timestamp_updates_on_save(tmp_path, monkeypatch):
 
     time.sleep(0.01)  # Small delay to ensure timestamp differs
 
-    assert state.save()
+    with pytest.warns(DeprecationWarning):
+        assert state.save()
     assert state.last_updated > original_timestamp
 
 
@@ -135,7 +137,8 @@ def test_compaction_counter_increments(tmp_path, monkeypatch):
 
     # Increment and save
     state.compaction_count = 1
-    assert state.save()
+    with pytest.warns(DeprecationWarning):
+        assert state.save()
 
     # Load and verify
     loaded = SessionOperationalState.load(session_id, agent_id)

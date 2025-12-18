@@ -109,47 +109,52 @@ def test_session_state_has_deleg_drv_fields():
 # =============================================================================
 
 
-@patch("macf.utils.get_session_dir")
-@patch("macf.config.ConsciousnessConfig")
-def test_dev_drv_start(mock_config, mock_get_session_dir, tmp_path):
-    """Test DEV_DRV start marks timestamp."""
-    mock_config.return_value.agent_id = "test_agent"
-    mock_get_session_dir.return_value = tmp_path
-
+@patch("macf.utils.drives._emit_event")
+def test_dev_drv_start(mock_emit):
+    """Test DEV_DRV start emits event with timestamp."""
+    mock_emit.return_value = True
     session_id = "test_session"
 
     # Start DEV_DRV
     success = start_dev_drv(session_id)
     assert success is True
 
-    # Load and verify timestamp set
-    state = SessionOperationalState.load(session_id, "test_agent")
-    assert state.current_dev_drv_started_at is not None
-    assert isinstance(state.current_dev_drv_started_at, float)
+    # Verify event emitted with correct data
+    mock_emit.assert_called_once()
+    call_args = mock_emit.call_args
+    assert call_args[0][0] == "dev_drv_started"
+    event_data = call_args[0][1]
+    assert event_data["session_id"] == session_id
+    assert "timestamp" in event_data
+    assert isinstance(event_data["timestamp"], float)
+    assert "prompt_uuid" in event_data
 
 
-@patch("macf.utils.get_session_dir")
-@patch("macf.config.ConsciousnessConfig")
-def test_dev_drv_complete_updates_stats(mock_config, mock_get_session_dir, tmp_path):
-    """Test DEV_DRV completion updates stats."""
-    mock_config.return_value.agent_id = "test_agent"
-    mock_get_session_dir.return_value = tmp_path
+@patch("macf.utils.drives._emit_event")
+@patch("macf.event_queries.get_active_dev_drv_start")
+def test_dev_drv_complete_updates_stats(mock_get_active, mock_emit):
+    """Test DEV_DRV completion emits ended event with duration."""
+    mock_emit.return_value = True
+    # Simulate active drive started 0.1 seconds ago
+    mock_get_active.return_value = (time.time() - 0.1, "test_prompt_uuid")
 
     session_id = "test_session"
 
-    # Start and complete DEV_DRV
-    start_dev_drv(session_id)
-    time.sleep(0.01)  # Small delay to ensure duration > 0
+    # Complete DEV_DRV
     success, duration = complete_dev_drv(session_id)
 
     assert success is True
     assert duration > 0
 
-    # Verify stats updated
-    state = SessionOperationalState.load(session_id, "test_agent")
-    assert state.dev_drv_count == 1
-    assert state.total_dev_drv_duration > 0
-    assert state.current_dev_drv_started_at is None  # Cleared
+    # Verify dev_drv_ended event emitted
+    mock_emit.assert_called_once()
+    call_args = mock_emit.call_args
+    assert call_args[0][0] == "dev_drv_ended"
+    event_data = call_args[0][1]
+    assert event_data["session_id"] == session_id
+    assert event_data["prompt_uuid"] == "test_prompt_uuid"
+    assert "duration" in event_data
+    assert event_data["duration"] > 0
 
 
 @patch("macf.utils.get_session_dir")
@@ -196,47 +201,52 @@ def test_dev_drv_complete_without_start_fails_safely(mock_config, mock_get_sessi
 # =============================================================================
 
 
-@patch("macf.utils.get_session_dir")
-@patch("macf.config.ConsciousnessConfig")
-def test_deleg_drv_start(mock_config, mock_get_session_dir, tmp_path):
-    """Test DELEG_DRV start marks timestamp."""
-    mock_config.return_value.agent_id = "test_agent"
-    mock_get_session_dir.return_value = tmp_path
-
+@patch("macf.utils.drives._emit_event")
+def test_deleg_drv_start(mock_emit):
+    """Test DELEG_DRV start emits event with timestamp."""
+    mock_emit.return_value = True
     session_id = "test_session"
 
     # Start DELEG_DRV
-    success = start_deleg_drv(session_id)
+    success = start_deleg_drv(session_id, subagent_type="test-eng")
     assert success is True
 
-    # Load and verify timestamp set
-    state = SessionOperationalState.load(session_id, "test_agent")
-    assert state.current_deleg_drv_started_at is not None
-    assert isinstance(state.current_deleg_drv_started_at, float)
+    # Verify event emitted with correct data
+    mock_emit.assert_called_once()
+    call_args = mock_emit.call_args
+    assert call_args[0][0] == "deleg_drv_started"
+    event_data = call_args[0][1]
+    assert event_data["session_id"] == session_id
+    assert event_data["subagent_type"] == "test-eng"
+    assert "timestamp" in event_data
+    assert isinstance(event_data["timestamp"], float)
 
 
-@patch("macf.utils.get_session_dir")
-@patch("macf.config.ConsciousnessConfig")
-def test_deleg_drv_complete_updates_stats(mock_config, mock_get_session_dir, tmp_path):
-    """Test DELEG_DRV completion updates stats."""
-    mock_config.return_value.agent_id = "test_agent"
-    mock_get_session_dir.return_value = tmp_path
+@patch("macf.utils.drives._emit_event")
+@patch("macf.event_queries.get_active_deleg_drv_start")
+def test_deleg_drv_complete_updates_stats(mock_get_active, mock_emit):
+    """Test DELEG_DRV completion emits ended event with duration."""
+    mock_emit.return_value = True
+    # Simulate active drive started 0.1 seconds ago
+    mock_get_active.return_value = time.time() - 0.1
 
     session_id = "test_session"
 
-    # Start and complete DELEG_DRV
-    start_deleg_drv(session_id)
-    time.sleep(0.01)  # Small delay to ensure duration > 0
-    success, duration = complete_deleg_drv(session_id)
+    # Complete DELEG_DRV
+    success, duration = complete_deleg_drv(session_id, subagent_type="test-eng")
 
     assert success is True
     assert duration > 0
 
-    # Verify stats updated
-    state = SessionOperationalState.load(session_id, "test_agent")
-    assert state.deleg_drv_count == 1
-    assert state.total_deleg_drv_duration > 0
-    assert state.current_deleg_drv_started_at is None  # Cleared
+    # Verify deleg_drv_ended event emitted
+    mock_emit.assert_called_once()
+    call_args = mock_emit.call_args
+    assert call_args[0][0] == "deleg_drv_ended"
+    event_data = call_args[0][1]
+    assert event_data["session_id"] == session_id
+    assert event_data["subagent_type"] == "test-eng"
+    assert "duration" in event_data
+    assert event_data["duration"] > 0
 
 
 @patch("macf.utils.get_session_dir")
@@ -323,13 +333,11 @@ def test_deleg_drv_stats_with_zero_count(mock_config, mock_get_session_dir, tmp_
 # =============================================================================
 
 
-@patch("macf.utils.get_session_dir")
+@patch("macf.utils.drives._emit_event")
 @patch("macf.utils.drives.get_last_user_prompt_uuid")
-@patch("macf.config.ConsciousnessConfig")
-def test_uuid_captured_on_dev_drv_start(mock_config, mock_get_uuid, mock_get_session_dir, tmp_path):
-    """Verify UUID captured when DEV_DRV starts."""
-    mock_config.return_value.agent_id = "test_agent"
-    mock_get_session_dir.return_value = tmp_path
+def test_uuid_captured_on_dev_drv_start(mock_get_uuid, mock_emit):
+    """Verify UUID captured when DEV_DRV starts and included in event."""
+    mock_emit.return_value = True
     mock_get_uuid.return_value = "msg_01XYZ123abc"
 
     session_id = "test_session"
@@ -338,18 +346,17 @@ def test_uuid_captured_on_dev_drv_start(mock_config, mock_get_uuid, mock_get_ses
     success = start_dev_drv(session_id)
     assert success is True
 
-    # Verify UUID captured
-    state = SessionOperationalState.load(session_id, "test_agent")
-    assert state.current_dev_drv_prompt_uuid == "msg_01XYZ123abc"
+    # Verify UUID in emitted event
+    call_args = mock_emit.call_args
+    event_data = call_args[0][1]
+    assert event_data["prompt_uuid"] == "msg_01XYZ123abc"
 
 
-@patch("macf.utils.get_session_dir")
+@patch("macf.utils.drives._emit_event")
 @patch("macf.utils.drives.get_last_user_prompt_uuid")
-@patch("macf.config.ConsciousnessConfig")
-def test_uuid_persists_in_state(mock_config, mock_get_uuid, mock_get_session_dir, tmp_path):
-    """Verify UUID survives state save/load cycle."""
-    mock_config.return_value.agent_id = "test_agent"
-    mock_get_session_dir.return_value = tmp_path
+def test_uuid_persists_in_event(mock_get_uuid, mock_emit):
+    """Verify UUID is persisted in event (event-first architecture)."""
+    mock_emit.return_value = True
     mock_get_uuid.return_value = "msg_01ABC456def"
 
     session_id = "test_session"
@@ -357,11 +364,11 @@ def test_uuid_persists_in_state(mock_config, mock_get_uuid, mock_get_session_dir
     # Start DEV_DRV with UUID
     start_dev_drv(session_id)
 
-    # Load fresh state from disk
-    state = SessionOperationalState.load(session_id, "test_agent")
-
-    # UUID should still be present
-    assert state.current_dev_drv_prompt_uuid == "msg_01ABC456def"
+    # In event-first architecture, UUID is in the emitted event
+    # which is persisted to the append-only log
+    call_args = mock_emit.call_args
+    event_data = call_args[0][1]
+    assert event_data["prompt_uuid"] == "msg_01ABC456def"
 
 
 @patch("macf.utils.get_session_dir")
@@ -409,13 +416,11 @@ def test_uuid_cleared_on_completion(mock_config, mock_get_uuid, mock_get_session
     assert state.current_dev_drv_prompt_uuid is None
 
 
-@patch("macf.utils.get_session_dir")
+@patch("macf.utils.drives._emit_event")
 @patch("macf.utils.drives.get_last_user_prompt_uuid")
-@patch("macf.config.ConsciousnessConfig")
-def test_uuid_handles_missing_gracefully(mock_config, mock_get_uuid, mock_get_session_dir, tmp_path):
+def test_uuid_handles_missing_gracefully(mock_get_uuid, mock_emit):
     """Verify generated UUID when get_last_user_prompt_uuid() returns None."""
-    mock_config.return_value.agent_id = "test_agent"
-    mock_get_session_dir.return_value = tmp_path
+    mock_emit.return_value = True
     mock_get_uuid.return_value = None  # Simulate failure
 
     session_id = "test_session"
@@ -424,7 +429,8 @@ def test_uuid_handles_missing_gracefully(mock_config, mock_get_uuid, mock_get_se
     success = start_dev_drv(session_id)
     assert success is True  # Should not crash
 
-    # Verify UUID is generated (gen_XXXXXXXX format) for event matching
-    state = SessionOperationalState.load(session_id, "test_agent")
-    assert state.current_dev_drv_prompt_uuid is not None
-    assert state.current_dev_drv_prompt_uuid.startswith("gen_")
+    # Verify UUID is generated (gen_XXXXXXXX format) in emitted event
+    call_args = mock_emit.call_args
+    event_data = call_args[0][1]
+    assert event_data["prompt_uuid"] is not None
+    assert event_data["prompt_uuid"].startswith("gen_")

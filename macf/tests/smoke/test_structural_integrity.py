@@ -145,7 +145,9 @@ def test_state_save_load_cycle():
                 compaction_count=5
             )
 
-            save_result = original.save()
+            # Deprecated API - will be removed in Phase 7
+            with pytest.warns(DeprecationWarning):
+                save_result = original.save()
             assert save_result, "State save failed"
 
             # Load state back

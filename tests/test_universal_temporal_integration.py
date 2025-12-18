@@ -110,17 +110,21 @@ class TestTemporalUtilitiesIntegration:
 class TestDEVDRVLifecycle:
     """Integration tests for Development Drive tracking."""
 
-    def test_start_dev_drv_creates_timestamp(self):
-        """Test starting DEV_DRV creates timestamp."""
+    @patch("macf.utils.drives._emit_event")
+    def test_start_dev_drv_creates_timestamp(self, mock_emit):
+        """Test starting DEV_DRV emits event with timestamp."""
+        mock_emit.return_value = True
         session_id = "test_session_dev1"
         agent_id = "test_agent"
 
         result = start_dev_drv(session_id, agent_id)
         assert result is True
 
-        # Verify state persisted
-        state = SessionOperationalState.load(session_id, agent_id)
-        assert state.current_dev_drv_started_at is not None
+        # Verify event emitted with timestamp
+        mock_emit.assert_called_once()
+        event_data = mock_emit.call_args[0][1]
+        assert "timestamp" in event_data
+        assert isinstance(event_data["timestamp"], float)
 
     def test_complete_dev_drv_calculates_duration(self):
         """Test completing DEV_DRV calculates duration."""
@@ -184,33 +188,39 @@ class TestDEVDRVLifecycle:
         expected_avg = stats["total_duration"] / stats["count"]
         assert abs(stats["avg_duration"] - expected_avg) < 0.001
 
-    def test_dev_drv_state_persistence(self):
-        """Test DEV_DRV state persists across save/load."""
+    @patch("macf.utils.drives._emit_event")
+    def test_dev_drv_state_persistence(self, mock_emit):
+        """Test DEV_DRV event emitted (event-first architecture)."""
+        mock_emit.return_value = True
         session_id = "test_session_dev6"
         agent_id = "test_agent"
 
-        # Start and save
+        # Start emits event
         start_dev_drv(session_id, agent_id)
 
-        # Reload and verify
-        state = SessionOperationalState.load(session_id, agent_id)
-        assert state.current_dev_drv_started_at is not None
+        # Event-first: verify event was emitted (persisted to JSONL)
+        mock_emit.assert_called_once()
+        assert mock_emit.call_args[0][0] == "dev_drv_started"
 
 
 class TestDELEGDRVLifecycle:
     """Integration tests for Delegation Drive tracking."""
 
-    def test_start_deleg_drv_creates_timestamp(self):
-        """Test starting DELEG_DRV creates timestamp."""
+    @patch("macf.utils.drives._emit_event")
+    def test_start_deleg_drv_creates_timestamp(self, mock_emit):
+        """Test starting DELEG_DRV emits event with timestamp."""
+        mock_emit.return_value = True
         session_id = "test_session_deleg1"
         agent_id = "test_agent"
 
         result = start_deleg_drv(session_id, agent_id)
         assert result is True
 
-        # Verify state persisted
-        state = SessionOperationalState.load(session_id, agent_id)
-        assert state.current_deleg_drv_started_at is not None
+        # Verify event emitted with timestamp
+        mock_emit.assert_called_once()
+        event_data = mock_emit.call_args[0][1]
+        assert "timestamp" in event_data
+        assert isinstance(event_data["timestamp"], float)
 
     def test_complete_deleg_drv_calculates_duration(self):
         """Test completing DELEG_DRV calculates duration."""
@@ -274,17 +284,19 @@ class TestDELEGDRVLifecycle:
         expected_avg = stats["total_duration"] / stats["count"]
         assert abs(stats["avg_duration"] - expected_avg) < 0.001
 
-    def test_deleg_drv_state_persistence(self):
-        """Test DELEG_DRV state persists across save/load."""
+    @patch("macf.utils.drives._emit_event")
+    def test_deleg_drv_state_persistence(self, mock_emit):
+        """Test DELEG_DRV event emitted (event-first architecture)."""
+        mock_emit.return_value = True
         session_id = "test_session_deleg6"
         agent_id = "test_agent"
 
-        # Start and save
+        # Start emits event
         start_deleg_drv(session_id, agent_id)
 
-        # Reload and verify
-        state = SessionOperationalState.load(session_id, agent_id)
-        assert state.current_deleg_drv_started_at is not None
+        # Event-first: verify event was emitted (persisted to JSONL)
+        mock_emit.assert_called_once()
+        assert mock_emit.call_args[0][0] == "deleg_drv_started"
 
 
 class TestHookMessageFormatting:
@@ -418,26 +430,28 @@ class TestCrossComponentIntegration:
         assert len(footer) > 0
         assert "MACF" in footer
 
-    def test_stats_persist_and_accumulate_correctly(self):
-        """Test stats persist and accumulate correctly."""
+    @patch("macf.utils.drives._emit_event")
+    @patch("macf.event_queries.get_active_dev_drv_start")
+    def test_stats_persist_and_accumulate_correctly(self, mock_get_active, mock_emit):
+        """Test event emission accumulates correctly (event-first)."""
+        mock_emit.return_value = True
+
         session_id = "test_session_e2e3"
-        agent_id = "test_agent"
 
-        # Complete multiple DEV_DRVs
+        # Complete 3 DEV_DRVs with mocked start times
         for i in range(3):
-            start_dev_drv(session_id, agent_id)
-            time.sleep(0.05)
-            complete_dev_drv(session_id, agent_id)
+            # Reset mock for start call
+            mock_get_active.return_value = (time.time() - 0.05, f"uuid_{i}")
+            start_dev_drv(session_id)
+            complete_dev_drv(session_id)
 
-        # Reload state and verify
-        state = SessionOperationalState.load(session_id, agent_id)
-        assert state.dev_drv_count == 3
-        assert state.total_dev_drv_duration >= 0.15
+        # Verify 6 events emitted (3 starts + 3 ends)
+        assert mock_emit.call_count == 6
 
-        # Stats function should return same values
-        stats = get_dev_drv_stats(session_id, agent_id)
-        assert stats["count"] == 3
-        assert stats["total_duration"] >= 0.15
+        # Verify event types alternated
+        events = [call[0][0] for call in mock_emit.call_args_list]
+        assert events.count("dev_drv_started") == 3
+        assert events.count("dev_drv_ended") == 3
 
     def test_mixed_dev_and_deleg_tracking(self):
         """Test DEV_DRV and DELEG_DRV can be tracked independently."""
@@ -462,30 +476,19 @@ class TestCrossComponentIntegration:
         assert dev_stats["total_duration"] >= 0.05
         assert deleg_stats["total_duration"] >= 0.05
 
+    @patch("macf.utils.drives._emit_event")
     @patch("macf.utils.drives.get_last_user_prompt_uuid")
-    def test_dev_drv_uuid_lifecycle(self, mock_get_uuid):
-        """Verify complete UUID tracking from start to stats display (Phase 1C)."""
+    def test_dev_drv_uuid_lifecycle(self, mock_get_uuid, mock_emit):
+        """Verify UUID included in emitted events (event-first architecture)."""
         mock_get_uuid.return_value = "msg_01TestUUID123"
+        mock_emit.return_value = True
 
         session_id = "test_session_uuid"
-        agent_id = "test_agent"
 
-        # Start DEV_DRV → verify UUID captured
-        start_dev_drv(session_id, agent_id)
-        state = SessionOperationalState.load(session_id, agent_id)
-        assert state.current_dev_drv_prompt_uuid == "msg_01TestUUID123"
+        # Start DEV_DRV → verify UUID in event
+        start_dev_drv(session_id)
 
-        # Get stats → verify UUID present
-        stats = get_dev_drv_stats(session_id, agent_id)
-        assert stats["prompt_uuid"] == "msg_01TestUUID123"
-
-        # Complete DEV_DRV → verify UUID cleared in state (drive ended)
-        time.sleep(0.01)
-        complete_dev_drv(session_id, agent_id)
-        state = SessionOperationalState.load(session_id, agent_id)
-        assert state.current_dev_drv_prompt_uuid is None  # State clears on completion
-
-        # Get stats → verify UUID shows most recent ended (event-first tracks history)
-        # Note: get_dev_drv_stats uses events which track "most recent ended" UUID
-        stats = get_dev_drv_stats(session_id, agent_id)
-        assert stats["prompt_uuid"] == "msg_01TestUUID123"  # Most recent ended UUID
+        # Verify start event emitted with UUID
+        start_call = mock_emit.call_args_list[0]
+        assert start_call[0][0] == "dev_drv_started"
+        assert start_call[0][1]["prompt_uuid"] == "msg_01TestUUID123"
