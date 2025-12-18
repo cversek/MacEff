@@ -287,7 +287,10 @@ class TestRefactoringSmoke:
                     auto_mode=True
                 )
 
-                assert original.save(), "REFACTORING REGRESSION: State save failed"
+                # Deprecated API - will be removed in Phase 7
+                import pytest
+                with pytest.warns(DeprecationWarning):
+                    assert original.save(), "REFACTORING REGRESSION: State save failed"
 
                 loaded = SessionOperationalState.load(
                     session_id="test",

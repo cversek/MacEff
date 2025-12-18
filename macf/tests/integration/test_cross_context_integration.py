@@ -106,7 +106,9 @@ def test_state_persistence_across_contexts():
                 agent_id="test-agent",
                 compaction_count=3
             )
-            assert state1.save(), "State save failed"
+            # Deprecated API - will be removed in Phase 7
+            with pytest.warns(DeprecationWarning):
+                assert state1.save(), "State save failed"
 
             # Load in "different context" (simulated by same session)
             state2 = SessionOperationalState.load(

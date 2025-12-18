@@ -38,7 +38,9 @@ class TestProjectStateCore:
             'cycles_completed': 4,
             'last_session_id': 'session-abc123'
         }
-        result = save_agent_state(state, agent_root)
+        # Deprecated API - will be removed in Phase 7
+        with pytest.warns(DeprecationWarning):
+            result = save_agent_state(state, agent_root)
         assert result is True
 
         # Load state back
@@ -59,7 +61,8 @@ class TestProjectStateCore:
             'current_cycle_number': 16,
             'last_session_id': 'session-old-abc123'
         }
-        save_agent_state(state, agent_root)
+        with pytest.warns(DeprecationWarning):
+            save_agent_state(state, agent_root)
 
         # Check with different session ID
         is_migration, old_id = detect_session_migration('session-new-xyz789', agent_root)
@@ -102,7 +105,8 @@ class TestProjectStateBackwardCompatibility:
 
         # Save should create it
         state = {'current_cycle_number': 1}
-        result = save_agent_state(state, agent_root)
+        with pytest.warns(DeprecationWarning):
+            result = save_agent_state(state, agent_root)
         assert result is True
         assert (agent_root / ".maceff").exists()
         assert (agent_root / ".maceff" / "agent_state.json").exists()
@@ -137,7 +141,8 @@ class TestProjectStateResilience:
 
         # Save state without last_session_id
         state = {'current_cycle_number': 5}
-        save_agent_state(state, agent_root)
+        with pytest.warns(DeprecationWarning):
+            save_agent_state(state, agent_root)
 
         # Should not crash, should return no migration
         is_migration, old_id = detect_session_migration('any-session', agent_root)
