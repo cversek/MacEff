@@ -17,7 +17,6 @@ from macf.utils import (
     get_rich_environment_string,
     format_duration,
     format_macf_footer,
-    get_agent_cycle_number,
     get_token_info,
     format_token_context_full,
     get_boundary_guidance,
@@ -35,7 +34,8 @@ from macf.agent_events_log import append_event
 from macf.event_queries import (
     get_last_session_end_time_from_events,
     get_compaction_count_from_events,
-    get_auto_mode_from_events
+    get_auto_mode_from_events,
+    get_cycle_number_from_events
 )
 
 
@@ -196,7 +196,7 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
                         orphaned_todo_size = 0
 
                 # Get current cycle from events (Phase 7: events are sole source)
-                current_cycle = get_agent_cycle_number()
+                current_cycle = get_cycle_number_from_events()
 
                 append_event(
                     event="migration_detected",
@@ -302,7 +302,7 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
                     snapshot_type="compaction_recovery",
                     source="events",
                     state_file_values={
-                        "cycle_number": get_agent_cycle_number(),
+                        "cycle_number": get_cycle_number_from_events(),
                         "compaction_count": current_compaction_count,
                         "auto_mode": auto_mode,
                         "auto_mode_source": auto_mode_source
@@ -311,7 +311,7 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
 
             # Cycle number: current + 1 (event log is source of truth)
             # compaction_detected event captures the new cycle number
-            cycle_number = get_agent_cycle_number() + 1
+            cycle_number = get_cycle_number_from_events() + 1
 
             # Compaction count from events + 1 for this compaction
             new_compaction_count = current_compaction_count + 1
@@ -392,7 +392,7 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
         import time
 
         # Get current cycle from events (Phase 7: events are sole source)
-        current_cycle = get_agent_cycle_number()
+        current_cycle = get_cycle_number_from_events()
         append_event(
             event="session_started",
             data={

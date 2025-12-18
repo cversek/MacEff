@@ -262,9 +262,9 @@ def get_breadcrumb() -> str:
         # This replaces the old mutable session_state.json approach which could desync
         prompt_uuid = get_current_dev_drv_prompt_uuid()
 
-        # Get cycle from agent_state.json (agent-scoped persistence)
-        from .cycles import get_agent_cycle_number
-        cycle_num = get_agent_cycle_number()
+        # Get cycle from event log (event-first architecture)
+        from ..event_queries import get_cycle_number_from_events
+        cycle_num = get_cycle_number_from_events()
 
         # Get current timestamp
         current_time = int(time.time())

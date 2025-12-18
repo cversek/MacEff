@@ -11,7 +11,6 @@ from unittest.mock import patch, MagicMock
 
 from macf.utils.cycles import (
     detect_auto_mode,
-    get_agent_cycle_number,
     set_auto_mode,
 )
 
@@ -88,37 +87,6 @@ class TestDetectAutoMode:
 
             assert 0.0 <= confidence <= 1.0
             assert source == expected_source
-
-
-class TestGetAgentCycleNumber:
-    """Tests for get_agent_cycle_number() function."""
-
-    def test_returns_1_when_no_state_exists(self, tmp_path):
-        """Returns 1 when no agent state or events exist."""
-        # Mock empty event log - must mock at event_queries module
-        with patch('macf.event_queries.get_cycle_number_from_events', return_value=0):
-            with patch('macf.utils.cycles.load_agent_state', return_value={}):
-                result = get_agent_cycle_number(agent_root=tmp_path)
-                assert result == 1
-
-    def test_reads_from_event_log_first(self, tmp_path):
-        """Reads cycle from event log (primary source)."""
-        with patch('macf.event_queries.get_cycle_number_from_events', return_value=42):
-            result = get_agent_cycle_number(agent_root=tmp_path)
-            assert result == 42
-
-    def test_falls_back_to_agent_state_when_no_events(self, tmp_path):
-        """Falls back to agent_state.json when no events exist."""
-        with patch('macf.event_queries.get_cycle_number_from_events', return_value=0):
-            with patch('macf.utils.cycles.load_agent_state', return_value={'current_cycle_number': 15}):
-                result = get_agent_cycle_number(agent_root=tmp_path)
-                assert result == 15
-
-    def test_handles_exceptions_gracefully(self, tmp_path):
-        """Returns 1 when exceptions occur during reading."""
-        with patch('macf.event_queries.get_cycle_number_from_events', side_effect=Exception("Error")):
-            result = get_agent_cycle_number(agent_root=tmp_path)
-            assert result == 1
 
 
 class TestSetAutoMode:

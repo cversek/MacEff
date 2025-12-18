@@ -70,36 +70,6 @@ def detect_auto_mode(session_id: str) -> Tuple[bool, str, float]:
         print(f"⚠️ MACF: Auto-mode detection failed (fallback: MANUAL): {e}", file=sys.stderr)
         return (False, "default", 0.0)
 
-def get_agent_cycle_number(agent_root: Optional[Path] = None) -> int:
-    """
-    Get current cycle number from event log (primary) or agent state (fallback).
-
-    EVENT-FIRST: Queries event log for cycle number. Falls back to agent_state.json
-    if no events exist (historical data predating event logging).
-
-    Operates on agent state (.maceff/agent_state.json) which persists
-    across sessions and projects (in container) or within project (on host).
-
-    Args:
-        agent_root: Agent root path (auto-detected if None)
-            Container: Uses Path.home() (agent-scoped)
-            Host: Uses find_project_root() (project-scoped)
-
-    Returns:
-        Current cycle number (1 if no events or agent state exist)
-    """
-    try:
-        # EVENT-FIRST: Try event log query (lazy import to avoid circular)
-        from ..event_queries import get_cycle_number_from_events
-        cycle_from_events = get_cycle_number_from_events()
-        if cycle_from_events > 0:
-            return cycle_from_events
-
-        # No fallback - events are sole source of truth
-        return 1  # Default for first run
-    except Exception:
-        return 1
-
 def set_auto_mode(
     enabled: bool,
     session_id: str,
