@@ -13,7 +13,7 @@ from macf.utils import (
     get_temporal_context,
     format_macf_footer,
     get_current_session_id,
-    load_agent_state,
+    get_agent_cycle_number,
     get_token_info,
     get_breadcrumb
 )
@@ -41,8 +41,7 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
 
         # Get session context
         session_id = get_current_session_id()
-        project_state = load_agent_state()
-        cycle_number = project_state.get('current_cycle_number', 0)
+        cycle_number = get_agent_cycle_number()
 
         # Get temporal context and breadcrumb
         temporal_ctx = get_temporal_context()

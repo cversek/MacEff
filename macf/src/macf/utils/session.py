@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 from .paths import find_project_root
-from .state import load_agent_state
+# Events are sole source of truth - state file reads removed
 
 def get_current_session_id() -> str:
     """Get current session ID from newest JSONL file.
@@ -130,16 +130,12 @@ def detect_session_migration(current_session_id: str, agent_root: Optional[Path]
         Tuple of (is_migration: bool, old_session_id: str)
     """
     try:
-        agent_state = load_agent_state(agent_root)
-
-        if not agent_state:
-            # First run - no migration
-            return (False, "")
-
-        last_session_id = agent_state.get('last_session_id', '')
+        # Event-first: query last session from events
+        from ..event_queries import get_last_session_id_from_events
+        last_session_id = get_last_session_id_from_events()
 
         if not last_session_id:
-            # No previous session recorded
+            # First run - no migration
             return (False, "")
 
         # Migration if session IDs differ

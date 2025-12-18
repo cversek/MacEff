@@ -20,8 +20,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "macf" / "src"))
 from macf.utils import (
     get_agent_cycle_number,
     increment_agent_cycle,
-    load_agent_state,
-    save_agent_state,
 )
 
 

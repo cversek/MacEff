@@ -19,8 +19,6 @@ from .state import (
     write_json_safely,
     read_json,
     get_agent_state_path,
-    load_agent_state,
-    save_agent_state,
     SessionOperationalState,
 )
 from .artifacts import (
@@ -141,13 +139,11 @@ __all__ = [
     "get_usable_context",
     "increment_agent_cycle",
     "list_policy_files",
-    "load_agent_state",
     "load_merged_manifest",
     "parse_breadcrumb",
     "read_json_safely",
     "record_delegation_complete",
     "record_delegation_start",
-    "save_agent_state",
     "start_deleg_drv",
     "start_dev_drv",
     "write_json_safely",

@@ -18,8 +18,7 @@ from macf.utils import (
     get_rich_environment_string,
     format_duration,
     format_macf_footer,
-    load_agent_state,
-    save_agent_state,
+    get_agent_cycle_number,
     increment_agent_cycle,
     get_token_info,
     format_token_context_full,
@@ -73,10 +72,8 @@ def detect_session_migration(current_session_id: str) -> tuple[bool, str, str]:
             print(f"⚠️ MACF: Event logging also failed: {log_e}", file=sys.stderr)
         previous_session_id = ""
 
-    # FALLBACK: Agent state file if event query returned empty
-    if not previous_session_id:
-        project_state = load_agent_state()
-        previous_session_id = project_state.get('last_session_id', '')
+    # NOTE: Event query is now sole source of truth (Phase 7 complete)
+    # If no previous_session_id from events, this is first run
 
     # Check if we have a previous session ID to compare
     if not previous_session_id:
@@ -220,9 +217,8 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
                     except Exception:
                         orphaned_todo_size = 0
 
-                # Get current cycle from agent state
-                agent_state = load_agent_state()
-                current_cycle = agent_state.get('current_cycle_number', 0)
+                # Get current cycle from events (Phase 7: events are sole source)
+                current_cycle = get_agent_cycle_number()
 
                 append_event(
                     event="migration_detected",
@@ -235,11 +231,8 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
                     hook_input=data
                 )
 
-                # Update project-scoped agent_state with current session ID for next detection
-                if not testing:
-                    project_state = load_agent_state()
-                    project_state['last_session_id'] = session_id
-                    save_agent_state(project_state)
+                # Event log captures session_id via migration_detected event
+                # Detection uses get_last_session_id_from_events() - state write removed
 
                 # Get temporal context for migration message
                 temporal_ctx = get_temporal_context()
@@ -319,27 +312,26 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
             # Side-effects: Skip if testing mode
             if not testing:
                 # Emit state snapshot BEFORE modifications (preserves historical baseline)
+                # Phase 7: Values now from events, not state files
                 from macf.agent_events_log import emit_state_snapshot
-                agent_state = load_agent_state()
                 emit_state_snapshot(
                     session_id=session_id,
                     snapshot_type="compaction_recovery",
-                    source="state_files",
+                    source="events",
                     state_file_values={
-                        "cycle_number": agent_state.get("current_cycle_number", 1),
+                        "cycle_number": get_agent_cycle_number(),
                         "compaction_count": state.compaction_count,
                         "auto_mode": state.auto_mode,
                         "auto_mode_source": state.auto_mode_source
                     }
                 )
 
-                # Increment compaction count
-                state.compaction_count += 1
-                state.save()
-
             # Increment cycle number in agent state (survives session boundaries)
             # Pass testing parameter through (respects safe-by-default)
             cycle_number = increment_agent_cycle(session_id, testing=testing)
+
+            # Compaction count from events (or state fallback + 1 for this compaction)
+            new_compaction_count = state.compaction_count + 1
 
             # Append compaction_detected event
             append_event(
@@ -348,17 +340,13 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
                     "session_id": session_id,
                     "cycle": cycle_number,
                     "detection_method": detection_method,
-                    "compaction_count": state.compaction_count
+                    "compaction_count": new_compaction_count
                 },
                 hook_input=data
             )
 
             # Detect AUTO_MODE
             auto_mode, source, confidence = detect_auto_mode(session_id)
-            state.auto_mode = auto_mode
-            state.auto_mode_source = source
-            state.auto_mode_confidence = confidence
-            state.save()
 
             # Append auto_mode_detected event for forensic reconstruction
             append_event(
@@ -420,11 +408,8 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
         # No compaction detected - provide temporal awareness message
         import time
 
-        # Load project state for cross-session time tracking
-        project_state = load_agent_state()
-
-        # Append session_started event (normal startup without compaction)
-        current_cycle = project_state.get('current_cycle_number', 0)
+        # Get current cycle from events (Phase 7: events are sole source)
+        current_cycle = get_agent_cycle_number()
         append_event(
             event="session_started",
             data={
@@ -434,10 +419,8 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
             hook_input=data
         )
 
-        # Update last_session_id in project-scoped state for future migration detection
-        if not testing:
-            project_state['last_session_id'] = session_id
-            save_agent_state(project_state)
+        # session_started event captures session_id for future migration detection
+        # Detection uses get_last_session_id_from_events() - state write removed
 
         # Get temporal context
         temporal_ctx = get_temporal_context()
@@ -456,11 +439,7 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
             time_gap_seconds = current_time - last_session_ended
             gap_display = format_duration(time_gap_seconds)
 
-        # Update session state timestamp (for within-session tracking)
-        # Skip if testing mode to avoid side-effects
-        if not testing:
-            state.last_updated = current_time
-            state.save()
+        # session_started event captures timestamp - state write removed
 
         # Get token context
         token_info = get_token_info(session_id)

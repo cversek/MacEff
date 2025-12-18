@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 from .paths import find_project_root
 from .session import get_current_session_id
-from .state import load_agent_state, save_agent_state, SessionOperationalState, read_json
+from .state import SessionOperationalState, read_json
 # NOTE: event_queries imported lazily inside functions to avoid circular import
 # (cycles.py -> event_queries -> agent_events_log -> utils -> cycles.py)
 
@@ -95,9 +95,8 @@ def get_agent_cycle_number(agent_root: Optional[Path] = None) -> int:
         if cycle_from_events > 0:
             return cycle_from_events
 
-        # FALLBACK: Agent state file (historical data predating event log)
-        agent_state = load_agent_state(agent_root)
-        return agent_state.get('current_cycle_number', 1)
+        # No fallback - events are sole source of truth
+        return 1  # Default for first run
     except Exception:
         return 1
 
@@ -202,26 +201,18 @@ def increment_agent_cycle(
         New cycle number (or current+1 if testing=True, without saving)
     """
     try:
-        agent_state = load_agent_state(agent_root)
+        # Get current cycle from events
+        from ..event_queries import get_cycle_number_from_events
+        current = get_cycle_number_from_events()
+        if current == 0:
+            current = 1  # First run default
 
         # Testing mode: Return what would be the new value, but don't mutate
         if testing:
-            current = agent_state.get('current_cycle_number', 1) if agent_state else 1
             return current + 1
 
-        # Production mode: Initialize if empty
-        if not agent_state:
-            agent_state = {
-                'current_cycle_number': 1,
-                'cycle_started_at': time.time(),
-                'cycles_completed': 0,
-                'last_session_id': session_id
-            }
-
-        # Increment cycle (compaction_detected event captures new value)
-        agent_state['current_cycle_number'] += 1
-        # state write removed - compaction_detected event is truth
-
-        return agent_state['current_cycle_number']
+        # Production mode: Just return incremented value
+        # compaction_detected event captures the new cycle number
+        return current + 1
     except Exception:
         return 1
