@@ -17,8 +17,6 @@ from macf.utils import (
     complete_dev_drv,
     get_dev_drv_stats,
     format_duration,
-    load_agent_state,
-    save_agent_state,
     get_token_info,
     format_token_context_full,
     get_boundary_guidance,
@@ -113,11 +111,7 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
         duration_str = format_duration(duration) if success else "N/A"
         total_duration_str = format_duration(stats['total_duration'])
 
-        # Save session end time to project state (cross-session persistence)
-        import time
-        project_state = load_agent_state()
-        project_state['last_session_ended_at'] = time.time()
-        save_agent_state(project_state)
+        # dev_drv_ended event captures timestamp - state write removed
 
         # Get token context and mode
         token_info = get_token_info(session_id)

@@ -1,10 +1,9 @@
 """
 State utilities.
 
-DEPRECATION NOTICE (Phase 6 - Mutable State Deprecation):
-State file writes are deprecated in favor of append-only JSONL event sourcing.
-- Reads: Use event_queries.py functions (event-first with state fallback)
-- Writes: Will be removed in Phase 7; events are the source of truth
+NOTE (Phase 7 Complete - Mutable State Removal):
+State file read/write APIs have been removed. Use event_queries.py functions.
+Events (JSONL) are the sole source of truth.
 See: agent/public/roadmaps/2025-12-02_DETOUR_Mutable_State_Deprecation/roadmap.md
 """
 
@@ -12,14 +11,10 @@ import json
 import os
 import sys
 import time
-import warnings
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from .paths import get_session_dir
-
-# Deprecation flag - set to True to emit warnings on state writes
-_DEPRECATION_WARNINGS_ENABLED = True
 
 # Test isolation: Override agent root for state file path resolution
 # Set via set_state_root() to isolate tests from production state
@@ -170,61 +165,6 @@ def get_agent_state_path(agent_root: Optional[Path] = None) -> Path:
 
     return agent_root / ".maceff" / "agent_state.json"
 
-def load_agent_state(agent_root: Optional[Path] = None) -> dict:
-    """
-    Load project state from JSON file.
-
-    Returns default dict if file doesn't exist (backward compat).
-    Handle JSON errors gracefully.
-
-    Args:
-        agent_root: Project root (auto-detected if None)
-
-    Returns:
-        Project state dict or empty dict on error
-    """
-    try:
-        state_path = get_agent_state_path(agent_root)
-        return read_json(state_path)
-    except Exception:
-        return {}
-
-def save_agent_state(state: dict, agent_root: Optional[Path] = None) -> bool:
-    """
-    Save project state atomically (write-rename pattern).
-
-    DEPRECATED: State file writes are deprecated. Events are now the source of truth.
-    This function will be removed in Phase 7. Use emit_event() instead.
-
-    Create .maceff/ directory if needed.
-
-    Args:
-        state: Project state dict to save
-        agent_root: Project root (auto-detected if None)
-
-    Returns:
-        True if successful, False otherwise
-    """
-    if _DEPRECATION_WARNINGS_ENABLED:
-        warnings.warn(
-            "save_agent_state() is deprecated. Events are now the source of truth. "
-            "This function will be removed in Phase 7.",
-            DeprecationWarning,
-            stacklevel=2
-        )
-    try:
-        state_path = get_agent_state_path(agent_root)
-
-        # Create .maceff directory if needed
-        state_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
-
-        # Update timestamp
-        state['last_updated'] = time.time()
-
-        return write_json_safely(state_path, state)
-    except Exception:
-        return False
-
 @dataclass
 class SessionOperationalState:
     """
@@ -264,75 +204,3 @@ class SessionOperationalState:
 
     # Delegation tracking within DEV_DRV (Phase 1F)
     delegations_this_drive: List[Dict[str, Any]] = field(default_factory=list)
-
-    def save(self) -> bool:
-        """
-        Atomically save state to .maceff/sessions/{session_id}/ directory.
-
-        DEPRECATED: State file writes are deprecated. Events are now the source of truth.
-        This method will be removed in Phase 7. Use emit_event() instead.
-
-        Returns:
-            True if successful, False otherwise
-        """
-        if _DEPRECATION_WARNINGS_ENABLED:
-            warnings.warn(
-                "SessionOperationalState.save() is deprecated. Events are the source of truth. "
-                "This method will be removed in Phase 7.",
-                DeprecationWarning,
-                stacklevel=2
-            )
-        try:
-            # Update timestamp
-            self.last_updated = time.time()
-
-            # Get session state path (environment-aware)
-            state_path = get_session_state_path(self.session_id)
-
-            # Create directory if needed
-            state_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
-
-            return write_json_safely(state_path, asdict(self))
-        except Exception:
-            return False
-
-    @classmethod
-    def load(cls, session_id: str, agent_id: Optional[str] = None) -> "SessionOperationalState":
-        """
-        Load state from .maceff/sessions/{session_id}/, returning default instance on failure.
-
-        Args:
-            session_id: Session identifier
-            agent_id: Agent identifier (auto-detected if None, used for default instance)
-
-        Returns:
-            SessionOperationalState instance (never crashes)
-        """
-        try:
-            # Auto-detect agent_id if needed (for default instance)
-            if not agent_id:
-                try:
-                    from ..config import ConsciousnessConfig
-                    config = ConsciousnessConfig()
-                    agent_id = config.agent_id
-                except Exception:
-                    agent_id = os.environ.get('MACEFF_USER') or os.environ.get('USER') or 'unknown_agent'
-
-            # Get session state path (environment-aware)
-            state_path = get_session_state_path(session_id)
-
-            # Ensure session directory exists on first run (FP#27 Issue 4)
-            state_path.parent.mkdir(parents=True, exist_ok=True)
-
-            # Read state if exists
-            data = read_json(state_path)
-
-            if not data:
-                # Return default instance if file doesn't exist
-                return cls(session_id=session_id, agent_id=agent_id)
-
-            # Restore from saved data
-            return cls(**data)
-        except Exception:
-            # Always return valid instance, never crash
-            return cls(session_id=session_id, agent_id=agent_id or "unknown_agent")

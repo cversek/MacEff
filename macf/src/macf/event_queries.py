@@ -329,6 +329,44 @@ def get_delegations_this_drive_from_events(session_id: str) -> List[Dict]:
     return delegations
 
 
+def get_active_dev_drv_start(session_id: str) -> tuple[float, str]:
+    """Get start time and prompt_uuid of active (unended) dev_drv from events."""
+    from .agent_events_log import read_events
+    session_prefix = session_id[:8] if session_id else ""
+
+    # Read in reverse - find most recent started/ended first
+    for event in read_events(limit=100, reverse=True):
+        event_type = event.get("event")
+        data = event.get("data", {})
+        event_session = data.get("session_id", "")
+        if session_prefix and event_session and not event_session.startswith(session_prefix):
+            continue
+        if event_type == "dev_drv_ended":
+            return (0.0, "")  # Most recent is ended - no active drive
+        if event_type == "dev_drv_started":
+            return (data.get("timestamp", 0.0), data.get("prompt_uuid", ""))
+    return (0.0, "")
+
+
+def get_active_deleg_drv_start(session_id: str) -> float:
+    """Get start time of active (unended) deleg_drv from events."""
+    from .agent_events_log import read_events
+    session_prefix = session_id[:8] if session_id else ""
+
+    # Read in reverse - find most recent started/ended first
+    for event in read_events(limit=100, reverse=True):
+        event_type = event.get("event")
+        data = event.get("data", {})
+        event_session = data.get("session_id", "")
+        if session_prefix and event_session and not event_session.startswith(session_prefix):
+            continue
+        if event_type == "deleg_drv_ended":
+            return 0.0  # Most recent is ended - no active drive
+        if event_type == "deleg_drv_started":
+            return data.get("timestamp", 0.0)
+    return 0.0
+
+
 def get_last_session_id_from_events() -> str:
     """
     Get the previous session ID from most recent migration_detected event.

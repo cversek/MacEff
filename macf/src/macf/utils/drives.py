@@ -28,21 +28,17 @@ def start_dev_drv(session_id: str, agent_id: Optional[str] = None, prompt_uuid: 
     Mark Development Drive start.
 
     DEV_DRV = period from user plan approval/UserPromptSubmit to Stop hook.
+    Event-first: emits dev_drv_started event as source of truth.
 
     Args:
         session_id: Session identifier
-        agent_id: Agent identifier (auto-detected if None)
+        agent_id: Agent identifier (unused, kept for API compatibility)
         prompt_uuid: Prompt UUID (auto-detected from JSONL if None)
 
     Returns:
         True if successful, False otherwise
     """
-    if agent_id is None:
-        from macf.config import ConsciousnessConfig
-        agent_id = ConsciousnessConfig().agent_id
-
-    state = SessionOperationalState.load(session_id, agent_id)
-    state.current_dev_drv_started_at = time.time()
+    started_at = time.time()
 
     # Use provided UUID or capture from JSONL or generate new
     if prompt_uuid is None:
@@ -50,16 +46,15 @@ def start_dev_drv(session_id: str, agent_id: Optional[str] = None, prompt_uuid: 
     if prompt_uuid is None:
         # Generate UUID for test/isolated environments where JSONL isn't available
         prompt_uuid = f"gen_{uuid.uuid4().hex[:8]}"
-    state.current_dev_drv_prompt_uuid = prompt_uuid
 
-    # EVENT-FIRST: Emit dev_drv_started event
+    # EVENT-FIRST: Event is sole truth
     _emit_event("dev_drv_started", {
         "session_id": session_id,
         "prompt_uuid": prompt_uuid,
-        "timestamp": state.current_dev_drv_started_at
+        "timestamp": started_at
     })
 
-    return state.save()
+    return True
 
 def complete_dev_drv(session_id: str, agent_id: Optional[str] = None) -> tuple[bool, float]:
     """
@@ -68,38 +63,23 @@ def complete_dev_drv(session_id: str, agent_id: Optional[str] = None) -> tuple[b
     Returns:
         Tuple of (success: bool, duration_seconds: float)
     """
-    if agent_id is None:
-        from macf.config import ConsciousnessConfig
-        agent_id = ConsciousnessConfig().agent_id
+    # EVENT-FIRST: Query events for active drive start time
+    from ..event_queries import get_active_dev_drv_start
+    started_at, prompt_uuid = get_active_dev_drv_start(session_id)
 
-    state = SessionOperationalState.load(session_id, agent_id)
+    if started_at == 0.0:
+        return (False, 0.0)  # No active drive
 
-    if state.current_dev_drv_started_at is None:
-        return (False, 0.0)
+    duration = time.time() - started_at
 
-    # Calculate duration
-    duration = time.time() - state.current_dev_drv_started_at
-
-    # Update stats
-    state.dev_drv_count += 1
-    state.total_dev_drv_duration += duration
-
-    # Get prompt_uuid before clearing (needed for event)
-    prompt_uuid = state.current_dev_drv_prompt_uuid
-
-    # Clear current drive tracking
-    state.current_dev_drv_started_at = None
-    state.current_dev_drv_prompt_uuid = None
-
-    # EVENT-FIRST: Emit dev_drv_ended event
+    # Emit dev_drv_ended event
     _emit_event("dev_drv_ended", {
         "session_id": session_id,
         "prompt_uuid": prompt_uuid,
         "duration": duration
     })
 
-    success = state.save()
-    return (success, duration)
+    return (True, duration)
 
 def get_dev_drv_stats(session_id: str, agent_id: Optional[str] = None) -> dict:
     """
@@ -128,23 +108,13 @@ def get_dev_drv_stats(session_id: str, agent_id: Optional[str] = None) -> dict:
             "from_snapshot": stats.get("from_snapshot", False)
         }
     except Exception:
-        # FALLBACK: State file (if event queries fail)
-        if agent_id is None:
-            from macf.config import ConsciousnessConfig
-            agent_id = ConsciousnessConfig().agent_id
-
-        state = SessionOperationalState.load(session_id, agent_id)
-
-        avg_duration = 0.0
-        if state.dev_drv_count > 0:
-            avg_duration = state.total_dev_drv_duration / state.dev_drv_count
-
+        # No fallback - return empty stats
         return {
-            "count": state.dev_drv_count,
-            "total_duration": state.total_dev_drv_duration,
-            "current_started_at": state.current_dev_drv_started_at,
-            "prompt_uuid": state.current_dev_drv_prompt_uuid,
-            "avg_duration": avg_duration,
+            "count": 0,
+            "total_duration": 0.0,
+            "current_started_at": None,
+            "prompt_uuid": None,
+            "avg_duration": 0.0,
             "from_snapshot": False
         }
 
@@ -153,70 +123,51 @@ def start_deleg_drv(session_id: str, agent_id: Optional[str] = None, subagent_ty
     Mark Delegation Drive start.
 
     DELEG_DRV = period from Task tool invocation to SubagentStop hook.
+    Event-first: emits deleg_drv_started event as source of truth.
 
     Args:
         session_id: Session identifier
-        agent_id: Agent identifier (auto-detected if None)
+        agent_id: Agent identifier (unused, kept for API compatibility)
         subagent_type: Type of subagent being delegated to (for event tracking)
 
     Returns:
         True if successful, False otherwise
     """
-    if agent_id is None:
-        from macf.config import ConsciousnessConfig
-        agent_id = ConsciousnessConfig().agent_id
-
-    state = SessionOperationalState.load(session_id, agent_id)
     started_at = time.time()
-    state.current_deleg_drv_started_at = started_at
 
-    # EVENT-FIRST: Emit deleg_drv_started event
+    # EVENT-FIRST: Event is sole truth
     _emit_event("deleg_drv_started", {
         "session_id": session_id,
         "subagent_type": subagent_type or "unknown",
         "timestamp": started_at
     })
 
-    return state.save()
+    return True
 
 def complete_deleg_drv(session_id: str, agent_id: Optional[str] = None, subagent_type: Optional[str] = None) -> tuple[bool, float]:
     """
     Mark Delegation Drive completion and update stats.
 
-    Args:
-        session_id: Session identifier
-        agent_id: Agent identifier (auto-detected if None)
-        subagent_type: Type of subagent that was delegated to (for event tracking)
-
     Returns:
         Tuple of (success: bool, duration_seconds: float)
     """
-    if agent_id is None:
-        from macf.config import ConsciousnessConfig
-        agent_id = ConsciousnessConfig().agent_id
+    # EVENT-FIRST: Query events for active drive start time
+    from ..event_queries import get_active_deleg_drv_start
+    started_at = get_active_deleg_drv_start(session_id)
 
-    state = SessionOperationalState.load(session_id, agent_id)
+    if started_at == 0.0:
+        return (False, 0.0)  # No active drive
 
-    if state.current_deleg_drv_started_at is None:
-        return (False, 0.0)
+    duration = time.time() - started_at
 
-    # Calculate duration
-    duration = time.time() - state.current_deleg_drv_started_at
-
-    # Update stats
-    state.deleg_drv_count += 1
-    state.total_deleg_drv_duration += duration
-    state.current_deleg_drv_started_at = None  # Clear current
-
-    # EVENT-FIRST: Emit deleg_drv_ended event
+    # Emit deleg_drv_ended event
     _emit_event("deleg_drv_ended", {
         "session_id": session_id,
         "subagent_type": subagent_type or "unknown",
         "duration": duration
     })
 
-    success = state.save()
-    return (success, duration)
+    return (True, duration)
 
 def get_deleg_drv_stats(session_id: str, agent_id: Optional[str] = None) -> dict:
     """
@@ -244,22 +195,12 @@ def get_deleg_drv_stats(session_id: str, agent_id: Optional[str] = None) -> dict
             "subagent_types": stats.get("subagent_types", [])
         }
     except Exception:
-        # FALLBACK: State file (if event queries fail)
-        if agent_id is None:
-            from macf.config import ConsciousnessConfig
-            agent_id = ConsciousnessConfig().agent_id
-
-        state = SessionOperationalState.load(session_id, agent_id)
-
-        avg_duration = 0.0
-        if state.deleg_drv_count > 0:
-            avg_duration = state.total_deleg_drv_duration / state.deleg_drv_count
-
+        # No fallback - return empty stats
         return {
-            "count": state.deleg_drv_count,
-            "total_duration": state.total_deleg_drv_duration,
-            "current_started_at": state.current_deleg_drv_started_at,
-            "avg_duration": avg_duration,
+            "count": 0,
+            "total_duration": 0.0,
+            "current_started_at": None,
+            "avg_duration": 0.0,
             "subagent_types": []
         }
 
@@ -270,30 +211,27 @@ def record_delegation_start(
     agent_id: Optional[str] = None
 ) -> bool:
     """
-    Record delegation start in session state.
+    Record delegation start via event emission.
+
+    Event-first: emits delegation_started event as source of truth.
 
     Args:
         session_id: Session identifier
         tool_use_uuid: Task tool_use_id for JSONL sidechain lookup
         subagent_type: Type of subagent (e.g., "devops-eng", "test-eng")
-        agent_id: Agent identifier (auto-detected if None)
+        agent_id: Agent identifier (unused, kept for API compatibility)
 
     Returns:
         True if recorded successfully, False otherwise
     """
     try:
-        state = SessionOperationalState.load(session_id, agent_id)
-
-        delegation = {
+        _emit_event("delegation_started", {
+            "session_id": session_id,
             "tool_use_uuid": tool_use_uuid,
             "subagent_type": subagent_type,
-            "started_at": time.time(),
-            "completed_at": None,
-            "duration": None
-        }
-
-        state.delegations_this_drive.append(delegation)
-        return state.save()
+            "timestamp": time.time()
+        })
+        return True
     except Exception:
         return False
 
@@ -304,28 +242,26 @@ def record_delegation_complete(
     agent_id: Optional[str] = None
 ) -> bool:
     """
-    Mark delegation as complete with duration.
+    Mark delegation as complete with duration via event emission.
+
+    Event-first: emits delegation_completed event as source of truth.
 
     Args:
         session_id: Session identifier
         tool_use_uuid: Task tool_use_id to match
         duration: Duration in seconds
-        agent_id: Agent identifier (auto-detected if None)
+        agent_id: Agent identifier (unused, kept for API compatibility)
 
     Returns:
         True if updated successfully, False otherwise
     """
     try:
-        state = SessionOperationalState.load(session_id, agent_id)
-
-        # Find matching delegation by UUID
-        for deleg in state.delegations_this_drive:
-            if deleg['tool_use_uuid'] == tool_use_uuid:
-                deleg['completed_at'] = time.time()
-                deleg['duration'] = duration
-                return state.save()
-
-        # UUID not found - still return True (safe failure)
+        _emit_event("delegation_completed", {
+            "session_id": session_id,
+            "tool_use_uuid": tool_use_uuid,
+            "duration": duration,
+            "timestamp": time.time()
+        })
         return True
     except Exception:
         return False
@@ -351,12 +287,8 @@ def get_delegations_this_drive(
         from ..event_queries import get_delegations_this_drive_from_events
         return get_delegations_this_drive_from_events(session_id)
     except Exception:
-        # FALLBACK: State file (if event queries fail)
-        try:
-            state = SessionOperationalState.load(session_id, agent_id)
-            return state.delegations_this_drive
-        except Exception:
-            return []
+        # No fallback - return empty list
+        return []
 
 def clear_delegations_this_drive(
     session_id: str,
@@ -365,16 +297,17 @@ def clear_delegations_this_drive(
     """
     Clear delegation list (called after DEV_DRV Complete reporting).
 
+    Event-first: No-op - delegations are scoped to DEV_DRV via event timestamps.
+    When dev_drv_ended is emitted, delegations for that drive are implicitly closed.
+    Kept for API compatibility.
+
     Args:
         session_id: Session identifier
-        agent_id: Agent identifier (auto-detected if None)
+        agent_id: Agent identifier (unused, kept for API compatibility)
 
     Returns:
-        True if cleared successfully, False otherwise
+        True always (no-op in event-first architecture)
     """
-    try:
-        state = SessionOperationalState.load(session_id, agent_id)
-        state.delegations_this_drive = []
-        return state.save()
-    except Exception:
-        return False
+    # No-op: Event-first architecture scopes delegations by dev_drv timestamps
+    # get_delegations_this_drive_from_events() queries events since last dev_drv_started
+    return True
