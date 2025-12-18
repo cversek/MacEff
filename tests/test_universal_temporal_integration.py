@@ -29,7 +29,6 @@ from macf.utils import (
     complete_deleg_drv,
     get_deleg_drv_stats,
     get_last_user_prompt_uuid,
-    SessionOperationalState
 )
 from unittest.mock import patch
 

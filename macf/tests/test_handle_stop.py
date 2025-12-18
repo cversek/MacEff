@@ -74,19 +74,14 @@ def test_uuid_truncation(mock_dependencies):
     from macf.hooks.handle_stop import run
     from unittest.mock import patch, MagicMock
 
+    # Event-first: UUID comes from stats dict, not SessionOperationalState
     mock_dependencies['stats'].return_value = {
         'count': 1,
         'total_duration': 60,
-        'prompt_uuid': None  # Will be overwritten by state UUID
+        'current_prompt_uuid': 'dda5c541-e66d-4c55-ad30-68d54d6a73cb'
     }
 
-    # Mock state to return UUID (patch where it's imported from)
-    with patch('macf.utils.SessionOperationalState.load') as mock_state_load:
-        mock_state = MagicMock()
-        mock_state.current_dev_drv_prompt_uuid = 'dda5c541-e66d-4c55-ad30-68d54d6a73cb'
-        mock_state_load.return_value = mock_state
-
-        result = run("")
+    result = run("")
 
     message = result["systemMessage"]
 
@@ -167,9 +162,7 @@ def test_saves_session_end_time_to_project_state(mock_dependencies):
     from macf.hooks.handle_stop import run
     from unittest.mock import patch, MagicMock
 
-    with patch('macf.hooks.handle_stop.load_agent_state') as mock_load, \
-         patch('macf.hooks.handle_stop.save_agent_state') as mock_save, \
-         patch('macf.hooks.handle_stop.get_temporal_context') as mock_temporal, \
+    with patch('macf.hooks.handle_stop.get_temporal_context') as mock_temporal, \
          patch('macf.hooks.handle_stop.get_rich_environment_string') as mock_env, \
          patch('macf.hooks.handle_stop.get_breadcrumb') as mock_breadcrumb, \
          patch('macf.hooks.handle_stop.get_token_info') as mock_token, \
@@ -177,15 +170,7 @@ def test_saves_session_end_time_to_project_state(mock_dependencies):
          patch('macf.hooks.handle_stop.format_token_context_full') as mock_token_fmt, \
          patch('macf.hooks.handle_stop.get_boundary_guidance') as mock_boundary, \
          patch('macf.hooks.handle_stop.format_macf_footer') as mock_footer, \
-         patch('macf.utils.SessionOperationalState.load') as mock_state_load, \
          patch('time.time') as mock_time:
-
-        # Mock state for UUID preservation
-        mock_state = MagicMock()
-        mock_state.current_dev_drv_prompt_uuid = 'abc123'
-        mock_state_load.return_value = mock_state
-
-        mock_load.return_value = {}
         mock_time.return_value = 1728400000.0
         mock_temporal.return_value = {
             'timestamp_formatted': 'Wednesday, October 8, 2025 at 12:26:43 PM EDT',
