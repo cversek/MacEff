@@ -17,7 +17,7 @@ class TestSessionEndHook:
     def test_returns_continue_true_on_success(self, isolated_events_log):
         """Hook returns continue=True for normal flow."""
         with patch('macf.hooks.handle_session_end.get_current_session_id', return_value="test-session"):
-            with patch('macf.hooks.handle_session_end.load_agent_state', return_value={'current_cycle_number': 5}):
+            with patch('macf.hooks.handle_session_end.get_cycle_number_from_events', return_value=5):
                 with patch('macf.hooks.handle_session_end.get_temporal_context', return_value={'timestamp_formatted': '2025-10-08 12:00 PM'}):
                     with patch('macf.hooks.handle_session_end.get_breadcrumb', return_value='s_abc/c_5/g_def/p_ghi/t_123'):
                         with patch('macf.hooks.handle_session_end.get_token_info', return_value={'tokens_used': 1000}):
@@ -29,7 +29,7 @@ class TestSessionEndHook:
     def test_includes_session_context_in_message(self, isolated_events_log):
         """System message includes session ID and breadcrumb."""
         with patch('macf.hooks.handle_session_end.get_current_session_id', return_value="test-session-abc123"):
-            with patch('macf.hooks.handle_session_end.load_agent_state', return_value={'current_cycle_number': 10}):
+            with patch('macf.hooks.handle_session_end.get_cycle_number_from_events', return_value=10):
                 with patch('macf.hooks.handle_session_end.get_temporal_context', return_value={'timestamp_formatted': '2025-10-08 12:00 PM'}):
                     with patch('macf.hooks.handle_session_end.get_breadcrumb', return_value='s_abc/c_10/g_def/p_ghi/t_123'):
                         with patch('macf.hooks.handle_session_end.get_token_info', return_value={}):
@@ -43,7 +43,7 @@ class TestSessionEndHook:
     def test_logs_session_ended_event(self, isolated_events_log):
         """Appends session_ended event to event log."""
         with patch('macf.hooks.handle_session_end.get_current_session_id', return_value="test-session"):
-            with patch('macf.hooks.handle_session_end.load_agent_state', return_value={'current_cycle_number': 7}):
+            with patch('macf.hooks.handle_session_end.get_cycle_number_from_events', return_value=7):
                 with patch('macf.hooks.handle_session_end.get_temporal_context', return_value={'timestamp_formatted': '2025-10-08 12:00 PM'}):
                     with patch('macf.hooks.handle_session_end.get_breadcrumb', return_value='s_abc/c_7/g_def/p_ghi/t_123'):
                         with patch('macf.hooks.handle_session_end.get_token_info', return_value={'tokens_used': 5000}):
@@ -64,7 +64,7 @@ class TestSessionEndHook:
         stdin_data = json.dumps({"reason": "user_logout"})
 
         with patch('macf.hooks.handle_session_end.get_current_session_id', return_value="test-session"):
-            with patch('macf.hooks.handle_session_end.load_agent_state', return_value={}):
+            with patch('macf.hooks.handle_session_end.get_cycle_number_from_events', return_value=1):
                 with patch('macf.hooks.handle_session_end.get_temporal_context', return_value={'timestamp_formatted': '2025-10-08 12:00 PM'}):
                     with patch('macf.hooks.handle_session_end.get_breadcrumb', return_value='s_abc/c_1/g_def/p_ghi/t_123'):
                         with patch('macf.hooks.handle_session_end.get_token_info', return_value={}):
@@ -87,7 +87,7 @@ class TestSessionEndHook:
     def test_handles_empty_stdin(self, isolated_events_log):
         """Handles empty stdin gracefully."""
         with patch('macf.hooks.handle_session_end.get_current_session_id', return_value="test-session"):
-            with patch('macf.hooks.handle_session_end.load_agent_state', return_value={}):
+            with patch('macf.hooks.handle_session_end.get_cycle_number_from_events', return_value=1):
                 with patch('macf.hooks.handle_session_end.get_temporal_context', return_value={'timestamp_formatted': '2025-10-08 12:00 PM'}):
                     with patch('macf.hooks.handle_session_end.get_breadcrumb', return_value='s_abc/c_1/g_def/p_ghi/t_123'):
                         with patch('macf.hooks.handle_session_end.get_token_info', return_value={}):

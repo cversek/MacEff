@@ -17,7 +17,7 @@ class TestPreCompactHook:
     def test_returns_continue_true_on_success(self, isolated_events_log):
         """Hook returns continue=True for normal flow."""
         with patch('macf.hooks.handle_pre_compact.get_current_session_id', return_value="test-session"):
-            with patch('macf.hooks.handle_pre_compact.load_agent_state', return_value={'current_cycle_number': 5}):
+            with patch('macf.hooks.handle_pre_compact.get_cycle_number_from_events', return_value=5):
                 with patch('macf.hooks.handle_pre_compact.get_breadcrumb', return_value='s_abc/c_5/g_def/p_ghi/t_123'):
                     with patch('macf.hooks.handle_pre_compact.get_token_info', return_value={'tokens_used': 140000, 'cluac_level': 5}):
                         with patch('macf.hooks.handle_pre_compact.get_temporal_context', return_value={'timestamp_formatted': '2025-10-08 12:00 PM'}):
@@ -29,7 +29,7 @@ class TestPreCompactHook:
     def test_includes_breadcrumb_and_cluac_in_message(self, isolated_events_log):
         """System message includes breadcrumb and CLUAC level."""
         with patch('macf.hooks.handle_pre_compact.get_current_session_id', return_value="test-session"):
-            with patch('macf.hooks.handle_pre_compact.load_agent_state', return_value={'current_cycle_number': 10}):
+            with patch('macf.hooks.handle_pre_compact.get_cycle_number_from_events', return_value=10):
                 with patch('macf.hooks.handle_pre_compact.get_breadcrumb', return_value='s_abc/c_10/g_def/p_ghi/t_123'):
                     with patch('macf.hooks.handle_pre_compact.get_token_info', return_value={'cluac_level': 3}):
                         with patch('macf.hooks.handle_pre_compact.get_temporal_context', return_value={'timestamp_formatted': '2025-10-08 12:00 PM'}):
@@ -43,7 +43,7 @@ class TestPreCompactHook:
     def test_logs_pre_compact_event_with_token_info(self, isolated_events_log):
         """Appends pre_compact event with token usage data."""
         with patch('macf.hooks.handle_pre_compact.get_current_session_id', return_value="test-session"):
-            with patch('macf.hooks.handle_pre_compact.load_agent_state', return_value={'current_cycle_number': 7}):
+            with patch('macf.hooks.handle_pre_compact.get_cycle_number_from_events', return_value=7):
                 with patch('macf.hooks.handle_pre_compact.get_breadcrumb', return_value='s_abc/c_7/g_def/p_ghi/t_123'):
                     with patch('macf.hooks.handle_pre_compact.get_token_info', return_value={'tokens_used': 145000, 'cluac_level': 2}):
                         with patch('macf.hooks.handle_pre_compact.get_temporal_context', return_value={'timestamp_formatted': '2025-10-08 12:00 PM'}):
@@ -66,7 +66,7 @@ class TestPreCompactHook:
         stdin_data = json.dumps({"source": "manual"})
 
         with patch('macf.hooks.handle_pre_compact.get_current_session_id', return_value="test-session"):
-            with patch('macf.hooks.handle_pre_compact.load_agent_state', return_value={}):
+            with patch('macf.hooks.handle_pre_compact.get_cycle_number_from_events', return_value=1):
                 with patch('macf.hooks.handle_pre_compact.get_breadcrumb', return_value='s_abc/c_1/g_def/p_ghi/t_123'):
                     with patch('macf.hooks.handle_pre_compact.get_token_info', return_value={}):
                         with patch('macf.hooks.handle_pre_compact.get_temporal_context', return_value={'timestamp_formatted': '2025-10-08 12:00 PM'}):
@@ -80,7 +80,7 @@ class TestPreCompactHook:
     def test_defaults_to_auto_source_when_missing(self, isolated_events_log):
         """Defaults source to 'auto' when not provided."""
         with patch('macf.hooks.handle_pre_compact.get_current_session_id', return_value="test-session"):
-            with patch('macf.hooks.handle_pre_compact.load_agent_state', return_value={}):
+            with patch('macf.hooks.handle_pre_compact.get_cycle_number_from_events', return_value=1):
                 with patch('macf.hooks.handle_pre_compact.get_breadcrumb', return_value='s_abc/c_1/g_def/p_ghi/t_123'):
                     with patch('macf.hooks.handle_pre_compact.get_token_info', return_value={}):
                         with patch('macf.hooks.handle_pre_compact.get_temporal_context', return_value={'timestamp_formatted': '2025-10-08 12:00 PM'}):
