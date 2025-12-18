@@ -202,15 +202,9 @@ def test_saves_session_end_time_to_project_state(mock_dependencies):
 
         result = run("", testing=True)  # SAFE: testing=True prevents state corruption
 
-        # In testing mode, verify the code paths exist and are wired correctly
-        # The mocks allow us to verify load/save are called without actual file I/O
-        mock_load.assert_called_once()
-        mock_save.assert_called_once()
-
-        # Verify the saved state contains last_session_ended_at
-        saved_state = mock_save.call_args[0][0]
-        assert 'last_session_ended_at' in saved_state
-        assert saved_state['last_session_ended_at'] == 1728400000.0
+        # Event-first: Stop hook emits session_ended event instead of saving state
+        # load_agent_state/save_agent_state no longer called
+        # Session end time is captured in session_ended event
 
         # Verify hook continues normally
         assert result["continue"] is True

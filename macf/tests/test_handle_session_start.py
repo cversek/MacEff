@@ -217,8 +217,8 @@ def test_compaction_count_increments(mock_dependencies):
 
         # In testing=True mode, compaction_count should NOT increment
         assert mock_dependencies['state'].compaction_count == 2
-        # State still saves for auto_mode update
-        assert mock_dependencies['state'].save.called
+        # Event-first: state.save() no longer called
+        # compaction_detected event emitted by hook instead
 
 
 def test_exception_handling(mock_dependencies):
