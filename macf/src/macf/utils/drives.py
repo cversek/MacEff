@@ -10,7 +10,6 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional
 from .session import get_last_user_prompt_uuid
-from .state import SessionOperationalState
 
 
 def _emit_event(event: str, data: dict) -> bool:
