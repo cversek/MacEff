@@ -613,24 +613,6 @@ def pytest_collection_modifyitems(config, items):
 # Hook-specific fixtures for handle_* module tests
 
 @pytest.fixture
-def mock_session_state():
-    """Return mock SessionOperationalState for hook testing."""
-    state = MagicMock()
-    state.auto_mode = False
-    state.auto_mode_source = "default"
-    state.auto_mode_confidence = 0.0
-    state.pending_todos = []
-    state.compaction_count = 0
-    state.session_started_at = None
-    state.last_compaction_at = None
-    state.dev_drv_start = None
-    state.dev_drv_prompt_uuid = None
-    state.deleg_drv_start = None
-    state.save = MagicMock(return_value=True)
-    return state
-
-
-@pytest.fixture
 def mock_consciousness_artifacts():
     """Return mock ConsciousnessArtifacts for hook testing."""
     artifacts = MagicMock()

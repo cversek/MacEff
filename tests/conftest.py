@@ -54,7 +54,7 @@ def isolate_state_files(tmp_path):
     This prevents tests from reading/writing the real .maceff/ state files.
     Every test gets a fresh, isolated agent root directory.
     """
-    from macf.utils.state import set_state_root
+    from macf.utils.json_io import set_state_root
 
     # Create isolated agent root with .maceff structure
     agent_root = tmp_path / "test_agent"
