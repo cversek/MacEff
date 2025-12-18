@@ -166,48 +166,33 @@ def test_compaction_detected_manual_mode(mock_dependencies):
 def test_compaction_detected_auto_mode(mock_dependencies):
     """Test compaction detected with AUTO mode authorization."""
     from macf.hooks.handle_session_start import run
+    from unittest.mock import patch
+    import json
+
+    # Prepare input with source='compact' to trigger compaction path
+    input_data = {"source": "compact", "session_id": "test123"}
+    stdin_json = json.dumps(input_data)
 
     mock_dependencies['detect_compaction'].return_value = True
     mock_dependencies['auto_mode'].return_value = (True, "env", 0.9)
-
-    # Mock state with pending todos
-    mock_dependencies['state'].pending_todos = [
-        {"content": "Task 1", "status": "in_progress", "activeForm": "Working on task 1"}
-    ]
     mock_dependencies['format_message'].return_value = "AUTO mode authorization message"
 
-    result = run("", testing=True)
-
-    assert result["continue"] is True
-    assert "hookSpecificOutput" in result
-    assert "additionalContext" in result["hookSpecificOutput"]
-    assert "AUTO mode" in result["hookSpecificOutput"]["additionalContext"]
-
-
-def test_compaction_count_increments(mock_dependencies):
-    """Test compaction count does NOT increment in testing mode (safe-by-default)."""
-    from macf.hooks.handle_session_start import run
-    from unittest.mock import patch
-
-    mock_dependencies['detect_compaction'].return_value = True
-    mock_dependencies['state'].compaction_count = 2
-
-    with patch('macf.hooks.handle_session_start.increment_agent_cycle') as mock_increment, \
-         patch('macf.hooks.handle_session_start.get_temporal_context') as mock_temporal, \
+    with patch('macf.hooks.handle_session_start.get_temporal_context') as mock_temporal, \
          patch('macf.hooks.handle_session_start.get_rich_environment_string') as mock_env, \
-         patch('macf.hooks.handle_session_start.get_token_info') as mock_token:
+         patch('macf.hooks.handle_session_start.get_token_info') as mock_token, \
+         patch('macf.hooks.handle_session_start.append_event') as mock_append:
 
-        mock_increment.return_value = 17
         mock_temporal.return_value = {'timestamp_formatted': 'Test', 'day_of_week': 'Monday', 'time_of_day': 'Morning'}
         mock_env.return_value = 'Host'
         mock_token.return_value = {}
 
-        run("", testing=True)
+        result = run(stdin_json, testing=True)
 
-        # In testing=True mode, compaction_count should NOT increment
-        assert mock_dependencies['state'].compaction_count == 2
-        # Event-first: state.save() no longer called
-        # compaction_detected event emitted by hook instead
+    assert result["continue"] is True
+    assert "hookSpecificOutput" in result
+    assert "additionalContext" in result["hookSpecificOutput"]
+    # Verify AUTO mode appears in the output
+    assert "AUTO" in result["hookSpecificOutput"]["additionalContext"]
 
 
 def test_exception_handling(mock_dependencies):
@@ -396,34 +381,5 @@ def test_source_compact_logs_method(mock_dependencies):
         assert 'session_id' in event
 
 
-def test_cycle_increments_on_compaction(mock_dependencies):
-    """Test cycle number increments in project state when compaction detected."""
-    from macf.hooks.handle_session_start import run
-    import json
-    from unittest.mock import patch
-
-    # Prepare input with source='compact'
-    input_data = {"source": "compact", "session_id": "test123"}
-    stdin_json = json.dumps(input_data)
-
-    mock_dependencies['detect_compaction'].return_value = True
-
-    with patch('macf.hooks.handle_session_start.increment_agent_cycle') as mock_increment, \
-         patch('macf.hooks.handle_session_start.get_temporal_context') as mock_temporal, \
-         patch('macf.hooks.handle_session_start.get_rich_environment_string') as mock_env, \
-         patch('macf.hooks.handle_session_start.get_token_info') as mock_token:
-
-        # Mock increment_agent_cycle to return new cycle number
-        mock_increment.return_value = 20
-        mock_temporal.return_value = {'timestamp_formatted': 'Test', 'day_of_week': 'Monday', 'time_of_day': 'Morning'}
-        mock_env.return_value = 'Host'
-        mock_token.return_value = {}
-
-        result = run(stdin_json, testing=True)
-
-        # Verify increment_agent_cycle was called with session_id and testing=True
-        mock_increment.assert_called_once_with("test-session-123", testing=True)
-
-        # Verify hook continues successfully
-        assert result["continue"] is True
-        assert "hookSpecificOutput" in result
+# NOTE: test_cycle_increments_on_compaction removed - tested deleted increment_agent_cycle function
+# Event-first architecture: cycle tracked via compaction_detected events, not state mutations
