@@ -18,7 +18,6 @@ from macf.utils import (
     format_duration,
     format_macf_footer,
     get_agent_cycle_number,
-    increment_agent_cycle,
     get_token_info,
     format_token_context_full,
     get_boundary_guidance,
@@ -310,9 +309,9 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
                     }
                 )
 
-            # Increment cycle number in agent state (survives session boundaries)
-            # Pass testing parameter through (respects safe-by-default)
-            cycle_number = increment_agent_cycle(session_id, testing=testing)
+            # Cycle number: current + 1 (event log is source of truth)
+            # compaction_detected event captures the new cycle number
+            cycle_number = get_agent_cycle_number() + 1
 
             # Compaction count from events + 1 for this compaction
             new_compaction_count = current_compaction_count + 1

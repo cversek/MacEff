@@ -28,7 +28,6 @@ from .artifacts import (
 from .cycles import (
     detect_auto_mode,
     get_agent_cycle_number,
-    increment_agent_cycle,
 )
 from .drives import (
     start_dev_drv,
@@ -137,7 +136,6 @@ __all__ = [
     "get_temporal_context",
     "get_token_info",
     "get_usable_context",
-    "increment_agent_cycle",
     "list_policy_files",
     "load_merged_manifest",
     "parse_breadcrumb",
