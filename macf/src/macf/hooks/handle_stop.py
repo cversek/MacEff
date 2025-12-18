@@ -72,11 +72,8 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
             except Exception as log_e:
                 print(f"⚠️ MACF: Event logging also failed: {log_e}", file=sys.stderr)
 
-        # FALLBACK: State file if event query failed
-        if not prompt_uuid:
-            from macf.utils import SessionOperationalState
-            state = SessionOperationalState.load(session_id)
-            prompt_uuid = state.current_dev_drv_prompt_uuid
+        # No fallback - event log is sole source of truth
+        # If event query failed, prompt_uuid stays empty/unknown
 
         # Complete Development Drive (increments count, adds duration)
         success, duration = complete_dev_drv(session_id)

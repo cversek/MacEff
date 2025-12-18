@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 from .paths import find_project_root
 from .session import get_current_session_id
-from .state import SessionOperationalState, read_json
+from .state import read_json
 # NOTE: event_queries imported lazily inside functions to avoid circular import
 # (cycles.py -> event_queries -> agent_events_log -> utils -> cycles.py)
 
