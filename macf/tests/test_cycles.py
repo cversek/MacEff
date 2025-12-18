@@ -201,56 +201,48 @@ class TestIncrementAgentCycle:
             # State should not be modified (testing mode)
 
     def test_increments_cycle_in_production_mode(self, tmp_path):
-        """Production mode increments and saves cycle number."""
+        """Production mode increments cycle number (caller emits event)."""
         state = {'current_cycle_number': 5}
 
         with patch('macf.utils.cycles.load_agent_state', return_value=state):
-            with patch('macf.utils.cycles.save_agent_state') as mock_save:
-                result = increment_agent_cycle(
-                    session_id="test-session",
-                    agent_root=tmp_path,
-                    testing=False
-                )
+            result = increment_agent_cycle(
+                session_id="test-session",
+                agent_root=tmp_path,
+                testing=False
+            )
 
-                assert result == 6
-                mock_save.assert_called_once()
+            # Event-first: function returns incremented value
+            # Caller (SessionStart hook) emits compaction_detected event
+            assert result == 6
 
     def test_initializes_state_when_empty(self, tmp_path):
         """Initializes agent state when no state exists."""
         with patch('macf.utils.cycles.load_agent_state', return_value={}):
-            with patch('macf.utils.cycles.save_agent_state') as mock_save:
-                result = increment_agent_cycle(
-                    session_id="test-session",
-                    agent_root=tmp_path,
-                    testing=False
-                )
+            result = increment_agent_cycle(
+                session_id="test-session",
+                agent_root=tmp_path,
+                testing=False
+            )
 
-                assert result == 2  # Initialized to 1, then incremented
-                mock_save.assert_called_once()
+            # Event-first: initialized to 1, then incremented
+            # Caller (SessionStart hook) emits compaction_detected event
+            assert result == 2
 
     def test_updates_session_tracking_fields(self, tmp_path):
-        """Updates cycle_started_at, cycles_completed, last_session_id."""
+        """Returns incremented cycle (session fields now in compaction_detected event)."""
         state = {'current_cycle_number': 10}
 
         with patch('macf.utils.cycles.load_agent_state', return_value=state):
-            with patch('macf.utils.cycles.save_agent_state') as mock_save:
-                import time
-                before = time.time()
+            result = increment_agent_cycle(
+                session_id="new-session",
+                agent_root=tmp_path,
+                testing=False
+            )
 
-                result = increment_agent_cycle(
-                    session_id="new-session",
-                    agent_root=tmp_path,
-                    testing=False
-                )
-
-                after = time.time()
-
-                # Verify save was called with updated state
-                saved_state = mock_save.call_args[0][0]
-                assert saved_state['current_cycle_number'] == 11
-                assert saved_state['cycles_completed'] == 10
-                assert saved_state['last_session_id'] == "new-session"
-                assert before <= saved_state['cycle_started_at'] <= after
+            # Event-first: function returns incremented value
+            # Session tracking fields (cycle_started_at, cycles_completed, last_session_id)
+            # are now included in compaction_detected event emitted by SessionStart hook
+            assert result == 11
 
     def test_returns_1_on_exception(self, tmp_path):
         """Returns 1 when exceptions occur during increment."""

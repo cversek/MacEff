@@ -218,14 +218,9 @@ def increment_agent_cycle(
                 'last_session_id': session_id
             }
 
-        # Increment cycle
+        # Increment cycle (compaction_detected event captures new value)
         agent_state['current_cycle_number'] += 1
-        agent_state['cycle_started_at'] = time.time()
-        agent_state['cycles_completed'] = agent_state['current_cycle_number'] - 1
-        agent_state['last_session_id'] = session_id
-
-        # Save atomically
-        save_agent_state(agent_state, agent_root)
+        # state write removed - compaction_detected event is truth
 
         return agent_state['current_cycle_number']
     except Exception:
