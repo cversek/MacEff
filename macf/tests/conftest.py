@@ -4,6 +4,24 @@ Shared test fixtures and configuration for macf_tools test suite.
 This module provides common fixtures, utilities, and configuration for all tests.
 It follows pytest best practices for sharing test resources and maintaining
 test isolation while providing realistic test environments.
+
+EVENT LOG ISOLATION FOR SUBPROCESS TESTS
+=========================================
+Tests using subprocess.run(['macf_tools', ...]) emit cli_command_invoked events.
+Without isolation, these pollute production agent_events_log.jsonl.
+
+Pattern for CLI subprocess tests (see test_policy_cli.py):
+
+    @pytest.fixture(autouse=True)
+    def isolated_cli_env(tmp_path, monkeypatch):
+        test_log = tmp_path / "test_cli_events.jsonl"
+        monkeypatch.setenv("MACF_EVENTS_LOG_PATH", str(test_log))
+        yield test_log
+
+This fixture is module-local (not global) because:
+- Only CLI subprocess tests need it
+- Hook execution tests (test_hook_execution.py) run scripts directly, no events
+- Global autouse would add overhead where not needed
 """
 
 import json
