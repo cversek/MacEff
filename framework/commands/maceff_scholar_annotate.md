@@ -56,7 +56,7 @@ find agent/private/checkpoints agent/private/reflections -name "*.md" -type f | 
 **Task**: Annotate consciousness artifacts with enhanced citations
 
 **Files**: [list of absolute paths, one per line]
-**Repository Context**: ClaudeTheBuilder
+**Repository Context**: {AgentProject}
 
 **Required Policy Reading** (read ONCE, apply to ALL files):
 - `macf_tools policy read scholarship` (complete)

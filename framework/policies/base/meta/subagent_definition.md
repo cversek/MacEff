@@ -95,9 +95,9 @@ Subagent definition best practices guide the creation of minimal, reading-driven
 
 ### 1.1 Pattern Evolution Discovery
 
-**The Journey** (ClaudeTheBuilder Cycles 48-106):
+**The Pattern Evolution**:
 
-**DevOpsEng (Cycle 48, 87 lines)**:
+**DevOpsEng (early pattern, 87 lines)**:
 - Embedded all instructions directly in definition
 - "Skip the Ceremony", "Direct Implementation", "Pragmatic Testing"
 - Complete operating philosophy embedded
@@ -439,18 +439,12 @@ Then create `/path/to/pragmatic_development.md` with Skip the Ceremony, Direct I
 
 **Problem**: Including agent-specific examples in framework definitions.
 
-**Example**:
-```markdown
-Follow patterns from ClaudeTheBuilder's checkpoint:
-[CCP 2025-11-05 s_4107604e/c_105/g_cc7e1bd/p_0502ec33/t_1762359658]
-```
-
 **Why Problematic**:
 - Creates dependency on one agent's personal context
 - Framework definitions should work for any agent
 - Model user validation fails
 
-**Fix**: Use generic sanitized examples:
+**Fix**: Describe the pattern, not specific agent artifacts
 ```markdown
 Follow checkpoint pattern from foundation policy:
 [CCP YYYY-MM-DD s_abc12345/c_NN/g_def6789/p_ghi01234/t_1234567890]

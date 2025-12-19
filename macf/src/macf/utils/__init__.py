@@ -15,13 +15,9 @@ from .session import (
     get_last_user_prompt_uuid,
     detect_session_migration,
 )
-from .state import (
+from .json_io import (
     write_json_safely,
     read_json,
-    get_agent_state_path,
-    load_agent_state,
-    save_agent_state,
-    SessionOperationalState,
 )
 from .artifacts import (
     get_latest_consciousness_artifacts,
@@ -29,8 +25,6 @@ from .artifacts import (
 )
 from .cycles import (
     detect_auto_mode,
-    get_agent_cycle_number,
-    increment_agent_cycle,
 )
 from .drives import (
     start_dev_drv,
@@ -94,7 +88,6 @@ __all__ = [
     "CC2_TOTAL_CONTEXT",
     "ConsciousnessArtifacts",
     "DATEUTIL_AVAILABLE",
-    "SessionOperationalState",
     "_deep_merge",
     "calculate_session_duration",
     "clear_delegations_this_drive",
@@ -117,11 +110,9 @@ __all__ = [
     "format_temporal_awareness_section",
     "format_token_context_full",
     "format_token_context_minimal",
-    "get_agent_state_path",
     "get_autocompact_setting",
     "get_boundary_guidance",
     "get_breadcrumb",
-    "get_agent_cycle_number",
     "get_current_session_id",
     "get_deleg_drv_stats",
     "get_delegations_this_drive",
@@ -139,15 +130,12 @@ __all__ = [
     "get_temporal_context",
     "get_token_info",
     "get_usable_context",
-    "increment_agent_cycle",
     "list_policy_files",
-    "load_agent_state",
     "load_merged_manifest",
     "parse_breadcrumb",
     "read_json_safely",
     "record_delegation_complete",
     "record_delegation_start",
-    "save_agent_state",
     "start_deleg_drv",
     "start_dev_drv",
     "write_json_safely",

@@ -1,5 +1,5 @@
 """
-Tests for manifest merging infrastructure (B.6 Phase 1.2).
+Tests for manifest merging infrastructure.
 
 Tests the 2-layer manifest merging: Framework base + Project overlay.
 Validates merge strategy: lists append, scalars override, nested dicts recurse.

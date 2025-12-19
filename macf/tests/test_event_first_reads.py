@@ -1,5 +1,5 @@
 """
-TDD Tests for Event-First Read Operations (Phase 5A).
+TDD Tests for Event-First Read Operations.
 
 These tests define expected behavior for migrating from mutable state file reads
 to event-first queries. Tests should FAIL initially (red phase) until
@@ -61,8 +61,8 @@ def realistic_session_events(test_session_id):
     - Stop hook fires (DEV_DRV ends)
     - Delegation occurs during work
     """
-    # Session initialization
-    append_event("session_started", {
+    # Session initialization - compaction_detected carries cycle number
+    append_event("compaction_detected", {
         "session_id": test_session_id,
         "cycle": 203,
         "timestamp": 1000.0
@@ -146,7 +146,7 @@ def test_event_first_cycle_number(realistic_session_events):
     """
     cycle = get_cycle_number_from_events()
 
-    # Should get cycle from most recent session_started event
+    # Should get cycle from most recent compaction_detected event
     assert cycle == 203, "Should return cycle from events, not state file"
 
 
@@ -316,8 +316,8 @@ def test_event_first_realistic_workflow(test_session_id):
     4. Stop hook logs dev_drv_ended
     5. Query functions can reconstruct state
     """
-    # Simulate SessionStart hook
-    append_event("session_started", {
+    # Simulate compaction (compaction_detected carries cycle number)
+    append_event("compaction_detected", {
         "session_id": test_session_id,
         "cycle": 204,
         "timestamp": 1000.0
@@ -339,7 +339,7 @@ def test_event_first_realistic_workflow(test_session_id):
 
     # Verify event-first queries reconstruct state correctly
     cycle = get_cycle_number_from_events()
-    assert cycle == 204, "Should get cycle from session_started event"
+    assert cycle == 204, "Should get cycle from compaction_detected event"
 
     dev_stats = get_dev_drv_stats_from_events(test_session_id)
     assert dev_stats["count"] == 1, "Should count completed DEV_DRV"
@@ -388,7 +388,7 @@ def test_event_first_multiple_drives_same_session(test_session_id):
 
 
 # =============================================================================
-# Test Group 5: New Phase 5.1 Query Functions
+# Test Group 5: Advanced Query Functions
 # =============================================================================
 
 def test_get_delegations_this_drive_from_events(test_session_id):

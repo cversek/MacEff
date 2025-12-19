@@ -2,7 +2,7 @@
 """
 Unit tests for token/context awareness formatting utilities.
 
-Tests Phase 1 DRY formatting functions:
+Tests DRY formatting functions:
 - format_token_context_minimal()
 - format_token_context_full()
 - get_boundary_guidance()

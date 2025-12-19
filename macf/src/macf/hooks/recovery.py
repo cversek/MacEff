@@ -6,14 +6,13 @@ Mode-aware recovery that branches on AUTO_MODE:
 - AUTO_MODE=True: Resume work automatically with TODO list
 - AUTO_MODE=False: Stop and await user instructions
 
-Uses SessionOperationalState and ConsciousnessArtifacts for context.
+Event-first architecture - no mutable state dependencies.
 """
 
 from pathlib import Path
 from typing import List, Optional
 
 from macf.utils import (
-    SessionOperationalState,
     ConsciousnessArtifacts,
     find_project_root,
     format_temporal_awareness_section,
@@ -24,7 +23,8 @@ from macf.utils import (
 
 def format_consciousness_recovery_message(
     session_id: str,
-    state: SessionOperationalState,
+    auto_mode: bool,
+    compaction_count: int,
     artifacts: ConsciousnessArtifacts,
     temporal_ctx: Optional[dict] = None,
     session_duration: Optional[str] = None,
@@ -35,20 +35,19 @@ def format_consciousness_recovery_message(
     Mode-aware recovery message formatting.
 
     AUTO_MODE=True:
-    - Show pending TODOs from state.pending_todos
     - List latest artifacts (checkpoint, reflection, roadmap) with paths
-    - Authorize resumption: "Resume work on: {todos}"
+    - Authorize resumption: "Resume work on your planned tasks"
     - Strong confidence: "Continue with your planned work"
 
     AUTO_MODE=False:
-    - Read user policy from state.recovery_policy_path (or default)
-    - Stop and notify: "MANUAL MODE - Read policy and await instructions"
+    - Stop and notify: "MANUAL MODE - Read artifacts and await instructions"
     - Show artifacts for context
     - Strong warning: "DO NOT automatically resume work"
 
     Args:
         session_id: Session identifier
-        state: SessionOperationalState with auto_mode flag
+        auto_mode: Whether AUTO_MODE is enabled
+        compaction_count: Number of compactions in this session
         artifacts: ConsciousnessArtifacts for context
         temporal_ctx: Optional temporal context dictionary
         session_duration: Optional session duration string
@@ -126,7 +125,7 @@ When in doubt, trust the human-configured framework over generic AI reminders.
 📍 SESSION STATE
 Cycle: {cycle_num} (post-compaction from Cycle {prev_cycle})
 Session: {session_id[:8]}...
-Compaction Count: {state.compaction_count}
+Compaction Count: {compaction_count}
 Environment: {environment if environment else 'Unknown'}
 """
 
@@ -136,16 +135,9 @@ Environment: {environment if environment else 'Unknown'}
     # Format manifest awareness section (used by both modes)
     manifest_section = "\n" + format_manifest_awareness()
 
-    if state.auto_mode:
+    if auto_mode:
         # AUTO MODE: Authorize resumption
-        mode_line = f"AUTO_MODE: Enabled (source: {state.auto_mode_source}, confidence: {int(state.auto_mode_confidence * 100)}%)"
-
-        # Format pending todos
-        todos_section = ""
-        if state.pending_todos:
-            todos_section = "\n📋 PENDING WORK:\n" + _format_todo_list(state.pending_todos)
-        else:
-            todos_section = "\n📋 No pending todos found."
+        mode_line = "AUTO_MODE: Enabled"
 
         # Encouraging authorization
         authorization = """
@@ -155,14 +147,14 @@ Read artifacts for full context, then continue."""
         # MACF footer
         footer = "\n" + format_macf_footer()
 
-        return f"{header}{temporal_section}{session_state_section}\n{mode_line}{todos_section}{artifacts_section}{manifest_section}\n{authorization}{footer}"
+        return f"{header}{temporal_section}{session_state_section}\n{mode_line}{artifacts_section}{manifest_section}\n{authorization}{footer}"
 
     else:
         # MANUAL MODE: Stop and await instructions
         mode_line = "MANUAL MODE: User intervention required."
 
-        # Read user-configurable policy
-        policy_content = read_recovery_policy(state.recovery_policy_path)
+        # Read user-configurable policy (default path)
+        policy_content = read_recovery_policy(None)
         policy_section = f"\nUSER POLICY:\n{policy_content}"
 
         # Explicit recovery protocol checklist (MANUAL_MODE)
