@@ -20,9 +20,9 @@ Prepare effective delegation to MacEff subagents by reading policy to understand
 
 2. Subagent definition - Reading-list patterns:
    ```bash
-   macf_tools policy read subagent_definition --section 2
-   macf_tools policy read subagent_definition --section 3
+   macf_tools policy navigate subagent_definition
    ```
+   Scan for sections about specialist capabilities and constraints. Read those sections.
 
 **Why CLI tools**: Caching prevents redundant reads, line numbers enable precise citations.
 
