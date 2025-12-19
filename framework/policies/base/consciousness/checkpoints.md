@@ -226,10 +226,11 @@ Checkpoints are the **primary defense** against compaction-induced amnesia, serv
 
 Before creating a CCP, complete these preparatory steps:
 
-1. **Backup TODO state** (MANDATORY - see todo_hygiene.md §9):
-   - Create timestamped JSON backup of current TODO list
-   - Location: `agent/public/todo_backups/YYYY-MM-DD_HHMMSS_{session}_{cycle}_{mission}.json`
-   - Enables TODO snapshot citation in CCP and post-compaction recovery
+1. **Verify TODO state is captured** (MANDATORY - see todo_hygiene.md §10):
+   - Every `TodoWrite` automatically emits `todos_updated` event with full state
+   - Use `macf_tools todos status` to verify current state is recorded
+   - For recovery: `macf_tools todos list --previous N` queries event history
+   - **Legacy fallback**: Manual JSON backup to `agent/public/todo_backups/` only if event log unavailable
 
 2. **Generate breadcrumb**:
    - Run `macf_tools breadcrumb` to capture forensic coordinates

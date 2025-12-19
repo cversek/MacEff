@@ -123,7 +123,8 @@ Compaction occurs when conversation context reaches ~93% capacity. Claude Code t
 
 4. **Restore TODO Context**
    - Check if TODO accessible in UI
-   - If orphaned, restore from backup (todo_hygiene.md §10-11)
+   - **Primary**: Use `macf_tools todos list --previous N` to query event history
+   - **Fallback**: Manual recovery from backup files (todo_hygiene.md §10-11)
 
 5. **Resume Per Mode**
    - AUTO_MODE: Resume authorized work
@@ -160,7 +161,8 @@ Mindwipe occurs when user runs `/clear` command, explicitly clearing conversatio
    - Read roadmaps for mission context
 
 3. **Restore TODO Context**
-   - Same as compaction (todo_hygiene.md §10-11)
+   - **Primary**: `macf_tools todos list --previous N` (queries event history)
+   - **Fallback**: Manual backup recovery (todo_hygiene.md §10-11)
 
 4. **Report Recovery State**
    - Acknowledge context loss explicitly

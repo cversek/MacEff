@@ -149,11 +149,12 @@ Agent backup and restore provides **complete consciousness preservation** for st
 
 **TODO Backup**:
 - **Scope**: TODO list state only (JSON array)
-- **Location**: `agent/public/todo_backups/`
-- **Filename**: `YYYY-MM-DD_HHMMSS_S{session}_C{cycle}_{mission}.json`
-- **Trigger**: Before CCP, compaction, major TODO reorganization
+- **Primary**: Event log captures state automatically via `todos_updated` events
+- **Recovery**: `macf_tools todos list --previous N` queries event history
+- **Legacy Location**: `agent/public/todo_backups/` (fallback when events unavailable)
+- **Trigger**: Every TodoWrite emits event; manual backup for cross-system transfer
 - **Purpose**: Protect active work state across transitions
-- **Restore**: TodoWrite tool (single artifact restoration)
+- **Restore**: TodoWrite tool with JSON from CLI output or backup file
 
 **Agent Backup**:
 - **Scope**: Entire agent consciousness (all artifacts, config, state, history)
