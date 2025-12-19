@@ -103,7 +103,7 @@ def collect_backup_sources(
         sources.append(BackupSource(
             source_path=paths.maceff_dir,
             archive_path=".maceff",
-            category="maceff_state",
+            category="legacy_state",  # Backward compat for old backups
             critical=True
         ))
 

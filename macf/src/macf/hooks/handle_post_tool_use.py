@@ -35,7 +35,7 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
     - Minimal token context (CLUAC indicator)
 
     Enhanced breadcrumb format (Cycle 42+): c_42/s_abc12345/p_def6789
-    - c_42: Cycle number from agent_state.json (self-describing prefix)
+    - c_42: Cycle number from event log (self-describing prefix)
     - s_abc12345: Session ID (first 8 chars, self-describing prefix)
     - p_def6789: DEV_DRV prompt UUID (last 7 chars) - stable for entire drive
     - No t_ timestamp in PostToolUse (only added when TODO completed)

@@ -66,7 +66,7 @@ def format_breadcrumb(
     Minimal format: s_abc12345/c_42/p_b0377089
 
     Args:
-        cycle: Cycle number (from agent_state.json)
+        cycle: Cycle number (from event log)
         session_id: Full session ID
         prompt_uuid: DEV_DRV prompt UUID (optional, shows 'none' if missing)
         completion_time: Unix timestamp when TODO completed (optional)

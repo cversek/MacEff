@@ -6,7 +6,7 @@ Mode-aware recovery that branches on AUTO_MODE:
 - AUTO_MODE=True: Resume work automatically with TODO list
 - AUTO_MODE=False: Stop and await user instructions
 
-Phase 7: Event-first architecture - no mutable state dependencies.
+Event-first architecture - no mutable state dependencies.
 """
 
 from pathlib import Path
