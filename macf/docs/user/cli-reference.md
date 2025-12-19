@@ -628,9 +628,9 @@ macf_tools events gaps [--threshold THRESHOLD]
 ## Files
 
 - `.maceff/config.json` - Agent configuration
-- `.maceff/agent_state.json` - Project-scoped agent state
-- `.maceff/sessions/{session_id}/session_state.json` - Session-scoped state
-- `.maceff/agent_events_log.jsonl` - Event sourcing log
+- `.maceff/agent_state.json` - **DEPRECATED** (legacy, kept for old backup compat)
+- `.maceff/sessions/{session_id}/session_state.json` - **DEPRECATED** (not used in v0.3+)
+- `.maceff/agent_events_log.jsonl` - **Primary state source** (event-first architecture)
 - `.claude/hooks/` - Installed hook scripts
 - `/tmp/macf/{agent_id}/{session_id}/` - Session temporary files
 

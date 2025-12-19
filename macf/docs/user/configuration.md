@@ -28,13 +28,16 @@ Agent identity configuration created by `macf_tools config init`.
 
 **Usage**: The moniker field is used by `ConsciousnessConfig.agent_id` for path resolution in host contexts.
 
-### `.maceff/agent_state.json` - Project-Scoped State
+### `.maceff/agent_state.json` - **DEPRECATED**
 
-Location:
-- **Container**: `/home/{agent}/.maceff/agent_state.json` (agent-scoped)
-- **Host**: `{project_root}/.maceff/agent_state.json` (project-scoped)
+> ⚠️ **Event-First Architecture (v0.3+)**: State is now derived from `.maceff/agent_events_log.jsonl`.
+> These state files are no longer written or read. Kept in docs for legacy backup compatibility only.
 
-Persistent state that survives session boundaries.
+~~Location:~~
+- ~~**Container**: `/home/{agent}/.maceff/agent_state.json` (agent-scoped)~~
+- ~~**Host**: `{project_root}/.maceff/agent_state.json` (project-scoped)~~
+
+~~Persistent state that survives session boundaries.~~
 
 **Structure**:
 ```json
