@@ -41,7 +41,6 @@ macf/
     ├── manifest.py            # Policy manifest handling
     ├── paths.py               # Path resolution
     ├── session.py             # Session utilities
-    ├── state.py               # State persistence
     ├── temporal.py            # Temporal awareness
     └── tokens.py              # Token budget tracking
 ```
@@ -212,18 +211,6 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
 
 **Unified Path Structure**: `/tmp/macf/{agent_id}/{session_id}/{subdir}/`
 
-#### `utils/state.py` - State Persistence
-
-**Key Functions**:
-- `write_json_safely()` - Atomic JSON write
-- `read_json_safely()` - Safe JSON read with error handling
-- `get_session_state_path()` - Session state file path
-- `get_agent_state_path()` - Agent state file path
-
-**State Scoping**:
-- **Session-scoped**: `.maceff/sessions/{session_id}/session_state.json` (orphaned on migration)
-- **Project-scoped**: `.maceff/agent_state.json` (survives session boundaries)
-
 #### `utils/breadcrumbs.py` - Breadcrumb Management
 
 **Format**: `s_{session_hash}/c_{cycle}/g_{git_hash}/p_{prompt_uuid}/t_{timestamp}`
@@ -239,9 +226,7 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
 
 **Key Functions**:
 - `detect_auto_mode()` - Hierarchical AUTO_MODE detection
-- `increment_agent_cycle()` - Increment cycle counter
-- `load_agent_state()` - Load project-scoped state
-- `save_agent_state()` - Save project-scoped state
+- `set_auto_mode()` - Set AUTO_MODE state
 
 **AUTO_MODE Priority**:
 1. CLI flag (future) - confidence 1.0
@@ -313,27 +298,38 @@ User sends message
     Show drive stats
 ```
 
-## State Management
+## State Management: Event-First Architecture
 
-### Session vs Project Scoping
+### Event Log as Sole Source of Truth
 
-**Session-Scoped State** (`.maceff/sessions/{session_id}/session_state.json`):
-- Lifetime: Single session only
-- Orphaned when session ID changes
-- Use case: State that should NOT persist across sessions
-- Examples: `auto_mode`, `pending_todos`, `compaction_count`
+**v0.3.0 Architecture**: The event log (`.maceff/agent_events_log.jsonl`) is the **sole source of truth** for all state.
 
-**Project-Scoped State** (`.maceff/agent_state.json`):
-- Lifetime: Persists across all sessions
-- Use case: State that MUST survive session boundaries
-- Examples: `last_session_id`, `current_cycle_number`, `cycles_completed`
+**Event Log** (`.maceff/agent_events_log.jsonl`):
+- Append-only JSONL format
+- Each event has timestamp, type, breadcrumb, and data
+- ALL state reconstructed by querying events
+- Survives all session boundaries
 
-### Atomic Operations
+**No State Files**: Legacy state files (`agent_state.json`, `session_state.json`, `SessionOperationalState`) have been **purged**. All state comes from events.
 
-All state writes use atomic operations:
-1. Write to temporary file (`.tmp` suffix)
-2. Atomic rename to target file
-3. Cleanup temporary file on failure
+### State Reconstruction Pattern
+
+```python
+# Get current cycle from events
+from macf.event_queries import get_cycle_number_from_events
+cycle = get_cycle_number_from_events()  # Queries cycle_incremented events
+
+# Get compaction count for session
+from macf.event_queries import get_compaction_count
+count = get_compaction_count(session_id)  # Queries compaction_detected events
+```
+
+**Benefits**:
+- No state file corruption (append-only log)
+- Full forensic history preserved
+- State at any timestamp reconstructible
+- No session orphaning issues
+- Single source of truth eliminates sync bugs
 
 ## Key Design Decisions
 
@@ -384,10 +380,10 @@ All state writes use atomic operations:
 **Pattern**: Safe failure with graceful degradation.
 
 **Examples**:
-- `SessionOperationalState.load()` → Returns default instance on failure
+- `query_events()` → Returns empty list on failure
 - `get_latest_consciousness_artifacts()` → Returns empty object
 - `detect_auto_mode()` → Returns `(False, "default", 0.0)` on failure
-- `state.save()` → Returns `False` on failure (never raises)
+- `append_event()` → Logs error, doesn't crash hook execution
 
 ## Performance Considerations
 

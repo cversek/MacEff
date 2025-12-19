@@ -108,13 +108,24 @@ def extract_source_paths(manifest: Dict) -> Dict[str, Path]:
     source_paths = manifest.get("source_paths", {})
 
     # Derive maceff_root from project_root if not stored
-    # (typically sibling directory: /path/to/Project -> /path/to/MacEff)
+    # Priority: env var > manifest value > sibling detection
     project_root = source_paths.get("project_root", "")
     maceff_root = source_paths.get("maceff_root", "")
+    if not maceff_root:
+        # Try environment variable first (portable, recommended)
+        maceff_root = os.environ.get("MACEFF_ROOT", "")
     if not maceff_root and project_root:
-        # Infer: /Users/x/gitwork/foo/Project -> /Users/x/gitwork/cversek/MacEff
-        # This is a heuristic - may need adjustment
-        maceff_root = str(Path(project_root).parent.parent / "cversek" / "MacEff")
+        # Fallback: sibling directory heuristic
+        # Walk up to find parent containing */MacEff sibling
+        project_path = Path(project_root)
+        for parent in [project_path.parent, project_path.parent.parent]:
+            if parent.exists():
+                for candidate in parent.glob("*/MacEff"):
+                    if candidate.is_dir() and (candidate / "macf").exists():
+                        maceff_root = str(candidate)
+                        break
+            if maceff_root:
+                break
 
     return {
         "project_root": Path(project_root) if project_root else Path(""),

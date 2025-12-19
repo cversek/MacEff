@@ -454,7 +454,7 @@ Link major work units to their completion breadcrumbs with CA_TAG (DEV_DRV, DELE
 - MacEff: COMMIT_HASH
 - Overlay: COMMIT_HASH
 - Parent: COMMIT_HASH
-- ClaudeTheBuilder: This CCP pending commit
+- Agent repo: This CCP pending commit
 
 **Container/Environment State**:
 - [Relevant environment details]

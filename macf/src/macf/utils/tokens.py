@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from .paths import find_project_root, get_session_dir, get_session_transcript_path
 from .session import get_current_session_id
-from .state import read_json, write_json_safely
+from .json_io import read_json, write_json_safely
 from .claude_settings import get_autocompact_setting
 
 CC2_TOTAL_CONTEXT = 200000
@@ -227,56 +227,19 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
                         "source": "jsonl",
                     }
             except Exception as e:
-                print(f"⚠️ MACF: Token cache JSONL read failed (fallback: hooks_state): {e}", file=sys.stderr)
+                print(f"⚠️ MACF: Token cache JSONL read failed: {e}", file=sys.stderr)
 
-    # Fallback to hooks_state.json (original implementation)
-    project_root = find_project_root()
-    hooks_state_path = project_root / ".claude" / "hooks" / "hooks_state.json"
-
-    if not hooks_state_path.exists():
-        return {
-            "tokens_used": 0,
-            "tokens_remaining": max_tokens,
-            "percentage_used": 0.0,
-            "percentage_remaining": 100.0,
-            "cluac_level": 0,
-            "source": "default",
-        }
-
-    try:
-        with open(hooks_state_path, "r") as f:
-            state = json.load(f)
-
-        token_data = state.get("token_tracking", {})
-        tokens_used = token_data.get("total_tokens", 0)
-        tokens_remaining = max_tokens - tokens_used
-        percentage_used = (tokens_used / max_tokens) * 100 if max_tokens > 0 else 0
-        percentage_remaining = 100 - percentage_used
-
-        # Calculate CLUAC level (based on percentage remaining)
-        # CLUAC level = percentage remaining (rounded)
-        # CLUAC100 = 100% remaining (0% used)
-        # CLUAC1 = 1% remaining (99% used)
-        cluac_level = round(percentage_remaining)
-
-        return {
-            "tokens_used": tokens_used,
-            "tokens_remaining": tokens_remaining,
-            "percentage_used": percentage_used,
-            "percentage_remaining": percentage_remaining,
-            "cluac_level": cluac_level,
-            "last_updated": token_data.get("last_updated", "unknown"),
-            "source": "hooks_state",
-        }
-    except (json.JSONDecodeError, IOError, KeyError):
-        return {
-            "tokens_used": 0,
-            "tokens_remaining": max_tokens,
-            "percentage_used": 0.0,
-            "percentage_remaining": 100.0,
-            "cluac_level": 0,
-            "source": "default",
-        }
+    # NOTE: hooks_state.json fallback REMOVED - event-first architecture
+    # JSONL transcript parsing is the sole source of token data
+    # Return default values if JSONL parsing fails
+    return {
+        "tokens_used": 0,
+        "tokens_remaining": max_tokens,
+        "percentage_used": 0.0,
+        "percentage_remaining": 100.0,
+        "cluac_level": 100,
+        "source": "default",
+    }
 
 def format_token_context_minimal(token_info: Dict[str, Any]) -> str:
     """

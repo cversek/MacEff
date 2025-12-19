@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from .paths import find_project_root
 from .session import get_current_session_id
-from .state import SessionOperationalState, read_json
+from .json_io import read_json
 
 
 def get_current_dev_drv_prompt_uuid() -> Optional[str]:
@@ -66,7 +66,7 @@ def format_breadcrumb(
     Minimal format: s_abc12345/c_42/p_b0377089
 
     Args:
-        cycle: Cycle number (from agent_state.json)
+        cycle: Cycle number (from event log)
         session_id: Full session ID
         prompt_uuid: DEV_DRV prompt UUID (optional, shows 'none' if missing)
         completion_time: Unix timestamp when TODO completed (optional)
@@ -262,9 +262,9 @@ def get_breadcrumb() -> str:
         # This replaces the old mutable session_state.json approach which could desync
         prompt_uuid = get_current_dev_drv_prompt_uuid()
 
-        # Get cycle from agent_state.json (agent-scoped persistence)
-        from .cycles import get_agent_cycle_number
-        cycle_num = get_agent_cycle_number()
+        # Get cycle from event log (event-first architecture)
+        from ..event_queries import get_cycle_number_from_events
+        cycle_num = get_cycle_number_from_events()
 
         # Get current timestamp
         current_time = int(time.time())

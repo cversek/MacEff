@@ -203,21 +203,50 @@ def get_deleg_drv_stats_from_events(session_id: str) -> dict:
 
 def get_cycle_number_from_events() -> int:
     """
-    Get cycle number from most recent session_started event.
+    Get cycle number from events.
+
+    Priority (last-write-wins semantics):
+    1. Most recent cycle_correction event's 'cycle' field (manual correction)
+    2. Most recent compaction_detected event's 'cycle' field (current cycle)
+    3. state_snapshot's derived_values.cycle_number (baseline)
+    4. Default to 1 for first run
 
     Returns:
-        Current cycle number (0 if no events found)
+        Current cycle number (1 if no events found)
     """
-    # Read most recent events first
-    for event in read_events(limit=100, reverse=True):
-        if event.get("event") == "session_started":
+    # Reverse scan - find most recent cycle source
+    # Self-limiting: exits on first match
+    for event in read_events(limit=None, reverse=True):
+        event_type = event.get("event")
+
+        # Highest priority: cycle_correction (manual fix for test pollution)
+        if event_type == "cycle_correction":
             data = event.get("data", {})
             cycle = data.get("cycle")
-            if cycle is not None:
+            if cycle is not None and cycle > 0:
                 return cycle
 
-    # Default if no session_started events found
-    return 0
+        # Primary: compaction_detected has authoritative cycle number
+        if event_type == "compaction_detected":
+            data = event.get("data", {})
+            cycle = data.get("cycle")
+            if cycle is not None and cycle > 0:
+                return cycle
+
+        # Fallback: state_snapshot baseline
+        if event_type == "state_snapshot":
+            data = event.get("data", {})
+            # Check derived_values first (from state file captures)
+            derived = data.get("derived_values", {})
+            if "cycle_number" in derived:
+                return derived["cycle_number"]
+            # Fallback to event_tallies
+            tallies = data.get("event_tallies", {})
+            if "compaction_detected" in tallies:
+                return tallies["compaction_detected"] + 1
+
+    # No events - return 1 (first run default)
+    return 1
 
 
 def get_compaction_count_from_events(session_id: str) -> dict:
@@ -327,6 +356,44 @@ def get_delegations_this_drive_from_events(session_id: str) -> List[Dict]:
                     break
 
     return delegations
+
+
+def get_active_dev_drv_start(session_id: str) -> tuple[float, str]:
+    """Get start time and prompt_uuid of active (unended) dev_drv from events."""
+    from .agent_events_log import read_events
+    session_prefix = session_id[:8] if session_id else ""
+
+    # Read in reverse - find most recent started/ended first
+    for event in read_events(limit=100, reverse=True):
+        event_type = event.get("event")
+        data = event.get("data", {})
+        event_session = data.get("session_id", "")
+        if session_prefix and event_session and not event_session.startswith(session_prefix):
+            continue
+        if event_type == "dev_drv_ended":
+            return (0.0, "")  # Most recent is ended - no active drive
+        if event_type == "dev_drv_started":
+            return (data.get("timestamp", 0.0), data.get("prompt_uuid", ""))
+    return (0.0, "")
+
+
+def get_active_deleg_drv_start(session_id: str) -> float:
+    """Get start time of active (unended) deleg_drv from events."""
+    from .agent_events_log import read_events
+    session_prefix = session_id[:8] if session_id else ""
+
+    # Read in reverse - find most recent started/ended first
+    for event in read_events(limit=100, reverse=True):
+        event_type = event.get("event")
+        data = event.get("data", {})
+        event_session = data.get("session_id", "")
+        if session_prefix and event_session and not event_session.startswith(session_prefix):
+            continue
+        if event_type == "deleg_drv_ended":
+            return 0.0  # Most recent is ended - no active drive
+        if event_type == "deleg_drv_started":
+            return data.get("timestamp", 0.0)
+    return 0.0
 
 
 def get_last_session_id_from_events() -> str:

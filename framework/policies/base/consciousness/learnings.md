@@ -263,7 +263,7 @@ YYYY-MM-DD_HHMMSS_{topic}_learning.md
 
 **Structure**:
 ```markdown
-# ClaudeTheBuilder Learnings Index
+# Agent Learnings Index
 
 **Last Updated**: YYYY-MM-DD HH:MM:SS
 **Total Learnings**: [count]

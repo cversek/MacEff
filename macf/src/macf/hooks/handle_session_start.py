@@ -11,16 +11,12 @@ from typing import Dict, Any
 
 from macf.utils import (
     get_current_session_id,
-    SessionOperationalState,
     get_latest_consciousness_artifacts,
     detect_auto_mode,
     get_temporal_context,
     get_rich_environment_string,
     format_duration,
     format_macf_footer,
-    load_agent_state,
-    save_agent_state,
-    increment_agent_cycle,
     get_token_info,
     format_token_context_full,
     get_boundary_guidance,
@@ -35,7 +31,12 @@ from macf.hooks.recovery import (
 )
 from macf.hooks.hook_logging import log_hook_event
 from macf.agent_events_log import append_event
-from macf.utils.state import get_session_state_path, read_json, write_json_safely
+from macf.event_queries import (
+    get_last_session_end_time_from_events,
+    get_compaction_count_from_events,
+    get_auto_mode_from_events,
+    get_cycle_number_from_events
+)
 
 
 def detect_session_migration(current_session_id: str) -> tuple[bool, str, str]:
@@ -45,7 +46,7 @@ def detect_session_migration(current_session_id: str) -> tuple[bool, str, str]:
     Session migration occurs when Claude Code creates a new session (crash recovery,
     manual restart) which orphans the previous TODO file in ~/.claude/todos/.
 
-    EVENT-FIRST: Queries event log for last_session_id, falls back to agent_state.json.
+    EVENT-FIRST: Queries event log for last_session_id, event log is sole source of truth.
 
     Args:
         current_session_id: Current session ID
@@ -54,7 +55,7 @@ def detect_session_migration(current_session_id: str) -> tuple[bool, str, str]:
         Tuple of (migration_detected: bool, orphaned_todo_path: str, previous_session_id: str)
         - migration_detected: True if session ID changed
         - orphaned_todo_path: Path to orphaned TODO file (empty if not found)
-        - previous_session_id: Previous session ID from events or agent_state
+        - previous_session_id: Previous session ID from events
     """
     # EVENT-FIRST: Query event log for last session ID (lazy import to avoid circular)
     try:
@@ -73,10 +74,8 @@ def detect_session_migration(current_session_id: str) -> tuple[bool, str, str]:
             print(f"⚠️ MACF: Event logging also failed: {log_e}", file=sys.stderr)
         previous_session_id = ""
 
-    # FALLBACK: Agent state file if event query returned empty
-    if not previous_session_id:
-        project_state = load_agent_state()
-        previous_session_id = project_state.get('last_session_id', '')
+    # NOTE: Event query is sole source of truth
+    # If no previous_session_id from events, this is first run
 
     # Check if we have a previous session ID to compare
     if not previous_session_id:
@@ -123,7 +122,7 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
     ⚠️  SIDE EFFECTS: This hook mutates project state on compaction detection
 
     Side effects (ONLY when testing=False):
-    - Increments cycle counter in .maceff/agent_state.json
+    - Increments cycle counter via cycle_incremented event
     - Increments compaction count in session state
     - Updates session timestamps
 
@@ -152,35 +151,11 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
             "session_id": session_id
         })
 
-        # Load session state EARLY for detection
-        state = SessionOperationalState.load(session_id)
-
         # PHASE 1: Check source field FIRST (highest priority)
         # This distinguishes user-initiated /compact from crash-based session migration
         source = data.get('source')
         compaction_detected = False
         detection_method = None
-
-        # PHASE 0.5: Clear policy_reads cache for non-resume sources
-        # New cycle = new consciousness = fresh policy engagement required
-        # Only 'resume' preserves cache (continuing same conversation)
-        if source != 'resume' and not testing:
-            state_path = get_session_state_path(session_id)
-            try:
-                session_state = read_json(state_path)
-            except FileNotFoundError:
-                # First run - no session state yet, nothing to clear
-                session_state = {}
-            if 'policy_reads' in session_state:
-                session_state['policy_reads'] = {}
-                write_json_safely(state_path, session_state)
-                log_hook_event({
-                    "hook_name": "session_start",
-                    "event_type": "POLICY_CACHE_CLEARED",
-                    "session_id": session_id,
-                    "source": source,
-                    "reason": "epistemological_humility"
-                })
 
         if source == 'compact':
             # User-initiated compaction via /compact command
@@ -220,9 +195,8 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
                     except Exception:
                         orphaned_todo_size = 0
 
-                # Get current cycle from agent state
-                agent_state = load_agent_state()
-                current_cycle = agent_state.get('current_cycle_number', 0)
+                # Get current cycle from events
+                current_cycle = get_cycle_number_from_events()
 
                 append_event(
                     event="migration_detected",
@@ -235,11 +209,8 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
                     hook_input=data
                 )
 
-                # Update project-scoped agent_state with current session ID for next detection
-                if not testing:
-                    project_state = load_agent_state()
-                    project_state['last_session_id'] = session_id
-                    save_agent_state(project_state)
+                # Event log captures session_id via migration_detected event
+                # Detection uses get_last_session_id_from_events() - state write removed
 
                 # Get temporal context for migration message
                 temporal_ctx = get_temporal_context()
@@ -316,30 +287,34 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
                     })
 
         if compaction_detected:
+            # Get current values from events BEFORE modifications
+            compaction_info = get_compaction_count_from_events(session_id)
+            current_compaction_count = compaction_info.get('count', 0)
+            auto_mode, auto_mode_source, confidence = detect_auto_mode(session_id)
+
             # Side-effects: Skip if testing mode
             if not testing:
                 # Emit state snapshot BEFORE modifications (preserves historical baseline)
+                # All values from events, no state files
                 from macf.agent_events_log import emit_state_snapshot
-                agent_state = load_agent_state()
                 emit_state_snapshot(
                     session_id=session_id,
                     snapshot_type="compaction_recovery",
-                    source="state_files",
+                    source="events",
                     state_file_values={
-                        "cycle_number": agent_state.get("current_cycle_number", 1),
-                        "compaction_count": state.compaction_count,
-                        "auto_mode": state.auto_mode,
-                        "auto_mode_source": state.auto_mode_source
+                        "cycle_number": get_cycle_number_from_events(),
+                        "compaction_count": current_compaction_count,
+                        "auto_mode": auto_mode,
+                        "auto_mode_source": auto_mode_source
                     }
                 )
 
-                # Increment compaction count
-                state.compaction_count += 1
-                state.save()
+            # Cycle number: current + 1 (event log is source of truth)
+            # compaction_detected event captures the new cycle number
+            cycle_number = get_cycle_number_from_events() + 1
 
-            # Increment cycle number in agent state (survives session boundaries)
-            # Pass testing parameter through (respects safe-by-default)
-            cycle_number = increment_agent_cycle(session_id, testing=testing)
+            # Compaction count from events + 1 for this compaction
+            new_compaction_count = current_compaction_count + 1
 
             # Append compaction_detected event
             append_event(
@@ -348,26 +323,20 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
                     "session_id": session_id,
                     "cycle": cycle_number,
                     "detection_method": detection_method,
-                    "compaction_count": state.compaction_count
+                    "compaction_count": new_compaction_count
                 },
                 hook_input=data
             )
 
-            # Detect AUTO_MODE
-            auto_mode, source, confidence = detect_auto_mode(session_id)
-            state.auto_mode = auto_mode
-            state.auto_mode_source = source
-            state.auto_mode_confidence = confidence
-            state.save()
-
             # Append auto_mode_detected event for forensic reconstruction
+            # (auto_mode already detected earlier for state snapshot)
             append_event(
                 event="auto_mode_detected",
                 data={
                     "session_id": session_id,
                     "cycle": cycle_number,
                     "auto_mode": auto_mode,
-                    "source": source,
+                    "source": auto_mode_source,
                     "confidence": confidence
                 },
                 hook_input=data
@@ -389,9 +358,11 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
             }
 
             # Format comprehensive recovery message
+            # Pass event-derived values instead of state object
             recovery_msg = format_consciousness_recovery_message(
                 session_id=session_id,
-                state=state,
+                auto_mode=auto_mode,
+                compaction_count=new_compaction_count,
                 artifacts=artifacts,
                 temporal_ctx=temporal_ctx,
                 environment=environment,
@@ -404,7 +375,7 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
                 "event_type": "RECOVERY_TRIGGERED",
                 "session_id": session_id,
                 "auto_mode": auto_mode,
-                "compaction_count": state.compaction_count
+                "compaction_count": new_compaction_count
             })
 
             # Pattern C: top-level systemMessage for user + hookSpecificOutput for agent
@@ -420,11 +391,8 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
         # No compaction detected - provide temporal awareness message
         import time
 
-        # Load project state for cross-session time tracking
-        project_state = load_agent_state()
-
-        # Append session_started event (normal startup without compaction)
-        current_cycle = project_state.get('current_cycle_number', 0)
+        # Get current cycle from events
+        current_cycle = get_cycle_number_from_events()
         append_event(
             event="session_started",
             data={
@@ -434,10 +402,8 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
             hook_input=data
         )
 
-        # Update last_session_id in project-scoped state for future migration detection
-        if not testing:
-            project_state['last_session_id'] = session_id
-            save_agent_state(project_state)
+        # session_started event captures session_id for future migration detection
+        # Detection uses get_last_session_id_from_events() - state write removed
 
         # Get temporal context
         temporal_ctx = get_temporal_context()
@@ -445,7 +411,9 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
 
         # Get breadcrumb
         breadcrumb = get_breadcrumb()
-        last_session_ended = project_state.get('last_session_ended_at', None)
+
+        # Get last session end time from events (events are sole source)
+        last_session_ended = get_last_session_end_time_from_events()
 
         # Calculate time gap since last session
         current_time = time.time()
@@ -456,11 +424,7 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
             time_gap_seconds = current_time - last_session_ended
             gap_display = format_duration(time_gap_seconds)
 
-        # Update session state timestamp (for within-session tracking)
-        # Skip if testing mode to avoid side-effects
-        if not testing:
-            state.last_updated = current_time
-            state.save()
+        # session_started event captures timestamp - state write removed
 
         # Get token context
         token_info = get_token_info(session_id)
@@ -468,6 +432,10 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
 
         # Format manifest awareness
         manifest_section = format_manifest_awareness()
+
+        # Get compaction count from events (events are sole source)
+        compaction_info = get_compaction_count_from_events(session_id)
+        compaction_count = compaction_info.get('count', 0)
 
         # Format temporal awareness message
         message = f"""🏗️ MACF | Session Start
@@ -478,7 +446,7 @@ Breadcrumb: {breadcrumb}
 
 Session Context:
 - Time since last session: {gap_display}
-- Compaction count: {state.compaction_count}
+- Compaction count: {compaction_count}
 - Environment: {environment}
 
 {token_section}

@@ -13,11 +13,11 @@ from macf.utils import (
     get_temporal_context,
     format_macf_footer,
     get_current_session_id,
-    load_agent_state,
     get_token_info,
     get_breadcrumb
 )
 from macf.agent_events_log import append_event
+from macf.event_queries import get_cycle_number_from_events
 from macf.hooks.hook_logging import log_hook_event
 
 
@@ -42,8 +42,7 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
 
         # Get session context
         session_id = get_current_session_id()
-        project_state = load_agent_state()
-        cycle_number = project_state.get('current_cycle_number', 0)
+        cycle_number = get_cycle_number_from_events()
 
         # Get breadcrumb before compaction
         breadcrumb = get_breadcrumb()

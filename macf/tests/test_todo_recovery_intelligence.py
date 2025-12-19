@@ -124,8 +124,8 @@ class TestTodoRecoveryIntelligence:
 
     def test_substantial_work_restored(self, temp_event_log):
         """Large TODO file (>200 bytes) in advanced cycle (>50) triggers restore."""
-        # Arrange: Migration with substantial file at Cycle 172
-        append_migration_event(orphaned_todo_size=450, current_cycle=172)
+        # Arrange: Migration with substantial file at an advanced cycle
+        append_migration_event(orphaned_todo_size=450, current_cycle=75)
 
         # Act: Query unrestored migrations
         unrestored = get_unrestored_migrations()
@@ -134,7 +134,7 @@ class TestTodoRecoveryIntelligence:
         assert len(unrestored) == 1
         migration = unrestored[0]
         assert migration['data']['orphaned_todo_size'] == 450
-        assert migration['data']['current_cycle'] == 172
+        assert migration['data']['current_cycle'] == 75
 
         # Simulate restore decision
         session_id = migration['data']['current_session']

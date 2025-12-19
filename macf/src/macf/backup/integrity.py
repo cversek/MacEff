@@ -26,7 +26,9 @@ def detect_existing_consciousness(target_dir: Path) -> Dict[str, bool]:
         Dictionary with detection results for each category
     """
     checks = {
-        "maceff_state": (target_dir / ".maceff" / "agent_state.json").exists(),
+        # NOTE: legacy_state checks for old agent_state.json format (backward compat for old backups)
+        # Event-first architecture uses events_log as sole source of truth
+        "legacy_state": (target_dir / ".maceff" / "agent_state.json").exists(),
         "agent_artifacts": (target_dir / "agent").exists(),
         "claude_config": (target_dir / ".claude").exists(),
         "events_log": (target_dir / ".maceff" / "agent_events_log.jsonl").exists(),
@@ -231,7 +233,7 @@ def format_safety_warning(checks: Dict[str, bool]) -> str:
     ]
 
     labels = {
-        "maceff_state": "Agent state (.maceff/agent_state.json)",
+        "legacy_state": "Legacy agent state (.maceff/agent_state.json) - old backup format",
         "agent_artifacts": "Consciousness artifacts (agent/)",
         "claude_config": "Claude configuration (.claude/)",
         "events_log": "Events log (.maceff/agent_events_log.jsonl)",
