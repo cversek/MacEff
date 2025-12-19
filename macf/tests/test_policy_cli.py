@@ -1,5 +1,5 @@
 """
-Integration tests for policy CLI commands (B.6 Phase 3.5).
+Integration tests for policy CLI commands.
 
 Tests the 4 policy commands: manifest, search, list, ca-types.
 Uses subprocess to invoke macf_tools CLI as real integration tests.
