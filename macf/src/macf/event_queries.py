@@ -34,6 +34,44 @@ def get_latest_state_snapshot() -> Optional[dict]:
     return None
 
 
+def get_latest_event(event_type: str, limit: Optional[int] = None) -> Optional[dict]:
+    """
+    Find most recent event of a specific type.
+
+    Args:
+        event_type: The event type to search for (e.g., "todos_updated")
+        limit: Maximum events to scan (default None = scan all)
+
+    Returns:
+        Most recent event of the specified type, or None if not found
+    """
+    for event in read_events(limit=limit, reverse=True):
+        if event.get("event") == event_type:
+            return event
+    return None
+
+
+def get_nth_event(event_type: str, n: int = 0, limit: Optional[int] = None) -> Optional[dict]:
+    """
+    Find the nth most recent event of a specific type.
+
+    Args:
+        event_type: The event type to search for (e.g., "todos_updated")
+        n: How many events back (0 = most recent, 1 = previous, etc.)
+        limit: Maximum events to scan (default None = scan all)
+
+    Returns:
+        The nth most recent event of the specified type, or None if not found
+    """
+    count = 0
+    for event in read_events(limit=limit, reverse=True):
+        if event.get("event") == event_type:
+            if count == n:
+                return event
+            count += 1
+    return None
+
+
 def get_dev_drv_stats_from_events(session_id: str) -> dict:
     """
     Query dev_drv_started/ended events, return stats with snapshot baseline.
