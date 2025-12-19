@@ -120,12 +120,14 @@ class TestGetTokenInfo:
                     result = get_token_info()
 
         # Should return default values (CC 2.0: 200k total)
+        # NOTE: cluac_level=100 means 100% remaining (full context available)
+        # hooks_state fallback removed - event-first architecture
         assert result['tokens_used'] == 0
         assert result['tokens_remaining'] == 200000
         assert result['percentage_used'] == 0.0
         assert result['percentage_remaining'] == 100.0
-        assert result['cluac_level'] == 0
-        assert result['source'] in ['default', 'hooks_state']
+        assert result['cluac_level'] == 100
+        assert result['source'] == 'default'
 
     def test_with_valid_session_id_parameter(self):
         """

@@ -1,5 +1,5 @@
 """
-TDD Tests for Event-First Read Operations (Phase 5A).
+TDD Tests for Event-First Read Operations.
 
 These tests define expected behavior for migrating from mutable state file reads
 to event-first queries. Tests should FAIL initially (red phase) until
@@ -388,7 +388,7 @@ def test_event_first_multiple_drives_same_session(test_session_id):
 
 
 # =============================================================================
-# Test Group 5: New Phase 5.1 Query Functions
+# Test Group 5: Advanced Query Functions
 # =============================================================================
 
 def test_get_delegations_this_drive_from_events(test_session_id):

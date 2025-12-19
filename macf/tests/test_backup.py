@@ -208,7 +208,7 @@ class TestIntegrity:
 
         checks = detect_existing_consciousness(tmp_path)
 
-        assert checks["maceff_state"] is True
+        assert checks["legacy_state"] is True  # Backward compat for old backups
         assert checks["agent_artifacts"] is True
         assert checks["claude_config"] is False
 
