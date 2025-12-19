@@ -1,10 +1,10 @@
 # TODO List Hygiene Policy
 
-**Version**: 1.7
+**Version**: 1.8
 **Tier**: CORE
 **Category**: Development
 **Status**: ACTIVE
-**Updated**: 2025-12-02
+**Updated**: 2025-12-19
 
 ---
 
@@ -88,14 +88,32 @@ Applies to Primary Agents (PA) and all Subagents (SA) managing multi-step work.
 - What is the TODO backup protocol?
 - Why backup TODO state?
 - When should I create backups?
+
+**10.1 CLI-Based Backup (CURRENT)**
+- How do I query TODO history via CLI?
+- What does `macf_tools todos list --previous N` do?
+- How do I check TODO status via CLI?
+- Why is event-based recovery preferred?
+
+**10.2 Manual Backup (LEGACY)**
 - What is the backup filename format?
-- Where do backups go?
+- Where do manual backups go?
 - How do I cite TODO backups?
+- When is manual backup needed as fallback?
 
 **11 Session File Migration TODO Recovery**
 - What is session file migration?
-- How do I recover orphaned TODO files?
-- What is the recovery protocol?
+- What causes TODO file orphaning?
+
+**11.1 CLI-Based Recovery (CURRENT)**
+- How do I recover TODOs via CLI tools?
+- What does `macf_tools todos list --previous N` do for recovery?
+- Why is CLI recovery the preferred method?
+
+**11.2 Manual Recovery (LEGACY)**
+- How do I recover orphaned TODO files manually?
+- What is the manual recovery protocol?
+- When is manual recovery needed as fallback?
 
 === CEP_NAV_BOUNDARY ===
 
@@ -491,8 +509,11 @@ BOTTOM STACK (COMPLETED - most recent first):
 
 **Pattern**:
 1. **Archive current TODO state** (preserves all breadcrumbs)
-2. **Collapse parent item** to single line
-3. **Link to archive** via embedded path
+2. **Authorize collapse**: `macf_tools todos auth-collapse --from <current> --to <target> [--reason "..."]`
+   - Required by PreToolUse hook before any TodoWrite that reduces item count
+   - Example: `macf_tools todos auth-collapse --from 25 --to 10 --reason "Archiving Phase 4"`
+3. **Collapse parent item** to single line via TodoWrite
+4. **Link to archive** via embedded path
 
 **Collapsed Format**:
 ```
@@ -533,7 +554,63 @@ Both `content` (imperative) and `activeForm` (present continuous) required for a
 
 **Problem**: Claude Code clobbers TODO state during compactions and session migrations. Strategic work context can be lost when TODO files become corrupted or emptied during transitions.
 
-**Solution**: Systematic backup of TODO state to disk-based JSON files before major transitions (compaction, CCP creation, session migration).
+**Solution**: The event system now captures TODO state automatically. Every successful `TodoWrite` emits a `todos_updated` event with the complete TODO list. CLI tools query this event log for recovery.
+
+**When to Use Backups**:
+1. **Before CCP creation** (MANDATORY) - Part of pre-CCP protocol
+2. **Before major transitions** - Manual compaction, session migration
+3. **After significant TODO changes** - Major reorganization
+
+---
+
+#### 10.1 CLI-Based Backup & Recovery (CURRENT)
+
+**🚀 PRIMARY METHOD**: Use CLI tools that query the event log directly.
+
+**Key Commands**:
+
+| Command | Purpose |
+|---------|---------|
+| `macf_tools todos list` | Show current TODO list from latest event |
+| `macf_tools todos list --previous N` | Show Nth previous TODO state (recovery) |
+| `macf_tools todos status` | Show count and status breakdown |
+
+**Recovery Example**:
+```bash
+# View current TODO state
+macf_tools todos list
+
+# View previous TODO state (before last change)
+macf_tools todos list --previous 1
+
+# View state from 3 changes ago
+macf_tools todos list --previous 3
+
+# Check TODO counts
+macf_tools todos status
+```
+
+**Why CLI Recovery is Preferred**:
+- ✅ **Event log is authoritative** - Every `TodoWrite` emits `todos_updated` with full state
+- ✅ **No manual file management** - Query events, not filesystem
+- ✅ **Automatic history** - Multiple previous states available via `--previous N`
+- ✅ **Consistent format** - JSON output compatible with `TodoWrite` restoration
+
+**Restoration Workflow**:
+1. Query previous state: `macf_tools todos list --previous 1`
+2. Copy JSON output
+3. Use `TodoWrite` tool with the JSON array to restore
+
+---
+
+#### 10.2 Manual Backup (LEGACY)
+
+**⚠️ FALLBACK METHOD**: Use only when event log is unavailable or corrupted.
+
+**When to Use Manual Backup**:
+- Event log file missing or corrupted
+- Need backup in portable location (disk-based JSON files)
+- Cross-system transfer where event log unavailable
 
 **Backup Location**: `agent/public/todo_backups/`
 
@@ -660,7 +737,49 @@ cat "$BACKUP" | python -m json.tool
 
 **Scenario**: Session crashes, network interruptions, or CC restarts can trigger session ID migration, leaving strategic work context stranded in the previous session's TODO file.
 
-**Solution**: Forensic recovery from the previous session's TODO JSON file using filesystem archaeology OR from TODO backup files (§9).
+---
+
+#### 11.1 CLI-Based Recovery (CURRENT)
+
+**🚀 PRIMARY METHOD**: Use CLI tools that query the event log directly.
+
+**Why CLI Recovery is Preferred**:
+- ✅ **Event log persists across session migrations** - session ID changes don't affect event log
+- ✅ **No filesystem archaeology needed** - query events, not orphaned JSON files
+- ✅ **Multiple previous states available** - `--previous N` for any historical state
+- ✅ **Simpler workflow** - single command instead of multi-step filesystem search
+
+**Recovery Workflow**:
+```bash
+# 1. Check current TODO status (should show event log state)
+macf_tools todos status
+
+# 2. View most recent TODO state from events
+macf_tools todos list
+
+# 3. If needed, view previous state
+macf_tools todos list --previous 1
+
+# 4. Copy JSON output and use TodoWrite to restore
+```
+
+**When CLI Recovery Works**:
+- Session migration detected (new session ID)
+- Event log file exists and is readable (`.maceff/agent_events_log.jsonl`)
+- Previous `todos_updated` events exist in log
+
+---
+
+#### 11.2 Manual Recovery (LEGACY)
+
+**⚠️ FALLBACK METHOD**: Use only when event log is unavailable.
+
+**When to Use Manual Recovery**:
+- Event log file missing or corrupted
+- No `todos_updated` events exist (pre-v0.3 sessions)
+- Cross-system transfer where event log unavailable
+
+**Solution**: Forensic recovery from the previous session's TODO JSON file using filesystem archaeology.
 
 **Recovery Protocol**:
 
