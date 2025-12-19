@@ -115,3 +115,95 @@ def test_exception_handling(mock_dependencies):
     # Should return minimal valid output
     assert result["continue"] is True
     assert "hookSpecificOutput" in result
+
+
+# ==================== TODO Collapse Authorization Tests ====================
+
+def test_todowrite_collapse_blocked_without_auth(mock_dependencies, isolated_events_log):
+    """TodoWrite collapse is blocked when no authorization exists."""
+    from macf.hooks.handle_pre_tool_use import run
+    from macf.agent_events_log import append_event
+    import json
+
+    # Set up previous TODO state
+    append_event("todos_updated", {"count": 50, "items": []})
+
+    # Attempt collapse: 50 -> 10
+    stdin = json.dumps({
+        "tool_name": "TodoWrite",
+        "tool_input": {"todos": [{"content": f"Item {i}", "status": "pending", "activeForm": "Test"} for i in range(10)]}
+    })
+
+    result = run(stdin, testing=True)
+
+    assert result["continue"] is False
+    assert "TODO Collapse Blocked" in result["hookSpecificOutput"]["message"]
+    assert "50" in result["hookSpecificOutput"]["message"]
+    assert "10" in result["hookSpecificOutput"]["message"]
+
+
+def test_todowrite_collapse_allowed_with_auth(mock_dependencies, isolated_events_log):
+    """TodoWrite collapse is allowed when proper authorization exists."""
+    from macf.hooks.handle_pre_tool_use import run
+    from macf.agent_events_log import append_event
+    import json
+
+    # Set up previous TODO state
+    append_event("todos_updated", {"count": 50, "items": []})
+    # Add authorization
+    append_event("todos_auth_collapse", {"from_count": 50, "to_count": 10, "reason": "test"})
+
+    # Attempt collapse: 50 -> 10
+    stdin = json.dumps({
+        "tool_name": "TodoWrite",
+        "tool_input": {"todos": [{"content": f"Item {i}", "status": "pending", "activeForm": "Test"} for i in range(10)]}
+    })
+
+    result = run(stdin, testing=True)
+
+    assert result["continue"] is True  # Allowed with auth
+
+
+def test_todowrite_expansion_always_allowed(mock_dependencies, isolated_events_log):
+    """TodoWrite expansion (adding items) is always allowed."""
+    from macf.hooks.handle_pre_tool_use import run
+    from macf.agent_events_log import append_event
+    import json
+
+    # Set up previous TODO state
+    append_event("todos_updated", {"count": 10, "items": []})
+
+    # Attempt expansion: 10 -> 50
+    stdin = json.dumps({
+        "tool_name": "TodoWrite",
+        "tool_input": {"todos": [{"content": f"Item {i}", "status": "pending", "activeForm": "Test"} for i in range(50)]}
+    })
+
+    result = run(stdin, testing=True)
+
+    assert result["continue"] is True  # Expansion always allowed
+
+
+def test_todowrite_auth_single_use(mock_dependencies, isolated_events_log):
+    """Authorization is consumed after use (single-use)."""
+    from macf.hooks.handle_pre_tool_use import run
+    from macf.agent_events_log import append_event
+    from macf.event_queries import get_latest_event
+    import json
+
+    # Set up state and auth
+    append_event("todos_updated", {"count": 50, "items": []})
+    append_event("todos_auth_collapse", {"from_count": 50, "to_count": 10, "reason": "test"})
+
+    # First collapse uses auth
+    stdin = json.dumps({
+        "tool_name": "TodoWrite",
+        "tool_input": {"todos": [{"content": f"Item {i}", "status": "pending", "activeForm": "Test"} for i in range(10)]}
+    })
+    result = run(stdin, testing=True)
+    assert result["continue"] is True
+
+    # Check that auth was cleared
+    cleared = get_latest_event("todos_auth_cleared")
+    assert cleared is not None
+    assert cleared["data"]["reason"] == "consumed_by_todowrite"

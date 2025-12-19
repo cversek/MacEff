@@ -112,6 +112,59 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
         breadcrumb = get_breadcrumb()
         message_parts = [f"🏗️ MACF | {timestamp} | {breadcrumb}"]
 
+        # TodoWrite collapse detection
+        if tool_name == "TodoWrite":
+            from macf.event_queries import get_latest_event
+
+            todos = tool_input.get("todos", [])
+            new_count = len(todos)
+
+            # Get previous TODO count from events
+            prev_event = get_latest_event("todos_updated")
+            prev_count = prev_event.get("data", {}).get("count", 0) if prev_event else 0
+
+            # Collapse detection: new < prev
+            if prev_count > 0 and new_count < prev_count:
+                # Check for authorization
+                auth_event = get_latest_event("todos_auth_collapse")
+                cleared_event = get_latest_event("todos_auth_cleared")
+
+                # Check if auth is valid (not cleared)
+                auth_valid = False
+                if auth_event:
+                    auth_ts = auth_event.get("timestamp", 0)
+                    cleared_ts = cleared_event.get("timestamp", 0) if cleared_event else 0
+                    if auth_ts > cleared_ts:
+                        auth_data = auth_event.get("data", {})
+                        auth_from = auth_data.get("from_count", 0)
+                        auth_to = auth_data.get("to_count", 0)
+                        # Validate counts match
+                        if auth_from == prev_count and auth_to == new_count:
+                            auth_valid = True
+                            # Clear the auth (single use)
+                            append_event(
+                                event="todos_auth_cleared",
+                                data={"reason": "consumed_by_todowrite"}
+                            )
+
+                if not auth_valid:
+                    reduction = prev_count - new_count
+                    error_msg = (
+                        f"❌ TODO Collapse Blocked - Authorization Required\n\n"
+                        f"Detected: Reducing from {prev_count} items to {new_count} items (collapse of {reduction} items)\n\n"
+                        f"To authorize this collapse, run:\n"
+                        f"  macf_tools todos auth-collapse --from {prev_count} --to {new_count} --reason \"your reason\"\n\n"
+                        f"Then retry your TodoWrite.\n\n"
+                        f"Why: TODO collapses are irreversible. This friction prevents accidental data loss."
+                    )
+                    return {
+                        "continue": False,
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "message": error_msg
+                        }
+                    }
+
         # Enhanced context based on tool type
         if tool_name == "Task":
             # DELEG_DRV start tracking (skip if testing)
@@ -223,6 +276,14 @@ if __name__ == "__main__":
     testing_mode = os.environ.get('MACF_TESTING_MODE', '').lower() in ('true', '1', 'yes')
     try:
         output = run(sys.stdin.read(), testing=testing_mode)
+        # Exit code 2 is the ONLY way to block tool execution in Claude Code
+        # JSON "continue": false is ignored due to known bugs (#4362, #4669, #3514)
+        # When blocking: NO stdout JSON, ONLY stderr message + exit 2
+        if not output.get("continue", True):
+            message = output.get("hookSpecificOutput", {}).get("message", "Tool blocked by PreToolUse hook")
+            print(message, file=sys.stderr)
+            sys.exit(2)
+        # Only print JSON for non-blocking cases
         print(json.dumps(output))
     except Exception as e:
         print(json.dumps({"continue": True}))

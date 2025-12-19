@@ -1941,6 +1941,141 @@ def cmd_events_gaps(args: argparse.Namespace) -> int:
         return 1
 
 
+# -------- todos commands --------
+
+def cmd_todos_list(args: argparse.Namespace) -> int:
+    """Show active TODO list from events."""
+    from macf.event_queries import get_nth_event
+    from datetime import datetime
+
+    try:
+        n = getattr(args, 'previous', 0)
+        event = get_nth_event("todos_updated", n=n)
+        if not event:
+            if n > 0:
+                print(f"No todos_updated event found at position {n}")
+            else:
+                print("No todos_updated events found")
+            return 0
+
+        data = event.get("data", {})
+        items = data.get("items", [])
+        timestamp = event.get("timestamp", 0)
+
+        if getattr(args, 'json_output', False):
+            print(json.dumps(items, indent=2))
+            return 0
+
+        # Pretty print with timestamp context
+        time_str = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S") if timestamp else "unknown"
+        if n > 0:
+            print(f"TODO List (previous #{n}, {len(items)} items, from {time_str})")
+        else:
+            print(f"Active TODO List ({len(items)} items)")
+        print("=" * 60)
+
+        for i, item in enumerate(items, 1):
+            content = item.get("content", "")
+            print(f"{i:3}. {content}")
+
+        return 0
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_todos_status(args: argparse.Namespace) -> int:
+    """Show current TODO state summary from events."""
+    from macf.event_queries import get_latest_event
+
+    try:
+        event = get_latest_event("todos_updated")
+        if not event:
+            print("No todos_updated events found")
+            return 0
+
+        data = event.get("data", {})
+        count = data.get("count", 0)
+        by_status = data.get("by_status", {})
+
+        print(f"TODO Status (from events)")
+        print("=" * 40)
+        print(f"Total items: {count}")
+        print(f"  Completed:   {by_status.get('completed', 0)}")
+        print(f"  In Progress: {by_status.get('in_progress', 0)}")
+        print(f"  Pending:     {by_status.get('pending', 0)}")
+
+        return 0
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_todos_auth_collapse(args: argparse.Namespace) -> int:
+    """Authorize a TODO collapse operation."""
+    from macf.agent_events_log import append_event
+
+    from_count = args.from_count
+    to_count = args.to_count
+    reason = getattr(args, 'reason', None) or "No reason provided"
+
+    if to_count >= from_count:
+        print(f"Error: to_count ({to_count}) must be less than from_count ({from_count})")
+        print("This command is for authorizing collapses (reductions), not expansions.")
+        return 1
+
+    try:
+        append_event(
+            event="todos_auth_collapse",
+            data={
+                "from_count": from_count,
+                "to_count": to_count,
+                "reason": reason
+            }
+        )
+
+        reduction = from_count - to_count
+        print(f"✅ Collapse authorized: {from_count} → {to_count} items (removing {reduction})")
+        print(f"   Reason: {reason}")
+        print(f"\nYou may now execute TodoWrite. Authorization is single-use.")
+        return 0
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_todos_auth_status(args: argparse.Namespace) -> int:
+    """Show pending authorization status."""
+    from macf.event_queries import get_latest_event
+
+    try:
+        # Get latest auth and latest cleared
+        auth_event = get_latest_event("todos_auth_collapse")
+        cleared_event = get_latest_event("todos_auth_cleared")
+
+        if not auth_event:
+            print("No pending collapse authorization")
+            return 0
+
+        auth_ts = auth_event.get("timestamp", 0)
+        cleared_ts = cleared_event.get("timestamp", 0) if cleared_event else 0
+
+        if cleared_ts > auth_ts:
+            print("No pending collapse authorization (last auth was cleared)")
+            return 0
+
+        data = auth_event.get("data", {})
+        print(f"⚠️  Pending collapse authorization:")
+        print(f"   From: {data.get('from_count')} items")
+        print(f"   To:   {data.get('to_count')} items")
+        print(f"   Reason: {data.get('reason', 'N/A')}")
+
+        return 0
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
 # -------- parser --------
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -2180,6 +2315,33 @@ def _build_parser() -> argparse.ArgumentParser:
     gaps_parser.add_argument("--threshold", type=float, default=3600,
                             help="gap threshold in seconds (default: 3600)")
     gaps_parser.set_defaults(func=cmd_events_gaps)
+
+    # Todos commands (TODO collapse authorization)
+    todos_parser = sub.add_parser("todos", help="TODO list management and collapse authorization")
+    todos_sub = todos_parser.add_subparsers(dest="todos_cmd")
+
+    # todos list
+    todos_list_parser = todos_sub.add_parser("list", help="show active TODO list")
+    todos_list_parser.add_argument("--json", dest="json_output", action="store_true",
+                                   help="output as JSON")
+    todos_list_parser.add_argument("--previous", "-p", type=int, default=0, metavar="N",
+                                   help="show Nth previous TODO list (0=current, 1=previous, etc.)")
+    todos_list_parser.set_defaults(func=cmd_todos_list)
+
+    # todos status
+    todos_sub.add_parser("status", help="show TODO status summary").set_defaults(func=cmd_todos_status)
+
+    # todos auth-collapse
+    auth_collapse_parser = todos_sub.add_parser("auth-collapse", help="authorize a TODO collapse")
+    auth_collapse_parser.add_argument("--from", dest="from_count", type=int, required=True,
+                                      help="current item count")
+    auth_collapse_parser.add_argument("--to", dest="to_count", type=int, required=True,
+                                      help="target item count after collapse")
+    auth_collapse_parser.add_argument("--reason", help="reason for collapse")
+    auth_collapse_parser.set_defaults(func=cmd_todos_auth_collapse)
+
+    # todos auth-status
+    todos_sub.add_parser("auth-status", help="show pending authorization").set_defaults(func=cmd_todos_auth_status)
 
     return p
 

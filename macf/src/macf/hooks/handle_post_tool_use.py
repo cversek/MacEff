@@ -138,7 +138,23 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
                 pending = sum(1 for t in todos if t.get("status") == "pending")
                 in_progress = sum(1 for t in todos if t.get("status") == "in_progress")
                 completed = sum(1 for t in todos if t.get("status") == "completed")
+                total = len(todos)
                 message_parts.append(f"📝 Todos: {completed}✅ {in_progress}🔄 {pending}⏳")
+
+                # Emit todos_updated event with full state for collapse detection
+                append_event(
+                    event="todos_updated",
+                    data={
+                        "items": todos,
+                        "count": total,
+                        "by_status": {
+                            "pending": pending,
+                            "in_progress": in_progress,
+                            "completed": completed
+                        }
+                    },
+                    hook_input=None  # Don't duplicate full hook input
+                )
 
         # Format message (single line for user visibility)
         message = " | ".join(message_parts)

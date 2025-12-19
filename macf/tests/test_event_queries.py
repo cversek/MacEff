@@ -502,3 +502,62 @@ def test_auto_mode_session_isolation(populated_auto_mode_events, different_sessi
     # Should return original session's values, not other session's
     assert auto_mode is True
     assert source == "env_var"
+
+
+# ==================== get_nth_event tests ====================
+
+def test_get_nth_event_returns_most_recent_at_n_zero(isolated_events_log):
+    """get_nth_event with n=0 returns most recent event of type."""
+    from macf.event_queries import get_nth_event
+    from macf.agent_events_log import append_event
+
+    # Add multiple todos_updated events
+    append_event("todos_updated", {"count": 10, "items": []})
+    append_event("todos_updated", {"count": 20, "items": []})
+    append_event("todos_updated", {"count": 30, "items": []})
+
+    result = get_nth_event("todos_updated", n=0)
+    assert result is not None
+    assert result["data"]["count"] == 30  # Most recent
+
+
+def test_get_nth_event_returns_previous_at_n_one(isolated_events_log):
+    """get_nth_event with n=1 returns second most recent."""
+    from macf.event_queries import get_nth_event
+    from macf.agent_events_log import append_event
+
+    append_event("todos_updated", {"count": 10, "items": []})
+    append_event("todos_updated", {"count": 20, "items": []})
+    append_event("todos_updated", {"count": 30, "items": []})
+
+    result = get_nth_event("todos_updated", n=1)
+    assert result is not None
+    assert result["data"]["count"] == 20  # Previous
+
+
+def test_get_nth_event_returns_none_when_n_exceeds_count(isolated_events_log):
+    """get_nth_event returns None when n exceeds available events."""
+    from macf.event_queries import get_nth_event
+    from macf.agent_events_log import append_event
+
+    append_event("todos_updated", {"count": 10, "items": []})
+
+    result = get_nth_event("todos_updated", n=5)
+    assert result is None
+
+
+def test_get_nth_event_filters_by_event_type(isolated_events_log):
+    """get_nth_event only counts events of specified type."""
+    from macf.event_queries import get_nth_event
+    from macf.agent_events_log import append_event
+
+    append_event("todos_updated", {"count": 10})
+    append_event("other_event", {"data": "ignored"})
+    append_event("todos_updated", {"count": 20})
+    append_event("other_event", {"data": "ignored"})
+    append_event("todos_updated", {"count": 30})
+
+    # n=1 should skip the most recent todos_updated and return count=20
+    result = get_nth_event("todos_updated", n=1)
+    assert result is not None
+    assert result["data"]["count"] == 20
