@@ -682,7 +682,7 @@ Encountered docker-compose working directory dependency [Roadmap 2025-11-11 "Doc
 
 ## Claude Code Todos JSON
 
-[Complete contents of ~/.claude/projects/ClaudeTheBuilder/todos_*.json]
+[Complete contents of ~/.claude/todos/{session}-agent-{session}.json]
 
 ## Completion Summary
 

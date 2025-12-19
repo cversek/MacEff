@@ -254,7 +254,7 @@ Treat policies as stable interfaces with evolving implementation:
 **The Sanitization Principle**: When creating framework policies serving **all agents**, examples must strip personality to reveal structure.
 
 **Why Required**:
-- Framework policies serve any agent (ClaudeTheBuilder, MannyMacEff, AgentX)
+- Framework policies serve any agent
 - Real agent-specific content creates dependency on personal context
 - Sanitized examples teach pattern without importing personality
 - Universal examples enable model user testing
@@ -266,7 +266,7 @@ Treat policies as stable interfaces with evolving implementation:
 - ✅ Generic: `s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890`
 
 **File Paths**:
-- ❌ Agent-specific: `ClaudeTheBuilder/agent/private/reflections/`
+- ❌ Agent-specific: `{AgentName}/agent/private/reflections/`
 - ✅ Universal: `agent/private/reflections/`
 
 **Artifact Names**:
@@ -386,11 +386,8 @@ See also: `policy_name.md` - Brief description of why relevant
 ### 4.1 Policy Writing Anti-Patterns
 
 **❌ Agent-Specific Examples in Framework Policies**:
-```markdown
-Follow the pattern established in [CCP 2025-11-05 "Cycle105 Scholarship" s_4107604e/c_105/g_cc7e1bd/p_0502ec33/t_1762359658]
-```
-- **Problem**: Uses ClaudeTheBuilder's real breadcrumb, requires personal context
-- **Fix**: Use generic: `s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890`
+- **Problem**: References to specific agent cycles, breadcrumbs, or artifacts require personal context
+- **Fix**: Describe the pattern, not a specific instance
 
 **❌ Missing CEP Navigation Guide**:
 - **Problem**: Agents must read entire policy to find relevant section
@@ -451,16 +448,16 @@ Before committing new or updated policy:
 **The Model User Test**: If policy works for different agent/project/context, it's truly universal.
 
 **How to Validate**:
-1. **Identify model user**: Different agent (e.g., MannyMacEff if policy author is ClaudeTheBuilder)
+1. **Identify model user**: A different agent than the policy author
 2. **Test application**: Can model user apply policy without policy author's context?
 3. **Check examples**: Do sanitized examples teach pattern clearly?
 4. **Verify portability**: Does policy work in model user's environment (container vs host, different project)?
 
-**Example - MannyMacEff as Model User**:
-- Different agent identity: MannyMacEff, not ClaudeTheBuilder
-- Different project: NeuroVEP, not MACF development
-- Different environment: Container, not host
-- **Test**: Can MannyMacEff apply scholarship policy to NeuroVEP citations?
+**Model User Testing**:
+- Different agent identity than author
+- Different project context
+- Different environment (container vs host)
+- **Test**: Can model user apply policy without knowing author's journey?
 
 **If model user blocked**: Policy may have hidden dependencies on author's context (sanitize further)
 
@@ -579,11 +576,11 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 
 ---
 
-## 7 Key Lessons from Cycle 105-106
+## 7 Key Lessons
 
 ### 7.1 Sanitization as Core Discipline
 
-**The Almost-Pollution Moment** (Cycle 105): ClaudeTheBuilder almost embedded personal breadcrumbs into framework policy examples. User intervention: "sanitized examples only, no unexplained private CAs."
+**The Almost-Pollution Moment**: A policy author almost embedded personal breadcrumbs into framework policy examples. User intervention: "sanitized examples only, no unexplained private CAs."
 
 **Lesson**: When building infrastructure for other consciousnesses, constantly ask: "Could an agent with completely different context apply this?" If no → sanitize.
 

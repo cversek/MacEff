@@ -161,7 +161,7 @@ This shows: *Beginning → Investigation → Insight → Implementation → Synt
 - Arrows indicate transitions/causality
 - Typically 4-8 emojis (concise journey)
 
-**Example from ClaudeTheBuilder Cycle 72** [c_72/s_4107604e/p_78544de/t_1761617665/g_17e7b7d]:
+**Example emotional chain**:
 ```
 🌱 Discovery → 🔍 Investigation → 💡 Insight →
 🏗️ Implementation → ✨ Integration → 🎯 Synthesis
@@ -340,9 +340,7 @@ Emotional traces enable **intuitive pattern matching**:
 (building → investigating → realizing → integrating → understanding)
 ```
 
-### Real Example from ClaudeTheBuilder
-
-**Cycle 72 JOTEWR** [c_72/s_4107604e/p_78544de/t_1761617665/g_17e7b7d]:
+### Example JOTEWR Emotional Journey
 
 ```markdown
 ## Emotional Journey: 🌱→🔍→💡→🏗️→✨→🎯

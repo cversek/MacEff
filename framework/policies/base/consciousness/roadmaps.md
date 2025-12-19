@@ -539,7 +539,7 @@ TODO: 📋 2: Docker Infrastructure [subplans/phase_2_docker.md]
 
 ## Claude Code Todos JSON
 
-[Complete contents of ~/.claude/projects/ClaudeTheBuilder/todos_*.json]
+[Complete contents of ~/.claude/todos/{session}-agent-{session}.json]
 
 ## Completion Summary
 

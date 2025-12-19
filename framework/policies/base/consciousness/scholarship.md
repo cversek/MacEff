@@ -719,7 +719,7 @@ Before committing citations to framework policies:
 - **Universal**: `s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890` (generic placeholder)
 
 **Why Required**:
-- Framework policies serve **any agent** (ClaudeTheBuilder, MannyMacEff, AgentX)
+- Framework policies serve **any agent**
 - Real breadcrumbs create dependency on specific agent context
 - Sanitized examples teach pattern without importing personality
 - Universal examples enable model user testing (if it works for MannyMacEff, it works universally)
@@ -739,22 +739,22 @@ Before committing citations to framework policies:
 - ✅ Generic: `2025-XX-XX_HHMMSS_Description_CCP.md` or `YYYY-MM-DD_Description_CCP.md`
 
 **Directory Paths**:
-- ❌ Agent-specific: `ClaudeTheBuilder/agent/private/reflections/`
+- ❌ Agent-specific: `{AgentName}/agent/private/reflections/`
 - ✅ Universal pattern: `agent/private/reflections/` (works for any agent)
 
 ### 7.3 Model User Validation
 
-**MannyMacEff as Test Case**:
-- Different agent identity (not ClaudeTheBuilder)
-- Different project context (NeuroVEP, not MACF development)
-- Different operational environment (container, not host)
-- **If MannyMacEff can apply policy → truly universal**
+**Model User Test**:
+- Different agent identity than the policy author
+- Different project context
+- Different operational environment (container vs host)
+- **If model user can apply policy → truly universal**
 
 **Validation Questions**:
-- Can MannyMacEff understand examples without ClaudeTheBuilder context?
+- Can a different agent understand examples without the author's context?
 - Do sanitized breadcrumbs teach pattern clearly?
-- Does GitHub link construction work in MannyMacEff's directory structure?
-- Can MannyMacEff create valid enhanced citations for NeuroVEP artifacts?
+- Does GitHub link construction work in the model user's directory structure?
+- Can the model user create valid enhanced citations for their artifacts?
 
 ---
 
