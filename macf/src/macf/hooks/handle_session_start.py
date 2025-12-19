@@ -46,7 +46,7 @@ def detect_session_migration(current_session_id: str) -> tuple[bool, str, str]:
     Session migration occurs when Claude Code creates a new session (crash recovery,
     manual restart) which orphans the previous TODO file in ~/.claude/todos/.
 
-    EVENT-FIRST: Queries event log for last_session_id, falls back to agent_state.json.
+    EVENT-FIRST: Queries event log for last_session_id, event log is sole source of truth.
 
     Args:
         current_session_id: Current session ID
@@ -55,7 +55,7 @@ def detect_session_migration(current_session_id: str) -> tuple[bool, str, str]:
         Tuple of (migration_detected: bool, orphaned_todo_path: str, previous_session_id: str)
         - migration_detected: True if session ID changed
         - orphaned_todo_path: Path to orphaned TODO file (empty if not found)
-        - previous_session_id: Previous session ID from events or agent_state
+        - previous_session_id: Previous session ID from events
     """
     # EVENT-FIRST: Query event log for last session ID (lazy import to avoid circular)
     try:
@@ -74,7 +74,7 @@ def detect_session_migration(current_session_id: str) -> tuple[bool, str, str]:
             print(f"⚠️ MACF: Event logging also failed: {log_e}", file=sys.stderr)
         previous_session_id = ""
 
-    # NOTE: Event query is now sole source of truth (Phase 7 complete)
+    # NOTE: Event query is sole source of truth
     # If no previous_session_id from events, this is first run
 
     # Check if we have a previous session ID to compare
@@ -122,7 +122,7 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
     ⚠️  SIDE EFFECTS: This hook mutates project state on compaction detection
 
     Side effects (ONLY when testing=False):
-    - Increments cycle counter in .maceff/agent_state.json
+    - Increments cycle counter via cycle_incremented event
     - Increments compaction count in session state
     - Updates session timestamps
 
@@ -195,7 +195,7 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
                     except Exception:
                         orphaned_todo_size = 0
 
-                # Get current cycle from events (Phase 7: events are sole source)
+                # Get current cycle from events
                 current_cycle = get_cycle_number_from_events()
 
                 append_event(
@@ -295,7 +295,7 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
             # Side-effects: Skip if testing mode
             if not testing:
                 # Emit state snapshot BEFORE modifications (preserves historical baseline)
-                # Phase 7: All values from events, no state files
+                # All values from events, no state files
                 from macf.agent_events_log import emit_state_snapshot
                 emit_state_snapshot(
                     session_id=session_id,
@@ -391,7 +391,7 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
         # No compaction detected - provide temporal awareness message
         import time
 
-        # Get current cycle from events (Phase 7: events are sole source)
+        # Get current cycle from events
         current_cycle = get_cycle_number_from_events()
         append_event(
             event="session_started",
@@ -412,7 +412,7 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
         # Get breadcrumb
         breadcrumb = get_breadcrumb()
 
-        # Get last session end time from events (Phase 7: events are sole source)
+        # Get last session end time from events (events are sole source)
         last_session_ended = get_last_session_end_time_from_events()
 
         # Calculate time gap since last session
@@ -433,7 +433,7 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
         # Format manifest awareness
         manifest_section = format_manifest_awareness()
 
-        # Get compaction count from events (Phase 7: events are sole source)
+        # Get compaction count from events (events are sole source)
         compaction_info = get_compaction_count_from_events(session_id)
         compaction_count = compaction_info.get('count', 0)
 

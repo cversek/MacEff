@@ -2,8 +2,7 @@
 Drives utilities.
 
 Event-first architecture: All drive operations emit events to the append-only
-JSONL log. Event queries reconstruct state from these events. State files are
-deprecated fallback (Phase 6) and will be removed (Phase 7).
+JSONL log. Event queries reconstruct state from these events.
 """
 
 import time

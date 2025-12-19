@@ -1084,35 +1084,14 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
         return 1
 
 
-def _get_policy_read_cache(session_id: str) -> dict:
-    """Get policy reads cache from session state."""
-    from .utils.json_io import get_session_state_path, read_json
-    state_path = get_session_state_path(session_id)
-    try:
-        state = read_json(state_path)
-        return state.get('policy_reads', {})
-    except (FileNotFoundError, OSError, json.JSONDecodeError):
-        return {}  # Cache miss - return empty
-
-
-def _update_policy_read_cache(session_id: str, policy_name: str, breadcrumb: str) -> bool:
-    """Update policy reads cache in session state."""
-    from .utils.json_io import get_session_state_path, read_json, write_json_safely
-    state_path = get_session_state_path(session_id)
-    try:
-        state = read_json(state_path)
-    except (FileNotFoundError, OSError, json.JSONDecodeError):
-        state = {}  # Start fresh if read fails
-
-    # Initialize policy_reads if needed
-    if 'policy_reads' not in state:
-        state['policy_reads'] = {}
-
-    state['policy_reads'][policy_name] = breadcrumb
-
-    # Ensure directory exists
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    return write_json_safely(state_path, state)
+# TODO: Migrate policy read caching to event-first architecture
+# Legacy _get_policy_read_cache and _update_policy_read_cache deleted (used session_state.json)
+# Implementation needed:
+#   1. _get_policy_read_from_events(policy_name) - scan events backwards until session_started/compaction_detected
+#      - Look for 'policy_read' events with matching policy_name
+#      - Return breadcrumb if found, None otherwise
+#   2. _record_policy_read_event(policy_name, breadcrumb) - append 'policy_read' event
+# Call sites at lines ~1240 and ~1255 reference deleted functions - currently broken
 
 
 def cmd_policy_navigate(args: argparse.Namespace) -> int:
@@ -1261,25 +1240,20 @@ def cmd_policy_read(args: argparse.Namespace) -> int:
             lines = section_lines
             line_offset = section_start
         else:
-            # Full read - check cache (unless --force)
-            if not force_read:
-                cache = _get_policy_read_cache(session_id)
-                if cache_key in cache:
-                    cached_breadcrumb = cache[cache_key]
-                    print(f"Already read at {cached_breadcrumb}")
-                    print(f"\nUse --force to re-read, or --section N for specific section")
-                    return 0
+            # TODO: Re-enable event-first cache check when implemented
+            # Full read - cache check disabled pending event-first migration
+            pass
 
         # Output with line numbers
         print(f"=== {policy_path.name} ===\n")
         for i, line in enumerate(lines, line_offset):
             print(f"{i:4d}│ {line}")
 
-        # Cache full reads only (not partial)
+        # TODO: Re-enable event-first cache recording when implemented
+        # Cache recording disabled pending event-first migration
         if not is_partial:
             breadcrumb = get_breadcrumb()
-            _update_policy_read_cache(session_id, cache_key, breadcrumb)
-            print(f"\n=== Read logged at {breadcrumb} ===")
+            print(f"\n=== Read at {breadcrumb} (caching disabled) ===")
         else:
             print(f"\n=== Partial read (not cached) ===")
 

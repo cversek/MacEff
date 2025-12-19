@@ -18,7 +18,6 @@ from .session import (
 from .json_io import (
     write_json_safely,
     read_json,
-    get_agent_state_path,
 )
 from .artifacts import (
     get_latest_consciousness_artifacts,
@@ -111,7 +110,6 @@ __all__ = [
     "format_temporal_awareness_section",
     "format_token_context_full",
     "format_token_context_minimal",
-    "get_agent_state_path",
     "get_autocompact_setting",
     "get_boundary_guidance",
     "get_breadcrumb",

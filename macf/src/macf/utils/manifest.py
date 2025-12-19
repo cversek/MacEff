@@ -20,7 +20,7 @@ def get_framework_policies_path(agent_root: Optional[Path] = None) -> Optional[P
             1. Check if we're in MacEff repo itself: {agent_root}/framework/policies
             2. Check for MacEff as submodule: {agent_root}/MacEff/framework/policies
             3. Check MACEFF_FRAMEWORK_PATH env var: ${MACEFF_FRAMEWORK_PATH}/policies
-            4. Check known sibling locations in gitwork/
+            4. Check sibling directories (walk up from project root)
 
     Args:
         agent_root: Optional project root (auto-detected if None)
@@ -58,12 +58,12 @@ def get_framework_policies_path(agent_root: Optional[Path] = None) -> Optional[P
         if candidate.exists():
             return candidate
 
-    # Strategy 4: Check known sibling locations in gitwork/
-    gitwork_base = agent_root.parent.parent if 'gitwork' in str(agent_root) else None
-    if gitwork_base:
-        candidate = gitwork_base / 'cversek' / 'MacEff' / 'framework' / 'policies'
-        if candidate.exists():
-            return candidate
+    # Strategy 4: Check sibling MacEff repos (walk up directory tree)
+    for parent in [agent_root.parent, agent_root.parent.parent]:
+        if parent.exists():
+            for candidate in parent.glob("*/MacEff/framework/policies"):
+                if candidate.exists():
+                    return candidate
 
     return None
 
@@ -263,19 +263,20 @@ def load_merged_manifest(agent_root: Optional[Path] = None) -> Dict[str, Any]:
         # Strategy 3: Check environment variable
         elif 'MACEFF_FRAMEWORK_PATH' in os.environ:
             base_path = Path(os.environ['MACEFF_FRAMEWORK_PATH']) / 'policies' / 'manifest.json'
-        # Strategy 4: Check known sibling locations in gitwork/
+        # Strategy 4: Check sibling MacEff repos (walk up directory tree)
         else:
-            # Try to find MacEff as sibling repo
-            gitwork_base = agent_root.parent.parent if 'gitwork' in str(agent_root) else None
-            if gitwork_base:
-                # Try cversek/MacEff (framework development location)
-                candidate = gitwork_base / 'cversek' / 'MacEff' / 'framework' / 'policies' / 'manifest.json'
-                if candidate.exists():
-                    base_path = candidate
-                else:
-                    # Fallback: assume submodule (will fail with warning below)
-                    base_path = agent_root / 'MacEff' / 'framework' / 'policies' / 'manifest.json'
-            else:
+            found = False
+            for parent in [agent_root.parent, agent_root.parent.parent]:
+                if parent.exists():
+                    for candidate in parent.glob("*/MacEff/framework/policies/manifest.json"):
+                        if candidate.exists():
+                            base_path = candidate
+                            found = True
+                            break
+                if found:
+                    break
+            if not found:
+                # Fallback: assume submodule (will fail with warning below)
                 base_path = agent_root / 'MacEff' / 'framework' / 'policies' / 'manifest.json'
 
     # Load framework base (always required)
