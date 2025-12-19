@@ -1133,7 +1133,7 @@ def cmd_policy_navigate(args: argparse.Namespace) -> int:
 
         print(f"\n=== End Navigation Guide ===")
         print(f"\nTo read full policy: macf_tools policy read {args.policy_name}")
-        print(f"To read specific section: macf_tools policy read {args.policy_name} --section N")
+        print(f"To read specific section: macf_tools policy read {args.policy_name} --section N (e.g., --section 5 or --section 5.1)")
 
         return 0
 
@@ -1204,15 +1204,36 @@ def cmd_policy_read(args: argparse.Namespace) -> int:
         # Handle --section option
         elif hasattr(args, 'section') and args.section:
             section_num = str(args.section)
+
+            def matches_section_prefix(heading_num: str, target: str) -> bool:
+                """Check if heading_num matches target section (hierarchical).
+
+                Examples:
+                    matches_section_prefix("10", "10") → True (exact)
+                    matches_section_prefix("10.1", "10") → True (subsection)
+                    matches_section_prefix("10", "10.1") → False (parent doesn't match child request)
+                    matches_section_prefix("100", "10") → False (not a subsection!)
+                """
+                if heading_num == target:
+                    return True
+                # Check if heading is a subsection: must start with "target."
+                return heading_num.startswith(target + ".")
+
             # Find section by heading number, include subsections
             # Stop only at same-or-higher level heading (not subsections)
             in_section = False
             section_lines = []
             section_start = 0
             section_level = 0  # Track heading level (## = 2, ### = 3, etc.)
+            in_code_block = False  # Track if we're inside a fenced code block
 
             for i, line in enumerate(lines):
-                if line.startswith('#'):
+                # Track code block boundaries (``` or ~~~)
+                if line.startswith('```') or line.startswith('~~~'):
+                    in_code_block = not in_code_block
+
+                # Only process headings outside code blocks
+                if line.startswith('#') and not in_code_block:
                     # Count heading level
                     level = len(line) - len(line.lstrip('#'))
                     heading_text = line.lstrip('#').strip()
@@ -1220,11 +1241,14 @@ def cmd_policy_read(args: argparse.Namespace) -> int:
                     if heading_text:
                         heading_num = heading_text.split()[0].rstrip('.')
 
-                        if heading_num == section_num:
-                            # Found target section
-                            in_section = True
-                            section_start = i + 1
-                            section_level = level
+                        if matches_section_prefix(heading_num, section_num):
+                            # Found target section or subsection
+                            if not in_section:
+                                # First match - record the section level
+                                in_section = True
+                                section_start = i + 1
+                                section_level = level
+                            # Subsequent matches (subsections) don't reset level
                         elif in_section and level <= section_level:
                             # Same or higher level heading = new section, stop
                             break
@@ -2237,7 +2261,7 @@ def _build_parser() -> argparse.ArgumentParser:
     read_parser = policy_sub.add_parser("read", help="read policy with line numbers and caching")
     read_parser.add_argument("policy_name", help="policy name (e.g., todo_hygiene, development/todo_hygiene)")
     read_parser.add_argument("--lines", help="line range START:END (e.g., 50:100)")
-    read_parser.add_argument("--section", help="section number to read (e.g., 5)")
+    read_parser.add_argument("--section", help="section number to read (e.g., 5, 5.1) - includes subsections")
     read_parser.add_argument("--force", action="store_true", help="bypass cache for full read")
     read_parser.add_argument("--from-nav-boundary", action="store_true", help="start after CEP_NAV_BOUNDARY (use after navigate)")
     read_parser.set_defaults(func=cmd_policy_read)

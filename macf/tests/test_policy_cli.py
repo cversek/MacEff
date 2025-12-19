@@ -3,13 +3,31 @@ Integration tests for policy CLI commands.
 
 Tests the 4 policy commands: manifest, search, list, ca-types.
 Uses subprocess to invoke macf_tools CLI as real integration tests.
+
+CRITICAL: All subprocess tests must use isolated_cli_env fixture to prevent
+polluting production event logs with cli_command_invoked events.
 """
 
 import json
+import os
 import subprocess
 import tempfile
 from pathlib import Path
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def isolated_cli_env(tmp_path, monkeypatch):
+    """Isolate CLI subprocess calls from production event logs.
+
+    All CLI invocations emit cli_command_invoked events. Without isolation,
+    tests pollute the production agent_events_log.jsonl file.
+
+    This fixture is autouse=True so ALL tests in this module get isolation.
+    """
+    test_log = tmp_path / "test_cli_events.jsonl"
+    monkeypatch.setenv("MACF_EVENTS_LOG_PATH", str(test_log))
+    yield test_log
 
 
 class TestPolicyManifestCommand:
@@ -150,3 +168,64 @@ class TestPolicyCaTypesCommand:
         assert result.returncode == 0
         # Should either show types or "No CA types configured"
         assert 'CA' in result.stdout or 'Consciousness' in result.stdout
+
+
+class TestPolicyReadSectionCommand:
+    """Test macf_tools policy read --section hierarchical parsing."""
+
+    def test_section_includes_subsections(self):
+        """Test --section 10 includes 10.1 and 10.2 subsections."""
+        result = subprocess.run(
+            ['macf_tools', 'policy', 'read', 'todo_hygiene', '--section', '10'],
+            capture_output=True, text=True
+        )
+
+        assert result.returncode == 0
+        # Should include parent section 10
+        assert '10.' in result.stdout
+        # Should include subsection 10.1
+        assert '10.1' in result.stdout
+        # Should include subsection 10.2
+        assert '10.2' in result.stdout
+        # Should NOT include section 11
+        assert '### 11.' not in result.stdout
+
+    def test_subsection_excludes_siblings(self):
+        """Test --section 10.1 excludes 10.2 sibling."""
+        result = subprocess.run(
+            ['macf_tools', 'policy', 'read', 'todo_hygiene', '--section', '10.1'],
+            capture_output=True, text=True
+        )
+
+        assert result.returncode == 0
+        # Should include subsection 10.1
+        assert '10.1' in result.stdout
+        # Should NOT include sibling 10.2
+        assert '#### 10.2' not in result.stdout
+
+    def test_section_1_not_matches_10(self):
+        """Test --section 1 does NOT match section 10 (edge case)."""
+        result = subprocess.run(
+            ['macf_tools', 'policy', 'read', 'todo_hygiene', '--section', '1'],
+            capture_output=True, text=True
+        )
+
+        assert result.returncode == 0
+        # Check that section 10 content is NOT in output
+        # Section 10 has specific text "TODO Backup Protocol"
+        assert 'TODO Backup Protocol' not in result.stdout
+
+    def test_section_ignores_code_block_comments(self):
+        """Test --section ignores # comments inside code blocks."""
+        # Section 10 has bash code blocks with # comments
+        # These should not break section parsing
+        result = subprocess.run(
+            ['macf_tools', 'policy', 'read', 'todo_hygiene', '--section', '10'],
+            capture_output=True, text=True
+        )
+
+        assert result.returncode == 0
+        # Should capture content all the way through 10.2
+        # (bug before fix: code block # comments caused early termination)
+        assert '10.2' in result.stdout
+        assert 'Manual Backup' in result.stdout or 'LEGACY' in result.stdout
