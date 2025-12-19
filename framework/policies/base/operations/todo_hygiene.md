@@ -34,6 +34,12 @@ Applies to Primary Agents (PA) and all Subagents (SA) managing multi-step work.
 - What is the MANUAL_MODE permission link?
 - What happens if I violate transparency?
 
+**1.5 Collapse Authorization (Hook-Enforced)**
+- What triggers hook blocking of TODO collapses?
+- How do I authorize a collapse before TodoWrite?
+- Why is hook enforcement needed beyond transparency?
+- What CLI commands support collapse authorization?
+
 **2 Completion Requires Verification**
 - When can I mark a TODO completed?
 - What is the completion protocol?
@@ -187,6 +193,46 @@ Applies to Primary Agents (PA) and all Subagents (SA) managing multi-step work.
 **When Optional**:
 - TodoWrite in "Allow" permission category (auto-approved)
 - Subagent operations where PA has already authorized scope
+
+### 1.5 Collapse Authorization (Hook-Enforced)
+
+**🚨 MANDATORY: Authorize Before Reducing Item Count 🚨**
+
+TODO collapses (reducing total item count) are **irreversible data loss**. The PreToolUse hook blocks unauthorized collapses at the tool execution layer.
+
+**What Triggers Blocking**:
+- Any TodoWrite where `new_count < previous_count`
+- Hook compares against last `todos_updated` event
+- No authorization event found → **TodoWrite blocked with exit code 2**
+
+**The Authorization Protocol**:
+1. **Plan the collapse** - Determine current count and target count
+2. **Authorize via CLI**:
+   ```bash
+   macf_tools todos auth-collapse --from 50 --to 35 --reason "Archiving Phase 5"
+   ```
+3. **Execute TodoWrite** - Hook allows the authorized reduction
+4. **Authorization consumed** - Single-use, cleared after TodoWrite
+
+**Why Hook Enforcement**:
+- Transparency Protocol (section 1) operates at annotation layer - violations still possible
+- Hook enforcement operates at execution layer - collapse cannot proceed without authorization
+- Defense in depth: annotation provides visibility, hooks provide enforcement
+
+**Count Matching Required**:
+- Authorization must specify exact from/to counts
+- Mismatch (e.g., auth 50→35, actual 50→30) → blocked
+- Forces precise planning before destructive operation
+
+**CLI Commands**:
+```bash
+macf_tools todos status        # Show current count
+macf_tools todos auth-status   # Show pending authorization
+macf_tools todos list          # Show current items
+macf_tools todos list --previous 1  # Show previous state (recovery)
+```
+
+**Error Messages**: When blocked, the hook provides clear instructions including the exact `auth-collapse` command to run.
 
 ### 2. Completion Requires Verification
 

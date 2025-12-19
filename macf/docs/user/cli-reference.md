@@ -15,6 +15,7 @@ Complete command reference for `macf_tools` CLI.
 - [Development Drives](#development-drives)
 - [Policy Management](#policy-management)
 - [Event Sourcing](#event-sourcing)
+- [TODO Management](#todo-management)
 
 ## Global Options
 
@@ -614,11 +615,104 @@ macf_tools events gaps [--threshold THRESHOLD]
 
 **Related:** `events query`, `hooks logs`
 
+## TODO Management
+
+Commands for TODO list state tracking and collapse authorization.
+
+### todos list
+
+Display current TODO list from events.
+
+**Syntax:**
+```bash
+macf_tools todos list [--json] [--previous N]
+```
+
+**Options:**
+- `--json` - Output raw JSON array
+- `--previous N` - Show Nth previous TODO state (0=current, 1=previous, etc.)
+
+**Description:** Queries `todos_updated` events to display TODO list state. Use `--previous` for historical recovery after accidental changes.
+
+**Related:** `todos status`, `events query`
+
+### todos status
+
+Show current TODO count and status breakdown.
+
+**Syntax:**
+```bash
+macf_tools todos status
+```
+
+**Output:**
+```
+TODO Status: 50 items
+  Completed: 41
+  In Progress: 5
+  Pending: 4
+```
+
+**Related:** `todos list`, `todos auth-status`
+
+### todos auth-collapse
+
+Authorize a TODO list collapse (reduction in item count).
+
+**Syntax:**
+```bash
+macf_tools todos auth-collapse --from N --to M [--reason TEXT]
+```
+
+**Options:**
+- `--from N` - Current item count (required)
+- `--to M` - Target item count after collapse (required)
+- `--reason TEXT` - Reason for collapse (optional, for forensics)
+
+**Description:** Emits `todos_auth_collapse` event authorizing PreToolUse hook to allow the next TodoWrite that reduces items from N to M. Authorization is **single-use** and cleared after consumption.
+
+**Example:**
+```bash
+# Authorize collapse from 50 to 35 items
+macf_tools todos auth-collapse --from 50 --to 35 --reason "Archiving Phase 5"
+```
+
+**Why Required:** TODO collapses are irreversible data loss. This friction prevents accidental collapse by requiring explicit authorization before TodoWrite.
+
+**Related:** `todos auth-status`, `todos list`
+
+### todos auth-status
+
+Show pending collapse authorization.
+
+**Syntax:**
+```bash
+macf_tools todos auth-status
+```
+
+**Output (with pending auth):**
+```
+Pending Authorization:
+  From: 50 items
+  To: 35 items
+  Reason: Archiving Phase 5
+  Granted: 2025-12-19T09:30:00Z
+```
+
+**Output (no auth):**
+```
+No pending collapse authorization.
+```
+
+**Description:** Queries for `todos_auth_collapse` event not yet consumed. Useful to verify authorization before attempting collapse.
+
+**Related:** `todos auth-collapse`, `todos status`
+
 ## Exit Codes
 
 - `0` - Success
 - `1` - General error
-- `2` - Command-line syntax error
+- `2` - Command-line syntax error (also used by hooks to block tool execution)
 
 ## Environment Variables
 

@@ -52,6 +52,9 @@ macf_tools events gaps --threshold 3600
 | `deleg_drv_started` | Delegation drive began |
 | `deleg_drv_completed` | Delegation drive ended |
 | `migration_detected` | Session migration (restart without compaction) |
+| `todos_updated` | TODO list state captured after successful TodoWrite |
+| `todos_auth_collapse` | Authorization granted for TODO list collapse |
+| `todos_auth_cleared` | TODO collapse authorization consumed or expired |
 
 ## Breadcrumbs
 
