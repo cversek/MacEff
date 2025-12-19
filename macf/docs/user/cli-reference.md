@@ -488,6 +488,65 @@ macf_tools policy list [--layer {mandatory,dev,lang}]
 
 **Related:** `policy manifest`
 
+### policy navigate
+
+Show CEP Navigation Guide for a policy.
+
+**Syntax:**
+```bash
+macf_tools policy navigate POLICY_NAME
+```
+
+**Arguments:**
+- `POLICY_NAME` - Name of the policy (without .md extension)
+
+**Description:** Displays the CEP (Consciousness Expanding Protocol) Navigation Guide, showing semantic section structure with questions that guide policy discovery. Use this before `policy read` to understand policy organization.
+
+**Example:**
+```bash
+macf_tools policy navigate todo_hygiene
+```
+
+**Related:** `policy read`, `policy list`
+
+### policy read
+
+Read a policy file with optional section filtering.
+
+**Syntax:**
+```bash
+macf_tools policy read POLICY_NAME [--section N[.M[.P]]] [--from-nav-boundary]
+```
+
+**Arguments:**
+- `POLICY_NAME` - Name of the policy (without .md extension)
+
+**Options:**
+- `--section N` - Read specific section and all subsections
+- `--from-nav-boundary` - Start reading from after CEP Navigation Guide
+
+**Section Hierarchical Matching:**
+- `--section 10` matches sections 10, 10.1, 10.2, etc. (but NOT 11 or 100)
+- `--section 10.1` matches 10.1, 10.1.1, 10.1.2, etc. (but NOT 10.2)
+- Uses prefix matching with dot separator to prevent false matches
+
+**Examples:**
+```bash
+# Read full policy
+macf_tools policy read todo_hygiene
+
+# Read section 10 and all subsections (10.1, 10.2, etc.)
+macf_tools policy read todo_hygiene --section 10
+
+# Read only subsection 10.1 and its children
+macf_tools policy read todo_hygiene --section 10.1
+
+# Read policy content after navigation guide
+macf_tools policy read delegation_guidelines --from-nav-boundary
+```
+
+**Related:** `policy navigate`, `policy list`
+
 ### policy ca-types
 
 Show consciousness artifact types with emojis.
