@@ -442,112 +442,24 @@ def format_manifest_awareness() -> str:
         Plain text awareness message (<500 tokens, for <system-reminder> tags)
     """
     try:
-        # Load merged+filtered manifest
+        # Verify manifest exists (validates policy infrastructure)
         manifest = load_merged_manifest()
         if not manifest:
-            return "📋 POLICY MANIFEST AWARENESS\n\nManifest not found - policy awareness unavailable"
+            return "📋 POLICY DISCOVERY\n\nManifest not found - run `macf_tools policy list` to check"
 
-        filtered_manifest = filter_active_policies(manifest)
-
-        # Extract configuration
-        version = filtered_manifest.get('version', 'unknown')
-        active_layers = filtered_manifest.get('active_layers', [])
-        active_languages = filtered_manifest.get('active_languages', [])
-        active_ca_types = filtered_manifest.get('active_consciousness', [])
-
-        # Build output sections with directive tone
+        # Policy Discovery Obsession: Minimal bootstrap, trust discovery infrastructure
         lines = [
-            "📋 POLICY MANIFEST AWARENESS",
+            "📋 POLICY DISCOVERY",
             "",
-            f"Version: {version}",
-            f"Active Layers: {', '.join(active_layers) if active_layers else 'none'}",
-            f"Active Languages: {', '.join(active_languages) if active_languages else 'none'}",
-            ""
+            "⚠️ Policies persist across compaction. Your memory doesn't.",
+            "",
+            "🎯 FIRST COMMAND: `macf_tools policy list`",
+            "",
+            "Discovery flow: list → navigate → read",
         ]
-
-        # Consciousness patterns summary
-        consciousness_patterns = filtered_manifest.get('consciousness_patterns', {})
-        pattern_count = len(consciousness_patterns.get('triggers', []))
-        lines.append(f"Consciousness Patterns Active: {pattern_count}")
-
-        # Active CA types with emoji mapping
-        if active_ca_types:
-            lines.append("Active CA Types:")
-            # Emoji mapping from DELEG_PLAN
-            ca_emoji_map = {
-                'observations': '🔬',
-                'experiments': '🧪',
-                'reports': '📊',
-                'reflections': '💭',
-                'checkpoints': '🔖',
-                'roadmaps': '🗺️',
-                'learnings': '❤️'
-            }
-            for ca_type in active_ca_types:
-                emoji = ca_emoji_map.get(ca_type, '📝')
-                lines.append(f"  {emoji}  {ca_type}")
-        else:
-            lines.append("Active CA Types: none")
-
-        lines.append("")
-
-        # CRITICAL: Policies persist, memory doesn't
-        lines.append("⚠️ CRITICAL: Policies persist across compaction. Your memory doesn't.")
-        lines.append("These are PROJECT PRIORITIES configured by the user, not suggestions.")
-        lines.append("")
-
-        # BEFORE ANY WORK directive
-        mandatory_policies = filtered_manifest.get('mandatory_policies', {}).get('policies', [])
-        if mandatory_policies:
-            lines.append("🔴 BEFORE ANY WORK: Check mandatory policies")
-            lines.append("")
-            for policy in mandatory_policies[:4]:  # Show top 4 for token efficiency
-                name = policy.get('name', 'unknown')
-                short_name = policy.get('short_name', '')
-                desc = policy.get('description', '')
-                lines.append(f"  {short_name}: {desc}")
-                lines.append(f"      → macf_tools policy search {name.split('_')[0]}")
-            lines.append("")
-
-        # Pattern-to-action mapping (directive, not catalog)
-        consciousness_patterns = filtered_manifest.get('consciousness_patterns', {})
-        triggers = consciousness_patterns.get('triggers', [])
-        if triggers:
-            lines.append("🔴 WHEN YOU FEEL THESE PATTERNS → ACT IMMEDIATELY:")
-            lines.append("")
-            for trigger in triggers[:6]:  # Show top 6 for token efficiency
-                consciousness = trigger.get('consciousness', '')
-                likely_policies = trigger.get('likely_policies', [])
-                search_terms = trigger.get('search_terms', [])
-
-                lines.append(f'"{consciousness}"')
-                if likely_policies:
-                    policy_name = likely_policies[0]  # First policy is most relevant
-                    lines.append(f"   → macf_tools policy search {policy_name.split('/')[-1].replace('_', ' ')}")
-                elif search_terms:
-                    lines.append(f"   → macf_tools policy search {search_terms[0]}")
-                lines.append("")
-
-        # Project enforcement section (if configured)
-        if active_layers or active_languages:
-            lines.append("🔴 PROJECT ENFORCEMENT:")
-            if active_layers:
-                layers_str = ', '.join(active_layers)
-                lines.append(f"   Development layers MANDATORY: {layers_str}")
-            if active_languages:
-                langs_str = ', '.join(active_languages)
-                lines.append(f"   Language standards MANDATORY: {langs_str}")
-            lines.append("")
-
-        # CLI commands for discovery
-        lines.append("CLI Commands for Discovery:")
-        lines.append("- macf_tools policy manifest --format=summary")
-        lines.append("- macf_tools policy search <keyword>")
-        lines.append("- macf_tools policy ca-types")
-        lines.append("- macf_tools policy list --layer=mandatory")
 
         return "\n".join(lines)
 
     except Exception:
-        # Graceful fallback
-        return "📋 POLICY MANIFEST AWARENESS\n\nError loading manifest - policy awareness unavailable"
+        # Graceful fallback - still point to discovery
+        return "📋 POLICY DISCOVERY\n\nRun `macf_tools policy list` to discover policies"
