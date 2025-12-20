@@ -1618,12 +1618,11 @@ def cmd_mode_set(args: argparse.Namespace) -> int:
             print("  macf_tools mode set AUTO_MODE --auth-token \"$(python3 -c \"import json; print(json.load(open('.maceff/settings.json'))['auto_mode_auth_token'])\")\"\n")
             return 1
 
-        # Set mode (testing=False for real effect)
+        # Set mode
         success, message = set_auto_mode(
             enabled=enabled,
             session_id=session_id,
             auth_token=auth_token,
-            testing=False
         )
 
         if success:

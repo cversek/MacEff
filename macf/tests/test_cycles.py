@@ -92,29 +92,32 @@ class TestDetectAutoMode:
 class TestSetAutoMode:
     """Tests for set_auto_mode() function."""
 
-    def test_testing_mode_returns_success_without_mutation(self):
-        """Testing mode returns success message without side effects."""
-        success, message = set_auto_mode(
-            enabled=True,
-            session_id="test-session",
-            testing=True
-        )
+    def test_auto_mode_emits_event(self):
+        """AUTO_MODE emits mode_change event."""
+        with patch('macf.agent_events_log.append_event') as mock_append:
+            success, message = set_auto_mode(
+                enabled=True,
+                session_id="test-session",
+            )
 
-        assert success is True
-        assert "Would set AUTO_MODE" in message
-        assert "testing=True" in message
+            assert success is True
+            assert "AUTO_MODE" in message
+            mock_append.assert_called_once()
+            call_args = mock_append.call_args
+            assert call_args[1]['event'] == 'mode_change'
+            assert call_args[1]['data']['mode'] == 'AUTO_MODE'
 
     def test_manual_mode_always_allowed_without_auth(self):
         """MANUAL_MODE can be set without auth token."""
-        success, message = set_auto_mode(
-            enabled=False,
-            session_id="test-session",
-            auth_token=None,
-            testing=True
-        )
+        with patch('macf.agent_events_log.append_event'):
+            success, message = set_auto_mode(
+                enabled=False,
+                session_id="test-session",
+                auth_token=None,
+            )
 
-        assert success is True
-        assert "MANUAL_MODE" in message
+            assert success is True
+            assert "MANUAL_MODE" in message
 
     def test_validates_auth_token_for_auto_mode(self, tmp_path):
         """AUTO_MODE requires valid auth token when configured."""
@@ -124,13 +127,12 @@ class TestSetAutoMode:
         settings_file = settings_dir / "settings.json"
         settings_file.write_text(json.dumps({"auto_mode_auth_token": "valid-token"}))
 
-        # Invalid token should fail
+        # Invalid token should fail (before event emission)
         success, message = set_auto_mode(
             enabled=True,
             session_id="test-session",
             auth_token="invalid-token",
             agent_root=tmp_path,
-            testing=True
         )
 
         assert success is False
@@ -138,15 +140,14 @@ class TestSetAutoMode:
 
     def test_handles_errors_gracefully(self):
         """Returns error message when exceptions occur."""
-        # Force an error by passing invalid session_id type
+        # Force an error by patching find_project_root
         with patch('macf.utils.cycles.find_project_root', side_effect=Exception("Error")):
             success, message = set_auto_mode(
                 enabled=True,
                 session_id="test-session",
                 auth_token="token",
-                testing=True  # Still safe even with error
             )
 
-            # Should handle gracefully in testing mode
+            # Should handle gracefully
             assert isinstance(success, bool)
             assert isinstance(message, str)
