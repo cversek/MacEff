@@ -147,9 +147,14 @@ def configure_bashrc(username: str) -> None:
 # MacEff root directory (contains framework/, used by macf_tools for path resolution)
 export MACEFF_ROOT_DIR=/opt/maceff
 
+# Resolve symlinks in paths (show real paths, not symlink names)
+set -P
+cd "$(pwd -P)"
+
 # MacEff: cd to active project on interactive login
 if [[ $- == *i* ]] && [[ -L ~/active_project ]] && [[ -d ~/active_project ]]; then
     cd ~/active_project
+    cd "$(pwd -P)"  # Resolve symlink so prompt shows real path
 fi
 '''
 
