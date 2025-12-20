@@ -142,8 +142,11 @@ def configure_bashrc(username: str) -> None:
     home_dir = Path(f'/home/{username}')
     bashrc = home_dir / '.bashrc'
 
-    # MacEff active project cd block
+    # MacEff environment and active project cd block
     bashrc_block = '''
+# MacEff root directory (contains framework/, used by macf_tools for path resolution)
+export MACEFF_ROOT_DIR=/opt/maceff
+
 # MacEff: cd to active project on interactive login
 if [[ $- == *i* ]] && [[ -L ~/active_project ]] && [[ -d ~/active_project ]]; then
     cd ~/active_project
