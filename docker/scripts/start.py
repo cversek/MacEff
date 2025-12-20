@@ -102,6 +102,9 @@ def create_pa_user(agent_spec: AgentSpec, defaults_dict: Optional[Dict] = None) 
     # Install SSH key if present
     install_ssh_key(username)
 
+    # Configure .bashrc for active project cd on login
+    configure_bashrc(username)
+
     # Configure Claude Code settings (merge defaults + agent-specific)
     configure_claude_settings(username, agent_spec, defaults_dict)
 
@@ -123,6 +126,42 @@ def install_ssh_key(username: str) -> None:
         run_command(['chown', f'{username}:{username}', str(authorized_keys)])
         run_command(['chmod', '600', str(authorized_keys)])
         log(f"SSH key installed: {username}")
+
+
+def configure_bashrc(username: str) -> None:
+    """Configure .bashrc to cd to active project on interactive login.
+
+    Appends a block to .bashrc that changes to ~/active_project if:
+    - The session is interactive
+    - The symlink exists
+    - We're not already in that directory
+
+    The active_project symlink is created by create_workspace_structure()
+    pointing to the agent's first assigned project.
+    """
+    home_dir = Path(f'/home/{username}')
+    bashrc = home_dir / '.bashrc'
+
+    # MacEff active project cd block
+    bashrc_block = '''
+# MacEff: cd to active project on interactive login
+if [[ $- == *i* ]] && [[ -L ~/active_project ]] && [[ -d ~/active_project ]]; then
+    cd ~/active_project
+fi
+'''
+
+    # Check if block already exists
+    if bashrc.exists():
+        existing_content = bashrc.read_text()
+        if 'MacEff: cd to active project' in existing_content:
+            return  # Already configured
+
+    # Append block to .bashrc
+    with bashrc.open('a') as f:
+        f.write(bashrc_block)
+
+    run_command(['chown', f'{username}:{username}', str(bashrc)])
+    log(f"Bashrc configured for active_project: {username}")
 
 
 def configure_claude_settings(
@@ -571,6 +610,17 @@ def create_workspace_structure(username: str, assigned_projects: List[str],
             log(f"Outputs symlink: {username}/{project_name}/outputs → {shared_outputs}")
 
         log(f"Workspace structure created: {username} -> {project_name}")
+
+    # Create active_project symlink pointing to first assigned project
+    # This enables .bashrc to cd to the active project on login
+    if assigned_projects:
+        first_project = assigned_projects[0]
+        active_project_link = home / 'active_project'
+        target_project = workspace / first_project
+        if target_project.exists() and not active_project_link.exists():
+            active_project_link.symlink_to(target_project)
+            run_command(['chown', '-h', f'{username}:{username}', str(active_project_link)])
+            log(f"Active project symlink: ~/active_project -> {first_project}")
 
 
 def initialize_agents(agents_config: AgentsConfig) -> None:
