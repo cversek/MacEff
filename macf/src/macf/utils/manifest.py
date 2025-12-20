@@ -122,7 +122,8 @@ def find_policy_file(
 def list_policy_files(
     tier: Optional[str] = None,
     category: Optional[str] = None,
-    agent_root: Optional[Path] = None
+    agent_root: Optional[Path] = None,
+    include_tier: bool = False
 ) -> List[Dict[str, Any]]:
     """
     List all policy files with optional filtering.
@@ -131,9 +132,10 @@ def list_policy_files(
         tier: Filter by tier (CORE, optional) - reads from file metadata
         category: Filter by subdirectory (development, consciousness, meta)
         agent_root: Optional project root (auto-detected if None)
+        include_tier: If True, read tier info for all policies (for display)
 
     Returns:
-        List of dicts with keys: name, path, relative_path, category
+        List of dicts with keys: name, path, relative_path, category, tier
     """
     base_path = get_framework_policies_path(agent_root)
     if not base_path:
@@ -151,9 +153,9 @@ def list_policy_files(
         if category and file_category != category:
             continue
 
-        # Read tier from file if filtering by tier
+        # Read tier from file if filtering by tier OR include_tier requested
         file_tier = None
-        if tier:
+        if tier or include_tier:
             try:
                 content = md_file.read_text()
                 # Look for **Tier**: CORE or similar in first 500 chars
@@ -164,7 +166,8 @@ def list_policy_files(
             except Exception as e:
                 print(f"⚠️ MACF: Policy tier parse failed ({md_file.name}): {e}", file=sys.stderr)
 
-            if file_tier != tier.upper():
+            # Only filter if tier argument was provided
+            if tier and file_tier != tier.upper():
                 continue
 
         policies.append({
