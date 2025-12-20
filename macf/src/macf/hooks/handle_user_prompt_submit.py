@@ -64,18 +64,20 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
         current_prompt_uuid = get_last_user_prompt_uuid(session_id)
 
         # Start Development Drive tracking with current UUID (skip if testing)
+        # Note: start_dev_drv() emits dev_drv_started event internally
         if not testing:
             start_dev_drv(session_id, prompt_uuid=current_prompt_uuid)
-
-        # Append dev_drv_started event
-        append_event(
-            event="dev_drv_started",
-            data={
-                "session_id": session_id,
-                "prompt_uuid": current_prompt_uuid if current_prompt_uuid else "unknown"
-            },
-            hook_input=hook_input
-        )
+        else:
+            # In testing mode, still emit event for forensic visibility
+            # but don't call start_dev_drv() which has other side effects
+            append_event(
+                event="dev_drv_started",
+                data={
+                    "session_id": session_id,
+                    "prompt_uuid": current_prompt_uuid if current_prompt_uuid else "unknown"
+                },
+                hook_input=hook_input
+            )
 
         # Get breadcrumb
         breadcrumb = get_breadcrumb()
