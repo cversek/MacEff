@@ -75,7 +75,6 @@ def set_auto_mode(
     session_id: str,
     auth_token: Optional[str] = None,
     agent_root: Optional[Path] = None,
-    testing: bool = True
 ) -> Tuple[bool, str]:
     """
     Set AUTO_MODE for current session with optional auth token validation.
@@ -92,7 +91,6 @@ def set_auto_mode(
         session_id: Current session identifier
         auth_token: Optional auth token for AUTO_MODE activation
         agent_root: Agent root path (auto-detected if None)
-        testing: If True, skip state mutations (safe-by-default)
 
     Returns:
         Tuple of (success: bool, message: str)
@@ -119,12 +117,7 @@ def set_auto_mode(
             # If no settings file or no token configured, skip validation
             # (allows initial setup before tokens exist)
 
-        # Testing mode: return success without mutations
-        if testing:
-            mode_str = "AUTO_MODE" if enabled else "MANUAL_MODE"
-            return (True, f"Would set {mode_str} (testing=True)")
-
-        # Production mode: Log mode change event
+        # Log mode change event
         try:
             from ..agent_events_log import append_event
             mode_str = "AUTO_MODE" if enabled else "MANUAL_MODE"
