@@ -1128,12 +1128,20 @@ def cmd_policy_navigate(args: argparse.Namespace) -> int:
 
         # Output with line numbers
         print(f"=== CEP Navigation Guide: {policy_path.name} ===\n")
-        for i, line in enumerate(nav_content.split('\n'), 1):
+        nav_lines = nav_content.split('\n')
+        for i, line in enumerate(nav_lines, 1):
             print(f"{i:4d}│ {line}")
 
         print(f"\n=== End Navigation Guide ===")
+
+        # Discovery flow footer with guidance
         print(f"\nTo read full policy: macf_tools policy read {args.policy_name}")
         print(f"To read specific section: macf_tools policy read {args.policy_name} --section N (e.g., --section 5 or --section 5.1)")
+
+        # Estimate tokens: ~4 tokens/line average for markdown, display in k
+        full_lines = len(content.split('\n'))
+        est_tokens_k = (full_lines * 4) / 1000
+        print(f"\n📊 Full policy: ~{full_lines} lines (~{est_tokens_k:.1f}k tokens)")
 
         return 0
 
@@ -1280,6 +1288,15 @@ def cmd_policy_read(args: argparse.Namespace) -> int:
             print(f"\n=== Read at {breadcrumb} (caching disabled) ===")
         else:
             print(f"\n=== Partial read (not cached) ===")
+
+        # Show policy metadata footer
+        import os
+        from datetime import datetime
+        mtime = os.path.getmtime(policy_path)
+        last_modified = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d')
+        print(f"\n📅 Last updated: {last_modified}")
+        if is_partial:
+            print(f"💡 Run `macf_tools policy navigate {args.policy_name}` to see all sections")
 
         return 0
 
@@ -1432,7 +1449,8 @@ def cmd_policy_list(args: argparse.Namespace) -> int:
         tier = getattr(args, 'tier', None)
         category = getattr(args, 'category', None)
 
-        policies = list_policy_files(tier=tier, category=category)
+        # Always extract tier info for all policies
+        policies = list_policy_files(tier=tier, category=category, include_tier=True)
 
         if tier or category:
             filter_desc = []
@@ -1451,19 +1469,34 @@ def cmd_policy_list(args: argparse.Namespace) -> int:
 
         # Group by category for display
         by_category = {}
+        core_count = 0
         for p in policies:
             cat = p['category']
             if cat not in by_category:
                 by_category[cat] = []
             by_category[cat].append(p)
+            tier_val = p.get('tier') or ''
+            if tier_val.upper() == 'CORE':
+                core_count += 1
 
         for cat in sorted(by_category.keys()):
             print(f"\n{cat}/")
             for p in by_category[cat]:
-                tier_str = f" [{p['tier']}]" if p.get('tier') else ""
+                policy_tier = (p.get('tier') or '').upper()
+                if policy_tier == 'CORE':
+                    tier_str = " [CORE]"
+                elif policy_tier:
+                    tier_str = f" [{policy_tier}]"
+                else:
+                    tier_str = ""
                 print(f"  {p['name']}.md{tier_str}")
 
-        print(f"\nTotal: {len(policies)} policies")
+        # Summary with CORE highlight
+        print(f"\nTotal: {len(policies)} policies ({core_count} CORE)")
+
+        # Discovery footer - guide agents to next step
+        print("\n" + "-" * 50)
+        print("💡 Run `macf_tools policy navigate <name>` to explore any policy")
         return 0
 
     except Exception as e:

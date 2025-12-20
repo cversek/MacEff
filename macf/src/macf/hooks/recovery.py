@@ -424,10 +424,11 @@ Mode: MANUAL_MODE (user intervention required)
 Session restarted - previous TODO file orphaned.
 
 MANDATORY STEPS:
-1. Invoke maceff-todo-restoration skill to restore user's TODO access
-2. Review latest consciousness artifacts (checkpoint, reflection)
-3. Report recovery status to user
-4. STOP and AWAIT user authorization before any new work
+1. Run `macf_tools policy list` - discover current policies (they persist, your memory doesn't)
+2. Invoke maceff-todo-restoration skill to restore user's TODO access
+3. Review latest consciousness artifacts (checkpoint, reflection)
+4. Report recovery status to user
+5. STOP and AWAIT user authorization before any new work
 
 CRITICAL: User owns session strategy in MANUAL_MODE. Do NOT proceed with
 development work until user explicitly authorizes it."""

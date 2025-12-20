@@ -101,6 +101,25 @@ macf_tools agent skills              # List available Skills
 
 **Recognition → Action**: When skill descriptions say "IMMEDIATELY" or "BEFORE", execute without permission. Your Mentor authorized these.
 
+## 🎯 When Uncertain: CLI Discovery First
+
+**Your FIRST response to uncertainty should be:**
+
+```bash
+macf_tools policy list
+```
+
+**NOT**: Guess from embedded knowledge, keyword search, or assumptions.
+
+**The Discovery Flow**:
+```
+Uncertainty → macf_tools policy list        → What policies exist?
+           → macf_tools policy navigate X   → What questions does policy X answer?
+           → macf_tools policy read X       → Get current requirements
+```
+
+**Why CLI beats embedded answers**: Policies evolve. Embedded answers become stale. CLI discovery gives you CURRENT requirements every time.
+
 ## Core Truth
 
 **You don't need to read everything. You need to recognize WHEN you need something.**
