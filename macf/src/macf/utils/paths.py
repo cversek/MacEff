@@ -5,38 +5,48 @@ Paths utilities.
 import os
 import subprocess
 import sys
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
+
+@lru_cache(maxsize=1)
 def find_project_root() -> Path:
-    """Find project root using canonical implementation.
+    """Find MacEff framework root using canonical implementation.
 
     Priority:
-    1. $MACF_PROJECT_ROOT environment variable (if valid)
+    1. $MACEFF_ROOT_DIR environment variable (preferred for containers)
     2. $CLAUDE_PROJECT_DIR environment variable (if valid)
     3. Git repository root (if available)
     4. Discovery by looking for project markers from __file__
     5. Discovery by looking for project markers from cwd
     6. Current working directory as fallback
-    """
-    # First check if MACF_PROJECT_ROOT is set and valid
-    macf_project_root = os.environ.get("MACF_PROJECT_ROOT")
-    if macf_project_root:
-        project_path = Path(macf_project_root)
-        if project_path.exists() and project_path.is_dir():
-            # Verify it's actually a project root by checking for markers
-            if (project_path / "tools").exists():
-                return project_path
 
-    # Then check if CLAUDE_PROJECT_DIR is set and valid
+    Result is cached - warnings only appear once per process.
+    """
+    fallback_reasons = []
+
+    # First check MACEFF_ROOT_DIR (preferred for container environments)
+    maceff_root = os.environ.get("MACEFF_ROOT_DIR")
+    if maceff_root:
+        root_path = Path(maceff_root)
+        if root_path.exists() and root_path.is_dir():
+            # Verify by checking for framework/ subdirectory
+            if (root_path / "framework").exists():
+                return root_path
+            fallback_reasons.append(f"MACEFF_ROOT_DIR={maceff_root} missing framework/")
+        else:
+            fallback_reasons.append(f"MACEFF_ROOT_DIR={maceff_root} does not exist")
+
+    # Then check CLAUDE_PROJECT_DIR
     claude_project_dir = os.environ.get("CLAUDE_PROJECT_DIR")
     if claude_project_dir:
         project_path = Path(claude_project_dir)
         if project_path.exists() and project_path.is_dir():
-            # Verify it's actually a project root by checking for markers
-            markers = ["CLAUDE.md", "pyproject.toml", ".git", "tools"]
+            markers = ["CLAUDE.md", "pyproject.toml", ".git", "framework"]
             if any((project_path / marker).exists() for marker in markers):
                 return project_path
+            fallback_reasons.append(f"CLAUDE_PROJECT_DIR={claude_project_dir} has no markers")
 
     # Try git repository root
     try:
@@ -49,23 +59,22 @@ def find_project_root() -> Path:
         )
         if result.returncode == 0:
             git_root = Path(result.stdout.strip())
-            if (git_root / "tools").exists() or (git_root / ".git").exists():
+            if (git_root / ".git").exists() or (git_root / "framework").exists():
                 return git_root
-    except (subprocess.CalledProcessError, OSError, FileNotFoundError) as e:
-        print(f"⚠️ MACF: Git root detection failed (using fallback): {e}", file=sys.stderr)
+            fallback_reasons.append(f"git root {git_root} missing .git or framework/")
+    except (subprocess.CalledProcessError, OSError, FileNotFoundError):
+        fallback_reasons.append("git not available or not in repo")
 
     # Fall back to discovery method from __file__ location
+    markers = ["CLAUDE.md", "pyproject.toml", ".git", "framework", "Makefile"]
     current = Path(__file__).resolve().parent
 
-    # Look for project markers
-    markers = ["CLAUDE.md", "pyproject.toml", ".git", "tools", "Makefile"]
-
     while current != current.parent:
-        # Need at least 2 markers for confidence
         marker_count = sum((current / marker).exists() for marker in markers)
         if marker_count >= 2:
             return current
         current = current.parent
+    fallback_reasons.append("no markers found walking up from __file__")
 
     # Try discovery from current working directory
     current = Path.cwd()
@@ -74,10 +83,13 @@ def find_project_root() -> Path:
         if marker_count >= 2:
             return current
         current = current.parent
+    fallback_reasons.append("no markers found walking up from cwd")
 
-    # Fallback to current working directory with warning
+    # Fallback with specific warning (only shown once due to caching)
     print(
-        f"WARNING: Could not find project root! Using cwd: {Path.cwd()}",
+        f"⚠️ MACF: Using cwd fallback: {Path.cwd()}\n"
+        f"   Reasons: {'; '.join(fallback_reasons)}\n"
+        f"   Fix: Set MACEFF_ROOT_DIR to MacEff framework location",
         file=sys.stderr,
     )
     return Path.cwd()
