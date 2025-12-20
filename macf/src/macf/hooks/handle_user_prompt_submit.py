@@ -21,25 +21,17 @@ from macf.utils import (
     detect_auto_mode,
     get_breadcrumb
 )
-from macf.agent_events_log import append_event
 from macf.hooks.hook_logging import log_hook_event
 
 
-def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
+def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
     """
     Run UserPromptSubmit hook logic.
 
     Tracks DEV_DRV start and injects temporal + token/CLUAC awareness.
 
-    Side effects (ONLY when testing=False):
-    - Starts DEV_DRV tracking in session state
-    - Records prompt UUID and start timestamp
-    - Updates session operational state
-
     Args:
         stdin_json: JSON string from stdin (Claude Code hook input)
-        testing: If True (DEFAULT), skip side-effects (read-only safe mode).
-                 If False, apply mutations (production only).
         **kwargs: Additional parameters for future extensibility
 
     Returns:
@@ -63,21 +55,9 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
         from macf.utils.session import get_last_user_prompt_uuid
         current_prompt_uuid = get_last_user_prompt_uuid(session_id)
 
-        # Start Development Drive tracking with current UUID (skip if testing)
+        # Start Development Drive tracking with current UUID
         # Note: start_dev_drv() emits dev_drv_started event internally
-        if not testing:
-            start_dev_drv(session_id, prompt_uuid=current_prompt_uuid)
-        else:
-            # In testing mode, still emit event for forensic visibility
-            # but don't call start_dev_drv() which has other side effects
-            append_event(
-                event="dev_drv_started",
-                data={
-                    "session_id": session_id,
-                    "prompt_uuid": current_prompt_uuid if current_prompt_uuid else "unknown"
-                },
-                hook_input=hook_input
-            )
+        start_dev_drv(session_id, prompt_uuid=current_prompt_uuid)
 
         # Get breadcrumb
         breadcrumb = get_breadcrumb()
@@ -147,12 +127,9 @@ Breadcrumb: {breadcrumb}"""
 
 if __name__ == "__main__":
     import json
-    import os
     import sys
-    # MACF_TESTING_MODE env var enables safe testing via subprocess
-    testing_mode = os.environ.get('MACF_TESTING_MODE', '').lower() in ('true', '1', 'yes')
     try:
-        output = run(sys.stdin.read(), testing=testing_mode)
+        output = run(sys.stdin.read())
         print(json.dumps(output))
     except Exception as e:
         print(json.dumps({"continue": True}))

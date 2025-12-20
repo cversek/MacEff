@@ -21,7 +21,7 @@ from macf.event_queries import get_cycle_number_from_events
 from macf.hooks.hook_logging import log_hook_event
 
 
-def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
+def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
     """
     Run PreCompact hook logic.
 
@@ -30,7 +30,6 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
 
     Args:
         stdin_json: JSON string from stdin (Claude Code hook input)
-        testing: If True (DEFAULT), skip side-effects (read-only safe mode).
         **kwargs: Additional parameters for future extensibility
 
     Returns:
@@ -100,12 +99,9 @@ CLUAC: {token_info.get('cluac_level', 'N/A')}
 
 if __name__ == "__main__":
     import json
-    import os
     import sys
-    # MACF_TESTING_MODE env var enables safe testing via subprocess
-    testing_mode = os.environ.get('MACF_TESTING_MODE', '').lower() in ('true', '1', 'yes')
     try:
-        output = run(sys.stdin.read(), testing=testing_mode)
+        output = run(sys.stdin.read())
         print(json.dumps(output))
     except Exception as e:
         print(json.dumps({"continue": True}))

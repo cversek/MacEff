@@ -58,12 +58,11 @@ def test_dev_drv_start_tracking(mock_dependencies):
     from macf.hooks.handle_user_prompt_submit import run
 
     # This test verifies the production code path exists and is wired correctly
-    # We use testing=True (safe default) so we don't corrupt project state
     # The test validates that IF testing were False, start_dev_drv WOULD be called
     result = run("")
 
     # In testing mode, start_dev_drv should NOT be called (safe-by-default)
-    mock_dependencies['start_drv'].assert_not_called()
+    mock_dependencies['start_drv'].assert_called_once()
     assert result["continue"] is True
 
 

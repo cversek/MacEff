@@ -185,7 +185,7 @@ def test_saves_session_end_time_to_project_state(mock_dependencies):
         mock_boundary.return_value = ""
         mock_footer.return_value = "Footer"
 
-        result = run("", testing=True)  # SAFE: testing=True prevents state corruption
+        result = run("")
 
         # Event-first: Stop hook emits session_ended event instead of saving state
         # load_agent_state/save_agent_state no longer called

@@ -20,7 +20,7 @@ from macf.agent_events_log import append_event
 from macf.hooks.hook_logging import log_hook_event
 
 
-def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
+def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
     """
     Run PostToolUse hook logic.
 
@@ -46,8 +46,6 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
 
     Args:
         stdin_json: JSON string from stdin (Claude Code hook input)
-        testing: If True (DEFAULT), skip side-effects (safe mode).
-                 If False, apply mutations (production only).
                  Currently no side-effects in PostToolUse.
         **kwargs: Additional parameters for future extensibility
 
@@ -194,12 +192,9 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
 
 if __name__ == "__main__":
     import json
-    import os
     import sys
-    # MACF_TESTING_MODE env var enables safe testing via subprocess
-    testing_mode = os.environ.get('MACF_TESTING_MODE', '').lower() in ('true', '1', 'yes')
     try:
-        output = run(sys.stdin.read(), testing=testing_mode)
+        output = run(sys.stdin.read())
         print(json.dumps(output))
     except Exception as e:
         print(json.dumps({"continue": True}))
