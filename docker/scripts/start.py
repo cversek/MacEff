@@ -171,62 +171,68 @@ def configure_claude_settings(
 ) -> None:
     """Configure Claude Code settings for agent.
 
-    Merges deployment-level defaults with per-agent overrides.
-    Settings applied: cleanupPeriodDays, thinking, outputStyle, env.
+    Writes TWO separate files based on settings epistemology:
+    - ~/.claude/settings.json: Project/capability settings (hooks, env, outputStyle)
+    - ~/.claude.json: Person/UI preferences (verbose, autoCompactEnabled)
 
+    Merges deployment-level defaults with per-agent overrides.
     Priority: agent_spec.claude_config > defaults.claude_config > hardcoded defaults
     """
-    claude_dir = Path(f'/home/{username}/.claude')
+    from macf.models.agent_spec import (
+        ClaudeCodeConfig, ClaudeCodeSettingsConfig, ClaudeCodePreferencesConfig
+    )
+
+    home_dir = Path(f'/home/{username}')
+    claude_dir = home_dir / '.claude'
     claude_dir.mkdir(mode=0o755, exist_ok=True)
 
-    # Build merged config: hardcoded defaults < deployment defaults < agent overrides
-    # Start with hardcoded defaults
-    merged = ClaudeCodeConfig()
+    # Start with defaults from Pydantic models
+    merged_settings = ClaudeCodeSettingsConfig()
+    merged_prefs = ClaudeCodePreferencesConfig()
 
-    # Apply deployment-level defaults
+    def merge_layer(source: Optional[Dict]) -> None:
+        """Merge a config layer into merged settings/prefs."""
+        nonlocal merged_settings, merged_prefs
+        if not source:
+            return
+        if source.get('settings'):
+            # Deep merge: update only non-None values
+            layer = ClaudeCodeSettingsConfig(**source['settings'])
+            for field in layer.model_fields:
+                val = getattr(layer, field)
+                if val is not None:
+                    setattr(merged_settings, field, val)
+        if source.get('preferences'):
+            layer = ClaudeCodePreferencesConfig(**source['preferences'])
+            for field in layer.model_fields:
+                setattr(merged_prefs, field, getattr(layer, field))
+
+    # Apply layers: defaults < agent overrides
     if defaults_dict and defaults_dict.get('claude_config'):
-        defaults_cc = defaults_dict['claude_config']
-        if defaults_cc.get('cleanupPeriodDays') is not None:
-            merged.cleanupPeriodDays = defaults_cc['cleanupPeriodDays']
-        if defaults_cc.get('thinking') is not None:
-            merged.thinking = defaults_cc['thinking']
-        if defaults_cc.get('outputStyle') is not None:
-            merged.outputStyle = defaults_cc['outputStyle']
-        if defaults_cc.get('env'):
-            merged.env.update(defaults_cc['env'])
-
-    # Apply agent-specific overrides
+        merge_layer(defaults_dict['claude_config'])
     if agent_spec.claude_config:
-        agent_cc = agent_spec.claude_config
-        if agent_cc.cleanupPeriodDays is not None:
-            merged.cleanupPeriodDays = agent_cc.cleanupPeriodDays
-        if agent_cc.thinking is not None:
-            merged.thinking = agent_cc.thinking
-        if agent_cc.outputStyle is not None:
-            merged.outputStyle = agent_cc.outputStyle
-        if agent_cc.env:
-            merged.env.update(agent_cc.env)
+        merge_layer(agent_spec.claude_config.model_dump())
 
-    # Build settings.json
+    # Write ~/.claude/settings.json (let Pydantic handle serialization)
     settings_file = claude_dir / 'settings.json'
-    settings = {
-        'cleanupPeriodDays': merged.cleanupPeriodDays,
-        'env': merged.env
-    }
+    settings_file.write_text(json.dumps(
+        merged_settings.model_dump(exclude_none=True),
+        indent=2
+    ))
 
-    # Add thinking if specified
-    if merged.thinking:
-        settings['thinking'] = merged.thinking
+    # Write ~/.claude.json (person/preferences)
+    prefs_file = home_dir / '.claude.json'
+    prefs_file.write_text(json.dumps(
+        merged_prefs.model_dump(),
+        indent=2
+    ))
 
-    # Add outputStyle if specified (Claude Code uses this to select output style)
-    if merged.outputStyle:
-        settings['outputStyle'] = merged.outputStyle
-
-    settings_file.write_text(json.dumps(settings, indent=2))
+    # Set ownership
     run_command(['chown', '-R', f'{username}:{username}', str(claude_dir)])
+    run_command(['chown', f'{username}:{username}', str(prefs_file)])
 
-    # Log what was configured
-    log(f"  Claude settings: cleanup={merged.cleanupPeriodDays}d, thinking={merged.thinking}, outputStyle={merged.outputStyle}")
+    log(f"  Claude settings: {merged_settings.model_dump(exclude_none=True)}")
+    log(f"  Claude prefs: {merged_prefs.model_dump()}")
 
 
 def create_agent_tree(username: str, agent_spec: AgentSpec, defaults_config: Optional[Dict]) -> None:
