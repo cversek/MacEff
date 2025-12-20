@@ -109,7 +109,7 @@ def detect_session_migration(current_session_id: str) -> tuple[bool, str, str]:
     return True, "", previous_session_id
 
 
-def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
+def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
     """
     Run SessionStart hook logic.
 
@@ -119,17 +119,8 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
     - Artifact discovery
     - Session state restoration
 
-    ⚠️  SIDE EFFECTS: This hook mutates project state on compaction detection
-
-    Side effects (ONLY when testing=False):
-    - Increments cycle counter via cycle_incremented event
-    - Increments compaction count in session state
-    - Updates session timestamps
-
     Args:
         stdin_json: JSON string from stdin (Claude Code hook input)
-        testing: If True (DEFAULT), skip side-effects (read-only safe mode).
-                 If False, apply mutations (production only).
         **kwargs: Additional parameters for future extensibility
 
     Returns:
@@ -292,22 +283,20 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
             current_compaction_count = compaction_info.get('count', 0)
             auto_mode, auto_mode_source, confidence = detect_auto_mode(session_id)
 
-            # Side-effects: Skip if testing mode
-            if not testing:
-                # Emit state snapshot BEFORE modifications (preserves historical baseline)
-                # All values from events, no state files
-                from macf.agent_events_log import emit_state_snapshot
-                emit_state_snapshot(
-                    session_id=session_id,
-                    snapshot_type="compaction_recovery",
-                    source="events",
-                    state_file_values={
-                        "cycle_number": get_cycle_number_from_events(),
-                        "compaction_count": current_compaction_count,
-                        "auto_mode": auto_mode,
-                        "auto_mode_source": auto_mode_source
-                    }
-                )
+            # Emit state snapshot BEFORE modifications (preserves historical baseline)
+            # All values from events, no state files
+            from macf.agent_events_log import emit_state_snapshot
+            emit_state_snapshot(
+                session_id=session_id,
+                snapshot_type="compaction_recovery",
+                source="events",
+                state_file_values={
+                    "cycle_number": get_cycle_number_from_events(),
+                    "compaction_count": current_compaction_count,
+                    "auto_mode": auto_mode,
+                    "auto_mode_source": auto_mode_source
+                }
+            )
 
             # Cycle number: current + 1 (event log is source of truth)
             # compaction_detected event captures the new cycle number
@@ -496,12 +485,9 @@ Session Context:
 
 if __name__ == "__main__":
     import json
-    import os
     import sys
-    # MACF_TESTING_MODE env var enables safe testing via subprocess
-    testing_mode = os.environ.get('MACF_TESTING_MODE', '').lower() in ('true', '1', 'yes')
     try:
-        output = run(sys.stdin.read(), testing=testing_mode)
+        output = run(sys.stdin.read())
         print(json.dumps(output))
     except Exception as e:
         print(json.dumps({"continue": True}))

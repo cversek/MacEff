@@ -27,21 +27,18 @@ from macf.agent_events_log import append_event
 from macf.hooks.hook_logging import log_hook_event
 
 
-def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
+def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
     """
     Run Stop hook logic.
 
     Tracks DEV_DRV completion and displays stats.
 
-    Side effects (ONLY when testing=False):
     - Increments DEV_DRV counter in session state
     - Records drive duration and aggregates stats
     - Updates last_session_ended_at timestamp in .maceff/project_state.json
 
     Args:
         stdin_json: JSON string from stdin (Claude Code hook input)
-        testing: If True (DEFAULT), skip side-effects (read-only safe mode).
-                 If False, apply mutations (production only).
         **kwargs: Additional parameters for future extensibility
 
     Returns:
@@ -169,12 +166,9 @@ Development Drive Stats:
 
 if __name__ == "__main__":
     import json
-    import os
     import sys
-    # MACF_TESTING_MODE env var enables safe testing via subprocess
-    testing_mode = os.environ.get('MACF_TESTING_MODE', '').lower() in ('true', '1', 'yes')
     try:
-        output = run(sys.stdin.read(), testing=testing_mode)
+        output = run(sys.stdin.read())
         print(json.dumps(output))
     except Exception as e:
         print(json.dumps({"continue": True}))

@@ -22,15 +22,14 @@ def mock_dependencies():
 
 
 def test_task_tool_deleg_drv_start(mock_dependencies, hook_stdin_task_tool):
-    """Test Task tool triggers DELEG_DRV start tracking in production mode."""
+    """Test Task tool triggers DELEG_DRV start tracking."""
     from macf.hooks.handle_pre_tool_use import run
 
-    # SAFE-BY-DEFAULT: Always use testing=True in tests to prevent state corruption
-    # Mocks verify production code path exists without actual side-effects
-    result = run(hook_stdin_task_tool, testing=True)
+    # Event log isolation via fixtures - code runs same as production
+    result = run(hook_stdin_task_tool)
 
-    # In testing mode, start_deleg_drv should NOT be called (safe-by-default)
-    mock_dependencies['start_deleg'].assert_not_called()
+    # start_deleg_drv should be called (event-first architecture - events isolated via fixtures)
+    mock_dependencies['start_deleg'].assert_called_once()
 
     # Verify output contains delegation message
     assert "hookSpecificOutput" in result
@@ -134,7 +133,7 @@ def test_todowrite_collapse_blocked_without_auth(mock_dependencies, isolated_eve
         "tool_input": {"todos": [{"content": f"Item {i}", "status": "pending", "activeForm": "Test"} for i in range(10)]}
     })
 
-    result = run(stdin, testing=True)
+    result = run(stdin)
 
     assert result["continue"] is False
     assert "TODO Collapse Blocked" in result["hookSpecificOutput"]["message"]
@@ -159,7 +158,7 @@ def test_todowrite_collapse_allowed_with_auth(mock_dependencies, isolated_events
         "tool_input": {"todos": [{"content": f"Item {i}", "status": "pending", "activeForm": "Test"} for i in range(10)]}
     })
 
-    result = run(stdin, testing=True)
+    result = run(stdin)
 
     assert result["continue"] is True  # Allowed with auth
 
@@ -179,7 +178,7 @@ def test_todowrite_expansion_always_allowed(mock_dependencies, isolated_events_l
         "tool_input": {"todos": [{"content": f"Item {i}", "status": "pending", "activeForm": "Test"} for i in range(50)]}
     })
 
-    result = run(stdin, testing=True)
+    result = run(stdin)
 
     assert result["continue"] is True  # Expansion always allowed
 
@@ -200,7 +199,7 @@ def test_todowrite_auth_single_use(mock_dependencies, isolated_events_log):
         "tool_name": "TodoWrite",
         "tool_input": {"todos": [{"content": f"Item {i}", "status": "pending", "activeForm": "Test"} for i in range(10)]}
     })
-    result = run(stdin, testing=True)
+    result = run(stdin)
     assert result["continue"] is True
 
     # Check that auth was cleared

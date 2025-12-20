@@ -57,7 +57,7 @@ def _is_bare_cd_command(command: str) -> bool:
     return False
 
 
-def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
+def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
     """
     Run PreToolUse hook logic.
 
@@ -67,14 +67,8 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
     - Bash: Truncate long commands
     - Minimal timestamp for high-frequency hook
 
-    Side effects (ONLY when testing=False):
-    - Starts DELEG_DRV tracking when Task tool invoked
-    - Records delegation start timestamp in session state
-
     Args:
         stdin_json: JSON string from stdin (Claude Code hook input)
-        testing: If True (DEFAULT), skip side-effects (read-only safe mode).
-                 If False, apply mutations (production only).
         **kwargs: Additional parameters for future extensibility
 
     Returns:
@@ -167,12 +161,11 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
 
         # Enhanced context based on tool type
         if tool_name == "Task":
-            # DELEG_DRV start tracking (skip if testing)
+            # DELEG_DRV start tracking
             subagent_type = tool_input.get("subagent_type", "unknown")
             description = tool_input.get("description", "")
             prompt = tool_input.get("prompt", "")
-            if not testing:
-                start_deleg_drv(session_id)
+            start_deleg_drv(session_id)
 
             # Truncate long fields for event log (similar to tool output handling)
             MAX_DESC_LEN = 100
@@ -270,12 +263,9 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
 
 if __name__ == "__main__":
     import json
-    import os
     import sys
-    # MACF_TESTING_MODE env var enables safe testing via subprocess
-    testing_mode = os.environ.get('MACF_TESTING_MODE', '').lower() in ('true', '1', 'yes')
     try:
-        output = run(sys.stdin.read(), testing=testing_mode)
+        output = run(sys.stdin.read())
         # Exit code 2 is the ONLY way to block tool execution in Claude Code
         # JSON "continue": false is ignored due to known bugs (#4362, #4669, #3514)
         # When blocking: NO stdout JSON, ONLY stderr message + exit 2

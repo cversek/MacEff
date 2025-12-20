@@ -37,11 +37,10 @@ def test_deleg_drv_completion_tracking(mock_dependencies):
 
     mock_dependencies['complete'].return_value = (True, 65)
 
-    # Call with testing=True (safe default) - mocks verify production code path exists
-    result = run("", testing=True)
+    result = run("")
 
     # In testing mode, complete_deleg_drv should NOT be called (safe-by-default)
-    mock_dependencies['complete'].assert_not_called()
+    mock_dependencies['complete'].assert_called_once()
     assert result["continue"] is True
 
 
