@@ -9,11 +9,28 @@ from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field, field_validator
 
 
-class ClaudeCodeConfig(BaseModel):
-    """Claude Code settings for container agents.
+class ClaudeCodePreferencesConfig(BaseModel):
+    """Claude Code UI preferences for container agents.
 
-    Controls thinking mode, output style, cleanup period, and environment variables.
-    Per-agent settings override deployment-level defaults.
+    These settings go in ~/.claude.json (person layer).
+    Controls how the agent experiences their environment.
+    """
+
+    verbose: bool = Field(
+        default=True,
+        description="Enable verbose output for debugging"
+    )
+    autoCompactEnabled: bool = Field(
+        default=False,
+        description="Enable auto-compaction (False for MANUAL_MODE agents)"
+    )
+
+
+class ClaudeCodeSettingsConfig(BaseModel):
+    """Claude Code project/capability settings for container agents.
+
+    These settings go in ~/.claude/settings.json (project layer).
+    Controls what capabilities are authorized.
     """
 
     cleanupPeriodDays: int = Field(
@@ -33,6 +50,26 @@ class ClaudeCodeConfig(BaseModel):
             "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR": "1"
         },
         description="Environment variables for Claude Code"
+    )
+
+
+class ClaudeCodeConfig(BaseModel):
+    """Combined Claude Code configuration for container agents.
+
+    Separates settings by concern into two sub-configs:
+    - settings: Project/capability settings (-> ~/.claude/settings.json)
+    - preferences: Person/UI settings (-> ~/.claude.json)
+
+    Per-agent values override deployment-level defaults.
+    """
+
+    settings: Optional[ClaudeCodeSettingsConfig] = Field(
+        default=None,
+        description="Project/capability settings for ~/.claude/settings.json"
+    )
+    preferences: Optional[ClaudeCodePreferencesConfig] = Field(
+        default=None,
+        description="Person/UI preferences for ~/.claude.json"
     )
 
 
