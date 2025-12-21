@@ -9,23 +9,47 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    try:
+        from backports.zoneinfo import ZoneInfo  # type: ignore
+    except ImportError:
+        ZoneInfo = None  # type: ignore
+
+try:
     import dateutil.tz  # type: ignore
     DATEUTIL_AVAILABLE = True
 except ImportError:
     DATEUTIL_AVAILABLE = False
 
+
+def _pick_tz():
+    """Prefer MACEFF_TZ, then TZ, else system local; fall back to UTC.
+
+    This ensures temporal awareness respects container timezone configuration.
+    """
+    for key in ("MACEFF_TZ", "TZ"):
+        name = os.getenv(key)
+        if name and ZoneInfo is not None:
+            try:
+                return ZoneInfo(name)
+            except Exception:
+                pass
+    try:
+        return datetime.now().astimezone().tzinfo or timezone.utc
+    except Exception:
+        return timezone.utc
+
 def get_formatted_timestamp() -> Tuple[str, datetime]:
     """Get formatted timestamp with day of week and timezone.
+
+    Uses MACEFF_TZ or TZ environment variable for timezone.
 
     Returns:
         Tuple of (formatted_string, datetime_object)
     """
-    if DATEUTIL_AVAILABLE:
-        eastern = dateutil.tz.gettz("America/New_York")
-        now = datetime.now(tz=eastern)
-    else:
-        now = datetime.now(timezone.utc)
-
+    tz = _pick_tz()
+    now = datetime.now(tz=tz)
     formatted = now.strftime("%A, %b %d, %Y %I:%M:%S %p %Z")
     return formatted, now
 
@@ -34,7 +58,7 @@ def get_temporal_context() -> dict:
     Master temporal context function.
 
     Returns comprehensive temporal information for consciousness injection.
-    Uses standard library only, platform-native timezone detection.
+    Uses MACEFF_TZ or TZ environment variable for timezone.
 
     Returns:
         dict with keys:
@@ -45,10 +69,11 @@ def get_temporal_context() -> dict:
             - timezone: "EDT"
             - iso_timestamp: "2025-10-02T20:42:11"
     """
-    now = datetime.now()
+    tz = _pick_tz()
+    now = datetime.now(tz=tz)
 
-    # Platform-native timezone detection
-    timezone_str = time.tzname[time.daylight]
+    # Get timezone abbreviation from the datetime object
+    timezone_str = now.strftime("%Z") or "UTC"
 
     # Time-of-day classification
     hour = now.hour
@@ -186,10 +211,13 @@ def get_minimal_timestamp() -> str:
     """
     Get minimal timestamp for high-frequency hooks.
 
+    Uses MACEFF_TZ or TZ environment variable for timezone.
+
     Returns:
         Minimal timestamp like "03:22:45 PM"
     """
-    now = datetime.now()
+    tz = _pick_tz()
+    now = datetime.now(tz=tz)
     return now.strftime("%I:%M:%S %p")
 
 def format_minimal_temporal_message(timestamp: str) -> str:
