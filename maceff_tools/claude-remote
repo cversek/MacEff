@@ -29,8 +29,10 @@ done
 # Build a single safely-escaped remote command
 build_remote_cmd() {
   # Pre-create and cd into the workspace dir, then run claude with forwarded args
-  printf 'set -e; mkdir -p %q && cd %q; claude' \
-    "/shared_workspace/${PROJ}" "/shared_workspace/${PROJ}"
+  # WORKSPACE_ROOT defaults to ~/workspace (Named Agents pattern)
+  local ws="${WORKSPACE_ROOT:-\$HOME/workspace}"
+  printf 'set -e; mkdir -p %s/%q && cd %s/%q; claude' \
+    "${ws}" "${PROJ}" "${ws}" "${PROJ}"
   for a in "$@"; do
     printf ' %q' "$a"
   done
