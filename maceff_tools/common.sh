@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Hard defaults
-PA="maceff_user001"
-SID="001"
-PORT="2222"
-KEYS_DIR="keys"
-PROJ="demo"
+# Hard defaults (only if not already set in environment)
+PA="${PA:-maceff_user001}"
+SID="${SID:-001}"
+PORT="${PORT:-2222}"
+KEYS_DIR="${KEYS_DIR:-keys}"
+PROJ="${PROJ:-demo}"
 
 repo_root() { git rev-parse --show-toplevel 2>/dev/null || pwd; }
 
