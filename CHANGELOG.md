@@ -5,6 +5,165 @@ All notable changes to MACF Tools (Multi-Agent Coordination Framework) will be d
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2025-12-21
+
+### Summary
+
+Major release introducing **Named Agents Architecture** for multi-agent systems with persistent identities, **Event-First Architecture** eliminating state file corruption, and **Policy CLI Suite** for on-demand policy discovery. This release spans 273 commits with comprehensive container validation.
+
+### Added
+
+**Named Agents Architecture** ([docs](https://github.com/cversek/MacEff/blob/main/docs/arch_v0.3_named_agents/INDEX.md)):
+- Declarative YAML-driven agent configuration via `agents.yaml` and `projects.yaml` ([schemas](https://github.com/cversek/MacEff/blob/main/docs/arch_v0.3_named_agents/APPENDIX_A_YAML_SCHEMAS.md))
+- Primary Agent (PA) and Subagent (SA) model with kernel-level user isolation between PAs ([delegation model](https://github.com/cversek/MacEff/blob/main/docs/arch_v0.3_named_agents/03_delegation_model.md))
+- Three-layer CLAUDE.md context loading (System → Identity → Project)
+- Pydantic v2 schema validation with clear error messages
+- Agent tree initialization with private/public artifact directories ([filesystem structure](https://github.com/cversek/MacEff/blob/main/docs/arch_v0.3_named_agents/02_filesystem_structure.md))
+- Per-agent workspace isolation with shared project mounting
+- Git worktree support for concurrent repository editing
+- Automatic user creation, SSH key installation, and `.bashrc` configuration ([implementation guide](https://github.com/cversek/MacEff/blob/main/docs/arch_v0.3_named_agents/05_implementation_guide.md))
+
+**Python Startup Orchestration** (`start.py`):
+- Complete container startup orchestration replacing shell scripts
+- Settings epistemology: separate `.claude.json` (UI preferences) from `.claude/settings.json` (operational) ([settings docs](https://github.com/cversek/MacEff/blob/main/macf/docs/maintainer/settings-epistemology.md))
+- Active project symlink (`~/active_project`) with bashrc auto-cd
+- Framework symlink installation for commands, skills, and output styles
+- Hook installation with container-aware path detection
+
+**Policy CLI Suite** (`macf_tools policy`) ([CLI reference](https://github.com/cversek/MacEff/blob/main/macf/docs/user/cli-reference.md)):
+- `policy list` - Discover available framework policies
+- `policy navigate <name>` - Show CEP Navigation Guide (semantic structure)
+- `policy read <name>` - Full policy with line numbers and caching
+- `policy read <name> --section N` - Targeted hierarchical section reading
+- `policy search <keyword>` - Cross-policy keyword search
+- Policy Manifest v2.0.0 indexing all 36+ policies
+
+**Event-First Architecture** ([architecture docs](https://github.com/cversek/MacEff/blob/main/macf/docs/maintainer/event-sourcing.md)):
+- Immutable append-only event log (`agent_events_log.jsonl`) as sole source of truth
+- Event query utilities with snapshot baselines for efficient historical scanning
+- Development Drive (DEV_DRV) and Delegation Drive (DELEG_DRV) tracking via events
+- `macf_tools events query` with command filtering and verbose output
+- Forensic event logging across all hooks
+
+**TODO CLI Integration** (`macf_tools todos`):
+- `todos list` - Show current TODO state from events
+- `todos list --previous N` - Query TODO history for recovery
+- `todos status` - Quick TODO statistics
+- TODO collapse authorization with hook-enforced protection (exit code 2)
+
+**Hook Ecosystem Enhancements** ([hook epistemology](https://github.com/cversek/MacEff/blob/main/macf/docs/maintainer/hook-epistemology.md)):
+- Comprehensive event logging to JSONL with structured field tagging
+- Session migration detection preventing TODO orphaning on restart vs compaction
+- Claude Code version display in all hook footers
+- Container-aware hook installation with environment detection ([hooks user guide](https://github.com/cversek/MacEff/blob/main/macf/docs/user/hooks.md))
+- Safe subprocess testing with `MACF_TESTING_MODE` environment variable
+
+**Framework Infrastructure**:
+- `maceff-init` with parent repo framework overlay support
+- Framework command and skill symlinks installed on startup
+- Output styles directory with personality configuration
+- Docker Compose configs section for mounting agent/project YAML
+- Timezone awareness respecting `MACEFF_TZ` and `TZ` environment variables
+
+### Changed
+
+**Breaking: Event-First Migration**:
+- `SessionOperationalState` class removed entirely
+- All state queries now derive from immutable event log
+- Test isolation via pytest fixtures instead of code-level `testing` parameter
+
+**Framework Architecture** ([architecture overview](https://github.com/cversek/MacEff/blob/main/macf/docs/maintainer/architecture.md)):
+- Policies reorganized under `framework/policies/base/` structure
+- Identity-blind refactoring for portability
+- `state.py` renamed to `json_io.py` for clarity
+- Monolithic `utils.py` split into semantic package modules
+
+**Hook Signatures**:
+- Removed `testing` parameter from all 10 hooks
+- Boundary-level isolation via conftest fixtures instead
+
+**Error Handling**:
+- Eradicated silent failure anti-pattern across codebase
+- Implemented warn+reraise pattern for visibility
+- All `sys` imports moved to module level
+
+### Fixed
+
+**35+ Friction Points Resolved**:
+- FP#23-25: Deploy friction points
+- FP#26: SSH host key warning in Makefile
+- FP#27: Hook bootstrap in containers
+- FP#28: `sys` import anti-pattern (module-level imports)
+- FP#29: Relative import for configuration classes
+- FP#30: Graceful handling of missing state files on first run
+- FP#31: `make ssh` starts in project directory
+- FP#32: `make claude` with argument forwarding
+- FP#33: Claude settings auto-configuration
+- FP#34: `MACEFF_ROOT_DIR` + warning caching
+- FP#35: Duplicate `dev_drv_started` events
+- FP#36-38: Timezone and path resolution fixes
+
+**Code Quality**:
+- Symlink resolution in `start.py` for real paths in bash prompt
+- Correct field names for `notification_type` in hooks
+- Policy read section option includes subsections correctly
+- Missing parent directory creation for SSH key installation
+
+**Testing**:
+- From ~250 to 307+ passing tests
+- Event log isolation per test via conftest fixtures
+- Integration tests for policy commands, events, context
+
+### Removed
+
+- `SessionOperationalState` class (replaced by event queries)
+- State file mutations (`state.save()` calls)
+- `testing` parameter from all hooks and utility functions
+- 71 obsolete TDD specification files
+- Vestigial state API functions (`get_agent_cycle_number`, `increment_agent_cycle`)
+
+### Breaking Changes
+
+1. **Event-First Migration**: Code using `SessionOperationalState` must migrate to `macf.utils.event_queries`
+2. **No `testing` Parameter**: Hooks no longer accept `testing=True`. Use pytest fixtures for test isolation.
+3. **Policy Paths**: Policies reorganized under `framework/policies/base/` structure
+
+### Migration Guide
+
+**Upgrading from v0.2.0:**
+```bash
+git pull && git checkout v0.3.0
+make build && make up
+```
+
+**For code using state API:**
+```python
+# Before (v0.2.0)
+from macf.utils.state import SessionOperationalState
+state = SessionOperationalState.load()
+cycle = state.agent_cycle_number
+
+# After (v0.3.0)
+from macf.utils.event_queries import get_cycle_number_from_events
+cycle = get_cycle_number_from_events()
+```
+
+**For tests using `testing=True`:**
+```python
+# Before (v0.2.0)
+result = run(stdin_json, testing=True)
+
+# After (v0.3.0) - use conftest fixtures for isolation
+def test_hook(isolated_event_log):
+    result = run(stdin_json)  # Same code as production
+```
+
+### Security Notes
+
+- Real OS-level isolation between Primary Agents via kernel user separation ([validation results](https://github.com/cversek/MacEff/blob/main/docs/arch_v0.3_named_agents/VALIDATION_RESULTS.md))
+- Conventional policy boundaries within PA + SA teams (organizational, not enforced)
+- Not suitable for untrusted third-party code execution within same-user teams
+
 ## [0.2.0] - 2025-10-14
 
 ### Added
