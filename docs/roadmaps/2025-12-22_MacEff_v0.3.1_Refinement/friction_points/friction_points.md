@@ -1,8 +1,9 @@
 # MacEff v0.3.1 Friction Points
 
-## FP#1: Path Resolution Semantics Confusion
+## FP#1: Path Resolution Semantics Confusion ✅ RESOLVED
 
 **Reported**: 2025-12-22
+**Resolved**: 2025-12-24 (Cycle 308 DETOUR)
 **Source**: MannyMacEff container deployment
 **Severity**: Medium (warning noise, potential misconfigurations)
 
@@ -33,15 +34,28 @@ The warning suggests `MACEFF_ROOT_DIR` but the function `find_project_root` is l
 3. How should container startup set these correctly?
 4. Is `find_project_root` the right function for this context?
 
-### Proposed Fix
+### Resolution (Cycle 308 DETOUR)
 
-1. **Clarify semantics**: Document each path concept in maintainer docs
-2. **Env var audit**: Review all MACEFF_* and MACF_* env vars
-3. **Container setup**: Ensure start.py sets correct vars in agent environment
-4. **Warning improvement**: Make warning specify which path is missing
+**Commits**: `b400eb2`, `1cdf3a4`
+
+Three-way path semantics implemented:
+
+| Function | Env Var | Purpose |
+|----------|---------|---------|
+| `find_maceff_root()` | `MACEFF_ROOT_DIR` | MacEff framework installation |
+| `find_project_root()` | `CLAUDE_PROJECT_DIR` | User's project workspace |
+| `find_agent_home()` | `MACEFF_AGENT_HOME_DIR` | Agent's sacred home (consciousness persists) |
+
+**Changes Made**:
+1. ✅ Created 3 distinct functions in `macf/src/macf/utils/paths.py`
+2. ✅ Added 11 tests in `macf/tests/test_paths.py`
+3. ✅ Migrated call sites: manifest.py, cycles.py, agent_events_log.py, recovery.py, cli.py
+4. ✅ Container setup: Added `MACEFF_AGENT_HOME_DIR=$HOME` to start.py bash_init
+
+**Archive**: `archived_todos/2025-12-24_012029_DETOUR_Path_Finding_Disambiguation_COMPLETED.md`
 
 ### Related
 
-- MannyMacEff FP#1 (deployment-side of same issue)
+- MannyMacEff FP#1 (deployment-side - needs submodule sync)
 - `macf/src/macf/utils/paths.py` (path resolution logic)
 - `docker/scripts/start.py` (env var setup)
