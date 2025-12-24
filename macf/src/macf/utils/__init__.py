@@ -3,7 +3,9 @@ MACF Utilities - Modular package structure.
 """
 
 from .paths import (
+    find_maceff_root,
     find_project_root,
+    find_agent_home,
     get_session_dir,
     get_hooks_dir,
     get_dev_scripts_dir,
@@ -98,6 +100,8 @@ __all__ = [
     "detect_session_migration",
     "extract_current_git_hash",
     "filter_active_policies",
+    "find_agent_home",
+    "find_maceff_root",
     "find_policy_file",
     "find_project_root",
     "format_breadcrumb",

@@ -11,22 +11,23 @@ from typing import Optional
 
 
 @lru_cache(maxsize=1)
-def find_project_root() -> Path:
-    """Find MacEff framework root using canonical implementation.
+def find_maceff_root() -> Path:
+    """Find MacEff installation root.
 
     Priority:
-    1. $MACEFF_ROOT_DIR environment variable (preferred for containers)
-    2. $CLAUDE_PROJECT_DIR environment variable (if valid)
-    3. Git repository root (if available)
-    4. Discovery by looking for project markers from __file__
-    5. Discovery by looking for project markers from cwd
-    6. Current working directory as fallback
+    1. MACEFF_ROOT_DIR env var (explicit configuration)
+    2. Git root with framework/ subdirectory (development checkout)
+    3. Discovery via framework/ marker from __file__
+    4. Current working directory as fallback
+
+    This is where MacEff repo is checked out (host) or installed (container).
+    The framework/ subdirectory contains policies and templates.
 
     Result is cached - warnings only appear once per process.
     """
     fallback_reasons = []
 
-    # First check MACEFF_ROOT_DIR (preferred for container environments)
+    # 1. Check MACEFF_ROOT_DIR (preferred for container environments)
     maceff_root = os.environ.get("MACEFF_ROOT_DIR")
     if maceff_root:
         root_path = Path(maceff_root)
@@ -38,17 +39,7 @@ def find_project_root() -> Path:
         else:
             fallback_reasons.append(f"MACEFF_ROOT_DIR={maceff_root} does not exist")
 
-    # Then check CLAUDE_PROJECT_DIR
-    claude_project_dir = os.environ.get("CLAUDE_PROJECT_DIR")
-    if claude_project_dir:
-        project_path = Path(claude_project_dir)
-        if project_path.exists() and project_path.is_dir():
-            markers = ["CLAUDE.md", "pyproject.toml", ".git", "framework"]
-            if any((project_path / marker).exists() for marker in markers):
-                return project_path
-            fallback_reasons.append(f"CLAUDE_PROJECT_DIR={claude_project_dir} has no markers")
-
-    # Try git repository root
+    # 2. Try git repository root with framework/ marker
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
@@ -59,40 +50,104 @@ def find_project_root() -> Path:
         )
         if result.returncode == 0:
             git_root = Path(result.stdout.strip())
-            if (git_root / ".git").exists() or (git_root / "framework").exists():
+            if (git_root / "framework").exists():
                 return git_root
-            fallback_reasons.append(f"git root {git_root} missing .git or framework/")
+            fallback_reasons.append(f"git root {git_root} missing framework/")
     except (subprocess.CalledProcessError, OSError, FileNotFoundError):
         fallback_reasons.append("git not available or not in repo")
 
-    # Fall back to discovery method from __file__ location
-    markers = ["CLAUDE.md", "pyproject.toml", ".git", "framework", "Makefile"]
+    # 3. Discovery by walking up from __file__ looking for framework/
     current = Path(__file__).resolve().parent
-
     while current != current.parent:
-        marker_count = sum((current / marker).exists() for marker in markers)
-        if marker_count >= 2:
+        if (current / "framework").exists():
             return current
         current = current.parent
-    fallback_reasons.append("no markers found walking up from __file__")
+    fallback_reasons.append("no framework/ found walking up from __file__")
 
-    # Try discovery from current working directory
-    current = Path.cwd()
-    while current != current.parent:
-        marker_count = sum((current / marker).exists() for marker in markers)
-        if marker_count >= 2:
-            return current
-        current = current.parent
-    fallback_reasons.append("no markers found walking up from cwd")
-
-    # Fallback with specific warning (only shown once due to caching)
+    # 4. Fallback with warning
     print(
-        f"⚠️ MACF: Using cwd fallback: {Path.cwd()}\n"
+        f"⚠️ MACF: MacEff root not found, using cwd fallback: {Path.cwd()}\n"
         f"   Reasons: {'; '.join(fallback_reasons)}\n"
-        f"   Fix: Set MACEFF_ROOT_DIR to MacEff framework location",
+        f"   Fix: Set MACEFF_ROOT_DIR to MacEff installation location",
         file=sys.stderr,
     )
     return Path.cwd()
+
+
+@lru_cache(maxsize=1)
+def find_project_root() -> Path:
+    """Find user's project/workspace root.
+
+    Priority:
+    1. CLAUDE_PROJECT_DIR env var (set by Claude Code)
+    2. Git root with .claude/ or CLAUDE.md marker
+    3. Current working directory
+
+    This is where `claude` was launched - the user's workspace.
+    Contains project-specific CLAUDE.md and .claude/ configuration.
+
+    Result is cached - warnings only appear once per process.
+    """
+    # 1. Check CLAUDE_PROJECT_DIR (set by Claude Code)
+    claude_project_dir = os.environ.get("CLAUDE_PROJECT_DIR")
+    if claude_project_dir:
+        project_path = Path(claude_project_dir)
+        if project_path.exists() and project_path.is_dir():
+            return project_path
+
+    # 2. Try git repository root with Claude markers
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            timeout=1,
+            cwd=Path.cwd(),
+        )
+        if result.returncode == 0:
+            git_root = Path(result.stdout.strip())
+            # Check for Claude project markers
+            if (git_root / ".claude").exists() or (git_root / "CLAUDE.md").exists():
+                return git_root
+    except (subprocess.CalledProcessError, OSError, FileNotFoundError):
+        pass
+
+    # 3. Fallback to current working directory
+    return Path.cwd()
+
+
+@lru_cache(maxsize=1)
+def find_agent_home() -> Path:
+    """Find agent's persistent home directory root.
+
+    Priority:
+    1. MACEFF_AGENT_HOME_DIR env var (explicit configuration)
+    2. ~ (user home directory, default)
+
+    Directory structure under agent_home:
+    - {agent_home}/.maceff/config.json - agent configuration
+    - {agent_home}/.maceff/agent_events_log.jsonl - event log
+    - {agent_home}/agent/ - consciousness artifacts (CAs)
+
+    This is SACRED - agent continuity persists across project reassignments.
+
+    Result is cached.
+    """
+    # 1. Check MACEFF_AGENT_HOME_DIR
+    agent_home = os.environ.get("MACEFF_AGENT_HOME_DIR")
+    if agent_home:
+        home_path = Path(agent_home)
+        if home_path.exists() and home_path.is_dir():
+            return home_path
+        # Create if doesn't exist but env var is set
+        try:
+            home_path.mkdir(parents=True, exist_ok=True, mode=0o755)
+            return home_path
+        except OSError:
+            pass  # Fall through to default
+
+    # 2. Default to user home directory
+    return Path.home()
 
 def get_session_dir(
     session_id: Optional[str] = None,
