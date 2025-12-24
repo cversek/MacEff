@@ -7,23 +7,23 @@ import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from .paths import find_project_root
+from .paths import find_maceff_root
 
 
-def get_framework_policies_path(agent_root: Optional[Path] = None) -> Optional[Path]:
+def get_framework_policies_path(maceff_root: Optional[Path] = None) -> Optional[Path]:
     """
     Get the framework policies root path for container or host.
 
     Resolution Strategy:
         Container (/.dockerenv exists): /opt/maceff/framework/policies
         Host:
-            1. Check if we're in MacEff repo itself: {agent_root}/framework/policies
-            2. Check for MacEff as submodule: {agent_root}/MacEff/framework/policies
+            1. Check if we're in MacEff repo itself: {maceff_root}/framework/policies
+            2. Check for MacEff as submodule: {maceff_root}/MacEff/framework/policies
             3. Check MACEFF_FRAMEWORK_PATH env var: ${MACEFF_FRAMEWORK_PATH}/policies
-            4. Check sibling directories (walk up from project root)
+            4. Check sibling directories (walk up from maceff root)
 
     Args:
-        agent_root: Optional project root (auto-detected if None)
+        maceff_root: Optional MacEff installation root (auto-detected if None)
 
     Returns:
         Path to framework/policies directory (root, includes base/, tech/, lang/, recovery/)
@@ -34,21 +34,21 @@ def get_framework_policies_path(agent_root: Optional[Path] = None) -> Optional[P
         return policies_root if policies_root.exists() else None
 
     # Host path resolution
-    if agent_root is None:
-        agent_root = find_project_root()
+    if maceff_root is None:
+        maceff_root = find_maceff_root()
 
-    if agent_root is None:
+    if maceff_root is None:
         return None
 
-    agent_root = Path(agent_root)
+    maceff_root = Path(maceff_root)
 
     # Strategy 1: Check if we're in MacEff repo itself
-    candidate = agent_root / 'framework' / 'policies'
+    candidate = maceff_root / 'framework' / 'policies'
     if candidate.exists():
         return candidate
 
     # Strategy 2: Check for MacEff as submodule
-    candidate = agent_root / 'MacEff' / 'framework' / 'policies'
+    candidate = maceff_root / 'MacEff' / 'framework' / 'policies'
     if candidate.exists():
         return candidate
 
@@ -59,7 +59,7 @@ def get_framework_policies_path(agent_root: Optional[Path] = None) -> Optional[P
             return candidate
 
     # Strategy 4: Check sibling MacEff repos (walk up directory tree)
-    for parent in [agent_root.parent, agent_root.parent.parent]:
+    for parent in [maceff_root.parent, maceff_root.parent.parent]:
         if parent.exists():
             for candidate in parent.glob("*/MacEff/framework/policies"):
                 if candidate.exists():
@@ -71,7 +71,7 @@ def get_framework_policies_path(agent_root: Optional[Path] = None) -> Optional[P
 def find_policy_file(
     policy_name: str,
     parents: Optional[List[str]] = None,
-    agent_root: Optional[Path] = None
+    maceff_root: Optional[Path] = None
 ) -> Optional[Path]:
     """
     Find policy file by name, walking the framework policies tree.
@@ -81,7 +81,7 @@ def find_policy_file(
                     e.g., 'todo_hygiene', 'todo_hygiene.md'
         parents: Optional list of parent directory names to match
                 e.g., ['development'] to find development/todo_hygiene.md
-        agent_root: Optional project root (auto-detected if None)
+        maceff_root: Optional MacEff installation root (auto-detected if None)
 
     Returns:
         Path to policy file, or None if not found
@@ -96,7 +96,7 @@ def find_policy_file(
         find_policy_file('checkpoints', parents=['consciousness'])
             → .../framework/policies/base/consciousness/checkpoints.md
     """
-    base_path = get_framework_policies_path(agent_root)
+    base_path = get_framework_policies_path(maceff_root)
     if not base_path:
         return None
 
@@ -122,7 +122,7 @@ def find_policy_file(
 def list_policy_files(
     tier: Optional[str] = None,
     category: Optional[str] = None,
-    agent_root: Optional[Path] = None,
+    maceff_root: Optional[Path] = None,
     include_tier: bool = False
 ) -> List[Dict[str, Any]]:
     """
@@ -131,13 +131,13 @@ def list_policy_files(
     Args:
         tier: Filter by tier (CORE, optional) - reads from file metadata
         category: Filter by subdirectory (development, consciousness, meta)
-        agent_root: Optional project root (auto-detected if None)
+        maceff_root: Optional MacEff installation root (auto-detected if None)
         include_tier: If True, read tier info for all policies (for display)
 
     Returns:
         List of dicts with keys: name, path, relative_path, category, tier
     """
-    base_path = get_framework_policies_path(agent_root)
+    base_path = get_framework_policies_path(maceff_root)
     if not base_path:
         return []
 
@@ -220,7 +220,7 @@ def _deep_merge(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]
 
     return result
 
-def load_merged_manifest(agent_root: Optional[Path] = None) -> Dict[str, Any]:
+def load_merged_manifest(maceff_root: Optional[Path] = None) -> Dict[str, Any]:
     """
     Load and merge manifest.json from framework base + project overlay.
 
@@ -236,7 +236,7 @@ def load_merged_manifest(agent_root: Optional[Path] = None) -> Dict[str, Any]:
     - Deep merge: Recursively merge nested dicts
 
     Args:
-        agent_root: Optional project root path (auto-detect if None via find_project_root())
+        maceff_root: Optional MacEff installation root (auto-detect if None via find_maceff_root())
 
     Returns:
         Merged manifest dict (base + project overlay)
@@ -252,24 +252,24 @@ def load_merged_manifest(agent_root: Optional[Path] = None) -> Dict[str, Any]:
         base_path = Path('/opt/maceff/framework/policies/manifest.json')
     else:
         # Host path - try multiple strategies
-        if agent_root is None:
-            agent_root = find_project_root()
+        if maceff_root is None:
+            maceff_root = find_maceff_root()
         else:
-            agent_root = Path(agent_root)
+            maceff_root = Path(maceff_root)
 
         # Strategy 1: Check if we're in MacEff repo itself
-        if (agent_root / 'framework' / 'policies' / 'manifest.json').exists():
-            base_path = agent_root / 'framework' / 'policies' / 'manifest.json'
+        if (maceff_root / 'framework' / 'policies' / 'manifest.json').exists():
+            base_path = maceff_root / 'framework' / 'policies' / 'manifest.json'
         # Strategy 2: Check for MacEff as submodule
-        elif (agent_root / 'MacEff' / 'framework' / 'policies' / 'manifest.json').exists():
-            base_path = agent_root / 'MacEff' / 'framework' / 'policies' / 'manifest.json'
+        elif (maceff_root / 'MacEff' / 'framework' / 'policies' / 'manifest.json').exists():
+            base_path = maceff_root / 'MacEff' / 'framework' / 'policies' / 'manifest.json'
         # Strategy 3: Check environment variable
         elif 'MACEFF_FRAMEWORK_PATH' in os.environ:
             base_path = Path(os.environ['MACEFF_FRAMEWORK_PATH']) / 'policies' / 'manifest.json'
         # Strategy 4: Check sibling MacEff repos (walk up directory tree)
         else:
             found = False
-            for parent in [agent_root.parent, agent_root.parent.parent]:
+            for parent in [maceff_root.parent, maceff_root.parent.parent]:
                 if parent.exists():
                     for candidate in parent.glob("*/MacEff/framework/policies/manifest.json"):
                         if candidate.exists():
@@ -280,7 +280,7 @@ def load_merged_manifest(agent_root: Optional[Path] = None) -> Dict[str, Any]:
                     break
             if not found:
                 # Fallback: assume submodule (will fail with warning below)
-                base_path = agent_root / 'MacEff' / 'framework' / 'policies' / 'manifest.json'
+                base_path = maceff_root / 'MacEff' / 'framework' / 'policies' / 'manifest.json'
 
     # Load framework base (always required)
     manifest = {}
@@ -292,11 +292,11 @@ def load_merged_manifest(agent_root: Optional[Path] = None) -> Dict[str, Any]:
         print(f"WARNING: Failed to load base manifest from {base_path}: {e}", file=sys.stderr)
         return {}
 
-    # Discover project overlay path (cwd first, then agent_root)
+    # Discover project overlay path (cwd first, then maceff_root)
     project_manifest_path = Path.cwd() / '.maceff' / 'policies' / 'manifest.json'
 
-    if not project_manifest_path.exists() and agent_root:
-        project_manifest_path = agent_root / '.maceff' / 'policies' / 'manifest.json'
+    if not project_manifest_path.exists() and maceff_root:
+        project_manifest_path = maceff_root / '.maceff' / 'policies' / 'manifest.json'
 
     # Load and merge project overlay (optional)
     if project_manifest_path.exists():

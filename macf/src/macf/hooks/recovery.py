@@ -14,7 +14,7 @@ from typing import List, Optional
 
 from macf.utils import (
     ConsciousnessArtifacts,
-    find_project_root,
+    find_maceff_root,
     format_temporal_awareness_section,
     format_macf_footer,
     format_manifest_awareness
@@ -226,8 +226,8 @@ def read_recovery_policy(policy_path: Optional[str] = None) -> str:
     try:
         # Use custom path or default
         if policy_path is None:
-            project_root = find_project_root()
-            policy_path_obj = project_root / "policies" / "recovery" / "manual_mode_recovery.md"
+            maceff_root = find_maceff_root()
+            policy_path_obj = maceff_root / "framework" / "policies" / "recovery" / "manual_mode_recovery.md"
         else:
             policy_path_obj = Path(policy_path)
 

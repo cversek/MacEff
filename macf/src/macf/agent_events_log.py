@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional
 
 from .utils import (
-    find_project_root,
+    find_agent_home,
     get_breadcrumb,
     parse_breadcrumb,
 )
@@ -58,8 +58,8 @@ def _get_log_path() -> Path:
         return Path(env_path)
 
     try:
-        project_root = find_project_root()
-        maceff_dir = project_root / ".maceff"
+        agent_home = find_agent_home()
+        maceff_dir = agent_home / ".maceff"
         maceff_dir.mkdir(mode=0o700, exist_ok=True)
         return maceff_dir / "agent_events_log.jsonl"
     except Exception:

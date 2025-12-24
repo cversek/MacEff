@@ -981,12 +981,12 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
             # In container: use detected home
             pa_home = Path.home()
         else:
-            # On host: try to find project root with .claude/
+            # On host: use agent home
             try:
-                from .utils import find_project_root
-                project_root = find_project_root()
-                if project_root:
-                    pa_home = project_root
+                from .utils import find_agent_home
+                agent_home = find_agent_home()
+                if agent_home:
+                    pa_home = agent_home
                 else:
                     pa_home = Path.cwd()
             except Exception:

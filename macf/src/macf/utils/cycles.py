@@ -8,7 +8,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Optional, Tuple
-from .paths import find_project_root
+from .paths import find_agent_home
 from .session import get_current_session_id
 from .json_io import read_json
 # NOTE: event_queries imported lazily inside functions to avoid circular import
@@ -42,10 +42,10 @@ def detect_auto_mode(session_id: str) -> Tuple[bool, str, float]:
         elif env_value in ('false', '0', 'no'):
             return (False, "env", 0.9)
 
-        # 3. Config file
+        # 3. Config file (in agent home)
         try:
-            project_root = find_project_root()
-            config_path = project_root / ".maceff" / "config.json"
+            agent_home = find_agent_home()
+            config_path = agent_home / ".maceff" / "config.json"
             config_data = read_json(config_path)
 
             if "auto_mode" in config_data:
@@ -74,7 +74,7 @@ def set_auto_mode(
     enabled: bool,
     session_id: str,
     auth_token: Optional[str] = None,
-    agent_root: Optional[Path] = None,
+    agent_home: Optional[Path] = None,
 ) -> Tuple[bool, str]:
     """
     Set AUTO_MODE for current session with optional auth token validation.
@@ -90,7 +90,7 @@ def set_auto_mode(
         enabled: True for AUTO_MODE, False for MANUAL_MODE
         session_id: Current session identifier
         auth_token: Optional auth token for AUTO_MODE activation
-        agent_root: Agent root path (auto-detected if None)
+        agent_home: Agent home path (auto-detected if None)
 
     Returns:
         Tuple of (success: bool, message: str)
@@ -103,9 +103,9 @@ def set_auto_mode(
         # Validate auth token for AUTO_MODE activation
         if enabled and auth_token is not None:
             # Load expected token from settings
-            if agent_root is None:
-                agent_root = find_project_root()
-            settings_path = agent_root / ".maceff" / "settings.json"
+            if agent_home is None:
+                agent_home = find_agent_home()
+            settings_path = agent_home / ".maceff" / "settings.json"
 
             if settings_path.exists():
                 with open(settings_path, 'r') as f:
