@@ -5,6 +5,49 @@ All notable changes to MACF Tools (Multi-Agent Coordination Framework) will be d
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2025-12-24
+
+### Summary
+
+Refinement release focused on **path semantics disambiguation** and **policy search indexing**. Resolves confusion between framework, project, and agent home paths that caused deployment warnings. Adds section-level search indexing for faster policy discovery.
+
+### Added
+
+**Three-Way Path Semantics** (`macf/utils/paths.py`):
+- `find_maceff_root()` - MacEff framework installation location (`MACEFF_ROOT_DIR`)
+- `find_project_root()` - Claude project workspace (`CLAUDE_PROJECT_DIR`)
+- `find_agent_home()` - Agent's persistent home for consciousness artifacts (`MACEFF_AGENT_HOME_DIR`)
+- 11 new tests in `test_paths.py` covering all path resolution scenarios
+
+**Policy Search Indexing**:
+- Section-level keyword extraction from policy content
+- `policy search <keyword>` returns section-specific matches
+- Faster policy discovery through indexed search
+
+**Container Environment**:
+- `MACEFF_AGENT_HOME_DIR=$HOME` added to container bash_init
+- Agent event log now persists at `{agent_home}/.maceff/agent_events_log.jsonl`
+
+### Changed
+
+**Path Resolution Refactoring**:
+- `manifest.py`: Renamed `agent_root` parameter to `maceff_root` for clarity
+- `cycles.py`: Uses `find_agent_home()` for agent config/settings
+- `agent_events_log.py`: Uses `find_agent_home()` for consciousness persistence
+- `recovery.py`: Uses `find_maceff_root()` for framework policy loading
+- `cli.py`: Uses `find_agent_home()` for agent initialization
+
+### Fixed
+
+- **FP#1**: Path resolution semantics confusion causing "Using cwd fallback" warnings
+- Test mocks updated for new path function names (`find_agent_home`, `find_maceff_root`)
+
+### Documentation
+
+- OPERATORS.md: Added Workflow 9 - MacEff Upgrade with Data Preservation
+
+---
+
 ## [0.3.0] - 2025-12-21
 
 ### Summary
