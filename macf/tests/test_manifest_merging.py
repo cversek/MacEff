@@ -93,10 +93,10 @@ class TestLoadMergedManifest:
         manifest_path.write_text(json.dumps(base_manifest))
 
         # Mock find_project_root to return tmp_path
-        monkeypatch.setattr("macf.utils.find_project_root", lambda: tmp_path)
+        monkeypatch.setattr("macf.utils.find_maceff_root", lambda: tmp_path)
 
         # No .maceff directory = no project manifest
-        result = load_merged_manifest(agent_root=tmp_path)
+        result = load_merged_manifest(maceff_root=tmp_path)
 
         # Should return base manifest only
         assert result["version"] == "1.0.0"
@@ -130,9 +130,9 @@ class TestLoadMergedManifest:
         (project_dir / "manifest.json").write_text(json.dumps(project_overlay))
 
         # Mock find_project_root
-        monkeypatch.setattr("macf.utils.find_project_root", lambda: tmp_path)
+        monkeypatch.setattr("macf.utils.find_maceff_root", lambda: tmp_path)
 
-        result = load_merged_manifest(agent_root=tmp_path)
+        result = load_merged_manifest(maceff_root=tmp_path)
 
         # Should have base structure
         assert result["version"] == "1.0.0"
@@ -164,9 +164,9 @@ class TestLoadMergedManifest:
 
         (project_dir / "manifest.json").write_text(json.dumps(project_overlay))
 
-        monkeypatch.setattr("macf.utils.find_project_root", lambda: tmp_path)
+        monkeypatch.setattr("macf.utils.find_maceff_root", lambda: tmp_path)
 
-        result = load_merged_manifest(agent_root=tmp_path)
+        result = load_merged_manifest(maceff_root=tmp_path)
 
         # Lists should append
         assert len(result["custom_policies"]) == 3
@@ -207,9 +207,9 @@ class TestLoadMergedManifest:
 
         (project_dir / "manifest.json").write_text(json.dumps(project_overlay))
 
-        monkeypatch.setattr("macf.utils.find_project_root", lambda: tmp_path)
+        monkeypatch.setattr("macf.utils.find_maceff_root", lambda: tmp_path)
 
-        result = load_merged_manifest(agent_root=tmp_path)
+        result = load_merged_manifest(maceff_root=tmp_path)
 
         # Triggers list should append
         triggers = result["consciousness_patterns"]["triggers"]
@@ -236,10 +236,10 @@ class TestLoadMergedManifest:
 
         (framework_dir / "manifest.json").write_text(json.dumps(base_manifest))
 
-        monkeypatch.setattr("macf.utils.find_project_root", lambda: tmp_path)
+        monkeypatch.setattr("macf.utils.find_maceff_root", lambda: tmp_path)
 
         # .maceff directory doesn't exist at all
-        result = load_merged_manifest(agent_root=tmp_path)
+        result = load_merged_manifest(maceff_root=tmp_path)
 
         # Should return base manifest
         assert result["version"] == "1.0.0"
@@ -265,9 +265,9 @@ class TestLoadMergedManifest:
         # Write invalid JSON
         (project_dir / "manifest.json").write_text("{ invalid json }")
 
-        monkeypatch.setattr("macf.utils.find_project_root", lambda: tmp_path)
+        monkeypatch.setattr("macf.utils.find_maceff_root", lambda: tmp_path)
 
-        result = load_merged_manifest(agent_root=tmp_path)
+        result = load_merged_manifest(maceff_root=tmp_path)
 
         # Should return base manifest (graceful fallback)
         assert result["version"] == "1.0.0"
@@ -283,6 +283,6 @@ class TestLoadMergedManifest:
         (framework_dir / "manifest.json").write_text(json.dumps(base_manifest))
 
         # Call with explicit agent_root (no monkeypatch needed)
-        result = load_merged_manifest(agent_root=tmp_path)
+        result = load_merged_manifest(maceff_root=tmp_path)
 
         assert result["explicit_test"] is True
