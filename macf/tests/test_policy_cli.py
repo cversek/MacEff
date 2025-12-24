@@ -104,6 +104,64 @@ class TestPolicySearchCommand:
         assert result.returncode == 0
         assert 'No matches found' in result.stdout or '0 matches' in result.stdout
 
+    def test_search_finds_consciousness_policies(self):
+        """Test search covers consciousness_policies category."""
+        result = subprocess.run(
+            ['macf_tools', 'policy', 'search', 'checkpoint'],
+            capture_output=True, text=True
+        )
+
+        assert result.returncode == 0
+        assert 'consciousness' in result.stdout.lower()
+        assert 'checkpoints' in result.stdout.lower()
+
+    def test_search_finds_operations_policies(self):
+        """Test search covers operations_policies category."""
+        result = subprocess.run(
+            ['macf_tools', 'policy', 'search', 'todo'],
+            capture_output=True, text=True
+        )
+
+        assert result.returncode == 0
+        assert 'operations' in result.stdout.lower()
+        assert 'todo_hygiene' in result.stdout.lower()
+
+    def test_search_returns_section_matches(self):
+        """Test search returns section-level matches from discovery_index."""
+        result = subprocess.run(
+            ['macf_tools', 'policy', 'search', 'checkpoint'],
+            capture_output=True, text=True
+        )
+
+        assert result.returncode == 0
+        # Should show section matches from discovery_index
+        assert 'Section Matches' in result.stdout
+        assert '#' in result.stdout  # Section anchors contain #
+
+    def test_search_separates_policy_and_section_matches(self):
+        """Test search output separates policy matches from section matches."""
+        result = subprocess.run(
+            ['macf_tools', 'policy', 'search', 'todo'],
+            capture_output=True, text=True
+        )
+
+        assert result.returncode == 0
+        # Should have both sections in output
+        assert 'Policy Matches' in result.stdout
+        assert 'Section Matches' in result.stdout
+
+    def test_search_shows_next_steps_footer(self):
+        """Test search output includes discovery flow guidance."""
+        result = subprocess.run(
+            ['macf_tools', 'policy', 'search', 'checkpoint'],
+            capture_output=True, text=True
+        )
+
+        assert result.returncode == 0
+        assert 'Next steps' in result.stdout
+        assert 'navigate' in result.stdout
+        assert 'read' in result.stdout
+
 
 class TestPolicyListCommand:
     """Test macf_tools policy list command."""

@@ -1376,7 +1376,7 @@ def cmd_policy_manifest(args: argparse.Namespace) -> int:
 
 
 def cmd_policy_search(args: argparse.Namespace) -> int:
-    """Search for keyword in policy manifest."""
+    """Search for keyword in policy manifest with section-level results."""
     from .utils import load_merged_manifest, filter_active_policies
 
     try:
@@ -1386,11 +1386,11 @@ def cmd_policy_search(args: argparse.Namespace) -> int:
         manifest = load_merged_manifest()
         filtered = filter_active_policies(manifest)
 
-        matches = []
+        policy_matches = []  # (category, name, description)
+        section_matches = []  # (index_key, policy_ref)
 
-        # Search mandatory policies
-        mandatory = filtered.get('mandatory_policies', {}).get('policies', [])
-        for policy in mandatory:
+        def search_policy_dict(policy: dict, category: str) -> bool:
+            """Check if a policy dict matches the keyword. Returns True if matched."""
             name = policy.get('name', '')
             desc = policy.get('description', '')
             keywords_list = policy.get('keywords', [])
@@ -1398,41 +1398,82 @@ def cmd_policy_search(args: argparse.Namespace) -> int:
             if (keyword in name.lower() or
                 keyword in desc.lower() or
                 any(keyword in kw.lower() for kw in keywords_list)):
-                matches.append(('mandatory', name, desc))
+                policy_matches.append((category, name, desc or name))
+                return True
+            return False
 
-        # Search development policies
-        dev = filtered.get('development_policies', {}).get('policies', [])
-        for policy in dev:
-            name = policy.get('name', '')
-            desc = policy.get('description', '')
-            keywords_list = policy.get('keywords', [])
+        def search_policies_recursive(data: any, category: str) -> None:
+            """Recursively search for policies in any manifest structure."""
+            if isinstance(data, dict):
+                # Check if this dict has 'policies' key (standard policy list)
+                if 'policies' in data and isinstance(data['policies'], list):
+                    for policy in data['policies']:
+                        if isinstance(policy, dict):
+                            search_policy_dict(policy, category)
+                # Check if this dict has 'triggers' key (consciousness_patterns)
+                elif 'triggers' in data and isinstance(data['triggers'], list):
+                    for trigger in data['triggers']:
+                        if isinstance(trigger, dict):
+                            pattern_name = trigger.get('pattern', '')
+                            consciousness = trigger.get('consciousness', '')
+                            search_terms = trigger.get('search_terms', [])
+                            if (keyword in pattern_name.lower() or
+                                keyword in consciousness.lower() or
+                                any(keyword in term.lower() for term in search_terms)):
+                                policy_matches.append(('pattern', pattern_name, consciousness))
+                # Check if this dict looks like a policy itself (has 'name' and 'keywords')
+                elif 'name' in data and 'keywords' in data:
+                    search_policy_dict(data, category)
+                # Otherwise recurse into nested structures
+                else:
+                    for key, value in data.items():
+                        if key not in ('description', 'location', 'opt_in', 'version',
+                                       'last_updated', 'base_path', 'discovery_index',
+                                       'consciousness_artifacts'):
+                            sub_category = f"{category}/{key}" if category else key
+                            search_policies_recursive(value, sub_category)
+            elif isinstance(data, list):
+                for item in data:
+                    search_policies_recursive(item, category)
 
-            if (keyword in name.lower() or
-                keyword in desc.lower() or
-                any(keyword in kw.lower() for kw in keywords_list)):
-                matches.append(('development', name, desc))
+        # Search all policy categories dynamically
+        for key, value in filtered.items():
+            if key.endswith('_policies') or key == 'consciousness_patterns':
+                category = key.replace('_policies', '').replace('_', ' ')
+                search_policies_recursive(value, category)
 
-        # Search consciousness patterns
-        patterns = filtered.get('consciousness_patterns', {}).get('triggers', [])
-        for pattern in patterns:
-            pattern_name = pattern.get('pattern', '')
-            consciousness = pattern.get('consciousness', '')
-            search_terms = pattern.get('search_terms', [])
-
-            if (keyword in pattern_name.lower() or
-                keyword in consciousness.lower() or
-                any(keyword in term.lower() for term in search_terms)):
-                matches.append(('consciousness_pattern', pattern_name, consciousness))
+        # Search discovery_index for section-level matches
+        discovery_index = filtered.get('discovery_index', {})
+        for index_key, policy_refs in discovery_index.items():
+            if keyword in index_key.lower():
+                for ref in policy_refs:
+                    section_matches.append((index_key, ref))
 
         # Display results
-        print(f"Search results for '{keyword}': {len(matches)} matches")
+        total = len(policy_matches) + len(section_matches)
+        print(f"Search results for '{keyword}': {total} matches")
         print("=" * 50)
 
-        if matches:
-            for section, name, desc in matches:
-                print(f"[{section}] {name}: {desc}")
-        else:
+        if policy_matches:
+            print("\n📋 Policy Matches:")
+            for category, name, desc in policy_matches:
+                print(f"  [{category}] {name}: {desc}")
+
+        if section_matches:
+            print("\n📍 Section Matches (from discovery index):")
+            for index_key, ref in section_matches:
+                print(f"  [{index_key}] → {ref}")
+
+        if not policy_matches and not section_matches:
             print("No matches found")
+            print("\n💡 Try:")
+            print("  macf_tools policy list              # Browse all policies")
+            print("  macf_tools policy search <keyword>  # Try different keyword")
+        else:
+            # Guide toward discovery flow: search → navigate → read
+            print("\n💡 Next steps:")
+            print("  macf_tools policy navigate <name>          # See CEP navigation guide")
+            print("  macf_tools policy read <name> --section N  # Read specific section")
 
         return 0
 
