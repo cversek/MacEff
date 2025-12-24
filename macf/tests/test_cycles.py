@@ -42,8 +42,8 @@ class TestDetectAutoMode:
         """Reads from .maceff/config.json when env var not set."""
         monkeypatch.delenv('MACF_AUTO_MODE', raising=False)
 
-        # Mock project root and create config
-        with patch('macf.utils.cycles.find_project_root', return_value=tmp_path):
+        # Mock agent home and create config
+        with patch('macf.utils.cycles.find_agent_home', return_value=tmp_path):
             config_dir = tmp_path / ".maceff"
             config_dir.mkdir()
             config_file = config_dir / "config.json"
@@ -59,8 +59,8 @@ class TestDetectAutoMode:
         """Returns MANUAL_MODE (False) with default source when no config found."""
         monkeypatch.delenv('MACF_AUTO_MODE', raising=False)
 
-        # Mock find_project_root to raise exception (no project found)
-        with patch('macf.utils.cycles.find_project_root', side_effect=OSError("No project")):
+        # Mock find_agent_home to raise exception (no agent home found)
+        with patch('macf.utils.cycles.find_agent_home', side_effect=OSError("No agent home")):
             enabled, source, confidence = detect_auto_mode("test-session")
 
             assert enabled is False
@@ -80,7 +80,7 @@ class TestDetectAutoMode:
                 monkeypatch.setenv('MACF_AUTO_MODE', env_value)
             else:
                 monkeypatch.delenv('MACF_AUTO_MODE', raising=False)
-                with patch('macf.utils.cycles.find_project_root', side_effect=OSError()):
+                with patch('macf.utils.cycles.find_agent_home', side_effect=OSError()):
                     pass
 
             enabled, source, confidence = detect_auto_mode("test-session")
@@ -132,7 +132,7 @@ class TestSetAutoMode:
             enabled=True,
             session_id="test-session",
             auth_token="invalid-token",
-            agent_root=tmp_path,
+            agent_home=tmp_path,
         )
 
         assert success is False
@@ -140,8 +140,8 @@ class TestSetAutoMode:
 
     def test_handles_errors_gracefully(self):
         """Returns error message when exceptions occur."""
-        # Force an error by patching find_project_root
-        with patch('macf.utils.cycles.find_project_root', side_effect=Exception("Error")):
+        # Force an error by patching find_agent_home
+        with patch('macf.utils.cycles.find_agent_home', side_effect=Exception("Error")):
             success, message = set_auto_mode(
                 enabled=True,
                 session_id="test-session",
