@@ -147,6 +147,9 @@ def configure_bashrc(username: str) -> None:
 # MacEff root directory (contains framework/, used by macf_tools for path resolution)
 export MACEFF_ROOT_DIR=/opt/maceff
 
+# Agent home directory (SACRED - consciousness persists across projects)
+export MACEFF_AGENT_HOME_DIR=$HOME
+
 # Resolve symlinks in paths (show real paths, not symlink names)
 set -P
 cd "$(pwd -P)"
