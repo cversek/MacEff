@@ -59,3 +59,39 @@ Three-way path semantics implemented:
 - MannyMacEff FP#1 (deployment-side - needs submodule sync)
 - `macf/src/macf/utils/paths.py` (path resolution logic)
 - `docker/scripts/start.py` (env var setup)
+
+---
+
+## FP#2: MACF Tools Version Not Synced with pyproject.toml
+
+**Reported**: 2025-12-24
+**Source**: Container hook footer inspection
+**Severity**: Low (cosmetic, but confusing)
+
+### Symptom
+
+Hook footer shows stale version:
+```
+🏗️ MACF Tools 0.3.0 | Claude Code 2.0.70
+```
+
+But `macf/pyproject.toml` has:
+```toml
+version = "0.3.1"
+```
+
+### Root Cause
+
+The version displayed in hook footers is likely hardcoded or cached, not dynamically read from `macf.__version__` or `pyproject.toml`.
+
+### Proposed Fix
+
+1. Ensure `macf/__init__.py` exports `__version__` from pyproject.toml
+2. Hook footer should import and display `macf.__version__`
+3. Single source of truth for version string
+
+### Related
+
+- `macf/pyproject.toml` (canonical version)
+- Hook footer formatting code
+- Container needs rebuild after fix
