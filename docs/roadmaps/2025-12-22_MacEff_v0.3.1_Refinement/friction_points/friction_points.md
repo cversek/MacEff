@@ -62,9 +62,10 @@ Three-way path semantics implemented:
 
 ---
 
-## FP#2: MACF Tools Version Not Synced with pyproject.toml
+## FP#2: MACF Tools Version Not Synced with pyproject.toml ✅ RESOLVED
 
 **Reported**: 2025-12-24
+**Resolved**: 2025-12-24 (Cycle 309)
 **Source**: Container hook footer inspection
 **Severity**: Low (cosmetic, but confusing)
 
@@ -84,14 +85,15 @@ version = "0.3.1"
 
 The version displayed in hook footers is likely hardcoded or cached, not dynamically read from `macf.__version__` or `pyproject.toml`.
 
-### Proposed Fix
+### Resolution
 
-1. Ensure `macf/__init__.py` exports `__version__` from pyproject.toml
-2. Hook footer should import and display `macf.__version__`
-3. Single source of truth for version string
+**Root cause**: Editable installs (`pip install -e`) cache version metadata. Bumping `pyproject.toml` requires reinstall.
+
+**Fix**: `pip install -e /path/to/macf` after version bumps.
+
+**For containers**: SSH in and run `pip install -e /opt/macf_tools`
 
 ### Related
 
 - `macf/pyproject.toml` (canonical version)
-- Hook footer formatting code
-- Container needs rebuild after fix
+- `importlib.metadata.version()` reads installed metadata, not source
