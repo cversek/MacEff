@@ -36,14 +36,15 @@ Navigate todo_hygiene policy using CLI tools:
 **Before Marking Complete:**
 5. What verification is required before marking a TODO complete?
 6. What must be added to completed items for traceability?
+7. What minimum pending item requirement exists to prevent UI disappearance?
 
 **Before Removing/Collapsing Items:**
-7. What must happen before removing or collapsing completed work?
-8. What are the requirements for reducing TODO hierarchy depth?
+8. What must happen before removing or collapsing completed work?
+9. What are the requirements for reducing TODO hierarchy depth?
 
 **General:**
-9. What documentation integration requirements exist for TODOs?
-10. What backup requirements apply to significant TODO modifications?
+10. What documentation integration requirements exist for TODOs?
+11. What backup requirements apply to significant TODO modifications?
 
 ## Execution
 

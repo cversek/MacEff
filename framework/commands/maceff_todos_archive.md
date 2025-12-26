@@ -42,6 +42,7 @@ After reading policies, you should be able to answer:
 5. **What symbol distinguishes archived work from fresh completions?**
 6. **How do you generate a forensic breadcrumb?**
 7. **What constitutes a policy violation in this context?**
+8. **After archiving, what minimum pending item requirement prevents UI disappearance?**
 
 ---
 
