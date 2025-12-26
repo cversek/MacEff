@@ -1,10 +1,10 @@
 # TODO List Hygiene Policy
 
-**Version**: 1.8
+**Version**: 1.9
 **Tier**: CORE
 **Category**: Development
 **Status**: ACTIVE
-**Updated**: 2025-12-19
+**Updated**: 2025-12-26
 
 ---
 
@@ -114,6 +114,12 @@ Applies to Primary Agents (PA) and all Subagents (SA) managing multi-step work.
 - How do I recover orphaned TODO files manually?
 - What is the manual recovery protocol?
 - When is manual recovery needed as fallback?
+
+**12 Minimum Pending Item Requirement**
+- Why must TODO lists have at least one pending item?
+- What is the Claude Code UI bug?
+- What placeholder to use when all work is complete?
+- When will this workaround be removed?
 
 === CEP_NAV_BOUNDARY ===
 
@@ -879,6 +885,35 @@ cat ~/.claude/todos/{previous-session-hash}-agent-{previous-session-hash}.json |
 - Mark `completed` IMMEDIATELY after finishing
 - Exactly ONE task `in_progress` at any time
 - DO NOT batch completions
+
+---
+
+## 12. Minimum Pending Item Requirement
+
+**MANDATORY**: TODO lists must contain at least one `pending` or `in_progress` item at all times.
+
+**Why**: Claude Code UI (as of v2.0.76) has a bug where the TODO tray completely disappears when all items are `completed`. The system internally treats an all-completed list as "empty" despite the JSON file containing valid data. See: https://github.com/anthropics/claude-code/issues/15408
+
+**Workaround**: When all substantive work is complete, add a placeholder pending item:
+
+```json
+{
+  "content": "Awaiting next task",
+  "status": "pending",
+  "activeForm": "Awaiting next task"
+}
+```
+
+**When to Use Placeholder**:
+- All mission items are completed
+- Session work is done but session continues
+- Transitioning between work phases
+
+**What NOT to Do**:
+- ❌ Mark all items completed without adding placeholder
+- ❌ Leave TODO list in all-completed state (UI will disappear)
+
+**Future**: Remove this workaround when Claude Code fixes issue #15408.
 
 ---
 
