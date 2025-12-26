@@ -10,10 +10,38 @@ from .paths import find_project_root
 # Events are sole source of truth - state file reads removed
 
 def get_current_session_id() -> str:
-    """Get current session ID from newest JSONL file.
+    """Get current session ID.
 
-    This is more reliable than environment after compaction,
-    as it finds the actual current session file.
+    PRIMARY: Query event log for most recent session_started event (authoritative).
+    FALLBACK: Use mtime-based JSONL file detection (for first run before events).
+
+    The event-based approach is deterministic and consistent across all hooks,
+    unlike mtime-based detection which can vary when multiple session files
+    are being written concurrently (e.g., after `claude -c`).
+
+    Returns:
+        Session ID string or "unknown" if not found
+    """
+    # PRIMARY: Event-first approach - query session_started event
+    try:
+        from ..event_queries import get_current_session_id_from_events
+        session_id = get_current_session_id_from_events()
+        if session_id:
+            return session_id
+        # No session_started events yet - warn and fallback
+        print("⚠️ MACF: No session_started events found, falling back to mtime-based detection", file=sys.stderr)
+    except Exception as e:
+        print(f"⚠️ MACF: Event query failed ({e}), falling back to mtime-based detection", file=sys.stderr)
+
+    # FALLBACK: mtime-based detection (for first run before any events)
+    return _get_session_id_from_mtime()
+
+
+def _get_session_id_from_mtime() -> str:
+    """Get session ID from newest JSONL file by modification time.
+
+    This is the legacy approach, kept as fallback for first run
+    before any session_started events exist.
 
     Returns:
         Session ID string or "unknown" if not found

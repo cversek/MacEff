@@ -434,6 +434,23 @@ def get_active_deleg_drv_start(session_id: str) -> float:
     return 0.0
 
 
+def get_current_session_id_from_events() -> str:
+    """
+    Get current session ID from most recent session_started event.
+
+    This is the authoritative source for session ID - uses event log
+    instead of mtime-based file detection which can be non-deterministic
+    when multiple session files exist.
+
+    Returns:
+        Current session ID string, or empty string if no session_started events
+    """
+    for event in read_events(limit=50, reverse=True):
+        if event.get("event") == "session_started":
+            return event.get("data", {}).get("session_id", "")
+    return ""
+
+
 def get_last_session_id_from_events() -> str:
     """
     Get the previous session ID from most recent migration_detected event.
