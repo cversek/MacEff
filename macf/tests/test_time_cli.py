@@ -85,12 +85,22 @@ class TestTimeCommand:
         diff = abs((now - timestamp).total_seconds())
         assert diff < 5, f"Timestamp difference {diff}s exceeds 5s threshold"
 
-    def test_time_no_stderr_output(self):
-        """Test time command produces no error output."""
+    def test_time_no_error_output(self):
+        """Test time command produces no unexpected error output.
+
+        Note: MACF fallback warnings to stderr are expected when running
+        in test environment without session events - these are informational,
+        not errors.
+        """
         result = subprocess.run(
             ['macf_tools', 'time'],
             capture_output=True, text=True
         )
 
         assert result.returncode == 0
-        assert not result.stderr  # Should have no error output
+        # Allow MACF informational warnings (fallback notices)
+        # but fail on actual Python errors/tracebacks
+        if result.stderr:
+            for line in result.stderr.strip().split('\n'):
+                assert line.startswith('⚠️ MACF:') or not line, \
+                    f"Unexpected stderr: {line}"
