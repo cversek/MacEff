@@ -36,11 +36,11 @@ Establish complete epistemology for Claude Code session/transcript identifiers, 
 - Updated `get_current_session_id()` to use event query first
 
 **Success Criteria**:
-- [ ] All hooks in same session report identical `s_` value
-- [ ] Test: `claude -c` restart shows consistent session ID post-restart
-- [ ] No mtime-based session detection in hot path
+- [x] All hooks in same session report identical `s_` value
+- [x] Test: `claude -c` restart shows consistent session ID post-restart
+- [x] No mtime-based session detection in hot path
 
-**Breadcrumb** (when complete):
+**Breadcrumb**: s_1b969d39/c_311/g_5f083be [C311]
 
 ---
 
@@ -52,11 +52,11 @@ Establish complete epistemology for Claude Code session/transcript identifiers, 
 - `macf/docs/user/identifiers.md` - Complete reference
 
 **Success Criteria**:
-- [ ] All 5 breadcrumb components documented with semantics
-- [ ] `claude -c` vs compaction behavior explained
-- [ ] Delegation sidechain UUID tracking documented
+- [x] All 5 breadcrumb components documented with semantics
+- [x] `claude -c` vs compaction behavior explained
+- [x] Delegation sidechain UUID tracking documented
 
-**Breadcrumb** (when complete):
+**Breadcrumb**: s_1b969d39/c_312/g_bf8431f [C312]
 
 ---
 
