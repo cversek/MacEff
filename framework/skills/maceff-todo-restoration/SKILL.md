@@ -27,6 +27,7 @@ Scan for sections about TODO backup and recovery mechanisms. Read those sections
 1. What recovery mechanisms does the policy define?
 2. How does the policy prioritize them?
 3. What tools and formats enable direct restoration?
+4. What minimum pending item requirement must restored lists satisfy?
 
 ---
 

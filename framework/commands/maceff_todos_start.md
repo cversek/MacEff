@@ -48,6 +48,7 @@ After reading policies, you should be able to answer:
 8. **When work encounters unexpected friction, what documentation practices preserve learnings for future cycles?**
 9. **What breadcrumb discipline applies?** When and how to generate breadcrumbs?
 10. **When marking items complete, what forensic traceability does the policy require?** What format for completion breadcrumbs?
+11. **What minimum pending item requirement prevents UI disappearance?** What placeholder to use when all work is complete?
 
 ---
 
