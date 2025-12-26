@@ -1,5 +1,5 @@
 # tools/src/maceff/cli.py
-import argparse, json, os, sys, glob
+import argparse, json, os, sys, glob, platform, socket
 from pathlib import Path
 from datetime import datetime, timezone
 try:
@@ -16,12 +16,17 @@ except Exception:
 from .config import ConsciousnessConfig
 from .hooks.compaction import detect_compaction, inject_recovery
 from .agent_events_log import append_event
+from .event_queries import get_cycle_number_from_events
 from .utils import (
     get_current_session_id,
     get_dev_scripts_dir,
-    get_hooks_dir,
     get_formatted_timestamp,
-    get_token_info
+    get_token_info,
+    extract_current_git_hash,
+    get_claude_code_version,
+    get_temporal_context,
+    detect_auto_mode,
+    find_agent_home
 )
 
 # -------- helpers --------
@@ -56,29 +61,126 @@ def _format_time_ago(file_path: Path) -> str:
         return "unknown"
 
 # -------- commands --------
-def cmd_env(_: argparse.Namespace) -> int:
-    warn = float(os.getenv("MACEFF_TOKEN_WARN", "0.85"))
-    hard = float(os.getenv("MACEFF_TOKEN_HARD", "0.95"))
-    mode = os.getenv("MACEFF_BUDGET_MODE", "concise/default")
-    vcs = "git" if (Path.cwd() / ".git").exists() else "none"
-    tz = _pick_tz()
-    tz_label = getattr(tz, "key", None) or str(tz)
+def cmd_env(args: argparse.Namespace) -> int:
+    """Print comprehensive environment summary."""
+    temporal = get_temporal_context()
+    session_id = get_current_session_id()
 
+    # Get agent home path
+    try:
+        agent_home = find_agent_home()
+    except Exception:
+        agent_home = None
+
+    # Count installed hooks (in .claude/hooks/)
+    hooks_dir = agent_home / ".claude" / "hooks" if agent_home else None
+    hooks_count = len(list(hooks_dir.glob("*.py"))) if hooks_dir and hooks_dir.exists() else 0
+
+    # Get auto mode status
+    auto_enabled, _, _ = detect_auto_mode(session_id)
+
+    # Resolve paths safely
+    def resolve_path(p):
+        try:
+            return str(p.resolve()) if p and p.exists() else str(p) if p else "(not set)"
+        except Exception:
+            return str(p) if p else "(not set)"
+
+    # Gather all data
     data = {
-        "time_local": _now_iso(tz),
-        "time_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-        "tz": tz_label,
-        "time_source": "env",  # future: "gateway"
-        "budget": {
-            "adapter": "absent",
-            "mode": mode,
-            "thresholds": {"warn": warn, "hard": hard},
+        "versions": {
+            "macf": _ver,
+            "claude_code": get_claude_code_version() or "(unavailable)",
+            "python_path": sys.executable,
+            "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
         },
-        "persistence": {"adapter": "absent", "plan": "emit checkpoints inline"},
-        "cwd": str(Path.cwd()),
-        "vcs": vcs,
+        "time": {
+            "local": temporal.get("timestamp_formatted", _now_iso()),
+            "utc": datetime.now(timezone.utc).replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S"),
+            "timezone": temporal.get("timezone", "UTC")
+        },
+        "paths": {
+            "agent_home": resolve_path(agent_home),
+            "event_log": resolve_path(agent_home / ".maceff" / "agent_events_log.jsonl") if agent_home else "(not set)",
+            "hooks_dir": resolve_path(hooks_dir),
+            "checkpoints_dir": resolve_path(agent_home / "agent" / "private" / "checkpoints") if agent_home else "(not set)",
+            "settings_local": resolve_path(agent_home / ".claude" / "settings.local.json") if agent_home else "(not set)"
+        },
+        "session": {
+            "session_id": session_id or "(unknown)",
+            "cycle": get_cycle_number_from_events(),
+            "git_hash": extract_current_git_hash() or "(unknown)"
+        },
+        "system": {
+            "platform": platform.system().lower(),
+            "os_version": f"{platform.system()} {platform.release()}",
+            "cwd": str(Path.cwd().resolve()),
+            "hostname": socket.gethostname()
+        },
+        "environment": {
+            "BASH_ENV": os.getenv("BASH_ENV", "(not set)"),
+            "CLAUDE_PROJECT_DIR": os.getenv("CLAUDE_PROJECT_DIR", "(not set)"),
+            "MACEFF_AGENT_HOME_DIR": os.getenv("MACEFF_AGENT_HOME_DIR", "(not set)")
+        },
+        "config": {
+            "hooks_installed": hooks_count,
+            "auto_mode": auto_enabled
+        }
     }
-    print(json.dumps(data, indent=2))
+
+    # Output format
+    if getattr(args, 'json', False):
+        print(json.dumps(data, indent=2))
+    else:
+        # Pretty-print format
+        line = "━" * 80
+        print(line)
+
+        print("Versions")
+        print(f"  MACF:         {data['versions']['macf']}")
+        print(f"  Claude Code:  {data['versions']['claude_code']}")
+        print(f"  Python:       {data['versions']['python_path']} ({data['versions']['python_version']})")
+        print()
+
+        print("Time")
+        print(f"  Local:        {data['time']['local']}")
+        print(f"  UTC:          {data['time']['utc']}")
+        print(f"  Timezone:     {data['time']['timezone']}")
+        print()
+
+        print("Paths")
+        print(f"  Agent Home:   {data['paths']['agent_home']}")
+        print(f"  Event Log:    {data['paths']['event_log']}")
+        print(f"  Hooks Dir:    {data['paths']['hooks_dir']}")
+        print(f"  Checkpoints:  {data['paths']['checkpoints_dir']}")
+        print(f"  Settings:     {data['paths']['settings_local']}")
+        print()
+
+        print("Session")
+        print(f"  Session ID:   {data['session']['session_id']}")
+        print(f"  Cycle:        {data['session']['cycle']}")
+        print(f"  Git Hash:     {data['session']['git_hash']}")
+        print()
+
+        print("System")
+        print(f"  Platform:     {data['system']['platform']}")
+        print(f"  OS:           {data['system']['os_version']}")
+        print(f"  CWD:          {data['system']['cwd']}")
+        print(f"  Hostname:     {data['system']['hostname']}")
+        print()
+
+        print("Environment")
+        print(f"  BASH_ENV:              {data['environment']['BASH_ENV']}")
+        print(f"  CLAUDE_PROJECT_DIR:    {data['environment']['CLAUDE_PROJECT_DIR']}")
+        print(f"  MACEFF_AGENT_HOME_DIR: {data['environment']['MACEFF_AGENT_HOME_DIR']}")
+        print()
+
+        print("Config")
+        print(f"  Hooks Installed: {data['config']['hooks_installed']}")
+        print(f"  Auto Mode:       {data['config']['auto_mode']}")
+
+        print(line)
+
     return 0
 
 def cmd_time(_: argparse.Namespace) -> int:
@@ -2180,7 +2282,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--version", action="version", version=f"%(prog)s {_ver}")
     sub = p.add_subparsers(dest="cmd")  # keep non-required for compatibility
-    sub.add_parser("env", help="print env summary (JSON)").set_defaults(func=cmd_env)
+    env_parser = sub.add_parser("env", help="print environment summary")
+    env_parser.add_argument("--json", action="store_true", help="output as JSON")
+    env_parser.set_defaults(func=cmd_env)
     sub.add_parser("time", help="print current local time with CCP gap").set_defaults(func=cmd_time)
     sub.add_parser("budget", help="print budget thresholds (JSON)").set_defaults(func=cmd_budget)
 
