@@ -132,8 +132,12 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # Parse input (may be empty for SessionStart)
         data = json.loads(stdin_json) if stdin_json else {}
 
-        # Get session ID
-        session_id = get_current_session_id()
+        # Get session ID from Claude Code's authoritative input
+        # Claude Code provides session_id in hook input - this is the source of truth
+        session_id = data.get("session_id")
+        if not session_id:
+            print("⚠️ MACF: No session_id in hook input, falling back to mtime detection", file=sys.stderr)
+            session_id = get_current_session_id()
 
         # Log hook start
         log_hook_event({
