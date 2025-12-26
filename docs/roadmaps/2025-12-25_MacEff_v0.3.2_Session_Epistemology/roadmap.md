@@ -2,7 +2,7 @@
 
 **Date**: 2025-12-25 Thursday
 **Breadcrumb**: s_1b969d39/c_311/g_bf70468/p_3d47b051/t_1766714561
-**Status**: ACTIVE
+**Status**: COMPLETE
 **Context**: Session ID variance discovered between hooks - need consistent identifier semantics
 
 ---
@@ -70,10 +70,15 @@ Establish complete epistemology for Claude Code session/transcript identifiers, 
 - E3: Multiple hooks in same session - verify consistent `s_`
 
 **Success Criteria**:
-- [ ] All experiments pass with documented results
-- [ ] Any discrepancies investigated and resolved
+- [x] All experiments pass with documented results
+- [x] Any discrepancies investigated and resolved
 
-**Breadcrumb** (when complete):
+**Breadcrumb**: s_1b969d39/c_312/g_6ffe691 [C312]
+
+**Results**:
+- E1: `claude -c` creates new session file, same cycle (C311 verified)
+- E2: `/compact` triggers compaction, cycle increments (C311→C312 transition)
+- E3: All hooks report consistent `s_1b969d39` after fix
 
 ---
 
@@ -86,10 +91,15 @@ Establish complete epistemology for Claude Code session/transcript identifiers, 
 - `test_breadcrumb_components.py`
 
 **Success Criteria**:
-- [ ] Tests pass in CI
-- [ ] Coverage for session ID edge cases
+- [x] Tests pass in CI
+- [x] Coverage for session ID edge cases
 
-**Breadcrumb** (when complete):
+**Breadcrumb**: s_1b969d39/c_312/g_e6f345b [C312]
+
+**Notes**:
+- 323 tests passing (322 + 1 fixed)
+- test_session.py covers session ID extraction (8 tests)
+- test_time_cli.py updated to allow MACF fallback warnings
 
 ---
 
