@@ -2,7 +2,7 @@
 
 **Date**: 2025-12-25 Thursday
 **Breadcrumb**: s_1b969d39/c_312/g_ca8c73d/p_b48c25b7/t_1766722106
-**Status**: ACTIVE
+**Status**: COMPLETE
 
 ---
 
@@ -95,26 +95,28 @@ Config
 
 ### Success Criteria
 
-- [ ] `macf_tools env` shows pretty-printed comprehensive info
-- [ ] `macf_tools env --json` outputs machine-readable JSON
-- [ ] All paths shown as absolute real paths
-- [ ] No vestigial "adapter: absent" fields
-- [ ] Tests added and passing
+- [x] `macf_tools env` shows pretty-printed comprehensive info
+- [x] `macf_tools env --json` outputs machine-readable JSON
+- [x] All paths shown as absolute real paths
+- [x] No vestigial "adapter: absent" fields
+- [x] Tests added and passing (5 tests)
 
-**Breadcrumb** (when complete):
+**Breadcrumb**: s_1b969d39/c_313/g_bf70468/p_none/t_1766727610
 
 ---
 
-## Phase 2: Tests
+## Phase 2: Tests ✅
 
-**File**: `macf/tests/test_env_cli.py` (new or extend existing)
+**File**: `macf/tests/test_env_cli.py` (new)
 
-**Tests needed**:
-- `test_env_executes_successfully` - returns 0
-- `test_env_json_valid` - `--json` outputs valid JSON
-- `test_env_contains_required_sections` - Versions, Time, Paths, Session, System, Environment, Config
+**Tests implemented**:
+- `test_env_executes_successfully` - returns 0 ✅
+- `test_env_json_valid` - `--json` outputs valid JSON ✅
+- `test_env_json_contains_required_sections` - all 7 sections ✅
+- `test_env_versions_section` - version fields ✅
+- `test_env_pretty_print_contains_sections` - section headers ✅
 
-**Breadcrumb** (when complete):
+**Breadcrumb**: s_1b969d39/c_313/g_bf70468/p_none/t_1766727610
 
 ---
 
