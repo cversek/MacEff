@@ -85,7 +85,7 @@ def ensure_group(groupname: str) -> None:
         log(f"Group created: {groupname}")
 
 
-def create_pa_user(agent_spec: AgentSpec, defaults_dict: Optional[Dict] = None) -> None:
+def create_pa_user(agent_name: str, agent_spec: AgentSpec, defaults_dict: Optional[Dict] = None) -> None:
     """Create Primary Agent Linux user."""
     username = agent_spec.username
 
@@ -104,7 +104,7 @@ def create_pa_user(agent_spec: AgentSpec, defaults_dict: Optional[Dict] = None) 
 
     # Create bash_init.sh (MUST come before configure_bashrc)
     # This is the single source of truth for PA environment setup
-    create_bash_init(username, agent_spec.name)
+    create_bash_init(username, agent_name)
 
     # Configure .bashrc to source bash_init.sh
     configure_bashrc(username)
@@ -933,7 +933,7 @@ def main() -> int:
             log(f"Setting up PA: {agent_spec.username}")
 
             # Create user
-            create_pa_user(agent_spec, defaults_dict)
+            create_pa_user(agent_name, agent_spec, defaults_dict)
 
             # Create agent tree
             create_agent_tree(agent_spec.username, agent_spec, defaults_dict)
