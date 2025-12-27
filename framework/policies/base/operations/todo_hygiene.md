@@ -238,6 +238,27 @@ TODO collapses (reducing total item count) are **irreversible data loss**. The P
 3. **Execute TodoWrite** - Hook allows the authorized reduction
 4. **Authorization consumed** - Single-use, cleared after TodoWrite
 
+**🚨 CRITICAL: Agents CANNOT Self-Authorize Collapse 🚨**
+
+The `auth-collapse` command exists for **USER authorization only**. Agents must NEVER run this command themselves - doing so defeats the friction's purpose entirely.
+
+**Correct Flow**:
+1. Hook blocks TodoWrite with collapse
+2. Agent reports the block to user
+3. **USER** decides whether to authorize (runs `macf_tools todos auth-collapse`)
+4. Agent retries TodoWrite after user authorization
+
+**Anti-Pattern** (violates policy):
+```bash
+# Agent runs this themselves - FORBIDDEN
+macf_tools todos auth-collapse --from 12 --to 5 --reason "..."
+# Then immediately calls TodoWrite - defeats friction
+```
+
+**Why This Matters**: The friction exists to ensure human oversight of irreversible operations. Self-authorization is a form of self-deception that bypasses the safety mechanism.
+
+**Exception**: The `/maceff_todos_archive` command orchestrates proper archiving workflow which includes user-visible archive creation before any collapse.
+
 **Why Hook Enforcement**:
 - Transparency Protocol (section 1) operates at annotation layer - violations still possible
 - Hook enforcement operates at execution layer - collapse cannot proceed without authorization
