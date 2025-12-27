@@ -144,12 +144,14 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 if not auth_valid:
                     reduction = prev_count - new_count
                     error_msg = (
-                        f"❌ TODO Collapse Blocked - Authorization Required\n\n"
+                        f"❌ TODO Collapse Blocked - User Authorization Required\n\n"
                         f"Detected: Reducing from {prev_count} items to {new_count} items (collapse of {reduction} items)\n\n"
-                        f"To authorize this collapse, run:\n"
-                        f"  macf_tools todos auth-collapse --from {prev_count} --to {new_count} --reason \"your reason\"\n\n"
-                        f"Then retry your TodoWrite.\n\n"
-                        f"Why: TODO collapses are irreversible. This friction prevents accidental data loss."
+                        f"🚨 AGENT: Ask the user for approval before running auth commands.\n\n"
+                        f"To authorize, USER may either:\n"
+                        f"  1. Run directly: macf_tools todos auth-collapse --from {prev_count} --to {new_count} --reason \"reason\"\n"
+                        f"  2. Say \"granted!\" to allow agent to run the auth command\n\n"
+                        f"AGENT: After authorization, retry TodoWrite.\n\n"
+                        f"Why: TODO collapses are irreversible. Human oversight prevents accidental data loss."
                     )
                     return {
                         "continue": False,
