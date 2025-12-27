@@ -102,7 +102,11 @@ def create_pa_user(agent_spec: AgentSpec, defaults_dict: Optional[Dict] = None) 
     # Install SSH key if present
     install_ssh_key(username)
 
-    # Configure .bashrc for active project cd on login
+    # Create bash_init.sh (MUST come before configure_bashrc)
+    # This is the single source of truth for PA environment setup
+    create_bash_init(username, agent_spec.name)
+
+    # Configure .bashrc to source bash_init.sh
     configure_bashrc(username)
 
     # Configure Claude Code settings (merge defaults + agent-specific)
@@ -128,6 +132,57 @@ def install_ssh_key(username: str) -> None:
         log(f"SSH key installed: {username}")
 
 
+def create_bash_init(username: str, agent_name: str) -> None:
+    """Create ~/.bash_init.sh for shell initialization (interactive + non-interactive).
+
+    This file is the single source of truth for PA-specific environment setup.
+    It is sourced by:
+    - Interactive shells: via ~/.bashrc
+    - Non-interactive shells: via BASH_ENV environment variable
+
+    Contains PA-specific variables only. Container-wide vars (MACEFF_ROOT_DIR,
+    MACEFF_TZ) are in /etc/environment.
+
+    Args:
+        username: Linux username (e.g., 'pa_manny')
+        agent_name: Agent identity name (e.g., 'manny')
+    """
+    home_dir = Path(f'/home/{username}')
+    bash_init = home_dir / '.bash_init.sh'
+
+    bash_init_content = f'''#!/bin/bash
+# MacEff: Shell initialization for both interactive and non-interactive shells
+# Created by start.py - DO NOT EDIT MANUALLY
+# Sourced by: ~/.bashrc (interactive) and BASH_ENV (non-interactive)
+
+# Self-referential BASH_ENV for nested shells
+export BASH_ENV="$HOME/.bash_init.sh"
+
+# PA-specific environment (container-wide vars in /etc/environment)
+export MACEFF_AGENT_HOME_DIR="$HOME"
+export MACEFF_AGENT_NAME="{agent_name}"
+
+# Conda activation (if available)
+if [ -f /opt/miniforge3/etc/profile.d/conda.sh ]; then
+    . /opt/miniforge3/etc/profile.d/conda.sh
+    # Activate default environment if MACEFF_CONDA_ENV is set
+    if [ -n "$MACEFF_CONDA_ENV" ]; then
+        conda activate "$MACEFF_CONDA_ENV" 2>/dev/null || true
+    fi
+fi
+
+# Ensure macf_tools venv is in PATH
+if [ -d /opt/maceff-venv/bin ]; then
+    export PATH="/opt/maceff-venv/bin:$PATH"
+fi
+'''
+
+    bash_init.write_text(bash_init_content)
+    bash_init.chmod(0o755)  # Executable
+    run_command(['chown', f'{username}:{username}', str(bash_init)])
+    log(f"Created bash_init.sh: {username}")
+
+
 def configure_bashrc(username: str) -> None:
     """Configure .bashrc to cd to active project on interactive login.
 
@@ -143,12 +198,12 @@ def configure_bashrc(username: str) -> None:
     bashrc = home_dir / '.bashrc'
 
     # MacEff environment and active project cd block
+    # DRY pattern: source bash_init.sh for env vars (shared with non-interactive shells)
     bashrc_block = '''
-# MacEff root directory (contains framework/, used by macf_tools for path resolution)
-export MACEFF_ROOT_DIR=/opt/maceff
-
-# Agent home directory (SACRED - consciousness persists across projects)
-export MACEFF_AGENT_HOME_DIR=$HOME
+# MacEff: Source shared initialization (DRY with BASH_ENV for non-interactive shells)
+if [ -f ~/.bash_init.sh ]; then
+    . ~/.bash_init.sh
+fi
 
 # Resolve symlinks in paths (show real paths, not symlink names)
 set -P
@@ -161,11 +216,13 @@ if [[ $- == *i* ]] && [[ -L ~/active_project ]] && [[ -d ~/active_project ]]; th
 fi
 '''
 
-    # Check if block already exists
+    # Check if block already exists (check for new or old format)
     if bashrc.exists():
         existing_content = bashrc.read_text()
-        if 'MacEff: cd to active project' in existing_content:
-            return  # Already configured
+        if 'MacEff: Source shared initialization' in existing_content:
+            return  # Already configured (new DRY format)
+        # Note: Old format with inline exports will get the new block appended
+        # This is intentional - both will work, and new format takes precedence
 
     # Append block to .bashrc
     with bashrc.open('a') as f:
@@ -223,6 +280,18 @@ def configure_claude_settings(
         merge_layer(defaults_dict['claude_config'])
     if agent_spec.claude_config:
         merge_layer(agent_spec.claude_config.model_dump())
+
+    # Inject PA-specific environment variables (belt-and-suspenders with BASH_ENV)
+    # These are available to Claude Code directly without shell sourcing
+    agent_name = agent_spec.name
+    pa_env_vars = {
+        'MACEFF_AGENT_HOME_DIR': str(home_dir),
+        'MACEFF_AGENT_NAME': agent_name,
+    }
+    # Merge PA vars into env (don't overwrite explicit config)
+    for key, value in pa_env_vars.items():
+        if key not in merged_settings.env:
+            merged_settings.env[key] = value
 
     # Write ~/.claude/settings.json (let Pydantic handle serialization)
     settings_file = claude_dir / 'settings.json'
@@ -748,18 +817,40 @@ def setup_policies() -> None:
 
 
 def propagate_container_env() -> None:
-    """Propagate container environment to SSH sessions."""
+    """Propagate container environment to SSH sessions.
+
+    Writes to /etc/environment (PAM reads this for SSH sessions):
+    - MACEFF_TZ: Timezone from docker-compose.yml (if set)
+    - MACEFF_ROOT_DIR: Framework root (constant /opt/maceff)
+    - BASH_ENV: Points to ~/.bash_init.sh (tilde expands per-user)
+
+    The BASH_ENV entry enables non-interactive shells (Claude Code Bash tool)
+    to source PA-specific initialization from ~/.bash_init.sh.
+    """
+    env_file = Path('/etc/environment')
+    lines = env_file.read_text().splitlines() if env_file.exists() else []
+
+    # Filter out entries we'll replace
+    filter_prefixes = ('MACEFF_TZ=', 'MACEFF_ROOT_DIR=', 'BASH_ENV=')
+    lines = [line for line in lines if not any(line.startswith(p) for p in filter_prefixes)]
+
+    # Add container-wide environment variables
     maceff_tz = os.getenv('MACEFF_TZ')
-
     if maceff_tz:
-        # Write to /etc/environment for PAM
-        env_file = Path('/etc/environment')
-        lines = env_file.read_text().splitlines() if env_file.exists() else []
-        lines = [line for line in lines if not line.startswith('MACEFF_TZ=')]
         lines.append(f'MACEFF_TZ={maceff_tz}')
-        env_file.write_text('\n'.join(lines) + '\n')
 
-        # Write to /etc/profile.d for interactive shells
+    # Framework root - constant for all PAs
+    lines.append('MACEFF_ROOT_DIR=/opt/maceff')
+
+    # BASH_ENV with tilde - expands per-user at shell startup
+    # This is the KEY fix for non-interactive shell initialization
+    lines.append('BASH_ENV=~/.bash_init.sh')
+
+    env_file.write_text('\n'.join(lines) + '\n')
+    log("Container env propagated: MACEFF_TZ, MACEFF_ROOT_DIR, BASH_ENV")
+
+    # Write to /etc/profile.d for interactive shells (timezone only)
+    if maceff_tz:
         profile_script = Path('/etc/profile.d/99-maceff-env.sh')
         profile_script.write_text(f'export MACEFF_TZ={maceff_tz!r}\n')
         profile_script.chmod(0o644)

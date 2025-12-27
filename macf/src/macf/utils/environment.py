@@ -15,8 +15,9 @@ from typing import Dict, Tuple
 # These are checked explicitly and shown as "(not set)" if missing
 KEY_ENV_VARS = [
     "MACEFF_AGENT_HOME_DIR",
+    "MACEFF_AGENT_NAME",
+    "MACEFF_ROOT_DIR",
     "MACEFF_TZ",
-    "MACF_AGENT",
     "BASH_ENV",
     "CLAUDECODE",
     "CLAUDE_PROJECT_DIR",

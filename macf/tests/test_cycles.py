@@ -38,22 +38,8 @@ class TestDetectAutoMode:
         assert source == "env"
         assert confidence == 0.9
 
-    def test_config_file_auto_mode_when_no_env_var(self, tmp_path, monkeypatch, isolated_events_log):
-        """Reads from .maceff/config.json when env var not set."""
-        monkeypatch.delenv('MACF_AUTO_MODE', raising=False)
-
-        # Mock agent home and create config
-        with patch('macf.utils.cycles.find_agent_home', return_value=tmp_path):
-            config_dir = tmp_path / ".maceff"
-            config_dir.mkdir()
-            config_file = config_dir / "config.json"
-            config_file.write_text(json.dumps({"auto_mode": True}))
-
-            enabled, source, confidence = detect_auto_mode("test-session")
-
-            assert enabled is True
-            assert source == "config"
-            assert confidence == 0.7
+    # NOTE: test_config_file_auto_mode_when_no_env_var removed in Cycle 314
+    # Config.json path was removed in Cycle 313 (commit ce6089e) - event-first architecture
 
     def test_defaults_to_manual_mode_when_no_config(self, monkeypatch, isolated_events_log):
         """Returns MANUAL_MODE (False) with default source when no config found."""
