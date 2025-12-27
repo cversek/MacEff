@@ -21,9 +21,8 @@ def detect_auto_mode(session_id: str) -> Tuple[bool, str, float]:
     Priority (highest to lowest):
     1. CLI flag --auto-mode (not implemented yet, return None)
     2. Environment variable MACF_AUTO_MODE=true/false - confidence 0.9
-    3. Config file .macf/config.json "auto_mode" field - confidence 0.7
-    4. Session state (load previous setting) - confidence 0.5
-    5. Default (False, "default", 0.0)
+    3. Event log (previous setting) - confidence 0.5
+    4. Default (False, "default", 0.0)
 
     Args:
         session_id: Session identifier
@@ -42,19 +41,7 @@ def detect_auto_mode(session_id: str) -> Tuple[bool, str, float]:
         elif env_value in ('false', '0', 'no'):
             return (False, "env", 0.9)
 
-        # 3. Config file (in agent home)
-        try:
-            agent_home = find_agent_home()
-            config_path = agent_home / ".maceff" / "config.json"
-            config_data = read_json(config_path)
-
-            if "auto_mode" in config_data:
-                auto_mode = bool(config_data["auto_mode"])
-                return (auto_mode, "config", 0.7)
-        except Exception as e:
-            print(f"⚠️ MACF: Config auto_mode read failed: {e}", file=sys.stderr)
-
-        # 4. Event log (previous setting) - EVENT-FIRST: Query events instead of mutable state
+        # 3. Event log (previous setting) - EVENT-FIRST architecture
         try:
             from ..event_queries import get_auto_mode_from_events
             auto_mode, source, confidence = get_auto_mode_from_events(session_id)
