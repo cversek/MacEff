@@ -52,6 +52,8 @@ from .temporal import (
 from .environment import (
     detect_execution_environment,
     get_rich_environment_string,
+    get_env_var_report,
+    KEY_ENV_VARS,
 )
 from .breadcrumbs import (
     format_breadcrumb,
@@ -129,6 +131,8 @@ __all__ = [
     "get_logs_dir",
     "get_minimal_timestamp",
     "get_rich_environment_string",
+    "get_env_var_report",
+    "KEY_ENV_VARS",
     "get_session_dir",
     "get_session_transcript_path",
     "get_temporal_context",
