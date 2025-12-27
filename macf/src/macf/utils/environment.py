@@ -9,6 +9,46 @@ import platform
 import socket
 import sys
 from pathlib import Path
+from typing import Dict, Tuple
+
+# Key environment variables to always report in diagnostics
+# These are checked explicitly and shown as "(not set)" if missing
+KEY_ENV_VARS = [
+    "MACEFF_AGENT_HOME_DIR",
+    "MACEFF_TZ",
+    "MACF_AGENT",
+    "BASH_ENV",
+    "CLAUDECODE",
+    "CLAUDE_PROJECT_DIR",
+    "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR",
+    "TZ",
+]
+
+# Prefixes for dynamic env var discovery (additional vars beyond KEY_ENV_VARS)
+ENV_VAR_PREFIXES = ("MACEFF_", "MACF_", "CLAUDE")
+
+
+def get_env_var_report() -> Tuple[Dict[str, str], Dict[str, str]]:
+    """
+    Get environment variables for diagnostic reporting.
+
+    Returns:
+        Tuple of (key_vars, extra_vars):
+        - key_vars: Dict of KEY_ENV_VARS with values or "(not set)"
+        - extra_vars: Dict of additional matching vars that are set
+    """
+    # Key vars always reported
+    key_vars = {}
+    for k in KEY_ENV_VARS:
+        key_vars[k] = os.getenv(k, "(not set)")
+
+    # Extra vars matching prefixes but not in key list
+    extra_vars = {
+        k: v for k, v in sorted(os.environ.items())
+        if k.startswith(ENV_VAR_PREFIXES) and k not in KEY_ENV_VARS
+    }
+
+    return key_vars, extra_vars
 
 
 def detect_execution_environment() -> str:

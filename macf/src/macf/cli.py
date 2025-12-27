@@ -26,7 +26,8 @@ from .utils import (
     get_claude_code_version,
     get_temporal_context,
     detect_auto_mode,
-    find_agent_home
+    find_agent_home,
+    get_env_var_report
 )
 
 # -------- helpers --------
@@ -117,11 +118,7 @@ def cmd_env(args: argparse.Namespace) -> int:
             "cwd": str(Path.cwd().resolve()),
             "hostname": socket.gethostname()
         },
-        "environment": {
-            "BASH_ENV": os.getenv("BASH_ENV", "(not set)"),
-            "CLAUDE_PROJECT_DIR": os.getenv("CLAUDE_PROJECT_DIR", "(not set)"),
-            "MACEFF_AGENT_HOME_DIR": os.getenv("MACEFF_AGENT_HOME_DIR", "(not set)")
-        },
+        "environment": get_env_var_report(),
         "config": {
             "hooks_installed": hooks_count,
             "auto_mode": auto_enabled
@@ -130,6 +127,9 @@ def cmd_env(args: argparse.Namespace) -> int:
 
     # Output format
     if getattr(args, 'json', False):
+        # Convert tuple to dict for JSON serialization
+        key_vars, extra_vars = data['environment']
+        data['environment'] = {"key": key_vars, "extra": extra_vars}
         print(json.dumps(data, indent=2))
     else:
         # Pretty-print format
@@ -170,9 +170,13 @@ def cmd_env(args: argparse.Namespace) -> int:
         print()
 
         print("Environment")
-        print(f"  BASH_ENV:              {data['environment']['BASH_ENV']}")
-        print(f"  CLAUDE_PROJECT_DIR:    {data['environment']['CLAUDE_PROJECT_DIR']}")
-        print(f"  MACEFF_AGENT_HOME_DIR: {data['environment']['MACEFF_AGENT_HOME_DIR']}")
+        key_vars, extra_vars = data['environment']
+        for k, v in key_vars.items():
+            print(f"  {k}: {v}")
+        if extra_vars:
+            print("  ---")
+            for k, v in extra_vars.items():
+                print(f"  {k}: {v}")
         print()
 
         print("Config")
