@@ -842,9 +842,18 @@ def propagate_container_env() -> None:
     # Framework root - constant for all PAs
     lines.append('MACEFF_ROOT_DIR=/opt/maceff')
 
-    # BASH_ENV with tilde - expands per-user at shell startup
-    # This is the KEY fix for non-interactive shell initialization
-    lines.append('BASH_ENV=~/.bash_init.sh')
+    # BASH_ENV: Create a profile.d wrapper that sources user's bash_init.sh
+    # Direct tilde in /etc/environment doesn't expand, so we use a wrapper
+    bash_env_wrapper = Path('/etc/profile.d/maceff-bash-env.sh')
+    bash_env_wrapper.write_text('''#!/bin/bash
+# MacEff BASH_ENV wrapper - sources per-user bash_init.sh
+# This script is pointed to by BASH_ENV in /etc/environment
+if [ -f "$HOME/.bash_init.sh" ]; then
+    . "$HOME/.bash_init.sh"
+fi
+''')
+    bash_env_wrapper.chmod(0o644)
+    lines.append('BASH_ENV=/etc/profile.d/maceff-bash-env.sh')
 
     env_file.write_text('\n'.join(lines) + '\n')
     log("Container env propagated: MACEFF_TZ, MACEFF_ROOT_DIR, BASH_ENV")
