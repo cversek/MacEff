@@ -184,31 +184,27 @@ fi
 
 
 def configure_bashrc(username: str) -> None:
-    """Configure .bashrc to cd to active project on interactive login.
+    """Configure .bashrc for MacEff initialization.
 
-    Appends a block to .bashrc that changes to ~/active_project if:
-    - The session is interactive
-    - The symlink exists
-    - We're not already in that directory
+    CRITICAL: Sources ~/.bash_init.sh BEFORE the interactive guard so that
+    non-interactive shells (Claude Code's bash -c) get proper initialization.
 
-    The active_project symlink is created by create_workspace_structure()
-    pointing to the agent's first assigned project.
+    Also adds active_project cd for interactive sessions.
     """
     home_dir = Path(f'/home/{username}')
     bashrc = home_dir / '.bashrc'
 
-    # MacEff environment and active project cd block
-    # DRY pattern: source bash_init.sh for env vars (shared with non-interactive shells)
-    bashrc_block = '''
-# MacEff: Source shared initialization (DRY with BASH_ENV for non-interactive shells)
+    # Block that MUST come BEFORE the interactive guard
+    # This ensures non-interactive shells get initialized
+    prepend_block = '''# MacEff: Source BEFORE interactive guard (for bash -c commands)
 if [ -f ~/.bash_init.sh ]; then
     . ~/.bash_init.sh
 fi
 
-# Resolve symlinks in paths (show real paths, not symlink names)
-set -P
-cd "$(pwd -P)"
+'''
 
+    # Block that comes AFTER the interactive guard (for interactive features)
+    append_block = '''
 # MacEff: cd to active project on interactive login
 if [[ $- == *i* ]] && [[ -L ~/active_project ]] && [[ -d ~/active_project ]]; then
     cd ~/active_project
@@ -216,17 +212,21 @@ if [[ $- == *i* ]] && [[ -L ~/active_project ]] && [[ -d ~/active_project ]]; th
 fi
 '''
 
-    # Check if block already exists (check for new or old format)
+    # Check if already configured
     if bashrc.exists():
         existing_content = bashrc.read_text()
-        if 'MacEff: Source shared initialization' in existing_content:
-            return  # Already configured (new DRY format)
-        # Note: Old format with inline exports will get the new block appended
-        # This is intentional - both will work, and new format takes precedence
+        if 'MacEff: Source BEFORE interactive guard' in existing_content:
+            return  # Already configured
 
-    # Append block to .bashrc
-    with bashrc.open('a') as f:
-        f.write(bashrc_block)
+        # PREPEND our init block at the very beginning
+        new_content = prepend_block + existing_content
+        # Append the interactive features if not already there
+        if 'MacEff: cd to active project' not in existing_content:
+            new_content += append_block
+        bashrc.write_text(new_content)
+    else:
+        # No bashrc exists, create with both blocks
+        bashrc.write_text(prepend_block + append_block)
 
     run_command(['chown', f'{username}:{username}', str(bashrc)])
     log(f"Bashrc configured for active_project: {username}")
