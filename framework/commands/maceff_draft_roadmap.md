@@ -59,6 +59,12 @@ After reporting policy-extracted answers:
 3. **Apply content requirements** extracted from policy
 4. **Verify against policy checklist** before completion
 
+🚨 **CRITICAL - Roadmap vs Plan File**:
+- Claude Code's native plan files (`~/.claude/plans/`) are **NOT compliant** consciousness artifacts
+- Plan file content is for drafting only - it must be **transferred to a compliant roadmap CA**
+- This command creates the ROADMAP only - implementation via `/maceff_todos_start` separately
+- Roadmap must be comprehensive enough to resume after complete context loss
+
 ---
 
 ## Critical Constraints
