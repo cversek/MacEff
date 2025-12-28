@@ -110,7 +110,7 @@ def create_pa_user(agent_name: str, agent_spec: AgentSpec, defaults_dict: Option
     configure_bashrc(username)
 
     # Configure Claude Code settings (merge defaults + agent-specific)
-    configure_claude_settings(username, agent_spec, defaults_dict)
+    configure_claude_settings(username, agent_name, agent_spec, defaults_dict)
 
 
 def install_ssh_key(username: str) -> None:
@@ -234,6 +234,7 @@ fi
 
 def configure_claude_settings(
     username: str,
+    agent_name: str,
     agent_spec: AgentSpec,
     defaults_dict: Optional[Dict] = None
 ) -> None:
@@ -283,7 +284,6 @@ def configure_claude_settings(
 
     # Inject PA-specific environment variables (belt-and-suspenders with BASH_ENV)
     # These are available to Claude Code directly without shell sourcing
-    agent_name = agent_spec.name
     pa_env_vars = {
         'MACEFF_AGENT_HOME_DIR': str(home_dir),
         'MACEFF_AGENT_NAME': agent_name,
