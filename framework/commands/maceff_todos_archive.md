@@ -43,6 +43,9 @@ After reading policies, you should be able to answer:
 6. **How do you generate a forensic breadcrumb?**
 7. **What constitutes a policy violation in this context?**
 8. **After archiving, what minimum pending item requirement prevents UI disappearance?**
+9. **Is this a cross-repo MISSION? Where should archives go for cross-repo work?**
+10. **How should archive filenames identify the MISSION being archived?**
+11. **What is the Agent CA Principle for TODO archives?**
 
 ---
 

@@ -41,10 +41,12 @@ Navigate todo_hygiene policy using CLI tools:
 **Before Removing/Collapsing Items:**
 8. What must happen before removing or collapsing completed work?
 9. What are the requirements for reducing TODO hierarchy depth?
+10. Is this cross-repo MISSION work? What determines archive location?
+11. How should archive filenames identify the MISSION being archived?
 
 **General:**
-10. What documentation integration requirements exist for TODOs?
-11. What backup requirements apply to significant TODO modifications?
+12. What documentation integration requirements exist for TODOs?
+13. What backup requirements apply to significant TODO modifications?
 
 ## Execution
 

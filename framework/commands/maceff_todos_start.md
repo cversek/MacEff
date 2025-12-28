@@ -39,16 +39,17 @@ Start work on a TODO item (new or archived) by reading policy to understand cont
 After reading policies, you should be able to answer:
 
 1. **Is this TODO archived?** How do I recognize and restore archived context?
-2. **Does this TODO reference a roadmap/plan?** What's the mandatory reading discipline?
-3. **How should roadmap phases appear in the TODO list?** What structure and numbering does the policy require for multi-phase work?
-4. **Should I delegate this work?** What signals mandatory vs optional delegation?
-5. **Does this need a detailed roadmap?** What triggers roadmap creation?
-6. **Does this need a DELEG_PLAN?** What must delegation plans contain?
-7. **Can I just execute?** When is simple execution appropriate?
-8. **When work encounters unexpected friction, what documentation practices preserve learnings for future cycles?**
-9. **What breadcrumb discipline applies?** When and how to generate breadcrumbs?
-10. **When marking items complete, what forensic traceability does the policy require?** What format for completion breadcrumbs?
-11. **What minimum pending item requirement prevents UI disappearance?** What placeholder to use when all work is complete?
+2. **Is this a cross-repo MISSION?** Where should I look for archives (agent CA repo vs roadmap folder)?
+3. **Does this TODO reference a roadmap/plan?** What's the mandatory reading discipline?
+4. **How should roadmap phases appear in the TODO list?** What structure and numbering does the policy require for multi-phase work?
+5. **Should I delegate this work?** What signals mandatory vs optional delegation?
+6. **Does this need a detailed roadmap?** What triggers roadmap creation?
+7. **Does this need a DELEG_PLAN?** What must delegation plans contain?
+8. **Can I just execute?** When is simple execution appropriate?
+9. **When work encounters unexpected friction, what documentation practices preserve learnings for future cycles?**
+10. **What breadcrumb discipline applies?** When and how to generate breadcrumbs?
+11. **When marking items complete, what forensic traceability does the policy require?** What format for completion breadcrumbs?
+12. **What minimum pending item requirement prevents UI disappearance?** What placeholder to use when all work is complete?
 
 ---
 
