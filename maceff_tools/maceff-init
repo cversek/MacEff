@@ -157,6 +157,13 @@ if [[ "$MACEFF_SOURCE" != "$REPO_ROOT" ]] && [[ -d "$REPO_ROOT/framework" ]]; th
         warn "  ⚠ OVERLAY: projects/* (parent customizations added/override)"
     fi
 
+    # Copy parent env.d scripts (environment extensibility)
+    if [[ -d "$REPO_ROOT/framework/env.d" ]]; then
+        mkdir -p "$MACEFF_DIR/framework/env.d"
+        cp -r "$REPO_ROOT/framework/env.d/"* "$MACEFF_DIR/framework/env.d/" 2>/dev/null || true
+        warn "  ⚠ OVERLAY: env.d/* (parent environment scripts)"
+    fi
+
     log "  ✓ Parent overlay complete"
 fi
 
