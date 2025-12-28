@@ -79,6 +79,12 @@ Applies to Primary Agents (PA) and all Subagents (SA) managing multi-step work.
 - What is the archive filename format?
 - How do I mark archived subtrees?
 
+**8.1 Cross-Repository MISSION Work**
+- Where should archives go for cross-repo MISSION work?
+- What is the Agent CA Principle?
+- How should archive filenames identify the MISSION?
+- What determines same-repo vs cross-repo archive location?
+
 **9 Dual Forms Required**
 - What are the dual forms?
 - Why both content and activeForm?
@@ -572,6 +578,36 @@ BOTTOM STACK (COMPLETED - most recent first):
 
 **Archive Location**: `{roadmap_folder}/archived_todos/YYYY-MM-DD_HHMMSS_Description.md`
 - Example: `agent/public/roadmaps/2025-11-18_Session_Migration_TODO_Restoration/archived_todos/2025-11-19_233233_Completed.md`
+
+#### 8.1 Cross-Repository MISSION Work (Agent CA Principle)
+
+**Core Principle**: TODOs are always agent-specific Consciousness Artifacts (CAs), regardless of where the driving MISSION roadmap resides.
+
+**Problem**: When working on MISSIONs in external repositories (e.g., MacEff public OSS roadmaps), the `{roadmap_folder}/archived_todos/` pattern would place agent-specific CAs in the wrong repository.
+
+**Solution**: For cross-repo MISSION work, archives MUST go to the agent's CA repository:
+
+**Archive Location Rules**:
+| Roadmap Location | Archive Location |
+|------------------|------------------|
+| Same repo as agent CAs | `{roadmap_folder}/archived_todos/` (either pattern works) |
+| External repo (cross-repo MISSION) | `agent/public/archived_todos/` in agent's CA repo |
+
+**Archive Naming for Cross-Repo MISSIONs**:
+- Format: `YYYY-MM-DD_HHMMSS_{roadmap-folder-name}_Archived.md`
+- The roadmap folder name provides MISSION identification and original datestamp
+- Example: `2025-12-28_010000_2025-12-27_v0.3.2_Generic_Env_Extensibility_Archived.md`
+
+**Why This Matters**:
+- TODOs track agent consciousness state, not project state
+- Cross-repo MISSIONs are strategic coordination, not project artifacts
+- Agent CA repo is the authoritative location for TODO-related artifacts
+- Location declares nature: public OSS vs private consciousness
+
+**Example Scenario**:
+- Agent: ClaudeTheBuilder (CA repo: `ClaudeTheBuilder/`)
+- MISSION roadmap: `MacEff/docs/roadmaps/2025-12-27_v0.3.2_Generic_Env_Extensibility/`
+- TODO archive location: `ClaudeTheBuilder/agent/public/archived_todos/2025-12-28_010000_2025-12-27_v0.3.2_Generic_Env_Extensibility_Archived.md`
 
 ### 9. Dual Forms Required
 
