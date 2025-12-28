@@ -117,6 +117,27 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             prev_event = get_latest_event("todos_updated")
             prev_count = prev_event.get("data", {}).get("count", 0) if prev_event else 0
 
+            # All-completed detection: when all items are completed, the TODO list disappears from UI
+            if new_count > 0:
+                pending_count = sum(1 for t in todos if t.get("status") != "completed")
+                if pending_count == 0:
+                    error_msg = (
+                        f"❌ TODO Visibility Warning - All Items Completed\n\n"
+                        f"Detected: All {new_count} items marked as completed.\n\n"
+                        f"⚠️ When all TODOs are completed, the list disappears from Claude Code UI.\n"
+                        f"This makes it impossible to see completed work or restore context after compaction.\n\n"
+                        f"Recommended: Keep at least one pending item as an anchor:\n"
+                        f'  {{"content": "Awaiting next task", "status": "pending", "activeForm": "Awaiting next task"}}\n\n'
+                        f"Add this item to your TodoWrite call and retry."
+                    )
+                    return {
+                        "continue": False,
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "message": error_msg
+                        }
+                    }
+
             # Collapse detection: new < prev
             if prev_count > 0 and new_count < prev_count:
                 # Check for authorization
