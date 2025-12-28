@@ -123,11 +123,6 @@ class AgentSpec(BaseModel):
         description="Hook configuration (enabled list, etc.)"
     )
 
-    conda_env: Optional[str] = Field(
-        default=None,
-        description="Conda environment to activate for this agent (e.g., 'neurovep_data')"
-    )
-
     claude_config: Optional[ClaudeCodeConfig] = Field(
         default=None,
         description="Claude Code settings override for this agent"

@@ -104,7 +104,7 @@ def create_pa_user(agent_name: str, agent_spec: AgentSpec, defaults_dict: Option
 
     # Create bash_init.sh (MUST come before configure_bashrc)
     # This is the single source of truth for PA environment setup
-    create_bash_init(username, agent_name, conda_env=agent_spec.conda_env)
+    create_bash_init(username, agent_name)
 
     # Configure .bashrc to source bash_init.sh
     configure_bashrc(username)
@@ -132,7 +132,7 @@ def install_ssh_key(username: str) -> None:
         log(f"SSH key installed: {username}")
 
 
-def create_bash_init(username: str, agent_name: str, conda_env: Optional[str] = None) -> None:
+def create_bash_init(username: str, agent_name: str) -> None:
     """Create ~/.bash_init.sh for shell initialization (interactive + non-interactive).
 
     This file is the single source of truth for PA-specific environment setup.
@@ -143,10 +143,12 @@ def create_bash_init(username: str, agent_name: str, conda_env: Optional[str] = 
     Contains PA-specific variables only. Container-wide vars (MACEFF_ROOT_DIR,
     MACEFF_TZ) are in /etc/environment.
 
+    Environment-specific setup (conda, venv, etc.) is handled by deployment-provided
+    scripts in /opt/maceff/framework/env.d/*.sh, which are sourced in alphanumeric order.
+
     Args:
         username: Linux username (e.g., 'pa_manny')
         agent_name: Agent identity name (e.g., 'manny')
-        conda_env: Optional conda environment name to activate (e.g., 'neurovep_data')
     """
     home_dir = Path(f'/home/{username}')
     bash_init = home_dir / '.bash_init.sh'
@@ -162,21 +164,13 @@ export BASH_ENV="$HOME/.bash_init.sh"
 # PA-specific environment (container-wide vars in /etc/environment)
 export MACEFF_AGENT_HOME_DIR="$HOME"
 export MACEFF_AGENT_NAME="{agent_name}"
-{f'export MACEFF_CONDA_ENV="{conda_env}"' if conda_env else '# MACEFF_CONDA_ENV not configured'}
 
-# ~/.local/bin for pip-installed scripts (before conda so user scripts accessible)
-if [ -d "$HOME/.local/bin" ]; then
-    export PATH="$HOME/.local/bin:$PATH"
-fi
-
-# Conda activation (prepends to PATH, so conda python is default)
-# NOTE: maceff-venv NOT in PATH - hooks use explicit /opt/maceff-venv/bin/python
-if [ -f /opt/miniforge3/etc/profile.d/conda.sh ]; then
-    . /opt/miniforge3/etc/profile.d/conda.sh
-    # Activate default environment if MACEFF_CONDA_ENV is set
-    if [ -n "$MACEFF_CONDA_ENV" ]; then
-        conda activate "$MACEFF_CONDA_ENV" 2>/dev/null || true
-    fi
+# Source deployment-provided environment scripts (alphanumeric order)
+# Scripts: 00-core, 10-lang-managers, 20-path, 50-custom, 90-final
+if [ -d /opt/maceff/framework/env.d ]; then
+    for script in /opt/maceff/framework/env.d/*.sh; do
+        [ -r "$script" ] && . "$script"
+    done
 fi
 '''
 
