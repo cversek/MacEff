@@ -164,15 +164,13 @@ export MACEFF_AGENT_HOME_DIR="$HOME"
 export MACEFF_AGENT_NAME="{agent_name}"
 {f'export MACEFF_CONDA_ENV="{conda_env}"' if conda_env else '# MACEFF_CONDA_ENV not configured'}
 
-# PATH setup FIRST (conda activation will prepend and take precedence)
-if [ -d /opt/maceff-venv/bin ]; then
-    export PATH="/opt/maceff-venv/bin:$PATH"
-fi
+# ~/.local/bin for pip-installed scripts (before conda so user scripts accessible)
 if [ -d "$HOME/.local/bin" ]; then
     export PATH="$HOME/.local/bin:$PATH"
 fi
 
-# Conda activation LAST (prepends to PATH, so conda python takes precedence)
+# Conda activation (prepends to PATH, so conda python is default)
+# NOTE: maceff-venv NOT in PATH - hooks use explicit /opt/maceff-venv/bin/python
 if [ -f /opt/miniforge3/etc/profile.d/conda.sh ]; then
     . /opt/miniforge3/etc/profile.d/conda.sh
     # Activate default environment if MACEFF_CONDA_ENV is set
