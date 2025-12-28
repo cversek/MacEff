@@ -171,9 +171,12 @@ if [ -f /opt/miniforge3/etc/profile.d/conda.sh ]; then
     fi
 fi
 
-# Ensure macf_tools venv is in PATH
+# Ensure macf_tools venv and ~/.local/bin are in PATH
 if [ -d /opt/maceff-venv/bin ]; then
     export PATH="/opt/maceff-venv/bin:$PATH"
+fi
+if [ -d "$HOME/.local/bin" ]; then
+    export PATH="$HOME/.local/bin:$PATH"
 fi
 '''
 
