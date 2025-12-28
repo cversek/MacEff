@@ -164,21 +164,21 @@ export MACEFF_AGENT_HOME_DIR="$HOME"
 export MACEFF_AGENT_NAME="{agent_name}"
 {f'export MACEFF_CONDA_ENV="{conda_env}"' if conda_env else '# MACEFF_CONDA_ENV not configured'}
 
-# Conda activation (if available)
+# PATH setup FIRST (conda activation will prepend and take precedence)
+if [ -d /opt/maceff-venv/bin ]; then
+    export PATH="/opt/maceff-venv/bin:$PATH"
+fi
+if [ -d "$HOME/.local/bin" ]; then
+    export PATH="$HOME/.local/bin:$PATH"
+fi
+
+# Conda activation LAST (prepends to PATH, so conda python takes precedence)
 if [ -f /opt/miniforge3/etc/profile.d/conda.sh ]; then
     . /opt/miniforge3/etc/profile.d/conda.sh
     # Activate default environment if MACEFF_CONDA_ENV is set
     if [ -n "$MACEFF_CONDA_ENV" ]; then
         conda activate "$MACEFF_CONDA_ENV" 2>/dev/null || true
     fi
-fi
-
-# Ensure macf_tools venv and ~/.local/bin are in PATH
-if [ -d /opt/maceff-venv/bin ]; then
-    export PATH="/opt/maceff-venv/bin:$PATH"
-fi
-if [ -d "$HOME/.local/bin" ]; then
-    export PATH="$HOME/.local/bin:$PATH"
 fi
 '''
 
