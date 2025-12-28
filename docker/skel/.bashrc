@@ -25,10 +25,8 @@ alias ll='ls -alF'
 alias la='ls -A'
 alias l='ls -CF'
 
-# Activate MacEff virtual environment if it exists
-if [ -f /opt/maceff-venv/bin/activate ]; then
-    source /opt/maceff-venv/bin/activate
-fi
+# NOTE: maceff-venv NOT activated here - hooks use explicit /opt/maceff-venv/bin/python
+# Environment setup via env.d scripts sourced by ~/.bash_init.sh
 
 # Load bash completion if available
 if ! shopt -oq posix; then
