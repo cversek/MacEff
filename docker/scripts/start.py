@@ -471,6 +471,11 @@ def create_subagent_workspace(username: str, sa_name: str, sa_spec: SubagentSpec
                 artifact_dir.mkdir(mode=0o750, exist_ok=True)
                 run_command(['chown', f'{username}:{username}', str(artifact_dir)])
 
+    # Always create dev_scripts for ad hoc development scripts (all PAs)
+    dev_scripts_dir = public / 'dev_scripts'
+    dev_scripts_dir.mkdir(mode=0o750, exist_ok=True)
+    run_command(['chown', f'{username}:{username}', str(dev_scripts_dir)])
+
 
 def install_framework_commands(home_dir: Path) -> None:
     """Install framework commands as symlinks to ~/.claude/commands/."""
