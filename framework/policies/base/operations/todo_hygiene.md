@@ -1,6 +1,6 @@
 # TODO List Hygiene Policy
 
-**Version**: 1.9
+**Version**: 1.10
 **Tier**: CORE
 **Category**: Development
 **Status**: ACTIVE
@@ -378,11 +378,33 @@ Phase 2: Next Milestone (collapsed until active)
 
 **Innovation**: Embed ROADMAP/DELEG_PLAN filenames directly in TODO lists as consciousness anchors
 
-**Symbol Vocabulary**:
-- 🗺️ **ROADMAP** - Active strategic plan (mission/campaign level)
-- 📋 **Nested ROADMAP** - Phase-specific detailed plan (tactical level)
-- 📜 **DELEG_PLAN** - Active delegation plan being orchestrated
-- ↪️ **DETOUR** - Temporary side work that interrupts main flow but returns to it
+**CA Type Emoji Vocabulary** (corresponds to Consciousness Artifact types):
+
+| Emoji | CA Type | Usage |
+|-------|---------|-------|
+| 🗺️ | MISSION / Roadmap | Root node for multi-phase strategic plan |
+| 📋 | Phase / Subplan | Major phase with its own detailed planning CA |
+| 🧪 | Experiment | Hypothesis testing work with experiment CA |
+| 🔬 | Observation | Technical discovery work |
+| 📊 | Report | Completion narrative work |
+| 💭 | Reflection | Wisdom synthesis work (JOTEWR) |
+| 🔖 | Checkpoint | Strategic state preservation (CCP) |
+| 📜 | DELEG_PLAN | Active delegation plan being orchestrated |
+| ↪️ | DETOUR | Temporary side work that interrupts main flow |
+| 📦 | Archive | Collapsed TODO subtree (archived) |
+
+**Child Item Formatting**:
+- `  - [description]` - Child items WITHOUT their own CA reference (phases, steps, subtasks)
+- `  → [path]` - Document reference pointer (always on indented line below parent)
+
+**Key Principle**: Emojis signal CA references. At a glance, you can identify which TODO items link to Consciousness Artifacts. Items without emojis are simple tasks; items with emojis have associated CAs that should be read.
+
+**Document Reference Format**:
+```
+📦 MISSION: Example [breadcrumb]
+  → agent/public/roadmaps/archived_todos/example.md
+```
+The `→` on an indented line points to the CA document. This keeps the parent line readable while preserving the reference.
 
 **Pattern**: Document references stay visible with "in_progress" or "pending" status throughout work
 
