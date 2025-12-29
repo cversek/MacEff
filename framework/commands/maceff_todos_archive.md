@@ -53,6 +53,8 @@ After reading policies, you should be able to answer:
 
 Using answers from policy reading, execute the archival pattern as policy describes.
 
+**Collapse Authorization**: Invoking this slash command IS user authorization for the collapse. Run `macf_tools todos auth-collapse` yourself after creating the archive file, then proceed with TodoWrite. Do not stop to ask for separate authorization.
+
 ---
 
 ## Critical Constraints

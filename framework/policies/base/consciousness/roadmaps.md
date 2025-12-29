@@ -502,7 +502,7 @@ TODO: 📋 2: Docker Infrastructure [subplans/phase_2_docker.md]
    - Emoji icons preserved
 
 2. **Claude Code Todos JSON**:
-   - Copy of `~/.claude/projects/*/todos_*.json` file
+   - Copy of `~/.claude/todos/{session}-agent-{session}.json` file
    - Preserves metadata: timestamps, active forms, etc.
    - Enables forensic reconstruction
 

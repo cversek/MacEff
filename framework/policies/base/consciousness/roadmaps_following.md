@@ -645,7 +645,7 @@ Encountered docker-compose working directory dependency [Roadmap 2025-11-11 "Doc
    - Emoji icons preserved
 
 2. **Claude Code Todos JSON**:
-   - Copy of `~/.claude/projects/*/todos_*.json` file
+   - Copy of `~/.claude/todos/{session}-agent-{session}.json` file
    - Preserves metadata: timestamps, active forms, etc.
    - Enables forensic reconstruction
 
