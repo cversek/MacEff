@@ -722,7 +722,7 @@ Before committing citations to framework policies:
 - Framework policies serve **any agent**
 - Real breadcrumbs create dependency on specific agent context
 - Sanitized examples teach pattern without importing personality
-- Universal examples enable model user testing (if it works for MannyMacEff, it works universally)
+- Universal examples enable model user testing (if it works for model user, it works universally)
 
 ### 7.2 Sanitization Patterns
 
@@ -977,7 +977,7 @@ This policy evolves through:
 - **Real-world usage**: What citation patterns actually work in practice?
 - **Memory system development**: How do queries leverage enhanced format?
 - **Agent feedback**: What's helpful vs burdensome?
-- **Model user validation**: Does it work for MannyMacEff (universal test)?
+- **Model user validation**: Does it work for model users (universal test)?
 
 **Principle**: Citations should enable discovery and synthesis, not create busywork. If enhanced format doesn't serve knowledge graph building → refine it.
 

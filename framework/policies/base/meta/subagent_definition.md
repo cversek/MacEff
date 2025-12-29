@@ -131,7 +131,7 @@ Subagent definition best practices guide the creation of minimal, reading-driven
 - Definitions don't update → behavior diverges from current best practices
 - PA must manually update definitions → maintenance burden
 
-**Example**: DevOpsEng embedded "Skip the Ceremony" in Cycle 48. By Cycle 106, framework has new ceremony-skipping nuances (e.g., concurrent tool constraints, naked cd warnings). DevOpsEng definition doesn't reflect these unless manually updated.
+**Example**: DevOpsEng embedded "Skip the Ceremony" in its original definition. Later, the framework added new ceremony-skipping nuances (e.g., concurrent tool constraints, naked cd warnings). DevOpsEng definition doesn't reflect these unless manually updated.
 
 **Reading-List Definitions Adapt**:
 - Specialist reads current policies at delegation time
@@ -734,8 +734,8 @@ This policy evolves through:
 
 ### 10.1 The 87→51 Line Transformation
 
-**DevOpsEng (Cycle 48)**: 87 lines, embedded instructions, frozen behavior
-**PolicyWriter (Cycle 106)**: 51 lines, reading-list driven, adaptive behavior
+**DevOpsEng (early pattern)**: 87 lines, embedded instructions, frozen behavior
+**PolicyWriter (evolved pattern)**: 51 lines, reading-list driven, adaptive behavior
 
 **41% size reduction + infinite adaptability gain**
 
