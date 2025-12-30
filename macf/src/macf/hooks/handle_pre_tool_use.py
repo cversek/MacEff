@@ -138,6 +138,50 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                         }
                     }
 
+            # Erasure detection: check if existing item CONTENT was removed (not just count reduction)
+            # This catches when agent replaces items while keeping similar count
+            # Note: Status changes allowed, breadcrumb additions allowed (prefix matching)
+            if prev_count > 0 and prev_event:
+                prev_todos = prev_event.get("data", {}).get("items", [])
+                if prev_todos:
+                    # Extract content text from todos
+                    prev_contents = [t.get("content", "") for t in prev_todos if t.get("content")]
+                    new_contents = [t.get("content", "") for t in todos if t.get("content")]
+
+                    # For each previous content, check if ANY new content starts with it
+                    # This allows adding breadcrumbs (e.g., "Phase 1" -> "Phase 1 [breadcrumb]")
+                    erased_items = []
+                    for prev_content in prev_contents:
+                        # Check if any new content starts with this previous content
+                        preserved = any(new_c.startswith(prev_content) or prev_content.startswith(new_c)
+                                        for new_c in new_contents)
+                        if not preserved:
+                            erased_items.append(prev_content)
+
+                    # Only block if items were truly erased AND no collapse was authorized
+                    if erased_items and new_count >= prev_count:
+                        erased_preview = [item[:50] + "..." if len(item) > 50 else item for item in erased_items[:3]]
+                        more_count = len(erased_items) - 3 if len(erased_items) > 3 else 0
+                        erased_str = "\n  - ".join(erased_preview)
+                        if more_count > 0:
+                            erased_str += f"\n  - ... and {more_count} more"
+
+                        warning_msg = (
+                            f"⚠️ TODO Erasure Detected - Item Content Removed\n\n"
+                            f"Previous: {prev_count} items → New: {new_count} items\n"
+                            f"Erased content ({len(erased_items)} items):\n  - {erased_str}\n\n"
+                            f"🚨 AGENT: You may be replacing existing items instead of adding to them.\n"
+                            f"Status changes and breadcrumb additions are allowed.\n\n"
+                            f"To proceed anyway, USER can say 'proceed' or agent can retry with preserved content."
+                        )
+                        return {
+                            "continue": False,
+                            "hookSpecificOutput": {
+                                "hookEventName": "PreToolUse",
+                                "message": warning_msg
+                            }
+                        }
+
             # Collapse detection: new < prev
             if prev_count > 0 and new_count < prev_count:
                 # Check for authorization

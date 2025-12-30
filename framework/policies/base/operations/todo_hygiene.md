@@ -1,6 +1,6 @@
 # TODO List Hygiene Policy
 
-**Version**: 1.10
+**Version**: 1.11
 **Tier**: CORE
 **Category**: Development
 **Status**: ACTIVE
@@ -39,6 +39,12 @@ Applies to Primary Agents (PA) and all Subagents (SA) managing multi-step work.
 - How do I authorize a collapse before TodoWrite?
 - Why is hook enforcement needed beyond transparency?
 - What CLI commands support collapse authorization?
+
+**1.6 Erasure Detection (Hook-Enforced)**
+- What triggers blocking when items are replaced?
+- Why does content erasure matter?
+- How does prefix matching work?
+- How do I resolve erasure warnings?
 
 **2 Completion Requires Verification**
 - When can I mark a TODO completed?
@@ -284,6 +290,30 @@ macf_tools todos list --previous 1  # Show previous state (recovery)
 ```
 
 **Error Messages**: When blocked, the hook provides clear instructions including the exact `auth-collapse` command to run.
+
+### 1.6 Erasure Detection (Hook-Enforced)
+
+**⚠️ WARNING: Blocks Item Replacement Without Count Reduction ⚠️**
+
+Beyond count-based collapse detection, the hook also detects **content erasure** - when existing items are removed and replaced with new ones, even if total count stays the same or increases.
+
+**What Triggers Blocking**:
+- Any TodoWrite where existing item content signatures disappear
+- Hook compares content of each item
+- Items in previous list but not in new list → **blocked with warning**
+
+**Why This Matters**:
+Agents sometimes accidentally replace the entire TODO list instead of adding to it. This destroys historical context (breadcrumbs, roadmap references, completion timestamps) that cannot be recovered.
+
+**Resolution Options**:
+1. **Agent**: Retry TodoWrite with existing items preserved (add new items, don't replace)
+2. **User**: Say "proceed" to override the warning if replacement is intentional
+
+**Detection Method**:
+- Extracts content text from previous `todos_updated` event
+- Uses **prefix matching**: new content must start with previous content (or vice versa)
+- Allows breadcrumb additions: `"Phase 1"` → `"Phase 1 [s_abc/c_1/...]"` is valid
+- Missing content with no prefix match = erased item
 
 ### 2. Completion Requires Verification
 
