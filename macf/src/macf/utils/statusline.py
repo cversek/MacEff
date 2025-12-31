@@ -138,14 +138,17 @@ def get_statusline_data(cc_json: Optional[Dict[str, Any]] = None) -> Dict[str, A
 
     # Token info - prefer CC JSON, fallback to MACF
     if cc_json:
-        tokens_used = cc_json.get("tokens_used", 0)
-        tokens_total = cc_json.get("tokens_total", CC2_TOTAL_CONTEXT)
-        # Calculate CLUAC from CC data if not provided
-        if "cluac" in cc_json:
-            cluac = cc_json["cluac"]
-        else:
-            tokens_remaining = tokens_total - tokens_used
-            cluac = round((tokens_remaining / tokens_total) * 100) if tokens_total > 0 else 100
+        # Claude Code sends nested structure: context_window.current_usage.input_tokens
+        context_window = cc_json.get("context_window", {})
+        current_usage = context_window.get("current_usage", {})
+
+        # Extract token counts from CC's nested structure
+        tokens_used = current_usage.get("input_tokens", 0) + current_usage.get("output_tokens", 0)
+        tokens_total = context_window.get("context_window_size", CC2_TOTAL_CONTEXT)
+
+        # Calculate CLUAC from actual usage
+        tokens_remaining = tokens_total - tokens_used
+        cluac = round((tokens_remaining / tokens_total) * 100) if tokens_total > 0 else 100
     else:
         try:
             token_info = get_token_info()
