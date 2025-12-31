@@ -136,19 +136,13 @@ def get_statusline_data(cc_json: Optional[Dict[str, Any]] = None) -> Dict[str, A
         print(f"⚠️ MACF: Environment detection failed: {e}", file=sys.stderr)
         environment = "Unknown"
 
-    # Token info - prefer CC JSON, fallback to MACF
+    # Token info - always use MACF calculation (CC JSON fields don't represent context window)
+    # Note: CC's total_input_tokens/total_output_tokens are session totals, not context window usage
+    cc_json = None  # Force MACF fallback - CC JSON doesn't provide usable context window data
+
     if cc_json:
-        # Claude Code sends nested structure in context_window
-        context_window = cc_json.get("context_window", {})
-
-        # Use total_input_tokens + total_output_tokens for cumulative usage
-        # (current_usage contains only current message, not session totals)
-        tokens_used = context_window.get("total_input_tokens", 0) + context_window.get("total_output_tokens", 0)
-        tokens_total = context_window.get("context_window_size", CC2_TOTAL_CONTEXT)
-
-        # Calculate CLUAC from cumulative usage
-        tokens_remaining = tokens_total - tokens_used
-        cluac = round((tokens_remaining / tokens_total) * 100) if tokens_total > 0 else 100
+        # Placeholder for future CC integration if they add context window fields
+        pass
     else:
         try:
             token_info = get_token_info()
