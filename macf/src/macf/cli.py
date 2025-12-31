@@ -845,6 +845,103 @@ def cmd_context(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_statusline(args: argparse.Namespace) -> int:
+    """Generate formatted statusline for Claude Code display."""
+    from .utils.statusline import get_statusline_data, format_statusline
+
+    try:
+        # Check for CC JSON on stdin (non-blocking)
+        cc_json = None
+        if not sys.stdin.isatty():
+            try:
+                stdin_data = sys.stdin.read().strip()
+                if stdin_data:
+                    cc_json = json.loads(stdin_data)
+            except (json.JSONDecodeError, Exception):
+                # Ignore stdin parsing failures - use MACF data only
+                pass
+
+        # Gather statusline data
+        data = get_statusline_data(cc_json=cc_json)
+
+        # Format and output
+        statusline = format_statusline(
+            agent_name=data["agent_name"],
+            project=data["project"],
+            environment=data["environment"],
+            tokens_used=data["tokens_used"],
+            tokens_total=data["tokens_total"],
+            cluac=data["cluac"]
+        )
+
+        print(statusline)
+        return 0
+
+    except Exception as e:
+        print(f"Error generating statusline: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_statusline_install(args: argparse.Namespace) -> int:
+    """Install statusline script and configure Claude Code settings."""
+    from pathlib import Path
+    import stat
+
+    try:
+        # Find .claude directory (project or global)
+        cwd = Path.cwd()
+        claude_dir = cwd / ".claude"
+
+        if not claude_dir.exists():
+            # Try global directory
+            claude_dir = Path.home() / ".claude"
+            if not claude_dir.exists():
+                print("Error: No .claude directory found (checked project and ~/.claude)", file=sys.stderr)
+                return 1
+
+        # Create statusline.sh wrapper script
+        script_path = claude_dir / "statusline.sh"
+        script_content = """#!/bin/bash
+# MacEff Statusline for Claude Code
+exec macf_tools statusline
+"""
+
+        script_path.write_text(script_content)
+
+        # Make executable
+        script_path.chmod(script_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+        # Update settings.local.json
+        settings_path = claude_dir / "settings.local.json"
+
+        # Read existing settings or create empty dict
+        if settings_path.exists():
+            settings = json.loads(settings_path.read_text())
+        else:
+            settings = {}
+
+        # Add statusLine configuration
+        settings["statusLine"] = {
+            "type": "command",
+            "command": ".claude/statusline.sh",
+            "padding": 0
+        }
+
+        # Write back
+        settings_path.write_text(json.dumps(settings, indent=2) + "\n")
+
+        print(f"✅ Statusline installed successfully:")
+        print(f"   Script: {script_path}")
+        print(f"   Settings: {settings_path}")
+        print(f"\nRestart Claude Code to see the statusline.")
+
+        return 0
+
+    except Exception as e:
+        print(f"Error installing statusline: {e}", file=sys.stderr)
+        return 1
+
+
 def cmd_breadcrumb(args: argparse.Namespace) -> int:
     """Generate fresh breadcrumb for current DEV_DRV."""
     from .utils import get_breadcrumb, parse_breadcrumb
@@ -2279,6 +2376,35 @@ def cmd_todos_auth_status(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_todos_auth_item_edit(args: argparse.Namespace) -> int:
+    """Authorize editing content of a specific TODO item by index."""
+    from macf.agent_events_log import append_event
+
+    index = args.index
+    reason = getattr(args, 'reason', None) or "No reason provided"
+
+    if index < 1:
+        print(f"Error: index must be >= 1 (1-based indexing)")
+        return 1
+
+    try:
+        append_event(
+            event="todos_auth_item_edit",
+            data={
+                "index": index,
+                "reason": reason
+            }
+        )
+
+        print(f"✅ Item edit authorized: index {index}")
+        print(f"   Reason: {reason}")
+        print(f"\nYou may now execute TodoWrite. Authorization is single-use.")
+        return 0
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
 # -------- parser --------
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -2400,6 +2526,21 @@ def _build_parser() -> argparse.ArgumentParser:
                                help="output as JSON")
     context_parser.add_argument("--session", help="specific session ID (default: current)")
     context_parser.set_defaults(func=cmd_context)
+
+    # Statusline command with subcommands
+    statusline_parser = sub.add_parser("statusline", help="statusline operations for Claude Code")
+    statusline_sub = statusline_parser.add_subparsers(dest="statusline_cmd")
+
+    # statusline (default - generate output)
+    statusline_generate = statusline_sub.add_parser("generate", help="generate formatted statusline output")
+    statusline_generate.set_defaults(func=cmd_statusline)
+
+    # statusline install
+    statusline_install = statusline_sub.add_parser("install", help="install statusline script and configure Claude Code")
+    statusline_install.set_defaults(func=cmd_statusline_install)
+
+    # Default to generate if no subcommand
+    statusline_parser.set_defaults(func=cmd_statusline)
 
     # Breadcrumb command
     breadcrumb_parser = sub.add_parser("breadcrumb", help="generate fresh breadcrumb for TODO completion")
@@ -2544,6 +2685,13 @@ def _build_parser() -> argparse.ArgumentParser:
                                       help="target item count after collapse")
     auth_collapse_parser.add_argument("--reason", help="reason for collapse")
     auth_collapse_parser.set_defaults(func=cmd_todos_auth_collapse)
+
+    # todos auth-item-edit
+    auth_item_edit_parser = todos_sub.add_parser("auth-item-edit", help="authorize editing a TODO item's content")
+    auth_item_edit_parser.add_argument("--index", type=int, required=True,
+                                       help="1-based index of item to edit")
+    auth_item_edit_parser.add_argument("--reason", help="reason for edit")
+    auth_item_edit_parser.set_defaults(func=cmd_todos_auth_item_edit)
 
     # todos auth-status
     todos_sub.add_parser("auth-status", help="show pending authorization").set_defaults(func=cmd_todos_auth_status)

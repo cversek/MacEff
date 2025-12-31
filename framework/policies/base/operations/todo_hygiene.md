@@ -1,10 +1,10 @@
 # TODO List Hygiene Policy
 
-**Version**: 1.11
+**Version**: 1.12
 **Tier**: CORE
 **Category**: Development
 **Status**: ACTIVE
-**Updated**: 2025-12-26
+**Updated**: 2025-12-30
 
 ---
 
@@ -308,6 +308,27 @@ Agents sometimes accidentally replace the entire TODO list instead of adding to 
 **Resolution Options**:
 1. **Agent**: Retry TodoWrite with existing items preserved (add new items, don't replace)
 2. **User**: Say "proceed" to override the warning if replacement is intentional
+3. **Authorized Edit**: Use `auth-item-edit` for intentional single-item content replacement
+
+**Item Edit Authorization Protocol**:
+
+When you need to legitimately replace an item's content (not just add breadcrumbs):
+
+1. **Agent asks user**: "May I edit item #N to change [old content] → [new content]?"
+2. **User grants**: Says "granted!" to authorize agent to run the auth command
+3. **Agent authorizes**: `macf_tools todos auth-item-edit --index N --reason "reason"`
+4. **Agent retries**: TodoWrite with the modified content
+5. **Authorization consumed**: Single-use, expires on next TodoWrite
+
+```bash
+# Example: Cleaning up an anchor item
+macf_tools todos auth-item-edit --index 9 --reason "Convert anchor to experiment tracking"
+```
+
+**When to Use Item Edit Authorization**:
+- Converting placeholder items to real work items
+- Fixing typos or clarifying item descriptions
+- Renaming items without losing position in hierarchy
 
 **Detection Method**:
 - Extracts content text from previous `todos_updated` event
