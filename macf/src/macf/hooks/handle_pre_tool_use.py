@@ -160,27 +160,74 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
 
                     # Only block if items were truly erased AND no collapse was authorized
                     if erased_items and new_count >= prev_count:
-                        erased_preview = [item[:50] + "..." if len(item) > 50 else item for item in erased_items[:3]]
-                        more_count = len(erased_items) - 3 if len(erased_items) > 3 else 0
-                        erased_str = "\n  - ".join(erased_preview)
-                        if more_count > 0:
-                            erased_str += f"\n  - ... and {more_count} more"
+                        # Check for item edit authorization
+                        item_edit_auth = get_latest_event("todos_auth_item_edit")
+                        item_edit_cleared = get_latest_event("todos_auth_item_edit_cleared")
 
-                        warning_msg = (
-                            f"⚠️ TODO Erasure Detected - Item Content Removed\n\n"
-                            f"Previous: {prev_count} items → New: {new_count} items\n"
-                            f"Erased content ({len(erased_items)} items):\n  - {erased_str}\n\n"
-                            f"🚨 AGENT: You may be replacing existing items instead of adding to them.\n"
-                            f"Status changes and breadcrumb additions are allowed.\n\n"
-                            f"To proceed anyway, USER can say 'proceed' or agent can retry with preserved content."
-                        )
-                        return {
-                            "continue": False,
-                            "hookSpecificOutput": {
-                                "hookEventName": "PreToolUse",
-                                "message": warning_msg
+                        item_edit_authorized = False
+                        if item_edit_auth:
+                            auth_ts = item_edit_auth.get("timestamp", 0)
+                            cleared_ts = item_edit_cleared.get("timestamp", 0) if item_edit_cleared else 0
+                            if auth_ts > cleared_ts:
+                                auth_index = item_edit_auth.get("data", {}).get("index", 0)
+                                # Check if exactly one item was erased and it matches the authorized index
+                                if len(erased_items) == 1 and auth_index >= 1:
+                                    # Find the index of the erased item in prev_contents
+                                    erased_content = erased_items[0]
+                                    for i, prev_c in enumerate(prev_contents):
+                                        if prev_c == erased_content and (i + 1) == auth_index:
+                                            item_edit_authorized = True
+                                            # Clear the auth (single use)
+                                            append_event(
+                                                event="todos_auth_item_edit_cleared",
+                                                data={"reason": "consumed_by_todowrite", "index": auth_index}
+                                            )
+                                            break
+
+                        if not item_edit_authorized:
+                            erased_preview = [item[:50] + "..." if len(item) > 50 else item for item in erased_items[:3]]
+                            more_count = len(erased_items) - 3 if len(erased_items) > 3 else 0
+                            erased_str = "\n  - ".join(erased_preview)
+                            if more_count > 0:
+                                erased_str += f"\n  - ... and {more_count} more"
+
+                            # Find indices of erased items for auth hint
+                            erased_indices = []
+                            for erased in erased_items[:1]:  # Just show first one for hint
+                                for i, prev_c in enumerate(prev_contents):
+                                    if prev_c == erased:
+                                        erased_indices.append(i + 1)
+                                        break
+
+                            # Build authorization instructions
+                            if erased_indices:
+                                auth_cmd = f"macf_tools todos auth-item-edit --index {erased_indices[0]} --reason \"reason\""
+                                auth_instructions = (
+                                    f"\n\n🚨 AGENT: Ask the user for approval before running auth commands.\n\n"
+                                    f"To authorize, USER may either:\n"
+                                    f"  1. Run directly: {auth_cmd}\n"
+                                    f"  2. Say \"granted!\" to allow agent to run the auth command\n\n"
+                                    f"AGENT: After authorization, retry TodoWrite.\n\n"
+                                    f"Why: Content replacement requires human oversight to prevent accidental data loss."
+                                )
+                            else:
+                                auth_instructions = (
+                                    f"\n\nTo proceed anyway, USER can say 'proceed' or agent can retry with preserved content."
+                                )
+
+                            warning_msg = (
+                                f"⚠️ TODO Erasure Detected - Item Content Removed\n\n"
+                                f"Previous: {prev_count} items → New: {new_count} items\n"
+                                f"Erased content ({len(erased_items)} items):\n  - {erased_str}\n\n"
+                                f"Status changes and breadcrumb additions are allowed.{auth_instructions}"
+                            )
+                            return {
+                                "continue": False,
+                                "hookSpecificOutput": {
+                                    "hookEventName": "PreToolUse",
+                                    "message": warning_msg
+                                }
                             }
-                        }
 
             # Collapse detection: new < prev
             if prev_count > 0 and new_count < prev_count:
