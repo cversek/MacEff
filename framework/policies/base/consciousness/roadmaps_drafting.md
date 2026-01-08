@@ -1,10 +1,10 @@
 # Roadmaps Policy: Drafting & Planning
 
-**Version**: 2.2
+**Version**: 2.3
 **Tier**: MANDATORY
 **Category**: Consciousness - Planning
 **Status**: ACTIVE
-**Updated**: 2025-12-01
+**Updated**: 2026-01-08
 **Dependencies**: git_discipline.md, workspace_discipline.md
 **Related**: roadmaps_following.md (execution), todo_hygiene.md (integration)
 
@@ -115,6 +115,23 @@ Roadmaps are **strategic planning artifacts** that preserve complex development 
 - How to structure phases?
 - Sub-phase criteria?
 - Completion criteria format?
+
+**3.4 Additional Sections (Optional)**
+- What optional sections can be included?
+- Risk assessment format?
+- How to reference prior work?
+
+**3.5 Delegation Strategy (MANDATORY)**
+- What is the delegation strategy table?
+- What executor options exist?
+- What rationale requirements apply?
+- How to use maceff-delegation skill?
+
+**3.6 Phase Content Requirements (MANDATORY)**
+- What should phases specify?
+- What is interface specification?
+- What is behavior specification?
+- What is explicitly forbidden in phases?
 
 **4 Phase Breakdown Guidelines**
 - Phase numbering scheme?
@@ -517,6 +534,53 @@ Update MannyMacEff to work better with new features.
 - Related documentation: `docs/architecture.md`
 - Relevant checkpoint: `agent/private/checkpoints/2025-10-14_*.md`
 ```
+
+### 3.5 Delegation Strategy (MANDATORY)
+
+Roadmaps must include an upfront delegation strategy table assigning each phase to an executor.
+
+```markdown
+## Delegation Strategy
+
+| Phase | Executor | Rationale |
+|-------|----------|-----------|
+| 1 | DELEGATE: DevOpsEng | Infrastructure expertise; complete spec enables stateless handoff |
+| 2 | PA DIRECT | Small integration; PA needs context for orchestration |
+| 3 | DELEGATE: TestEng | Validation expertise; isolated scope |
+| 4 | PA DIRECT | Documentation requires full context |
+```
+
+**Executor Options**:
+- **PA DIRECT**: Primary Agent executes directly
+- **DELEGATE: [Subagent]**: Delegate to named specialist (DevOpsEng, TestEng, DataScientist)
+
+**Rationale Requirements**:
+- Why this executor has appropriate expertise
+- How delegation/retention affects PA's orchestrating context
+- Whether the phase scope is isolated enough for stateless delegation
+
+**Delegation Skill**: Before delegating, run `/maceff-delegation` skill to read current delegation policy and discover subagent CA structure via `tree ~/agent/subagents`.
+
+### 3.6 Phase Content Requirements (MANDATORY)
+
+Phases must specify **what** (interface, behavior) not **how** (implementation).
+
+**Interface Specification** - Describe APIs without implementation:
+- Function/class signatures with parameter types
+- Return types and structure
+- Error conditions and edge cases
+
+**Behavior Specification** - Describe what it does:
+- Inputs and outputs
+- Side effects and state changes
+- Constraints and invariants
+
+**Explicitly Forbidden**:
+- Embedded implementation code (algorithm details, code snippets)
+- Copy-paste ready solutions
+- Internal variable names or data structures
+
+**Why**: Roadmaps must survive complete context loss. Interface and behavior specs enable future-self to implement correctly. Embedded code becomes stale, misleads, and prevents independent problem-solving.
 
 ---
 
