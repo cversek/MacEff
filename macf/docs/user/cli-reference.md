@@ -28,38 +28,56 @@ macf_tools --help       # Show command help
 
 ### env
 
-Display environment summary as JSON.
+Display comprehensive environment and debugging information.
 
 **Syntax:**
 ```bash
-macf_tools env
+macf_tools env           # Pretty-printed output (default)
+macf_tools env --json    # Machine-readable JSON output
 ```
 
-**Output:**
-```json
-{
-  "time_local": "2025-11-27T21:17:56-05:00",
-  "time_utc": "2025-11-28T02:17:56+00:00",
-  "tz": "EST",
-  "time_source": "env",
-  "budget": {
-    "adapter": "absent",
-    "mode": "concise/default",
-    "thresholds": {
-      "warn": 0.85,
-      "hard": 0.95
-    }
-  },
-  "persistence": {
-    "adapter": "absent",
-    "plan": "emit checkpoints inline"
-  },
-  "cwd": "/path/to/project",
-  "vcs": "git"
-}
+**Output Categories:**
+
+| Category | Information |
+|----------|-------------|
+| **Versions** | MACF version, Claude Code version, Python interpreter path + version |
+| **Time** | Current time (local + UTC), timezone name |
+| **Paths** | Agent home, framework root, event log, hooks dir, policies dir |
+| **Session** | Session ID, cycle number, git hash |
+| **System** | Platform, OS version, CWD, hostname |
+| **Environment** | BASH_ENV, CLAUDE_PROJECT_DIR, MACEFF_AGENT_HOME_DIR |
+| **Config** | Hooks installed count, auto_mode status |
+
+**Example Output:**
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Versions
+  MACF:         0.3.2
+  Claude Code:  2.1.1
+  Python:       /usr/bin/python3 (3.10.12)
+
+Time
+  Local:        2026-01-08 04:50:00 PM EST
+  UTC:          2026-01-08 21:50:00
+
+Paths
+  Agent Home:   /Users/user/project
+  Framework:    /opt/maceff
+  Event Log:    ~/.maceff/agent_events_log.jsonl
+
+Session
+  Session ID:   c7cfbf0e
+  Cycle:        327
+  Git Hash:     3654b42
+
+System
+  Platform:     darwin
+  OS:           Darwin 24.5.0
+  Hostname:     MacBook-Pro.local
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
-**Related:** `budget`, `context`
+**Related:** `context`, `session info`
 
 ### time
 
@@ -738,7 +756,41 @@ macf_tools todos auth-collapse --from 50 --to 35 --reason "Archiving Phase 5"
 
 **Why Required:** TODO collapses are irreversible data loss. This friction prevents accidental collapse by requiring explicit authorization before TodoWrite.
 
-**Related:** `todos auth-status`, `todos list`
+**Related:** `todos auth-item-edit`, `todos auth-status`, `todos list`
+
+### todos auth-item-edit
+
+Authorize item content changes that would trigger erasure detection.
+
+**Syntax:**
+```bash
+macf_tools todos auth-item-edit --index SPEC [--reason TEXT]
+```
+
+**Index Specification Formats:**
+- **Single:** `--index 13` - authorize item 13
+- **Range:** `--index 13-17` - authorize items 13, 14, 15, 16, 17
+- **List:** `--index 13,14,15` - authorize specific items
+- **Mixed:** `--index 13-15,18,20-22` - combine ranges and lists
+
+**Examples:**
+```bash
+# Authorize single item
+macf_tools todos auth-item-edit --index 5 --reason "Fixing format"
+
+# Authorize range of items
+macf_tools todos auth-item-edit --index 10-15 --reason "Batch format update"
+
+# Authorize specific items
+macf_tools todos auth-item-edit --index 3,7,12 --reason "Selected fixes"
+
+# Mixed format
+macf_tools todos auth-item-edit --index 1-3,8,10-12 --reason "Multiple sections"
+```
+
+**Why Required:** The PreToolUse hook detects when TodoWrite replaces item content (erasure detection). This authorization grants permission before the hook blocks the operation.
+
+**Related:** `todos auth-collapse`, `todos auth-status`
 
 ### todos auth-status
 
