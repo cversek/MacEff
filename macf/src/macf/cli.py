@@ -2376,27 +2376,68 @@ def cmd_todos_auth_status(args: argparse.Namespace) -> int:
         return 1
 
 
+def parse_index_spec(spec: str) -> list[int]:
+    """Parse index specification: single (13), range (13-17), or comma-separated (13,14,15).
+
+    Supports mixed formats like '13-15,18,20-22'.
+    Returns sorted unique indices.
+    """
+    indices = []
+    for part in spec.split(','):
+        part = part.strip()
+        if '-' in part:
+            try:
+                start, end = part.split('-', 1)
+                start_int, end_int = int(start.strip()), int(end.strip())
+                if start_int > end_int:
+                    raise ValueError(f"Invalid range: {start_int}-{end_int} (start > end)")
+                indices.extend(range(start_int, end_int + 1))
+            except ValueError as e:
+                raise ValueError(f"Invalid range format '{part}': {e}")
+        else:
+            try:
+                indices.append(int(part))
+            except ValueError:
+                raise ValueError(f"Invalid index: '{part}'")
+    return sorted(set(indices))
+
+
 def cmd_todos_auth_item_edit(args: argparse.Namespace) -> int:
-    """Authorize editing content of a specific TODO item by index."""
+    """Authorize editing content of TODO items by index.
+
+    Supports single index (13), range (13-17), or comma-separated (13,14,15).
+    """
     from macf.agent_events_log import append_event
 
-    index = args.index
     reason = getattr(args, 'reason', None) or "No reason provided"
 
-    if index < 1:
-        print(f"Error: index must be >= 1 (1-based indexing)")
+    try:
+        indices = parse_index_spec(args.index)
+    except ValueError as e:
+        print(f"Error: {e}")
         return 1
 
-    try:
-        append_event(
-            event="todos_auth_item_edit",
-            data={
-                "index": index,
-                "reason": reason
-            }
-        )
+    # Validate all indices first
+    for index in indices:
+        if index < 1:
+            print(f"Error: index {index} must be >= 1 (1-based indexing)")
+            return 1
 
-        print(f"✅ Item edit authorized: index {index}")
+    try:
+        # Authorize each index
+        for index in indices:
+            append_event(
+                event="todos_auth_item_edit",
+                data={
+                    "index": index,
+                    "reason": reason
+                }
+            )
+
+        if len(indices) == 1:
+            print(f"✅ Item edit authorized: index {indices[0]}")
+        else:
+            print(f"✅ Item edits authorized: indices {', '.join(map(str, indices))}")
         print(f"   Reason: {reason}")
         print(f"\nYou may now execute TodoWrite. Authorization is single-use.")
         return 0
@@ -2687,9 +2728,9 @@ def _build_parser() -> argparse.ArgumentParser:
     auth_collapse_parser.set_defaults(func=cmd_todos_auth_collapse)
 
     # todos auth-item-edit
-    auth_item_edit_parser = todos_sub.add_parser("auth-item-edit", help="authorize editing a TODO item's content")
-    auth_item_edit_parser.add_argument("--index", type=int, required=True,
-                                       help="1-based index of item to edit")
+    auth_item_edit_parser = todos_sub.add_parser("auth-item-edit", help="authorize editing TODO item(s) content")
+    auth_item_edit_parser.add_argument("--index", type=str, required=True,
+                                       help="indices to edit: single (13), range (13-17), or list (13,14,15)")
     auth_item_edit_parser.add_argument("--reason", help="reason for edit")
     auth_item_edit_parser.set_defaults(func=cmd_todos_auth_item_edit)
 

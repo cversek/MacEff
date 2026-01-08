@@ -108,7 +108,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
 
         # TodoWrite collapse detection
         if tool_name == "TodoWrite":
-            from macf.event_queries import get_latest_event
+            from macf.event_queries import get_latest_event, get_recent_events
 
             todos = tool_input.get("todos", [])
             new_count = len(todos)
@@ -162,29 +162,44 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
 
                     # Only block if items were truly erased AND no collapse was authorized
                     if erased_items and new_count >= prev_count:
-                        # Check for item edit authorization
-                        item_edit_auth = get_latest_event("todos_auth_item_edit")
+                        # Check for item edit authorizations (supports multiple)
+                        # Get the most recent cleared timestamp to filter out consumed auths
                         item_edit_cleared = get_latest_event("todos_auth_item_edit_cleared")
+                        cleared_ts = item_edit_cleared.get("timestamp", 0) if item_edit_cleared else 0
 
-                        item_edit_authorized = False
-                        if item_edit_auth:
-                            auth_ts = item_edit_auth.get("timestamp", 0)
-                            cleared_ts = item_edit_cleared.get("timestamp", 0) if item_edit_cleared else 0
+                        # Get all recent authorizations newer than last clear
+                        recent_auths = get_recent_events("todos_auth_item_edit", max_count=50)
+                        authorized_indices = set()
+                        auth_events_to_clear = []
+
+                        for auth_event in recent_auths:
+                            auth_ts = auth_event.get("timestamp", 0)
                             if auth_ts > cleared_ts:
-                                auth_index = item_edit_auth.get("data", {}).get("index", 0)
-                                # Check if exactly one item was erased and it matches the authorized index
-                                if len(erased_items) == 1 and auth_index >= 1:
-                                    # Find the index of the erased item in prev_contents
-                                    erased_content = erased_items[0]
-                                    for i, prev_c in enumerate(prev_contents):
-                                        if prev_c == erased_content and (i + 1) == auth_index:
-                                            item_edit_authorized = True
-                                            # Clear the auth (single use)
-                                            append_event(
-                                                event="todos_auth_item_edit_cleared",
-                                                data={"reason": "consumed_by_todowrite", "index": auth_index}
-                                            )
-                                            break
+                                auth_index = auth_event.get("data", {}).get("index", 0)
+                                if auth_index >= 1:
+                                    authorized_indices.add(auth_index)
+                                    auth_events_to_clear.append(auth_event)
+
+                        # Find indices of all erased items
+                        erased_indices = set()
+                        for erased_content in erased_items:
+                            for i, prev_c in enumerate(prev_contents):
+                                if prev_c == erased_content:
+                                    erased_indices.add(i + 1)  # 1-based index
+                                    break
+
+                        # Check if ALL erased items have authorizations
+                        item_edit_authorized = erased_indices and erased_indices.issubset(authorized_indices)
+
+                        if item_edit_authorized:
+                            # Clear all consumed authorizations
+                            for auth_event in auth_events_to_clear:
+                                auth_index = auth_event.get("data", {}).get("index", 0)
+                                if auth_index in erased_indices:
+                                    append_event(
+                                        event="todos_auth_item_edit_cleared",
+                                        data={"reason": "consumed_by_todowrite", "index": auth_index}
+                                    )
 
                         if not item_edit_authorized:
                             erased_preview = [item[:50] + "..." if len(item) > 50 else item for item in erased_items[:3]]
