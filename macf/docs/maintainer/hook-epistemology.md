@@ -420,6 +420,19 @@ Claude Code hooks have several known bugs and limitations tracked in GitHub issu
 - **Symptom**: Race conditions with plugin initialization
 - **Source**: [GitHub #10997](https://github.com/anthropics/claude-code/issues/10997)
 
+#### Exit Code 2 Visibility is Tool-Dependent
+- **Status**: ✅ Verified empirically (2026-01-08)
+- **Symptom**: stderr output with exit code 2 is visible for Bash tool blocking but NOT for TodoWrite blocking
+- **Workaround**: Use `permissionDecision: "deny"` with `permissionDecisionReason` + exit code 0 for non-Bash tools
+
+| Blocking Method | Bash | TodoWrite | Other Tools |
+|-----------------|------|-----------|-------------|
+| exit 2 + stderr | ✅ User sees | ❌ User blind | ❓ Untested |
+| permissionDecision: deny | ✅ User sees | ✅ User sees | ✅ Expected |
+
+- **Recommendation**: For universal visibility, use `permissionDecision: "deny"` pattern for all tool blocking except Bash (where exit 2 works and is simpler)
+- **Source**: MacEff empirical observation
+
 ---
 
 ## Best Practices
