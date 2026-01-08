@@ -64,10 +64,14 @@ macf_tools breadcrumb
 
 - [CLI Reference](docs/user/cli-reference.md) - Complete command documentation
 - [Hooks Guide](docs/user/hooks.md) - Hook installation and usage
+- [Environment Guide](docs/user/environment.md) - PA environment and env.d extensibility
+- [Commands Guide](docs/user/commands.md) - Hierarchical command namespaces
+- [Identifiers Guide](docs/user/identifiers.md) - Session/cycle/breadcrumb semantics
+- [Statusline Guide](docs/user/statusline.md) - Custom statusline configuration
 
 ## Version
 
-Current version: **0.3.0**
+Current version: **0.3.2**
 
 ## Requirements
 
