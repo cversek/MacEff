@@ -478,17 +478,26 @@ def create_subagent_workspace(username: str, sa_name: str, sa_spec: SubagentSpec
 
 
 def install_framework_commands(home_dir: Path) -> None:
-    """Install framework commands as symlinks to ~/.claude/commands/."""
+    """Install framework commands as symlinks to ~/.claude/commands/.
+
+    Supports nested directory structure for hierarchical namespaces.
+    E.g., commands/maceff/todos/start.md → /maceff:todos:start
+    """
     commands_dir = home_dir / '.claude' / 'commands'
     commands_dir.mkdir(parents=True, exist_ok=True)
 
     framework_commands = FRAMEWORK_ROOT / 'commands'
     if framework_commands.exists():
-        for cmd_file in framework_commands.glob('maceff_*.md'):
-            link = commands_dir / cmd_file.name
+        # Walk nested structure recursively
+        for cmd_file in framework_commands.rglob('*.md'):
+            # Get relative path from commands/ root
+            rel_path = cmd_file.relative_to(framework_commands)
+            # Create target path preserving directory structure
+            link = commands_dir / rel_path
+            link.parent.mkdir(parents=True, exist_ok=True)
             if not link.exists() and not link.is_symlink():
                 link.symlink_to(cmd_file)
-                log(f"Created command symlink: {link.name}")
+                log(f"Created command symlink: {rel_path}")
 
 
 def install_framework_skills(home_dir: Path) -> None:
