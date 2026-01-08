@@ -44,7 +44,16 @@ After reading policies, **report answers to user before any state-changing tools
    - How should policies be referenced?
    - What patterns are prohibited?
 
-5. **What TODO integration does roadmaps_following.md require?**
+5. **What delegation strategy does §3.5 require?**
+   - What executor options exist (PA DIRECT vs DELEGATE)?
+   - What rationale must accompany each phase assignment?
+   - When should `/maceff-delegation` skill be invoked?
+
+6. **What phase content requirements does §3.6 specify?**
+   - What should phases specify (interface/behavior)?
+   - What is explicitly forbidden in phase descriptions?
+
+7. **What TODO integration does roadmaps_following.md require?**
    - How must new roadmaps be pinned to the TODO list?
    - What emoji/format distinguishes roadmap items?
 
