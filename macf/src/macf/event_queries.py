@@ -72,6 +72,27 @@ def get_nth_event(event_type: str, n: int = 0, limit: Optional[int] = None) -> O
     return None
 
 
+def get_recent_events(event_type: str, max_count: int = 100, limit: Optional[int] = None) -> List[dict]:
+    """
+    Get all recent events of a specific type.
+
+    Args:
+        event_type: The event type to search for
+        max_count: Maximum number of matching events to return
+        limit: Maximum events to scan (default None = scan all)
+
+    Returns:
+        List of matching events, most recent first
+    """
+    results = []
+    for event in read_events(limit=limit, reverse=True):
+        if event.get("event") == event_type:
+            results.append(event)
+            if len(results) >= max_count:
+                break
+    return results
+
+
 def get_dev_drv_stats_from_events(session_id: str) -> dict:
     """
     Query dev_drv_started/ended events, return stats with snapshot baseline.

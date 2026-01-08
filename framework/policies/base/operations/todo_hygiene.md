@@ -314,15 +314,27 @@ Agents sometimes accidentally replace the entire TODO list instead of adding to 
 
 When you need to legitimately replace an item's content (not just add breadcrumbs):
 
-1. **Agent asks user**: "May I edit item #N to change [old content] → [new content]?"
+1. **Agent asks user**: "May I edit item(s) #N to change [old content] → [new content]?"
 2. **User grants**: Says "granted!" to authorize agent to run the auth command
-3. **Agent authorizes**: `macf_tools todos auth-item-edit --index N --reason "reason"`
+3. **Agent authorizes**: `macf_tools todos auth-item-edit --index SPEC --reason "reason"`
 4. **Agent retries**: TodoWrite with the modified content
-5. **Authorization consumed**: Single-use, expires on next TodoWrite
+5. **Authorization consumed**: Single-use per index, expires on next TodoWrite
+
+**Index Specification Formats**:
+- **Single**: `--index 13` (one item)
+- **Range**: `--index 13-17` (items 13, 14, 15, 16, 17)
+- **List**: `--index 13,15,17` (specific items)
+- **Mixed**: `--index 13-15,18,20-22` (combination)
 
 ```bash
-# Example: Cleaning up an anchor item
-macf_tools todos auth-item-edit --index 9 --reason "Convert anchor to experiment tracking"
+# Example: Single item
+macf_tools todos auth-item-edit --index 9 --reason "Convert anchor to experiment"
+
+# Example: Multiple items (range)
+macf_tools todos auth-item-edit --index 13-18 --reason "Format fix per policy update"
+
+# Example: Specific items
+macf_tools todos auth-item-edit --index 5,8,12 --reason "Update roadmap references"
 ```
 
 **When to Use Item Edit Authorization**:
@@ -414,14 +426,15 @@ macf_tools dev_drv --breadcrumb c_62/s_4107604e/p_c1116f5/t_1761368640/g_5ef1146
 
 ```
 Phase 1: High-Level Milestone
-  → Step 1.1: Specific subtask
-  → Step 1.2: Another subtask
+  - Step 1.1: Specific subtask
+  - Step 1.2: Another subtask
 Phase 2: Next Milestone (collapsed until active)
 ```
 
 **Formatting Pattern**:
 - **Parent items**: No prefix, describes phase/milestone
-- **Child items**: `  →` prefix (two spaces + arrow), describes specific subtask
+- **Child items**: `  - ` prefix (two spaces + dash + space), describes specific subtask
+- **Document refs**: `  → ` prefix (two spaces + arrow + space), points to file path (see §5)
 - **Completed phases**: Collapse to single line summary
 - **Active phase**: Expand with numbered sub-steps
 
@@ -482,12 +495,12 @@ The `→` on an indented line points to the CA document. This keeps the parent l
 ✅ Phase 2: Infrastructure
 Phase 3: Deployment
   📋 Phase 3 Detailed: agent/public/roadmaps/2025-10-24_Phase3_Deployment_ROADMAP.md
-  → 3.1: Initialize framework
-  → 3.2: Configure environment
+  - 3.1: Initialize framework
+  - 3.2: Configure environment
   ↪️ DETOUR: Fix discovered issue
-    → Debug configuration error
-    → Update documentation
-  → 3.3: Deploy services
+    - Debug configuration error
+    - Update documentation
+  - 3.3: Deploy services
 Phase 4: Validation
 ```
 
@@ -497,8 +510,8 @@ Phase 4: Validation
 🗺️ ROADMAP: 2025-10-24_Feature_Implementation_ROADMAP.md
 📜 DELEG_PLAN: 2025-10-24_DELEG_PLAN_Testing_TestEng.md
 Phase 1: Unit tests
-  → Test core functionality
-  → Test edge cases
+  - Test core functionality
+  - Test edge cases
 ```
 
 **Benefits**:
