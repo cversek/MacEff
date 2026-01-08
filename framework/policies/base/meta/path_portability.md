@@ -1,6 +1,6 @@
 # Path Portability Guidelines
 
-**Breadcrumb**: s_1b969d39/c_194/g_0541f17/p_d8030408/t_1764631820
+**Breadcrumb**: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
 **Type**: Meta-Policy (Framework Infrastructure)
 **Scope**: All MacEff-portable artifacts (skills, commands, subagents, policies)
 **Status**: ACTIVE

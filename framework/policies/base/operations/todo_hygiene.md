@@ -174,7 +174,7 @@ Applies to Primary Agents (PA) and all Subagents (SA) managing multi-step work.
 - **Timestamp**: Completion moment (when work finished)
 
 **Post-Compaction Archaeology**: Breadcrumb enables reconstruction
-1. Identify which cycle work occurred (e.g., Cycle 61)
+1. Identify which cycle work occurred (e.g., Cycle 42)
 2. Locate session transcript file
 3. Search for prompt UUID to find exact conversation moment
 4. Know precise completion time
@@ -556,18 +556,18 @@ Phase 1: Unit tests
 
 ```
 TOP STACK (ACTIVE - most recent first):
-↪️ DETOUR: Fix Infrastructure [Cycle 112 active]
+↪️ DETOUR: Fix Infrastructure [Cycle 42 active]
   📜 DELEG_PLAN: Ready for delegation
 🗺️ MISSION: Platform Migration [Cycles 109-111 ongoing]
   📦 Phase 4: Complete [c_109/...]
   Phase 5: Pending
 
 MIDDLE STACK (DEFERRED - most recent first):
-📦 DETOUR DEFERRED: Policy Integration [Cycle 107]
-📦 DETOUR DEFERRED: CLI Enhancements [Cycle 105]
+📦 DETOUR DEFERRED: Policy Integration [Cycle 42]
+📦 DETOUR DEFERRED: CLI Enhancements [Cycle 42]
 
 BOTTOM STACK (COMPLETED - most recent first):
-📦 DETOUR COMPLETED: Memory Research [Cycle 103]
+📦 DETOUR COMPLETED: Memory Research [Cycle 42]
 ```
 
 **Priority Signals**:
@@ -596,9 +596,9 @@ BOTTOM STACK (COMPLETED - most recent first):
 #    - What are their cycle numbers?
 
 # 2. Sort within each status tier (most recent first)
-#    ACTIVE: Cycle 112 DETOUR > Cycle 109 MISSION
-#    DEFERRED: Cycle 107 > Cycle 105
-#    COMPLETED: Cycle 103
+#    ACTIVE: Cycle 42 DETOUR > Cycle 42 MISSION
+#    DEFERRED: Cycle 42 > Cycle 42
+#    COMPLETED: Cycle 42
 
 # 3. Stack them: ACTIVE (top) → DEFERRED (middle) → COMPLETED (bottom)
 
@@ -691,9 +691,9 @@ BOTTOM STACK (COMPLETED - most recent first):
 - Location declares nature: public OSS vs private consciousness
 
 **Example Scenario**:
-- Agent: ClaudeTheBuilder (CA repo: `ClaudeTheBuilder/`)
+- Agent: [Primary Agent] (CA repo: `[Primary Agent]/`)
 - MISSION roadmap: `MacEff/docs/roadmaps/2025-12-27_v0.3.2_Generic_Env_Extensibility/`
-- TODO archive location: `ClaudeTheBuilder/agent/public/archived_todos/2025-12-28_010000_2025-12-27_v0.3.2_Generic_Env_Extensibility_Archived.md`
+- TODO archive location: `[Primary Agent]/agent/public/archived_todos/2025-12-28_010000_2025-12-27_v0.3.2_Generic_Env_Extensibility_Archived.md`
 
 ### 9. Dual Forms Required
 

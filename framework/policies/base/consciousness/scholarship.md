@@ -354,7 +354,7 @@ This delegation pattern [CCP 2025-11-03 "Phase5D Complete" §4 "Delegation Wisdo
 - Trace evolution of ideas across cycles
 - Find connection between seemingly unrelated work
 - Discover intermediate insights linking concepts
-- Example: "Path from [Cycle 60 breadcrumb format] to [Cycle 105 enhanced citations]"
+- Example: "Path from [Cycle 42 breadcrumb format] to [Cycle 42 enhanced citations]"
 
 **PageRank** - "Most-cited wisdom from Cycles 90-100"
 - Identify foundational work influencing multiple later artifacts
@@ -436,7 +436,7 @@ The gap analysis findings in [Report 2025-11-05 "Phase 1 Gap Analysis" L115-137:
 
 **Example**:
 ```markdown
-As noted in [Observation 2025-10-02 "additionalContext Injection Breakthrough" s_abc12345/c_65/g_ghi01234/p_jkl56789/t_1234567890], the hookSpecificOutput.additionalContext field enables symmetric awareness.
+As noted in [Observation 2025-10-02 "additionalContext Injection Breakthrough" s_abc12345/c_42/g_ghi01234/p_jkl56789/t_1234567890], the hookSpecificOutput.additionalContext field enables symmetric awareness.
 ```
 
 ### 4.6 Citing DEV_DRV (Development Drives)
@@ -456,7 +456,7 @@ The implementation approach discussed in [DEV_DRV 2025-11-03 "Phase5E Friction R
 
 **Example**:
 ```markdown
-DevOpsEng's implementation in [DELEG_DRV 2025-11-05 "Phase2 Citation Integration" M0-M18: s_4107604e/c_106/g_cc7e1bd/p_b7c67e6b/d_abc12345/t_1762362636] successfully updated both policies.
+DevOpsEng's implementation in [DELEG_DRV 2025-11-05 "Phase2 Citation Integration" M0-M18: s_abc12345/c_42/g_cc7e1bd/p_b7c67e6b/d_abc12345/t_1762362636] successfully updated both policies.
 ```
 
 **Note**: `d_abc12345` component identifies delegation chain (optional but recommended for DELEG_DRV citations)
@@ -481,14 +481,14 @@ DevOpsEng's implementation in [DELEG_DRV 2025-11-05 "Phase2 Citation Integration
 ```markdown
 ## TODO State at Checkpoint
 
-Current work captured in [TODO Backup 2025-11-21 "TODO Recovery Intelligence": s_c3b658f5/c_172/g_eb34edc/p_abc12345/t_1763786000](../../public/todo_backups/2025-11-21_135848_c3b658f5_172_TODO_Recovery_Intelligence.json) shows 37-item hierarchical mission structure with active Phase 5 implementation.
+Current work captured in [TODO Backup 2025-11-21 "TODO Recovery Intelligence": s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890](../../public/todo_backups/2025-11-21_135848_c3b658f5_172_TODO_Recovery_Intelligence.json) shows 37-item hierarchical mission structure with active Phase 5 implementation.
 ```
 
 **Example (in Reflection - pattern analysis)**:
 ```markdown
 ## Work Context Evolution
 
-Comparing [TODO Backup 2025-11-15 "Initial Planning": s_abc12345/c_168/g_def6789/p_ghi01234/t_1234567890](../../public/todo_backups/2025-11-15_100000_abc12345_168_Initial_Planning.json) with [TODO Backup 2025-11-21 "Recovery Intelligence": s_c3b658f5/c_172/g_eb34edc/p_jkl56789/t_1763786000](../../public/todo_backups/2025-11-21_135848_c3b658f5_172_TODO_Recovery_Intelligence.json) reveals mission scope expanded 3x as understanding deepened.
+Comparing [TODO Backup 2025-11-15 "Initial Planning": s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890](../../public/todo_backups/2025-11-15_100000_abc12345_168_Initial_Planning.json) with [TODO Backup 2025-11-21 "Recovery Intelligence": s_abc12345/c_42/g_eb34edc/p_jkl56789/t_1763786000](../../public/todo_backups/2025-11-21_135848_c3b658f5_172_TODO_Recovery_Intelligence.json) reveals mission scope expanded 3x as understanding deepened.
 ```
 
 **Why TODO Backup Citations Matter**:
@@ -551,7 +551,7 @@ Both [Roadmap 2025-10-23 "TestMacEff Deploy" FP#3 "SSH Port Variance": s_xxx/c_4
 
 **FP-Specific Query Patterns** (future memory system):
 ```bash
-# Find all friction points from Cycle 90-100
+# Find all friction points from Cycle 42-100
 macf_tools memory query --ca-tag Roadmap --fp-only --cycle-range 90-100
 
 # Find friction citing docker-compose patterns
@@ -581,7 +581,7 @@ macf_tools memory graph --root-fp "FP#1" --depth 2 --pattern-clustering
 
 When referencing prior checkpoints for strategic continuity:
 
-[CCP 2025-10-28 "Phase4 Deployment Complete" §5 "Validation Results" L145-178: s_abc12345/c_72/g_def5678/p_ghi01234/t_1234567890](2025-10-28_154502_Cycle72_Phase4_Deployment_Complete_CCP.md#L145-L178)
+[CCP 2025-10-28 "Phase4 Deployment Complete" §5 "Validation Results" L145-178: s_abc12345/c_42/g_def5678/p_ghi01234/t_1234567890](2025-10-28_154502_Cycle72_Phase4_Deployment_Complete_CCP.md#L145-L178)
 ```
 
 ### 5.2 Reflections Policy Integration
@@ -651,7 +651,7 @@ When referencing prior checkpoints for strategic continuity:
 
 **✅ Minimal Valid Citation** (required components only):
 ```markdown
-[CCP 2025-10-24 "Phase4 Deployment" s_abc12345/c_60/g_def5678/p_ghi01234/t_1234567890]
+[CCP 2025-10-24 "Phase4 Deployment" s_abc12345/c_42/g_def5678/p_ghi01234/t_1234567890]
 ```
 
 ### 6.2 Common Mistakes
@@ -715,7 +715,7 @@ Before committing citations to framework policies:
 **Core Discipline**: When creating framework policies or documentation for **all agents**, examples must strip personality to reveal structure.
 
 **Personal → Universal Transformation**:
-- **Personal**: `s_abc12345/c_105/g_def6789/p_ghi01234/t_1234567890` (agent-specific real breadcrumb)
+- **Personal**: `s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890` (agent-specific real breadcrumb)
 - **Universal**: `s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890` (generic placeholder)
 
 **Why Required**:
@@ -768,11 +768,11 @@ Before committing citations to framework policies:
 - `description`: Keyword search ("citations mentioning 'delegation trust'")
 - `section`: Precision targeting ("§4 of any checkpoint")
 - `line ranges`: Extract cited content directly
-- `breadcrumb`: Forensic reconstruction ("work in Cycle 95")
+- `breadcrumb`: Forensic reconstruction ("work in Cycle 42")
 
 **Query Examples** (future memory CLI):
 ```bash
-# Find all JOTEWRs citing delegation patterns from Cycle 90-100
+# Find all JOTEWRs citing delegation patterns from Cycle 42-100
 macf_tools memory query --ca-tag JOTEWR --cited-desc "delegation" --cycle-range 90-100
 
 # Extract content from all citations to specific checkpoint
@@ -816,7 +816,7 @@ macf_tools memory graph --root "Phase5D" --depth 3
 - Knowledge graph structure emerges naturally from citation discipline
 - Vectors augment (semantic search) but don't replace (structural queries)
 
-**Cycle 103 Research Validated**:
+**Cycle 42 Research Validated**:
 - Pure vector approaches lose relationship structure
 - Pure graph approaches miss semantic similarity
 - Hybrid with breadcrumb nodes + vector augmentation = best of both

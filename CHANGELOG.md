@@ -5,6 +5,101 @@ All notable changes to MACF Tools (Multi-Agent Coordination Framework) will be d
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-01-08
+
+### Summary
+
+Feature-rich release with major additions including **session identifier epistemology** (fixing breadcrumb consistency), **comprehensive env command**, **PA environment curation** with env.d extensibility, **custom statusline**, **hierarchical command namespaces**, and **multi-item authorization syntax**. Policy enhancements add mandatory delegation strategy and phase content requirements to roadmap drafting.
+
+### Added
+
+**Session Identifier Epistemology**:
+- Fixed session ID variance bug in breadcrumb generation
+- `get_current_session_id_from_events()` - event-first session detection
+- Complete documentation of identifier semantics (session UUID, cycle, prompt UUID)
+- Consistent `s_` field in breadcrumbs across all hooks
+
+**Env Command Rewrite** (`macf_tools env`):
+- Comprehensive debugging output replacing vestigial JSON stub
+- Categories: Versions, Time, Paths, Session, System, Environment, Config
+- `--json` flag for machine-readable output
+- Shows all critical paths, hook status, environment variables
+
+**PA Environment Curation**:
+- `create_bash_init()` - Build-time bash initialization for PA users
+- `/home/{user}/.bash_init` with container-wide environment variables
+- DRYed `configure_bashrc()` to source `.bash_init`
+- Claude settings injection for PA environment context
+
+**Generic Environment Extensibility**:
+- env.d dispatch pattern: `/opt/maceff/framework/env.d/*.sh`
+- Removed hardcoded `conda_env` from AgentSpec schema
+- `maceff-init` updated for env.d overlay copying
+- Project-specific environment scripts (e.g., `10-conda.sh`, `20-path.sh`)
+
+**Custom Statusline** (`macf_tools statusline`):
+- Native MacEff statusline for Claude Code terminal
+- `macf_tools statusline install` - one-command installation
+- Auto-detects agent, project, environment, CLUAC level
+- Format: `{agent} | {project} | {env} | {tokens} CLUAC {level}`
+- 16 tests covering all statusline functionality
+
+**Hierarchical Command Namespaces**:
+- Commands reorganized to colon-separated hierarchy
+- `/maceff:todos:start`, `/maceff:roadmap:draft`, `/maceff:ccp`
+- Clear namespace ownership for multi-agent environments
+- Nested command structure enables better discoverability
+- `start.py` updated for nested command symlink installation
+
+**Multi-Item Authorization Syntax**:
+- `macf_tools todos auth-item-edit --index` extended:
+  - Range syntax: `--index 13-17`
+  - List syntax: `--index 13,14,15`
+  - Mixed format: `--index 13-15,18,20-22`
+- `parse_index_spec()` function in cli.py
+- `get_recent_events()` function in event_queries.py
+- Hook enforcement updated to consume multiple authorizations atomically
+
+**Policy Enhancements** (`roadmaps_drafting.md` v2.3):
+- §3.5 Delegation Strategy (MANDATORY) - executor assignment table per phase
+- §3.6 Phase Content Requirements (MANDATORY) - interface vs implementation specs
+- CEP Navigation Guide updated with new sections
+- `/maceff:roadmap:draft` command updated with delegation questions
+
+**Hook Visibility Improvements**:
+- PreToolUse hook shows tool-specific context (Read filename, Bash command preview)
+- Abbreviated breadcrumb format for high-frequency hooks
+- CLUAC percentage display in all hook outputs
+- Exit code 2 tool-polymorphism documented (`permissionDecision: "deny"` solution)
+
+### Changed
+
+**Policy Examples Sanitized**:
+- All policy files use generic breadcrumb pattern (`s_abc12345/c_42/...`)
+- All archived roadmaps sanitized for identity-blind distribution
+- Generic cycle and agent references for public distribution
+
+**start.py Enhancements**:
+- Nested command support for hierarchical namespaces
+- Framework symlink installation handles colon-separated paths
+- env.d dispatch integration for PA initialization
+
+### Fixed
+
+- **Session ID variance**: Breadcrumbs now consistent within session (event-first detection)
+- **Exit code 2 workaround**: Tool-polymorphism handling for non-zero exits documented
+- **TODO hygiene policy conflict**: Child item format clarified (`  -` for descriptions, `  →` for paths)
+- **Hook interpreter precedence**: Python shebang consistency across hooks
+
+### Documentation
+
+- `hook-visibility-matrix.md`: Exit code 2 tool-polymorphism and visibility rules
+- `identifier-epistemology.md`: Complete session/cycle/prompt ID reference
+- `OPERATORS.md`: env.d mechanism documentation
+- Archived roadmaps moved to `docs/archive/v0.3.2/roadmaps/`
+
+---
+
 ## [0.3.1] - 2025-12-24
 
 ### Summary

@@ -1,7 +1,7 @@
 # MacEff v0.3.2 - Session Identifier Epistemology ROADMAP
 
 **Date**: 2025-12-25 Thursday
-**Breadcrumb**: s_1b969d39/c_311/g_bf70468/p_3d47b051/t_1766714561
+**Breadcrumb**: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
 **Status**: COMPLETE
 **Context**: Session ID variance discovered between hooks - need consistent identifier semantics
 
@@ -40,7 +40,7 @@ Establish complete epistemology for Claude Code session/transcript identifiers, 
 - [x] Test: `claude -c` restart shows consistent session ID post-restart
 - [x] No mtime-based session detection in hot path
 
-**Breadcrumb**: s_1b969d39/c_311/g_5f083be [C311]
+**Breadcrumb**: s_abc12345/c_42/g_5f083be [C311]
 
 ---
 
@@ -56,7 +56,7 @@ Establish complete epistemology for Claude Code session/transcript identifiers, 
 - [x] `claude -c` vs compaction behavior explained
 - [x] Delegation sidechain UUID tracking documented
 
-**Breadcrumb**: s_1b969d39/c_312/g_bf8431f [C312]
+**Breadcrumb**: s_abc12345/c_42/g_bf8431f [C312]
 
 ---
 
@@ -73,7 +73,7 @@ Establish complete epistemology for Claude Code session/transcript identifiers, 
 - [x] All experiments pass with documented results
 - [x] Any discrepancies investigated and resolved
 
-**Breadcrumb**: s_1b969d39/c_312/g_6ffe691 [C312]
+**Breadcrumb**: s_abc12345/c_42/g_6ffe691 [C312]
 
 **Results**:
 - E1: `claude -c` creates new session file, same cycle (C311 verified)
@@ -94,7 +94,7 @@ Establish complete epistemology for Claude Code session/transcript identifiers, 
 - [x] Tests pass in CI
 - [x] Coverage for session ID edge cases
 
-**Breadcrumb**: s_1b969d39/c_312/g_e6f345b [C312]
+**Breadcrumb**: s_abc12345/c_42/g_e6f345b [C312]
 
 **Notes**:
 - 323 tests passing (322 + 1 fixed)

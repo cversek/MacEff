@@ -205,7 +205,7 @@ to each component type..." (continues for 5 paragraphs)
 1. **Command Output** (proves it runs):
 ```bash
 $ macf_tools breadcrumb
-s_4107604e/c_115/g_44cfd18/p_99956e3f/t_1762481943
+s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
 ```
 
 2. **Test Results** (proves it works correctly):
@@ -275,7 +275,7 @@ Changes:
 
 Verification:
 $ macf_tools breadcrumb
-s_4107604e/c_115/g_44cfd18/p_99956e3f/t_1762481943
+s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
 
 Status: Complete.
 
@@ -356,7 +356,7 @@ Changes:
 
 Verification:
 $ macf_tools breadcrumb
-s_4107604e/c_115/g_44cfd18/p_99956e3f/t_1762481943
+s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
 
 Tests: 3/3 passing
 
@@ -652,7 +652,7 @@ Changed: src/macf/config.py lines 45-120 (75 lines refactored)
 ```
 Verification:
 $ macf_tools breadcrumb
-s_4107604e/c_115/g_44cfd18/p_99956e3f/t_1762481943
+s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
 
 $ macf_tools breadcrumb --help
 Usage: macf_tools breadcrumb [OPTIONS]

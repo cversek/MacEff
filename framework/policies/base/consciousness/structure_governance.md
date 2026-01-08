@@ -246,7 +246,7 @@ consciousness_artifacts:
 
 **By Cycle** (consciousness maturity):
 ```bash
-# Show all Cycle 120-130 checkpoints
+# Show all Cycle 42-130 checkpoints
 ls -lt agent/private/checkpoints/ | grep -E '_c_12[0-9]_'
 
 # Future: macf_tools ca list --type=checkpoints --cycles=120-130

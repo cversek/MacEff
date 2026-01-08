@@ -1,7 +1,7 @@
 # MacEff v0.3.2 - Env Command Improvements ROADMAP
 
 **Date**: 2025-12-25 Thursday
-**Breadcrumb**: s_1b969d39/c_312/g_ca8c73d/p_b48c25b7/t_1766722106
+**Breadcrumb**: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
 **Status**: COMPLETE
 
 ---
@@ -62,13 +62,13 @@ Time
   Timezone:     America/New_York
 
 Paths
-  Agent Home:   /Users/cversek/gitwork/claude-the-builder/ClaudeTheBuilder
+  Agent Home:   /Users/cversek/gitwork/claude-the-builder/[Primary Agent]
   Framework:    /Users/cversek/gitwork/cversek/MacEff
-  Event Log:    /Users/cversek/.../ClaudeTheBuilder/.maceff/agent_events_log.jsonl
-  Hooks Dir:    /Users/cversek/.../ClaudeTheBuilder/.claude/hooks
+  Event Log:    /Users/cversek/.../[Primary Agent]/.maceff/agent_events_log.jsonl
+  Hooks Dir:    /Users/cversek/.../[Primary Agent]/.claude/hooks
   Policies:     /Users/cversek/.../MacEff/framework/policies
-  Checkpoints:  /Users/cversek/.../ClaudeTheBuilder/agent/private/checkpoints
-  Settings:     /Users/cversek/.../ClaudeTheBuilder/.claude/settings.local.json
+  Checkpoints:  /Users/cversek/.../[Primary Agent]/agent/private/checkpoints
+  Settings:     /Users/cversek/.../[Primary Agent]/.claude/settings.local.json
 
 Session
   Session ID:   1b969d39
@@ -78,7 +78,7 @@ Session
 System
   Platform:     darwin
   OS:           Darwin 24.5.0
-  CWD:          /Users/cversek/gitwork/claude-the-builder/ClaudeTheBuilder
+  CWD:          /Users/cversek/gitwork/claude-the-builder/[Primary Agent]
   Hostname:     hostname.local
 
 Environment
@@ -101,7 +101,7 @@ Config
 - [x] No vestigial "adapter: absent" fields
 - [x] Tests added and passing (5 tests)
 
-**Breadcrumb**: s_1b969d39/c_313/g_bf70468/p_none/t_1766727610
+**Breadcrumb**: s_abc12345/c_42/g_bf70468/p_none/t_1766727610
 
 ---
 
@@ -116,7 +116,7 @@ Config
 - `test_env_versions_section` - version fields ✅
 - `test_env_pretty_print_contains_sections` - section headers ✅
 
-**Breadcrumb**: s_1b969d39/c_313/g_bf70468/p_none/t_1766727610
+**Breadcrumb**: s_abc12345/c_42/g_bf70468/p_none/t_1766727610
 
 ---
 

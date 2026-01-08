@@ -1,6 +1,6 @@
 # Subagent Definition Best Practices
 
-**Breadcrumb**: s_4107604e/c_106/g_cc7e1bd/p_19b2d6cf/t_1762367846
+**Breadcrumb**: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
 **Type**: Meta-Policy (Development Infrastructure)
 **Scope**: Subagent definition authors (PA creating specialist agents)
 **Status**: Framework guidelines for subagent definition creation
@@ -109,13 +109,13 @@ Subagent definition best practices guide the creation of minimal, reading-driven
 - Pragmatic TDD philosophy embedded
 - Result: Works but frozen at writing time
 
-**LearningCurator (Cycle 84, 296 lines)**:
+**LearningCurator (Cycle 42, 296 lines)**:
 - Hybrid approach: Some reading list + extensive embedded structure
 - Required reading includes base policies
 - Still contains large template sections embedded
 - Result: Transitional architecture
 
-**PolicyWriter (Cycle 106, 51 lines)**:
+**PolicyWriter (Cycle 42, 51 lines)**:
 - Pure reading-list driven: Mandatory reading before work
 - Required Reading: policy_writing.md + examples + related
 - Minimal embedded content: approach, style, success criteria

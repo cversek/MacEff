@@ -242,7 +242,7 @@ YYYY-MM-DD_HHMMSS_{topic}_learning.md
   - `agent/private/reflections/2025-10-21_JOTEWR_Cycle49.md#pattern-failures`
 
 - **Applied In**:
-  - Cycle 50 development work
+  - Cycle 42 development work
   - CLAUDE.md § Operating Principles
 
 - **Evolved To**:
