@@ -130,11 +130,13 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                         f'  {{"content": "Awaiting next task", "status": "pending", "activeForm": "Awaiting next task"}}\n\n'
                         f"Add this item to your TodoWrite call and retry."
                     )
+                    # Use permissionDecision for user visibility
                     return {
                         "continue": False,
                         "hookSpecificOutput": {
                             "hookEventName": "PreToolUse",
-                            "message": error_msg
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": error_msg
                         }
                     }
 
@@ -221,11 +223,13 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                                 f"Erased content ({len(erased_items)} items):\n  - {erased_str}\n\n"
                                 f"Status changes and breadcrumb additions are allowed.{auth_instructions}"
                             )
+                            # Use permissionDecision for user visibility
                             return {
                                 "continue": False,
                                 "hookSpecificOutput": {
                                     "hookEventName": "PreToolUse",
-                                    "message": warning_msg
+                                    "permissionDecision": "deny",
+                                    "permissionDecisionReason": warning_msg
                                 }
                             }
 
@@ -265,11 +269,13 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                         f"AGENT: After authorization, retry TodoWrite.\n\n"
                         f"Why: TODO collapses are irreversible. Human oversight prevents accidental data loss."
                     )
+                    # Use permissionDecision for user visibility (exit 2 stderr not shown for TodoWrite)
                     return {
                         "continue": False,
                         "hookSpecificOutput": {
                             "hookEventName": "PreToolUse",
-                            "message": error_msg
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": error_msg
                         }
                     }
 
@@ -384,9 +390,17 @@ if __name__ == "__main__":
         # JSON "continue": false is ignored due to known bugs (#4362, #4669, #3514)
         # When blocking: NO stdout JSON, ONLY stderr message + exit 2
         if not output.get("continue", True):
-            message = output.get("hookSpecificOutput", {}).get("message", "Tool blocked by PreToolUse hook")
-            print(message, file=sys.stderr)
-            sys.exit(2)
+            # Check if using permissionDecision (needs JSON output, exit 0)
+            hook_output = output.get("hookSpecificOutput", {})
+            if hook_output.get("permissionDecision") == "deny":
+                # permissionDecision requires JSON on stdout, exit 0
+                print(json.dumps(output))
+                sys.exit(0)
+            else:
+                # Exit 2 blocks without dialog, stderr shown (works for Bash)
+                message = output.get("systemMessage") or hook_output.get("message", "Tool blocked by PreToolUse hook")
+                print(message, file=sys.stderr)
+                sys.exit(2)
         # Only print JSON for non-blocking cases
         print(json.dumps(output))
     except Exception as e:
