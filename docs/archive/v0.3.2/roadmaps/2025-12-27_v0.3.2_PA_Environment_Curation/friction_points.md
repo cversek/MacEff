@@ -1,5 +1,5 @@
 
-## FP: ~/.local/bin not on PATH (Cycle 315)
+## FP: ~/.local/bin not on PATH (Cycle 42)
 
 **Symptom**: pip-installed scripts require full path
 ```
@@ -16,7 +16,7 @@ export PATH="$HOME/.local/bin:$PATH"
 
 ---
 
-## FP: conda env not activating (Cycle 315)
+## FP: conda env not activating (Cycle 42)
 
 **Symptom**: `conda env list` shows no active environment in non-interactive shell
 

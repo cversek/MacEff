@@ -1,7 +1,7 @@
 # MacEff v0.3.2 PA Environment Curation ROADMAP
 
 **Date**: Saturday, Dec 27, 2025
-**Breadcrumb**: s_1b969d39/c_314/g_bf70468/p_none/t_1766874196
+**Breadcrumb**: s_abc12345/c_42/g_bf70468/p_none/t_1766874196
 **Status**: ACTIVE
 **Context**: Fix env var propagation gap - SSH sessions don't inherit docker-compose vars
 

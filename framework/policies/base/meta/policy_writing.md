@@ -1,6 +1,6 @@
 # Policy Writing Guidelines
 
-**Breadcrumb**: s_4107604e/c_106/g_cc7e1bd/p_1df37611/t_1762363446
+**Breadcrumb**: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
 **Type**: Meta-Policy (Development Infrastructure)
 **Scope**: Policy authors (PA creating new framework policies)
 **Status**: Framework guidelines for policy creation and maintenance
@@ -262,7 +262,7 @@ Treat policies as stable interfaces with evolving implementation:
 **Sanitization Patterns**:
 
 **Breadcrumbs**:
-- ❌ Real: `s_4107604e/c_105/g_cc7e1bd/p_0502ec33/t_1762359658`
+- ❌ Real: `s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890`
 - ✅ Generic: `s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890`
 
 **File Paths**:

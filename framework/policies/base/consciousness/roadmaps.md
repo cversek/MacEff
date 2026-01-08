@@ -318,11 +318,11 @@ roadmaps/YYYY-MM-DD_Descriptive_Name/
 - [ ] Measurable criterion 2
 - [ ] Evidence-based criterion 3
 
-**Breadcrumb** (when complete): s_abc12345/c_73/g_def6789/p_ghi01234/t_1234567890
+**Breadcrumb** (when complete): s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
 
 **Enhanced Citation Usage** (citing this phase from checkpoint):
 ```
-[Roadmap 2025-10-28 "Feature Implementation" §2 "Core Implementation" complete: s_abc12345/c_73/g_def6789/p_ghi01234/t_1234567890](2025-10-28_Feature_Implementation/roadmap.md#phase-2-core-implementation)
+[Roadmap 2025-10-28 "Feature Implementation" §2 "Core Implementation" complete: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890](2025-10-28_Feature_Implementation/roadmap.md#phase-2-core-implementation)
 ```
 ```
 
@@ -643,7 +643,7 @@ git commit -m "roadmap: Revise Phase 4.4 validation (added GitHub auth check)
 Discovered SSH key authentication critical for private repos.
 Added validation step 4.4.11 for GitHub auth before repo cloning.
 
-- Breadcrumb: s_4107604e/c_60/g_def5678/p_e5f6g7h/t_1761345678
+- Breadcrumb: s_abc12345/c_42/g_def5678/p_e5f6g7h/t_1761345678
 "
 ```
 
@@ -694,7 +694,7 @@ Archived hierarchical TODO tree to:
 ```markdown
 ## Revision History
 
-- **2025-10-25**: Added Phase 4.4.11 GitHub auth validation [s_4107604e/c_60/g_def5678/p_e5f6g7h/t_1761345678]
+- **2025-10-25**: Added Phase 4.4.11 GitHub auth validation [s_abc12345/c_42/g_def5678/p_e5f6g7h/t_1761345678]
 - **2025-10-26**: Extended Phase 4.7 with neurovep-analysis package [/t_1761456789/.]
 ```
 
@@ -747,7 +747,7 @@ Create reports.md [/t_1761708042/g_abc9876]
 ## Phase 4: Deployment & Validation
 
 **Status**: COMPLETE
-**Breadcrumb**: s_4107604e/c_60/g_def5678/p_e5f6g7h/t_1761345678
+**Breadcrumb**: s_abc12345/c_42/g_def5678/p_e5f6g7h/t_1761345678
 
 All 13 validation checks passed. Container deployed successfully.
 ```
@@ -758,7 +758,7 @@ All 13 validation checks passed. Container deployed successfully.
 
 **Status**: COMPLETE (Archived)
 **Archive**: `archived_todos/2025-10-27_215009_Phases1-3_Foundation_COMPLETED.md`
-**Breadcrumb**: s_4107604e/c_58/g_ghi9012/p_i8j9k0l/t_1761123456
+**Breadcrumb**: s_abc12345/c_42/g_ghi9012/p_i8j9k0l/t_1761123456
 ```
 
 **Archaeological Power**: Breadcrumbs + embedded paths + git history = complete reconstruction across 30+ compactions.
@@ -946,7 +946,7 @@ Both [Roadmap 2025-10-23 "TestMacEff Deploy" FP#3: s_.../t_...] and [Roadmap 202
 
 **Query Examples** (future memory system):
 ```bash
-# Find all friction points from Cycle 90-100
+# Find all friction points from Cycle 42-100
 macf_tools memory query --ca-tag Roadmap --fp-only --cycle-range 90-100
 
 # Find friction citing docker-compose patterns

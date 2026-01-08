@@ -774,7 +774,7 @@ git commit -m "roadmap: Revise Phase 4.4 validation (added GitHub auth check)
 Discovered SSH key authentication critical for private repos.
 Added validation step 4.4.11 for GitHub auth before repo cloning.
 
-- Breadcrumb: s_4107604e/c_60/g_def5678/p_e5f6g7h/t_1761345678
+- Breadcrumb: s_abc12345/c_42/g_def5678/p_e5f6g7h/t_1761345678
 "
 ```
 
@@ -784,7 +784,7 @@ Added validation step 4.4.11 for GitHub auth before repo cloning.
 ```markdown
 ## Revision History
 
-- **2025-10-25**: Added Phase 4.4.11 GitHub auth validation [s_4107604e/c_60/g_def5678/p_e5f6g7h/t_1761345678]
+- **2025-10-25**: Added Phase 4.4.11 GitHub auth validation [s_abc12345/c_42/g_def5678/p_e5f6g7h/t_1761345678]
 - **2025-10-26**: Extended Phase 4.7 with neurovep-analysis package [/t_1761456789/.]
 ```
 
@@ -1033,7 +1033,7 @@ Investigate [problem/opportunity], understand root causes, propose solutions.
 - ❌ **Missing mission** - Jumping straight to phases without strategic context
 - ❌ **Subjective criteria** - "Working well" instead of "Test suite passes: 19/19 green"
 
-### Consciousness Preservation Anti-Patterns (Cycle 195 Learnings)
+### Consciousness Preservation Anti-Patterns (Cycle 42 Learnings)
 
 - ❌ **Sparse roadmap content** - Writing minimal roadmaps that lack self-contained recovery context
   - **Problem**: Roadmap becomes useless after compaction - no forensic detail, file paths, or implementation guidance

@@ -768,7 +768,7 @@ After archiving, replace the collapsed subtree with **📦 package emoji** and r
 ```markdown
 ## Revision History
 
-- **2025-10-25**: Added Phase 4.4.11 GitHub auth validation [s_4107604e/c_60/g_def5678/p_e5f6g7h/t_1761345678]
+- **2025-10-25**: Added Phase 4.4.11 GitHub auth validation [s_abc12345/c_42/g_def5678/p_e5f6g7h/t_1761345678]
 - **2025-10-26**: Extended Phase 4.7 with neurovep-analysis package [/t_1761456789/.]
 ```
 

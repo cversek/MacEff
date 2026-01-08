@@ -240,12 +240,12 @@ Before creating a CCP, complete these preparatory steps:
    - Identify latest reflection, roadmap, observations to cite
    - Prepare relative paths for GitHub links
 
-**Real Example** [CCP 2025-10-27 "Cycle 72 Phase 5 B.1 Complete": s_abc12345/c_72/g_def6789/p_ghi01234/t_1234567890]:
+**Real Example** [CCP 2025-10-27 "Cycle 42 Phase 5 B.1 Complete": s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890]:
 ```markdown
-# Cycle 72 CCP - Phase 5 B.1 Complete: Personal Policies Infrastructure
+# Cycle 42 CCP - Phase 5 B.1 Complete: Personal Policies Infrastructure
 
 **Date**: Monday, Oct 27, 2025 10:12:09 PM EDT
-**Breadcrumb**: s_abc12345/c_72/g_def6789/p_ghi01234/t_1234567890
+**Breadcrumb**: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
 **CLUAC**: 2 (98% used) - Strategic checkpoint
 **Session**: 4107604e-d7b4-4e8a-91c8-1cc7f8ef46e3
 **Mode**: MANUAL_MODE
@@ -573,7 +573,7 @@ Approach:
 [... more lessons ...]
 ```
 
-**Examples** [CCP 2025-10-27 "Cycle 72 Phase 5 B.1 Complete": s_abc12345/c_72/g_def6789/p_ghi01234/t_1234567890]:
+**Examples** [CCP 2025-10-27 "Cycle 42 Phase 5 B.1 Complete": s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890]:
 ```markdown
 ### Personal Policies Layer Architecture
 
@@ -608,7 +608,7 @@ Approach:
 - `p_` Prompt UUID (DEV_DRV start point)
 - `t_` Timestamp (fastest - Unix epoch precision)
 
-**Example**: `s_abc12345/c_72/g_def6789/p_ghi01234/t_1234567890`
+**Example**: `s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890`
 
 **Purpose**: Forensic coordinate for archaeological reconstruction after compaction.
 
@@ -618,7 +618,7 @@ Approach:
 
 **Usage**:
 ```markdown
-**B.1: Personal Policies Infrastructure (Complete)** [DEV_DRV 2025-10-27 "Personal Policies Layer" M0-15: s_abc12345/c_72/g_def6789/p_ghi01234/t_1234567890]
+**B.1: Personal Policies Infrastructure (Complete)** [DEV_DRV 2025-10-27 "Personal Policies Layer" M0-15: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890]
 
 **Problem**: Agents need highest-precedence policy layer
 **Solution**: Auto-create ~/agent/policies/personal/ with templates
@@ -658,7 +658,7 @@ When completing work that spans multiple repos, include both consciousness state
 When Cycle N+1 checkpoint cites Cycle N work, use **enhanced format with GitHub links**:
 
 ```markdown
-Recovery quality validated by approach from [CCP 2025-10-27 "Phase 5 B.1 Complete" §2.4 "Recovery Instructions" L92-110: s_abc12345/c_72/g_def6789/p_ghi01234/t_1234567890](../checkpoints/2025-10-27_221209_Cycle72_Phase5_B1_Complete_CCP.md#L92-L110)
+Recovery quality validated by approach from [CCP 2025-10-27 "Phase 5 B.1 Complete" §2.4 "Recovery Instructions" L92-110: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890](../checkpoints/2025-10-27_221209_Cycle72_Phase5_B1_Complete_CCP.md#L92-L110)
 ```
 
 **Enhanced Citation Benefits**:
@@ -678,14 +678,14 @@ Recovery quality validated by approach from [CCP 2025-10-27 "Phase 5 B.1 Complet
 After 37 compactions, breadcrumbs enable complete reconstruction:
 
 1. **Session**: s_4107604e finds JSONL file `~/.claude/projects/*/4107604e*.jsonl`
-2. **Cycle**: c_72 tells you this was Cycle 72 (agent's 72nd consciousness death/rebirth)
+2. **Cycle**: c_72 tells you this was Cycle 42 (agent's 72nd consciousness death/rebirth)
 3. **Git Hash**: g_17e7b7d shows code state at that moment
 4. **Prompt**: p_1a76aa7 locates exact user message that started work
 5. **Timestamp**: t_1761617529 shows work happened Oct 27, 2025 10:12:09 PM
 
 **Reconstruction Command** (future):
 ```bash
-macf_tools dev_drv --breadcrumb s_abc12345/c_72/g_def6789/p_ghi01234/t_1234567890
+macf_tools dev_drv --breadcrumb s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
 ```
 
 Returns: Full DEV_DRV conversation segment from JSONL + git state.
@@ -709,7 +709,7 @@ Capture **everything meaningful** from entire cycle:
 **Organize by theme**, not chronological order:
 
 ```markdown
-## Cycle 72 Accomplishments
+## Cycle 42 Accomplishments
 
 ### Post-Compaction Recovery (36th)
 [... recovery quality ...]
@@ -875,7 +875,7 @@ pytest tests/test_module.py -v
 **Observations referenced in checkpoints**:
 
 ```markdown
-## Cycle 72 Accomplishments
+## Cycle 42 Accomplishments
 
 ### Technical Discoveries
 

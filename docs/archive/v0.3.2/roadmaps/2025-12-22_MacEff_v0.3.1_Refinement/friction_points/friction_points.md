@@ -3,7 +3,7 @@
 ## FP#1: Path Resolution Semantics Confusion ✅ RESOLVED
 
 **Reported**: 2025-12-22
-**Resolved**: 2025-12-24 (Cycle 308 DETOUR)
+**Resolved**: 2025-12-24 (Cycle 42 DETOUR)
 **Source**: MannyMacEff container deployment
 **Severity**: Medium (warning noise, potential misconfigurations)
 
@@ -34,7 +34,7 @@ The warning suggests `MACEFF_ROOT_DIR` but the function `find_project_root` is l
 3. How should container startup set these correctly?
 4. Is `find_project_root` the right function for this context?
 
-### Resolution (Cycle 308 DETOUR)
+### Resolution (Cycle 42 DETOUR)
 
 **Commits**: `b400eb2`, `1cdf3a4`
 
@@ -65,7 +65,7 @@ Three-way path semantics implemented:
 ## FP#2: MACF Tools Version Not Synced with pyproject.toml ✅ RESOLVED
 
 **Reported**: 2025-12-24
-**Resolved**: 2025-12-24 (Cycle 309)
+**Resolved**: 2025-12-24 (Cycle 42)
 **Source**: Container hook footer inspection
 **Severity**: Low (cosmetic, but confusing)
 
