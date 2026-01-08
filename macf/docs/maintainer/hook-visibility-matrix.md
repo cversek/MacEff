@@ -1,7 +1,7 @@
 # Hook Visibility Matrix & Event Logging Reference
 
-**Version**: 1.0
-**Updated**: 2025-12-09 (Cycle 224)
+**Version**: 1.1
+**Updated**: 2026-01-08
 **Context**: Phase 8.1.5 audit of hook output schema and event logging
 
 ---
@@ -90,13 +90,47 @@ macf_tools events query --event delegation_completed --fields success,duration
 
 ---
 
-## Key Learnings (Cycle 223-224)
+## PreToolUse Blocking Visibility (Tool-Dependent Behavior)
+
+**CRITICAL FINDING**:
+
+Exit code 2 + stderr messaging has **tool-dependent user visibility**:
+
+| Tool Blocked | Exit Code 2 + stderr | User Sees Message? |
+|--------------|---------------------|-------------------|
+| Bash         | ✅ Works            | ✅ Yes            |
+| TodoWrite    | ❌ Silent           | ❌ No (user blind)|
+| Other tools  | ❓ Unknown          | Needs testing     |
+
+**The Problem**: When PreToolUse hook blocks with `exit 2` and stderr message, user visibility depends on which tool triggered the hook. Bash users see the stderr message; TodoWrite users see nothing.
+
+**The Solution**: Use `permissionDecision: "deny"` pattern for universal user visibility:
+
+```json
+{
+  "continue": true,
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "Your message here - user WILL see this"
+  }
+}
+```
+
+**Why This Works**: The `permissionDecision: "deny"` routes through JSON parsing (exit 0), not stderr capture. This provides consistent user-facing messaging regardless of which tool was blocked.
+
+**Discovery Context**: Discovered empirically while implementing TODO collapse blocking. The same hook code that worked for Bash blocking failed silently for TodoWrite blocking. Cross-agent testing revealed the tool-dependent polymorphism.
+
+---
+
+## Key Learnings
 
 1. **hookSpecificOutput validation errors**: Using hookSpecificOutput with unsupported hooks causes JSON validation failures at runtime
 2. **Pattern C limitation**: The "top-level for user + hookSpecificOutput for agent" pattern only works for 3 hooks
 3. **SessionStart special case**: Uses direct system-reminder injection in output string rather than hookSpecificOutput
 4. **Event logging comprehensive**: All 10 hooks log events; 14 total event types provide complete forensic coverage
 5. **Notification field name**: Claude Code uses `notification_type` (not `type`) in Notification hook stdin
+6. **Exit code 2 is tool-polymorphic**: stderr visibility when blocking with exit 2 depends on which tool triggered PreToolUse. Use `permissionDecision: "deny"` for universal user visibility.
 
 ---
 
