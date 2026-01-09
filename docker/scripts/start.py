@@ -17,6 +17,7 @@ import json
 import subprocess
 import pwd
 import grp
+import secrets
 from pathlib import Path
 from typing import Dict, List, Optional
 from datetime import datetime
@@ -85,6 +86,55 @@ def ensure_group(groupname: str) -> None:
         log(f"Group created: {groupname}")
 
 
+def provision_agent_identity(username: str, home_dir: str, display_name: Optional[str], agent_key: str) -> str:
+    """
+    Create persistent identity file and set GECOS field.
+
+    Args:
+        username: Linux username (e.g., 'pa_manny')
+        home_dir: Agent's home directory path
+        display_name: Human-readable name from agents.yaml (e.g., 'Manny MacEff')
+        agent_key: Agent dictionary key (e.g., 'manny') for fallback
+
+    Returns:
+        str: The 6-character agent UUID (existing or newly generated)
+    """
+    identity_file = Path(home_dir) / '.maceff_primary_agent.id'
+
+    # Check if identity file already exists (preserve continuity)
+    if identity_file.exists():
+        try:
+            agent_uuid = identity_file.read_text().strip()
+            log(f"Identity preserved: {username} -> {agent_uuid}")
+        except Exception as e:
+            log(f"WARNING: Could not read existing identity file for {username}: {e}")
+            agent_uuid = secrets.token_hex(3)
+            log(f"Generated new identity: {username} -> {agent_uuid}")
+    else:
+        # Generate new 6-character lowercase hex UUID
+        agent_uuid = secrets.token_hex(3)
+
+        try:
+            # Write identity file with root ownership and immutable permissions
+            identity_file.write_text(agent_uuid)
+            identity_file.chmod(0o444)
+            run_command(['chown', 'root:root', str(identity_file)])
+            log(f"Identity created: {username} -> {agent_uuid}")
+        except Exception as e:
+            log(f"WARNING: Could not create identity file for {username}: {e}")
+
+    # Set GECOS field (Full Name) for user
+    try:
+        # Use display_name if provided, otherwise derive from agent_key
+        gecos_name = display_name if display_name else agent_key.title()
+        run_command(['chfn', '-f', gecos_name, username], check=False)
+        log(f"GECOS field set: {username} -> {gecos_name}")
+    except Exception as e:
+        log(f"WARNING: Could not set GECOS field for {username}: {e}")
+
+    return agent_uuid
+
+
 def create_pa_user(agent_name: str, agent_spec: AgentSpec, defaults_dict: Optional[Dict] = None) -> None:
     """Create Primary Agent Linux user."""
     username = agent_spec.username
@@ -98,6 +148,10 @@ def create_pa_user(agent_name: str, agent_spec: AgentSpec, defaults_dict: Option
     home_dir = Path(f'/home/{username}')
     home_dir.mkdir(mode=0o755, exist_ok=True)
     run_command(['chown', f'{username}:{username}', str(home_dir)])
+
+    # Provision persistent agent identity (UUID + GECOS field)
+    display_name = getattr(agent_spec, 'display_name', None)
+    agent_uuid = provision_agent_identity(username, str(home_dir), display_name, agent_name)
 
     # Install SSH key if present
     install_ssh_key(username)

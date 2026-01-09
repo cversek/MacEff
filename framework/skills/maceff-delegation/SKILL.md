@@ -35,11 +35,12 @@ After reading policies, extract answers to:
 1. **Delegation Decision Framework** - What determines when delegation is appropriate vs inappropriate?
 2. **Information Architecture** - What information must specialists receive? How should it be provided?
 3. **Authority Mechanisms** - How are decision-making permissions handled?
-4. **Deliverables Structure** - What artifacts do specialists produce? Where?
+4. **Mandatory Artifacts** - What artifacts does the policy require from specialists? What path formats are specified?
 5. **Success Definition** - How should completion criteria be specified?
-6. **Constraint Communication** - What limitations must specialists understand?
+6. **Constraint Communication** - What limitations does the policy say specialists must understand?
 7. **Execution Architecture** - What are the specialist capabilities and limitations?
 8. **Validation Protocols** - How should results be verified post-delegation?
+9. **Prompt Requirements** - What does the policy require be included in delegation prompts?
 
 ---
 

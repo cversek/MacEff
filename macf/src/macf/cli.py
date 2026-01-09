@@ -27,7 +27,8 @@ from .utils import (
     get_temporal_context,
     detect_auto_mode,
     find_agent_home,
-    get_env_var_report
+    get_env_var_report,
+    get_agent_identity
 )
 
 # -------- helpers --------
@@ -87,8 +88,14 @@ def cmd_env(args: argparse.Namespace) -> int:
         except Exception:
             return str(p) if p else "(not set)"
 
+    # Get agent identity
+    agent_identity = get_agent_identity()
+
     # Gather all data
     data = {
+        "identity": {
+            "agent_id": agent_identity
+        },
         "versions": {
             "macf": _ver,
             "claude_code": get_claude_code_version() or "(unavailable)",
@@ -135,6 +142,10 @@ def cmd_env(args: argparse.Namespace) -> int:
         # Pretty-print format
         line = "━" * 80
         print(line)
+
+        print("Agent ID")
+        print(f"  {data['identity']['agent_id']}")
+        print()
 
         print("Versions")
         print(f"  MACF:         {data['versions']['macf']}")

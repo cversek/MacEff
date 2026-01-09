@@ -98,6 +98,11 @@ class AgentSpec(BaseModel):
         description="Linux username for the agent (e.g., pa_manny)"
     )
 
+    display_name: Optional[str] = Field(
+        default=None,
+        description="Human-readable display name for GECOS field and statusline (e.g., 'Manny MacEff')"
+    )
+
     personality: str = Field(
         ...,
         description="Path to personality file (Identity layer CLAUDE.md source)"
