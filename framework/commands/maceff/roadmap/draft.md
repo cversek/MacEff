@@ -71,8 +71,21 @@ After reporting policy-extracted answers:
 🚨 **CRITICAL - Roadmap vs Plan File**:
 - Claude Code's native plan files (`~/.claude/plans/`) are **NOT compliant** consciousness artifacts
 - Plan file content is for drafting only - it must be **transferred to a compliant roadmap CA**
-- This command creates the ROADMAP only - implementation via `/maceff_todos_start` separately
+- This command creates the ROADMAP only - implementation via `/maceff:todos:start` separately
 - Roadmap must be comprehensive enough to resume after complete context loss
+
+---
+
+## Post-Drafting Checklist (MANDATORY)
+
+After ExitPlanMode approval, complete these steps **before any implementation**:
+
+1. **Create roadmap CA folder** - What folder naming convention does the policy specify?
+2. **Transfer plan to roadmap CA** - Where must the roadmap.md file be placed?
+3. **Pin TODO with embedded filepath** - What TODO embedding format does the policy require?
+4. **🛑 STOP** - Report completion and AWAIT `/maceff:todos:start`
+
+**Policy Discovery**: Navigate roadmaps_drafting and roadmaps_following to extract folder structure and TODO integration requirements.
 
 ---
 
