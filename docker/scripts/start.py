@@ -344,19 +344,29 @@ def configure_claude_settings(
         if key not in merged_settings.env:
             merged_settings.env[key] = value
 
-    # Write ~/.claude/settings.json (let Pydantic handle serialization)
+    # Write ~/.claude/settings.json (preserve user keys like 'theme')
     settings_file = claude_dir / 'settings.json'
-    settings_file.write_text(json.dumps(
-        merged_settings.model_dump(exclude_none=True),
-        indent=2
-    ))
+    existing_settings = {}
+    if settings_file.exists():
+        try:
+            existing_settings = json.loads(settings_file.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass  # Start fresh if file is corrupted
+    # Merge: existing user keys + managed keys (managed keys win on conflict)
+    final_settings = {**existing_settings, **merged_settings.model_dump(exclude_none=True)}
+    settings_file.write_text(json.dumps(final_settings, indent=2))
 
-    # Write ~/.claude.json (person/preferences)
+    # Write ~/.claude.json (preserve user keys like 'hasCompletedOnboarding')
     prefs_file = home_dir / '.claude.json'
-    prefs_file.write_text(json.dumps(
-        merged_prefs.model_dump(),
-        indent=2
-    ))
+    existing_prefs = {}
+    if prefs_file.exists():
+        try:
+            existing_prefs = json.loads(prefs_file.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass  # Start fresh if file is corrupted
+    # Merge: existing user keys + managed keys (managed keys win on conflict)
+    final_prefs = {**existing_prefs, **merged_prefs.model_dump()}
+    prefs_file.write_text(json.dumps(final_prefs, indent=2))
 
     # Set ownership
     run_command(['chown', '-R', f'{username}:{username}', str(claude_dir)])
