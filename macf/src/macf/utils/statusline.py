@@ -12,6 +12,7 @@ from pathlib import Path
 
 from .tokens import get_token_info, CC2_TOTAL_CONTEXT
 from .environment import detect_execution_environment
+from .identity import get_agent_identity
 from ..config import ConsciousnessConfig
 
 
@@ -120,11 +121,10 @@ def get_statusline_data(cc_json: Optional[Dict[str, Any]] = None) -> Dict[str, A
     """
     # Get MACF-sourced data
     try:
-        config = ConsciousnessConfig()
-        agent_name = config.agent_id
+        agent_name = get_agent_identity()
     except Exception as e:
-        print(f"⚠️ MACF: Agent name detection failed: {e}", file=sys.stderr)
-        agent_name = "unknown"
+        print(f"⚠️ MACF: Agent identity detection failed: {e}", file=sys.stderr)
+        agent_name = "unknown@unknown"
 
     # Project detection (env var or workspace detection)
     project = detect_project()

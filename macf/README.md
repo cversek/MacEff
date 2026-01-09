@@ -71,7 +71,7 @@ macf_tools breadcrumb
 
 ## Version
 
-Current version: **0.3.2**
+Current version: **0.3.3**
 
 ## Requirements
 

@@ -559,7 +559,7 @@ Roadmaps must include an upfront delegation strategy table assigning each phase 
 - How delegation/retention affects PA's orchestrating context
 - Whether the phase scope is isolated enough for stateless delegation
 
-**Delegation Skill**: Before delegating, run `/maceff-delegation` skill to read current delegation policy and discover subagent CA structure via `tree ~/agent/subagents`.
+**Delegation Skill (MANDATORY)**: Before the FIRST delegation in any roadmap execution, you MUST invoke the `/maceff-delegation` skill to read current delegation policy and extract protocol requirements. This ensures you understand artifact requirements, constraint communication, and prompt specifications that may have evolved since your last delegation.
 
 ### 3.6 Phase Content Requirements (MANDATORY)
 
