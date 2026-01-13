@@ -177,8 +177,8 @@ Roadmaps preserve strategic intent across context loss. This policy ensures agen
 🗺️ MISSION: MannyMacEff v0.3.0 Migration [2025-10-27_MannyMacEff_v0.3_Migration/roadmap.md]
   📋 1: Safe Preparation [subplans/phase_1_preparation.md]
   📋 2: Docker Infrastructure [subplans/phase_2_docker.md]
-    → 2.1: Platform-aware build
-    → 2.2: ARM64 optimization
+    - 2.1: Platform-aware build
+    - 2.2: ARM64 optimization
 ```
 
 **Path Format Rules**:
@@ -239,14 +239,14 @@ TODO: 📋 2: Docker Infrastructure [subplans/phase_2_docker.md]
 ```
 🗺️ MISSION: [Description] [2025-10-27_Roadmap_Name/roadmap.md]
   📋 1: [Phase 1 Title] [subplans/phase_1_plan.md]
-    → 1.1: [Sub-phase 1.1 Title]
-      → 1.1.1: [Nested sub-phase]
-      → 1.1.2: [Nested sub-phase]
-    → 1.2: [Sub-phase 1.2 Title]
+    - 1.1: [Sub-phase 1.1 Title]
+      - 1.1.1: [Nested sub-phase]
+      - 1.1.2: [Nested sub-phase]
+    - 1.2: [Sub-phase 1.2 Title]
   📋 2: [Phase 2 Title] [subplans/phase_2_plan.md]
-    → 2.1: [Sub-phase 2.1 Title]
-    → 2.2: [Sub-phase 2.2 Title]
-      → 2.2.1: [Nested sub-phase]
+    - 2.1: [Sub-phase 2.1 Title]
+    - 2.2: [Sub-phase 2.2 Title]
+      - 2.2.1: [Nested sub-phase]
 ```
 
 **Numbering Rules**:
@@ -271,8 +271,8 @@ TODO: 📋 2: Docker Infrastructure [subplans/phase_2_docker.md]
 🗺️ MISSION: MannyMacEff v0.3.0 Migration [2025-10-27_MannyMacEff_v0.3_Migration/roadmap.md]
   📋 1: Safe Preparation [subplans/phase_1_preparation.md]
   📋 2: Docker Infrastructure [subplans/phase_2_docker.md]
-    → 2.1: Platform-aware build
-    → 2.2: ARM64 optimization
+    - 2.1: Platform-aware build
+    - 2.2: ARM64 optimization
 ```
 
 **Why Mandatory**:
@@ -406,11 +406,11 @@ All platform tests passing. ARM64 builds 23% faster than x86_64 emulation.
 ```markdown
 🗺️ MISSION: MannyMacEff Migration [2025-10-27_Name/roadmap.md]
   📋 3: Deployment [subplans/phase_3_deploy.md]
-    → 3.1: Initialize framework
+    - 3.1: Initialize framework
     ↪️ DETOUR: Fix discovered configuration issue
-      → Debug SSH key permissions
-      → Update deployment script
-    → 3.2: Configure environment (resume after DETOUR)
+      - Debug SSH key permissions
+      - Update deployment script
+    - 3.2: Configure environment (resume after DETOUR)
 ```
 
 **DETOUR Rules**:
@@ -721,8 +721,8 @@ After archiving, replace the collapsed subtree with **📦 package emoji** and r
 🗺️ MISSION: MannyMacEff v0.3.0 Migration [2025-10-24_MannyMacEff_v0.3_Migration/roadmap.md]
   [📦 Archive 2025-10-27 "Phases 1-4 Complete": s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890](archived_todos/2025-10-27_215009_Phases1-4_COMPLETED.md)
   📋 5: CEP Fixes & Bootstrap [subplans/phase_5_cep.md]
-    → 5.1: Critical path fixes
-    → 5.2: Infrastructure improvements
+    - 5.1: Critical path fixes
+    - 5.2: Infrastructure improvements
 ```
 
 **Enhanced Format**: `[📦 Archive YYYY-MM-DD "Description": s/c/g/p/t](archived_todos/filename.md)`
