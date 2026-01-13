@@ -26,6 +26,31 @@ class ClaudeCodePreferencesConfig(BaseModel):
     )
 
 
+class ClaudeCodePermissionsConfig(BaseModel):
+    """Claude Code permission rules for container agents.
+
+    These settings control tool authorization in ~/.claude/settings.json.
+    Allows declarative configuration of allow/ask/deny rules via agents.yaml.
+    """
+
+    allow: Optional[List[str]] = Field(
+        default=None,
+        description="Tools that run without confirmation (e.g., ['Read', 'Glob'])"
+    )
+    ask: Optional[List[str]] = Field(
+        default=None,
+        description="Tools that prompt for confirmation (e.g., ['TodoWrite', 'Bash'])"
+    )
+    deny: Optional[List[str]] = Field(
+        default=None,
+        description="Tools that are blocked entirely"
+    )
+    defaultMode: Optional[str] = Field(
+        default=None,
+        description="Default permission mode for unlisted tools ('allow', 'ask', 'deny')"
+    )
+
+
 class ClaudeCodeSettingsConfig(BaseModel):
     """Claude Code project/capability settings for container agents.
 
@@ -50,6 +75,10 @@ class ClaudeCodeSettingsConfig(BaseModel):
             "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR": "1"
         },
         description="Environment variables for Claude Code"
+    )
+    permissions: Optional[ClaudeCodePermissionsConfig] = Field(
+        default=None,
+        description="Permission rules for tool authorization (allow/ask/deny)"
     )
 
 
