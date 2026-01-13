@@ -8,12 +8,13 @@ RUN --mount=type=cache,target=/var/cache/apt \
     --mount=type=cache,target=/var/lib/apt \
     apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl wget gnupg sudo openssh-server \
-      git vim less build-essential python3 python3-venv python3-pip \
+      git git-lfs vim less build-essential python3 python3-venv python3-pip \
       python3-yaml \
       nodejs npm \
       acl jq tini \
       tree \
- && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/* \
+ && git lfs install --system
 
 # Install pydantic v2 via pip (code requires field_validator from v2)
 RUN pip3 install --break-system-packages pydantic>=2.0
