@@ -2355,6 +2355,47 @@ def cmd_todos_auth_collapse(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_todos_auth_restore(args: argparse.Namespace) -> int:
+    """Authorize a TODO restore from previous state."""
+    from macf.agent_events_log import append_event
+    from macf.event_queries import get_nth_event
+
+    n = args.previous
+    reason = getattr(args, 'reason', None) or f"Restore from previous #{n}"
+
+    try:
+        event = get_nth_event("todos_updated", n=n)
+        if not event:
+            print(f"Error: No todos_updated event found at position {n}")
+            return 1
+
+        data = event.get("data", {})
+        items = data.get("items", [])
+
+        if not items:
+            print(f"Error: Previous state #{n} has no items")
+            return 1
+
+        append_event(
+            event="todos_auth_restore",
+            data={
+                "previous_n": n,
+                "expected_items": items,
+                "expected_count": len(items),
+                "reason": reason
+            }
+        )
+
+        print(f"✅ Restore authorized: from previous #{n} ({len(items)} items)")
+        print(f"   Reason: {reason}")
+        print(f"\nYou may now execute TodoWrite. Authorization is single-use.")
+        print(f"⚠️  TodoWrite MUST exactly match the stored JSON to proceed.")
+        return 0
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
 def cmd_todos_auth_status(args: argparse.Namespace) -> int:
     """Show pending authorization status."""
     from macf.event_queries import get_latest_event
@@ -2744,6 +2785,13 @@ def _build_parser() -> argparse.ArgumentParser:
                                        help="indices to edit: single (13), range (13-17), or list (13,14,15)")
     auth_item_edit_parser.add_argument("--reason", help="reason for edit")
     auth_item_edit_parser.set_defaults(func=cmd_todos_auth_item_edit)
+
+    # todos auth-restore
+    auth_restore_parser = todos_sub.add_parser("auth-restore", help="authorize restoring TODO list from previous state")
+    auth_restore_parser.add_argument("--previous", "-p", type=int, required=True, metavar="N",
+                                     help="restore from Nth previous state (1=last, 2=before that)")
+    auth_restore_parser.add_argument("--reason", help="reason for restore")
+    auth_restore_parser.set_defaults(func=cmd_todos_auth_restore)
 
     # todos auth-status
     todos_sub.add_parser("auth-status", help="show pending authorization").set_defaults(func=cmd_todos_auth_status)
