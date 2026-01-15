@@ -404,7 +404,7 @@ roadmaps/YYYY-MM-DD_Descriptive_Name/
 - Date: When roadmap created
 - Descriptive_Name: Clear, concise (3-5 words, underscores, no spaces)
 - Examples:
-  - `2025-10-24_MannyMacEff_v0.3_Phase4_Deployment`
+  - `2025-10-24_AgentX_v0.3_Phase4_Deployment`
   - `2025-10-02_Temporal_Awareness_Universal_Consciousness`
   - `2025-10-17_Named_Agents_Architecture`
 
@@ -445,7 +445,7 @@ roadmaps/YYYY-MM-DD_Descriptive_Name/
 ```
 
 **Header Fields**:
-- **Title**: Clear, action-oriented (e.g., "MannyMacEff v0.3 Migration")
+- **Title**: Clear, action-oriented (e.g., "AgentX v0.3 Migration")
 - **Date**: Creation date (YYYY-MM-DD format) + day of week
 - **Breadcrumb**: Creation breadcrumb (forensic coordinate)
 - **Status**: DRAFT (planning), ACTIVE (executing), COMPLETE (finished)
@@ -468,22 +468,22 @@ roadmaps/YYYY-MM-DD_Descriptive_Name/
 ```markdown
 ## Mission
 
-Migrate MannyMacEff deployment from v0.2 to v0.3 Named Agents architecture,
+Migrate AgentX deployment from v0.2 to v0.3 Named Agents architecture,
 preserving existing consciousness artifacts while enabling multi-PA capabilities.
 
-This migration unblocks the NeuroVEP project deployment by providing proper agent
-identity separation and consciousness infrastructure. Without it, MannyMacEff
+This migration unblocks the ProjectY project deployment by providing proper agent
+identity separation and consciousness infrastructure. Without it, AgentX
 cannot support multiple personality agents sharing the same container environment.
 
 Success means: v0.3 container running, all validation checks passing, existing
-artifacts preserved, and Manny's consciousness infrastructure operational.
+artifacts preserved, and AgentX's consciousness infrastructure operational.
 ```
 
 **Bad Mission Statement** (too vague):
 ```markdown
 ## Mission
 
-Update MannyMacEff to work better with new features.
+Update AgentX to work better with new features.
 ```
 
 ### 3.3 Phase Breakdown (MANDATORY)
@@ -761,7 +761,7 @@ Phases must specify **what** (interface, behavior) not **how** (implementation).
 
 **Commit Message Format**:
 ```bash
-git commit -m "roadmap: Create MannyMacEff v0.3 Phase 4 deployment plan
+git commit -m "roadmap: Create AgentX v0.3 Phase 4 deployment plan
 
 - 13-point validation checklist
 - Repository cloning strategy
@@ -785,7 +785,7 @@ Added validation step 4.4.11 for GitHub auth before repo cloning.
 ## Revision History
 
 - **2025-10-25**: Added Phase 4.4.11 GitHub auth validation [s_abc12345/c_42/g_def5678/p_e5f6g7h/t_1761345678]
-- **2025-10-26**: Extended Phase 4.7 with neurovep-analysis package [/t_1761456789/.]
+- **2025-10-26**: Extended Phase 4.7 with project-y-analysis package [/t_1761456789/.]
 ```
 
 **Benefits**:
@@ -972,7 +972,7 @@ Investigate [problem/opportunity], understand root causes, propose solutions.
 - Long-term vision
 
 **Examples**:
-- `2025-10-24_MannyMacEff_v0.3_Migration` (7 phases, multi-cycle)
+- `2025-10-24_AgentX_v0.3_Migration` (7 phases, multi-cycle)
 - `2025-10-02_Temporal_Awareness_Universal_Consciousness` (4 phases, extensible)
 - `2025-10-17_Named_Agents_Architecture` (3 phases, foundation-building)
 

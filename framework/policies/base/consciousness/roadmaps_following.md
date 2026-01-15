@@ -174,7 +174,7 @@ Roadmaps preserve strategic intent across context loss. This policy ensures agen
 
 **Embedded Path Examples**:
 ```markdown
-🗺️ MISSION: MannyMacEff v0.3.0 Migration [2025-10-27_MannyMacEff_v0.3_Migration/roadmap.md]
+🗺️ MISSION: AgentX v0.3.0 Migration [2025-10-27_AgentX_v0.3_Migration/roadmap.md]
   📋 1: Safe Preparation [subplans/phase_1_preparation.md]
   📋 2: Docker Infrastructure [subplans/phase_2_docker.md]
     - 2.1: Platform-aware build
@@ -183,7 +183,7 @@ Roadmaps preserve strategic intent across context loss. This policy ensures agen
 
 **Path Format Rules**:
 - **Roadmap path** (MISSION node): `{folder}/roadmap.md`
-  - Example: `2025-10-27_MannyMacEff_v0.3_Migration/roadmap.md`
+  - Example: `2025-10-27_AgentX_v0.3_Migration/roadmap.md`
   - Relative from `agent/public/roadmaps/` (PA) or `agent/subagents/{role}/public/roadmaps/` (SA)
 - **Subplan paths** (Phase nodes): `subplans/phase_{num}_{desc}.md`
   - Example: `subplans/phase_2_docker.md`
@@ -268,7 +268,7 @@ TODO: 📋 2: Docker Infrastructure [subplans/phase_2_docker.md]
 **EVERY parent node MUST embed plan filepath (RELATIVE PATHS)**:
 
 ```markdown
-🗺️ MISSION: MannyMacEff v0.3.0 Migration [2025-10-27_MannyMacEff_v0.3_Migration/roadmap.md]
+🗺️ MISSION: AgentX v0.3.0 Migration [2025-10-27_AgentX_v0.3_Migration/roadmap.md]
   📋 1: Safe Preparation [subplans/phase_1_preparation.md]
   📋 2: Docker Infrastructure [subplans/phase_2_docker.md]
     - 2.1: Platform-aware build
@@ -404,7 +404,7 @@ All platform tests passing. ARM64 builds 23% faster than x86_64 emulation.
 
 **DETOUR Format in TODO**:
 ```markdown
-🗺️ MISSION: MannyMacEff Migration [2025-10-27_Name/roadmap.md]
+🗺️ MISSION: AgentX Migration [2025-10-27_Name/roadmap.md]
   📋 3: Deployment [subplans/phase_3_deploy.md]
     - 3.1: Initialize framework
     ↪️ DETOUR: Fix discovered configuration issue
@@ -667,12 +667,12 @@ Encountered docker-compose working directory dependency [Roadmap 2025-11-11 "Doc
 
 **Archived**: 2025-10-27 21:50:09
 **Breadcrumb**: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
-**Original Plan**: 2025-10-24_MannyMacEff_v0.3_Migration/roadmap.md
+**Original Plan**: 2025-10-24_AgentX_v0.3_Migration/roadmap.md
 **Status**: COMPLETED
 
 ## Hierarchical TODO Content
 
-🗺️ MISSION: MannyMacEff v0.3.0 Migration [2025-10-24_MannyMacEff_v0.3_Migration/roadmap.md]
+🗺️ MISSION: AgentX v0.3.0 Migration [2025-10-24_AgentX_v0.3_Migration/roadmap.md]
   1: Safe Preparation [s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890]
     1.1: Backup volume (4.1GB complete)
     1.2: Update submodule to v0.3.0
@@ -703,7 +703,7 @@ Encountered docker-compose working directory dependency [Roadmap 2025-11-11 "Doc
 git commit -m "roadmap: Archive Phases 1-4 completion [s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890]
 
 Archived hierarchical TODO tree to:
-2025-10-24_MannyMacEff_v0.3_Migration/archived_todos/2025-10-27_215009_Phases1-4_COMPLETED.md
+2025-10-24_AgentX_v0.3_Migration/archived_todos/2025-10-27_215009_Phases1-4_COMPLETED.md
 
 - All 4 phases complete
 - 23 sub-tasks tracked with breadcrumbs
@@ -718,7 +718,7 @@ Archived hierarchical TODO tree to:
 After archiving, replace the collapsed subtree with **📦 package emoji** and reference to archive:
 
 ```markdown
-🗺️ MISSION: MannyMacEff v0.3.0 Migration [2025-10-24_MannyMacEff_v0.3_Migration/roadmap.md]
+🗺️ MISSION: AgentX v0.3.0 Migration [2025-10-24_AgentX_v0.3_Migration/roadmap.md]
   [📦 Archive 2025-10-27 "Phases 1-4 Complete": s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890](archived_todos/2025-10-27_215009_Phases1-4_COMPLETED.md)
   📋 5: CEP Fixes & Bootstrap [subplans/phase_5_cep.md]
     - 5.1: Critical path fixes
@@ -769,7 +769,7 @@ After archiving, replace the collapsed subtree with **📦 package emoji** and r
 ## Revision History
 
 - **2025-10-25**: Added Phase 4.4.11 GitHub auth validation [s_abc12345/c_42/g_def5678/p_e5f6g7h/t_1761345678]
-- **2025-10-26**: Extended Phase 4.7 with neurovep-analysis package [/t_1761456789/.]
+- **2025-10-26**: Extended Phase 4.7 with project-y-analysis package [/t_1761456789/.]
 ```
 
 **Benefits**:

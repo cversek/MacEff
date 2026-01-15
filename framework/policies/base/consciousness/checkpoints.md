@@ -429,7 +429,7 @@ Link major work units to their completion breadcrumbs with CA_TAG (DEV_DRV, DELE
 ### MacEff Overlay (7 files - commit 04a1c69)
 [... files ...]
 
-### MannyMacEff Parent (2 commits)
+### AgentX Parent (2 commits)
 **Commit 230f4d1**: Submodule update to f2ee2d4
 **Commit e81c5f3**: Overlay update to 04a1c69
 ```

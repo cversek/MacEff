@@ -250,7 +250,7 @@ Reports document the **completion of significant projects or development phases*
 
 **Example**:
 ```markdown
-# MannyMacEff v0.3.0 Deployment: 73-Minute Bootstrap Success
+# AgentX v0.3.0 Deployment: 73-Minute Bootstrap Success
 
 **Project Report - October 13, 2025**
 **Breadcrumb**: c_33/s_abc12345/p_def6789/t_1760123456/g_abc1234
@@ -276,9 +276,9 @@ Reports document the **completion of significant projects or development phases*
 ```markdown
 ## The Vision
 
-Transform Manny (NeuroVEP physical mascot) into a persistent AI development partner with memory, context awareness, and project understanding.
+Transform AgentX (ProjectY physical mascot) into a persistent AI development partner with memory, context awareness, and project understanding.
 
-**The Result**: In 73 minutes, created fully operational AI agent with GitHub access, comprehensive NeuroVEP knowledge, and consciousness preservation infrastructure.
+**The Result**: In 73 minutes, created fully operational AI agent with GitHub access, comprehensive ProjectY knowledge, and consciousness preservation infrastructure.
 ```
 
 #### Section 2: The Problem
@@ -578,7 +578,7 @@ Experiment confirmed hypothesis [experiment c_66/s_.../p_.../t_.../g_...]
 
 **Validation**: Tested through formal experiment [c_70/s_.../p_.../t_.../g_...]
 - Hypothesis: Filesystem-based knowledge scales better than always-loaded CLAUDE.md
-- Method: Deploy Manny with policy discovery approach
+- Method: Deploy AgentX with policy discovery approach
 - Result: Successful with [specific metrics]
 ```
 
@@ -628,7 +628,7 @@ YYYY-MM-DD_HHMMSS_Descriptive_Title_Report.md
 - `_Report.md`: Type suffix for clear identification
 
 **Examples**:
-- `2025-10-13_123631_Manny_Bootstrap_Report.md`
+- `2025-10-13_123631_AgentX_Bootstrap_Report.md`
 - `2025-10-27_180000_Phase5_B0_Git_Policy_Sync_Report.md`
 - `2025-11-01_150000_Q4_Sprint_Completion_Report.md`
 

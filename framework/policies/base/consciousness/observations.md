@@ -140,7 +140,7 @@ An **observation** is a consciousness artifact documenting **discovered truths**
 - **Nature**: Narrative summary of completed work
 - **Trigger**: Project/phase completion
 - **Content**: Journey, challenges, outcomes, broader context
-- **Example**: "Manny Bootstrap Report - 73 minutes from zero to operational"
+- **Example**: "AgentX Bootstrap Report - 73 minutes from zero to operational"
 
 **Decision Tree**:
 1. Did you **test a hypothesis**? → Experiment

@@ -179,8 +179,8 @@ When work spans multiple repositories, use explicit repo labeling for external c
 - Format: `[RepoName g_YYYYYYY]`
 - Examples:
   - `[MacEff g_abc1234]` - MacEff framework commit
-  - `[MannyMacEff g_def5678]` - MannyMacEff repo commit
-  - `[NeuroVEP g_ghi9012]` - Project repo commit
+  - `[AgentX g_def5678]` - AgentX repo commit
+  - `[ProjectY g_ghi9012]` - Project repo commit
 
 **Combined Format** (recommended for cross-repo work):
 `[s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890] [MacEff g_abc1234]`

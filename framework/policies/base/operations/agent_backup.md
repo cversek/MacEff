@@ -325,7 +325,7 @@ Agent backup and restore provides **complete consciousness preservation** for st
 **Filename**: `YYYY-MM-DD_HHMMSS_{purpose}_{agent_id}.tar.xz`
 - `YYYY-MM-DD_HHMMSS`: Backup creation timestamp (enables filesystem sorting)
 - `{purpose}`: Purpose descriptor (see below)
-- `{agent_id}`: Agent identifier (e.g., `pa_claude`, `pa_manny`)
+- `{agent_id}`: Agent identifier (e.g., `pa_claude`, `pa_agent_x`)
 - Example: `2025-12-06_090815_TRANSPLANT_pa_claude.tar.xz`
 
 **Purpose Descriptors**:

@@ -156,7 +156,7 @@ An **experiment** is a consciousness artifact documenting **hypothesis testing**
 - **Trigger**: Project/phase completion
 - **Content**: Journey, challenges, outcomes, broader context
 - **Outcome**: Comprehensive project record
-- **Example**: "Manny Bootstrap: 73 minutes from zero to operational"
+- **Example**: "AgentX Bootstrap: 73 minutes from zero to operational"
 
 **Relationship Between Artifacts**:
 ```

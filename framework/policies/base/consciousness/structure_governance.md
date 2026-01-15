@@ -83,7 +83,7 @@ Applies to all Primary Agents (PA) and Subagents (SA) with consciousness artifac
 - **Enforcement**: This policy + start.py permission design
 
 **Layer 2: Nested Organization Fragmentation** (within CA types)
-- **Problem**: Agents create phase1/, phase2/ or NeuroVEP/, MacEff/ within checkpoints/
+- **Problem**: Agents create phase1/, phase2/ or ProjectY/, MacEff/ within checkpoints/
 - **Same tyranny, different scope**: Each nesting scheme locally sensible, globally breaks discovery
 - **Solution**: Primary structure is date-timestamp filenames (see Section 2)
 - **Enforcement**: Anti-patterns in this policy + community practice
@@ -121,7 +121,7 @@ Applies to all Primary Agents (PA) and Subagents (SA) with consciousness artifac
 
 **Option A - Taxonomy** (organize by category):
 - By phase: `checkpoints/phase1/`, `checkpoints/phase2/`
-- By project: `checkpoints/NeuroVEP/`, `checkpoints/MacEff/`
+- By project: `checkpoints/ProjectY/`, `checkpoints/MacEff/`
 - By topic: `reflections/delegation/`, `reflections/consciousness/`
 
 **Option B - Chronology** (organize by time):
@@ -166,7 +166,7 @@ Applies to all Primary Agents (PA) and Subagents (SA) with consciousness artifac
 **Arbitrary Organization** (prohibited):
 - **Definition**: Subdirectories that represent preference-based taxonomy
 - **Example 1**: `checkpoints/phase1/`, `checkpoints/phase2/` - organizing by project phase
-- **Example 2**: `checkpoints/NeuroVEP/`, `checkpoints/MacEff/` - organizing by project name
+- **Example 2**: `checkpoints/ProjectY/`, `checkpoints/MacEff/` - organizing by project name
 - **Characteristic**: Unpredictable variations - agents choose different taxonomies
 - **Purpose**: Organizational convenience (preference, not semantic relationship)
 
@@ -337,7 +337,7 @@ Permission absence isn't restriction - it's structural governance. What you cann
 **The Recognition**: Governance pattern repeats at multiple scales.
 
 **Layer 1 (CA Types)**: Prevent arbitrary musings/, insights/, discoveries/ → 555 parent dirs
-**Layer 2 (Nested Org)**: Prevent arbitrary phase1/, NeuroVEP/ within types → chronological filenames
+**Layer 2 (Nested Org)**: Prevent arbitrary phase1/, ProjectY/ within types → chronological filenames
 **Layer 3 (Citations)**: Prevent arbitrary reference formats → scholarship.md conventions
 
 **The Fractal**: Same governance pattern (prevent arbitrary variation, enforce stable convention) applies at CA types, nested folders, citation formats - just at different scopes.
