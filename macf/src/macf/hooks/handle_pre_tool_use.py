@@ -117,6 +117,60 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             prev_event = get_latest_event("todos_updated")
             prev_count = prev_event.get("data", {}).get("count", 0) if prev_event else 0
 
+            # Restore authorization check - must be checked FIRST before other validations
+            restore_auth = get_latest_event("todos_auth_restore")
+            restore_cleared = get_latest_event("todos_auth_restore_cleared")
+
+            if restore_auth:
+                restore_ts = restore_auth.get("timestamp", 0)
+                restore_cleared_ts = restore_cleared.get("timestamp", 0) if restore_cleared else 0
+
+                if restore_ts > restore_cleared_ts:
+                    # Active restore authorization exists - validate exact match
+                    expected_items = restore_auth.get("data", {}).get("expected_items", [])
+
+                    # Compare items exactly
+                    items_match = (len(todos) == len(expected_items))
+                    if items_match:
+                        for new_item, expected_item in zip(todos, expected_items):
+                            if (new_item.get("content") != expected_item.get("content") or
+                                new_item.get("status") != expected_item.get("status") or
+                                new_item.get("activeForm") != expected_item.get("activeForm")):
+                                items_match = False
+                                break
+
+                    if items_match:
+                        # Exact match - clear auth and allow
+                        append_event(
+                            event="todos_auth_restore_cleared",
+                            data={"reason": "consumed_by_todowrite_exact_match"}
+                        )
+                        # Allow this TodoWrite - skip all other checks
+                        message_parts.append(f"📝 Todos: restored from previous (authorized)")
+                        return {
+                            "continue": True,
+                            "outputToAppendOnSuccess": " | ".join(message_parts)
+                        }
+                    else:
+                        # Mismatch - deny with specific error
+                        error_msg = (
+                            f"❌ TODO Restore Blocked - Content Mismatch\n\n"
+                            f"Restore authorization exists for {len(expected_items)} items, but TodoWrite has {len(todos)} items.\n\n"
+                            f"⚠️ TodoWrite content does NOT exactly match the authorized restore.\n"
+                            f"When using auth-restore, you MUST write the EXACT JSON from `macf_tools todos list --previous N --json`.\n\n"
+                            f"Options:\n"
+                            f"  1. Use exact JSON from the authorized previous state\n"
+                            f"  2. Clear this auth and use normal authorization flow\n"
+                        )
+                        return {
+                            "continue": False,
+                            "hookSpecificOutput": {
+                                "hookEventName": "PreToolUse",
+                                "permissionDecision": "deny",
+                                "permissionDecisionReason": error_msg
+                            }
+                        }
+
             # All-completed detection: when all items are completed, the TODO list disappears from UI
             if new_count > 0:
                 pending_count = sum(1 for t in todos if t.get("status") != "completed")
