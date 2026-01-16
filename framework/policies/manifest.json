@@ -311,6 +311,24 @@
         "keywords": ["workspace", "discipline", "organization", "files", "naming"]
       },
       {
+        "name": "git_discipline",
+        "short_name": "GIT",
+        "path": "base/development/git_discipline.md",
+        "description": "Git version control discipline and workflows",
+        "CEP_triggers": [
+          "How to commit?",
+          "Commit message format?",
+          "When to branch?",
+          "Push/pull protocol?",
+          "Multi-identity management?",
+          "Submodule workflows?",
+          "Git-LFS usage?",
+          "Git safety?",
+          "Release protocol?"
+        ],
+        "keywords": ["git", "commit", "branch", "push", "pull", "merge", "rebase", "submodule", "identity", "lfs", "release", "version"]
+      },
+      {
         "name": "container_operations",
         "short_name": "CONTAINER",
         "path": "tech/docker/container_operations.md",
@@ -573,6 +591,18 @@
     "subagent": ["base/meta/subagent_definition", "delegation_guidelines"],
     "portable": ["base/meta/path_portability"],
     "transplant": ["base/operations/agent_backup"],
-    "migration": ["base/operations/agent_backup"]
+    "migration": ["base/operations/agent_backup"],
+    "git": ["base/development/git_discipline"],
+    "commit": ["base/development/git_discipline"],
+    "branch": ["base/development/git_discipline"],
+    "push": ["base/development/git_discipline"],
+    "pull": ["base/development/git_discipline"],
+    "merge": ["base/development/git_discipline"],
+    "rebase": ["base/development/git_discipline"],
+    "submodule": ["base/development/git_discipline"],
+    "lfs": ["base/development/git_discipline"],
+    "release": ["base/development/git_discipline"],
+    "version": ["base/development/git_discipline"],
+    "identity": ["base/development/git_discipline", "core_principles"]
   }
 }
