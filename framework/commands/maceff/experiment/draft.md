@@ -4,20 +4,47 @@ Create a MacEff-compliant experiment protocol by reading policies for structure 
 
 ---
 
+## EnterPlanMode (MANDATORY)
+
+🚨 **FIRST ACTION**: Enter PlanMode before any exploration or drafting.
+
+**Why**: PlanMode creates deliberation friction, separating planning from execution. User approval via ExitPlanMode gates the transition to implementation.
+
+---
+
+## Exploration Phase (ENCOURAGED)
+
+**Questions to assess**:
+1. Is the hypothesis clear or does it require codebase exploration?
+2. Are there existing patterns that inform the experiment design?
+3. Is technical feasibility uncertain?
+4. Did the user explicitly request exploration?
+
+**If exploration needed**: Launch 1-3 Explore subagents in parallel per `{POLICY_EXPLORATION_GUIDANCE}`.
+
+**When to skip**: Hypothesis is clear, approach is obvious, or experiment is conceptual/phenomenological.
+
+---
+
+## Clarification Phase (ENCOURAGED)
+
+**Questions to assess**:
+1. Do multiple experimental approaches exist?
+2. Do user preferences matter (scope, risk, duration)?
+3. Are there trade-offs that need user input?
+
+Use AskUserQuestion if any apply.
+
+---
+
 ## Policy Reading (MANDATORY)
 
 Before drafting, read these policies to understand requirements:
 
-1. **Experiments Policy** - Protocol structure, phases, success criteria:
-   ```bash
-   macf_tools policy navigate experiments
-   macf_tools policy read experiments
-   ```
-
-2. **Path Portability** (for framework experiments) - Portable path conventions:
-   ```bash
-   macf_tools policy read path_portability
-   ```
+```bash
+macf_tools policy navigate experiments
+macf_tools policy read experiments
+```
 
 **Why CLI tools**: Caching prevents redundant reads, line numbers enable precise citations.
 
@@ -27,28 +54,33 @@ Before drafting, read these policies to understand requirements:
 
 After reading policies, **report answers to user before any state-changing tools**:
 
-1. **What distinguishes experiments from other CA types?**
+1. **What preliminary planning workflow does the policy specify?**
+   - What gates the transition from planning to execution?
+   - When is exploration encouraged vs skipped?
+   - What role does PlanMode play?
+
+2. **What distinguishes experiments from other CA types?**
    - What triggers experiment vs observation vs report?
    - What makes something hypothesis-testing?
 
-2. **What preliminary work does the policy require?**
+3. **What preliminary work does the policy require?**
    - What must happen before formal protocol creation?
    - What validates feasibility?
 
-3. **What directory structure does the policy specify?**
+4. **What directory structure does the policy specify?**
    - What is the naming convention?
    - What subdirectories are required?
 
-4. **What protocol sections does the policy require?**
+5. **What protocol sections does the policy require?**
    - What metadata is mandatory?
    - What hypothesis format is specified?
    - What method documentation is required?
 
-5. **What reflection discipline does the policy specify?**
+6. **What reflection discipline does the policy specify?**
    - When must reflection occur?
    - Where do reflections go?
 
-6. **What TODO integration does the policy require?**
+7. **What TODO integration does the policy require?**
    - How are experiments pinned?
    - What markers distinguish experiment items?
 
