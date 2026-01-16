@@ -3,10 +3,13 @@
 handle_user_prompt_submit - UserPromptSubmit hook runner.
 
 DEV_DRV start tracking + full temporal + token/CLUAC awareness injection.
+EXPERIMENT: Claude-mem associative memory injection (Cycle 337)
 """
 import json
+import subprocess
 import sys
 import traceback
+from pathlib import Path
 from typing import Dict, Any
 
 from macf.utils import (
@@ -22,6 +25,82 @@ from macf.utils import (
     get_breadcrumb
 )
 from macf.hooks.hook_logging import log_hook_event
+
+# EXPERIMENT: Memory injection script path (Cycle 337)
+MEMORY_RECALL_SCRIPT = Path(__file__).parent.parent.parent / "agent/public/experiments/2026-01-15_140000_001_Claude-Mem_Associative_Injection/artifacts/memory-recall.py"
+
+# EXPERIMENT: Policy injection script path (Cycle 338)
+POLICY_RECOMMEND_SCRIPT = Path(__file__).parent.parent.parent / "agent/public/experiments/2026-01-15_210000_002_Policy_Injection/artifacts/policy-recommend.py"
+
+
+def get_memory_injection(prompt: str) -> str:
+    """
+    Query claude-mem for associative memories relevant to the prompt.
+
+    EXPERIMENT (Cycle 337): Testing whether injected memories feel more
+    like "remembering" than explicit tool calls.
+
+    Returns empty string on any failure (graceful degradation).
+    """
+    if not MEMORY_RECALL_SCRIPT.exists():
+        return ""
+
+    if len(prompt) < 10:  # Skip very short prompts
+        return ""
+
+    try:
+        result = subprocess.run(
+            [sys.executable, str(MEMORY_RECALL_SCRIPT)],
+            input=json.dumps({"prompt": prompt}),
+            capture_output=True,
+            text=True,
+            timeout=0.2  # 200ms hard timeout
+        )
+
+        if result.returncode == 0 and result.stdout.strip():
+            output = json.loads(result.stdout)
+            return output.get("additionalContext", "")
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception):
+        pass  # Fail silently - don't block session
+
+    return ""
+
+
+def get_policy_injection(prompt: str) -> str:
+    """
+    Query policy index for relevant policy recommendations.
+
+    EXPERIMENT (Cycle 338): Testing whether policy injection creates
+    "ambient procedural awareness" - knowing how to act without looking up.
+
+    Two-tier system:
+    - High relevance (≥0.7): Inject CEP Navigation Guide
+    - Medium relevance (0.5-0.7): Suggest discovery commands
+
+    Returns empty string on any failure (graceful degradation).
+    """
+    if not POLICY_RECOMMEND_SCRIPT.exists():
+        return ""
+
+    if len(prompt) < 10:  # Skip very short prompts
+        return ""
+
+    try:
+        result = subprocess.run(
+            [sys.executable, str(POLICY_RECOMMEND_SCRIPT)],
+            input=json.dumps({"prompt": prompt}),
+            capture_output=True,
+            text=True,
+            timeout=0.1  # 100ms hard timeout (policies are local)
+        )
+
+        if result.returncode == 0 and result.stdout.strip():
+            output = json.loads(result.stdout)
+            return output.get("additionalContext", "")
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception):
+        pass  # Fail silently - don't block session
+
+    return ""
 
 
 def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
@@ -83,6 +162,14 @@ Breadcrumb: {breadcrumb}"""
         # Get boundary guidance (if CLUAC ≤ 10)
         boundary_guidance = get_boundary_guidance(token_info['cluac_level'], auto_mode)
 
+        # EXPERIMENT: Get associative memory injection (Cycle 337)
+        # DISABLED: Testing if this causes CLUAC 17 limit
+        prompt = hook_input.get('prompt', '') if hook_input else ''
+        memory_injection = ""  # get_memory_injection(prompt)
+
+        # EXPERIMENT: Get policy recommendation injection (Cycle 338)
+        policy_injection = get_policy_injection(prompt)
+
         # Format footer
         footer = format_macf_footer()
 
@@ -91,6 +178,8 @@ Breadcrumb: {breadcrumb}"""
             temporal_section,
             token_section,
             boundary_guidance if boundary_guidance else "",
+            memory_injection if memory_injection else "",  # EXPERIMENT: associative memories
+            policy_injection if policy_injection else "",  # EXPERIMENT: policy recommendations
             footer
         ]
         plain_content = chr(10).join([s for s in sections if s])
