@@ -6,6 +6,7 @@ DEV_DRV start tracking + full temporal + token/CLUAC awareness injection.
 EXPERIMENT: Claude-mem associative memory injection (Cycle 337)
 """
 import json
+import os
 import subprocess
 import sys
 import traceback
@@ -29,8 +30,10 @@ from macf.hooks.hook_logging import log_hook_event
 # EXPERIMENT: Memory injection script path (Cycle 337)
 MEMORY_RECALL_SCRIPT = Path(__file__).parent.parent.parent / "agent/public/experiments/2026-01-15_140000_001_Claude-Mem_Associative_Injection/artifacts/memory-recall.py"
 
-# EXPERIMENT: Policy injection script path (Cycle 338)
-POLICY_RECOMMEND_SCRIPT = Path(__file__).parent.parent.parent / "agent/public/experiments/2026-01-15_210000_002_Policy_Injection/artifacts/policy-recommend.py"
+# EXPERIMENT: Policy injection script path (Cycle 338, Phase 6 update)
+# Use MACF_AGENT_ROOT if set, otherwise fallback to ClaudeTheBuilder location
+_agent_root = os.environ.get("MACF_AGENT_ROOT", "/Users/cversek/gitwork/claude-the-builder/ClaudeTheBuilder")
+POLICY_RECOMMEND_SCRIPT = Path(_agent_root) / "agent/public/experiments/2026-01-15_210000_002_Policy_Injection/artifacts/policy-recommend.py"
 
 
 def get_memory_injection(prompt: str) -> str:
@@ -91,7 +94,7 @@ def get_policy_injection(prompt: str) -> str:
             input=json.dumps({"prompt": prompt}),
             capture_output=True,
             text=True,
-            timeout=0.1  # 100ms hard timeout (policies are local)
+            timeout=5.0  # 5s timeout (first call loads embedding model ~3s, subsequent <100ms)
         )
 
         if result.returncode == 0 and result.stdout.strip():
