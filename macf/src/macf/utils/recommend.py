@@ -32,8 +32,25 @@ from typing import Literal, Optional
 import sqlite_vec
 from sentence_transformers import SentenceTransformer
 
-# Configuration
-DB_PATH = Path.home() / ".maceff" / "policy_index.db"
+from .paths import find_agent_home
+
+
+def get_policy_db_path() -> Path:
+    """Get path to policy_index.db using portable path resolution."""
+    agent_home = find_agent_home()
+    return agent_home / ".maceff" / "policy_index.db"
+
+
+# Configuration (lazy - computed on first use)
+DB_PATH: Optional[Path] = None
+
+
+def _get_db_path() -> Path:
+    """Lazy accessor for DB_PATH with portable resolution."""
+    global DB_PATH
+    if DB_PATH is None:
+        DB_PATH = get_policy_db_path()
+    return DB_PATH
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 EMBEDDING_DIM = 384
 
@@ -525,12 +542,19 @@ def get_recommendations(prompt: str) -> tuple[str, list[dict]]:
     if not keywords:
         return "", []
 
-    if not DB_PATH.exists():
+    db_path = _get_db_path()
+    if not db_path.exists():
+        import sys
+        print(
+            f"⚠️ MACF: Policy index not found at {db_path}\n"
+            f"   Run: macf_tools policy build_index",
+            file=sys.stderr
+        )
         return "", []
 
     try:
         # Connect and enable sqlite-vec
-        conn = sqlite3.connect(str(DB_PATH), timeout=0.5)
+        conn = sqlite3.connect(str(db_path), timeout=0.5)
         conn.enable_load_extension(True)
         sqlite_vec.load(conn)
 
