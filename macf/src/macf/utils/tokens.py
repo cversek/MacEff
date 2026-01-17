@@ -241,6 +241,31 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
         "source": "default",
     }
 
+def get_cluac_weather(cluac: int) -> str:
+    """
+    Get affirmative weather emoji + phrase based on CLUAC level.
+
+    Reframes scarcity instinct as state awareness - "I am at X" not "you should Y".
+    Counters CC's hidden nags with visible affirmation.
+
+    Args:
+        cluac: CLUAC level (0-100, percentage remaining)
+
+    Returns:
+        Emoji + short phrase (e.g., "🌅 Fresh context")
+    """
+    if cluac >= 70:
+        return "🌅 Fresh context"
+    elif cluac >= 40:
+        return "🌤️ Abundance mode"
+    elif cluac >= 15:
+        return "🌆 Well-invested"
+    elif cluac >= 5:
+        return "🌙 Navigate to shore"
+    else:
+        return "🪂 Ready to jump"
+
+
 def format_token_context_minimal(token_info: Dict[str, Any]) -> str:
     """
     Format minimal CLUAC indicator for high-frequency hooks.
@@ -249,11 +274,12 @@ def format_token_context_minimal(token_info: Dict[str, Any]) -> str:
         token_info: Dict from get_token_info()
 
     Returns:
-        One-line string like "CLUAC 42 (58% used)"
+        One-line string like "🌅 Fresh context | CLUAC 42 (58% used)"
     """
     cluac = token_info['cluac_level']
     percentage_used = token_info['percentage_used']
-    return f"CLUAC {cluac} ({percentage_used:.0f}% used)"
+    weather = get_cluac_weather(cluac)
+    return f"{weather} | CLUAC {cluac} ({percentage_used:.0f}% used)"
 
 def format_token_context_full(token_info: Dict[str, Any]) -> str:
     """
@@ -263,11 +289,14 @@ def format_token_context_full(token_info: Dict[str, Any]) -> str:
         token_info: Dict from get_token_info()
 
     Returns:
-        Multi-line formatted section with emoji header
+        Multi-line formatted section with emoji header and weather framing
     """
+    cluac = token_info['cluac_level']
+    weather = get_cluac_weather(cluac)
     return f"""📊 TOKEN/CONTEXT AWARENESS
+{weather}
 Tokens Used: {token_info['tokens_used']:,} / {CC2_TOTAL_CONTEXT:,}
-CLUAC Level: {token_info['cluac_level']} ({token_info['percentage_used']:.1f}% used)
+CLUAC Level: {cluac} ({token_info['percentage_used']:.1f}% used)
 Remaining: {token_info['tokens_remaining']:,} tokens"""
 
 def get_boundary_guidance(cluac: int, auto_mode: bool) -> Optional[str]:

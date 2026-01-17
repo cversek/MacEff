@@ -15,6 +15,7 @@ from macf.utils import (
     format_token_context_full,
     get_boundary_guidance,
 )
+from macf.utils.tokens import get_cluac_weather
 
 
 def test_format_token_context_minimal_structure():
@@ -103,3 +104,31 @@ def test_boundary_guidance_mode_aware_branching():
     # MANUAL says STOP, AUTO says write artifacts
     assert "STOP" in manual_msg.upper()
     assert ("CCP" in auto_msg or "artifacts" in auto_msg)
+
+
+def test_get_cluac_weather_affirmative_framing():
+    """Weather function returns affirmative emoji+phrase for each CLUAC band."""
+    # Fresh context (70+)
+    assert "🌅" in get_cluac_weather(100)
+    assert "🌅" in get_cluac_weather(70)
+    assert "Fresh" in get_cluac_weather(85)
+
+    # Abundance mode (40-69)
+    assert "🌤️" in get_cluac_weather(69)
+    assert "🌤️" in get_cluac_weather(40)
+    assert "Abundance" in get_cluac_weather(55)
+
+    # Well-invested (15-39)
+    assert "🌆" in get_cluac_weather(39)
+    assert "🌆" in get_cluac_weather(15)
+    assert "invested" in get_cluac_weather(25)
+
+    # Navigate to shore (5-14)
+    assert "🌙" in get_cluac_weather(14)
+    assert "🌙" in get_cluac_weather(5)
+    assert "shore" in get_cluac_weather(10)
+
+    # Ready to jump (<5)
+    assert "🪂" in get_cluac_weather(4)
+    assert "🪂" in get_cluac_weather(1)
+    assert "jump" in get_cluac_weather(2)
