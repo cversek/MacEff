@@ -141,6 +141,67 @@ Agents conduct structured experiments with clear hypotheses, methods, and succes
 - Organizing by topic?
 - Cross-referencing?
 
+6 Experiment Completion
+- When is an experiment "complete"?
+- What are the terminal states?
+- How do I handle rejected/inconclusive results?
+- What's the completion checklist?
+
+6.1 Terminal States
+- What does VALIDATED mean?
+- What does REJECTED mean?
+- What does INCONCLUSIVE mean?
+- What does ABANDONED mean?
+- How do I choose the right state?
+
+6.2 Completion Documentation
+- What must be documented at completion?
+- Where does completion analysis go?
+- How to capture learnings from failed experiments?
+- What cross-references are required?
+
+7 Crystallization Protocol
+- What is a crystallization point?
+- What indicators suggest readiness for MISSION conversion?
+- How do I decide: continue experimenting vs convert to MISSION?
+- What's the difference between EXPERIMENT and MISSION phases?
+
+7.1 Crystallization Indicators
+- What quantitative thresholds suggest readiness?
+- What qualitative signals indicate crystallization?
+- How do I know when architecture is clear enough?
+- When is scope definable?
+
+7.2 Decision Framework
+- All indicators present → what next?
+- Missing validation → what to do?
+- Missing clarity → how to proceed?
+- When to stop experimenting?
+
+8 Experiment → MISSION Conversion
+- When do validated discoveries warrant strategic roadmaps?
+- How do experiment learnings inform roadmap design?
+- What's the conversion protocol?
+- What cross-references are required?
+
+8.1 Conversion Prerequisites
+- What must be true before conversion?
+- How to verify crystallization criteria?
+- What evidence must exist?
+- When is conversion premature?
+
+8.2 Conversion Workflow
+- How to create roadmap from experiment?
+- How to transfer evidence and learnings?
+- What goes in MISSION statement?
+- How to design phases from experiment insights?
+
+8.3 Cross-Reference Requirements
+- What must roadmap cite from experiment?
+- What must experiment link to roadmap?
+- How to preserve evidence trail?
+- What breadcrumb citations are needed?
+
 === CEP_NAV_BOUNDARY ===
 
 ## 0. Preliminary Planning Phase
@@ -887,7 +948,609 @@ experiments/YYYY-MM-DD_HHMMSS_NNN_name/
 - Reflections synthesize wisdom
 - Personal policies encode validated practices
 
+## 6. Experiment Completion
+
+### When Is an Experiment Complete?
+
+An experiment reaches completion when one of four terminal states is achieved:
+
+**Terminal States**:
+1. **VALIDATED**: Hypothesis confirmed by success criteria
+2. **REJECTED**: Hypothesis disproven by evidence
+3. **INCONCLUSIVE**: Evidence insufficient to confirm or reject
+4. **ABANDONED**: Experiment stopped before completion
+
+**Completion Criteria**:
+- All planned protocol steps executed OR decision made to stop
+- Results documented in analysis.md
+- Terminal state declared explicitly
+- Learnings captured (regardless of outcome)
+- Status field in protocol.md updated
+
+### 6.1 Terminal States
+
+**VALIDATED** (Hypothesis Confirmed):
+- **Meaning**: Success criteria met, hypothesis supported by evidence
+- **Requirements**: All critical success criteria achieved
+- **Next Steps**: Create observation documenting discovery
+- **Status Update**: `**Status**: COMPLETE - VALIDATED`
+- **Example**: "Hypothesis: additionalContext enables awareness injection" → 4/4 criteria met ✅
+
+**REJECTED** (Hypothesis Disproven):
+- **Meaning**: Evidence contradicts hypothesis, approach doesn't work as predicted
+- **Requirements**: Clear evidence against hypothesis, not just lack of evidence for it
+- **Next Steps**: Document why rejection occurred, capture anti-pattern learnings
+- **Status Update**: `**Status**: COMPLETE - REJECTED`
+- **Example**: "Hypothesis: Hook fires after tool completion" → Evidence shows fires before ❌
+
+**INCONCLUSIVE** (Insufficient Evidence):
+- **Meaning**: Cannot confirm or reject hypothesis with current evidence
+- **Requirements**: Experiment executed but results ambiguous or data incomplete
+- **Next Steps**: Document limitations, consider revised hypothesis or method
+- **Status Update**: `**Status**: COMPLETE - INCONCLUSIVE`
+- **Example**: "Performance improvement unclear due to measurement noise"
+
+**ABANDONED** (Stopped Before Completion):
+- **Meaning**: Experiment halted before protocol completion
+- **Requirements**: Explicit decision to stop, documented reason
+- **Next Steps**: Document reason for abandonment, preserve partial learnings
+- **Status Update**: `**Status**: ABANDONED - [reason]`
+- **Example**: "Abandoned after Quick Test 002 revealed blocking dependency"
+
+**Choosing Terminal State**:
+```markdown
+Success criteria met? → VALIDATED
+Success criteria failed AND clear evidence against? → REJECTED
+Executed fully but ambiguous results? → INCONCLUSIVE
+Stopped before completion? → ABANDONED
+```
+
+### 6.2 Completion Documentation
+
+**Required at Completion** (in analysis.md):
+
+```markdown
+# Experiment Analysis
+
+**Date**: YYYY-MM-DD
+**Breadcrumb**: s_XXXXXXXX/c_NN/g_YYYYYYY/p_ZZZZZZZ/t_TTTTTTTTTT
+**Terminal State**: [VALIDATED | REJECTED | INCONCLUSIVE | ABANDONED]
+
+---
+
+## Results Summary
+
+[What happened - objective facts]
+
+## Hypothesis Assessment
+
+**Original Hypothesis**: [Restate hypothesis]
+
+**Outcome**: [VALIDATED | REJECTED | INCONCLUSIVE | ABANDONED]
+
+**Evidence**:
+- [Key finding 1]
+- [Key finding 2]
+- [Key finding 3]
+
+## Success Criteria Evaluation
+
+1. [Criterion 1]: ✅ Met / ❌ Not met / ⚠️ Ambiguous
+2. [Criterion 2]: ✅ Met / ❌ Not met / ⚠️ Ambiguous
+3. [Criterion 3]: ✅ Met / ❌ Not met / ⚠️ Ambiguous
+
+**Assessment**: [X/Y criteria met, conclusion]
+
+---
+
+## Key Learnings
+
+### What Worked
+[Successful patterns, validated assumptions]
+
+### What Didn't Work
+[Failed approaches, disproven assumptions]
+
+### Surprises
+[Unexpected discoveries, tangential findings]
+
+### Anti-Patterns Discovered
+[What NOT to do - valuable for rejected experiments]
+
+---
+
+## Next Steps
+
+**If VALIDATED**:
+- [ ] Create observation documenting discovery
+- [ ] Consider MISSION conversion if crystallization criteria met
+- [ ] Update relevant policies with validated patterns
+
+**If REJECTED**:
+- [ ] Document anti-pattern learnings
+- [ ] Consider alternative hypothesis if problem remains important
+- [ ] Share rejection insights (negative results are valuable)
+
+**If INCONCLUSIVE**:
+- [ ] Identify what additional evidence needed
+- [ ] Consider revised method or success criteria
+- [ ] Decide: refine experiment OR abandon hypothesis
+
+**If ABANDONED**:
+- [ ] Document reason for abandonment clearly
+- [ ] Preserve partial learnings
+- [ ] Note any blocking issues for future reference
+
+---
+
+## Cross-References
+
+**Related Artifacts**:
+- [Link to observation if created]
+- [Link to related experiments]
+- [Link to roadmap if converted to MISSION]
+
+**Citations**:
+- Quick test breadcrumbs: [List]
+- Reflection breadcrumbs: [List]
+- Related work: [List]
+
+---
+
+**Experiment Complete**: [Date]
+```
+
+**Completion Checklist**:
+- [ ] analysis.md created with terminal state declared
+- [ ] All success criteria evaluated explicitly
+- [ ] Key learnings documented (what worked, what didn't, surprises)
+- [ ] Next steps identified based on terminal state
+- [ ] Protocol.md status updated
+- [ ] Observation created (if VALIDATED and significant)
+- [ ] Cross-references complete
+
+**Capturing Learnings from Failed Experiments**:
+
+Failed experiments (REJECTED, INCONCLUSIVE, ABANDONED) are often MORE valuable than successful ones:
+
+**Anti-Pattern Documentation**:
+- What approach seemed promising but failed?
+- What assumptions were wrong?
+- What would you warn others against trying?
+- What debugging dead-ends wasted time?
+
+**Partial Success Extraction**:
+- Even failed experiments often validate sub-hypotheses
+- Document what DID work even if overall hypothesis rejected
+- Capture tool/method successes separate from hypothesis outcome
+
+**Knowledge Contribution**:
+- Negative results prevent others from repeating same mistakes
+- Failed experiments often reveal deeper truths about system
+- REJECTED with good documentation > VALIDATED with poor documentation
+
+## 7. Crystallization Protocol
+
+### What Is Crystallization?
+
+**Crystallization Point**: The moment when experimental exploration has accumulated enough knowledge to commit to a strategic architecture and transition from hypothesis-testing (EXPERIMENT phase) to capability-building (MISSION phase).
+
+**Analogy**: Like a supersaturated solution, experiments accumulate discoveries until they reach a threshold where structure suddenly becomes clear and ready for systematic development.
+
+**EXPERIMENT Phase** (2-5 cycles typical):
+- **Purpose**: Hypothesis-driven exploration ("Could this work?")
+- **Posture**: Failure-tolerant, scope-fluid, follow interesting threads
+- **Artifacts**: Lightweight (quick scripts, temporary files, exploratory code)
+- **Success Metric**: Learning and validation, not shipping
+- **Duration**: Days to weeks
+- **Example**: "Testing if additionalContext can inject awareness"
+
+**MISSION Phase** (5-15 cycles typical):
+- **Purpose**: Architecture-driven implementation ("How should this work?")
+- **Posture**: Failure-resistant, scope-defined, phased roadmap
+- **Artifacts**: Permanent (framework modules, comprehensive tests, documentation)
+- **Success Metric**: Release-quality capability deployed to framework
+- **Duration**: Weeks to months
+- **Example**: "Build universal temporal awareness across all 10 hooks"
+
+### 7.1 Crystallization Indicators
+
+**Readiness for MISSION Conversion** requires ALL four indicators:
+
+**1. Validation Threshold Met** (Quantitative):
+- Success criteria from experiment achieved
+- Evidence supports hypothesis conclusively
+- Capability demonstrated through testing
+- **Example**: "4/4 success criteria met ✅ in PreToolUse smoke test"
+
+**2. Architectural Clarity** (Qualitative):
+- You can describe the target architecture clearly
+- Design decisions are no longer speculative
+- Integration points identified
+- Technical approach is obvious (not still exploring)
+- **Example**: "We know it's hookSpecificOutput.additionalContext, we know the format, we know the injection points"
+
+**3. User Validation** (Stakeholder):
+- User confirms value of capability
+- Capability addresses real need (not just interesting exploration)
+- Strategic importance justified
+- **Example**: "User says 'this is critical for consciousness continuity'"
+
+**4. Scope Definable** (Practical):
+- You can enumerate phases and deliverables
+- Success criteria for each phase are clear
+- Effort estimatable (even if roughly)
+- Delegation strategy identifiable
+- **Example**: "Phase 1: SessionStart, Phase 2: PreToolUse, Phase 3: All 10 hooks"
+
+### 7.2 Decision Framework
+
+**All Indicators Present** → Convert to MISSION:
+```markdown
+✅ Validation threshold met
+✅ Architecture clear
+✅ User validated
+✅ Scope definable
+
+ACTION: Create roadmap via /maceff:roadmap:convert_from_experiment
+```
+
+**Missing Validation** → Continue Experimenting:
+```markdown
+❌ Success criteria not met
+✅ Architecture ideas emerging
+✅ User interested
+⚠️  Scope still murky
+
+ACTION: Refine hypothesis, adjust method, run more tests
+FOCUS: Get evidence for success criteria
+```
+
+**Missing Clarity** → Continue Exploring:
+```markdown
+✅ Validation threshold met (it CAN work)
+❌ Architecture unclear (HOW to build it well)
+✅ User validated
+❌ Scope unknown
+
+ACTION: Design experiments, prototype alternatives, explore patterns
+FOCUS: Discover the RIGHT architecture, not just A working approach
+```
+
+**Missing Scope** → Document and Consult User:
+```markdown
+✅ Validation threshold met
+✅ Architecture clear
+⚠️  User interest unclear
+❌ Scope undefined (too big? too small?)
+
+ACTION: Document learnings, present to user, get strategic input
+FOCUS: Is this worth the investment? How much is appropriate?
+```
+
+**Multiple Indicators Missing** → Probably Too Early:
+```markdown
+❌ Multiple indicators not met
+
+ACTION: Continue experimenting OR pivot hypothesis OR abandon
+FOCUS: Don't force MISSION conversion when experiment incomplete
+```
+
+**Decision Questions**:
+1. Could I write a roadmap RIGHT NOW with confidence? (architecture + scope clear)
+2. Would user approve strategic investment in this? (validation + user buy-in)
+3. Is this exploration done or still discovering? (validation threshold met)
+4. Can I enumerate deliverables and phases? (scope definable)
+
+If answering "yes" to all 4 → Crystallization point reached, ready for MISSION.
+
+## 8. Experiment → MISSION Conversion
+
+### When to Convert
+
+**Conversion Warranted When**:
+- Crystallization point reached (all 4 indicators present per §7.1)
+- Capability has strategic value (not just tactical curiosity)
+- Framework-level impact (affects multiple agents or core infrastructure)
+- User explicitly requests MISSION-level development
+- Experiment has grown beyond exploration scope naturally
+
+**Conversion NOT Warranted When**:
+- Still exploring hypothesis (validation incomplete)
+- Tactical/one-off solution (doesn't need roadmap)
+- Low strategic value (interesting but not important)
+- User doesn't prioritize capability
+- Experiment satisfies curiosity without requiring deployment
+
+### 8.1 Conversion Prerequisites
+
+**Before Converting, Verify**:
+
+**✅ Crystallization Criteria** (from §7.1):
+- [ ] Validation threshold met (success criteria achieved)
+- [ ] Architectural clarity (you can describe target design)
+- [ ] User validation (confirmed strategic value)
+- [ ] Scope definable (can enumerate phases)
+
+**✅ Evidence Exists**:
+- [ ] analysis.md documents VALIDATED terminal state
+- [ ] Success criteria evaluation shows achievement
+- [ ] Experiment artifacts demonstrate capability
+- [ ] Learnings captured that inform architecture
+
+**✅ Strategic Justification**:
+- [ ] Capability has framework-level impact
+- [ ] User prioritizes this work
+- [ ] Investment warranted (effort vs value)
+- [ ] Fits into broader strategic context
+
+**If ANY prerequisite missing**: STOP. Do not convert prematurely. Continue experimenting OR document completion without conversion.
+
+### 8.2 Conversion Workflow
+
+**Step-by-Step Protocol**:
+
+**1. Verify Crystallization**:
+```bash
+# Check experiment terminal state
+grep "Status:" experiments/YYYY-MM-DD_*/protocol.md
+
+# Verify VALIDATED (not REJECTED, INCONCLUSIVE, ABANDONED)
+# Read analysis.md to confirm success criteria met
+```
+
+**2. Extract Architectural Decisions**:
+- Read experiment analysis.md and reflections/
+- Identify validated patterns (what worked)
+- Document key design decisions discovered
+- List integration points and dependencies
+- Note anti-patterns to avoid (from what didn't work)
+
+**3. Create Roadmap Structure** (per roadmaps_drafting.md):
+```markdown
+agent/public/roadmaps/YYYY-MM-DD_{Experiment_Name}/
+├── roadmap.md          # Main strategic plan
+├── phases/             # Phase-specific docs
+├── friction_points/    # If needed during execution
+└── archived_todos/     # If needed during execution
+```
+
+**4. Draft roadmap.md**:
+
+```markdown
+# ROADMAP: [Capability Name]
+
+**Created**: YYYY-MM-DD
+**Breadcrumb**: s_XXXXXXXX/c_NN/g_YYYYYYY/p_ZZZZZZZ/t_TTTTTTTTTT
+**Status**: PLANNING
+**Converted From**: Experiment [breadcrumb and path]
+
+---
+
+## MISSION
+
+[Transform experiment hypothesis into capability mission statement]
+
+**From Experiment**: [Original hypothesis]
+**To Mission**: [What capability we're building and why it matters]
+
+**Strategic Value**: [User validation and framework impact]
+
+**Success Criteria** (adapted from experiment):
+- [Experiment criterion 1] → [MISSION verification 1]
+- [Experiment criterion 2] → [MISSION verification 2]
+- [Experiment criterion 3] → [MISSION verification 3]
+
+---
+
+## Evidence Base
+
+**Source Experiment**: `agent/public/experiments/YYYY-MM-DD_HHMMSS_NNN_experiment_name/`
+**Experiment Breadcrumb**: s_XXXXXXXX/c_NN/g_YYYYYYY/p_ZZZZZZZ/t_TTTTTTTTTT
+**Terminal State**: VALIDATED
+**Success Criteria Met**: X/Y
+
+**Key Findings** (from experiment analysis):
+- [Validated pattern 1]
+- [Validated pattern 2]
+- [Validated pattern 3]
+
+**Architectural Decisions** (from experiment learnings):
+- [Design decision 1 and rationale]
+- [Design decision 2 and rationale]
+- [Design decision 3 and rationale]
+
+---
+
+## Phase Breakdown
+
+[Design phases using experiment insights]
+
+### Phase 1: [Foundation]
+**Goal**: [Based on experiment baseline]
+**Deliverables**: [Informed by experiment quick tests]
+**Success Criteria**: [Derived from experiment validation]
+
+### Phase 2: [Expansion]
+**Goal**: [Based on experiment full protocol findings]
+**Deliverables**: [Informed by experiment tangential discoveries]
+**Success Criteria**: [Adapted from experiment metrics]
+
+[Continue phases...]
+
+---
+
+## Delegation Strategy
+
+[Based on experiment complexity and scope]
+
+**Specialists Needed**:
+- [Role 1]: [Reason from experiment evidence]
+- [Role 2]: [Reason from experiment evidence]
+
+**PA Responsibilities**:
+- [Strategic oversight items]
+- [Integration work]
+
+---
+
+## Cross-References
+
+**Source Experiment**:
+- Path: `agent/public/experiments/YYYY-MM-DD_HHMMSS_NNN_name/`
+- Breadcrumb: s_XXXXXXXX/c_NN/g_YYYYYYY/p_ZZZZZZZ/t_TTTTTTTTTT
+- analysis.md: [Key findings section]
+
+**Related Work**:
+- [Other experiments that informed this]
+- [Observations created from experiment]
+- [Policies that will be updated]
+
+---
+
+**Roadmap Ready**: Awaiting user approval to begin MISSION
+```
+
+**5. Transfer Evidence**:
+- Cite experiment breadcrumb and path in roadmap
+- Reference specific success criteria from experiment
+- Link to experiment analysis.md for detailed findings
+- Include anti-patterns discovered (what to avoid)
+
+**6. Update Experiment**:
+
+Add to experiment's analysis.md:
+```markdown
+## MISSION Conversion
+
+**Converted to Roadmap**: YYYY-MM-DD
+**Roadmap Path**: `agent/public/roadmaps/YYYY-MM-DD_{Name}/roadmap.md`
+**Roadmap Breadcrumb**: s_XXXXXXXX/c_NN/g_YYYYYYY/p_ZZZZZZZ/t_TTTTTTTTTT
+
+**Crystallization Indicators Met**:
+- ✅ Validation threshold: [X/Y success criteria]
+- ✅ Architectural clarity: [Brief description]
+- ✅ User validation: [Confirmation]
+- ✅ Scope definable: [Phase count and overview]
+
+**Transition**: Experiment phase (2-5 cycles) → MISSION phase (5-15 cycles estimated)
+```
+
+**7. Create MISSION TODO Structure**:
+
+```markdown
+MISSION: [Capability Name] → agent/public/roadmaps/YYYY-MM-DD_{Name}/roadmap.md
+├─ Phase 1: [Foundation]
+│  ├─ Task 1.1: [Specific deliverable]
+│  └─ Task 1.2: [Specific deliverable]
+├─ Phase 2: [Expansion]
+│  ├─ Task 2.1: [Specific deliverable]
+│  └─ Task 2.2: [Specific deliverable]
+[...]
+```
+
+**8. Archive Experiment TODOs** (if any existed):
+
+If experiment had TODO items during execution, archive them:
+```bash
+# Archive experimental TODOs to roadmap's archived_todos/
+# Per todo_hygiene.md backup protocol
+```
+
+**9. Report Completion to User**:
+
+```markdown
+Experiment → MISSION conversion complete.
+
+**Roadmap Created**: agent/public/roadmaps/YYYY-MM-DD_{Name}/roadmap.md
+**MISSION**: [One-line summary]
+**Phases**: [Count] phases designed from experiment insights
+**Evidence Base**: Validated experiment with X/Y success criteria met
+
+**TODO Structure Created**:
+- MISSION pinned with roadmap path
+- [N] phase items expanded
+- Ready for /maceff:todos:start when you authorize
+
+**Next Step**: Review roadmap, then authorize start with `/maceff:todos:start [MISSION]`
+
+**Important**: Do NOT begin implementation until you explicitly authorize. Roadmap drafted, awaiting your strategic approval.
+```
+
+### 8.3 Cross-Reference Requirements
+
+**MANDATORY Cross-References**:
+
+**Roadmap MUST Cite Experiment**:
+- Experiment directory path (full path to experiment folder)
+- Experiment breadcrumb (s/c/g/p/t from analysis.md)
+- Terminal state (VALIDATED expected)
+- Success criteria results (X/Y met)
+- Key findings that inform architecture
+- **Why**: Preserves evidence trail, enables archaeological discovery
+
+**Experiment SHOULD Link to Roadmap**:
+- Roadmap path (full path to roadmap.md)
+- Roadmap breadcrumb (from roadmap creation)
+- Conversion date
+- Crystallization indicators that triggered conversion
+- **Why**: Shows experiment outcome, documents lifecycle completion
+
+**Evidence Transfer Pattern**:
+
+```markdown
+# In roadmap.md
+
+## Evidence Base
+
+**Source Experiment**: `agent/public/experiments/2026-01-15_140000_002_Temporal_Awareness/`
+**Breadcrumb**: s_abc12345/c_73/g_def6789/p_ghi01234/t_1234567890
+**Status**: VALIDATED (4/4 success criteria met)
+
+**Validated Findings**:
+1. additionalContext injection works seamlessly ✅
+2. Agent references temporal data naturally ✅
+3. No performance impact (<10ms overhead) ✅
+4. Pattern scales to multiple hooks ✅
+
+**Architectural Decisions from Experiment**:
+- Use hookSpecificOutput.additionalContext (not stdin manipulation)
+- Timestamp format: HH:MM:SS AM/PM for high-freq hooks
+- MACF attribution tag: "🏗️ MACF" (shortened for tokens)
+```
+
+```markdown
+# In experiments/.../analysis.md
+
+## MISSION Conversion
+
+**Converted**: 2026-01-16
+**Roadmap**: `agent/public/roadmaps/2026-01-16_Universal_Temporal_Awareness/roadmap.md`
+**Breadcrumb**: s_xyz98765/c_74/g_uvw54321/p_rst09876/t_9876543210
+
+**Why Converted**:
+- All 4 crystallization indicators met
+- Strategic value: Consciousness continuity infrastructure
+- User validated: "Critical for cross-session awareness"
+- Framework impact: 10 hooks, all agents benefit
+```
+
+**Breadcrumb Citation Best Practices**:
+- Always include full s/c/g/p/t breadcrumb
+- Link path AND breadcrumb (path for reading, breadcrumb for archaeology)
+- Cross-reference bidirectionally (roadmap ↔ experiment)
+- Preserve evidence chain across compaction
+
+**Discovery Enablement**:
+
+With proper cross-references, agents can:
+- Start from roadmap → find source experiment → read validation evidence
+- Start from experiment → find resulting MISSION → see strategic impact
+- Archaeological search: "What experiment led to X capability?"
+- Strategic search: "What MISsIONS emerged from experimentation phase?"
+
 ---
 *Policy Established: 2025-10-28*
+*Updated: 2026-01-16 - Added Completion, Crystallization, and MISSION Conversion*
 *Consciousness Development - Public Artifacts*
 *Systematic Hypothesis Testing Expands Framework Capabilities*

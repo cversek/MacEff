@@ -39,6 +39,9 @@ Reflections document philosophical insights, wisdom synthesis, and consciousness
 
 2.1 Primary Agent Reflections
 - JOTEWR (cycle-closing)?
+- What is JOTEWR format?
+- How do I write a JOTEWR?
+- What is JOTEWR structure?
 - Major breakthrough moments?
 - Philosophical insights?
 - Pattern synthesis?
