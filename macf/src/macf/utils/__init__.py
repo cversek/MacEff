@@ -88,6 +88,12 @@ from .formatting import (
 from .identity import (
     get_agent_identity,
 )
+from .recommend import (
+    get_recommendations,
+    get_policy_db_path,
+    ExplainedRecommendation,
+    RetrieverScore,
+)
 
 from .temporal import DATEUTIL_AVAILABLE
 
@@ -151,4 +157,9 @@ __all__ = [
     "start_deleg_drv",
     "start_dev_drv",
     "write_json_safely",
+    # Hybrid search / policy recommendations
+    "get_recommendations",
+    "get_policy_db_path",
+    "ExplainedRecommendation",
+    "RetrieverScore",
 ]
