@@ -897,6 +897,38 @@ def setup_policies() -> None:
         log("Policies already deployed (current symlink exists)")
 
 
+def build_policy_index(agents_config: AgentsConfig) -> None:
+    """Build policy index for first PA user.
+
+    Creates ~/.maceff/policy_index.db with FTS5 and embedding tables
+    for hybrid search. Required for search service to provide recommendations.
+    """
+    if not agents_config.agents:
+        log("No agents configured, skipping policy index build")
+        return
+
+    # Get first PA username
+    first_agent_name = list(agents_config.agents.keys())[0]
+    first_agent = agents_config.agents[first_agent_name]
+    pa_username = first_agent.username or f"pa_{first_agent_name}"
+
+    log(f"Building policy index as {pa_username}...")
+    try:
+        result = subprocess.run(
+            ['su', '-', pa_username, '-c',
+             '/opt/maceff-venv/bin/macf_tools policy build_index'],
+            capture_output=True, text=True, timeout=120
+        )
+        if result.returncode == 0:
+            log("Policy index built successfully")
+        else:
+            log(f"Policy index build warning: {result.stderr or result.stdout or 'unknown'}")
+    except subprocess.TimeoutExpired:
+        log("Policy index build timed out (non-fatal) - will retry on first search")
+    except Exception as e:
+        log(f"Policy index build failed (non-fatal): {e}")
+
+
 def start_search_service_daemon(agents_config: AgentsConfig) -> None:
     """Start search service daemon as first PA user (background process).
 
@@ -1105,6 +1137,9 @@ def main() -> int:
 
         # Propagate environment
         propagate_container_env()
+
+        # Build policy index for first PA (required for search service)
+        build_policy_index(agents_config)
 
         # Start search service daemon for first PA (background process)
         start_search_service_daemon(agents_config)
