@@ -917,7 +917,7 @@ def start_search_service_daemon(agents_config: AgentsConfig) -> None:
         # Start as background daemon using su
         result = subprocess.run(
             ['su', '-', pa_username, '-c',
-             '/opt/maceff-venv/bin/python -m macf.search_service.daemon --daemonize'],
+             '/opt/maceff-venv/bin/python -m macf.search_service.daemon --daemon'],
             capture_output=True, text=True, timeout=30
         )
         if result.returncode == 0:
