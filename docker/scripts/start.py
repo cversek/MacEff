@@ -897,20 +897,20 @@ def setup_policies() -> None:
         log("Policies already deployed (current symlink exists)")
 
 
-def start_search_service_daemon(agents_config: dict) -> None:
+def start_search_service_daemon(agents_config: AgentsConfig) -> None:
     """Start search service daemon as first PA user (background process).
 
     The search service provides 89x faster policy recommendations by keeping
     the sentence-transformers model warm in memory.
     """
-    agents = agents_config.get('agents', {})
-    if not agents:
+    if not agents_config.agents:
         log("No agents configured, skipping search service")
         return
 
     # Get first PA username
-    first_agent = list(agents.values())[0]
-    pa_username = first_agent.get('username', f"pa_{list(agents.keys())[0]}")
+    first_agent_name = list(agents_config.agents.keys())[0]
+    first_agent = agents_config.agents[first_agent_name]
+    pa_username = first_agent.username or f"pa_{first_agent_name}"
 
     log(f"Starting search service daemon as {pa_username}...")
     try:
