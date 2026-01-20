@@ -392,21 +392,33 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 # MANUAL_MODE: block violation
                 if _is_bare_cd_command(command):
                     auto_mode, _, _ = detect_auto_mode(session_id)
+
+                    # Truncate command for display
+                    cmd_preview = command[:80] + "..." if len(command) > 80 else command
+
                     violation_msg = (
-                        "Bare 'cd' command detected - changes working directory and breaks hook paths.\n"
-                        "Use subshell instead: (cd /path && command)\n"
-                        "Or use absolute paths without cd."
+                        f"❌ Bare 'cd' Command Blocked\n\n"
+                        f"Command: {cmd_preview}\n\n"
+                        f"⚠️ Bare 'cd' changes working directory and breaks relative hook paths.\n\n"
+                        f"✅ Alternatives that work:\n"
+                        f"  1. Subshell: (cd /path && command)\n"
+                        f"  2. Absolute paths: pytest /full/path/to/tests\n"
+                        f"  3. Tool flags: git -C /path status\n\n"
+                        f"Simply wrap in subshell or use absolute paths, then retry."
                     )
+
                     if auto_mode:
                         # AUTO_MODE: warn but continue
-                        message_parts.append(f"⚠️ {violation_msg}")
+                        message_parts.append(f"⚠️ Bare cd detected - use subshell or absolute paths")
                     else:
-                        # MANUAL_MODE: block
+                        # MANUAL_MODE: Use permissionDecision pattern (like TodoWrite)
+                        # This shows as permission dialog, not scary "Error:"
                         return {
                             "continue": False,
                             "hookSpecificOutput": {
                                 "hookEventName": "PreToolUse",
-                                "message": f"❌ {violation_msg}"
+                                "permissionDecision": "deny",
+                                "permissionDecisionReason": violation_msg
                             }
                         }
 

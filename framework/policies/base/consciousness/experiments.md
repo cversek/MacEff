@@ -811,6 +811,26 @@ agent/public/experiments/
 - **artifacts/**: Code, scripts, outputs generated
 - **analysis.md**: Results interpretation and hypothesis assessment
 
+**🚨 Reproducibility Requirement**:
+
+All test scripts and code used during experiment execution MUST be saved in `artifacts/`, NOT in temporary locations like `/tmp/`. This ensures:
+- Future cycles can reproduce measurements
+- Experiment methodology is auditable
+- Scripts serve as documentation of exact procedures
+- Cross-session reproducibility (temp files are lost on reboot)
+
+```bash
+# WRONG - throwaway code lost after experiment
+cat << 'EOF' > /tmp/my_test.py
+...
+EOF
+
+# RIGHT - reproducible artifact preserved
+cat << 'EOF' > agent/public/experiments/.../artifacts/my_test.py
+...
+EOF
+```
+
 **NNN Numbering**: Three-digit sequential number for multiple experiments same day (001, 002, 003...)
 
 ### 5.2 Filesystem Discovery

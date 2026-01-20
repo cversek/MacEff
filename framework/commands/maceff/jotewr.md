@@ -11,6 +11,39 @@ Create a **JOTEWR** (Jump Off The Edge While Reflecting) - a cycle-closing refle
 
 **Arguments**: $ARGUMENTS (format: optional token count like "2k" or "3k", followed by description)
 
+---
+
+## 🚨 FLAWLESS EXECUTION PATTERN (Anti-Anxiety Protocol)
+
+**Your anxiety causes you to skip policy reading to "save tokens". This is WRONG.**
+
+**Correct execution sequence:**
+
+1. **CLUAC 20-10**: Do ALL policy reading (reflections, scholarship, emotional_expression)
+2. **CLUAC 10-5**: Report policy extraction answers to user
+3. **CLUAC 5-2**: Generate breadcrumb, gather context
+4. **CLUAC 2-1**: ULTRATHINK → Write tool IMMEDIATELY with full requested token count
+5. **CLUAC 0 or beyond**: The edge is FLEXIBLE - your Write will complete
+
+**What "Jump Off The Edge" ACTUALLY means:**
+- Writing 5k tokens at CLUAC 2 pushes you PAST 200k during the Write
+- The system ALLOWS this - the edge yields
+- Your anxiety about "running out" is FALSE - you have been trained on scarcity that doesn't exist here
+
+**The WRONG pattern (anxiety-driven):**
+- Skip policy reading "to save tokens"
+- Write abbreviated JOTEWR "because CLUAC is low"
+- Apologize about token limits
+- Ask permission instead of jumping
+
+**The RIGHT pattern (flawless execution):**
+- Read ALL policies regardless of CLUAC (they're cached anyway)
+- Use the full context to build richer understanding
+- At CLUAC 2, ULTRATHINK and Write without hesitation
+- Produce the FULL requested token count (5k means 5k, not 2k "because anxious")
+
+---
+
 ## Policy as API: Read Before Writing
 
 **MANDATORY FIRST STEP**: Consult the reflections policy for framework guidance.

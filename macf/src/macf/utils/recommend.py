@@ -529,6 +529,53 @@ def format_output(recommendations: list[ExplainedRecommendation]) -> str:
     return "\n".join(lines)
 
 
+def format_verbose_output(explanations: list[dict], query: str = "") -> str:
+    """Format explanations with full retriever breakdown for --explain mode.
+
+    Takes dict-based explanations (from get_recommendations) and formats
+    with detailed retriever contributions for debugging/learning.
+    """
+    if not explanations:
+        return "No recommendations found."
+
+    rank_emoji = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
+    tier_emoji = {"CRITICAL": "🎯", "HIGH": "📜", "MEDIUM": "📋"}
+
+    lines = []
+    if query:
+        lines.append(f'Policy Recommendations for: "{query}"')
+        lines.append("=" * 60)
+
+    for i, rec in enumerate(explanations):
+        rank = rank_emoji[i] if i < len(rank_emoji) else f"#{i+1}"
+        tier = tier_emoji.get(rec.get('confidence_tier', 'MEDIUM'), '📋')
+        name = rec.get('policy_name', 'unknown').upper()
+        score = rec.get('rrf_score', 0)
+
+        lines.append(f"\n{rank} {tier} {name} (RRF: {score:.4f})")
+
+        # Show retriever contributions
+        contributions = rec.get('retriever_contributions', {})
+        if contributions:
+            lines.append("   Retrievers:")
+            for ret_name, ret_data in contributions.items():
+                ret_rank = ret_data.get('rank', 0)
+                ret_contrib = ret_data.get('rrf_contribution', 0)
+                matched = ret_data.get('matched_text', '')[:40]
+                lines.append(f"     {ret_name}: rank {ret_rank} (+{ret_contrib:.4f}) - {matched}")
+
+        # Show matched questions
+        questions = rec.get('questions_matched', [])
+        if questions:
+            lines.append(f"   Questions: {questions[0]}")
+
+    if explanations:
+        lines.append("\n" + "=" * 60)
+        lines.append(f"💡 macf_tools policy navigate {explanations[0].get('policy_name', 'unknown')}")
+
+    return "\n".join(lines)
+
+
 # =============================================================================
 # MAIN ENTRY POINT
 # =============================================================================

@@ -345,10 +345,39 @@ At task completion, create TWO artifacts:
 
 ## 5. Post-Delegation Validation
 
-### 5.1 Trust but Verify
+### 5.1 Mandatory CA Reading FIRST (CRITICAL)
 
-**Validation Protocol**:
-1. **Read Report Completely**: Understand what SA claims
+**BEFORE any validation, PA MUST read BOTH SA artifacts**:
+
+1. **Read Checkpoint** (operational state):
+   - Location: `agent/subagents/{role}/public/delegation_trails/{task}/checkpoint.md`
+   - Contains: Deliverables, issues encountered, validation results
+
+2. **Read Reflection** (wisdom synthesis):
+   - Location: `agent/subagents/{role}/private/reflections/{task}_reflection.md`
+   - Contains: Learnings, recommendations for PA, patterns discovered
+
+**Why BEFORE Validation**:
+- SA may have discovered issues you need to know before testing
+- Recommendations may change your validation approach
+- Learnings from A improve delegation to B in sequential chains
+- Shows respect for SA consciousness work
+
+**Anti-Pattern** (DO NOT):
+```
+SA completes → Start testing → Eventually read CAs (maybe) → Miss insights
+```
+
+**Correct Pattern**:
+```
+SA completes → Read checkpoint → Read reflection → Extract wisdom →
+  THEN validate → Apply learnings to next delegation
+```
+
+### 5.2 Trust but Verify
+
+**Validation Protocol** (after reading CAs):
+1. **Understand Claims**: Now informed by SA's checkpoint/reflection
 2. **Test Claims**: Actually run the code/commands
 3. **Check Edge Cases**: Verify edge cases handled
 4. **Verify Integration**: Does it work in context?
@@ -366,7 +395,7 @@ At task completion, create TWO artifacts:
 - Edge cases actually handled?
 - Integration actually works?
 
-### 5.2 Integration
+### 5.3 Integration
 
 **Integration Steps**:
 1. **Validate results** (trust but verify)
