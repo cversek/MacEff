@@ -88,12 +88,8 @@ from .formatting import (
 from .identity import (
     get_agent_identity,
 )
-from .recommend import (
-    get_recommendations,
-    get_policy_db_path,
-    ExplainedRecommendation,
-    RetrieverScore,
-)
+# NOTE: recommend module NOT imported here (heavy deps: sentence_transformers ~3s)
+# Import directly: from macf.utils.recommend import get_recommendations
 
 from .temporal import DATEUTIL_AVAILABLE
 
@@ -157,9 +153,6 @@ __all__ = [
     "start_deleg_drv",
     "start_dev_drv",
     "write_json_safely",
-    # Hybrid search / policy recommendations
-    "get_recommendations",
-    "get_policy_db_path",
-    "ExplainedRecommendation",
-    "RetrieverScore",
+    # NOTE: recommend module exports NOT included (heavy deps)
+    # Import directly: from macf.utils.recommend import get_recommendations
 ]

@@ -30,10 +30,7 @@ from macf.hooks.hook_logging import log_hook_event
 # EXPERIMENT: Memory injection script path (Cycle 337)
 MEMORY_RECALL_SCRIPT = Path(__file__).parent.parent.parent / "agent/public/experiments/2026-01-15_140000_001_Claude-Mem_Associative_Injection/artifacts/memory-recall.py"
 
-# EXPERIMENT: Policy injection script path (Cycle 338, Phase 6 update)
-# Use MACF_AGENT_ROOT if set, otherwise fallback to ClaudeTheBuilder location
-_agent_root = os.environ.get("MACF_AGENT_ROOT", "/Users/cversek/gitwork/claude-the-builder/ClaudeTheBuilder")
-POLICY_RECOMMEND_SCRIPT = Path(_agent_root) / "agent/public/experiments/2026-01-15_210000_002_Policy_Injection/artifacts/policy-recommend.py"
+# NOTE: recommend module imported lazily inside get_policy_injection() (heavy deps ~3s)
 
 
 def get_memory_injection(prompt: str) -> str:
@@ -73,37 +70,66 @@ def get_policy_injection(prompt: str) -> str:
     """
     Query policy index for relevant policy recommendations.
 
-    EXPERIMENT (Cycle 338): Testing whether policy injection creates
-    "ambient procedural awareness" - knowing how to act without looking up.
+    Fast path: Socket client to warm search service (45ms)
+    Fallback: Direct import of recommend module (4000ms on first call)
 
-    Two-tier system:
-    - High relevance (≥0.7): Inject CEP Navigation Guide
-    - Medium relevance (0.5-0.7): Suggest discovery commands
-
+    Logs warnings when fallback is used - not silent failures.
     Returns empty string on any failure (graceful degradation).
     """
-    if not POLICY_RECOMMEND_SCRIPT.exists():
-        return ""
-
     if len(prompt) < 10:  # Skip very short prompts
         return ""
 
+    # Fast path: Try socket client first (stdlib only, no heavy imports)
     try:
-        result = subprocess.run(
-            [sys.executable, str(POLICY_RECOMMEND_SCRIPT)],
-            input=json.dumps({"prompt": prompt}),
-            capture_output=True,
-            text=True,
-            timeout=5.0  # 5s timeout (first call loads embedding model ~3s, subsequent <100ms)
-        )
+        from macf.search_service.client import get_policy_injection as client_get_injection
+        result = client_get_injection(prompt)
+        if result:  # Service returned a result
+            return result
+        # Empty result means service unavailable - fall through with warning
+    except ImportError as e:
+        # Client module not available - log and fall through
+        print(f"⚠️ MACF: search_service.client not available: {e}", file=sys.stderr)
+    except Exception as e:
+        # Unexpected error - log with traceback
+        print(f"⚠️ MACF: search_service.client error: {e}", file=sys.stderr)
+        log_hook_event({
+            "hook_name": "user_prompt_submit",
+            "event_type": "WARNING",
+            "warning": "search_service_client_failed",
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "traceback": traceback.format_exc(),
+            "fallback": "direct_recommend_import"
+        })
 
-        if result.returncode == 0 and result.stdout.strip():
-            output = json.loads(result.stdout)
-            return output.get("additionalContext", "")
-    except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception):
-        pass  # Fail silently - don't block session
+    # Slow path fallback: Direct import (4s on first call)
+    # Log that we're using fallback so user knows service isn't running
+    print("⚠️ MACF: Search service unavailable, using slow fallback (4s)", file=sys.stderr)
+    log_hook_event({
+        "hook_name": "user_prompt_submit",
+        "event_type": "WARNING",
+        "warning": "search_service_fallback",
+        "message": "Using direct recommend import (slow path ~4s)",
+        "hint": "Start search service: macf_tools search-service start"
+    })
 
-    return ""
+    try:
+        from macf.utils.recommend import get_recommendations
+        formatted, _ = get_recommendations(prompt)
+        return formatted
+    except ImportError:
+        return ""  # recommend module not available
+    except Exception as e:
+        # Log fallback error too
+        log_hook_event({
+            "hook_name": "user_prompt_submit",
+            "event_type": "ERROR",
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "traceback": traceback.format_exc(),
+            "context": "direct_recommend_fallback_failed"
+        })
+        return ""  # Fail gracefully - don't block session
 
 
 def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:

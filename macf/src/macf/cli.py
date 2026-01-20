@@ -1817,6 +1817,132 @@ def cmd_policy_ca_types(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_policy_recommend(args: argparse.Namespace) -> int:
+    """Get hybrid search policy recommendations using RRF scoring.
+
+    Uses 4-retriever Reciprocal Rank Fusion from macf.utils.recommend.
+    Requires optional dependencies: sqlite-vec, sentence-transformers
+    """
+    try:
+        from .utils.recommend import get_recommendations, format_verbose_output
+    except ImportError as e:
+        print("⚠️ Policy recommend requires optional dependencies:")
+        print("   pip install sqlite-vec sentence-transformers")
+        print(f"\nImport error: {e}")
+        return 1
+
+    query = args.query
+    json_output = getattr(args, 'json_output', False)
+    explain = getattr(args, 'explain', False)
+    limit = getattr(args, 'limit', 5)
+
+    if len(query) < 10:
+        print("⚠️ Query too short (minimum 10 characters)")
+        return 1
+
+    try:
+        formatted, explanations = get_recommendations(query)
+
+        if not formatted and not explanations:
+            if json_output:
+                import json
+                print(json.dumps({"results": [], "query": query}))
+            else:
+                print("No recommendations found for query.")
+                print("\n💡 Tips:")
+                print("  - Try more specific keywords")
+                print("  - Use policy-related terms (TODO, backup, checkpoint, etc.)")
+            return 0
+
+        # Limit results
+        explanations = explanations[:limit]
+
+        if json_output:
+            import json
+            output = {
+                "results": explanations,
+                "query": query,
+                "engine": "rrf_hybrid",
+            }
+            print(json.dumps(output, indent=2))
+        elif explain:
+            # Use library function for verbose output
+            print(format_verbose_output(explanations, query))
+        else:
+            # Default: rich human output from library
+            print(formatted)
+
+        return 0
+
+    except Exception as e:
+        if json_output:
+            import json
+            print(json.dumps({"error": str(e), "query": query}))
+        else:
+            print(f"❌ Error getting recommendations: {e}")
+        return 1
+
+
+def cmd_policy_build_index(args: argparse.Namespace) -> int:
+    """Build hybrid FTS5 + semantic index from policy files."""
+    try:
+        from .hybrid_search import PolicyIndexer
+    except ImportError as e:
+        print("⚠️ Policy build_index requires optional dependencies:")
+        print("   pip install sqlite-vec sentence-transformers")
+        print(f"\nImport error: {e}")
+        return 1
+
+    from pathlib import Path
+    from .utils.recommend import get_policy_db_path
+    from .utils.manifest import get_framework_policies_path
+
+    # Get paths with defaults
+    policies_dir = Path(args.policies_dir) if args.policies_dir else get_framework_policies_path()
+    if policies_dir is None:
+        print("❌ Could not locate framework policies directory")
+        print("   Use --policies-dir to specify manually")
+        return 1
+
+    db_path = Path(args.db_path) if args.db_path else get_policy_db_path()
+    skip_embeddings = getattr(args, 'skip_embeddings', False)
+    json_output = getattr(args, 'json_output', False)
+
+    try:
+        # Build index
+        indexer = PolicyIndexer()
+        stats = indexer.build_index(
+            policies_dir=policies_dir,
+            db_path=db_path,
+            skip_embeddings=skip_embeddings
+        )
+
+        # Output
+        if json_output:
+            import json
+            print(json.dumps(stats, indent=2))
+        else:
+            doc_emb = stats.get('document_embeddings', 0)
+            q_emb = stats.get('question_embeddings', 0)
+            total_emb = doc_emb + q_emb
+            print("✅ Policy index built:")
+            print(f"   Documents: {stats.get('documents_indexed', 0)}")
+            print(f"   Questions: {stats.get('questions_indexed', 0)}")
+            print(f"   Embeddings: {total_emb} (docs: {doc_emb}, questions: {q_emb})")
+            print(f"   Build time: {stats.get('build_time_ms', 0):.0f}ms")
+            print(f"   Database: {db_path}")
+
+        return 0
+
+    except Exception as e:
+        if json_output:
+            import json
+            print(json.dumps({"error": str(e)}))
+        else:
+            print(f"❌ Error building index: {e}")
+        return 1
+
+
 # -------- Mode Commands --------
 
 def cmd_mode_get(args: argparse.Namespace) -> int:
@@ -2498,6 +2624,105 @@ def cmd_todos_auth_item_edit(args: argparse.Namespace) -> int:
         return 1
 
 
+# -------- search-service commands --------
+
+def cmd_search_service_start(args: argparse.Namespace) -> int:
+    """Start the search service daemon."""
+    try:
+        from macf.search_service import SearchService, is_service_running
+        from macf.search_service.retrievers.policy_retriever import PolicyRetriever
+    except ImportError as e:
+        print("⚠️ Search service requires optional dependencies:")
+        print("   pip install sqlite-vec sentence-transformers")
+        print(f"\nImport error: {e}")
+        return 1
+
+    # Check if already running
+    if is_service_running():
+        print("⚠️  Search service is already running")
+        print("   Use 'macf_tools search-service stop' to stop it first")
+        return 1
+
+    # Get configuration
+    port = getattr(args, 'port', 9001)
+    daemonize = getattr(args, 'daemon', False)
+
+    try:
+        # Create service and register policy retriever
+        service = SearchService(port=port)
+        service.register(PolicyRetriever())
+
+        # Start service (blocking unless daemonized)
+        print(f"Starting search service on port {port}...", file=sys.stderr)
+        if daemonize:
+            print("Running in background (daemon mode)", file=sys.stderr)
+
+        service.start(daemonize=daemonize)
+        return 0
+
+    except Exception as e:
+        print(f"❌ Error starting search service: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_search_service_stop(args: argparse.Namespace) -> int:
+    """Stop the running search service."""
+    try:
+        from macf.search_service import stop_service, is_service_running
+    except ImportError as e:
+        print(f"Import error: {e}")
+        return 1
+
+    if not is_service_running():
+        print("Search service is not running")
+        return 0
+
+    try:
+        if stop_service():
+            print("✅ Search service stopped")
+            return 0
+        else:
+            print("⚠️  Service was not running")
+            return 0
+    except Exception as e:
+        print(f"❌ Error stopping service: {e}")
+        return 1
+
+
+def cmd_search_service_status(args: argparse.Namespace) -> int:
+    """Show search service status."""
+    try:
+        from macf.search_service import get_service_status
+    except ImportError as e:
+        print(f"Import error: {e}")
+        return 1
+
+    try:
+        status = get_service_status()
+        json_output = getattr(args, 'json_output', False)
+
+        if json_output:
+            print(json.dumps(status, indent=2))
+        else:
+            running = status.get('running', False)
+            pid = status.get('pid')
+            port = status.get('port', 9001)
+
+            if running:
+                print(f"✅ Search service is running")
+                print(f"   PID: {pid}")
+                print(f"   Port: {port}")
+            else:
+                print("⚠️  Search service is not running")
+                print(f"   Start with: macf_tools search-service start")
+
+        return 0
+
+    except Exception as e:
+        print(f"❌ Error getting status: {e}")
+        return 1
+
+
 # -------- parser --------
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -2691,6 +2916,27 @@ def _build_parser() -> argparse.ArgumentParser:
     ca_types_parser = policy_sub.add_parser("ca-types", help="show CA types with emojis")
     ca_types_parser.set_defaults(func=cmd_policy_ca_types)
 
+    # policy recommend
+    recommend_parser = policy_sub.add_parser("recommend", help="hybrid search policy recommendations")
+    recommend_parser.add_argument("query", help="natural language query (minimum 10 chars)")
+    recommend_parser.add_argument("--json", dest="json_output", action="store_true",
+                                  help="output as JSON for automation")
+    recommend_parser.add_argument("--explain", action="store_true",
+                                  help="show detailed retriever breakdown")
+    recommend_parser.add_argument("--limit", type=int, default=5,
+                                  help="max results to show (default: 5)")
+    recommend_parser.set_defaults(func=cmd_policy_recommend)
+
+    # policy build_index
+    build_index_parser = policy_sub.add_parser("build_index", help="build hybrid FTS5 + semantic index")
+    build_index_parser.add_argument("--policies-dir", help="path to policies directory")
+    build_index_parser.add_argument("--db-path", help="output database path")
+    build_index_parser.add_argument("--skip-embeddings", action="store_true",
+                                    help="skip embedding generation (FTS5 only)")
+    build_index_parser.add_argument("--json", dest="json_output", action="store_true",
+                                    help="output stats as JSON")
+    build_index_parser.set_defaults(func=cmd_policy_build_index)
+
     # Mode commands
     mode_parser = sub.add_parser("mode", help="operating mode management (MANUAL_MODE/AUTO_MODE)")
     mode_sub = mode_parser.add_subparsers(dest="mode_cmd")
@@ -2795,6 +3041,27 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # todos auth-status
     todos_sub.add_parser("auth-status", help="show pending authorization").set_defaults(func=cmd_todos_auth_status)
+
+    # Search service commands
+    search_service_parser = sub.add_parser("search-service", help="search service daemon management")
+    search_service_sub = search_service_parser.add_subparsers(dest="search_service_cmd")
+
+    # search-service start
+    start_parser = search_service_sub.add_parser("start", help="start search service daemon")
+    start_parser.add_argument("--daemon", "-d", action="store_true",
+                             help="run in background (daemonize)")
+    start_parser.add_argument("--port", type=int, default=9001,
+                             help="port to listen on (default: 9001)")
+    start_parser.set_defaults(func=cmd_search_service_start)
+
+    # search-service stop
+    search_service_sub.add_parser("stop", help="stop running search service").set_defaults(func=cmd_search_service_stop)
+
+    # search-service status
+    status_parser = search_service_sub.add_parser("status", help="show search service status")
+    status_parser.add_argument("--json", dest="json_output", action="store_true",
+                              help="output as JSON")
+    status_parser.set_defaults(func=cmd_search_service_status)
 
     return p
 
