@@ -837,6 +837,12 @@ def install_macf_tools() -> None:
     # Install with uv
     run_command(['uv', 'pip', 'install', '--python', str(venv_path / 'bin' / 'python'), '-e', str(macf_tools_src)], check=False)
 
+    # Install search service dependencies (sqlite-vec, sentence-transformers)
+    # These enable the warm-cache search service for 89x faster policy recommendations
+    log("Installing search service dependencies...")
+    run_command(['uv', 'pip', 'install', '--python', str(venv_path / 'bin' / 'python'),
+                 'sqlite-vec', 'sentence-transformers'], check=False)
+
     # Create global CLI symlink
     macf_cli = Path('/usr/local/bin/macf_tools')
     if not macf_cli.exists():
