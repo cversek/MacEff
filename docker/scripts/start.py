@@ -897,6 +897,37 @@ def setup_policies() -> None:
         log("Policies already deployed (current symlink exists)")
 
 
+def start_search_service_daemon(agents_config: dict) -> None:
+    """Start search service daemon as first PA user (background process).
+
+    The search service provides 89x faster policy recommendations by keeping
+    the sentence-transformers model warm in memory.
+    """
+    agents = agents_config.get('agents', {})
+    if not agents:
+        log("No agents configured, skipping search service")
+        return
+
+    # Get first PA username
+    first_agent = list(agents.values())[0]
+    pa_username = first_agent.get('username', f"pa_{list(agents.keys())[0]}")
+
+    log(f"Starting search service daemon as {pa_username}...")
+    try:
+        # Start as background daemon using su
+        result = subprocess.run(
+            ['su', '-', pa_username, '-c',
+             '/opt/maceff-venv/bin/python -m macf.search_service.daemon --daemonize'],
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode == 0:
+            log("Search service daemon started successfully")
+        else:
+            log(f"Search service start warning: {result.stderr or 'unknown'}")
+    except Exception as e:
+        log(f"Search service start failed (non-fatal): {e}")
+
+
 def propagate_container_env() -> None:
     """Propagate container environment to SSH sessions.
 
@@ -1074,6 +1105,9 @@ def main() -> int:
 
         # Propagate environment
         propagate_container_env()
+
+        # Start search service daemon for first PA (background process)
+        start_search_service_daemon(agents_config)
 
         log("Startup complete")
         log("Run 'python scripts/deploy.py install' to deploy repos and worktrees")
