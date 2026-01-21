@@ -1,15 +1,8 @@
 #!/usr/bin/env python3
 """
-policy-recommend.py - Hybrid search with RRF scoring and explainability
+policy-recommend.py - Hybrid search with LanceDB backend
 
-Phase 3 (MISSION): Reciprocal Rank Fusion combining 4 retrievers:
-1. FTS5 BM25 on policies_fts
-2. FTS5 BM25 on questions_fts
-3. Cosine similarity on policy_embeddings
-4. Cosine similarity on question_embeddings
-
-Each recommendation carries ExplainedRecommendation metadata showing
-WHY it matched - enabling learning and debugging.
+Migrated from sqlite-vec to LanceDB for ARM64 compatibility and native hybrid search.
 
 Usage (from UserPromptSubmit hook):
     echo '{"prompt": "How do I manage TODOs?"}' | python policy-recommend.py
@@ -17,31 +10,27 @@ Usage (from UserPromptSubmit hook):
 Output:
     {"additionalContext": "...", "explanations": [...]}
 
-Target: <100ms execution time (embedding lookup ~15ms)
+Target: <100ms execution time
 """
 
 import json
 import re
-import sqlite3
-import struct
 import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Literal, Optional
 
-import sqlite_vec
-from sentence_transformers import SentenceTransformer
-
+from ..hybrid_search.lancedb_search import LanceDBPolicySearch
 from .paths import find_agent_home
 
 
 def get_policy_db_path() -> Path:
-    """Get path to policy_index.db using portable path resolution."""
+    """Get path to policy index using portable path resolution."""
     agent_home = find_agent_home()
-    return agent_home / ".maceff" / "policy_index.db"
+    return agent_home / ".maceff" / "policy_index.lance"
 
 
-# Configuration (lazy - computed on first use)
+# Configuration
 DB_PATH: Optional[Path] = None
 
 
@@ -51,35 +40,29 @@ def _get_db_path() -> Path:
     if DB_PATH is None:
         DB_PATH = get_policy_db_path()
     return DB_PATH
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-EMBEDDING_DIM = 384
 
-# RRF constant (standard value from literature)
-RRF_K = 60
+
+EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
 # Thresholds for tiered output
-CRITICAL_THRESHOLD = 0.025  # RRF score for CRITICAL tier
-HIGH_THRESHOLD = 0.015      # RRF score for HIGH tier
-LOW_THRESHOLD = 0.008       # Minimum for any suggestion
+CRITICAL_THRESHOLD = 0.70  # Similarity score for CRITICAL tier
+HIGH_THRESHOLD = 0.55      # Similarity score for HIGH tier
+LOW_THRESHOLD = 0.30       # Minimum for any suggestion
 
 MAX_RESULTS = 5
 MIN_QUERY_LENGTH = 10
 
-# Lazy-loaded model
-_model: Optional[SentenceTransformer] = None
+# Lazy-loaded searcher
+_searcher: Optional[LanceDBPolicySearch] = None
 
 
-def get_model() -> SentenceTransformer:
-    """Lazy load the embedding model."""
-    global _model
-    if _model is None:
-        _model = SentenceTransformer(EMBEDDING_MODEL)
-    return _model
-
-
-def serialize_f32(vector: list[float]) -> bytes:
-    """Serialize a float32 vector for sqlite-vec query."""
-    return struct.pack(f'{len(vector)}f', *vector)
+def get_searcher() -> LanceDBPolicySearch:
+    """Lazy load the LanceDB searcher."""
+    global _searcher
+    if _searcher is None:
+        db_path = _get_db_path()
+        _searcher = LanceDBPolicySearch(db_path, model_name=EMBEDDING_MODEL)
+    return _searcher
 
 
 @dataclass
@@ -87,9 +70,9 @@ class RetrieverScore:
     """Score from a single retriever with explanation."""
     retriever: str
     rank: int  # 1-indexed rank (0 = not found)
-    raw_score: float  # Original score (BM25 or cosine)
+    raw_score: float  # Similarity score
     rrf_contribution: float  # 1/(k + rank) contribution
-    matched_text: str = ""  # What matched (keyword, question text, etc.)
+    matched_text: str = ""  # What matched
 
 
 @dataclass
@@ -152,353 +135,60 @@ def extract_keywords(prompt: str) -> list[tuple[str, float]]:
     return keywords[:10]
 
 
-def build_fts_query(keywords: list[tuple[str, float]]) -> str:
-    """Build FTS5 query string with weighted keywords."""
-    query_parts = []
-    for word, weight in keywords:
-        if weight > 1:
-            query_parts.extend([word] * int(weight))
-        else:
-            query_parts.append(word)
-    return " OR ".join(query_parts)
-
-
-def normalize_bm25(bm25_score: float) -> float:
-    """Normalize BM25 score to 0-1 range."""
-    if bm25_score >= 0:
-        return 0.0
-    return min(1.0, max(0.0, -bm25_score / 20))
-
-
-# =============================================================================
-# RETRIEVER 1: FTS5 on policies_fts
-# =============================================================================
-
-def search_policies_fts(keywords: list[tuple[str, float]], conn: sqlite3.Connection) -> dict[str, RetrieverScore]:
-    """Retriever 1: FTS5 BM25 search on policies."""
-    results = {}
-    if not keywords:
-        return results
-
-    try:
-        cursor = conn.cursor()
-        fts_query = build_fts_query(keywords)
-
-        cursor.execute("""
-            SELECT policy_name, bm25(policies_fts) as score
-            FROM policies_fts
-            WHERE policies_fts MATCH ?
-            ORDER BY score
-            LIMIT 20
-        """, (fts_query,))
-
-        for rank, row in enumerate(cursor.fetchall(), start=1):
-            policy_name = row[0]
-            raw_score = row[1]
-            rrf_contrib = 1.0 / (RRF_K + rank)
-
-            results[policy_name] = RetrieverScore(
-                retriever="policies_fts",
-                rank=rank,
-                raw_score=normalize_bm25(raw_score),
-                rrf_contribution=rrf_contrib,
-                matched_text=fts_query[:50]
-            )
-
-    except sqlite3.Error:
-        pass
-
-    return results
-
-
-# =============================================================================
-# RETRIEVER 2: FTS5 on questions_fts
-# =============================================================================
-
-def search_questions_fts(keywords: list[tuple[str, float]], conn: sqlite3.Connection) -> tuple[dict[str, RetrieverScore], dict[str, list[str]]]:
-    """Retriever 2: FTS5 BM25 search on CNG questions.
-
-    Returns (policy_scores, matched_questions_by_policy).
+def search_with_lancedb(query: str, limit: int = 5) -> list[ExplainedRecommendation]:
     """
-    results = {}
-    matched_questions: dict[str, list[str]] = {}
+    Search using LanceDB native hybrid search.
 
-    if not keywords:
-        return results, matched_questions
-
-    try:
-        cursor = conn.cursor()
-        fts_query = build_fts_query(keywords)
-
-        cursor.execute("""
-            SELECT policy_name, question_text, section_number, bm25(questions_fts) as score
-            FROM questions_fts
-            WHERE questions_fts MATCH ?
-            ORDER BY score
-            LIMIT 30
-        """, (fts_query,))
-
-        # Group by policy, use best question rank
-        policy_ranks: dict[str, tuple[int, float, str]] = {}  # policy -> (rank, score, question)
-
-        for rank, row in enumerate(cursor.fetchall(), start=1):
-            policy_name = row[0]
-            question_text = row[1]
-            section_num = row[2]
-            raw_score = row[3]
-
-            # Track matched questions
-            if policy_name not in matched_questions:
-                matched_questions[policy_name] = []
-            matched_questions[policy_name].append(f"{question_text} (§{section_num})")
-
-            # Use first (best) rank for each policy
-            if policy_name not in policy_ranks:
-                policy_ranks[policy_name] = (rank, raw_score, question_text)
-
-        # Convert to RetrieverScores
-        for policy_name, (rank, raw_score, question) in policy_ranks.items():
-            rrf_contrib = 1.0 / (RRF_K + rank)
-            results[policy_name] = RetrieverScore(
-                retriever="questions_fts",
-                rank=rank,
-                raw_score=normalize_bm25(raw_score),
-                rrf_contribution=rrf_contrib,
-                matched_text=question[:80]
-            )
-
-    except sqlite3.Error:
-        pass
-
-    return results, matched_questions
-
-
-# =============================================================================
-# RETRIEVER 3: Semantic search on policy_embeddings
-# =============================================================================
-
-def search_policies_semantic(query_embedding: bytes, conn: sqlite3.Connection) -> dict[str, RetrieverScore]:
-    """Retriever 3: Semantic search on policy embeddings."""
-    results = {}
-
-    try:
-        cursor = conn.cursor()
-
-        # sqlite-vec KNN query with k= constraint
-        cursor.execute("""
-            SELECT
-                pe.rowid,
-                pem.policy_name,
-                pe.distance
-            FROM policy_embeddings pe
-            JOIN policy_embedding_map pem ON pe.rowid = pem.rowid
-            WHERE pe.embedding MATCH ? AND k = 20
-            ORDER BY pe.distance
-        """, (query_embedding,))
-
-        for rank, row in enumerate(cursor.fetchall(), start=1):
-            policy_name = row[1]
-            distance = row[2]
-            # Convert distance to similarity (cosine distance -> similarity)
-            similarity = max(0, 1 - distance)
-            rrf_contrib = 1.0 / (RRF_K + rank)
-
-            results[policy_name] = RetrieverScore(
-                retriever="policy_embeddings",
-                rank=rank,
-                raw_score=round(similarity, 3),
-                rrf_contribution=rrf_contrib,
-                matched_text=f"semantic similarity: {similarity:.2f}"
-            )
-
-    except sqlite3.Error:
-        pass
-
-    return results
-
-
-# =============================================================================
-# RETRIEVER 4: Semantic search on question_embeddings
-# =============================================================================
-
-def search_questions_semantic(query_embedding: bytes, conn: sqlite3.Connection) -> tuple[dict[str, RetrieverScore], dict[str, list[str]]]:
-    """Retriever 4: Semantic search on question embeddings.
-
-    Returns (policy_scores, matched_questions_by_policy).
+    Replaces 4-retriever RRF fusion with LanceDB's built-in capabilities.
     """
-    results = {}
-    matched_questions: dict[str, list[str]] = {}
+    searcher = get_searcher()
+    keywords = extract_keywords(query)
 
-    try:
-        cursor = conn.cursor()
-
-        cursor.execute("""
-            SELECT
-                qe.rowid,
-                qem.policy_name,
-                qem.question_id,
-                qe.distance
-            FROM question_embeddings qe
-            JOIN question_embedding_map qem ON qe.rowid = qem.rowid
-            WHERE qe.embedding MATCH ? AND k = 30
-            ORDER BY qe.distance
-        """, (query_embedding,))
-
-        # Group by policy, use best question rank
-        policy_ranks: dict[str, tuple[int, float]] = {}
-
-        for rank, row in enumerate(cursor.fetchall(), start=1):
-            policy_name = row[1]
-            question_id = row[2]
-            distance = row[3]
-            similarity = max(0, 1 - distance)
-
-            # Track for explanation
-            if policy_name not in matched_questions:
-                matched_questions[policy_name] = []
-            matched_questions[policy_name].append(f"[semantic] {question_id}")
-
-            if policy_name not in policy_ranks:
-                policy_ranks[policy_name] = (rank, similarity)
-
-        for policy_name, (rank, similarity) in policy_ranks.items():
-            rrf_contrib = 1.0 / (RRF_K + rank)
-            results[policy_name] = RetrieverScore(
-                retriever="question_embeddings",
-                rank=rank,
-                raw_score=round(similarity, 3),
-                rrf_contribution=rrf_contrib,
-                matched_text=f"semantic similarity: {similarity:.2f}"
-            )
-
-    except sqlite3.Error:
-        pass
-
-    return results, matched_questions
-
-
-# =============================================================================
-# RRF FUSION
-# =============================================================================
-
-def fuse_with_rrf(
-    policies_fts: dict[str, RetrieverScore],
-    questions_fts: dict[str, RetrieverScore],
-    policies_semantic: dict[str, RetrieverScore],
-    questions_semantic: dict[str, RetrieverScore],
-    keywords: list[tuple[str, float]],
-    fts_questions: dict[str, list[str]],
-    semantic_questions: dict[str, list[str]],
-) -> list[ExplainedRecommendation]:
-    """Fuse results from 4 retrievers using Reciprocal Rank Fusion.
-
-    RRF_score(d) = Σ 1/(k + rank_i(d))
-
-    Each policy gets contributions from retrievers that found it.
-    """
-    # Collect all policy names
-    all_policies = set()
-    all_policies.update(policies_fts.keys())
-    all_policies.update(questions_fts.keys())
-    all_policies.update(policies_semantic.keys())
-    all_policies.update(questions_semantic.keys())
+    # Use LanceDB hybrid search (vector + FTS)
+    result = searcher.hybrid_search(query, limit=limit)
 
     recommendations = []
+    for idx, r in enumerate(result['results'], start=1):
+        similarity = r['similarity']
 
-    for policy_name in all_policies:
-        # Sum RRF contributions
-        rrf_score = 0.0
-        contributions = {}
-
-        if policy_name in policies_fts:
-            score = policies_fts[policy_name]
-            rrf_score += score.rrf_contribution
-            contributions["policies_fts"] = score
-
-        if policy_name in questions_fts:
-            score = questions_fts[policy_name]
-            rrf_score += score.rrf_contribution
-            contributions["questions_fts"] = score
-
-        if policy_name in policies_semantic:
-            score = policies_semantic[policy_name]
-            rrf_score += score.rrf_contribution
-            contributions["policy_embeddings"] = score
-
-        if policy_name in questions_semantic:
-            score = questions_semantic[policy_name]
-            rrf_score += score.rrf_contribution
-            contributions["question_embeddings"] = score
-
-        # Determine confidence tier based on RRF score and retriever count
-        num_retrievers = len(contributions)
-        if rrf_score >= CRITICAL_THRESHOLD and num_retrievers >= 3:
+        # Determine confidence tier based on similarity
+        if similarity >= CRITICAL_THRESHOLD:
             tier = "CRITICAL"
-        elif rrf_score >= HIGH_THRESHOLD and num_retrievers >= 2:
+        elif similarity >= HIGH_THRESHOLD:
             tier = "HIGH"
         else:
             tier = "MEDIUM"
 
-        # Collect matched questions from both FTS and semantic
-        questions_matched = []
-        if policy_name in fts_questions:
-            questions_matched.extend(fts_questions[policy_name][:3])
-        if policy_name in semantic_questions:
-            questions_matched.extend(semantic_questions[policy_name][:2])
+        # Create retriever score for explanation
+        retriever_score = RetrieverScore(
+            retriever="lancedb_hybrid",
+            rank=idx,
+            raw_score=similarity,
+            rrf_contribution=r.get('rrf_score', 0),
+            matched_text=f"similarity: {similarity:.2f}"
+        )
 
         rec = ExplainedRecommendation(
-            policy_name=policy_name,
-            rrf_score=rrf_score,
+            policy_name=r['policy_name'],
+            rrf_score=r.get('rrf_score', similarity),  # Use similarity as proxy
             confidence_tier=tier,
-            retriever_contributions=contributions,
+            retriever_contributions={"lancedb_hybrid": retriever_score},
             keywords_matched=keywords[:5],
-            questions_matched=questions_matched[:5],
+            questions_matched=[],  # LanceDB doesn't expose matched questions directly
         )
         recommendations.append(rec)
 
-    # Sort by RRF score descending
-    recommendations.sort(key=lambda r: r.rrf_score, reverse=True)
-
-    return recommendations[:MAX_RESULTS]
-
-
-# =============================================================================
-# OUTPUT FORMATTING
-# =============================================================================
-
-def format_recommendation(rec: ExplainedRecommendation, verbose: bool = False) -> str:
-    """Format a single recommendation for display."""
-    tier_emoji = {"CRITICAL": "🎯", "HIGH": "📜", "MEDIUM": "📋"}
-    emoji = tier_emoji.get(rec.confidence_tier, "📋")
-
-    lines = [f"{emoji} Policy Match: {rec.policy_name.upper()} ({rec.rrf_score:.3f})"]
-    lines.append(f"  macf_tools policy navigate {rec.policy_name}")
-
-    if verbose:
-        # Show retriever breakdown
-        for name, score in rec.retriever_contributions.items():
-            lines.append(f"    {name}: rank {score.rank} (+{score.rrf_contribution:.4f})")
-
-        # Show matched questions
-        if rec.questions_matched:
-            lines.append(f"    Questions: {rec.questions_matched[0][:60]}...")
-
-    return "\n".join(lines)
+    return recommendations
 
 
 def format_output(recommendations: list[ExplainedRecommendation]) -> str:
-    """Format ALL recommendations as ranked list for hook injection.
+    """Format recommendations as ranked list for hook injection.
 
-    additionalContext is ephemeral (zero token cost, not persisted),
-    so we show full ranked list to support learning, trust, and
-    effective user-agent collaboration.
-
-    Visual markers help users track relevance at a glance:
+    Visual markers:
     🥇🥈🥉 = Top 3 ranks
     🎯 = CRITICAL tier (high confidence)
     📜 = HIGH tier
     📋 = MEDIUM tier
-    ✦ = 4 retrievers agreed
     """
     if not recommendations:
         return ""
@@ -506,21 +196,14 @@ def format_output(recommendations: list[ExplainedRecommendation]) -> str:
     rank_emoji = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
     tier_emoji = {"CRITICAL": "🎯", "HIGH": "📜", "MEDIUM": "📋"}
 
-    lines = ["📚 Policy Recommendations (RRF Hybrid Search):"]
+    lines = ["📚 Policy Recommendations (LanceDB Hybrid Search):"]
 
-    for i, rec in enumerate(recommendations[:5]):  # Show top 5
+    for i, rec in enumerate(recommendations[:5]):
         rank = rank_emoji[i] if i < len(rank_emoji) else f"#{i+1}"
         tier = tier_emoji.get(rec.confidence_tier, "📋")
-        num_r = len(rec.retriever_contributions)
-        consensus = "✦" if num_r == 4 else f"({num_r}R)"
 
-        # Main line: rank + tier + name + score + consensus
-        lines.append(f"{rank} {tier} {rec.policy_name.upper()} ({rec.rrf_score:.3f}) {consensus}")
-
-        # Matched question (full - additionalContext is ephemeral, no token cost)
-        if rec.questions_matched:
-            q = rec.questions_matched[0]
-            lines.append(f"    └─ {q}")
+        # Main line: rank + tier + name + score
+        lines.append(f"{rank} {tier} {rec.policy_name.upper()} ({rec.rrf_score:.3f})")
 
     # CLI hint for top result
     if recommendations:
@@ -530,11 +213,7 @@ def format_output(recommendations: list[ExplainedRecommendation]) -> str:
 
 
 def format_verbose_output(explanations: list[dict], query: str = "") -> str:
-    """Format explanations with full retriever breakdown for --explain mode.
-
-    Takes dict-based explanations (from get_recommendations) and formats
-    with detailed retriever contributions for debugging/learning.
-    """
+    """Format explanations with full retriever breakdown for --explain mode."""
     if not explanations:
         return "No recommendations found."
 
@@ -552,7 +231,7 @@ def format_verbose_output(explanations: list[dict], query: str = "") -> str:
         name = rec.get('policy_name', 'unknown').upper()
         score = rec.get('rrf_score', 0)
 
-        lines.append(f"\n{rank} {tier} {name} (RRF: {score:.4f})")
+        lines.append(f"\n{rank} {tier} {name} (Score: {score:.4f})")
 
         # Show retriever contributions
         contributions = rec.get('retriever_contributions', {})
@@ -560,14 +239,8 @@ def format_verbose_output(explanations: list[dict], query: str = "") -> str:
             lines.append("   Retrievers:")
             for ret_name, ret_data in contributions.items():
                 ret_rank = ret_data.get('rank', 0)
-                ret_contrib = ret_data.get('rrf_contribution', 0)
                 matched = ret_data.get('matched_text', '')[:40]
-                lines.append(f"     {ret_name}: rank {ret_rank} (+{ret_contrib:.4f}) - {matched}")
-
-        # Show matched questions
-        questions = rec.get('questions_matched', [])
-        if questions:
-            lines.append(f"   Questions: {questions[0]}")
+                lines.append(f"     {ret_name}: rank {ret_rank} - {matched}")
 
     if explanations:
         lines.append("\n" + "=" * 60)
@@ -576,12 +249,9 @@ def format_verbose_output(explanations: list[dict], query: str = "") -> str:
     return "\n".join(lines)
 
 
-# =============================================================================
-# MAIN ENTRY POINT
-# =============================================================================
-
 def get_recommendations(prompt: str) -> tuple[str, list[dict]]:
-    """Get hybrid RRF recommendations with explanations.
+    """
+    Get hybrid recommendations with explanations.
 
     Returns (formatted_output, explanations_list).
     """
@@ -591,7 +261,6 @@ def get_recommendations(prompt: str) -> tuple[str, list[dict]]:
 
     db_path = _get_db_path()
     if not db_path.exists():
-        import sys
         print(
             f"⚠️ MACF: Policy index not found at {db_path}\n"
             f"   Run: macf_tools policy build_index",
@@ -600,33 +269,12 @@ def get_recommendations(prompt: str) -> tuple[str, list[dict]]:
         return "", []
 
     try:
-        # Connect and enable sqlite-vec
-        conn = sqlite3.connect(str(db_path), timeout=0.5)
-        conn.enable_load_extension(True)
-        sqlite_vec.load(conn)
-
-        # Generate query embedding
-        model = get_model()
-        query_embedding = model.encode(prompt)
-        query_bytes = serialize_f32(query_embedding.tolist())
-
-        # Run all 4 retrievers
-        policies_fts = search_policies_fts(keywords, conn)
-        questions_fts, fts_questions = search_questions_fts(keywords, conn)
-        policies_semantic = search_policies_semantic(query_bytes, conn)
-        questions_semantic, semantic_questions = search_questions_semantic(query_bytes, conn)
-
-        conn.close()
-
-        # Fuse with RRF
-        recommendations = fuse_with_rrf(
-            policies_fts, questions_fts,
-            policies_semantic, questions_semantic,
-            keywords, fts_questions, semantic_questions
-        )
+        recommendations = search_with_lancedb(prompt, limit=MAX_RESULTS)
 
         # Filter by minimum threshold
-        recommendations = [r for r in recommendations if r.rrf_score >= LOW_THRESHOLD]
+        recommendations = [r for r in recommendations
+                          if r.retriever_contributions.get('lancedb_hybrid',
+                             RetrieverScore('', 0, 0, 0)).raw_score >= LOW_THRESHOLD]
 
         if not recommendations:
             return "", []
@@ -637,8 +285,43 @@ def get_recommendations(prompt: str) -> tuple[str, list[dict]]:
 
         return formatted, explanations
 
-    except Exception:
+    except Exception as e:
+        print(f"⚠️ MACF: Search error: {e}", file=sys.stderr)
         return "", []
+
+
+def get_policy_recommendation(
+    prompt: str,
+    db_path: Optional[Path] = None,
+    limit: int = MAX_RESULTS,
+    explain: bool = False
+) -> dict:
+    """
+    Public API for policy recommendations.
+
+    Args:
+        prompt: User query text
+        db_path: Optional override for index path
+        limit: Maximum results
+        explain: Include verbose explanations
+
+    Returns:
+        Dict with additionalContext and optional explanations
+    """
+    global DB_PATH
+    if db_path:
+        DB_PATH = db_path
+
+    formatted, explanations = get_recommendations(prompt)
+
+    output = {
+        "additionalContext": formatted,
+    }
+
+    if explain and explanations:
+        output["explanations"] = explanations
+
+    return output
 
 
 def main():
@@ -667,7 +350,7 @@ def main():
             "additionalContext": formatted,
         }
 
-        # Include explanations for debugging/learning (can be omitted in production)
+        # Include explanations for debugging/learning
         if explanations:
             output["explanations"] = explanations
 
