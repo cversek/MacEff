@@ -22,7 +22,8 @@ test = [
 ]
 recommend = [
     "sentence-transformers>=2.2.0",  # For semantic embeddings
-    "sqlite-vec>=0.1.0",             # For vector similarity search
+    "lancedb>=0.26.0",               # For vector similarity and hybrid search
+    # "sqlite-vec>=0.1.0",           # DEPRECATED: ARM64 broken, 12-month stale
 ]
 
 [project.scripts]

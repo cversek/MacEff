@@ -16,10 +16,11 @@ Usage:
     python -m macf.mcp.policy_search
 
 Target: Token-efficient progressive disclosure
+
+Breadcrumb: s_77270981/c_356/g_a76f3cd/p_4593c146/t_1768952820
 """
 
 import json
-import sqlite3
 import sys
 from pathlib import Path
 from typing import Any, Optional
@@ -32,16 +33,33 @@ except ImportError:
     RECOMMEND_AVAILABLE = False
     get_recommendations = None
 
+# LanceDB search backend
+try:
+    from macf.hybrid_search.lancedb_search import LanceDBPolicySearch
+    LANCEDB_AVAILABLE = True
+except ImportError:
+    LANCEDB_AVAILABLE = False
+    LanceDBPolicySearch = None
+
 from macf.utils.paths import find_agent_home
 
 
 def get_db_path() -> Path:
-    """Get policy index DB path using portable resolution."""
-    return find_agent_home() / ".maceff" / "policy_index.db"
+    """Get policy index path using portable resolution."""
+    return find_agent_home() / ".maceff" / "policy_index.lance"
 
 
 # Configuration
 DB_PATH = get_db_path()
+_searcher: Optional[Any] = None  # LanceDBPolicySearch instance
+
+
+def get_searcher():
+    """Lazy load LanceDB searcher."""
+    global _searcher
+    if _searcher is None and LANCEDB_AVAILABLE:
+        _searcher = LanceDBPolicySearch(DB_PATH)
+    return _searcher
 
 
 # =============================================================================
@@ -119,29 +137,29 @@ def tool_context(policy_name: str) -> dict:
     if not DB_PATH.exists():
         return {"error": "Policy index not found"}
 
+    if not LANCEDB_AVAILABLE:
+        return {"error": "LanceDB backend not available"}
+
     try:
-        conn = sqlite3.connect(str(DB_PATH), timeout=0.5)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
+        searcher = get_searcher()
+        if not searcher:
+            return {"error": "Failed to initialize LanceDB searcher"}
 
-        cursor.execute("""
-            SELECT policy_name, tier, category, description, cep_guide
-            FROM policies_fts
-            WHERE policy_name = ?
-        """, (policy_name,))
+        # Search for exact policy name
+        table = searcher.table
+        results = table.search().where(f"policy_name = '{policy_name}'").limit(1).to_list()
 
-        row = cursor.fetchone()
-        conn.close()
-
-        if not row:
+        if not results:
             return {"error": f"Policy '{policy_name}' not found"}
+
+        row = results[0]
 
         return {
             "policy_name": row["policy_name"],
-            "tier": row["tier"],
-            "category": row["category"],
-            "description": row["description"],
-            "cep_guide": row["cep_guide"],
+            "tier": row.get("tier", ""),
+            "category": row.get("category", ""),
+            "description": row.get("description", ""),
+            "cep_guide": row.get("cep_guide", ""),
             "cli_command": f"macf_tools policy navigate {policy_name}",
         }
 
@@ -172,31 +190,30 @@ def tool_details(policy_names: list[str]) -> dict:
     if not policy_names:
         return {"error": "No policy names provided"}
 
+    if not LANCEDB_AVAILABLE:
+        return {"error": "LanceDB backend not available"}
+
     try:
-        conn = sqlite3.connect(str(DB_PATH), timeout=0.5)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
+        searcher = get_searcher()
+        if not searcher:
+            return {"error": "Failed to initialize LanceDB searcher"}
 
+        table = searcher.table
         results = {}
-        for name in policy_names[:5]:  # Limit to 5
-            cursor.execute("""
-                SELECT policy_name, file_path
-                FROM policies_fts
-                WHERE policy_name = ?
-            """, (name,))
 
-            row = cursor.fetchone()
-            if row:
+        for name in policy_names[:5]:  # Limit to 5
+            rows = table.search().where(f"policy_name = '{name}'").limit(1).to_list()
+
+            if rows:
+                row = rows[0]
                 results[name] = {
-                    "file_path": row["file_path"],
+                    "file_path": row.get("file_path", ""),
                     "cli_commands": {
                         "full": f"macf_tools policy read {name}",
                         "navigate": f"macf_tools policy navigate {name}",
                         "section": f"macf_tools policy read {name} --section N",
                     },
                 }
-
-        conn.close()
 
         return {
             "policies": results,

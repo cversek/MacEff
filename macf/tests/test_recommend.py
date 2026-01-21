@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
-Unit tests for policy recommendation (hybrid RRF search).
+Unit tests for policy recommendation (LanceDB hybrid search).
 
 Tests macf.utils.recommend module:
-- get_policy_db_path() - Portable path resolution
+- get_policy_db_path() - Portable path resolution (now returns .lance)
 - ExplainedRecommendation dataclass - Structure validation
 - RetrieverScore dataclass - Structure validation
 - get_recommendations() - Return tuple structure
 - Warning when DB not found
 - Short query filtering
+
+Updated for LanceDB backend migration (Cycle 356).
 """
 
 import pytest
@@ -32,7 +34,7 @@ class TestPolicyDbPath:
         """
         get_policy_db_path() should use find_agent_home() for portability.
 
-        Should NOT use hardcoded Path.home(), must use portable resolution.
+        Should return .lance directory (LanceDB) not .db (sqlite-vec).
         """
         with patch('macf.utils.recommend.find_agent_home') as mock_find_home:
             mock_find_home.return_value = Path('/mock/agent/home')
@@ -42,9 +44,9 @@ class TestPolicyDbPath:
             # Verify find_agent_home was called
             mock_find_home.assert_called_once()
 
-            # Verify path structure
-            assert result == Path('/mock/agent/home/.maceff/policy_index.db')
-            assert result.name == 'policy_index.db'
+            # Verify path structure (LanceDB uses .lance directory)
+            assert result == Path('/mock/agent/home/.maceff/policy_index.lance')
+            assert result.name == 'policy_index.lance'
             assert result.parent.name == '.maceff'
 
 
@@ -58,19 +60,19 @@ class TestDataclassStructures:
         Required: retriever, rank, raw_score, rrf_contribution, matched_text
         """
         score = RetrieverScore(
-            retriever="policies_fts",
+            retriever="lancedb_hybrid",
             rank=1,
             raw_score=0.85,
             rrf_contribution=0.016,
-            matched_text="test query"
+            matched_text="similarity: 0.85"
         )
 
         # Verify all required fields exist
-        assert score.retriever == "policies_fts"
+        assert score.retriever == "lancedb_hybrid"
         assert score.rank == 1
         assert score.raw_score == 0.85
         assert score.rrf_contribution == 0.016
-        assert score.matched_text == "test query"
+        assert score.matched_text == "similarity: 0.85"
 
         # Verify dataclass has exactly these fields
         field_names = {f.name for f in fields(RetrieverScore)}
@@ -142,7 +144,7 @@ class TestGetRecommendations:
         with patch('macf.utils.recommend._get_db_path') as mock_path:
             mock_db = MagicMock(spec=Path)
             mock_db.exists.return_value = False
-            mock_db.__str__.return_value = '/fake/path/policy_index.db'
+            mock_db.__str__.return_value = '/fake/path/policy_index.lance'
             mock_path.return_value = mock_db
 
             result = get_recommendations("test query with enough length")
@@ -193,19 +195,19 @@ class TestGetRecommendations:
             assert formatted_output == ""
             assert explanations == []
 
-    def test_graceful_failure_on_db_exception(self):
+    def test_graceful_failure_on_search_exception(self):
         """
-        Should handle DB exceptions gracefully without crashing.
+        Should handle search exceptions gracefully without crashing.
 
-        Should return empty tuple on any exception.
+        Should return empty tuple on any exception during LanceDB search.
         """
         with patch('macf.utils.recommend._get_db_path') as mock_path:
             mock_db = MagicMock(spec=Path)
             mock_db.exists.return_value = True
             mock_path.return_value = mock_db
 
-            # Simulate DB connection failure
-            with patch('sqlite3.connect', side_effect=Exception('DB error')):
+            # Simulate LanceDB search failure
+            with patch('macf.utils.recommend.search_with_lancedb', side_effect=Exception('Search error')):
                 result = get_recommendations("test query with enough length")
 
                 formatted_output, explanations = result
@@ -223,20 +225,20 @@ class TestExplainedRecommendationMethods:
         Should include all fields with proper nesting.
         """
         score = RetrieverScore(
-            retriever="policies_fts",
+            retriever="lancedb_hybrid",
             rank=1,
             raw_score=0.85,
             rrf_contribution=0.016,
-            matched_text="test"
+            matched_text="similarity: 0.85"
         )
 
         rec = ExplainedRecommendation(
             policy_name="test_policy",
             rrf_score=0.045,
             confidence_tier="HIGH",
-            retriever_contributions={"policies_fts": score},
+            retriever_contributions={"lancedb_hybrid": score},
             keywords_matched=[("keyword", 1.0)],
-            questions_matched=["test question"],
+            questions_matched=[],  # LanceDB doesn't expose questions directly
         )
 
         result = rec.to_dict()
@@ -249,8 +251,49 @@ class TestExplainedRecommendationMethods:
 
         # Verify nested structures
         assert 'retriever_contributions' in result
-        assert 'policies_fts' in result['retriever_contributions']
-        assert result['retriever_contributions']['policies_fts']['retriever'] == "policies_fts"
+        assert 'lancedb_hybrid' in result['retriever_contributions']
+        assert result['retriever_contributions']['lancedb_hybrid']['retriever'] == "lancedb_hybrid"
 
         assert result['keywords_matched'] == [("keyword", 1.0)]
-        assert result['questions_matched'] == ["test question"]
+        assert result['questions_matched'] == []
+
+
+class TestGetPolicyRecommendation:
+    """Test get_policy_recommendation() public API."""
+
+    def test_returns_dict_with_additional_context(self):
+        """
+        get_policy_recommendation() should return dict with additionalContext.
+
+        Public API for hooks and external callers.
+        """
+        from macf.utils.recommend import get_policy_recommendation
+
+        with patch('macf.utils.recommend._get_db_path') as mock_path:
+            mock_db = MagicMock(spec=Path)
+            mock_db.exists.return_value = False
+            mock_path.return_value = mock_db
+
+            result = get_policy_recommendation("test query with enough length")
+
+            # Verify structure
+            assert isinstance(result, dict)
+            assert 'additionalContext' in result
+
+    def test_explain_flag_includes_explanations(self):
+        """
+        explain=True should include explanations in output.
+
+        Used for debugging and verbose mode.
+        """
+        from macf.utils.recommend import get_policy_recommendation
+
+        with patch('macf.utils.recommend.get_recommendations') as mock_get:
+            mock_get.return_value = ("formatted output", [{"policy_name": "test"}])
+
+            result = get_policy_recommendation("test query", explain=True)
+
+            # Verify explanations included
+            assert 'additionalContext' in result
+            assert 'explanations' in result
+            assert result['explanations'] == [{"policy_name": "test"}]
