@@ -126,13 +126,12 @@ class LanceDBPolicySearch:
             'results': [
                 {
                     'policy_name': r['policy_name'],
-                    'distance': r['_distance'],
+                    'distance': r['_distance'],  # Lower = closer = better match
                     'similarity': 1 - r['_distance'],
-                    'rrf_score': 1 / (60 + idx + 1),  # Approximate RRF for compatibility
                     'tier': r.get('tier', ''),
                     'category': r.get('category', ''),
                 }
-                for idx, r in enumerate(results)
+                for r in results
             ],
             'latency_ms': latency_ms,
         }
