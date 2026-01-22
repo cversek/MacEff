@@ -98,7 +98,7 @@ def tool_search(query: str, limit: int = 5, explain: bool = False) -> dict:
         for exp in explanations:
             result = {
                 "policy_name": exp["policy_name"],
-                "rrf_score": exp["rrf_score"],
+                "score": exp["score"],
                 "confidence_tier": exp["confidence_tier"],
                 "num_retrievers": len(exp["retriever_contributions"]),
             }
@@ -107,7 +107,7 @@ def tool_search(query: str, limit: int = 5, explain: bool = False) -> dict:
             if explain:
                 result["retriever_contributions"] = exp["retriever_contributions"]
                 result["keywords_matched"] = exp["keywords_matched"]
-                result["questions_matched"] = exp["questions_matched"][:3]
+                result["matched_questions"] = exp["matched_questions"][:3]
 
             results.append(result)
 
@@ -252,11 +252,11 @@ def tool_explain(query: str, policy_name: str) -> dict:
                 return {
                     "policy_name": policy_name,
                     "query": query,
-                    "rrf_score": exp["rrf_score"],
+                    "score": exp["score"],
                     "confidence_tier": exp["confidence_tier"],
                     "retriever_contributions": exp["retriever_contributions"],
                     "keywords_matched": exp["keywords_matched"],
-                    "questions_matched": exp["questions_matched"],
+                    "matched_questions": exp["matched_questions"],
                     "interpretation": _interpret_match(exp),
                 }
 
@@ -289,9 +289,13 @@ def _interpret_match(exp: dict) -> str:
         if p.get("rank", 99) <= 3:
             interpretations.append("Semantically similar to query meaning")
 
-    questions = exp.get("questions_matched", [])
+    questions = exp.get("matched_questions", [])
     if questions:
-        interpretations.append(f"Relevant sections: {questions[0][:60]}")
+        q = questions[0]
+        if isinstance(q, dict):
+            interpretations.append(f"§{q.get('section_number', '?')} {q.get('section_header', '')[:50]}")
+        else:
+            interpretations.append(f"Relevant section: {str(q)[:60]}")
 
     return " | ".join(interpretations) if interpretations else "Standard match"
 

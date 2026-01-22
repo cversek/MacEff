@@ -76,6 +76,26 @@ class RetrieverScore:
 
 
 @dataclass
+class MatchedQuestion:
+    """A CEP question that matched the query with section targeting info."""
+    question_text: str
+    section_number: int
+    section_header: str
+    policy_name: str
+    distance: float  # LanceDB distance (lower = better match)
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "question_text": self.question_text,
+            "section_number": self.section_number,
+            "section_header": self.section_header,
+            "policy_name": self.policy_name,
+            "distance": round(self.distance, 4),
+        }
+
+
+@dataclass
 class ExplainedRecommendation:
     """A policy recommendation with full explanation metadata."""
     policy_name: str
@@ -83,7 +103,7 @@ class ExplainedRecommendation:
     confidence_tier: Literal["CRITICAL", "HIGH", "MEDIUM"]
     retriever_contributions: dict[str, RetrieverScore] = field(default_factory=dict)
     keywords_matched: list[tuple[str, float]] = field(default_factory=list)
-    questions_matched: list[str] = field(default_factory=list)
+    matched_questions: list[MatchedQuestion] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -95,7 +115,7 @@ class ExplainedRecommendation:
                 k: asdict(v) for k, v in self.retriever_contributions.items()
             },
             "keywords_matched": self.keywords_matched,
-            "questions_matched": self.questions_matched,
+            "matched_questions": [mq.to_dict() for mq in self.matched_questions],
         }
 
 
@@ -174,7 +194,7 @@ def search_with_lancedb(query: str, limit: int = 5) -> list[ExplainedRecommendat
             confidence_tier=tier,
             retriever_contributions={"lancedb_hybrid": retriever_score},
             keywords_matched=keywords[:5],
-            questions_matched=[],  # LanceDB doesn't expose matched questions directly
+            matched_questions=[],  # Populated by search_questions() when available
         )
         recommendations.append(rec)
 
