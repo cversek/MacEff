@@ -903,14 +903,16 @@ cat "$BACKUP" | python -m json.tool
 # 1. Check current TODO status (should show event log state)
 macf_tools todos status
 
-# 2. View most recent TODO state from events
-macf_tools todos list
+# 2. Get TODO state in JSON format (REQUIRED for TodoWrite compatibility)
+macf_tools todos list --json
 
-# 3. If needed, view previous state
-macf_tools todos list --previous 1
+# 3. If needed, view previous state in JSON
+macf_tools todos list --previous 1 --json
 
-# 4. Copy JSON output and use TodoWrite to restore
+# 4. Pass JSON array directly to TodoWrite
 ```
+
+**⚠️ CRITICAL**: Always use `--json` flag when recovering TODOs. The human-readable format uses different line formatting that triggers erasure detection hooks. JSON format preserves exact content structure for clean restoration.
 
 **When CLI Recovery Works**:
 - Session migration detected (new session ID)
