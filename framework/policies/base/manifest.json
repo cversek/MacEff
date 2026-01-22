@@ -19,7 +19,10 @@
     "artifacts": ["core_principles.md#3.4"],
     "learnings": ["consciousness/learnings.md"],
     "workspace": ["development/workspace_discipline.md"],
-    "development": ["development/workspace_discipline.md"]
+    "development": ["development/workspace_discipline.md"],
+    "search": ["infrastructure/search_service.md"],
+    "search_service": ["infrastructure/search_service.md"],
+    "policy_recommend": ["infrastructure/search_service.md"]
   },
 
   "quick_lookup": {
