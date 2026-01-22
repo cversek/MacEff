@@ -1820,16 +1820,11 @@ def cmd_policy_ca_types(args: argparse.Namespace) -> int:
 def cmd_policy_recommend(args: argparse.Namespace) -> int:
     """Get hybrid search policy recommendations using RRF scoring.
 
-    Uses 4-retriever Reciprocal Rank Fusion from macf.utils.recommend.
-    Requires optional dependencies: sqlite-vec, sentence-transformers
+    First tries the warm search service (fast, ~20ms), falls back to
+    direct search (slow, ~8s) if service unavailable.
     """
-    try:
-        from .utils.recommend import get_recommendations, format_verbose_output
-    except ImportError as e:
-        print("⚠️ Policy recommend requires optional dependencies:")
-        print("   pip install sqlite-vec sentence-transformers")
-        print(f"\nImport error: {e}")
-        return 1
+    import sys
+    from .search_service.client import query_search_service
 
     query = args.query
     json_output = getattr(args, 'json_output', False)
@@ -1840,8 +1835,28 @@ def cmd_policy_recommend(args: argparse.Namespace) -> int:
         print("⚠️ Query too short (minimum 10 characters)")
         return 1
 
+    # Try warm service first (fast path)
+    result = query_search_service("policy", query, limit=limit, timeout_s=1.0)
+
+    if result.get("formatted") and not result.get("error"):
+        # Service responded - use fast path
+        formatted = result["formatted"]
+        explanations = result.get("explanations", [])
+    else:
+        # Service unavailable - fall back to direct search (slow)
+        print("⚠️ Search service unavailable, using direct search (~8s)...",
+              file=sys.stderr)
+        print("   Start service: macf_tools search-service start", file=sys.stderr)
+        try:
+            from .utils.recommend import get_recommendations
+            formatted, explanations = get_recommendations(query)
+        except ImportError as e:
+            print("⚠️ Policy recommend requires optional dependencies:")
+            print("   pip install lancedb sentence-transformers")
+            print(f"\nImport error: {e}")
+            return 1
+
     try:
-        formatted, explanations = get_recommendations(query)
 
         if not formatted and not explanations:
             if json_output:
