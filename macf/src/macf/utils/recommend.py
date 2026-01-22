@@ -271,11 +271,8 @@ def get_recommendations(prompt: str) -> tuple[str, list[dict]]:
     try:
         recommendations = search_with_lancedb(prompt, limit=MAX_RESULTS)
 
-        # Filter by minimum threshold
-        recommendations = [r for r in recommendations
-                          if r.retriever_contributions.get('lancedb_hybrid',
-                             RetrieverScore('', 0, 0, 0)).raw_score >= LOW_THRESHOLD]
-
+        # Note: LanceDB returns distance scores (lower = better), not similarity
+        # RRF ranking already handles relevance, so we don't filter by raw score
         if not recommendations:
             return "", []
 
