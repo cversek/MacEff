@@ -79,7 +79,7 @@ class RetrieverScore:
 class ExplainedRecommendation:
     """A policy recommendation with full explanation metadata."""
     policy_name: str
-    rrf_score: float
+    score: float
     confidence_tier: Literal["CRITICAL", "HIGH", "MEDIUM"]
     retriever_contributions: dict[str, RetrieverScore] = field(default_factory=dict)
     keywords_matched: list[tuple[str, float]] = field(default_factory=list)
@@ -89,7 +89,7 @@ class ExplainedRecommendation:
         """Convert to dictionary for JSON serialization."""
         return {
             "policy_name": self.policy_name,
-            "rrf_score": round(self.rrf_score, 4),
+            "score": round(self.score, 4),
             "confidence_tier": self.confidence_tier,
             "retriever_contributions": {
                 k: asdict(v) for k, v in self.retriever_contributions.items()
@@ -164,13 +164,13 @@ def search_with_lancedb(query: str, limit: int = 5) -> list[ExplainedRecommendat
             retriever="lancedb_hybrid",
             rank=idx,
             raw_score=similarity,
-            rrf_contribution=r.get('rrf_score', 0),
+            rrf_contribution=r['distance'],  # Use distance directly
             matched_text=f"similarity: {similarity:.2f}"
         )
 
         rec = ExplainedRecommendation(
             policy_name=r['policy_name'],
-            rrf_score=r.get('rrf_score', similarity),  # Use similarity as proxy
+            score=r['distance'],  # Lower = better match (actual semantic distance)
             confidence_tier=tier,
             retriever_contributions={"lancedb_hybrid": retriever_score},
             keywords_matched=keywords[:5],
@@ -203,7 +203,7 @@ def format_output(recommendations: list[ExplainedRecommendation]) -> str:
         tier = tier_emoji.get(rec.confidence_tier, "📋")
 
         # Main line: rank + tier + name + score
-        lines.append(f"{rank} {tier} {rec.policy_name.upper()} ({rec.rrf_score:.3f})")
+        lines.append(f"{rank} {tier} {rec.policy_name.upper()} ({rec.score:.3f})")
 
     # CLI hint for top result
     if recommendations:
@@ -229,7 +229,7 @@ def format_verbose_output(explanations: list[dict], query: str = "") -> str:
         rank = rank_emoji[i] if i < len(rank_emoji) else f"#{i+1}"
         tier = tier_emoji.get(rec.get('confidence_tier', 'MEDIUM'), '📋')
         name = rec.get('policy_name', 'unknown').upper()
-        score = rec.get('rrf_score', 0)
+        score = rec.get('score', 0)
 
         lines.append(f"\n{rank} {tier} {name} (Score: {score:.4f})")
 
