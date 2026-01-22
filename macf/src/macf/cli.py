@@ -1913,7 +1913,7 @@ def cmd_policy_build_index(args: argparse.Namespace) -> int:
         indexer = PolicyIndexer()
         stats = indexer.build_index(
             policies_dir=policies_dir,
-            db_path=db_path,
+            output_path=db_path,
             skip_embeddings=skip_embeddings
         )
 
