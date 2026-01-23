@@ -1920,16 +1920,15 @@ def cmd_policy_build_index(args: argparse.Namespace) -> int:
         return 1
 
     db_path = Path(args.db_path) if args.db_path else get_policy_db_path()
-    skip_embeddings = getattr(args, 'skip_embeddings', False)
     json_output = getattr(args, 'json_output', False)
 
     try:
         # Build index
-        indexer = PolicyIndexer()
+        manifest_path = policies_dir / "manifest.json"
+        indexer = PolicyIndexer(manifest_path=manifest_path if manifest_path.exists() else None)
         stats = indexer.build_index(
             policies_dir=policies_dir,
-            output_path=db_path,
-            skip_embeddings=skip_embeddings
+            db_path=db_path,
         )
 
         # Output
@@ -1937,14 +1936,10 @@ def cmd_policy_build_index(args: argparse.Namespace) -> int:
             import json
             print(json.dumps(stats, indent=2))
         else:
-            doc_emb = stats.get('document_embeddings', 0)
-            q_emb = stats.get('question_embeddings', 0)
-            total_emb = doc_emb + q_emb
             print("✅ Policy index built:")
             print(f"   Documents: {stats.get('documents_indexed', 0)}")
             print(f"   Questions: {stats.get('questions_indexed', 0)}")
-            print(f"   Embeddings: {total_emb} (docs: {doc_emb}, questions: {q_emb})")
-            print(f"   Build time: {stats.get('build_time_ms', 0):.0f}ms")
+            print(f"   Total time: {stats.get('total_time', 0):.2f}s")
             print(f"   Database: {db_path}")
 
         return 0
