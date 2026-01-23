@@ -20,7 +20,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Literal, Optional
 
-from ..hybrid_search.lancedb_search import LanceDBPolicySearch
+from ..hybrid_search.policy_search import PolicySearch
 from .paths import find_agent_home
 
 
@@ -53,15 +53,15 @@ MAX_RESULTS = 5
 MIN_QUERY_LENGTH = 10
 
 # Lazy-loaded searcher
-_searcher: Optional[LanceDBPolicySearch] = None
+_searcher: Optional[PolicySearch] = None
 
 
-def get_searcher() -> LanceDBPolicySearch:
+def get_searcher() -> PolicySearch:
     """Lazy load the LanceDB searcher."""
     global _searcher
     if _searcher is None:
         db_path = _get_db_path()
-        _searcher = LanceDBPolicySearch(db_path, model_name=EMBEDDING_MODEL)
+        _searcher = PolicySearch(db_path, model_name=EMBEDDING_MODEL)
     return _searcher
 
 

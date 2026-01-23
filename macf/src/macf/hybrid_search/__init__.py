@@ -1,43 +1,45 @@
 """
-Hybrid Search - Reusable search infrastructure combining FTS5 + semantic embeddings.
-
-Design Principle: Lightweight indices with rich metadata, NO content storage
-(content stays in filesystem).
-
-Use Cases:
-1. Policy search (primary)
-2. Learnings knowledge base (future)
-3. General CA knowledge base (future)
+Hybrid Search - LanceDB-based search infrastructure for policies and knowledge bases.
 
 Architecture:
-- BaseIndexer: Generic FTS5 + vec0 indexer with pluggable extractors
+- BaseIndexer: Generic document indexer (domain-agnostic, creates 'documents' table)
+- PolicyIndexer: Policy-specific indexer (uses BaseIndexer + adds 'questions' table)
+- PolicySearch: Search with document + question support
 - AbstractExtractor: Interface for document-specific field extraction
-- PolicyExtractor: Policy-specific metadata and CEP guide extraction
-- PolicyIndexer: Convenience wrapper (BaseIndexer + PolicyExtractor)
+- PolicyExtractor: Policy metadata and CEP guide extraction
+
+Design Principle: Layered extensibility - generic infrastructure (BaseIndexer) with
+domain-specific extensions (PolicyIndexer, future LearningsIndexer, CAIndexer).
 """
 
 from .models import (
     RetrieverScore,
     ExplainedRecommendation,
+    MatchedQuestion,
 )
-from .base_indexer import BaseIndexer
 
-# Conditional imports for optional components
+# Conditional imports for optional LanceDB components
 try:
+    from .base_indexer import BaseIndexer
+    from .policy_indexer import PolicyIndexer
+    from .policy_search import PolicySearch
     from .extractors.base import AbstractExtractor
     from .extractors.policy_extractor import PolicyExtractor
-    from .indexers.policy_indexer import PolicyIndexer
 except ImportError:
     # Graceful degradation if optional deps missing
+    BaseIndexer = None
+    PolicyIndexer = None
+    PolicySearch = None
     AbstractExtractor = None
     PolicyExtractor = None
-    PolicyIndexer = None
 
 __all__ = [
     "RetrieverScore",
     "ExplainedRecommendation",
+    "MatchedQuestion",
     "BaseIndexer",
+    "PolicyIndexer",
+    "PolicySearch",
     "AbstractExtractor",
     "PolicyExtractor",
-    "PolicyIndexer",
 ]

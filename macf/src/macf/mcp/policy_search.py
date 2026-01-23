@@ -35,11 +35,11 @@ except ImportError:
 
 # LanceDB search backend
 try:
-    from macf.hybrid_search.lancedb_search import LanceDBPolicySearch
+    from macf.hybrid_search.policy_search import PolicySearch
     LANCEDB_AVAILABLE = True
 except ImportError:
     LANCEDB_AVAILABLE = False
-    LanceDBPolicySearch = None
+    PolicySearch = None
 
 from macf.utils.paths import find_agent_home
 
@@ -51,14 +51,14 @@ def get_db_path() -> Path:
 
 # Configuration
 DB_PATH = get_db_path()
-_searcher: Optional[Any] = None  # LanceDBPolicySearch instance
+_searcher: Optional[Any] = None  # PolicySearch instance
 
 
 def get_searcher():
-    """Lazy load LanceDB searcher."""
+    """Lazy load policy searcher."""
     global _searcher
     if _searcher is None and LANCEDB_AVAILABLE:
-        _searcher = LanceDBPolicySearch(DB_PATH)
+        _searcher = PolicySearch(DB_PATH)
     return _searcher
 
 
@@ -146,7 +146,7 @@ def tool_context(policy_name: str) -> dict:
             return {"error": "Failed to initialize LanceDB searcher"}
 
         # Search for exact policy name
-        table = searcher.table
+        table = searcher.documents_table
         results = table.search().where(f"policy_name = '{policy_name}'").limit(1).to_list()
 
         if not results:
@@ -198,7 +198,7 @@ def tool_details(policy_names: list[str]) -> dict:
         if not searcher:
             return {"error": "Failed to initialize LanceDB searcher"}
 
-        table = searcher.table
+        table = searcher.documents_table
         results = {}
 
         for name in policy_names[:5]:  # Limit to 5
