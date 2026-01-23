@@ -57,13 +57,13 @@ class TestDataclassStructures:
         """
         RetrieverScore dataclass should have required fields.
 
-        Required: retriever, rank, raw_score, rrf_contribution, matched_text
+        Required: retriever, rank, raw_score, distance, matched_text
         """
         score = RetrieverScore(
             retriever="lancedb_hybrid",
             rank=1,
             raw_score=0.85,
-            rrf_contribution=0.016,
+            distance=0.016,
             matched_text="similarity: 0.85"
         )
 
@@ -71,12 +71,12 @@ class TestDataclassStructures:
         assert score.retriever == "lancedb_hybrid"
         assert score.rank == 1
         assert score.raw_score == 0.85
-        assert score.rrf_contribution == 0.016
+        assert score.distance == 0.016
         assert score.matched_text == "similarity: 0.85"
 
         # Verify dataclass has exactly these fields
         field_names = {f.name for f in fields(RetrieverScore)}
-        expected = {'retriever', 'rank', 'raw_score', 'rrf_contribution', 'matched_text'}
+        expected = {'retriever', 'rank', 'raw_score', 'distance', 'matched_text'}
         assert field_names == expected
 
     def test_explained_recommendation_has_required_fields(self):
@@ -207,7 +207,7 @@ class TestGetRecommendations:
             mock_path.return_value = mock_db
 
             # Simulate LanceDB search failure
-            with patch('macf.utils.recommend.search_with_lancedb', side_effect=Exception('Search error')):
+            with patch('macf.utils.recommend.search_policies', side_effect=Exception('Search error')):
                 result = get_recommendations("test query with enough length")
 
                 formatted_output, explanations = result
@@ -228,7 +228,7 @@ class TestExplainedRecommendationMethods:
             retriever="lancedb_hybrid",
             rank=1,
             raw_score=0.85,
-            rrf_contribution=0.016,
+            distance=0.016,
             matched_text="similarity: 0.85"
         )
 
