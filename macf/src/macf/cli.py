@@ -2395,6 +2395,25 @@ def cmd_todos_list(args: argparse.Namespace) -> int:
     from macf.event_queries import get_nth_event
     from datetime import datetime
 
+    # ANSI escape codes
+    BOLD = "\033[1m"
+    DIM = "\033[2m"
+    RESET = "\033[0m"
+
+    # Status markers (lightweight)
+    STATUS_MARKERS = {
+        "completed": "✔",
+        "in_progress": "◼",
+        "pending": "◻",
+    }
+
+    # Status styling (completed=dim, active=bold)
+    STATUS_STYLES = {
+        "completed": DIM,
+        "in_progress": BOLD,
+        "pending": BOLD,
+    }
+
     try:
         n = getattr(args, 'previous', 0)
         event = get_nth_event("todos_updated", n=n)
@@ -2409,21 +2428,40 @@ def cmd_todos_list(args: argparse.Namespace) -> int:
         items = data.get("items", [])
         timestamp = event.get("timestamp", 0)
 
+        # Apply filter if specified
+        filter_mode = getattr(args, 'filter', 'all')
+        if filter_mode == 'active':
+            items = [i for i in items if i.get('status') in ('pending', 'in_progress')]
+        elif filter_mode == 'completed':
+            items = [i for i in items if i.get('status') == 'completed']
+
         if getattr(args, 'json_output', False):
             print(json.dumps(items, indent=2))
             return 0
 
-        # Pretty print with timestamp context
+        # Calculate status counts for header
+        by_status = {"completed": 0, "in_progress": 0, "pending": 0}
+        for item in items:
+            status = item.get("status", "pending")
+            by_status[status] = by_status.get(status, 0) + 1
+
+        # Pretty print with timestamp context and status summary
         time_str = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S") if timestamp else "unknown"
+        status_summary = ", ".join(f"{v} {k}" for k, v in by_status.items() if v > 0)
+        filter_note = f" [{filter_mode}]" if filter_mode != 'all' else ""
         if n > 0:
-            print(f"TODO List (previous #{n}, {len(items)} items, from {time_str})")
+            print(f"TODO List (previous #{n}, {len(items)} items: {status_summary}, from {time_str}){filter_note}")
         else:
-            print(f"Active TODO List ({len(items)} items)")
+            print(f"Active TODO List ({len(items)} items: {status_summary}){filter_note}")
         print("=" * 60)
 
+        # Enhanced item display with markers BEFORE number + styling
         for i, item in enumerate(items, 1):
             content = item.get("content", "")
-            print(f"{i:3}. {content}")
+            status = item.get("status", "pending")
+            marker = STATUS_MARKERS.get(status, "◻")
+            style = STATUS_STYLES.get(status, "")
+            print(f"{style}{marker} {i:3}. {content}{RESET}")
 
         return 0
     except Exception as e:
@@ -3021,6 +3059,9 @@ def _build_parser() -> argparse.ArgumentParser:
                                    help="output as JSON")
     todos_list_parser.add_argument("--previous", "-p", type=int, default=0, metavar="N",
                                    help="show Nth previous TODO list (0=current, 1=previous, etc.)")
+    todos_list_parser.add_argument("--filter", "-f", choices=["all", "active", "completed"],
+                                   default="all",
+                                   help="filter by status (active=pending+in_progress)")
     todos_list_parser.set_defaults(func=cmd_todos_list)
 
     # todos status
