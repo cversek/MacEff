@@ -136,6 +136,27 @@ PreToolUse fires before every tool invocation, making it ideal for validation, l
 
 ---
 
+### 🚨 CRITICAL: Task* Tools Do NOT Trigger Hooks
+
+**As of Claude Code v2.1.16** (January 22, 2026), the following tools bypass ALL hooks:
+
+| Tool | Purpose | Triggers Hooks? |
+|------|---------|-----------------|
+| `TaskCreate` | Create new task item | ❌ **NO** |
+| `TaskUpdate` | Modify task status/content | ❌ **NO** |
+| `TaskList` | List all tasks | ❌ **NO** |
+| `TaskGet` | Get specific task details | ❌ **NO** |
+
+**Version History**:
+- **v2.1.15 and earlier**: `TodoWrite` available to agents, triggers PreToolUse/PostToolUse
+- **v2.1.16+**: `TodoWrite` removed from agent access; Task* tools introduced with NO hook integration
+
+**Impact**: Hook-based monitoring, validation, or blocking of task modifications is NOT possible with Task* tools. The `TodoWrite` entry above only triggers hooks when used by Claude Code internally, not when agents use Task* tools.
+
+**Evidence**: [GitHub Issue #20243](https://github.com/anthropics/claude-code/issues/20243) documents this regression with version-specific testing.
+
+---
+
 ### PostToolUse
 
 PostToolUse fires after every tool completes, providing access to both the input parameters and the tool's response. Use this for logging, result validation, or injecting follow-up context. Like PreToolUse, this hook supports `hookSpecificOutput` for symmetric user/agent awareness.
