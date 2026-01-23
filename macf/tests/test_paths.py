@@ -136,14 +136,35 @@ class TestFindAgentHome:
             assert agent_home.exists()
 
     def test_defaults_to_home_dir(self, monkeypatch, tmp_path):
-        """Test default to ~ (user home) when no env var."""
+        """Test default to ~ (user home) when no env var and no project marker."""
         monkeypatch.delenv("MACEFF_AGENT_HOME_DIR", raising=False)
 
-        # Mock Path.home() to return tmp_path
-        with patch.object(Path, "home", return_value=tmp_path):
+        # Create a directory without .maceff/agent_events_log.jsonl marker
+        no_marker_dir = tmp_path / "no_marker"
+        no_marker_dir.mkdir()
+
+        # Mock Path.cwd() and Path.home() to control the detection
+        with patch.object(Path, "cwd", return_value=no_marker_dir):
+            with patch.object(Path, "home", return_value=tmp_path):
+                result = find_agent_home()
+                # Should return home directory itself (no project marker found)
+                assert result == tmp_path
+
+    def test_detects_project_via_event_log_marker(self, monkeypatch, tmp_path):
+        """Test project detection via .maceff/agent_events_log.jsonl marker."""
+        monkeypatch.delenv("MACEFF_AGENT_HOME_DIR", raising=False)
+
+        # Create project with .maceff/agent_events_log.jsonl marker
+        project_dir = tmp_path / "my_project"
+        project_dir.mkdir()
+        maceff_dir = project_dir / ".maceff"
+        maceff_dir.mkdir()
+        (maceff_dir / "agent_events_log.jsonl").touch()
+
+        # Mock cwd to be inside the project
+        with patch.object(Path, "cwd", return_value=project_dir):
             result = find_agent_home()
-            # Should return home directory itself
-            assert result == tmp_path
+            assert result == project_dir
 
     def test_agent_home_is_sacred(self):
         """Document the SACRED principle - agent continuity across projects."""

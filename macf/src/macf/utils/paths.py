@@ -122,7 +122,8 @@ def find_agent_home() -> Path:
 
     Priority:
     1. MACEFF_AGENT_HOME_DIR env var (explicit configuration)
-    2. ~ (user home directory, default)
+    2. Project root detection via .maceff/agent_events_log.jsonl marker
+    3. ~ (user home directory, default)
 
     Directory structure under agent_home:
     - {agent_home}/.maceff/config.json - agent configuration
@@ -133,7 +134,7 @@ def find_agent_home() -> Path:
 
     Result is cached.
     """
-    # 1. Check MACEFF_AGENT_HOME_DIR
+    # 1. Check MACEFF_AGENT_HOME_DIR (explicit configuration takes precedence)
     agent_home = os.environ.get("MACEFF_AGENT_HOME_DIR")
     if agent_home:
         home_path = Path(agent_home)
@@ -144,9 +145,18 @@ def find_agent_home() -> Path:
             home_path.mkdir(parents=True, exist_ok=True, mode=0o755)
             return home_path
         except OSError:
-            pass  # Fall through to default
+            pass  # Fall through to detection
 
-    # 2. Default to user home directory
+    # 2. Project root detection: walk up from cwd looking for .maceff/agent_events_log.jsonl
+    # This enables running macf_tools from within a project without setting env vars
+    current = Path.cwd().resolve()
+    while current != current.parent:
+        marker = current / ".maceff" / "agent_events_log.jsonl"
+        if marker.exists():
+            return current
+        current = current.parent
+
+    # 3. Default to user home directory
     return Path.home()
 
 def get_session_dir(
