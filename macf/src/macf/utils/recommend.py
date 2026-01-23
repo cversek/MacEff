@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Literal, Optional
 
 from ..hybrid_search.policy_search import PolicySearch
+from ..hybrid_search.models import MatchedQuestion
 from .paths import find_agent_home
 
 
@@ -70,29 +71,9 @@ class RetrieverScore:
     """Score from a single retriever with explanation."""
     retriever: str
     rank: int  # 1-indexed rank (0 = not found)
-    raw_score: float  # Similarity score
-    rrf_contribution: float  # 1/(k + rank) contribution
+    raw_score: float  # Similarity score (1 - distance)
+    distance: float  # Semantic distance (lower = better)
     matched_text: str = ""  # What matched
-
-
-@dataclass
-class MatchedQuestion:
-    """A CEP question that matched the query with section targeting info."""
-    question_text: str
-    section_number: int
-    section_header: str
-    policy_name: str
-    distance: float  # LanceDB distance (lower = better match)
-
-    def to_dict(self) -> dict:
-        """Convert to dictionary for JSON serialization."""
-        return {
-            "question_text": self.question_text,
-            "section_number": self.section_number,
-            "section_header": self.section_header,
-            "policy_name": self.policy_name,
-            "distance": round(self.distance, 4),
-        }
 
 
 @dataclass
@@ -155,21 +136,25 @@ def extract_keywords(prompt: str) -> list[tuple[str, float]]:
     return keywords[:10]
 
 
-def search_with_lancedb(query: str, limit: int = 5) -> list[ExplainedRecommendation]:
+def search_policies(query: str, limit: int = 5) -> list[ExplainedRecommendation]:
     """
-    Search using LanceDB native hybrid search.
+    Search policies with CEP question targeting.
 
-    Replaces 4-retriever RRF fusion with LanceDB's built-in capabilities.
+    Combines document search with question search for section-level recommendations.
     """
     searcher = get_searcher()
     keywords = extract_keywords(query)
 
-    # Use LanceDB hybrid search (vector + FTS)
+    # Hybrid search (vector + FTS)
     result = searcher.hybrid_search(query, limit=limit)
+
+    # Search questions for section targeting
+    all_questions = searcher.search_questions(query, limit=limit * 5)
 
     recommendations = []
     for idx, r in enumerate(result['results'], start=1):
         similarity = r['similarity']
+        policy_name = r['policy_name']
 
         # Determine confidence tier based on similarity
         if similarity >= CRITICAL_THRESHOLD:
@@ -181,20 +166,26 @@ def search_with_lancedb(query: str, limit: int = 5) -> list[ExplainedRecommendat
 
         # Create retriever score for explanation
         retriever_score = RetrieverScore(
-            retriever="lancedb_hybrid",
+            retriever="hybrid",
             rank=idx,
             raw_score=similarity,
-            rrf_contribution=r['distance'],  # Use distance directly
+            distance=r['distance'],
             matched_text=f"similarity: {similarity:.2f}"
         )
 
+        # Filter questions for this policy (distance < 1.0 = strong match)
+        policy_questions = [
+            q for q in all_questions
+            if q.policy_name == policy_name and q.distance < 1.0
+        ][:3]  # Top 3 questions per policy
+
         rec = ExplainedRecommendation(
-            policy_name=r['policy_name'],
-            score=r['distance'],  # Lower = better match (actual semantic distance)
+            policy_name=policy_name,
+            score=r['distance'],
             confidence_tier=tier,
-            retriever_contributions={"lancedb_hybrid": retriever_score},
+            retriever_contributions={"hybrid": retriever_score},
             keywords_matched=keywords[:5],
-            matched_questions=[],  # Populated by search_questions() when available
+            matched_questions=policy_questions,
         )
         recommendations.append(rec)
 
@@ -209,6 +200,7 @@ def format_output(recommendations: list[ExplainedRecommendation]) -> str:
     🎯 = CRITICAL tier (high confidence)
     📜 = HIGH tier
     📋 = MEDIUM tier
+    → §N = CEP section targeting
     """
     if not recommendations:
         return ""
@@ -216,7 +208,7 @@ def format_output(recommendations: list[ExplainedRecommendation]) -> str:
     rank_emoji = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
     tier_emoji = {"CRITICAL": "🎯", "HIGH": "📜", "MEDIUM": "📋"}
 
-    lines = ["📚 Policy Recommendations (LanceDB Hybrid Search):"]
+    lines = ["📚 Policy Recommendations:"]
 
     for i, rec in enumerate(recommendations[:5]):
         rank = rank_emoji[i] if i < len(rank_emoji) else f"#{i+1}"
@@ -224,6 +216,11 @@ def format_output(recommendations: list[ExplainedRecommendation]) -> str:
 
         # Main line: rank + tier + name + score
         lines.append(f"{rank} {tier} {rec.policy_name.upper()} ({rec.score:.3f})")
+
+        # Show matched questions for top result (section targeting)
+        if i == 0 and rec.matched_questions:
+            for q in rec.matched_questions[:2]:  # Top 2 questions
+                lines.append(f"   → §{q.section_number} \"{q.question_text[:50]}...\"")
 
     # CLI hint for top result
     if recommendations:
@@ -289,7 +286,7 @@ def get_recommendations(prompt: str) -> tuple[str, list[dict]]:
         return "", []
 
     try:
-        recommendations = search_with_lancedb(prompt, limit=MAX_RESULTS)
+        recommendations = search_policies(prompt, limit=MAX_RESULTS)
 
         # Note: LanceDB returns distance scores (lower = better), not similarity
         # RRF ranking already handles relevance, so we don't filter by raw score
