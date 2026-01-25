@@ -223,7 +223,8 @@ class MacfTask:
 
         Parses MTMD from description and extracts hierarchy from subject.
         """
-        task_id = data.get("id", 0)
+        # Ensure task_id is always an integer
+        task_id = int(data.get("id", 0))
         subject = data.get("subject", "")
         description = data.get("description", "")
         status = data.get("status", "pending")
