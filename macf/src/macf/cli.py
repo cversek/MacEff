@@ -2674,6 +2674,308 @@ def cmd_todos_auth_item_edit(args: argparse.Namespace) -> int:
 
 # -------- search-service commands --------
 
+# -------- task commands --------
+# ANSI escape codes for styling
+ANSI_DIM = "\033[2m"
+ANSI_STRIKE = "\033[9m"
+ANSI_RED = "\033[31m"
+ANSI_GREEN = "\033[32m"
+ANSI_RESET = "\033[0m"
+
+
+def cmd_task_list(args: argparse.Namespace) -> int:
+    """List tasks from current session with hierarchy and metadata."""
+    from .task import TaskReader, MacfTask
+
+    reader = TaskReader()
+    tasks = reader.read_all_tasks()
+
+    if not tasks:
+        print("No tasks found in current session.")
+        return 0
+
+    # Sort tasks numerically by ID first
+    tasks = sorted(tasks, key=lambda t: t.id)
+
+    # Apply filters
+    if args.type_filter:
+        type_upper = args.type_filter.upper()
+        tasks = [t for t in tasks if t.task_type == type_upper]
+
+    if args.status_filter:
+        tasks = [t for t in tasks if t.status == args.status_filter]
+
+    if args.parent_filter is not None:
+        tasks = [t for t in tasks if t.parent_id == args.parent_filter]
+
+    if not tasks:
+        print("No tasks match filters.")
+        return 0
+
+    # JSON output
+    if args.json_output:
+        import json
+        output = []
+        for t in sorted(tasks, key=lambda t: t.id):
+            item = {
+                "id": t.id,
+                "subject": t.subject,
+                "status": t.status,
+                "type": t.task_type,
+                "parent_id": t.parent_id,
+                "blocked_by": t.blocked_by,
+            }
+            if t.mtmd:
+                item["mtmd"] = {
+                    "plan_ca_ref": t.mtmd.plan_ca_ref,
+                    "creation_breadcrumb": t.mtmd.creation_breadcrumb,
+                    "created_cycle": t.mtmd.created_cycle,
+                    "repo": t.mtmd.repo,
+                    "target_version": t.mtmd.target_version,
+                }
+            output.append(item)
+        print(json.dumps(output, indent=2))
+        return 0
+
+    # Build hierarchy for tree display
+    task_map = {t.id: t for t in tasks}
+    root_tasks = [t for t in tasks if t.parent_id is None or t.parent_id not in task_map]
+
+    def get_children(parent_id):
+        return sorted([t for t in tasks if t.parent_id == parent_id], key=lambda t: t.id)
+
+    def format_task(t: MacfTask, indent: int = 0) -> str:
+        prefix = "  " * indent
+        # CC-style markers with colors: red ◼ in_progress, ◻ pending, green ✔ completed
+        if t.status == "completed":
+            status_icon = f"{ANSI_GREEN}✔{ANSI_RESET}"
+            # Dim+strikethrough for completed task text
+            line = f"{prefix}{status_icon} {ANSI_DIM}{ANSI_STRIKE}#{t.id} {t.subject}{ANSI_RESET}"
+        elif t.status == "in_progress":
+            status_icon = f"{ANSI_RED}◼{ANSI_RESET}"
+            line = f"{prefix}{status_icon} #{t.id} {t.subject}"
+        else:  # pending
+            status_icon = "◻"
+            line = f"{prefix}{status_icon} #{t.id} {t.subject}"
+
+        # Add plan_ca_ref if present (key feature of enhanced display)
+        if t.mtmd and t.mtmd.plan_ca_ref:
+            if t.status == "completed":
+                line += f"\n{prefix}   {ANSI_DIM}{ANSI_STRIKE}→ {t.mtmd.plan_ca_ref}{ANSI_RESET}"
+            else:
+                line += f"\n{prefix}   → {t.mtmd.plan_ca_ref}"
+
+        return line
+
+    def print_tree(task: MacfTask, indent: int = 0):
+        print(format_task(task, indent))
+        for child in get_children(task.id):
+            print_tree(child, indent + 1)
+
+    # Print header
+    print(f"📋 Tasks ({len(tasks)} total) - Session: {reader.session_uuid[:8]}...")
+    print("-" * 60)
+
+    # Print tree from roots (sorted by ID)
+    for root in sorted(root_tasks, key=lambda t: t.id):
+        print_tree(root)
+
+    return 0
+
+
+def cmd_task_get(args: argparse.Namespace) -> int:
+    """Get detailed information about a specific task."""
+    from .task import TaskReader
+
+    # Parse task ID (handle #N or N format)
+    task_id_str = args.task_id.lstrip('#')
+    try:
+        task_id = int(task_id_str)
+    except ValueError:
+        print(f"❌ Invalid task ID: {args.task_id}")
+        return 1
+
+    reader = TaskReader()
+    task = reader.read_task(task_id)
+
+    if not task:
+        print(f"❌ Task #{task_id} not found")
+        return 1
+
+    # JSON output
+    if args.json_output:
+        import json
+        output = {
+            "id": task.id,
+            "subject": task.subject,
+            "description": task.description,
+            "status": task.status,
+            "type": task.task_type,
+            "parent_id": task.parent_id,
+            "blocks": task.blocks,
+            "blocked_by": task.blocked_by,
+            "session_uuid": task.session_uuid,
+            "file_path": task.file_path,
+        }
+        if task.mtmd:
+            output["mtmd"] = {
+                "version": task.mtmd.version,
+                "creation_breadcrumb": task.mtmd.creation_breadcrumb,
+                "created_cycle": task.mtmd.created_cycle,
+                "created_by": task.mtmd.created_by,
+                "plan_ca_ref": task.mtmd.plan_ca_ref,
+                "experiment_ca_ref": task.mtmd.experiment_ca_ref,
+                "parent_id": task.mtmd.parent_id,
+                "repo": task.mtmd.repo,
+                "target_version": task.mtmd.target_version,
+                "release_branch": task.mtmd.release_branch,
+                "completion_breadcrumb": task.mtmd.completion_breadcrumb,
+                "unblock_breadcrumb": task.mtmd.unblock_breadcrumb,
+                "updates": [{"breadcrumb": u.breadcrumb, "description": u.description, "agent": u.agent} for u in task.mtmd.updates],
+                "archived": task.mtmd.archived,
+            }
+        print(json.dumps(output, indent=2))
+        return 0
+
+    # Human-readable output
+    status_icon = {"completed": "✅", "in_progress": "🔄", "pending": "⏳"}.get(task.status, "❓")
+
+    print(f"{'='*60}")
+    print(f"Task #{task.id} {status_icon}")
+    print(f"{'='*60}")
+    print(f"Subject: {task.subject}")
+    print(f"Status: {task.status}")
+    if task.task_type:
+        print(f"Type: {task.task_type}")
+    if task.parent_id:
+        print(f"Parent: #{task.parent_id}")
+    if task.blocked_by:
+        print(f"Blocked by: {', '.join(f'#{b}' for b in task.blocked_by)}")
+    if task.blocks:
+        print(f"Blocks: {', '.join(f'#{b}' for b in task.blocks)}")
+
+    # MTMD section
+    if task.mtmd:
+        print(f"\n📦 MacfTaskMetaData (v{task.mtmd.version})")
+        print("-" * 40)
+        if task.mtmd.plan_ca_ref:
+            print(f"  plan_ca_ref: {task.mtmd.plan_ca_ref}")
+        if task.mtmd.experiment_ca_ref:
+            print(f"  experiment_ca_ref: {task.mtmd.experiment_ca_ref}")
+        if task.mtmd.creation_breadcrumb:
+            print(f"  created: {task.mtmd.creation_breadcrumb}")
+        if task.mtmd.created_cycle:
+            print(f"  cycle: {task.mtmd.created_cycle}")
+        if task.mtmd.created_by:
+            print(f"  by: {task.mtmd.created_by}")
+        if task.mtmd.repo:
+            print(f"  repo: {task.mtmd.repo}")
+        if task.mtmd.target_version:
+            print(f"  target: {task.mtmd.target_version}")
+        if task.mtmd.completion_breadcrumb:
+            print(f"  completed: {task.mtmd.completion_breadcrumb}")
+        if task.mtmd.unblock_breadcrumb:
+            print(f"  unblocked: {task.mtmd.unblock_breadcrumb}")
+        if task.mtmd.updates:
+            print(f"  updates: ({len(task.mtmd.updates)})")
+            for u in task.mtmd.updates:
+                desc = f" - {u.description}" if u.description else ""
+                print(f"    • {u.breadcrumb}{desc}")
+
+    # Description (without MTMD)
+    desc_clean = task.description_without_mtmd()
+    if desc_clean:
+        print(f"\n📝 Description")
+        print("-" * 40)
+        print(desc_clean)
+
+    print(f"\n📁 File: {task.file_path}")
+
+    return 0
+
+
+def cmd_task_tree(args: argparse.Namespace) -> int:
+    """Display task hierarchy tree from a root task."""
+    from .task import TaskReader
+
+    # Parse task ID
+    task_id_str = args.task_id.lstrip('#')
+    try:
+        root_id = int(task_id_str)
+    except ValueError:
+        print(f"❌ Invalid task ID: {args.task_id}")
+        return 1
+
+    reader = TaskReader()
+    all_tasks = reader.read_all_tasks()
+    task_map = {t.id: t for t in all_tasks}
+
+    if root_id not in task_map:
+        print(f"❌ Task #{root_id} not found")
+        print(f"   Session: {reader.session_uuid}")
+        print(f"   Tasks loaded: {len(all_tasks)}")
+        if all_tasks:
+            ids = sorted(t.id for t in all_tasks)
+            print(f"   Available IDs: {ids[:10]}{'...' if len(ids) > 10 else ''}")
+        return 1
+
+    root = task_map[root_id]
+
+    def get_children(parent_id):
+        return sorted([t for t in all_tasks if t.parent_id == parent_id], key=lambda t: t.id)
+
+    def count_descendants(task_id):
+        children = get_children(task_id)
+        return len(children) + sum(count_descendants(c.id) for c in children)
+
+    def print_tree(task, prefix="", is_last=True):
+        connector = "└── " if is_last else "├── "
+
+        # CC-style markers with colors
+        if task.status == "completed":
+            status_icon = f"{ANSI_GREEN}✔{ANSI_RESET}"
+            text = f"{ANSI_DIM}{ANSI_STRIKE}#{task.id} {task.subject[:47]}{'...' if len(task.subject) > 50 else ''}{ANSI_RESET}"
+        elif task.status == "in_progress":
+            status_icon = f"{ANSI_RED}◼{ANSI_RESET}"
+            text = f"#{task.id} {task.subject[:47]}{'...' if len(task.subject) > 50 else ''}"
+        else:
+            status_icon = "◻"
+            text = f"#{task.id} {task.subject[:47]}{'...' if len(task.subject) > 50 else ''}"
+
+        print(f"{prefix}{connector}{status_icon} {text}")
+
+        children = get_children(task.id)
+        for i, child in enumerate(children):
+            extension = "    " if is_last else "│   "
+            print_tree(child, prefix + extension, i == len(children) - 1)
+
+    # Print header
+    total = 1 + count_descendants(root_id)
+    print(f"🌳 Task Tree from #{root_id} ({total} tasks)")
+    print("=" * 60)
+
+    # Print root specially with CC-style markers
+    if root.status == "completed":
+        status_icon = f"{ANSI_GREEN}✔{ANSI_RESET}"
+        root_text = f"{ANSI_DIM}{ANSI_STRIKE}#{root.id} {root.subject}{ANSI_RESET}"
+    elif root.status == "in_progress":
+        status_icon = f"{ANSI_RED}◼{ANSI_RESET}"
+        root_text = f"#{root.id} {root.subject}"
+    else:
+        status_icon = "◻"
+        root_text = f"#{root.id} {root.subject}"
+    print(f"{status_icon} {root_text}")
+    if root.mtmd and root.mtmd.plan_ca_ref:
+        print(f"   → {root.mtmd.plan_ca_ref}")
+
+    # Print children
+    children = get_children(root_id)
+    for i, child in enumerate(children):
+        print_tree(child, "", i == len(children) - 1)
+
+    return 0
+
+
 def cmd_search_service_start(args: argparse.Namespace) -> int:
     """Start the search service daemon."""
     try:
@@ -3092,6 +3394,36 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # todos auth-status
     todos_sub.add_parser("auth-status", help="show pending authorization").set_defaults(func=cmd_todos_auth_status)
+
+    # Task commands (MACF Task CLI)
+    task_parser = sub.add_parser("task", help="task management with MTMD support")
+    task_sub = task_parser.add_subparsers(dest="task_cmd")
+
+    # task list
+    task_list_parser = task_sub.add_parser("list", help="list tasks with hierarchy")
+    task_list_parser.add_argument("--json", dest="json_output", action="store_true",
+                                  help="output as JSON")
+    task_list_parser.add_argument("--type", dest="type_filter",
+                                  choices=["MISSION", "EXPERIMENT", "DETOUR", "PHASE"],
+                                  help="filter by task type")
+    task_list_parser.add_argument("--status", dest="status_filter",
+                                  choices=["pending", "in_progress", "completed"],
+                                  help="filter by status")
+    task_list_parser.add_argument("--parent", dest="parent_filter", type=int,
+                                  help="filter by parent task ID")
+    task_list_parser.set_defaults(func=cmd_task_list)
+
+    # task get
+    task_get_parser = task_sub.add_parser("get", help="get task details")
+    task_get_parser.add_argument("task_id", help="task ID (e.g., #67 or 67)")
+    task_get_parser.add_argument("--json", dest="json_output", action="store_true",
+                                 help="output as JSON")
+    task_get_parser.set_defaults(func=cmd_task_get)
+
+    # task tree
+    task_tree_parser = task_sub.add_parser("tree", help="show task hierarchy tree")
+    task_tree_parser.add_argument("task_id", help="root task ID (e.g., #67 or 67)")
+    task_tree_parser.set_defaults(func=cmd_task_tree)
 
     # Search service commands
     search_service_parser = sub.add_parser("search-service", help="search service daemon management")
