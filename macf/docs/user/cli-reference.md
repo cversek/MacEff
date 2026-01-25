@@ -14,6 +14,7 @@ Complete command reference for `macf_tools` CLI.
 - [Consciousness Artifacts](#consciousness-artifacts)
 - [Development Drives](#development-drives)
 - [Policy Management](#policy-management)
+- [Search Service](#search-service)
 - [Event Sourcing](#event-sourcing)
 - [TODO Management](#todo-management)
 
@@ -569,6 +570,91 @@ macf_tools policy read delegation_guidelines --from-nav-boundary
 
 **Related:** `policy navigate`, `policy list`
 
+### policy build_index
+
+Build hybrid FTS5 + semantic search index from policy files.
+
+**Syntax:**
+```bash
+macf_tools policy build_index [--policies-dir DIR] [--db-path PATH] [--json]
+```
+
+**Options:**
+- `--policies-dir DIR` - Path to policies directory (default: auto-detected framework path)
+- `--db-path PATH` - Path for output database (default: `~/.maceff/policy_index.lance/`)
+- `--json` - Output as JSON instead of human-readable format
+
+**Output (default):**
+```
+✅ Policy index built:
+   Documents: 24
+   Questions: 156
+   Total time: 3.45s
+   Database: /Users/user/.maceff/policy_index.lance/
+```
+
+**Dependencies:** Requires optional packages:
+```bash
+pip install lancedb sentence-transformers
+```
+
+**Related:** `policy recommend`, `search-service start`
+
+### policy recommend
+
+Get hybrid search policy recommendations using LanceDB's semantic + full-text search.
+
+**Syntax:**
+```bash
+macf_tools policy recommend QUERY [--limit N] [--explain] [--json]
+```
+
+**Arguments:**
+- `QUERY` - Natural language query (minimum 10 characters)
+
+**Options:**
+- `--limit N` - Maximum number of results (default: 5)
+- `--explain` - Show verbose breakdown with retriever contributions
+- `--json` - Output as JSON for machine processing
+
+**Output (default):**
+```
+📚 Policy Recommendations:
+🥇 📋 TODO_HYGIENE (1.327)
+   → §10 "What is the TODO backup protocol?"
+🥈 📋 CHECKPOINTS (1.503)
+🥉 📋 CONTEXT_RECOVERY (1.576)
+```
+
+**Output (--explain):**
+```
+📚 Policy Recommendations for: "How do I backup TODOs?"
+────────────────────────────────────────────────────────────────
+
+🥇 TODO_HYGIENE
+   RRF Score: 1.327
+   Distance: 0.423
+   Matched Questions:
+     → §10 "What is the TODO backup protocol?"
+     → §10.1 "How do I query TODO history via CLI?"
+```
+
+**Performance:**
+- With search service running: ~20ms response time
+- Without service (fallback): ~8s (model loading overhead)
+
+**Tip:** Start the search service for fast responses:
+```bash
+macf_tools search-service start --daemon
+```
+
+**Dependencies:** Requires optional packages:
+```bash
+pip install lancedb sentence-transformers
+```
+
+**Related:** `policy build_index`, `search-service start`
+
 ### policy ca-types
 
 Show consciousness artifact types with emojis.
@@ -581,6 +667,86 @@ macf_tools policy ca-types
 **Description:** Displays configured CA (Consciousness Artifact) types and their visual representations.
 
 **Related:** `policy manifest`, `list ccps`
+
+## Search Service
+
+Commands for managing the persistent search service daemon that provides fast (~20ms) policy recommendations.
+
+### search-service start
+
+Start the search service daemon.
+
+**Syntax:**
+```bash
+macf_tools search-service start [--port PORT] [--daemon]
+```
+
+**Options:**
+- `--port PORT` - Port to listen on (default: 9001)
+- `--daemon` - Run in background (detached from terminal)
+
+**Description:** Starts a persistent socket service that keeps the embedding model loaded in memory. This eliminates the ~8s model loading overhead on each query.
+
+**Example:**
+```bash
+# Start in foreground (for debugging)
+macf_tools search-service start
+
+# Start as background daemon (recommended)
+macf_tools search-service start --daemon
+```
+
+**Dependencies:** Requires optional packages:
+```bash
+pip install lancedb sentence-transformers
+```
+
+**Related:** `search-service stop`, `search-service status`, `policy recommend`
+
+### search-service stop
+
+Stop the running search service.
+
+**Syntax:**
+```bash
+macf_tools search-service stop
+```
+
+**Description:** Gracefully stops the search service daemon if running.
+
+**Output:**
+```
+✅ Search service stopped
+```
+
+**Related:** `search-service start`, `search-service status`
+
+### search-service status
+
+Show search service status.
+
+**Syntax:**
+```bash
+macf_tools search-service status [--json]
+```
+
+**Options:**
+- `--json` - Output as JSON
+
+**Output (running):**
+```
+✅ Search service is running
+   PID: 12345
+   Port: 9001
+```
+
+**Output (not running):**
+```
+⚠️  Search service is not running
+   Start with: macf_tools search-service start
+```
+
+**Related:** `search-service start`, `search-service stop`
 
 ## Event Sourcing
 
