@@ -544,8 +544,15 @@ agent/public/task_archives/
 
 **Archive files**:
 - **archive.md** (REQUIRED): Complete task snapshot for version
+- **task_files/** (REQUIRED): Copy of Claude Code native task JSON files
 - **MISSION_*.md** (OPTIONAL): Detailed breakdown per MISSION if helpful
 - **DETOUR_*.md** (OPTIONAL): DETOUR work details if substantial
+
+**Task files location** (Claude Code native storage):
+```
+~/.claude/tasks/{session_uuid}/*.json
+```
+Each task is stored as `{id}.json`. Copy ONLY tasks being archived (not placeholders or future version work).
 
 ### 5.2 Archive Content
 
