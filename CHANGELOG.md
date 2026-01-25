@@ -5,6 +5,86 @@ All notable changes to MACF Tools (Multi-Agent Coordination Framework) will be d
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] - 2026-01-24
+
+### Summary
+
+Major release introducing **LanceDB-powered hybrid search** for intelligent policy recommendations, **CEP Section Targeting** for precise navigation, and **persistent search service** with 89x latency improvement. Includes comprehensive CLI and MCP tool integration, plus new release workflow policy.
+
+### Added
+
+**LanceDB Hybrid Search** (`macf_tools policy recommend`):
+- Native hybrid search combining semantic embeddings + full-text search
+- LanceDB backend replacing sqlite-vec (ARM64 compatibility)
+- `all-MiniLM-L6-v2` embeddings (80MB model)
+- Distance-based scoring (lower = more relevant)
+- Confidence tiers: CRITICAL (< 0.30), HIGH (0.30-0.45), MEDIUM (0.45-0.70)
+
+**CEP Section Targeting**:
+- Question-based search matching queries to CEP Navigation Guide questions
+- Section recommendations: `→ §10 "What is the TODO backup protocol?"`
+- `MatchedQuestion` dataclass with policy_name, section, question, distance
+- Enables precise navigation to relevant policy sections
+
+**Search Service** (`macf_tools search-service`):
+- Persistent socket daemon keeping embedding model warm
+- 89x latency improvement: 4000ms → 45ms
+- Commands: `start [--daemon]`, `stop`, `status [--json]`
+- Graceful fallback when service unavailable
+- Container auto-start via start.py integration
+
+**MCP Policy Search Tools**:
+- `mcp__policy-search__search` - Hybrid search with optional explain
+- `mcp__policy-search__context` - CEP navigation for policy
+- `mcp__policy-search__details` - Full policy content retrieval
+- Progressive disclosure pattern (index → context → details)
+
+**CLI Commands**:
+- `macf_tools policy build_index` - Build LanceDB index from policies
+- `macf_tools policy recommend QUERY` - Get policy recommendations
+  - `--explain` flag for verbose breakdown
+  - `--json` flag for machine processing
+  - `--limit N` for result count control
+- `macf_tools search-service start/stop/status` - Service management
+
+**Documentation**:
+- `docs/user/hybrid-search.md` - End-to-end workflow guide
+- `docs/user/cli-reference.md` - Updated with all new commands
+- `docs/developer/future-knowledge-extensions.md` - v0.4.0+ roadmap
+
+**Policy: Release Workflow** (DRAFT):
+- `framework/policies/base/development/release_workflow.md`
+- Multi-MISSION aware release process
+- Version-scoped task archives (`task_archives/vX.Y.Z/`)
+- Pre-release checklist, CHANGELOG discipline, git tagging protocol
+
+### Changed
+
+**Hook Integration**:
+- UserPromptSubmit hook uses search service for fast recommendations
+- Lightweight socket client (stdlib only) for hook→service communication
+- Fallback to direct search when service unavailable
+
+**Hybrid Search Architecture**:
+- `BaseIndexer` + `AbstractExtractor` pattern for extensibility
+- `PolicyIndexer` extends generic infrastructure
+- `SearchService` + `AbstractRetriever` for namespace routing
+- Prepared for future learnings/CA search (namespace-based)
+
+### Fixed
+
+- **ARM64 Compatibility**: LanceDB replaces sqlite-vec (12-month unreleased ARM64 fix)
+- **Hook Latency**: Search service eliminates repeated model loading
+- **Index Portability**: LanceDB index works across platforms
+
+### Experiments Validated
+
+- **EXPERIMENT 003**: MCP Warm Cache Hook Optimization (89x speedup validated)
+- **EXPERIMENT 004**: sqlite-vec ARM64 Verification (bug confirmed, motivated pivot)
+- **EXPERIMENT 005**: LanceDB Hybrid Policy Search (39ms avg, native FTS)
+
+---
+
 ## [0.3.2] - 2026-01-08
 
 ### Summary
