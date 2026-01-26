@@ -31,6 +31,13 @@ from .utils import (
     get_agent_identity
 )
 
+# -------- ANSI escape codes --------
+ANSI_RESET = "\033[0m"
+ANSI_RED = "\033[31m"
+ANSI_GREEN = "\033[32m"
+ANSI_DIM = "\033[2m"
+ANSI_STRIKE = "\033[9m"
+
 # -------- helpers --------
 def _pick_tz():
     """Prefer MACEFF_TZ, then TZ, else system local; fall back to UTC."""
