@@ -989,6 +989,189 @@ No pending collapse authorization.
 
 **Related:** `todos auth-collapse`, `todos status`
 
+---
+
+## Task Commands (v0.4.0+)
+
+Task commands provide CLI access to Claude Code's native Task* tools with MTMD (MacfTaskMetaData) enhancement.
+
+### task list
+
+List tasks with hierarchy and metadata.
+
+**Syntax:**
+```bash
+macf_tools task list [--type TYPE] [--all-sessions]
+```
+
+**Options:**
+- `--type TYPE` - Filter by type (MISSION, EXPERIMENT, DETOUR, PHASE, BUG, AD_HOC)
+- `--all-sessions` - Include tasks from historical sessions
+
+**Output:**
+```
+📋 Tasks (current session)
+============================================================
+◼ #67 🗺️ MISSION: MACF Task CLI & Policy Migration
+   → agent/public/roadmaps/2026-01-23_MACF_Task_CLI/roadmap.md
+✔ #68 [^#67] 📋 Phase 1: Core CLI Commands
+◻ #81 [^#67] 📋 Phase 2: Metadata Management
+```
+
+### task get
+
+Display full task details including MTMD.
+
+**Syntax:**
+```bash
+macf_tools task get <task_id>
+```
+
+**Example:**
+```bash
+macf_tools task get 67
+macf_tools task get #67  # Leading # is optional
+```
+
+### task tree
+
+Display task hierarchy as tree.
+
+**Syntax:**
+```bash
+macf_tools task tree <task_id>
+```
+
+**Output:**
+```
+🌳 Task Tree from #67 (19 tasks)
+├── ✔ #68 [^#67] 📋 Phase 1: Core CLI Commands
+│   ├── ✔ #69 [^#68] 1.1: Create package structure
+│   └── ✔ #70 [^#68] 1.2: Implement task list
+├── ◻ #81 [^#67] 📋 Phase 2: Metadata Management
+```
+
+### task delete
+
+Delete a task file (requires grant in MANUAL_MODE).
+
+**Syntax:**
+```bash
+macf_tools task delete <task_id> [--cascade] [--force]
+```
+
+**Options:**
+- `--cascade` - Also delete child tasks
+- `--force` - Skip confirmation prompt
+
+**Protection Level:** HIGH (requires user grant)
+
+### task edit
+
+Edit a top-level task field (subject, status, description).
+
+**Syntax:**
+```bash
+macf_tools task edit <task_id> <field> <value>
+```
+
+**Example:**
+```bash
+macf_tools task edit 67 status completed
+macf_tools task edit 67 subject "New title"
+```
+
+### task metadata get
+
+Display pure MTMD for a task.
+
+**Syntax:**
+```bash
+macf_tools task metadata get <task_id>
+```
+
+**Output:**
+```
+📦 MacfTaskMetaData (v1.0) for #81
+----------------------------------------
+  creation_breadcrumb: s_77270981/c_374/g_a948f8b/...
+  created_cycle: 374
+  created_by: PA
+  parent_id: 67
+  repo: MacEff
+  target_version: 0.4.0
+```
+
+### task metadata set
+
+Set an MTMD field value.
+
+**Syntax:**
+```bash
+macf_tools task metadata set <task_id> <field> <value>
+```
+
+**Example:**
+```bash
+macf_tools task metadata set 81 repo MacEff
+macf_tools task metadata set 81 target_version 0.4.0
+macf_tools task metadata set 81 parent_id 67
+```
+
+**Valid Fields:** `plan_ca_ref`, `parent_id`, `repo`, `target_version`, `release_branch`, `completion_breadcrumb`, `unblock_breadcrumb`, `archived`, `archived_at`, `creation_breadcrumb`, `created_cycle`, `created_by`, `experiment_ca_ref`
+
+### task metadata add
+
+Add a custom field to MTMD's custom section.
+
+**Syntax:**
+```bash
+macf_tools task metadata add <task_id> <key> <value>
+```
+
+**Example:**
+```bash
+macf_tools task metadata add 67 priority high
+macf_tools task metadata add 67 reviewer cversek
+```
+
+### task metadata validate
+
+Validate MTMD against schema requirements.
+
+**Syntax:**
+```bash
+macf_tools task metadata validate <task_id>
+```
+
+**Output (success):**
+```
+🔍 Validating task #81: [^#67] 📋 Phase 2...
+
+   Type: PHASE
+
+✅ VALIDATION PASSED
+```
+
+**Output (failure):**
+```
+🔍 Validating task #67: 🗺️ MISSION...
+
+   Type: MISSION
+
+❌ VALIDATION FAILED
+
+   ❌ MISSION requires plan_ca_ref (roadmap/protocol path)
+```
+
+**Validation Rules:**
+- ALL tasks: `creation_breadcrumb` required
+- MISSION/EXPERIMENT/DETOUR: `plan_ca_ref` required
+- PHASE tasks: `parent_id` required
+- Subject `[^#N]` must match MTMD `parent_id`
+
+---
+
 ## Exit Codes
 
 - `0` - Success
