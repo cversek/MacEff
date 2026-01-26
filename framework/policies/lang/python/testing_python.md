@@ -1097,7 +1097,7 @@ tests/
 - Anti-pattern warnings for subagents
 
 **Roadmaps**:
-- `base/consciousness/roadmaps.md` - Phase completion criteria
+- `base/consciousness/roadmaps_following.md` - Phase completion criteria
 - Test results documentation in roadmaps
 - §3.4 integration pattern (this guide)
 

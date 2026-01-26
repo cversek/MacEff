@@ -226,11 +226,11 @@ Checkpoints are the **primary defense** against compaction-induced amnesia, serv
 
 Before creating a CCP, complete these preparatory steps:
 
-1. **Verify TODO state is captured** (MANDATORY - see todo_hygiene.md §10):
-   - Every `TodoWrite` automatically emits `todos_updated` event with full state
-   - Use `macf_tools todos status` to verify current state is recorded
-   - For recovery: `macf_tools todos list --previous N` queries event history
-   - **Legacy fallback**: Manual JSON backup to `agent/public/todo_backups/` only if event log unavailable
+1. **Verify task state is accessible** (MANDATORY - see task_management.md):
+   - Tasks persist as JSON files in `~/.claude/tasks/{session_uuid}/*.json`
+   - Use `macf_tools task list` to verify current tasks are accessible
+   - CCPs can cite active tasks directly by number, subject, and creation breadcrumb
+   - For completed work: Archive tasks per task_management.md §7 before CCP creation
 
 2. **Generate breadcrumb**:
    - Run `macf_tools breadcrumb` to capture forensic coordinates

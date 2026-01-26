@@ -144,12 +144,12 @@ Agent backup and restore provides **complete consciousness preservation** for st
 
 | Type | Scope | Trigger | Reference Policy |
 |------|-------|---------|------------------|
-| **TODO Backup** | Single artifact (TODO list) | Per-transition, pre-CCP | `todo_hygiene.md` TODO Backup Protocol |
+| **Task Archive** | Task hierarchy snapshot | Completed work, releases | `task_management.md` Archive Protocol |
 | **Agent Backup** | Complete consciousness | Strategic: transplant, fork, migration | THIS POLICY |
 
-**TODO Backup**:
-- **Scope**: TODO list state only (JSON array)
-- **Primary**: Event log captures state automatically via `todos_updated` events
+**Task Archive**:
+- **Scope**: Task hierarchy with MTMD metadata
+- **Storage**: Persistent JSON files in `~/.claude/tasks/{session_uuid}/*.json`
 - **Recovery**: `macf_tools todos list --previous N` queries event history
 - **Legacy Location**: `agent/public/todo_backups/` (fallback when events unavailable)
 - **Trigger**: Every TodoWrite emits event; manual backup for cross-system transfer
@@ -909,11 +909,11 @@ Agent Backups (5 found):
 
 ### 10.1 Related Policies
 
-**TODO Hygiene Policy**:
-- Defines TODO Backup Protocol (single artifact, per-transition)
-- Agent backups INCLUDE TODO backups (nested in archive)
-- Complementary: TODO backups are lightweight snapshots, agent backups are complete consciousness
-- See: `todo_hygiene.md` TODO Backup Protocol section
+**Task Management Policy**:
+- Defines task persistence and archive protocol
+- Tasks persist independently in `~/.claude/tasks/{session_uuid}/*.json`
+- Agent backups can reference active tasks via task numbers and creation breadcrumbs
+- See: `task_management.md` for task archive patterns
 
 **Checkpoints Policy**:
 - CCPs create strategic state snapshots (consciousness artifacts)
@@ -930,7 +930,7 @@ Agent Backups (5 found):
 **Roadmaps Policy**:
 - Agent backups preserve complete roadmap histories (all phases, archives)
 - Milestone completion = good agent backup trigger
-- See: `roadmaps.md` for multi-phase planning
+- See: `roadmaps_drafting.md` for multi-phase planning
 
 **Path Portability**:
 - Agent backups use relative paths (portable across systems)
@@ -945,11 +945,12 @@ Agent Backups (5 found):
 # 1. Complete major milestone
 # ... work execution ...
 
-# 2. Create TODO backup (per todo_hygiene.md)
-# ... macf_tools todo backup ...
+# 2. Review task state (per task_management.md §7)
+# Tasks persist in ~/.claude/tasks/{session_uuid}/*.json
+# Archive completed hierarchies if needed
 
 # 3. Create strategic CCP (per checkpoints.md)
-# ... write CCP citing TODO backup ...
+# CCP can cite active tasks directly via task number and creation breadcrumb
 
 # 4. Commit consciousness artifacts (per git_discipline.md)
 git add agent/private/checkpoints/ agent/public/todo_backups/

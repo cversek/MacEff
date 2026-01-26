@@ -155,7 +155,7 @@ Subagent definition best practices guide the creation of minimal, reading-driven
 
 **Layer 2: Example Policies** (structure & tone):
 - 2-3 exemplary policies showing patterns in practice
-- Example: roadmaps.md, scholarship.md for PolicyWriter
+- Example: roadmaps_drafting.md, scholarship.md for PolicyWriter
 - Purpose: Concrete references for structure, tone, formatting
 - Shows "what good looks like"
 
@@ -175,7 +175,7 @@ Subagent definition best practices guide the creation of minimal, reading-driven
    - `/path/to/policy_writing.md` (complete)
 
 2. **Policy Examples** (structure & tone):
-   - `/path/to/roadmaps.md`
+   - `/path/to/roadmaps_drafting.md`
    - `/path/to/scholarship.md`
 
 3. **Related Policies** (if delegation specifies task-specific reading)

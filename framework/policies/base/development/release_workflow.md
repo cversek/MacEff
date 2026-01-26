@@ -5,7 +5,7 @@
 **Scope**: All agents (PA and SA) performing release operations
 **Status**: DRAFT
 **Updated**: 2026-01-24
-**Dependencies**: todo_hygiene.md, git_discipline.md, roadmaps_following.md, task_management.md (TBD)
+**Dependencies**: task_management.md, git_discipline.md, roadmaps_following.md
 
 ---
 
@@ -815,7 +815,7 @@ agent/public/roadmaps/{active_roadmap}/friction_points/FP99_v0.3.3_Rollback.md
 
 ## 8 Integration with Other Policies
 
-- **`todo_hygiene.md`** (§8): Archive-then-collapse pattern
+- **`task_management.md`**: Task archive patterns, MTMD metadata
 - **`git_discipline.md`** (§1): Commit message format, tagging standards
 - **`roadmaps_following.md`** (§3.1): Phase completion protocol, breadcrumb updates
 - **`roadmaps_drafting.md`**: Version planning, MISSION structuring

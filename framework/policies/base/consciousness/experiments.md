@@ -1474,7 +1474,7 @@ MISSION: [Capability Name] → agent/public/roadmaps/YYYY-MM-DD_{Name}/roadmap.m
 If experiment had TODO items during execution, archive them:
 ```bash
 # Archive experimental TODOs to roadmap's archived_todos/
-# Per todo_hygiene.md backup protocol
+# Per task_management.md archive protocol
 ```
 
 **9. Report Completion to User**:

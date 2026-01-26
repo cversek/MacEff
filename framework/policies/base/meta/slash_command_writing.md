@@ -509,10 +509,10 @@ allowed-tools: Read, Task                          # Delegation preparation
 
 This pattern forces comprehensive policy reading BEFORE execution, preventing incomplete citations.
 
-### 7.2 Minimal TODO Engagement Command (maceff_start_todo)
+### 7.2 Minimal Task Engagement Command (/maceff:task:start)
 
 **Structure Highlights**:
-- **Policy Engagement**: 3 policies (todo_hygiene, delegation_guidelines, roadmaps_following)
+- **Policy Engagement**: 3 policies (task_management, delegation_guidelines, roadmaps_following)
 - **Questions**: 8 timeless extractive questions
 - **Integration**: Questions synthesize across policies ("Does this need delegation? Does this need roadmap?")
 - **Execution**: 4 steps applying discovered patterns
@@ -596,7 +596,7 @@ Read `checkpoints.md` and `scholarship.md` to understand checkpoint creation and
 ```markdown
 1. What does checkpoints.md say about preparation?
 2. What does scholarship.md say about citations?
-3. What does todo_hygiene.md say about backups?
+3. What does task_management.md say about archiving?
 ```
 
 **Fix**: Add integrative synthesis questions:

@@ -2976,6 +2976,189 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_task_edit(args: argparse.Namespace) -> int:
+    """Edit a top-level JSON field in a task file."""
+    from .task import TaskReader, update_task_file
+    from .utils.breadcrumbs import get_breadcrumb
+
+    # Parse task ID
+    task_id_str = args.task_id.lstrip('#')
+    try:
+        task_id = int(task_id_str)
+    except ValueError:
+        print(f"❌ Invalid task ID: {args.task_id}")
+        return 1
+
+    field = args.field
+    value = args.value
+
+    # Validate field is editable
+    editable_fields = ["subject", "status", "description"]
+    if field not in editable_fields:
+        print(f"❌ Field '{field}' is not editable")
+        print(f"   Editable fields: {', '.join(editable_fields)}")
+        return 1
+
+    # Validate status values
+    if field == "status" and value not in ["pending", "in_progress", "completed"]:
+        print(f"❌ Invalid status value: {value}")
+        print("   Valid values: pending, in_progress, completed")
+        return 1
+
+    # Read task to verify it exists and get current state
+    reader = TaskReader()
+    task = reader.read_task(task_id)
+    if not task:
+        print(f"❌ Task #{task_id} not found")
+        return 1
+
+    # For MTMD-aware tasks, add update record when editing description
+    if field == "description" and task.mtmd:
+        breadcrumb = get_breadcrumb()
+        new_mtmd = task.mtmd.with_updated_field("description", "(edited)", breadcrumb, f"Description replaced via CLI")
+        value = task.description_with_updated_mtmd(new_mtmd)
+
+    # Apply update
+    if update_task_file(task_id, {field: value}):
+        print(f"✅ Updated task #{task_id}")
+        print(f"   {field} = {value[:50]}{'...' if len(str(value)) > 50 else ''}")
+        return 0
+    else:
+        print(f"❌ Failed to update task #{task_id}")
+        return 1
+
+
+def cmd_task_edit_mtmd(args: argparse.Namespace) -> int:
+    """Edit an MTMD field within a task's description."""
+    from .task import TaskReader, update_task_file, MacfTaskMetaData
+    from .utils.breadcrumbs import get_breadcrumb
+
+    # Parse task ID
+    task_id_str = args.task_id.lstrip('#')
+    try:
+        task_id = int(task_id_str)
+    except ValueError:
+        print(f"❌ Invalid task ID: {args.task_id}")
+        return 1
+
+    field = args.field
+    value = args.value
+
+    # Read task
+    reader = TaskReader()
+    task = reader.read_task(task_id)
+    if not task:
+        print(f"❌ Task #{task_id} not found")
+        return 1
+
+    # Validate MTMD field exists
+    mtmd_fields = [
+        "plan_ca_ref", "parent_id", "repo", "target_version", "release_branch",
+        "completion_breadcrumb", "unblock_breadcrumb", "archived", "archived_at",
+        "creation_breadcrumb", "created_cycle", "created_by", "experiment_ca_ref"
+    ]
+    if field not in mtmd_fields:
+        print(f"❌ Unknown MTMD field: {field}")
+        print(f"   Valid fields: {', '.join(mtmd_fields)}")
+        return 1
+
+    # Parse value types for specific fields
+    if field == "parent_id" and value != "null":
+        try:
+            value = int(value)
+        except ValueError:
+            print(f"❌ parent_id must be an integer")
+            return 1
+    elif field == "created_cycle" and value != "null":
+        try:
+            value = int(value)
+        except ValueError:
+            print(f"❌ created_cycle must be an integer")
+            return 1
+    elif field == "archived":
+        value = value.lower() in ("true", "1", "yes")
+    elif value == "null":
+        value = None
+
+    # Get or create MTMD
+    breadcrumb = get_breadcrumb()
+    if task.mtmd:
+        new_mtmd = task.mtmd.with_updated_field(field, value, breadcrumb, f"Set {field} via CLI")
+    else:
+        # Create new MTMD with just this field
+        new_mtmd = MacfTaskMetaData()
+        setattr(new_mtmd, field, value)
+        from .task.models import MacfTaskUpdate
+        new_mtmd.updates.append(MacfTaskUpdate(
+            breadcrumb=breadcrumb,
+            description=f"Created MTMD with {field} via CLI",
+            agent="PA"
+        ))
+
+    # Embed updated MTMD in description
+    new_description = task.description_with_updated_mtmd(new_mtmd)
+
+    # Apply update
+    if update_task_file(task_id, {"description": new_description}):
+        print(f"✅ Updated MTMD for task #{task_id}")
+        print(f"   {field} = {value}")
+        return 0
+    else:
+        print(f"❌ Failed to update task #{task_id}")
+        return 1
+
+
+def cmd_task_add_mtmd(args: argparse.Namespace) -> int:
+    """Add a custom field to MTMD's custom_data section."""
+    from .task import TaskReader, update_task_file, MacfTaskMetaData
+    from .utils.breadcrumbs import get_breadcrumb
+
+    # Parse task ID
+    task_id_str = args.task_id.lstrip('#')
+    try:
+        task_id = int(task_id_str)
+    except ValueError:
+        print(f"❌ Invalid task ID: {args.task_id}")
+        return 1
+
+    key = args.key
+    value = args.value
+
+    # Read task
+    reader = TaskReader()
+    task = reader.read_task(task_id)
+    if not task:
+        print(f"❌ Task #{task_id} not found")
+        return 1
+
+    # Get or create MTMD
+    breadcrumb = get_breadcrumb()
+    if task.mtmd:
+        new_mtmd = task.mtmd.with_custom_field(key, value, breadcrumb)
+    else:
+        # Create new MTMD with custom field
+        new_mtmd = MacfTaskMetaData()
+        new_mtmd.custom[key] = value
+        from .task.models import MacfTaskUpdate
+        new_mtmd.updates.append(MacfTaskUpdate(
+            breadcrumb=breadcrumb,
+            description=f"Created MTMD with custom.{key} via CLI",
+            agent="PA"
+        ))
+
+    # Embed updated MTMD in description
+    new_description = task.description_with_updated_mtmd(new_mtmd)
+
+    # Apply update
+    if update_task_file(task_id, {"description": new_description}):
+        print(f"✅ Added custom field to task #{task_id}")
+        print(f"   custom.{key} = {value}")
+        return 0
+    else:
+        print(f"❌ Failed to update task #{task_id}")
+        return 1
+
+
 def cmd_search_service_start(args: argparse.Namespace) -> int:
     """Start the search service daemon."""
     try:
@@ -3424,6 +3607,27 @@ def _build_parser() -> argparse.ArgumentParser:
     task_tree_parser = task_sub.add_parser("tree", help="show task hierarchy tree")
     task_tree_parser.add_argument("task_id", help="root task ID (e.g., #67 or 67)")
     task_tree_parser.set_defaults(func=cmd_task_tree)
+
+    # task edit
+    task_edit_parser = task_sub.add_parser("edit", help="edit task JSON field")
+    task_edit_parser.add_argument("task_id", help="task ID (e.g., #67 or 67)")
+    task_edit_parser.add_argument("field", help="field to edit (subject, status, description)")
+    task_edit_parser.add_argument("value", help="new value for the field")
+    task_edit_parser.set_defaults(func=cmd_task_edit)
+
+    # task edit-mtmd
+    task_edit_mtmd_parser = task_sub.add_parser("edit-mtmd", help="edit MTMD field")
+    task_edit_mtmd_parser.add_argument("task_id", help="task ID (e.g., #67 or 67)")
+    task_edit_mtmd_parser.add_argument("field", help="MTMD field to edit")
+    task_edit_mtmd_parser.add_argument("value", help="new value for the field")
+    task_edit_mtmd_parser.set_defaults(func=cmd_task_edit_mtmd)
+
+    # task add-mtmd
+    task_add_mtmd_parser = task_sub.add_parser("add-mtmd", help="add custom MTMD field")
+    task_add_mtmd_parser.add_argument("task_id", help="task ID (e.g., #67 or 67)")
+    task_add_mtmd_parser.add_argument("key", help="custom field key")
+    task_add_mtmd_parser.add_argument("value", help="custom field value")
+    task_add_mtmd_parser.set_defaults(func=cmd_task_add_mtmd)
 
     # Search service commands
     search_service_parser = sub.add_parser("search-service", help="search service daemon management")

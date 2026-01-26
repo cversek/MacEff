@@ -418,7 +418,7 @@ The sanitization discipline described in [JOTEWR 2025-11-05 "Universal vs Person
 
 **Example**:
 ```markdown
-Following Phase 2 strategy outlined in [Roadmap 2025-11-05 "MacEff Scholarship Policy Integration" §Phase2 s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890](../../public/roadmaps/2025-11-05_MacEff_Scholarship_Policy_Integration/roadmap.md#phase-2-citation-format-integration), we updated roadmaps.md and checkpoints.md.
+Following Phase 2 strategy outlined in [Roadmap 2025-11-05 "MacEff Scholarship Policy Integration" §Phase2 s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890](../../public/roadmaps/2025-11-05_MacEff_Scholarship_Policy_Integration/roadmap.md#phase-2-citation-format-integration), we updated roadmaps_drafting.md and checkpoints.md.
 ```
 
 ### 4.4 Citing Reports
@@ -498,9 +498,9 @@ Comparing [TODO Backup 2025-11-15 "Initial Planning": s_abc12345/c_42/g_def6789/
 - **Strategic continuity**: Backups survive session migrations and compaction events
 - **Enhanced citations**: CCPs cite TODO backups for work context, not just technical state
 
-**Integration with Checkpoints**: Checkpoints should cite TODO backup created during pre-CCP protocol (see checkpoints.md §1.1).
+**Integration with Checkpoints**: Checkpoints can cite active tasks directly by task number, subject, and creation breadcrumb (see checkpoints.md §1.1).
 
-**Integration with TODO Hygiene**: See todo_hygiene.md §9 for backup creation protocol and filename format.
+**Integration with Task Management**: See task_management.md for task citation patterns and MTMD breadcrumb discipline.
 
 ### 4.9 Citing Friction Points (Roadmap Subartifacts)
 
@@ -561,7 +561,7 @@ macf_tools memory query --cited-desc "docker-compose" --ca-tag Roadmap --fp-only
 macf_tools memory graph --root-fp "FP#1" --depth 2 --pattern-clustering
 ```
 
-**Integration**: See roadmaps.md §6.3 for complete friction points documentation guidelines.
+**Integration**: See roadmaps_following.md for complete friction points documentation guidelines.
 
 ---
 
@@ -598,7 +598,7 @@ When referencing prior checkpoints for strategic continuity:
 
 **Phase Cross-References**:
 - Roadmaps cite prior roadmaps when building on established patterns
-- Archive package citations use enhanced format (shown in roadmaps.md updates)
+- Archive package citations use enhanced format (shown in roadmaps_following.md)
 - Phase completion breadcrumbs document strategic milestones
 - Embedded filepaths in TODOs reference roadmap subdirectories
 
@@ -917,7 +917,7 @@ s_abc12345c_42g_def6789p_ghi01234t_1234567890
 ```
 
 **Components**:
-- `{policy_name}.md`: Policy filename (e.g., `scholarship.md`, `todo_hygiene.md`)
+- `{policy_name}.md`: Policy filename (e.g., `scholarship.md`, `task_management.md`)
 - `§{N}`: Section number (REQUIRED - policies have stable section numbering)
 - `"{Section Heading}"`: Section heading text in double quotes (human-readable context)
 - `MacEff g_{hash}`: Git commit hash of MacEff repo when policy was referenced
@@ -945,7 +945,7 @@ s_abc12345c_42g_def6789p_ghi01234t_1234567890
 
 **Violation reflection (in JOTEWR)**:
 ```markdown
-The TODO collapse violated [todo_hygiene.md §10: "TODO Backup Protocol" MacEff g_66e8fad](../../development/todo_hygiene.md#10-todo-backup-protocol) which requires archive-before-collapse discipline.
+The task deletion violated [task_management.md §7: "Archive Protocol" MacEff g_66e8fad](../../development/task_management.md#7-archive-protocol) which requires archiving completed hierarchies before cleanup.
 ```
 
 **Newly written policy**:
