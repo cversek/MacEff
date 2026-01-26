@@ -105,14 +105,19 @@ Each task is stored as `{id}.json` (e.g., `1.json`, `67.json`).
 
 ### 0.3 ID Assignment
 
-**Validated**: Task IDs are assigned monotonically. Deleted IDs are **never reused** - they create permanent gaps.
+**Validated**: ID assignment uses `max(existing_file_IDs) + 1`, with behavior depending on session state:
+
+| Scenario | Behavior | Result |
+|----------|----------|--------|
+| Delete non-max ID | Gap persists | IDs appear permanent |
+| Delete max ID, same session | In-memory counter continues | ID not reused |
+| Delete max ID, after restart | Counter recalculates from disk | ID IS reused |
 
 **Empirical Evidence** (Cycle 373):
-- Task #79 created and deleted via `task delete 79 --force`
-- New task created → assigned #80, not #79
-- Confirms: IDs are permanent markers, never recycled
+1. Task #79 created, deleted, new task created (same session) → **#80** (in-memory counter)
+2. Session restart, new task created → **#79** (recalculated from disk, max was #78)
 
-**Implication**: Task IDs serve as forensic markers. A gap in IDs tells a story - something existed there once. This enables cross-compaction references via ID.
+**Implication**: IDs are forensically reliable WITHIN a session, but max-ID reuse can occur across restarts. For permanent references, use breadcrumbs not task IDs alone.
 
 ---
 
