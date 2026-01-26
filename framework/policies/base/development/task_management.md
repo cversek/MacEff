@@ -38,6 +38,7 @@ Task management policy governs the use of Claude Code native Task* tools (TaskCr
 **2 Task Type Markers**
 - What emoji markers identify task types?
 - When do I use each marker?
+- When should I create a 🐛 BUG task?
 - What requires a CA reference?
 
 **2.3 MISSION Pinning Protocol**
@@ -196,6 +197,7 @@ updates:
 | 📋 | SUBPLAN | ✅ subplan CA | Detailed phase with own CA (under MISSION/DETOUR) |
 | 📦 | ARCHIVE | - | Archived/completed hierarchy |
 | 🔧 | AD_HOC | - | Urgent repair, no time to plan (task file IS the CA) |
+| 🐛 | BUG | - | Defect discovered during work, typically child of parent phase |
 
 **Lightweight Phase Annotation**: For phases WITHOUT detailed subplan CAs, use `-` prefix:
 ```
