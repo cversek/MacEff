@@ -5,7 +5,7 @@
 **Category**: Recovery
 **Status**: ACTIVE
 **Updated**: 2025-12-06
-**Dependencies**: checkpoints.md, todo_hygiene.md
+**Dependencies**: checkpoints.md, task_management.md
 
 ---
 
@@ -121,10 +121,11 @@ Compaction occurs when conversation context reaches ~93% capacity. Claude Code t
    - Artifacts provide detail summary lacks
    - Identify any conflicts or gaps
 
-4. **Restore TODO Context**
-   - Check if TODO accessible in UI
-   - **Primary**: Use `macf_tools todos list --previous N` to query event history
-   - **Fallback**: Manual recovery from backup files (todo_hygiene.md §10-11)
+4. **Restore Task Context**
+   - Check if tasks accessible via `macf_tools task list`
+   - Tasks persist in `~/.claude/tasks/{session_uuid}/*.json`
+   - Review active tasks and recent completions
+   - See task_management.md for task recovery patterns
 
 5. **Resume Per Mode**
    - AUTO_MODE: Resume authorized work
@@ -160,9 +161,10 @@ Mindwipe occurs when user runs `/clear` command, explicitly clearing conversatio
    - Read JOTEWRs for wisdom/learnings
    - Read roadmaps for mission context
 
-3. **Restore TODO Context**
-   - **Primary**: `macf_tools todos list --previous N` (queries event history)
-   - **Fallback**: Manual backup recovery (todo_hygiene.md §10-11)
+3. **Restore Task Context**
+   - Check task persistence via `macf_tools task list`
+   - Tasks stored in `~/.claude/tasks/{session_uuid}/*.json`
+   - Review task hierarchy and active work (see task_management.md)
 
 4. **Report Recovery State**
    - Acknowledge context loss explicitly
@@ -207,7 +209,7 @@ The difference is merely the cause:
 2. **Read Foundation Policies**
    - `agent_backup.md` - What should transplanted agent do?
    - `checkpoints.md` - How to recover from artifacts?
-   - `todo_hygiene.md` - How to restore TODO context?
+   - `task_management.md` - How to access and manage tasks?
 
 3. **Use Multi-Explore CA Pattern** (see §5)
    - Parallel reading of CCPs, JOTEWRs, roadmaps
@@ -295,7 +297,7 @@ After parallel reading completes:
 
 - **manual_mode_recovery.md** - Mode-specific behavior after recovery
 - **checkpoints.md** - CCP structure and creation
-- **todo_hygiene.md** - TODO backup and restoration (§10-11)
+- **task_management.md** - Task persistence and access patterns
 - **agent_backup.md** - Backup creation and transplant procedures
 
 ---

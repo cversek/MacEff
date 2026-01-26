@@ -192,11 +192,11 @@ When skills or agent definitions embed section numbers, policy reorganization br
 
 ```markdown
 ❌ BRITTLE (breaks when policy reorganizes):
-"What does todo_hygiene.md §9 specify?"
+"What does task_management.md §7 specify?"
 "Extract from policy_writing.md §5.1"
 
 ✅ TIMELESS (works regardless of structure):
-"What backup protocol does todo_hygiene.md specify?"
+"What archive protocol does task_management.md specify?"
 "What validation checklist does policy_writing.md provide?"
 ```
 
@@ -349,7 +349,7 @@ See also: `policy_name.md` - Brief description of why relevant
 ## Integration with Other Policies
 
 - `checkpoints.md` - Cross-checkpoint citation practices
-- `roadmaps.md` - Phase completion breadcrumb discipline
+- `roadmaps_following.md` - Phase completion breadcrumb discipline
 - `git_discipline.md` - Commit message format for policy updates
 ```
 

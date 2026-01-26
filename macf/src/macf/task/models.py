@@ -149,6 +149,64 @@ class MacfTaskMetaData:
             custom=data.get("custom", {}),
         )
 
+    def with_updated_field(self, field: str, value: Any, breadcrumb: str, description: str = "") -> "MacfTaskMetaData":
+        """
+        Return new MTMD with field updated and update record added.
+
+        Args:
+            field: Field name to update
+            value: New value for field
+            breadcrumb: Current breadcrumb for tracking
+            description: Description of the update
+
+        Returns:
+            New MacfTaskMetaData instance with updated field and update record
+        """
+        import copy
+        # Create a copy of current state
+        new_mtmd = copy.deepcopy(self)
+
+        # Update the field
+        if hasattr(new_mtmd, field):
+            setattr(new_mtmd, field, value)
+
+        # Add update record
+        update_desc = description or f"Set {field} = {value}"
+        new_mtmd.updates.append(MacfTaskUpdate(
+            breadcrumb=breadcrumb,
+            description=update_desc,
+            agent="PA"
+        ))
+
+        return new_mtmd
+
+    def with_custom_field(self, key: str, value: Any, breadcrumb: str) -> "MacfTaskMetaData":
+        """
+        Return new MTMD with custom field added and update record.
+
+        Args:
+            key: Custom field key
+            value: Custom field value
+            breadcrumb: Current breadcrumb for tracking
+
+        Returns:
+            New MacfTaskMetaData instance with custom field added
+        """
+        import copy
+        new_mtmd = copy.deepcopy(self)
+
+        # Add to custom dict
+        new_mtmd.custom[key] = value
+
+        # Add update record
+        new_mtmd.updates.append(MacfTaskUpdate(
+            breadcrumb=breadcrumb,
+            description=f"Added custom.{key} = {value}",
+            agent="PA"
+        ))
+
+        return new_mtmd
+
     def to_yaml(self) -> str:
         """Serialize to YAML for embedding in description."""
         data = {}
@@ -303,3 +361,25 @@ class MacfTask:
         """Return description with MTMD block removed."""
         pattern = r'<macf_task_metadata[^>]*>.*?</macf_task_metadata>'
         return re.sub(pattern, '', self.description, flags=re.DOTALL).strip()
+
+    def description_with_updated_mtmd(self, new_mtmd: "MacfTaskMetaData") -> str:
+        """
+        Return description with MTMD block replaced/added.
+
+        Args:
+            new_mtmd: New MacfTaskMetaData to embed
+
+        Returns:
+            Description with updated MTMD block
+        """
+        # Get description without existing MTMD
+        base_desc = self.description_without_mtmd()
+
+        # Build new MTMD block
+        mtmd_block = f'<macf_task_metadata version="{new_mtmd.version}">\n{new_mtmd.to_yaml()}</macf_task_metadata>'
+
+        # Append MTMD to description
+        if base_desc:
+            return f"{base_desc}\n\n{mtmd_block}"
+        else:
+            return mtmd_block

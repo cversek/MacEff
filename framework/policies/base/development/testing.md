@@ -674,7 +674,7 @@ Roadmaps specify phase completion criteria. Test passage is a **completion gate*
 - Breadcrumb: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
 ```
 
-**Cross-Reference**: See `roadmaps.md` for complete phase structure and completion criteria patterns.
+**Cross-Reference**: See `roadmaps_following.md` for complete phase structure and completion criteria patterns.
 
 ---
 
@@ -1008,7 +1008,7 @@ Authority Granted:
 
 ### 6.3 Roadmap Integration
 
-**Phase Completion Criteria** (from `roadmaps.md`):
+**Phase Completion Criteria** (from `roadmaps_following.md`):
 
 Roadmaps specify measurable success criteria. Test passage is a **mandatory gate**.
 
@@ -1043,7 +1043,7 @@ Phase X Completion:
 ✅ Roadmap updated
 ```
 
-**Cross-Reference**: See `roadmaps.md` §6.2 for complete completion criteria patterns.
+**Cross-Reference**: See `roadmaps_following.md` for complete completion criteria patterns.
 
 ### 6.4 Language-Specific Implementations
 

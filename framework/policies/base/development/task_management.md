@@ -380,14 +380,34 @@ macf_tools task get #67                       # Full details with MTMD
 macf_tools task tree #67                      # Hierarchy from task
 ```
 
-### 9.3 Metadata Commands
+### 9.3 Edit Commands
+
+Edit task JSON fields or MTMD metadata with automatic update tracking.
 
 ```bash
-macf_tools task metadata get #67              # Extract MTMD
-macf_tools task metadata validate #67         # Validate schema
-macf_tools task metadata set #67 target_version 0.4.0  # Set field (MEDIUM grant)
-macf_tools task metadata add #67 custom.note "..."     # Add field (LOW)
+# Edit top-level JSON fields (MEDIUM protection)
+macf_tools task edit #67 subject "New Title"          # Change subject
+macf_tools task edit #67 status in_progress           # Change status
+macf_tools task edit #67 description "New desc..."    # Replace description
+
+# Edit MTMD fields (MEDIUM protection)
+macf_tools task edit-mtmd #67 target_version 0.4.0    # Set MTMD field
+macf_tools task edit-mtmd #67 plan_ca_ref "path/..."  # Update CA reference
+macf_tools task edit-mtmd #67 completion_breadcrumb "$(macf_tools breadcrumb)"
+
+# Add custom MTMD fields (LOW protection)
+macf_tools task add-mtmd #67 priority high            # Add to custom section
+macf_tools task add-mtmd #67 label "v0.4.0"           # Add metadata tags
 ```
+
+**Protection Levels**:
+
+| Level | Commands | AUTO_MODE | MANUAL_MODE |
+|-------|----------|-----------|-------------|
+| **MEDIUM** | `task edit`, `task edit-mtmd` | Self-grant | User grant required |
+| **LOW** | `task add-mtmd` | Auto-allowed | Auto-allowed |
+
+**Update Tracking**: All edit commands automatically append to the MTMD `updates` list with breadcrumb, description, and agent attribution. This provides forensic audit trail across compaction.
 
 ### 9.4 Archive & Delete
 

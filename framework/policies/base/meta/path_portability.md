@@ -213,7 +213,7 @@ cat "${FRAMEWORK_ROOT}/policies/base/meta/policy_writing.md"
 FRAMEWORK_ROOT="$(git rev-parse --show-toplevel)/framework"
 
 # Use resolved paths
-cat "${FRAMEWORK_ROOT}/policies/base/development/todo_hygiene.md"
+cat "${FRAMEWORK_ROOT}/policies/base/development/task_management.md"
 ```
 ```
 
@@ -254,7 +254,7 @@ When delegating to this specialist, ensure they read:
 ## Integration with Other Policies
 
 - `policy_writing.md` - Structure and CEP navigation requirements
-- `todo_hygiene.md` - Breadcrumb format specification
+- `task_management.md` - Breadcrumb format specification
 
 See also: `{FRAMEWORK_ROOT}/policies/base/meta/slash_command_writing.md`
 ```

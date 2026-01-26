@@ -218,7 +218,7 @@ consciousness_artifacts:
 
 ## 5 Integration with Policies
 
-**Related CA Policies**: checkpoints.md, reflections.md, roadmaps.md, learnings.md, reports.md, observations.md, experiments.md
+**Related CA Policies**: checkpoints.md, reflections.md, roadmaps_drafting.md, roadmaps_following.md, learnings.md, reports.md, observations.md, experiments.md
 
 ### Scholarship Policy (RECOMMENDED)
 

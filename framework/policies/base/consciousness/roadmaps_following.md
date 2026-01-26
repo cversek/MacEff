@@ -5,7 +5,7 @@
 **Category**: Consciousness - Execution
 **Status**: ACTIVE
 **Updated**: 2025-11-18
-**Dependencies**: todo_hygiene.md, git_discipline.md
+**Dependencies**: task_management.md, git_discipline.md
 **Related**: roadmaps_drafting.md (creation), delegation_guidelines.md (handoffs)
 
 ---
@@ -816,7 +816,7 @@ With observability → trust, delegation, strategic partnership.
 ## Related Policies
 
 - **roadmaps_drafting.md**: Creating roadmaps (folder structure, templates, planning)
-- **todo_hygiene.md**: TODO list discipline (breadcrumbs, hierarchy, completion)
+- **task_management.md**: Task list discipline (breadcrumbs, hierarchy, completion)
 - **delegation_guidelines.md**: SA execution (handoffs, checkpoints, reflections)
 - **git_discipline.md**: Commit discipline (archive commits, forensic trail)
 

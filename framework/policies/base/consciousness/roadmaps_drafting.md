@@ -6,7 +6,7 @@
 **Status**: ACTIVE
 **Updated**: 2026-01-08
 **Dependencies**: git_discipline.md, workspace_discipline.md
-**Related**: roadmaps_following.md (execution), todo_hygiene.md (integration)
+**Related**: roadmaps_following.md (execution), task_management.md (integration)
 
 ---
 
@@ -1074,7 +1074,7 @@ Investigate [problem/opportunity], understand root causes, propose solutions.
 ## Related Policies
 
 - **roadmaps_following.md**: Executing roadmaps (mandatory reading discipline, archive protocol)
-- **todo_hygiene.md**: TODO integration with roadmaps
+- **task_management.md**: Task integration with roadmaps
 - **git_discipline.md**: Commit requirements and forensic trail
 - **workspace_discipline.md**: Where roadmaps live in filesystem
 

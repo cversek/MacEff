@@ -141,3 +141,43 @@ def get_current_session_tasks() -> List[MacfTask]:
 def get_all_session_tasks() -> Dict[str, List[MacfTask]]:
     """Convenience function to get all tasks from all sessions."""
     return TaskReader.read_all_sessions()
+
+
+def update_task_file(task_id: int, updates: Dict[str, Any], session_uuid: Optional[str] = None) -> bool:
+    """
+    Update a task JSON file with new field values.
+
+    Args:
+        task_id: Task ID to update
+        updates: Dict of field names to new values
+        session_uuid: Session UUID (auto-detect if None)
+
+    Returns:
+        True if successful, False otherwise
+    """
+    reader = TaskReader(session_uuid)
+    if not reader.session_path:
+        return False
+
+    task_file = reader.session_path / f"{task_id}.json"
+    if not task_file.exists():
+        return False
+
+    try:
+        # Read current data
+        with open(task_file, "r") as f:
+            data = json.load(f)
+
+        # Apply updates
+        for key, value in updates.items():
+            if key == "id":
+                continue  # ID is immutable
+            data[key] = value
+
+        # Write back
+        with open(task_file, "w") as f:
+            json.dump(data, f, indent=2)
+
+        return True
+    except (json.JSONDecodeError, IOError):
+        return False

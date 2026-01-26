@@ -8,7 +8,7 @@ Task files are stored at: ~/.claude/tasks/{session_uuid}/*.json
 """
 
 from .models import MacfTask, MacfTaskMetaData, MacfTaskUpdate
-from .reader import TaskReader, get_current_session_tasks, get_all_session_tasks
+from .reader import TaskReader, get_current_session_tasks, get_all_session_tasks, update_task_file
 
 __all__ = [
     "MacfTask",
@@ -17,4 +17,5 @@ __all__ = [
     "TaskReader",
     "get_current_session_tasks",
     "get_all_session_tasks",
+    "update_task_file",
 ]

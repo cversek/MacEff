@@ -392,5 +392,5 @@ Mode changes logged to `agent_events_log.jsonl`:
 
 - **context_recovery.md** - Context loss types (compaction, mindwipe, transplant)
 - **agent_backup.md** - Complete consciousness backup/restore
-- **todo_hygiene.md** - TODO management during autonomous operation
+- **task_management.md** - Task management during autonomous operation
 - **roadmaps_following.md** - Scope adherence for authorized work
