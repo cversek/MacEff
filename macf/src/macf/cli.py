@@ -3081,7 +3081,12 @@ def cmd_task_edit(args: argparse.Namespace) -> int:
     if field == "description" and task.mtmd:
         breadcrumb = get_breadcrumb()
         new_mtmd = task.mtmd.with_updated_field("description", "(edited)", breadcrumb, f"Description replaced via CLI")
-        value = task.description_with_updated_mtmd(new_mtmd)
+        # Check if new description already has MTMD (user provided it)
+        if "<macf_task_metadata" not in value:
+            # Append updated MTMD to NEW description (preserving update history)
+            mtmd_block = f'<macf_task_metadata version="{new_mtmd.version}">\n{new_mtmd.to_yaml()}</macf_task_metadata>'
+            value = f"{value}\n\n{mtmd_block}"
+        # else: user provided MTMD in their description, use as-is
 
     # Apply update
     if update_task_file(task_id, {field: value}):
