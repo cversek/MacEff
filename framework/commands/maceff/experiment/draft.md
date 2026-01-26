@@ -105,13 +105,18 @@ After reporting policy-extracted answers:
 
 ## Post-Drafting Checklist (MANDATORY)
 
-After ExitPlanMode approval, complete these steps using policy-extracted values:
+After ExitPlanMode approval, complete these steps:
 
-1. **Create experiment folder** - `{POLICY_NAMING_CONVENTION}`
-2. **Create subdirectories** - `{POLICY_REQUIRED_SUBDIRS}`
-3. **Transfer plan to protocol** - `{POLICY_PROTOCOL_LOCATION}`
-4. **Pin TODO** - `{POLICY_TODO_FORMAT}` with `{POLICY_EXPERIMENT_MARKER}`
-5. **🛑 STOP** - Report completion and AWAIT `/maceff:todos:start`
+1. **Create task atomically**:
+   ```bash
+   macf_tools task create experiment "Your Title"
+   ```
+2. **Copy plan content** to the skeleton protocol.md created by CLI
+3. **Create subdirectories** if needed: `artifacts/`, `archived_todos/`
+4. **Report** task ID and protocol path
+5. **🛑 STOP** - Await `/maceff:task:start #{TASK_ID}`
+
+**Note**: The CLI creates the folder structure (with auto-numbered NNN), skeleton protocol.md, and task with MTMD automatically.
 
 ---
 
