@@ -3098,8 +3098,73 @@ def cmd_task_edit(args: argparse.Namespace) -> int:
         return 1
 
 
-def cmd_task_edit_mtmd(args: argparse.Namespace) -> int:
-    """Edit an MTMD field within a task's description."""
+def cmd_task_metadata_get(args: argparse.Namespace) -> int:
+    """Display MTMD for a task (pure metadata output)."""
+    from .task import TaskReader
+
+    # Parse task ID
+    task_id_str = args.task_id.lstrip('#')
+    try:
+        task_id = int(task_id_str)
+    except ValueError:
+        print(f"❌ Invalid task ID: {args.task_id}")
+        return 1
+
+    # Read task
+    reader = TaskReader()
+    task = reader.read_task(task_id)
+    if not task:
+        print(f"❌ Task #{task_id} not found")
+        return 1
+
+    if not task.mtmd:
+        print(f"⚠️  Task #{task_id} has no MTMD")
+        return 0
+
+    # Output MTMD
+    mtmd = task.mtmd
+    print(f"📦 MacfTaskMetaData (v{mtmd.version}) for #{task_id}")
+    print("-" * 40)
+    if mtmd.creation_breadcrumb:
+        print(f"  creation_breadcrumb: {mtmd.creation_breadcrumb}")
+    if mtmd.created_cycle:
+        print(f"  created_cycle: {mtmd.created_cycle}")
+    if mtmd.created_by:
+        print(f"  created_by: {mtmd.created_by}")
+    if mtmd.parent_id:
+        print(f"  parent_id: {mtmd.parent_id}")
+    if mtmd.plan_ca_ref:
+        print(f"  plan_ca_ref: {mtmd.plan_ca_ref}")
+    if mtmd.experiment_ca_ref:
+        print(f"  experiment_ca_ref: {mtmd.experiment_ca_ref}")
+    if mtmd.repo:
+        print(f"  repo: {mtmd.repo}")
+    if mtmd.target_version:
+        print(f"  target_version: {mtmd.target_version}")
+    if mtmd.release_branch:
+        print(f"  release_branch: {mtmd.release_branch}")
+    if mtmd.completion_breadcrumb:
+        print(f"  completion_breadcrumb: {mtmd.completion_breadcrumb}")
+    if mtmd.unblock_breadcrumb:
+        print(f"  unblock_breadcrumb: {mtmd.unblock_breadcrumb}")
+    if mtmd.archived:
+        print(f"  archived: {mtmd.archived}")
+    if mtmd.archived_at:
+        print(f"  archived_at: {mtmd.archived_at}")
+    if mtmd.custom:
+        print(f"  custom:")
+        for k, v in mtmd.custom.items():
+            print(f"    {k}: {v}")
+    if mtmd.updates:
+        print(f"  updates: ({len(mtmd.updates)})")
+        for u in mtmd.updates:
+            print(f"    • {u.breadcrumb} - {u.description}")
+
+    return 0
+
+
+def cmd_task_metadata_set(args: argparse.Namespace) -> int:
+    """Set an MTMD field within a task's description."""
     from .task import TaskReader, update_task_file, MacfTaskMetaData
     from .utils.breadcrumbs import get_breadcrumb
 
@@ -3178,8 +3243,8 @@ def cmd_task_edit_mtmd(args: argparse.Namespace) -> int:
         return 1
 
 
-def cmd_task_add_mtmd(args: argparse.Namespace) -> int:
-    """Add a custom field to MTMD's custom_data section."""
+def cmd_task_metadata_add(args: argparse.Namespace) -> int:
+    """Add a custom field to MTMD's custom section."""
     from .task import TaskReader, update_task_file, MacfTaskMetaData
     from .utils.breadcrumbs import get_breadcrumb
 
@@ -3227,6 +3292,110 @@ def cmd_task_add_mtmd(args: argparse.Namespace) -> int:
     else:
         print(f"❌ Failed to update task #{task_id}")
         return 1
+
+
+def cmd_task_metadata_validate(args: argparse.Namespace) -> int:
+    """Validate task MTMD against schema requirements."""
+    from .task import TaskReader
+
+    # Parse task ID
+    task_id_str = args.task_id.lstrip('#')
+    try:
+        task_id = int(task_id_str)
+    except ValueError:
+        print(f"❌ Invalid task ID: {args.task_id}")
+        return 1
+
+    # Read task
+    reader = TaskReader()
+    task = reader.read_task(task_id)
+    if not task:
+        print(f"❌ Task #{task_id} not found")
+        return 1
+
+    print(f"🔍 Validating task #{task_id}: {task.subject[:50]}...")
+    print()
+
+    errors = []
+    warnings = []
+
+    # Check MTMD presence
+    if not task.mtmd:
+        errors.append("No MTMD block found in description")
+        print("❌ VALIDATION FAILED")
+        print()
+        for err in errors:
+            print(f"   ❌ {err}")
+        return 1
+
+    mtmd = task.mtmd
+
+    # Detect task type from subject
+    subject = task.subject
+    task_type = "regular"
+    if "🗺️" in subject or "MISSION" in subject:
+        task_type = "MISSION"
+    elif "🧪" in subject or "EXPERIMENT" in subject:
+        task_type = "EXPERIMENT"
+    elif "↩️" in subject or "DETOUR" in subject:
+        task_type = "DETOUR"
+    elif "📋" in subject:
+        task_type = "PHASE"
+    elif "🐛" in subject or "BUG" in subject:
+        task_type = "BUG"
+    elif "🔧" in subject or "AD_HOC" in subject:
+        task_type = "AD_HOC"
+
+    print(f"   Type: {task_type}")
+    print()
+
+    # Required for ALL tasks
+    if not mtmd.creation_breadcrumb:
+        errors.append("Missing required field: creation_breadcrumb")
+    if not mtmd.created_cycle:
+        warnings.append("Missing recommended field: created_cycle")
+    if not mtmd.created_by:
+        warnings.append("Missing recommended field: created_by")
+
+    # Required for MISSION/EXPERIMENT/DETOUR
+    if task_type in ("MISSION", "EXPERIMENT", "DETOUR"):
+        if not mtmd.plan_ca_ref:
+            errors.append(f"{task_type} requires plan_ca_ref (roadmap/protocol path)")
+
+    # Required for PHASE tasks (children)
+    if task_type == "PHASE":
+        if not mtmd.parent_id:
+            errors.append("PHASE task requires parent_id")
+
+    # Check parent reference in subject matches MTMD
+    if "[^#" in subject:
+        import re
+        match = re.search(r'\[\^#(\d+)\]', subject)
+        if match:
+            subject_parent = int(match.group(1))
+            if mtmd.parent_id and mtmd.parent_id != subject_parent:
+                errors.append(f"Subject parent [^#{subject_parent}] doesn't match MTMD parent_id={mtmd.parent_id}")
+            elif not mtmd.parent_id:
+                warnings.append(f"Subject has parent [^#{subject_parent}] but MTMD missing parent_id")
+
+    # Report results
+    if errors:
+        print("❌ VALIDATION FAILED")
+        print()
+        for err in errors:
+            print(f"   ❌ {err}")
+        for warn in warnings:
+            print(f"   ⚠️  {warn}")
+        return 1
+    elif warnings:
+        print("⚠️  VALIDATION PASSED (with warnings)")
+        print()
+        for warn in warnings:
+            print(f"   ⚠️  {warn}")
+        return 0
+    else:
+        print("✅ VALIDATION PASSED")
+        return 0
 
 
 def cmd_search_service_start(args: argparse.Namespace) -> int:
@@ -3694,19 +3863,33 @@ def _build_parser() -> argparse.ArgumentParser:
     task_edit_parser.add_argument("value", help="new value for the field")
     task_edit_parser.set_defaults(func=cmd_task_edit)
 
-    # task edit-mtmd
-    task_edit_mtmd_parser = task_sub.add_parser("edit-mtmd", help="edit MTMD field")
-    task_edit_mtmd_parser.add_argument("task_id", help="task ID (e.g., #67 or 67)")
-    task_edit_mtmd_parser.add_argument("field", help="MTMD field to edit")
-    task_edit_mtmd_parser.add_argument("value", help="new value for the field")
-    task_edit_mtmd_parser.set_defaults(func=cmd_task_edit_mtmd)
+    # task metadata subcommand
+    task_metadata_parser = task_sub.add_parser("metadata", help="MTMD metadata operations")
+    task_metadata_sub = task_metadata_parser.add_subparsers(dest="metadata_cmd")
 
-    # task add-mtmd
-    task_add_mtmd_parser = task_sub.add_parser("add-mtmd", help="add custom MTMD field")
-    task_add_mtmd_parser.add_argument("task_id", help="task ID (e.g., #67 or 67)")
-    task_add_mtmd_parser.add_argument("key", help="custom field key")
-    task_add_mtmd_parser.add_argument("value", help="custom field value")
-    task_add_mtmd_parser.set_defaults(func=cmd_task_add_mtmd)
+    # task metadata get
+    task_metadata_get_parser = task_metadata_sub.add_parser("get", help="display MTMD for a task")
+    task_metadata_get_parser.add_argument("task_id", help="task ID (e.g., #67 or 67)")
+    task_metadata_get_parser.set_defaults(func=cmd_task_metadata_get)
+
+    # task metadata set
+    task_metadata_set_parser = task_metadata_sub.add_parser("set", help="set MTMD field")
+    task_metadata_set_parser.add_argument("task_id", help="task ID (e.g., #67 or 67)")
+    task_metadata_set_parser.add_argument("field", help="MTMD field to set")
+    task_metadata_set_parser.add_argument("value", help="new value for the field")
+    task_metadata_set_parser.set_defaults(func=cmd_task_metadata_set)
+
+    # task metadata add
+    task_metadata_add_parser = task_metadata_sub.add_parser("add", help="add custom MTMD field")
+    task_metadata_add_parser.add_argument("task_id", help="task ID (e.g., #67 or 67)")
+    task_metadata_add_parser.add_argument("key", help="custom field key")
+    task_metadata_add_parser.add_argument("value", help="custom field value")
+    task_metadata_add_parser.set_defaults(func=cmd_task_metadata_add)
+
+    # task metadata validate
+    task_metadata_validate_parser = task_metadata_sub.add_parser("validate", help="validate MTMD against schema")
+    task_metadata_validate_parser.add_argument("task_id", help="task ID (e.g., #67 or 67)")
+    task_metadata_validate_parser.set_defaults(func=cmd_task_metadata_validate)
 
     # Search service commands
     search_service_parser = sub.add_parser("search-service", help="search service daemon management")
