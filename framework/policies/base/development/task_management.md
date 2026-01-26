@@ -43,6 +43,7 @@ Task management policy governs the use of Claude Code native Task* tools (TaskCr
 **2.3 MISSION Pinning Protocol**
 - What happens when a MISSION roadmap is approved?
 - What tasks are created during pinning?
+- Why must phase tasks be created sequentially?
 - Where is expansion enforced?
 
 **3 Hierarchy Notation**
@@ -232,6 +233,26 @@ With MTMD:
 - `created_cycle`, `created_by`, `repo`, `target_version`
 
 **Step 2: Create Phase Tasks (Expansion)**
+
+🚨 **SEQUENTIAL CREATION REQUIRED**: Create phase tasks ONE AT A TIME in phase order.
+
+**Why**: ID assignment uses `max(existing_IDs) + 1`. Parallel TaskCreate calls race, causing Phase 2 to get a higher ID than Phase 7. Sequential creation preserves phase ordering in tree display.
+
+**Anti-pattern** (causes scrambled tree):
+```
+TaskCreate Phase 2  ─┬─→ #83 Phase 2
+TaskCreate Phase 3  ─┼─→ #84 Phase 3
+TaskCreate Phase 4  ─┼─→ #81 Phase 4  ← Out of order!
+TaskCreate Phase 5  ─┼─→ #85 Phase 5
+```
+
+**Correct pattern** (preserves order):
+```
+TaskCreate Phase 2 → wait → #81 Phase 2
+TaskCreate Phase 3 → wait → #82 Phase 3
+TaskCreate Phase 4 → wait → #83 Phase 4
+...
+```
 
 For each `## Phase N: Title` in roadmap, create child task:
 ```
