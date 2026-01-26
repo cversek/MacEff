@@ -40,6 +40,11 @@ Task management policy governs the use of Claude Code native Task* tools (TaskCr
 - When do I use each marker?
 - What requires a CA reference?
 
+**2.3 MISSION Pinning Protocol**
+- What happens when a MISSION roadmap is approved?
+- What tasks are created during pinning?
+- Where is expansion enforced?
+
 **3 Hierarchy Notation**
 - How do I express parent-child relationships?
 - What is the `[^#N]` pattern?
@@ -212,6 +217,35 @@ Subject lines are **mostly immutable** once created. Keep them clean:
 **No embedded breadcrumbs in subject**: MTMD `creation_breadcrumb` is the authoritative source.
 
 **Enhanced `macf_tools task list`** displays `plan_ca_ref` prominently - agents always see CA context.
+
+### 2.3 MISSION Pinning Protocol (MANDATORY)
+
+When a MISSION roadmap is approved, **pinning** creates the task hierarchy:
+
+**Step 1: Create MISSION Task**
+```
+🗺️ MISSION: [Title from roadmap]
+```
+With MTMD:
+- `plan_ca_ref`: Path to roadmap.md
+- `creation_breadcrumb`: Current breadcrumb
+- `created_cycle`, `created_by`, `repo`, `target_version`
+
+**Step 2: Create Phase Tasks (Expansion)**
+
+For each `## Phase N: Title` in roadmap, create child task:
+```
+[^#MISSION_ID] 📋 Phase N: [Title]
+```
+With MTMD:
+- `parent_id`: MISSION task ID
+- `creation_breadcrumb`: Current breadcrumb
+
+**Enforcement Points**:
+1. `/maceff:roadmap:draft` - After approval, prompts to pin MISSION with phases
+2. `/maceff:task:start` - If MISSION has no children, offers to expand from roadmap
+
+**Why Mandatory**: Task hierarchy provides observability. Without phase tasks, user cannot track progress through MISSION phases in task UI.
 
 ---
 
