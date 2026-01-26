@@ -53,9 +53,9 @@ After reading policies, **report answers to user before any state-changing tools
    - What should phases specify (interface/behavior)?
    - What is explicitly forbidden in phase descriptions?
 
-7. **What TODO integration does roadmaps_following.md require?**
-   - How must new roadmaps be pinned to the TODO list?
-   - What emoji/format distinguishes roadmap items?
+7. **What task pinning protocol does task_management.md require?**
+   - What must happen when a roadmap is approved?
+   - How are roadmap phases represented in the task system?
 
 ---
 
@@ -80,12 +80,12 @@ After reporting policy-extracted answers:
 
 After ExitPlanMode approval, complete these steps **before any implementation**:
 
-1. **Create roadmap CA folder** - What folder naming convention does the policy specify?
-2. **Transfer plan to roadmap CA** - Where must the roadmap.md file be placed?
-3. **Pin TODO with embedded filepath** - What TODO embedding format does the policy require?
-4. **🛑 STOP** - Report completion and AWAIT `/maceff:todos:start`
+1. **Create roadmap CA folder** - per folder naming convention from policy
+2. **Transfer plan to roadmap CA** - per file placement from policy
+3. **Pin parent task with phases** - per task pinning protocol from policy (Q7)
+4. **🛑 STOP** - Report completion and AWAIT `/maceff:task:start #{PARENT_TASK_ID}`
 
-**Policy Discovery**: Navigate roadmaps_drafting and roadmaps_following to extract folder structure and TODO integration requirements.
+**Policy Discovery**: Navigate task_management for pinning protocol, roadmaps_drafting for folder structure.
 
 ---
 
