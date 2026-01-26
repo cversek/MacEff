@@ -105,17 +105,14 @@ Each task is stored as `{id}.json` (e.g., `1.json`, `67.json`).
 
 ### 0.3 ID Assignment
 
-**Known**: Task IDs are assigned monotonically. Deleted IDs create gaps that persist.
+**Validated**: Task IDs are assigned monotonically. Deleted IDs are **never reused** - they create permanent gaps.
 
-**Unknown**: If task #N is max, deleted, and new task created - does it get #N or #(N+1)?
+**Empirical Evidence** (Cycle 373):
+- Task #79 created and deleted via `task delete 79 --force`
+- New task created → assigned #80, not #79
+- Confirms: IDs are permanent markers, never recycled
 
-**Example of Known Behavior**:
-- Tasks 1-5 exist, delete #3 → next task gets #6
-- The gap at #3 tells a story
-
-**Example of Unknown Behavior**:
-- Tasks 1-5 exist, delete #5 (max), create new → #5 or #6?
-- Requires empirical validation (§12)
+**Implication**: Task IDs serve as forensic markers. A gap in IDs tells a story - something existed there once. This enables cross-compaction references via ID.
 
 ---
 

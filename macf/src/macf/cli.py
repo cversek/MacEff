@@ -2976,6 +2976,71 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_task_delete(args: argparse.Namespace) -> int:
+    """Delete a task file with optional cascade to children.
+
+    HIGH protection level - requires user grant. Hook-based enforcement
+    will intercept this operation and require explicit permission.
+    Confirmation prompt provides basic protection at CLI level.
+    """
+    from .task import TaskReader
+
+    # Parse task ID
+    task_id_str = args.task_id.lstrip('#')
+    try:
+        task_id = int(task_id_str)
+    except ValueError:
+        print(f"❌ Invalid task ID: {args.task_id}")
+        return 1
+
+    # Read task to verify it exists
+    reader = TaskReader()
+    task = reader.read_task(task_id)
+    if not task:
+        print(f"❌ Task #{task_id} not found")
+        return 1
+
+    # Find children if cascade requested
+    children_ids = []
+    if args.cascade:
+        all_tasks = reader.read_all_tasks()
+        for t in all_tasks:
+            if t.mtmd and t.mtmd.parent_id == task_id:
+                children_ids.append(t.id)
+
+    # Build deletion list
+    to_delete = [task_id] + children_ids
+
+    # Show what will be deleted
+    print(f"🗑️  Task #{task_id}: {task.subject}")
+    if children_ids:
+        print(f"   + {len(children_ids)} child task(s):")
+        for cid in children_ids:
+            child = reader.read_task(cid)
+            if child:
+                print(f"     #{cid}: {child.subject[:50]}...")
+
+    # Confirmation (basic CLI protection - hooks provide grant system)
+    if not args.force:
+        print()
+        confirm = input("⚠️  Delete these tasks? [y/N]: ").strip().lower()
+        if confirm != 'y':
+            print("❌ Cancelled")
+            return 1
+
+    # Delete task files
+    deleted = 0
+    for tid in to_delete:
+        task_file = reader.session_path / f"{tid}.json"
+        if task_file.exists():
+            task_file.unlink()
+            deleted += 1
+            print(f"   ✓ Deleted #{tid}")
+
+    print(f"\n✅ Deleted {deleted} task(s)")
+    return 0
+
+
 def cmd_task_edit(args: argparse.Namespace) -> int:
     """Edit a top-level JSON field in a task file."""
     from .task import TaskReader, update_task_file
@@ -3607,6 +3672,15 @@ def _build_parser() -> argparse.ArgumentParser:
     task_tree_parser = task_sub.add_parser("tree", help="show task hierarchy tree")
     task_tree_parser.add_argument("task_id", help="root task ID (e.g., #67 or 67)")
     task_tree_parser.set_defaults(func=cmd_task_tree)
+
+    # task delete
+    task_delete_parser = task_sub.add_parser("delete", help="delete task (HIGH protection)")
+    task_delete_parser.add_argument("task_id", help="task ID (e.g., #67 or 67)")
+    task_delete_parser.add_argument("--cascade", action="store_true",
+                                    help="also delete child tasks")
+    task_delete_parser.add_argument("--force", "-f", action="store_true",
+                                    help="skip confirmation prompt")
+    task_delete_parser.set_defaults(func=cmd_task_delete)
 
     # task edit
     task_edit_parser = task_sub.add_parser("edit", help="edit task JSON field")
