@@ -80,12 +80,15 @@ After reporting policy-extracted answers:
 
 After ExitPlanMode approval, complete these steps **before any implementation**:
 
-1. **Create roadmap CA folder** - per folder naming convention from policy
-2. **Transfer plan to roadmap CA** - per file placement from policy
-3. **Pin parent task with phases** - per task pinning protocol from policy (Q7)
-4. **🛑 STOP** - Report completion and AWAIT `/maceff:task:start #{PARENT_TASK_ID}`
+1. **Create task atomically**:
+   ```bash
+   macf_tools task create mission "Title" --repo REPO --version VERSION
+   ```
+2. **Copy plan content** to the skeleton roadmap.md created by CLI
+3. **Report** task ID and roadmap path
+4. **🛑 STOP** - Await `/maceff:task:start #{TASK_ID}` for phase expansion
 
-**Policy Discovery**: Navigate task_management for pinning protocol, roadmaps_drafting for folder structure.
+**Note**: The CLI creates the folder structure, skeleton roadmap.md, and task with MTMD automatically.
 
 ---
 

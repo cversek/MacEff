@@ -75,6 +75,8 @@ Task management policy governs the use of Claude Code native Task* tools (TaskCr
 **9 CLI Commands**
 - What list/filter options exist?
 - What metadata commands exist?
+- How do I create tasks atomically?
+- What smart defaults do create commands provide?
 
 **10 Anti-Patterns**
 - What common mistakes should I avoid?
@@ -474,6 +476,45 @@ macf_tools task add-mtmd #67 label "v0.4.0"           # Add metadata tags
 macf_tools task archive #67                   # Archive with cascade (default)
 macf_tools task archive #67 --no-cascade      # Archive single task
 macf_tools task delete #67                    # Delete (HIGH grant required)
+```
+
+### 9.5 Create Commands
+
+Atomic task creation with smart MTMD defaults:
+
+| Command | Description | Creates |
+|---------|-------------|---------|
+| `task create mission "Title"` | Create MISSION atomically | Folder + roadmap.md + task |
+| `task create experiment "Title"` | Create EXPERIMENT atomically | Folder (NNN) + protocol.md + task |
+| `task create detour "Title"` | Create DETOUR atomically | Folder + roadmap.md + task |
+| `task create phase --parent N "Title"` | Create phase under parent | Task with parent_id |
+| `task create bug --parent N "Title"` | Create bug under parent | Task with 🐛 marker |
+
+**Smart Defaults** (zero LLM token cost):
+- `creation_breadcrumb` - Auto-generated
+- `created_cycle` - Extracted from breadcrumb
+- `plan_ca_ref` - Points to created skeleton CA
+- Experiment numbering - Auto-increments NNN
+- `[^#N]` prefix - Auto-added for phase/bug
+
+**Options**:
+- `--repo NAME` - Set repository in MTMD
+- `--version X.Y.Z` - Set target_version in MTMD
+- `--json` - Machine-readable output
+
+**Examples**:
+```bash
+# Create MISSION with metadata
+macf_tools task create mission "MACF v0.5.0 Release" --repo MacEff --version 0.5.0
+
+# Create experiment (auto-numbers)
+macf_tools task create experiment "Hook Performance Testing"
+
+# Create phase under MISSION
+macf_tools task create phase --parent 67 "Phase 3: Task Creation"
+
+# JSON output for automation
+macf_tools task create mission "Test" --json | jq .task_id
 ```
 
 ---

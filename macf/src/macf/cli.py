@@ -2999,6 +2999,226 @@ def cmd_task_metadata_add(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_task_create_mission(args: argparse.Namespace) -> int:
+    """Create MISSION task with roadmap folder."""
+    from .task.create import create_mission
+
+    try:
+        result = create_mission(
+            title=args.title,
+            repo=args.repo,
+            version=args.version
+        )
+
+        if args.json:
+            # JSON output for automation
+            output = {
+                "task_id": result.task_id,
+                "subject": result.subject,
+                "folder_path": result.folder_path,
+                "ca_path": result.ca_path,
+                "mtmd": {
+                    "version": result.mtmd.version,
+                    "creation_breadcrumb": result.mtmd.creation_breadcrumb,
+                    "created_cycle": result.mtmd.created_cycle,
+                    "created_by": result.mtmd.created_by,
+                    "plan_ca_ref": result.mtmd.plan_ca_ref,
+                    "repo": result.mtmd.repo,
+                    "target_version": result.mtmd.target_version
+                }
+            }
+            print(json.dumps(output, indent=2))
+        else:
+            # Human-friendly output
+            print(f"✅ Created MISSION task #{result.task_id}")
+            print(f"📁 Folder: {result.folder_path}")
+            print(f"📄 Roadmap: {result.ca_path}")
+            print(f"🏷️  Subject: {result.subject}")
+            print()
+            print("Next steps:")
+            print("1. Edit roadmap.md to fill in phases")
+            print(f"2. Run `macf_tools task get #{result.task_id}` to view task details")
+
+        return 0
+    except Exception as e:
+        print(f"❌ Failed to create MISSION: {e}")
+        return 1
+
+
+def cmd_task_create_experiment(args: argparse.Namespace) -> int:
+    """Create EXPERIMENT task with protocol folder."""
+    from .task.create import create_experiment
+
+    try:
+        result = create_experiment(title=args.title)
+
+        if args.json:
+            # JSON output for automation
+            output = {
+                "task_id": result.task_id,
+                "subject": result.subject,
+                "folder_path": result.folder_path,
+                "ca_path": result.ca_path,
+                "mtmd": {
+                    "version": result.mtmd.version,
+                    "creation_breadcrumb": result.mtmd.creation_breadcrumb,
+                    "created_cycle": result.mtmd.created_cycle,
+                    "created_by": result.mtmd.created_by,
+                    "plan_ca_ref": result.mtmd.plan_ca_ref
+                }
+            }
+            print(json.dumps(output, indent=2))
+        else:
+            # Human-friendly output
+            print(f"✅ Created EXPERIMENT task #{result.task_id}")
+            print(f"📁 Folder: {result.folder_path}")
+            print(f"📄 Protocol: {result.ca_path}")
+            print(f"🏷️  Subject: {result.subject}")
+            print()
+            print("Next steps:")
+            print("1. Edit protocol.md to fill in hypothesis and method")
+            print(f"2. Run `macf_tools task get #{result.task_id}` to view task details")
+
+        return 0
+    except Exception as e:
+        print(f"❌ Failed to create EXPERIMENT: {e}")
+        return 1
+
+
+def cmd_task_create_detour(args: argparse.Namespace) -> int:
+    """Create DETOUR task with roadmap folder."""
+    from .task.create import create_detour
+
+    try:
+        result = create_detour(
+            title=args.title,
+            repo=args.repo,
+            version=args.version
+        )
+
+        if args.json:
+            # JSON output for automation
+            output = {
+                "task_id": result.task_id,
+                "subject": result.subject,
+                "folder_path": result.folder_path,
+                "ca_path": result.ca_path,
+                "mtmd": {
+                    "version": result.mtmd.version,
+                    "creation_breadcrumb": result.mtmd.creation_breadcrumb,
+                    "created_cycle": result.mtmd.created_cycle,
+                    "created_by": result.mtmd.created_by,
+                    "plan_ca_ref": result.mtmd.plan_ca_ref,
+                    "repo": result.mtmd.repo,
+                    "target_version": result.mtmd.target_version
+                }
+            }
+            print(json.dumps(output, indent=2))
+        else:
+            # Human-friendly output
+            print(f"✅ Created DETOUR task #{result.task_id}")
+            print(f"📁 Folder: {result.folder_path}")
+            print(f"📄 Roadmap: {result.ca_path}")
+            print(f"🏷️  Subject: {result.subject}")
+            print()
+            print("Next steps:")
+            print("1. Edit roadmap.md to define detour objectives")
+            print(f"2. Run `macf_tools task get #{result.task_id}` to view task details")
+
+        return 0
+    except Exception as e:
+        print(f"❌ Failed to create DETOUR: {e}")
+        return 1
+
+
+def cmd_task_create_phase(args: argparse.Namespace) -> int:
+    """Create phase task under parent."""
+    from .task.create import create_phase
+
+    # Parse parent ID
+    parent_id_str = args.parent.lstrip('#')
+    try:
+        parent_id = int(parent_id_str)
+    except ValueError:
+        print(f"❌ Invalid parent ID: {args.parent}")
+        return 1
+
+    try:
+        result = create_phase(parent_id=parent_id, title=args.title)
+
+        if args.json:
+            # JSON output for automation
+            output = {
+                "task_id": result.task_id,
+                "subject": result.subject,
+                "mtmd": {
+                    "version": result.mtmd.version,
+                    "creation_breadcrumb": result.mtmd.creation_breadcrumb,
+                    "created_cycle": result.mtmd.created_cycle,
+                    "created_by": result.mtmd.created_by,
+                    "parent_id": result.mtmd.parent_id
+                }
+            }
+            print(json.dumps(output, indent=2))
+        else:
+            # Human-friendly output
+            print(f"✅ Created phase task #{result.task_id}")
+            print(f"🏷️  Subject: {result.subject}")
+            print(f"📎 Parent: #{parent_id}")
+            print()
+            print("Next steps:")
+            print(f"1. Run `macf_tools task tree #{parent_id}` to see hierarchy")
+
+        return 0
+    except Exception as e:
+        print(f"❌ Failed to create phase: {e}")
+        return 1
+
+
+def cmd_task_create_bug(args: argparse.Namespace) -> int:
+    """Create bug task under parent."""
+    from .task.create import create_bug
+
+    # Parse parent ID
+    parent_id_str = args.parent.lstrip('#')
+    try:
+        parent_id = int(parent_id_str)
+    except ValueError:
+        print(f"❌ Invalid parent ID: {args.parent}")
+        return 1
+
+    try:
+        result = create_bug(parent_id=parent_id, title=args.title)
+
+        if args.json:
+            # JSON output for automation
+            output = {
+                "task_id": result.task_id,
+                "subject": result.subject,
+                "mtmd": {
+                    "version": result.mtmd.version,
+                    "creation_breadcrumb": result.mtmd.creation_breadcrumb,
+                    "created_cycle": result.mtmd.created_cycle,
+                    "created_by": result.mtmd.created_by,
+                    "parent_id": result.mtmd.parent_id
+                }
+            }
+            print(json.dumps(output, indent=2))
+        else:
+            # Human-friendly output
+            print(f"✅ Created bug task #{result.task_id}")
+            print(f"🏷️  Subject: {result.subject}")
+            print(f"📎 Parent: #{parent_id}")
+            print()
+            print("Next steps:")
+            print(f"1. Run `macf_tools task tree #{parent_id}` to see hierarchy")
+
+        return 0
+    except Exception as e:
+        print(f"❌ Failed to create bug: {e}")
+        return 1
+
+
 def cmd_task_metadata_validate(args: argparse.Namespace) -> int:
     """Validate task MTMD against schema requirements."""
     from .task import TaskReader
@@ -3551,6 +3771,51 @@ def _build_parser() -> argparse.ArgumentParser:
     task_metadata_validate_parser = task_metadata_sub.add_parser("validate", help="validate MTMD against schema")
     task_metadata_validate_parser.add_argument("task_id", help="task ID (e.g., #67 or 67)")
     task_metadata_validate_parser.set_defaults(func=cmd_task_metadata_validate)
+
+    # task create subcommand
+    task_create_parser = task_sub.add_parser("create", help="create new tasks with MTMD")
+    task_create_sub = task_create_parser.add_subparsers(dest="create_cmd")
+
+    # task create mission
+    task_create_mission_parser = task_create_sub.add_parser("mission", help="create MISSION task with roadmap")
+    task_create_mission_parser.add_argument("title", help="mission title")
+    task_create_mission_parser.add_argument("--repo", help="repository name (e.g., MacEff)")
+    task_create_mission_parser.add_argument("--version", help="target version (e.g., 0.4.0)")
+    task_create_mission_parser.add_argument("--json", dest="json", action="store_true",
+                                            help="output as JSON")
+    task_create_mission_parser.set_defaults(func=cmd_task_create_mission)
+
+    # task create experiment
+    task_create_experiment_parser = task_create_sub.add_parser("experiment", help="create EXPERIMENT task with protocol")
+    task_create_experiment_parser.add_argument("title", help="experiment title")
+    task_create_experiment_parser.add_argument("--json", dest="json", action="store_true",
+                                               help="output as JSON")
+    task_create_experiment_parser.set_defaults(func=cmd_task_create_experiment)
+
+    # task create detour
+    task_create_detour_parser = task_create_sub.add_parser("detour", help="create DETOUR task with roadmap")
+    task_create_detour_parser.add_argument("title", help="detour title")
+    task_create_detour_parser.add_argument("--repo", help="repository name (e.g., MacEff)")
+    task_create_detour_parser.add_argument("--version", help="target version (e.g., 0.4.0)")
+    task_create_detour_parser.add_argument("--json", dest="json", action="store_true",
+                                           help="output as JSON")
+    task_create_detour_parser.set_defaults(func=cmd_task_create_detour)
+
+    # task create phase
+    task_create_phase_parser = task_create_sub.add_parser("phase", help="create phase task under parent")
+    task_create_phase_parser.add_argument("--parent", required=True, help="parent task ID (e.g., #67 or 67)")
+    task_create_phase_parser.add_argument("title", help="phase title")
+    task_create_phase_parser.add_argument("--json", dest="json", action="store_true",
+                                          help="output as JSON")
+    task_create_phase_parser.set_defaults(func=cmd_task_create_phase)
+
+    # task create bug
+    task_create_bug_parser = task_create_sub.add_parser("bug", help="create bug task under parent")
+    task_create_bug_parser.add_argument("--parent", required=True, help="parent task ID (e.g., #67 or 67)")
+    task_create_bug_parser.add_argument("title", help="bug title")
+    task_create_bug_parser.add_argument("--json", dest="json", action="store_true",
+                                        help="output as JSON")
+    task_create_bug_parser.set_defaults(func=cmd_task_create_bug)
 
     # Search service commands
     search_service_parser = sub.add_parser("search-service", help="search service daemon management")
