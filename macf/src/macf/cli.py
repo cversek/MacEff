@@ -2421,6 +2421,13 @@ def cmd_task_list(args: argparse.Namespace) -> int:
     # Sort tasks numerically by ID first
     tasks = sorted(tasks, key=lambda t: t.id)
 
+    # Apply archive visibility filters (before other filters)
+    # By default, hide archived tasks unless --all or --archived is specified
+    if args.show_archived_only:
+        tasks = [t for t in tasks if t.status == "archived"]
+    elif not args.show_all:
+        tasks = [t for t in tasks if t.status != "archived"]
+
     # Apply filters
     if args.type_filter:
         type_upper = args.type_filter.upper()
@@ -2470,12 +2477,19 @@ def cmd_task_list(args: argparse.Namespace) -> int:
 
     def format_task(t: MacfTask, indent: int = 0) -> str:
         prefix = "  " * indent
-        # CC-style markers with colors: red ◼ in_progress, ◻ pending, green ✔ completed
-        # Subject now contains #N prefix, so we just render subject with dim IDs
-        if t.status == "completed":
-            status_icon = f"{ANSI_GREEN}✔{ANSI_RESET}"
-            # Dim+strikethrough for completed task text (whole line dim)
+        # CC-style markers with colors:
+        # ◼ red = in_progress, ◻ = pending, ✔ green = completed, ▫ = archived
+        # Formatting: completed = strikethrough, archived = dim+strikethrough
+        if t.status == "archived":
+            # Cardboard brown filled box for archived (▪ with tan/brown color)
+            ANSI_BROWN = "\033[38;5;137m"  # Tan/cardboard brown
+            status_icon = f"{ANSI_BROWN}▪{ANSI_RESET}"
+            # Dim + strikethrough for archived
             line = f"{prefix}{status_icon} {ANSI_DIM}{ANSI_STRIKE}{t.subject}{ANSI_RESET}"
+        elif t.status == "completed":
+            status_icon = f"{ANSI_GREEN}✔{ANSI_RESET}"
+            # Strikethrough only for completed (no dim)
+            line = f"{prefix}{status_icon} {ANSI_STRIKE}{t.subject}{ANSI_RESET}"
         elif t.status == "in_progress":
             status_icon = f"{ANSI_RED}◼{ANSI_RESET}"
             line = f"{prefix}{status_icon} {_dim_task_ids(t.subject)}"
@@ -2485,8 +2499,10 @@ def cmd_task_list(args: argparse.Namespace) -> int:
 
         # Add plan_ca_ref if present (key feature of enhanced display)
         if t.mtmd and t.mtmd.plan_ca_ref:
-            if t.status == "completed":
+            if t.status == "archived":
                 line += f"\n{prefix}   {ANSI_DIM}{ANSI_STRIKE}→ {t.mtmd.plan_ca_ref}{ANSI_RESET}"
+            elif t.status == "completed":
+                line += f"\n{prefix}   {ANSI_STRIKE}→ {t.mtmd.plan_ca_ref}{ANSI_RESET}"
             else:
                 line += f"\n{prefix}   → {t.mtmd.plan_ca_ref}"
 
@@ -2791,9 +2807,10 @@ def cmd_task_edit(args: argparse.Namespace) -> int:
         return 1
 
     # Validate status values
-    if field == "status" and value not in ["pending", "in_progress", "completed"]:
+    # Note: "archived" is not a CC-native status but we allow it - CC UI will hide these tasks
+    if field == "status" and value not in ["pending", "in_progress", "completed", "archived"]:
         print(f"❌ Invalid status value: {value}")
-        print("   Valid values: pending, in_progress, completed")
+        print("   Valid values: pending, in_progress, completed, archived")
         return 1
 
     # Read task to verify it exists and get current state
@@ -3735,6 +3752,10 @@ def _build_parser() -> argparse.ArgumentParser:
                                   help="filter by status")
     task_list_parser.add_argument("--parent", dest="parent_filter", type=int,
                                   help="filter by parent task ID")
+    task_list_parser.add_argument("--all", dest="show_all", action="store_true",
+                                  help="show all tasks including archived")
+    task_list_parser.add_argument("--archived", dest="show_archived_only", action="store_true",
+                                  help="show only archived tasks")
     task_list_parser.set_defaults(func=cmd_task_list)
 
     # task get
