@@ -377,6 +377,8 @@ def _grant_hint_update(task_id: int) -> str:
 def check_grant_in_events(
     operation: str,
     task_id: Optional[int] = None,
+    field: Optional[str] = None,
+    value: Any = None,
 ) -> Tuple[bool, Optional[Dict[str, Any]]]:
     """
     Check if a grant exists for an operation.
@@ -404,7 +406,8 @@ def check_grant_in_events(
 
     if grant_event:
         # Check if grant is for this task (or any task if task_id not specified)
-        grant_task_id = grant_event.get("data", {}).get("task_id")
+        grant_data = grant_event.get("data", {})
+        grant_task_id = grant_data.get("task_id")
         if task_id is None or grant_task_id == task_id or grant_task_id is None:
             # Check if grant was cleared
             cleared_event = get_latest_event(f"task_grant_{operation}_cleared")
@@ -413,6 +416,19 @@ def check_grant_in_events(
                 cleared_ts = cleared_event.get("timestamp", 0)
                 if cleared_ts > grant_ts:
                     return False, None
+
+            # If field/value specified, verify they match the grant
+            grant_field = grant_data.get("field")
+            grant_value = grant_data.get("value")
+
+            # If grant has field specified, it must match
+            if grant_field is not None:
+                if field != grant_field:
+                    return False, None  # Field mismatch
+                # If grant has value specified, it must match too
+                if grant_value is not None and value != grant_value:
+                    return False, None  # Value mismatch
+
             return True, grant_event
 
     # Check for "granted!" keyword in recent user messages
@@ -445,7 +461,13 @@ def clear_grant(operation: str, task_id: Optional[int] = None, reason: str = "co
     )
 
 
-def create_grant(operation: str, task_id: Optional[int] = None, reason: str = ""):
+def create_grant(
+    operation: str,
+    task_id: Optional[int] = None,
+    reason: str = "",
+    field: Optional[str] = None,
+    value: Any = None,
+):
     """
     Create a grant for an operation.
 
@@ -453,13 +475,21 @@ def create_grant(operation: str, task_id: Optional[int] = None, reason: str = ""
         operation: Operation type (update, delete, create)
         task_id: Task ID (optional, None for general grants)
         reason: Reason for granting
+        field: Specific field to grant modification for (optional)
+        value: Expected new value for field (optional, requires field)
     """
     from macf.agent_events_log import append_event
 
+    data = {
+        "task_id": task_id,
+        "reason": reason,
+    }
+    if field is not None:
+        data["field"] = field
+    if value is not None:
+        data["value"] = value
+
     append_event(
         event=f"task_grant_{operation}",
-        data={
-            "task_id": task_id,
-            "reason": reason
-        }
+        data=data
     )
