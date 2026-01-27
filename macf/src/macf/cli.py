@@ -2970,12 +2970,12 @@ def cmd_task_metadata_set(args: argparse.Namespace) -> int:
     if task.mtmd:
         old_val = getattr(task.mtmd, field, None)
         if old_val is not None and old_val != value:
-            # Changing existing value - check for grant
+            # Changing existing value - check for grant with field/value specificity
             from .task.protection import check_grant_in_events, clear_grant
-            has_grant, _ = check_grant_in_events("update", task_id)
+            has_grant, _ = check_grant_in_events("update", task_id, field=field, value=value)
             if not has_grant:
                 print(f"❌ Modifying MTMD field '{field}' requires grant (current value: {old_val!r})")
-                print(f"   To authorize: macf_tools task grant-update {task_id}")
+                print(f"   To authorize: macf_tools task grant-update {task_id} --field {field} --value \"{value}\"")
                 return 1
             # Clear the grant (single-use)
             clear_grant("update", task_id, "consumed_by_metadata_set")
@@ -3389,8 +3389,19 @@ def cmd_task_grant_update(args: argparse.Namespace) -> int:
         print(f"❌ Invalid task ID: {args.task_id}")
         return 1
 
-    create_grant("update", task_id, args.reason)
+    # Validate --value requires --field
+    field = getattr(args, 'field', None)
+    value = getattr(args, 'value', None)
+    if value is not None and field is None:
+        print("❌ --value requires --field to be specified")
+        return 1
+
+    create_grant("update", task_id, args.reason, field=field, value=value)
     print(f"✅ Grant created for updating task #{task_id}")
+    if field:
+        print(f"   Field: {field}")
+    if value:
+        print(f"   Expected value: {value}")
     if args.reason:
         print(f"   Reason: {args.reason}")
     print("   Grant is single-use and will be cleared after consumption.")
@@ -4048,6 +4059,8 @@ def _build_parser() -> argparse.ArgumentParser:
     # task grant-update
     task_grant_update_parser = task_sub.add_parser("grant-update", help="grant permission to update task description")
     task_grant_update_parser.add_argument("task_id", help="task ID to grant update permission (e.g., #67 or 67)")
+    task_grant_update_parser.add_argument("--field", "-f", help="specific MTMD field to grant modification for")
+    task_grant_update_parser.add_argument("--value", "-v", help="expected new value (requires --field)")
     task_grant_update_parser.add_argument("--reason", "-r", default="", help="reason for granting")
     task_grant_update_parser.set_defaults(func=cmd_task_grant_update)
 
