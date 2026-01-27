@@ -17,6 +17,18 @@ from .archive import (
     RestoreResult,
     get_archive_dir,
 )
+from .protection import (
+    ProtectionLevel,
+    ProtectionResult,
+    check_task_create,
+    check_task_update_description,
+    check_grant_in_events,
+    clear_grant,
+    create_grant,
+    get_task_type,
+    TYPES_REQUIRING_PLAN_CA,
+    VALID_TASK_TYPES,
+)
 
 __all__ = [
     "MacfTask",
@@ -33,4 +45,15 @@ __all__ = [
     "ArchiveResult",
     "RestoreResult",
     "get_archive_dir",
+    # Protection
+    "ProtectionLevel",
+    "ProtectionResult",
+    "check_task_create",
+    "check_task_update_description",
+    "check_grant_in_events",
+    "clear_grant",
+    "create_grant",
+    "get_task_type",
+    "TYPES_REQUIRING_PLAN_CA",
+    "VALID_TASK_TYPES",
 ]

@@ -3363,6 +3363,46 @@ def cmd_task_archived_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_task_grant_update(args: argparse.Namespace) -> int:
+    """Grant permission to update a task's description."""
+    from .task.protection import create_grant
+
+    # Parse task ID
+    task_id_str = args.task_id.lstrip('#')
+    try:
+        task_id = int(task_id_str)
+    except ValueError:
+        print(f"❌ Invalid task ID: {args.task_id}")
+        return 1
+
+    create_grant("update", task_id, args.reason)
+    print(f"✅ Grant created for updating task #{task_id}")
+    if args.reason:
+        print(f"   Reason: {args.reason}")
+    print("   Grant is single-use and will be cleared after consumption.")
+    return 0
+
+
+def cmd_task_grant_delete(args: argparse.Namespace) -> int:
+    """Grant permission to delete a task."""
+    from .task.protection import create_grant
+
+    # Parse task ID
+    task_id_str = args.task_id.lstrip('#')
+    try:
+        task_id = int(task_id_str)
+    except ValueError:
+        print(f"❌ Invalid task ID: {args.task_id}")
+        return 1
+
+    create_grant("delete", task_id, args.reason)
+    print(f"✅ Grant created for deleting task #{task_id}")
+    if args.reason:
+        print(f"   Reason: {args.reason}")
+    print("   Grant is single-use and will be cleared after consumption.")
+    return 0
+
+
 def cmd_task_metadata_validate(args: argparse.Namespace) -> int:
     """Validate task MTMD against schema requirements."""
     from .task import TaskReader
@@ -3990,6 +4030,18 @@ def _build_parser() -> argparse.ArgumentParser:
     task_archived_list_parser.add_argument("--json", dest="json_output", action="store_true",
                                            help="output as JSON")
     task_archived_list_parser.set_defaults(func=cmd_task_archived_list)
+
+    # task grant-update
+    task_grant_update_parser = task_sub.add_parser("grant-update", help="grant permission to update task description")
+    task_grant_update_parser.add_argument("task_id", help="task ID to grant update permission (e.g., #67 or 67)")
+    task_grant_update_parser.add_argument("--reason", "-r", default="", help="reason for granting")
+    task_grant_update_parser.set_defaults(func=cmd_task_grant_update)
+
+    # task grant-delete
+    task_grant_delete_parser = task_sub.add_parser("grant-delete", help="grant permission to delete task")
+    task_grant_delete_parser.add_argument("task_id", help="task ID to grant delete permission (e.g., #67 or 67)")
+    task_grant_delete_parser.add_argument("--reason", "-r", default="", help="reason for granting")
+    task_grant_delete_parser.set_defaults(func=cmd_task_grant_delete)
 
     # Search service commands
     search_service_parser = sub.add_parser("search-service", help="search service daemon management")
