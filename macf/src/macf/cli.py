@@ -2605,7 +2605,7 @@ def cmd_task_get(args: argparse.Namespace) -> int:
 
     # MTMD section
     if task.mtmd:
-        print(f"\n📦 MacfTaskMetaData (v{task.mtmd.version})")
+        print(f"\nℹ️ MacfTaskMetaData (v{task.mtmd.version})")
         print("-" * 40)
         if task.mtmd.plan_ca_ref:
             print(f"  plan_ca_ref: {task.mtmd.plan_ca_ref}")
@@ -2874,7 +2874,7 @@ def cmd_task_metadata_get(args: argparse.Namespace) -> int:
 
     # Output MTMD
     mtmd = task.mtmd
-    print(f"📦 MacfTaskMetaData (v{mtmd.version}) for #{task_id}")
+    print(f"ℹ️ MacfTaskMetaData (v{mtmd.version}) for #{task_id}")
     print("-" * 40)
     if mtmd.creation_breadcrumb:
         print(f"  creation_breadcrumb: {mtmd.creation_breadcrumb}")
