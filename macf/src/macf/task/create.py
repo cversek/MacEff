@@ -113,10 +113,24 @@ def _create_task_file(
     task_file = reader.session_path / f"{task_id}.json"
 
     # Build task JSON structure
+    # Generate activeForm from subject (present continuous form)
+    # Strip emoji prefix and convert to gerund-style
+    active_form = subject
+    for prefix in ["🗺️ MISSION:", "🧪 EXPERIMENT:", "↩️ DETOUR:", "📋", "🐛 BUG:", "[^#"]:
+        if prefix in active_form:
+            active_form = active_form.split(prefix)[-1].strip()
+            if active_form.startswith("]"):
+                active_form = active_form.split("]", 1)[-1].strip()
+            break
+    # Make it gerund-style if it's a noun phrase
+    if not active_form.endswith("ing"):
+        active_form = f"Working on {active_form}"
+
     task_data = {
-        "id": task_id,
+        "id": str(task_id),  # CC expects string, not int
         "subject": subject,
         "description": description,
+        "activeForm": active_form,  # Required for CC UI visibility
         "status": status,
         "blocks": [],
         "blockedBy": []
