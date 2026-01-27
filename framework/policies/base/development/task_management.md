@@ -395,15 +395,62 @@ No `--cascade` flag needed. Use `--no-cascade` to archive single task.
 
 ## 8 Grant System (Protection)
 
-### 8.1 Protection Levels
+Task operations are protected by PreToolUse hook and CLI enforcement. Protection applies to BOTH CC native TaskCreate/TaskUpdate AND `macf_tools task` CLI commands.
+
+### 8.1 TaskCreate Protection
+
+**Tasks requiring `plan_ca_ref`** (blocked without it):
+- 🗺️ MISSION
+- 🧪 EXPERIMENT
+- ↩️ DETOUR
+- 📜 DELEG_PLAN
+- 📋 SUBPLAN
+
+**Tasks NOT requiring `plan_ca_ref`** (allowed freely):
+- 🔧 AD_HOC
+- 🐛 BUG
+- 📦 ARCHIVE
+- Regular tasks (no type marker)
+
+**Detection**: Task type determined from MTMD `task_type` field (authoritative) or subject line emoji (fallback).
+
+### 8.2 TaskUpdate Description Protection
+
+**Allowed WITHOUT grant**:
+| Operation | Example |
+|-----------|---------|
+| Append to non-MTMD content | Adding text after existing description |
+| First assignment of null MTMD field | `completion_breadcrumb: null → s_77.../...` |
+| Add to MTMD `custom` dict | New custom fields |
+| Add to MTMD `updates` list | Lifecycle breadcrumb tracking |
+
+**Requires grant**:
+| Operation | Example |
+|-----------|---------|
+| Modify existing non-MTMD content | Changing description text |
+| Modify MTMD field with existing value | `plan_ca_ref: path/a → path/b` |
+| Remove from `custom` or `updates` | Deleting entries |
+| Remove MTMD block entirely | Stripping metadata |
+
+### 8.3 Protection Levels Summary
 
 | Level | Operations | Requirement |
 |-------|------------|-------------|
-| **HIGH** | Delete task, erase description | User grant always |
-| **MEDIUM** | Change MTMD values | User grant (MANUAL_MODE) |
-| **LOW** | Insert new MTMD field | Auto-allowed |
+| **HIGH** | Delete task, modify existing values, remove content | User grant always |
+| **MEDIUM** | First assignment of null fields | Auto-allowed (no grant needed) |
+| **LOW** | Append content, add custom/updates | Auto-allowed |
 
-### 8.2 Conscientious Agent Pattern
+### 8.4 Grant Flow
+
+```
+1. Agent recognizes need for protected operation
+2. Agent requests permission from user BEFORE attempting
+3. User grants: says "granted!" or runs: macf_tools task grant-update #N
+4. Agent proceeds with operation
+5. Hook clears grant after consumption (single-use)
+```
+
+### 8.5 Conscientious Agent Pattern
 
 The grant system protects against accidents. A **conscientious agent**:
 
@@ -412,7 +459,7 @@ The grant system protects against accidents. A **conscientious agent**:
 3. **Receives** grant from user
 4. **Proceeds** with operation
 
-**Anti-Pattern**: Attempting operation, hitting block, then requesting permission.
+**Anti-Pattern**: Attempting operation, hitting block, then requesting permission. The hook blocking you is a failure mode, not normal operation.
 
 ---
 

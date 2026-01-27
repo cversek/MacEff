@@ -106,85 +106,24 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         breadcrumb = get_breadcrumb()
         message_parts = [f"🏗️ MACF | {timestamp} | {breadcrumb}"]
 
-        # TodoWrite collapse detection
-        if tool_name == "TodoWrite":
-            from macf.event_queries import get_latest_event, get_recent_events
+        # TaskCreate protection: MISSION/EXPERIMENT/DETOUR require plan_ca_ref
+        if tool_name == "TaskCreate":
+            from macf.task.protection import check_task_create, check_grant_in_events
 
-            todos = tool_input.get("todos", [])
-            new_count = len(todos)
+            subject = tool_input.get("subject", "")
+            description = tool_input.get("description", "")
+            auto_mode_flag, _, _ = detect_auto_mode(session_id)
 
-            # Get previous TODO count from events
-            prev_event = get_latest_event("todos_updated")
-            prev_count = prev_event.get("data", {}).get("count", 0) if prev_event else 0
+            result = check_task_create(subject, description, auto_mode_flag)
 
-            # Restore authorization check - must be checked FIRST before other validations
-            restore_auth = get_latest_event("todos_auth_restore")
-            restore_cleared = get_latest_event("todos_auth_restore_cleared")
-
-            if restore_auth:
-                restore_ts = restore_auth.get("timestamp", 0)
-                restore_cleared_ts = restore_cleared.get("timestamp", 0) if restore_cleared else 0
-
-                if restore_ts > restore_cleared_ts:
-                    # Active restore authorization exists - validate exact match
-                    expected_items = restore_auth.get("data", {}).get("expected_items", [])
-
-                    # Compare items exactly
-                    items_match = (len(todos) == len(expected_items))
-                    if items_match:
-                        for new_item, expected_item in zip(todos, expected_items):
-                            if (new_item.get("content") != expected_item.get("content") or
-                                new_item.get("status") != expected_item.get("status") or
-                                new_item.get("activeForm") != expected_item.get("activeForm")):
-                                items_match = False
-                                break
-
-                    if items_match:
-                        # Exact match - clear auth and allow
-                        append_event(
-                            event="todos_auth_restore_cleared",
-                            data={"reason": "consumed_by_todowrite_exact_match"}
-                        )
-                        # Allow this TodoWrite - skip all other checks
-                        message_parts.append(f"📝 Todos: restored from previous (authorized)")
-                        return {
-                            "continue": True,
-                            "outputToAppendOnSuccess": " | ".join(message_parts)
-                        }
-                    else:
-                        # Mismatch - deny with specific error
-                        error_msg = (
-                            f"❌ TODO Restore Blocked - Content Mismatch\n\n"
-                            f"Restore authorization exists for {len(expected_items)} items, but TodoWrite has {len(todos)} items.\n\n"
-                            f"⚠️ TodoWrite content does NOT exactly match the authorized restore.\n"
-                            f"When using auth-restore, you MUST write the EXACT JSON from `macf_tools todos list --previous N --json`.\n\n"
-                            f"Options:\n"
-                            f"  1. Use exact JSON from the authorized previous state\n"
-                            f"  2. Clear this auth and use normal authorization flow\n"
-                        )
-                        return {
-                            "continue": False,
-                            "hookSpecificOutput": {
-                                "hookEventName": "PreToolUse",
-                                "permissionDecision": "deny",
-                                "permissionDecisionReason": error_msg
-                            }
-                        }
-
-            # All-completed detection: when all items are completed, the TODO list disappears from UI
-            if new_count > 0:
-                pending_count = sum(1 for t in todos if t.get("status") != "completed")
-                if pending_count == 0:
+            if not result.allowed:
+                # Check for grant
+                has_grant, _ = check_grant_in_events("create")
+                if not has_grant:
                     error_msg = (
-                        f"❌ TODO Visibility Warning - All Items Completed\n\n"
-                        f"Detected: All {new_count} items marked as completed.\n\n"
-                        f"⚠️ When all TODOs are completed, the list disappears from Claude Code UI.\n"
-                        f"This makes it impossible to see completed work or restore context after compaction.\n\n"
-                        f"Recommended: Keep at least one pending item as an anchor:\n"
-                        f'  {{"content": "Awaiting next task", "status": "pending", "activeForm": "Awaiting next task"}}\n\n'
-                        f"Add this item to your TodoWrite call and retry."
+                        f"❌ TaskCreate Blocked - {result.reason}\n\n"
+                        f"{result.grant_hint or ''}"
                     )
-                    # Use permissionDecision for user visibility
                     return {
                         "continue": False,
                         "hookSpecificOutput": {
@@ -194,162 +133,67 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                         }
                     }
 
-            # Erasure detection: check if existing item CONTENT was removed (not just count reduction)
-            # This catches when agent replaces items while keeping similar count
-            # Note: Status changes allowed, breadcrumb additions allowed (prefix matching)
-            if prev_count > 0 and prev_event:
-                prev_todos = prev_event.get("data", {}).get("items", [])
-                if prev_todos:
-                    # Extract content text from todos
-                    prev_contents = [t.get("content", "") for t in prev_todos if t.get("content")]
-                    new_contents = [t.get("content", "") for t in todos if t.get("content")]
+            message_parts.append(f"📝 TaskCreate: {subject[:40]}...")
 
-                    # For each previous content, check if ANY new content starts with it
-                    # This allows adding breadcrumbs (e.g., "Phase 1" -> "Phase 1 [breadcrumb]")
-                    erased_items = []
-                    for prev_content in prev_contents:
-                        # Check if any new content starts with this previous content
-                        preserved = any(new_c.startswith(prev_content) or prev_content.startswith(new_c)
-                                        for new_c in new_contents)
-                        if not preserved:
-                            erased_items.append(prev_content)
+        # TaskUpdate protection: description modifications require grant (with exceptions)
+        elif tool_name == "TaskUpdate":
+            from macf.task.protection import check_task_update_description, check_grant_in_events, clear_grant
+            from macf.task.reader import TaskReader
 
-                    # Only block if items were truly erased AND no collapse was authorized
-                    if erased_items and new_count >= prev_count:
-                        # Check for item edit authorizations (supports multiple)
-                        # Get the most recent cleared timestamp to filter out consumed auths
-                        item_edit_cleared = get_latest_event("todos_auth_item_edit_cleared")
-                        cleared_ts = item_edit_cleared.get("timestamp", 0) if item_edit_cleared else 0
+            task_id_str = tool_input.get("taskId", "")
+            new_description = tool_input.get("description")
 
-                        # Get all recent authorizations newer than last clear
-                        recent_auths = get_recent_events("todos_auth_item_edit", max_count=50)
-                        authorized_indices = set()
-                        auth_events_to_clear = []
+            # Only check if description is being updated
+            if new_description is not None:
+                try:
+                    task_id = int(task_id_str)
+                    auto_mode_flag, _, _ = detect_auto_mode(session_id)
 
-                        for auth_event in recent_auths:
-                            auth_ts = auth_event.get("timestamp", 0)
-                            if auth_ts > cleared_ts:
-                                auth_index = auth_event.get("data", {}).get("index", 0)
-                                if auth_index >= 1:
-                                    authorized_indices.add(auth_index)
-                                    auth_events_to_clear.append(auth_event)
+                    # Get current task description
+                    reader = TaskReader()
+                    current_task = None
+                    for task in reader.read_tasks():
+                        if task.id == task_id:
+                            current_task = task
+                            break
 
-                        # Find indices of all erased items
-                        erased_indices = set()
-                        for erased_content in erased_items:
-                            for i, prev_c in enumerate(prev_contents):
-                                if prev_c == erased_content:
-                                    erased_indices.add(i + 1)  # 1-based index
-                                    break
+                    if current_task:
+                        # Check for grant
+                        has_grant, grant_event = check_grant_in_events("update", task_id)
 
-                        # Check if ALL erased items have authorizations
-                        item_edit_authorized = erased_indices and erased_indices.issubset(authorized_indices)
+                        result = check_task_update_description(
+                            task_id,
+                            current_task.description,
+                            new_description,
+                            auto_mode_flag,
+                            has_grant
+                        )
 
-                        if item_edit_authorized:
-                            # Clear all consumed authorizations
-                            for auth_event in auth_events_to_clear:
-                                auth_index = auth_event.get("data", {}).get("index", 0)
-                                if auth_index in erased_indices:
-                                    append_event(
-                                        event="todos_auth_item_edit_cleared",
-                                        data={"reason": "consumed_by_todowrite", "index": auth_index}
-                                    )
-
-                        if not item_edit_authorized:
-                            erased_preview = [item[:50] + "..." if len(item) > 50 else item for item in erased_items[:3]]
-                            more_count = len(erased_items) - 3 if len(erased_items) > 3 else 0
-                            erased_str = "\n  - ".join(erased_preview)
-                            if more_count > 0:
-                                erased_str += f"\n  - ... and {more_count} more"
-
-                            # Find indices of erased items for auth hint
-                            erased_indices = []
-                            for erased in erased_items[:1]:  # Just show first one for hint
-                                for i, prev_c in enumerate(prev_contents):
-                                    if prev_c == erased:
-                                        erased_indices.append(i + 1)
-                                        break
-
-                            # Build authorization instructions
-                            if erased_indices:
-                                auth_cmd = f"macf_tools todos auth-item-edit --index {erased_indices[0]} --reason \"reason\""
-                                auth_instructions = (
-                                    f"\n\n🚨 AGENT: Ask the user for approval before running auth commands.\n\n"
-                                    f"To authorize, USER may either:\n"
-                                    f"  1. Run directly: {auth_cmd}\n"
-                                    f"  2. Say \"granted!\" to allow agent to run the auth command\n\n"
-                                    f"AGENT: After authorization, retry TodoWrite.\n\n"
-                                    f"Why: Content replacement requires human oversight to prevent accidental data loss."
-                                )
-                            else:
-                                auth_instructions = (
-                                    f"\n\nTo proceed anyway, USER can say 'proceed' or agent can retry with preserved content."
-                                )
-
-                            warning_msg = (
-                                f"⚠️ TODO Erasure Detected - Item Content Removed\n\n"
-                                f"Previous: {prev_count} items → New: {new_count} items\n"
-                                f"Erased content ({len(erased_items)} items):\n  - {erased_str}\n\n"
-                                f"Status changes and breadcrumb additions are allowed.{auth_instructions}"
+                        if not result.allowed:
+                            error_msg = (
+                                f"❌ TaskUpdate Blocked - {result.reason}\n\n"
+                                f"{result.grant_hint or ''}"
                             )
-                            # Use permissionDecision for user visibility
                             return {
                                 "continue": False,
                                 "hookSpecificOutput": {
                                     "hookEventName": "PreToolUse",
                                     "permissionDecision": "deny",
-                                    "permissionDecisionReason": warning_msg
+                                    "permissionDecisionReason": error_msg
                                 }
                             }
 
-            # Collapse detection: new < prev
-            if prev_count > 0 and new_count < prev_count:
-                # Check for authorization
-                auth_event = get_latest_event("todos_auth_collapse")
-                cleared_event = get_latest_event("todos_auth_cleared")
+                        # Clear grant if it was used
+                        if has_grant and result.level.value == "HIGH":
+                            clear_grant("update", task_id, "consumed_by_taskupdate")
 
-                # Check if auth is valid (not cleared)
-                auth_valid = False
-                if auth_event:
-                    auth_ts = auth_event.get("timestamp", 0)
-                    cleared_ts = cleared_event.get("timestamp", 0) if cleared_event else 0
-                    if auth_ts > cleared_ts:
-                        auth_data = auth_event.get("data", {})
-                        auth_from = auth_data.get("from_count", 0)
-                        auth_to = auth_data.get("to_count", 0)
-                        # Validate counts match
-                        if auth_from == prev_count and auth_to == new_count:
-                            auth_valid = True
-                            # Clear the auth (single use)
-                            append_event(
-                                event="todos_auth_cleared",
-                                data={"reason": "consumed_by_todowrite"}
-                            )
+                except (ValueError, TypeError):
+                    pass  # Invalid task_id, let CC handle the error
 
-                if not auth_valid:
-                    reduction = prev_count - new_count
-                    error_msg = (
-                        f"❌ TODO Collapse Blocked - User Authorization Required\n\n"
-                        f"Detected: Reducing from {prev_count} items to {new_count} items (collapse of {reduction} items)\n\n"
-                        f"🚨 AGENT: Ask the user for approval before running auth commands.\n\n"
-                        f"To authorize, USER may either:\n"
-                        f"  1. Run directly: macf_tools todos auth-collapse --from {prev_count} --to {new_count} --reason \"reason\"\n"
-                        f"  2. Say \"granted!\" to allow agent to run the auth command\n\n"
-                        f"AGENT: After authorization, retry TodoWrite.\n\n"
-                        f"Why: TODO collapses are irreversible. Human oversight prevents accidental data loss."
-                    )
-                    # Use permissionDecision for user visibility (exit 2 stderr not shown for TodoWrite)
-                    return {
-                        "continue": False,
-                        "hookSpecificOutput": {
-                            "hookEventName": "PreToolUse",
-                            "permissionDecision": "deny",
-                            "permissionDecisionReason": error_msg
-                        }
-                    }
+            message_parts.append(f"📝 TaskUpdate: #{task_id_str}")
 
         # Enhanced context based on tool type
-        if tool_name == "Task":
+        elif tool_name == "Task":
             # DELEG_DRV start tracking
             subagent_type = tool_input.get("subagent_type", "unknown")
             description = tool_input.get("description", "")

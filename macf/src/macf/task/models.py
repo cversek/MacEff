@@ -62,7 +62,12 @@ class MacfTaskMetaData:
     created_cycle: Optional[int] = None
     created_by: Optional[str] = None  # PA | SA:{agent_type}
 
-    # Required for MISSION/DETOUR/EXPERIMENT
+    # Task type - AUTHORITATIVE source (takes precedence over subject line emoji parsing)
+    # Valid values: MISSION, EXPERIMENT, DETOUR, DELEG_PLAN, SUBPLAN, ARCHIVE, AD_HOC, BUG
+    # See task_management.md §2.1 for definitions
+    task_type: Optional[str] = None
+
+    # Required for MISSION/DETOUR/EXPERIMENT/DELEG_PLAN/SUBPLAN
     plan_ca_ref: Optional[str] = None
 
     # Optional - set on conversion from experiment
@@ -135,6 +140,7 @@ class MacfTaskMetaData:
             creation_breadcrumb=data.get("creation_breadcrumb"),
             created_cycle=data.get("created_cycle"),
             created_by=data.get("created_by"),
+            task_type=data.get("task_type"),
             plan_ca_ref=data.get("plan_ca_ref"),
             experiment_ca_ref=data.get("experiment_ca_ref"),
             parent_id=data.get("parent_id"),
@@ -218,6 +224,8 @@ class MacfTaskMetaData:
             data["created_cycle"] = self.created_cycle
         if self.created_by:
             data["created_by"] = self.created_by
+        if self.task_type:
+            data["task_type"] = self.task_type
         if self.plan_ca_ref:
             data["plan_ca_ref"] = self.plan_ca_ref
         if self.experiment_ca_ref:
