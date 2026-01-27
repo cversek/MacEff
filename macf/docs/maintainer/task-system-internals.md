@@ -1,7 +1,7 @@
 # Claude Code Task System Internals
 
 **Type**: Maintainer Documentation
-**Status**: Current as of Claude Code 2.1.19+
+**Status**: Current as of Claude Code 2.1.20
 **Scope**: Task file format, visibility requirements, extension patterns
 
 ---
@@ -89,6 +89,35 @@ CLI-created tasks with integer `id` and missing `activeForm`:
 | `TaskDelete` | **DOES NOT EXIST** | Use file deletion |
 
 **Key Limitation**: No native tool for task deletion.
+
+## CC Version-Specific Behaviors
+
+### CC 2.1.20: Task ID Column Removed
+
+**Change**: In CC 2.1.20, the task ID column was removed from the UI display.
+
+**Before** (CC 2.1.19):
+```
+#67. [in_progress] 🗺️ MISSION: Task CLI
+#68. [pending] [^#67] 📋 Phase 1
+```
+
+**After** (CC 2.1.20):
+```
+  ◼ 🗺️ MISSION: Task CLI
+  ◻ [^#67] 📋 Phase 1
+```
+
+**MACF Workaround**: Embed task ID with ANSI dim codes in subject:
+- CLI `task create` commands prepend dim `#N` to subjects
+- CC UI **DOES render ANSI escape codes** (discovered via testing!)
+- Example stored: `\033[2m#89\033[0m \033[2m[^#67]\033[0m 📋 Phase 4`
+- Example rendered: dim `#89` dim `[^#67]` normal `📋 Phase 4`
+
+**Subject Format**:
+```
+#{task_id} [^#{parent_id}] {emoji} {title}
+```
 
 ## File System Behaviors
 

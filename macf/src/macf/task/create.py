@@ -16,6 +16,10 @@ from typing import Optional
 from .models import MacfTaskMetaData
 from .reader import TaskReader
 
+# ANSI escape codes for dim text (CC UI renders these!)
+ANSI_DIM = "\033[2m"
+ANSI_RESET = "\033[0m"
+
 
 @dataclass
 class CreateResult:
@@ -114,8 +118,11 @@ def _create_task_file(
 
     # Build task JSON structure
     # Generate activeForm from subject (present continuous form)
-    # Strip emoji prefix and convert to gerund-style
+    # Strip ID prefix, emoji prefix and convert to gerund-style
     active_form = subject
+    # First strip #N prefix if present
+    if active_form.startswith("#"):
+        active_form = re.sub(r'^#\d+\s*', '', active_form)
     for prefix in ["🗺️ MISSION:", "🧪 EXPERIMENT:", "↩️ DETOUR:", "📋", "🐛 BUG:", "[^#"]:
         if prefix in active_form:
             active_form = active_form.split(prefix)[-1].strip()
@@ -248,8 +255,8 @@ def create_mission(
     # Build description with MTMD
     description = f"→ {ca_path_relative}\n\n{_generate_mtmd_block(mtmd)}"
 
-    # Create subject with emoji
-    subject = f"🗺️ MISSION: {title}"
+    # Create subject with dim ID prefix and emoji
+    subject = f"{ANSI_DIM}#{task_id}{ANSI_RESET} 🗺️ MISSION: {title}"
 
     # Create task file
     _create_task_file(task_id, subject, description)
@@ -352,8 +359,8 @@ def create_experiment(
     # Build description with MTMD
     description = f"→ {ca_path_relative}\n\n{_generate_mtmd_block(mtmd)}"
 
-    # Create subject with emoji
-    subject = f"🧪 EXPERIMENT: {title}"
+    # Create subject with dim ID prefix and emoji
+    subject = f"{ANSI_DIM}#{task_id}{ANSI_RESET} 🧪 EXPERIMENT: {title}"
 
     # Create task file
     _create_task_file(task_id, subject, description)
@@ -462,8 +469,8 @@ def create_detour(
     # Build description with MTMD
     description = f"→ {ca_path_relative}\n\n{_generate_mtmd_block(mtmd)}"
 
-    # Create subject with emoji
-    subject = f"↩️ DETOUR: {title}"
+    # Create subject with dim ID prefix and emoji
+    subject = f"{ANSI_DIM}#{task_id}{ANSI_RESET} ↩️ DETOUR: {title}"
 
     # Create task file
     _create_task_file(task_id, subject, description)
@@ -517,8 +524,8 @@ def create_phase(
     # Build description with MTMD
     description = _generate_mtmd_block(mtmd)
 
-    # Create subject with parent reference and emoji
-    subject = f"[^#{parent_id}] 📋 {title}"
+    # Create subject with dim ID prefix, dim parent reference and emoji
+    subject = f"{ANSI_DIM}#{task_id}{ANSI_RESET} {ANSI_DIM}[^#{parent_id}]{ANSI_RESET} 📋 {title}"
 
     # Create task file
     _create_task_file(task_id, subject, description)
@@ -570,8 +577,8 @@ def create_bug(
     # Build description with MTMD
     description = _generate_mtmd_block(mtmd)
 
-    # Create subject with parent reference and bug emoji
-    subject = f"[^#{parent_id}] 🐛 BUG: {title}"
+    # Create subject with dim ID prefix, dim parent reference and bug emoji
+    subject = f"{ANSI_DIM}#{task_id}{ANSI_RESET} {ANSI_DIM}[^#{parent_id}]{ANSI_RESET} 🐛 BUG: {title}"
 
     # Create task file
     _create_task_file(task_id, subject, description)

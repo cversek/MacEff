@@ -38,6 +38,18 @@ ANSI_GREEN = "\033[32m"
 ANSI_DIM = "\033[2m"
 ANSI_STRIKE = "\033[9m"
 
+
+def _dim_task_ids(text: str) -> str:
+    """Wrap task ID patterns (#N and [^#N]) in dim ANSI codes."""
+    import re
+    # Pattern matches: #123 at start, or [^#123] anywhere
+    # Replace #N at start with dim version
+    text = re.sub(r'^(#\d+)', f'{ANSI_DIM}\\1{ANSI_RESET}', text)
+    # Replace [^#N] with dim version
+    text = re.sub(r'(\[\^#\d+\])', f'{ANSI_DIM}\\1{ANSI_RESET}', text)
+    return text
+
+
 # -------- helpers --------
 def _pick_tz():
     """Prefer MACEFF_TZ, then TZ, else system local; fall back to UTC."""
@@ -2459,16 +2471,17 @@ def cmd_task_list(args: argparse.Namespace) -> int:
     def format_task(t: MacfTask, indent: int = 0) -> str:
         prefix = "  " * indent
         # CC-style markers with colors: red ◼ in_progress, ◻ pending, green ✔ completed
+        # Subject now contains #N prefix, so we just render subject with dim IDs
         if t.status == "completed":
             status_icon = f"{ANSI_GREEN}✔{ANSI_RESET}"
-            # Dim+strikethrough for completed task text
-            line = f"{prefix}{status_icon} {ANSI_DIM}{ANSI_STRIKE}#{t.id} {t.subject}{ANSI_RESET}"
+            # Dim+strikethrough for completed task text (whole line dim)
+            line = f"{prefix}{status_icon} {ANSI_DIM}{ANSI_STRIKE}{t.subject}{ANSI_RESET}"
         elif t.status == "in_progress":
             status_icon = f"{ANSI_RED}◼{ANSI_RESET}"
-            line = f"{prefix}{status_icon} #{t.id} {t.subject}"
+            line = f"{prefix}{status_icon} {_dim_task_ids(t.subject)}"
         else:  # pending
             status_icon = "◻"
-            line = f"{prefix}{status_icon} #{t.id} {t.subject}"
+            line = f"{prefix}{status_icon} {_dim_task_ids(t.subject)}"
 
         # Add plan_ca_ref if present (key feature of enhanced display)
         if t.mtmd and t.mtmd.plan_ca_ref:
@@ -2643,16 +2656,17 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
     def print_tree(task, prefix="", is_last=True):
         connector = "└── " if is_last else "├── "
 
-        # CC-style markers with colors
+        # CC-style markers with colors - subject now contains #N prefix
+        truncated = f"{task.subject[:50]}{'...' if len(task.subject) > 50 else ''}"
         if task.status == "completed":
             status_icon = f"{ANSI_GREEN}✔{ANSI_RESET}"
-            text = f"{ANSI_DIM}{ANSI_STRIKE}#{task.id} {task.subject[:47]}{'...' if len(task.subject) > 50 else ''}{ANSI_RESET}"
+            text = f"{ANSI_DIM}{ANSI_STRIKE}{truncated}{ANSI_RESET}"
         elif task.status == "in_progress":
             status_icon = f"{ANSI_RED}◼{ANSI_RESET}"
-            text = f"#{task.id} {task.subject[:47]}{'...' if len(task.subject) > 50 else ''}"
+            text = _dim_task_ids(truncated)
         else:
             status_icon = "◻"
-            text = f"#{task.id} {task.subject[:47]}{'...' if len(task.subject) > 50 else ''}"
+            text = _dim_task_ids(truncated)
 
         print(f"{prefix}{connector}{status_icon} {text}")
 
@@ -2666,16 +2680,16 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
     print(f"🌳 Task Tree from #{root_id} ({total} tasks)")
     print("=" * 60)
 
-    # Print root specially with CC-style markers
+    # Print root specially with CC-style markers - subject now contains #N prefix
     if root.status == "completed":
         status_icon = f"{ANSI_GREEN}✔{ANSI_RESET}"
-        root_text = f"{ANSI_DIM}{ANSI_STRIKE}#{root.id} {root.subject}{ANSI_RESET}"
+        root_text = f"{ANSI_DIM}{ANSI_STRIKE}{root.subject}{ANSI_RESET}"
     elif root.status == "in_progress":
         status_icon = f"{ANSI_RED}◼{ANSI_RESET}"
-        root_text = f"#{root.id} {root.subject}"
+        root_text = _dim_task_ids(root.subject)
     else:
         status_icon = "◻"
-        root_text = f"#{root.id} {root.subject}"
+        root_text = _dim_task_ids(root.subject)
     print(f"{status_icon} {root_text}")
     if root.mtmd and root.mtmd.plan_ca_ref:
         print(f"   → {root.mtmd.plan_ca_ref}")
