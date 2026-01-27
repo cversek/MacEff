@@ -2966,6 +2966,20 @@ def cmd_task_metadata_set(args: argparse.Namespace) -> int:
     elif value == "null":
         value = None
 
+    # Protection check: modifying existing value requires grant
+    if task.mtmd:
+        old_val = getattr(task.mtmd, field, None)
+        if old_val is not None and old_val != value:
+            # Changing existing value - check for grant
+            from .task.protection import check_grant_in_events, clear_grant
+            has_grant, _ = check_grant_in_events("update", task_id)
+            if not has_grant:
+                print(f"❌ Modifying MTMD field '{field}' requires grant (current value: {old_val!r})")
+                print(f"   To authorize: macf_tools task grant-update {task_id}")
+                return 1
+            # Clear the grant (single-use)
+            clear_grant("update", task_id, "consumed_by_metadata_set")
+
     # Get or create MTMD
     breadcrumb = get_breadcrumb()
     if task.mtmd:
