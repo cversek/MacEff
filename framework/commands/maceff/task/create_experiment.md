@@ -1,7 +1,7 @@
 ---
 description: Create EXPERIMENT task with protocol folder atomically using policy-guided metadata
 argument-hint: "Title"
-allowed-tools: Read, Bash
+allowed-tools: Bash
 ---
 
 Create a new EXPERIMENT task with protocol folder structure in a single atomic operation.
@@ -13,11 +13,19 @@ Create a new EXPERIMENT task with protocol folder structure in a single atomic o
 
 ## Policy Engagement Protocol
 
-**Read task management policy to understand EXPERIMENT structure**:
+**Use CLI tools to discover task management policy requirements**:
 
-1. `{FRAMEWORK_ROOT}/policies/base/development/task_management.md`
-   - Read from beginning to `=== CEP_NAV_BOUNDARY ===`
-   - Navigate to sections on task types, MTMD schema, experiment numbering
+```bash
+# First: Navigate to see policy structure and available sections
+macf_tools policy navigate task_management
+
+# Then: Read full policy or specific sections as needed
+macf_tools policy read task_management
+# OR for targeted reading:
+macf_tools policy read task_management --section N
+```
+
+Navigate to sections covering: task types, MTMD schema, experiment numbering.
 
 ---
 
@@ -68,4 +76,4 @@ Using answers from policy reading:
 
 ---
 
-**Meta-Pattern**: Policy as API - this command references policies without embedding content. As policies evolve, command stays current through dynamic policy reading.
+**Meta-Pattern**: Policy as API - this command references policies via CLI tools without embedding content. As policies evolve, command stays current through dynamic policy reading.

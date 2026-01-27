@@ -1,24 +1,32 @@
 ---
 description: Create phase task under parent MISSION/DETOUR with policy-guided hierarchy notation
 argument-hint: --parent N "Title"
-allowed-tools: Read, Bash
+allowed-tools: Bash
 ---
 
 Create a new phase task as child of parent MISSION or DETOUR.
 
 **Arguments**:
 - `--parent N` (required): Parent task ID
-- `Title` (required): Phase title (will auto-add `[^#N]` prefix)
+- `Title` (required): Phase title (CLI will auto-add hierarchy prefix)
 
 ---
 
 ## Policy Engagement Protocol
 
-**Read task management policy to understand phase hierarchy**:
+**Use CLI tools to discover task management policy requirements**:
 
-1. `{FRAMEWORK_ROOT}/policies/base/development/task_management.md`
-   - Read from beginning to `=== CEP_NAV_BOUNDARY ===`
-   - Navigate to sections on hierarchy notation, dependency system
+```bash
+# First: Navigate to see policy structure and available sections
+macf_tools policy navigate task_management
+
+# Then: Read full policy or specific sections as needed
+macf_tools policy read task_management
+# OR for targeted reading:
+macf_tools policy read task_management --section N
+```
+
+Navigate to sections covering: hierarchy notation, dependency system, phase relationships.
 
 ---
 
@@ -28,20 +36,20 @@ Create a new phase task as child of parent MISSION or DETOUR.
 
 After reading policy, you should be able to answer:
 
-1. **Hierarchy Notation**: What prefix format identifies phase tasks?
-   - How does `[^#N]` notation work?
-   - What does policy specify about parent_id?
+1. **Hierarchy Notation**: What prefix format does the policy specify for phase tasks?
+   - How does policy define parent-child notation?
+   - What does policy specify about parent_id metadata?
 
-2. **MTMD Inheritance**: What metadata does phase inherit from parent?
+2. **MTMD Inheritance**: What metadata does policy say phases inherit from parent?
    - How does repository propagate?
    - How does version propagate?
 
-3. **Dependency System**: How do phases relate to parents in policy?
-   - What's the blocking relationship?
-   - How does completion cascade?
+3. **Dependency System**: How does policy define phase-parent relationships?
+   - What blocking relationships does policy specify?
+   - How does policy describe completion cascade?
 
 4. **CLI Automation**: What does `task create phase` command provide automatically?
-   - What prefix is auto-added?
+   - What prefix does CLI add according to policy?
    - What metadata is auto-populated?
 
 ---
@@ -69,4 +77,4 @@ Using answers from policy reading:
 
 ---
 
-**Meta-Pattern**: Policy as API - this command references policies without embedding content. As policies evolve, command stays current through dynamic policy reading.
+**Meta-Pattern**: Policy as API - this command references policies via CLI tools without embedding content. As policies evolve, command stays current through dynamic policy reading.
