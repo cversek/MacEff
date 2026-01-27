@@ -50,6 +50,12 @@ def _dim_task_ids(text: str) -> str:
     return text
 
 
+def _strip_ansi(text: str) -> str:
+    """Strip all ANSI escape codes from text."""
+    import re
+    return re.sub(r'\x1b\[[0-9;]*m', '', text)
+
+
 # -------- helpers --------
 def _pick_tz():
     """Prefer MACEFF_TZ, then TZ, else system local; fall back to UTC."""
@@ -2484,12 +2490,14 @@ def cmd_task_list(args: argparse.Namespace) -> int:
             # Cardboard brown filled box for archived (▪ with tan/brown color)
             ANSI_BROWN = "\033[38;5;137m"  # Tan/cardboard brown
             status_icon = f"{ANSI_BROWN}▪{ANSI_RESET}"
-            # Dim + strikethrough for archived
-            line = f"{prefix}{status_icon} {ANSI_DIM}{ANSI_STRIKE}{t.subject}{ANSI_RESET}"
+            # Dim + strikethrough for archived (strip embedded ANSI first)
+            clean_subject = _strip_ansi(t.subject)
+            line = f"{prefix}{status_icon} {ANSI_DIM}{ANSI_STRIKE}{clean_subject}{ANSI_RESET}"
         elif t.status == "completed":
             status_icon = f"{ANSI_GREEN}✔{ANSI_RESET}"
-            # Strikethrough only for completed (no dim)
-            line = f"{prefix}{status_icon} {ANSI_STRIKE}{t.subject}{ANSI_RESET}"
+            # Strikethrough only for completed (strip embedded ANSI first)
+            clean_subject = _strip_ansi(t.subject)
+            line = f"{prefix}{status_icon} {ANSI_STRIKE}{clean_subject}{ANSI_RESET}"
         elif t.status == "in_progress":
             status_icon = f"{ANSI_RED}◼{ANSI_RESET}"
             line = f"{prefix}{status_icon} {_dim_task_ids(t.subject)}"
@@ -3257,6 +3265,104 @@ def cmd_task_create_bug(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_task_archive(args: argparse.Namespace) -> int:
+    """Archive a task (and children by default) to disk."""
+    from .task.archive import archive_task
+
+    # Parse task ID
+    task_id_str = args.task_id.lstrip('#')
+    try:
+        task_id = int(task_id_str)
+    except ValueError:
+        print(f"❌ Invalid task ID: {args.task_id}")
+        return 1
+
+    cascade = not args.no_cascade
+
+    result = archive_task(task_id, cascade=cascade)
+
+    if not result.success:
+        print(f"❌ Archive failed: {result.error}")
+        return 1
+
+    if args.json_output:
+        import json
+        output = {
+            "success": True,
+            "task_id": result.task_id,
+            "archive_path": result.archive_path,
+            "children_archived": result.children_archived,
+        }
+        print(json.dumps(output, indent=2))
+    else:
+        print(f"✅ Archived task #{result.task_id}")
+        print(f"   📦 Archive: {result.archive_path}")
+        if result.children_archived:
+            print(f"   📦 Children archived: {len(result.children_archived)} tasks")
+            for child_id in result.children_archived[:5]:
+                print(f"      - #{child_id}")
+            if len(result.children_archived) > 5:
+                print(f"      ... and {len(result.children_archived) - 5} more")
+
+    return 0
+
+
+def cmd_task_restore(args: argparse.Namespace) -> int:
+    """Restore a task from archive."""
+    from .task.archive import restore_task
+
+    result = restore_task(args.archive_path_or_id)
+
+    if not result.success:
+        print(f"❌ Restore failed: {result.error}")
+        return 1
+
+    if args.json_output:
+        import json
+        output = {
+            "success": True,
+            "old_id": result.old_id,
+            "new_id": result.new_id,
+        }
+        print(json.dumps(output, indent=2))
+    else:
+        print(f"✅ Restored task")
+        print(f"   📦 Original ID: #{result.old_id}")
+        print(f"   🆕 New ID: #{result.new_id}")
+        print()
+        print(f"View with: macf_tools task get #{result.new_id}")
+
+    return 0
+
+
+def cmd_task_archived_list(args: argparse.Namespace) -> int:
+    """List archived tasks."""
+    from .task.archive import list_archived_tasks
+
+    archives = list_archived_tasks()
+
+    if not archives:
+        print("No archived tasks found.")
+        return 0
+
+    if args.json_output:
+        import json
+        print(json.dumps(archives, indent=2))
+    else:
+        print(f"📦 Archived Tasks ({len(archives)} total)")
+        print("-" * 60)
+        for arch in archives:
+            archived_at = arch.get("archived_at", "unknown")
+            if archived_at and archived_at != "unknown":
+                # Format datetime
+                archived_at = archived_at[:19].replace("T", " ")
+            print(f"#{arch['id']:>4} | {archived_at} | {arch['subject'][:40]}")
+        print()
+        print("Restore with: macf_tools task restore <id_or_path>")
+
+    return 0
+
+
 def cmd_task_metadata_validate(args: argparse.Namespace) -> int:
     """Validate task MTMD against schema requirements."""
     from .task import TaskReader
@@ -3858,6 +3964,32 @@ def _build_parser() -> argparse.ArgumentParser:
     task_create_bug_parser.add_argument("--json", dest="json", action="store_true",
                                         help="output as JSON")
     task_create_bug_parser.set_defaults(func=cmd_task_create_bug)
+
+    # task archive
+    task_archive_parser = task_sub.add_parser("archive", help="archive task to disk")
+    task_archive_parser.add_argument("task_id", help="task ID to archive (e.g., #67 or 67)")
+    task_archive_parser.add_argument("--no-cascade", dest="no_cascade", action="store_true",
+                                     help="archive only this task, not children (default: cascade)")
+    task_archive_parser.add_argument("--json", dest="json_output", action="store_true",
+                                     help="output as JSON")
+    task_archive_parser.set_defaults(func=cmd_task_archive)
+
+    # task restore
+    task_restore_parser = task_sub.add_parser("restore", help="restore task from archive")
+    task_restore_parser.add_argument("archive_path_or_id", help="archive file path or original task ID")
+    task_restore_parser.add_argument("--json", dest="json_output", action="store_true",
+                                     help="output as JSON")
+    task_restore_parser.set_defaults(func=cmd_task_restore)
+
+    # task archived (subcommand group)
+    task_archived_parser = task_sub.add_parser("archived", help="archived task operations")
+    task_archived_sub = task_archived_parser.add_subparsers(dest="archived_cmd")
+
+    # task archived list
+    task_archived_list_parser = task_archived_sub.add_parser("list", help="list archived tasks")
+    task_archived_list_parser.add_argument("--json", dest="json_output", action="store_true",
+                                           help="output as JSON")
+    task_archived_list_parser.set_defaults(func=cmd_task_archived_list)
 
     # Search service commands
     search_service_parser = sub.add_parser("search-service", help="search service daemon management")
