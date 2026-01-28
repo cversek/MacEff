@@ -74,7 +74,11 @@ class MacfTaskMetaData:
     experiment_ca_ref: Optional[str] = None
 
     # Optional - hierarchy
-    parent_id: Optional[int] = None
+    parent_id: Optional[str] = None
+
+    # Optional - BUG task fix tracking (XOR: exactly one required for BUG tasks)
+    fix_plan: Optional[str] = None      # Inline fix description (simple bugs)
+    plan_ca_ref: Optional[str] = None   # Path to BUG_FIX roadmap CA (complex bugs)
 
     # Optional - version association
     repo: Optional[str] = None
@@ -143,6 +147,7 @@ class MacfTaskMetaData:
             created_by=data.get("created_by"),
             task_type=data.get("task_type"),
             plan_ca_ref=data.get("plan_ca_ref"),
+            fix_plan=data.get("fix_plan"),
             experiment_ca_ref=data.get("experiment_ca_ref"),
             parent_id=data.get("parent_id"),
             repo=data.get("repo"),
@@ -230,6 +235,8 @@ class MacfTaskMetaData:
             data["task_type"] = self.task_type
         if self.plan_ca_ref:
             data["plan_ca_ref"] = self.plan_ca_ref
+        if self.fix_plan:
+            data["fix_plan"] = self.fix_plan
         if self.experiment_ca_ref:
             data["experiment_ca_ref"] = self.experiment_ca_ref
         if self.parent_id is not None:
@@ -264,20 +271,20 @@ class MacfTask:
     Combines CC native fields with parsed MacfTaskMetaData.
     """
     # CC Native fields
-    id: Union[int, str]  # String IDs like "000" for system tasks
+    id: str  # Pure string IDs (supports "000" for sentinel, "1" for normal tasks)
     subject: str
     description: str
     status: str  # pending, in_progress, completed
 
     # CC Native dependency tracking
-    blocks: List[int] = field(default_factory=list)
-    blocked_by: List[int] = field(default_factory=list)
+    blocks: List[str] = field(default_factory=list)
+    blocked_by: List[str] = field(default_factory=list)
 
     # Parsed MTMD (None if no MTMD block in description)
     mtmd: Optional[MacfTaskMetaData] = None
 
     # Computed hierarchy fields (from subject line parsing)
-    parent_ref: Optional[int] = None  # Extracted from [^#N] prefix
+    parent_ref: Optional[str] = None  # Extracted from [^#N] prefix
     task_type: Optional[str] = None   # MISSION, EXPERIMENT, DETOUR, PHASE, or None
 
     # Source tracking
@@ -291,12 +298,8 @@ class MacfTask:
 
         Parses MTMD from description and extracts hierarchy from subject.
         """
-        # Parse task_id - preserve string IDs with leading zeros (like "000")
-        raw_id = str(data.get("id", "0"))
-        if raw_id.startswith('0') and len(raw_id) > 1:
-            task_id = raw_id  # Preserve as string (e.g., "000")
-        else:
-            task_id = int(raw_id)  # Convert to int for normal IDs
+        # Parse task_id - always keep as string (supports "000", "1", etc.)
+        task_id = str(data.get("id", "0"))
         subject = data.get("subject", "")
         description = data.get("description", "")
         status = data.get("status", "pending")
@@ -312,7 +315,7 @@ class MacfTask:
         parent_ref = None
         parent_match = re.search(r'\[\^#(\d+)\]', subject)
         if parent_match:
-            parent_ref = int(parent_match.group(1))
+            parent_ref = parent_match.group(1)  # Keep as string
 
         # Detect task type from emoji prefix
         task_type = None

@@ -69,10 +69,10 @@ class TaskReader:
 
         return sorted(
             self.session_path.glob("*.json"),
-            key=lambda p: int(p.stem) if p.stem.isdigit() else 0
+            key=lambda p: p.stem.zfill(10)  # String-safe sorting with zero-padding
         )
 
-    def read_task(self, task_id: Union[int, str]) -> Optional[MacfTask]:
+    def read_task(self, task_id: str) -> Optional[MacfTask]:
         """Read a single task by ID (supports int or string IDs like '000')."""
         if not self.session_path:
             return None
@@ -143,7 +143,7 @@ def get_all_session_tasks() -> Dict[str, List[MacfTask]]:
     return TaskReader.read_all_sessions()
 
 
-def update_task_file(task_id: int, updates: Dict[str, Any], session_uuid: Optional[str] = None) -> bool:
+def update_task_file(task_id: str, updates: Dict[str, Any], session_uuid: Optional[str] = None) -> bool:
     """
     Update a task JSON file with new field values.
 

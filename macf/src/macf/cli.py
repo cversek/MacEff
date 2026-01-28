@@ -2444,8 +2444,8 @@ def cmd_task_list(args: argparse.Namespace) -> int:
         print("No tasks found in current session.")
         return 0
 
-    # Sort tasks numerically by ID first
-    tasks = sorted(tasks, key=lambda t: t.id)
+    # Sort tasks by ID (string-safe with zero-padding)
+    tasks = sorted(tasks, key=lambda t: str(t.id).zfill(10))
 
     # Apply archive visibility filters (before other filters)
     # By default, hide archived tasks unless --all or --archived is specified
@@ -2473,7 +2473,7 @@ def cmd_task_list(args: argparse.Namespace) -> int:
     if args.json_output:
         import json
         output = []
-        for t in sorted(tasks, key=lambda t: t.id):
+        for t in sorted(tasks, key=lambda t: str(t.id).zfill(10)):
             item = {
                 "id": t.id,
                 "subject": t.subject,

@@ -26,10 +26,10 @@ from .models import MacfTask
 class ArchiveResult:
     """Result of an archive operation."""
     success: bool
-    task_id: int
+    task_id: str
     archive_path: Optional[str] = None
     error: Optional[str] = None
-    children_archived: List[int] = None
+    children_archived: List[str] = None
 
     def __post_init__(self):
         if self.children_archived is None:
@@ -40,8 +40,8 @@ class ArchiveResult:
 class RestoreResult:
     """Result of a restore operation."""
     success: bool
-    old_id: int
-    new_id: Optional[int] = None
+    old_id: str
+    new_id: Optional[str] = None
     error: Optional[str] = None
 
 
@@ -87,7 +87,7 @@ def get_archive_filename(task: MacfTask) -> str:
 
 
 def archive_task(
-    task_id: int,
+    task_id: str,
     cascade: bool = True,
     session_uuid: Optional[str] = None,
 ) -> ArchiveResult:
@@ -173,7 +173,7 @@ def archive_task(
     )
 
 
-def _get_all_descendants(parent_id: int, all_tasks: List[MacfTask]) -> List[MacfTask]:
+def _get_all_descendants(parent_id: str, all_tasks: List[MacfTask]) -> List[MacfTask]:
     """Get all descendant tasks of a parent (recursive)."""
     descendants = []
     direct_children = [t for t in all_tasks if t.parent_id == parent_id]
@@ -210,7 +210,7 @@ def restore_task(
     else:
         # Try to find by task ID in archive filenames
         try:
-            search_id = int(archive_path_or_id.lstrip('#'))
+            search_id = archive_path_or_id.lstrip('#')
             pattern = f"*_task_{search_id}_*.json"
             matches = list(archive_dir.glob(pattern))
             if matches:
@@ -223,7 +223,7 @@ def restore_task(
     if not archive_path or not archive_path.exists():
         return RestoreResult(
             success=False,
-            old_id=0,
+            old_id="0",
             error=f"Archive not found: {archive_path_or_id}"
         )
 
@@ -231,7 +231,7 @@ def restore_task(
     with open(archive_path, "r") as f:
         task_data = json.load(f)
 
-    old_id = task_data.get("id", 0)
+    old_id = str(task_data.get("id", "0"))
 
     # Remove archive metadata before restoration
     task_data.pop("_archive_metadata", None)
@@ -246,8 +246,8 @@ def restore_task(
         )
 
     # Find next available ID
-    existing_ids = [int(p.stem) for p in reader.list_task_files() if p.stem.isdigit()]
-    new_id = max(existing_ids, default=0) + 1
+    existing_ids = [p.stem for p in reader.list_task_files() if p.stem.isdigit()]
+    new_id = str(max([int(id_str) for id_str in existing_ids], default=0) + 1)
 
     # Update task data with new ID
     task_data["id"] = str(new_id)  # CC uses string IDs
