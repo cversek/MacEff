@@ -61,7 +61,10 @@ Task management policy governs the use of Claude Code native Task* tools (TaskCr
 
 **6 Completion Protocol**
 - How do I mark tasks complete?
-- What breadcrumb discipline applies?
+- What is the `task complete` CLI command?
+- What is the completion_report format?
+- What elements are required in completion reports?
+- How do I handle partial work?
 
 **7 Archive Protocol**
 - How do I archive completed tasks?
@@ -341,14 +344,51 @@ The agent ALWAYS has visibility into CA refs via enhanced `task list` display.
 
 ## 6 Completion Protocol
 
-### 6.1 Marking Complete
+### 6.1 CLI Command (Recommended)
+
+Use the `task complete` command for atomic completion with mandatory documentation:
+
+```bash
+macf_tools task complete #67 --report "Implemented feature X. No difficulties. Committed: abc1234"
+```
+
+**What It Does**:
+1. Generates `completion_breadcrumb` automatically
+2. Sets `completion_report` from mandatory `--report` flag
+3. Updates task status to `completed`
+4. Appends update entry to MTMD audit trail
+
+**Mandatory Report Requirement**: The `--report` flag is required. This friction ensures every completion is documented.
+
+### 6.2 Completion Report Format
+
+The `completion_report` MTMD field captures work summary for forensic recovery. Keep it brief but informative:
+
+**Required Elements**:
+- **Work done**: What was accomplished
+- **Difficulties**: Any blockers or issues (or "No difficulties")
+- **Future work**: Identified follow-up (or "None identified")
+- **Git status**: Commit hash or "pending" (e.g., "Committed: abc1234")
+
+**Examples**:
+```
+"Implemented task complete command with mandatory --report. No difficulties. Committed: 97a11d3"
+
+"Fixed CEP-Content alignment in roadmaps_following.md. Difficulty: PolicyWriter missed cross-layer validation. Future: Consider CEP alignment check in PolicyWriter definition. Committed: d06b338"
+
+"Research phase complete. Difficulties: sqlite-vec docs sparse. Future: Phase 2 implementation. Committed: pending"
+```
+
+### 6.3 Manual Completion (Alternative)
+
+If CLI unavailable, complete manually:
 
 1. **Verify** work is actually complete
 2. **Generate breadcrumb**: `macf_tools breadcrumb`
-3. **Update MTMD** with `completion_breadcrumb`
+3. **Update MTMD** with `completion_breadcrumb` and `completion_report`
 4. **Update status** to `completed`
 
-### 6.2 Partial Work
+### 6.4 Partial Work
 
 Keep status `in_progress`, document blocker, create subtask for remaining work.
 
@@ -536,6 +576,7 @@ Atomic task creation with smart MTMD defaults:
 | `task create detour "Title"` | Create DETOUR atomically | Folder + roadmap.md + task |
 | `task create phase --parent N "Title"` | Create phase under parent | Task with parent_id |
 | `task create bug --parent N "Title"` | Create bug under parent | Task with 🐛 marker |
+| `task create adhoc "Title"` | Create standalone AD_HOC task | Task with 🔧 marker |
 
 **Smart Defaults** (zero LLM token cost):
 - `creation_breadcrumb` - Auto-generated
@@ -559,6 +600,9 @@ macf_tools task create experiment "Hook Performance Testing"
 
 # Create phase under MISSION
 macf_tools task create phase --parent 67 "Phase 3: Task Creation"
+
+# Create standalone AD_HOC task for urgent unplanned work
+macf_tools task create adhoc "Fix urgent CEP alignment issue"
 
 # JSON output for automation
 macf_tools task create mission "Test" --json | jq .task_id

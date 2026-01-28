@@ -3279,6 +3279,41 @@ def cmd_task_create_bug(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_task_create_adhoc(args: argparse.Namespace) -> int:
+    """Create standalone AD_HOC task for urgent unplanned work."""
+    from .task.create import create_adhoc
+
+    try:
+        result = create_adhoc(title=args.title)
+
+        if args.json:
+            # JSON output for automation
+            output = {
+                "task_id": result.task_id,
+                "subject": result.subject,
+                "mtmd": {
+                    "version": result.mtmd.version,
+                    "creation_breadcrumb": result.mtmd.creation_breadcrumb,
+                    "created_cycle": result.mtmd.created_cycle,
+                    "created_by": result.mtmd.created_by
+                }
+            }
+            print(json.dumps(output, indent=2))
+        else:
+            # Human-friendly output
+            print(f"✅ Created AD_HOC task #{result.task_id}")
+            print(f"🏷️  Subject: {result.subject}")
+            print()
+            print("Next steps:")
+            print(f"1. Run `macf_tools task get #{result.task_id}` to view details")
+            print(f"2. Mark in_progress when starting work")
+
+        return 0
+    except Exception as e:
+        print(f"❌ Failed to create AD_HOC task: {e}")
+        return 1
+
+
 def cmd_task_archive(args: argparse.Namespace) -> int:
     """Archive a task (and children by default) to disk."""
     from .task.archive import archive_task
@@ -4114,6 +4149,13 @@ def _build_parser() -> argparse.ArgumentParser:
     task_create_bug_parser.add_argument("--json", dest="json", action="store_true",
                                         help="output as JSON")
     task_create_bug_parser.set_defaults(func=cmd_task_create_bug)
+
+    # task create adhoc
+    task_create_adhoc_parser = task_create_sub.add_parser("adhoc", help="create standalone AD_HOC task")
+    task_create_adhoc_parser.add_argument("title", help="task title")
+    task_create_adhoc_parser.add_argument("--json", dest="json", action="store_true",
+                                          help="output as JSON")
+    task_create_adhoc_parser.set_defaults(func=cmd_task_create_adhoc)
 
     # task archive
     task_archive_parser = task_sub.add_parser("archive", help="archive task to disk")
