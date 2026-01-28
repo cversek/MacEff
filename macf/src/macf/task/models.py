@@ -5,7 +5,7 @@ MTMD is embedded in task descriptions within <macf_task_metadata> tags.
 """
 
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 import re
 import yaml
 
@@ -264,7 +264,7 @@ class MacfTask:
     Combines CC native fields with parsed MacfTaskMetaData.
     """
     # CC Native fields
-    id: int
+    id: Union[int, str]  # String IDs like "000" for system tasks
     subject: str
     description: str
     status: str  # pending, in_progress, completed
@@ -291,8 +291,12 @@ class MacfTask:
 
         Parses MTMD from description and extracts hierarchy from subject.
         """
-        # Ensure task_id is always an integer
-        task_id = int(data.get("id", 0))
+        # Parse task_id - preserve string IDs with leading zeros (like "000")
+        raw_id = str(data.get("id", "0"))
+        if raw_id.startswith('0') and len(raw_id) > 1:
+            task_id = raw_id  # Preserve as string (e.g., "000")
+        else:
+            task_id = int(raw_id)  # Convert to int for normal IDs
         subject = data.get("subject", "")
         description = data.get("description", "")
         status = data.get("status", "pending")
