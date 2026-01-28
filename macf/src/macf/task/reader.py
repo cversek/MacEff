@@ -7,7 +7,7 @@ Tasks are stored at: ~/.claude/tasks/{session_uuid}/*.json
 import json
 import os
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 
 from .models import MacfTask
 
@@ -72,8 +72,8 @@ class TaskReader:
             key=lambda p: int(p.stem) if p.stem.isdigit() else 0
         )
 
-    def read_task(self, task_id: int) -> Optional[MacfTask]:
-        """Read a single task by ID."""
+    def read_task(self, task_id: Union[int, str]) -> Optional[MacfTask]:
+        """Read a single task by ID (supports int or string IDs like '000')."""
         if not self.session_path:
             return None
 
