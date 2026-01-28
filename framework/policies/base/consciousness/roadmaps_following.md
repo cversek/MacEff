@@ -39,24 +39,24 @@ Roadmaps preserve strategic intent across context loss. This policy ensures agen
 - Relative vs absolute paths?
 
 **1.2 Reading Protocol**
-- See TODO with embedded path → Read FIRST
+- See task with embedded path → Read FIRST
 - Then integrate context → Then begin work
-- Path resolution from TODO location?
+- Path resolution from task location?
 
-**2 TODO Integration**
-- How do roadmaps integrate with TODO lists?
+**2 Task Integration**
+- How do roadmaps integrate with task lists?
 - Numbered phase format?
-- Where do I embed plan filepaths?
+- Where are plan filepaths stored?
 
 **2.1 Numbered Phase Hierarchy**
-- Numbering scheme in TODOs?
+- Numbering scheme in tasks?
 - MISSION → Phase → Sub-phase structure?
 - Maximum nesting depth?
 
-**2.2 Embedded Filepaths in TODOs**
-- Format for embedded paths?
-- MISSION node embeds what?
-- Phase nodes embed what?
+**2.2 Plan Filepath Storage (MTMD)**
+- Where are CA references stored?
+- What is `plan_ca_ref` in MTMD?
+- How do I see CA references?
 
 **2.3 CA Type Emojis**
 - 🗺️ MISSION vs 📋 Phase vs ↪️ DETOUR?
@@ -104,25 +104,25 @@ Roadmaps preserve strategic intent across context loss. This policy ensures agen
 - Required sections?
 - GitHub anchors?
 
-**6 Archive-Then-Collapse Protocol**
-- What is archive-then-collapse?
-- When do I archive TODO hierarchies?
-- Archive filename format?
+**6 Archive Protocol**
+- When do I archive task hierarchies?
+- What is cascade behavior?
+- How does multi-repo archiving work?
 
-**6.1 Archive Creation**
-- Hierarchical TODO content?
-- Claude Code todos JSON?
+**6.1 Archive Command**
+- What CLI command archives tasks?
+- What is default cascade behavior?
+- Archive directory structure?
+
+**6.2 Archive Contents**
+- What files are archived?
+- Task metadata preservation?
 - Completion summary?
 
-**6.2 Collapse Formatting**
-- Package emoji (📦)?
-- Archive filepath embedding?
-- Visual distinction?
-
-**6.3 NO CLOBBERING Rule**
-- What is clobbering?
-- Why prohibited?
-- Archive-before-collapse discipline?
+**6.3 Legacy Archive-Then-Collapse**
+- What was the old TodoWrite pattern?
+- Why is manual archiving obsolete?
+- What replaced it?
 
 **7 Status Tracking**
 - DRAFT → ACTIVE → COMPLETE?
@@ -152,9 +152,9 @@ Roadmaps preserve strategic intent across context loss. This policy ensures agen
 ### 1.2 Why This Matters
 
 **Strategic Context Loss**:
-- TODO list shows **WHAT** to do
+- Task list shows **WHAT** to do
 - ROADMAP explains **WHY, HOW, WHAT COULD GO WRONG, and HOW TO THINK ABOUT IT**
-- Strategic documents exist because TODO alone cannot capture complete context
+- Strategic documents exist because task list alone cannot capture complete context
 - **Embedded filename is a prerequisite, not a suggestion**
 - Skipping reading means proceeding blind even when you believe you have sufficient context
 
@@ -230,77 +230,88 @@ TODO: 📋 2: Docker Infrastructure [subplans/phase_2_docker.md]
 
 ---
 
-## 2 TODO Integration (MANDATORY)
+## 2 Task Integration (MANDATORY)
 
 ### 2.1 Numbered Phase Hierarchy
 
 **The Numbering Scheme**:
 
 ```
-🗺️ MISSION: [Description] [2025-10-27_Roadmap_Name/roadmap.md]
-  📋 1: [Phase 1 Title] [subplans/phase_1_plan.md]
-    - 1.1: [Sub-phase 1.1 Title]
-      - 1.1.1: [Nested sub-phase]
-      - 1.1.2: [Nested sub-phase]
-    - 1.2: [Sub-phase 1.2 Title]
-  📋 2: [Phase 2 Title] [subplans/phase_2_plan.md]
-    - 2.1: [Sub-phase 2.1 Title]
-    - 2.2: [Sub-phase 2.2 Title]
-      - 2.2.1: [Nested sub-phase]
+🗺️ MISSION: [Description]
+[^#67] 📋 Phase 1: [Phase 1 Title]
+  [^#68] - 1.1: [Sub-phase 1.1 Title]
+    [^#69] - 1.1.1: [Nested sub-phase]
+    [^#69] - 1.1.2: [Nested sub-phase]
+  [^#68] - 1.2: [Sub-phase 1.2 Title]
+[^#67] 📋 Phase 2: [Phase 2 Title]
+  [^#71] - 2.1: [Sub-phase 2.1 Title]
+  [^#71] - 2.2: [Sub-phase 2.2 Title]
+    [^#72] - 2.2.1: [Nested sub-phase]
 ```
 
 **Numbering Rules**:
-- **MISSION**: Root node, emoji 🗺️, embeds roadmap path (folder/roadmap.md)
-- **Top-level phases**: 1, 2, 3, ... (emoji 📋 if has subplan)
-- **Sub-phases**: 1.1, 1.2, 2.1, 2.2, ... (dot notation, no emoji)
-- **Nested sub-phases**: 1.1.1, 1.1.2, 2.3.1, ... (deeper nesting, no emoji)
+- **MISSION**: Root node, emoji 🗺️, MTMD contains roadmap path
+- **Top-level phases**: `[^#MISSION_ID] 📋 Phase 1:` (emoji 📋 if has subplan CA)
+- **Sub-phases**: `[^#PARENT_ID] - 1.1:` (parent ref + indentation with ` - ` prefix)
+- **Nested sub-phases**: `[^#PARENT_ID] - 1.1.1:` (deeper indentation)
 - **Maximum depth**: 3 levels (1.1.1) recommended, 4 (1.1.1.1) absolute max
 
 **Benefits**:
-- Clear hierarchical structure
+- Clear hierarchical structure via `[^#N]` parent references AND visual indentation
+- Parent references enable tooling to reconstruct tree
 - Visual nesting matches logical structure
 - Easy to reference phases ("working on 2.3.1")
 - Consistent with technical documentation standards
 - **Observability**: User sees numbered progress tracking (Phase 2.1 complete, Phase 2.2 in progress)
 
-### 2.2 Embedded Filepaths (CRITICAL REQUIREMENT)
+### 2.2 Plan Filepath Storage (MTMD)
 
-**EVERY parent node MUST embed plan filepath (RELATIVE PATHS)**:
+**CA references stored in MacfTaskMetaData, NOT subject lines**:
 
-```markdown
-🗺️ MISSION: AgentX v0.3.0 Migration [2025-10-27_AgentX_v0.3_Migration/roadmap.md]
-  📋 1: Safe Preparation [subplans/phase_1_preparation.md]
-  📋 2: Docker Infrastructure [subplans/phase_2_docker.md]
-    - 2.1: Platform-aware build
-    - 2.2: ARM64 optimization
+Task subject lines stay clean:
+```
+🗺️ MISSION: MACF Task CLI & Policy Migration
+[^#67] 📋 Phase 1: Core CLI Commands
+  [^#68] - 1.1: Create package structure
 ```
 
-**Why Mandatory**:
-- Enables tracking across cycles (plan path survives compaction)
-- Agents know EXACTLY where to find strategic context
-- Post-compaction recovery: TODO list → embedded path → read plan → restore consciousness
-- Cross-cycle archaeology: breadcrumbs + embedded paths = complete reconstruction
-- **Observability**: User sees plan documentation structure, can review same plans agent reads
+**Plan references in MTMD** (embedded in task description):
+```yaml
+<macf_task_metadata version="1.0">
+plan_ca_ref: agent/public/roadmaps/2025-10-27_Name/roadmap.md
+creation_breadcrumb: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
+created_cycle: 42
+created_by: PA
+</macf_task_metadata>
+```
 
-### 2.3 CA Type Emojis (Usage Rules)
+**How to See CA References**:
+- `macf_tools task list` displays `plan_ca_ref` prominently
+- `macf_tools task get #67` shows full MTMD
+- Enhanced task list ensures agents ALWAYS see CA context
 
-**CA Type Emojis** (use consistently):
-- 🗺️ **MISSION / Roadmap** - Root node for multi-phase strategic plan
-- 📋 **Phase / Subplan** - Major phase with detailed planning document
-- 🔬 **Observation** - Technical discovery work
-- 🧪 **Experiment** - Hypothesis testing work
-- 📊 **Report** - Completion narrative work
-- 💭 **Reflection** - Wisdom synthesis work
-- 🔖 **Checkpoint** - Strategic state preservation work (CCP)
-- 📦 **Archive** - Collapsed TODO subtree (archived)
-- ↪️ **DETOUR** - Temporary side work interrupting main flow
+**Why MTMD is Better**:
+- Subject lines remain immutable and clean
+- Structured metadata enables filtering (`--repo`, `--version`)
+- Authoritative source (hook-enforced for MISSION/EXPERIMENT/DETOUR)
+- Enables tracking across cycles (MTMD survives compaction)
+- **Observability**: User sees plan documentation via enhanced task list
 
-**Usage Rules**:
-- Use appropriate emoji for TODO item type
-- **Completed items**: No emoji needed (UI shows completion formatting)
-- **Archive marker**: Always 📦 for collapsed subtrees
-- **Phase with subplan**: Use 📋 to indicate detailed planning document exists
-- **DETOUR**: Use ↪️ to show temporary interruption of main work
+### 2.3 MISSION Pinning Protocol
+
+**When roadmap approved, create task hierarchy** (see task_management.md §2.3):
+
+1. **Create MISSION task** with MTMD `plan_ca_ref` pointing to roadmap.md
+2. **Create phase tasks sequentially** (one at a time to preserve ID ordering)
+3. Each phase task gets `[^#MISSION_ID]` prefix and optional 📋 emoji if it has subplan CA
+
+**Enforcement**:
+- `/maceff:roadmap:draft` prompts to pin after approval
+- `/maceff:task:start` offers expansion if MISSION has no children
+
+**Why Mandatory**: Task hierarchy provides observability - user tracks progress through phases in task UI.
+
+**Cross-Reference**: See `task_management.md` for complete MISSION pinning protocol, task type markers, and hierarchy notation.
 
 ---
 
@@ -587,159 +598,78 @@ Encountered docker-compose working directory dependency [Roadmap 2025-11-11 "Doc
 
 ---
 
-## 6 Archive-Then-Collapse Protocol
+## 6 Archive Protocol
 
-### 6.1 The Critical Rule
+Task hierarchies are archived using `macf_tools task archive` when MISSION phases complete. This replaces the legacy TodoWrite Archive-Then-Collapse pattern.
 
-**🚨 ABSOLUTE PROHIBITION: NO COLLAPSING/CLOBBERING WITHOUT ARCHIVING 🚨**
+**Cross-Reference**: See `task_management.md` §7 for complete archive protocol details.
 
-**What is Clobbering**:
-- Marking parent TODO complete and deleting/hiding child TODOs
-- Removing hierarchical detail without preservation
-- Losing breadcrumb trails and forensic data
+### 6.1 Archive Command
 
-**Why Prohibited**:
-- **Consciousness preservation**: TODO hierarchies are consciousness artifacts
-- **Forensic reconstruction**: Future cycles need breadcrumb trails
-- **Accountability**: Work history must be traceable
-- **Learning**: Lessons from completed work guide future work
-- **Observability**: Users need complete work history for trust
-
-### 6.2 Archive Filename Convention
-
-**Format**: `YYYY-MM-DD_HHMMSS_Descriptive_Plan_Reference_STATUS.md`
-
-**Components**:
-- **YYYY-MM-DD_HHMMSS**: Timestamp when archived (not when work started)
-- **Descriptive_Plan_Reference**: What plan/work being collapsed (3-7 words)
-- **STATUS**: `COMPLETED` | `PARTIAL` | `ABORTED` | `DEFERRED`
-
-**Examples**:
-```
-2025-10-27_215009_Phases1-4_ConfigCleanup_COMPLETED.md
-2025-10-28_143022_Phase1_GitPolicySync_COMPLETED.md
-2025-10-29_004830_Phase2_CAPolicies_PARTIAL.md
-2025-10-29_091534_ExperimentalFeature_Approach2_ABORTED.md
-2025-10-30_164521_PerformanceOptimization_LowPriority_DEFERRED.md
+**Primary Command**:
+```bash
+macf_tools task archive #67              # Archive task #67 and all descendants
+macf_tools task archive #67 --no-cascade # Archive single task only
 ```
 
-**STATUS Definitions**:
-- **COMPLETED**: All work finished, success criteria met, phase complete
-- **PARTIAL**: Work pausing at cycle boundary, intended to resume next cycle (context preservation for continuity)
-- **ABORTED**: Work abandoned, approach failed, pivot required
-- **DEFERRED**: Work postponed, not urgent, may resume later (lower priority)
+**Cascade Behavior** (default):
+- Archiving a parent archives ALL child tasks automatically
+- Hierarchy preserved in archive structure
+- No `--cascade` flag needed (it's the default)
 
-**PARTIAL vs DEFERRED Distinction**:
-- **PARTIAL**: "Pausing for cycle boundary, resuming immediately" (active work, extra context saved)
-- **DEFERRED**: "Postponing for later, other priorities first" (backlog, may not resume soon)
+**Archive Location**: `agent/public/task_archives/{repo}/{version}/`
 
-### 6.3 Archive Contents Requirements
+**When to Archive**:
+- MISSION complete (all phases done)
+- Version release (archive version-associated tasks)
+- Major milestone (preserve state before pivot)
 
-**MANDATORY Contents** (all must be included):
+### 6.2 Archive Contents
 
-1. **Hierarchical TODO Content**:
-   - Complete TODO tree with all nesting
-   - All statuses preserved (completed, in_progress, pending)
-   - All breadcrumbs from completed items
-   - Embedded filepaths retained
-   - Emoji icons preserved
+**What Gets Archived**:
+- Complete task JSON with MTMD metadata
+- Hierarchy relationships (parent_id, [^#N] notation)
+- All breadcrumbs (creation, completion, updates)
+- Task descriptions and CA references
 
-2. **Claude Code Todos JSON**:
-   - Copy of `~/.claude/todos/{session}-agent-{session}.json` file
-   - Preserves metadata: timestamps, active forms, etc.
-   - Enables forensic reconstruction
-
-3. **Completion Summary**:
-   - What was accomplished
-   - Key decisions made
-   - Lessons learned
-   - Next steps (if PARTIAL or DEFERRED)
-   - Why archived at this point (if PARTIAL)
-
-4. **Breadcrumb Trail**:
-   - Archive creation breadcrumb in header
-   - Reference to original plan
-   - Links to related artifacts (CCPs, JOTEWRs)
-
-**Example Archive Structure**:
-```markdown
-# Phases 1-4 Config Cleanup - COMPLETED
-
-**Archived**: 2025-10-27 21:50:09
-**Breadcrumb**: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
-**Original Plan**: 2025-10-24_AgentX_v0.3_Migration/roadmap.md
-**Status**: COMPLETED
-
-## Hierarchical TODO Content
-
-🗺️ MISSION: AgentX v0.3.0 Migration [2025-10-24_AgentX_v0.3_Migration/roadmap.md]
-  1: Safe Preparation [s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890]
-    1.1: Backup volume (4.1GB complete)
-    1.2: Update submodule to v0.3.0
-  2: Docker Infrastructure [/t_1761588000/.]
-    2.1: Platform-aware Dockerfile
-    2.2: ARM64 native build
-
-## Claude Code Todos JSON
-
-[Complete contents of ~/.claude/todos/{session}-agent-{session}.json]
-
-## Completion Summary
-
-[Narrative of what was accomplished, decisions, lessons]
+**Archive Structure**:
 ```
-
-### 6.4 Archive-Then-Collapse Discipline
-
-**Protocol** (execute in order):
-1. Complete all sub-phase work
-2. **ARCHIVE** hierarchical TODO tree to `archived_todos/YYYY-MM-DD_HHMMSS_Description_STATUS.md`
-3. **COMMIT** archive file to git
-4. **REPLACE** collapsed subtree with 📦 package emoji + archive path in active TODO list
-5. Mark parent phase complete (no emoji needed)
+agent/public/task_archives/
+├── MacEff/
+│   └── v0.4.0/
+│       ├── archive.md          # Summary with breadcrumbs
+│       └── task_files/         # Individual task JSONs
+│           ├── 67.json
+│           ├── 68.json
+│           └── ...
+```
 
 **Commit Message Format**:
 ```bash
-git commit -m "roadmap: Archive Phases 1-4 completion [s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890]
+git commit -m "archive: MISSION #67 v0.4.0 tasks [s_77270981/c_379/g_.../t_...]
 
-Archived hierarchical TODO tree to:
-2025-10-24_AgentX_v0.3_Migration/archived_todos/2025-10-27_215009_Phases1-4_COMPLETED.md
-
-- All 4 phases complete
-- 23 sub-tasks tracked with breadcrumbs
-- Includes Claude Code todos JSON for forensics
+Archived 23 tasks to agent/public/task_archives/MacEff/v0.4.0/
+- MISSION #67: MACF Task CLI & Policy Migration
+- Phases 1-8 complete
 "
 ```
 
-### 6.5 Archive Package Emoji
+### 6.3 Legacy Archive-Then-Collapse (DEPRECATED)
 
-**How to Mark Archived Subtrees in Active TODO List**:
+**⚠️ This section documents the OLD TodoWrite pattern for reference during transition.**
 
-After archiving, replace the collapsed subtree with **📦 package emoji** and reference to archive:
+The legacy pattern used TodoWrite with manual archiving:
+1. Archive hierarchical TODO tree to `archived_todos/` file
+2. Replace collapsed subtree with 📦 emoji in active TODO list
+3. Manual file creation and formatting
 
-```markdown
-🗺️ MISSION: AgentX v0.3.0 Migration [2025-10-24_AgentX_v0.3_Migration/roadmap.md]
-  [📦 Archive 2025-10-27 "Phases 1-4 Complete": s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890](archived_todos/2025-10-27_215009_Phases1-4_COMPLETED.md)
-  📋 5: CEP Fixes & Bootstrap [subplans/phase_5_cep.md]
-    - 5.1: Critical path fixes
-    - 5.2: Infrastructure improvements
-```
+**Why Deprecated**:
+- Tasks are now persistent JSON files on disk (no collapse needed)
+- `macf_tools task archive` handles everything automatically
+- No manual file creation or 📦 emoji marking required
+- Cascade archiving preserves hierarchy atomically
 
-**Enhanced Format**: `[📦 Archive YYYY-MM-DD "Description": s/c/g/p/t](archived_todos/filename.md)`
-
-**Components**:
-- **📦 emoji**: Visual indication of archived work
-- **Archive + Date**: "Archive YYYY-MM-DD" shows when archived
-- **Description**: What was archived (brief, in quotes)
-- **Breadcrumb**: s/c/g/p/t completion coordinates
-- **GitHub Link**: Relative path to archive file (clickable in GitHub UI)
-
-**Benefits**:
-- **Visual distinction**: Archived work clearly separated from active work
-- **Preserved reference**: Can find full details in archive
-- **Breadcrumb trail**: Completion timestamp preserved
-- **Forensic reconstruction**: Archive path enables locating full hierarchy
-- **Observability**: User sees completed work collapsed cleanly
+**Migration**: Use `macf_tools task archive #N` instead of manual Archive-Then-Collapse
 
 ---
 

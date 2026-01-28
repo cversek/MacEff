@@ -3,8 +3,33 @@
 **Version**: 1.12
 **Tier**: CORE
 **Category**: Development
-**Status**: ACTIVE
-**Updated**: 2025-12-30
+**Status**: DEPRECATED
+**Updated**: 2026-01-27
+**Superseded By**: `development/task_management.md`
+
+---
+
+## ⚠️ DEPRECATION NOTICE
+
+This policy is **DEPRECATED** as of v0.4.0. The Task* tool paradigm (`TaskCreate`, `TaskUpdate`, `TaskGet`, `TaskList`) replaces TodoWrite for work tracking.
+
+**Migration Guide**:
+- TodoWrite → TaskCreate/TaskUpdate
+- TODO list → Task list (`macf_tools task list`)
+- TODO backup → Task archive (`macf_tools task archive`)
+- todo_hygiene.md → **task_management.md**
+
+**Why Deprecated**:
+- Task files are persistent JSON on disk (survive session migration)
+- MTMD (MacfTaskMetaData) provides structured metadata
+- Task* tools have grant system protection
+- Hierarchy support via `[^#N]` notation
+
+**See**: `framework/policies/base/development/task_management.md` for the successor policy.
+
+---
+
+*Original policy content preserved below for reference during transition period.*
 
 ---
 
