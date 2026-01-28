@@ -1007,6 +1007,117 @@ Investigate [problem/opportunity], understand root causes, propose solutions.
 
 ---
 
+## 9 BUG_FIX Roadmaps
+
+### 9.1 When to Create BUG_FIX Roadmaps
+
+BUG_FIX roadmaps document complex bug fixes that required a planning phase.
+
+**Create BUG_FIX roadmap when**:
+- Multi-file changes with collateral impact
+- Fixes requiring architectural decisions
+- Bugs discovered during planning phase exploration (EnterPlanMode)
+- Any fix where you used EnterPlanMode for investigation
+- Root cause analysis reveals systemic issues
+
+**Skip BUG_FIX roadmap for**:
+- Simple single-file fixes (<1hr)
+- Clear scope with obvious solution
+- No architectural decisions required
+- Use `fix_plan` field in BUG task instead
+
+### 9.2 Naming Convention
+
+**Folder**: `YYYY-MM-DD_BUG_FIX_{task_id}_{Description}/`
+
+**Examples**:
+- `2026-01-28_BUG_FIX_8_Task_ID_Type_Refactor/`
+- `2026-01-15_BUG_FIX_42_Session_Migration_Recovery/`
+- `2025-12-20_BUG_FIX_13_Hook_State_Corruption/`
+
+**Components**:
+- `YYYY-MM-DD`: Date roadmap created
+- `BUG_FIX`: Type marker (distinguishes from MISSION/DETOUR)
+- `{task_id}`: Task ID from task system (enables cross-reference)
+- `{Description}`: Short description (3-5 words, underscores)
+
+### 9.3 Location
+
+Same as other roadmaps:
+- **PA**: `agent/public/roadmaps/YYYY-MM-DD_BUG_FIX_N_Description/`
+- **SA**: `agent/subagents/{role}/public/roadmaps/YYYY-MM-DD_BUG_FIX_N_Description/`
+
+### 9.4 Structure
+
+Standard roadmap structure with emphasis on:
+
+**Required Sections**:
+1. **Problem Statement** - Root cause analysis, how bug manifests
+2. **Solution** - Approach chosen and rationale (why this fix vs alternatives)
+3. **Affected Files** - Comprehensive list with change descriptions
+4. **Verification Checklist** - How to confirm fix works
+
+**Optional Sections**:
+- **Investigation Notes** - Debugging trail, hypotheses tested
+- **Alternative Approaches** - Solutions considered and rejected
+- **Regression Prevention** - Test coverage to prevent recurrence
+
+**Example Structure**:
+```markdown
+# BUG_FIX: Task ID Type Refactor
+
+## Problem Statement
+Task IDs stored inconsistently as int and str across codebase.
+Causes sort failures when mixed types compared.
+
+## Root Cause
+- CLI input: strings from argparse
+- Internal: integers from JSON deserialization
+- No type coercion at boundaries
+
+## Solution
+Standardize on string representation throughout.
+Rationale: Task IDs are identifiers, not quantities.
+
+## Affected Files
+- `macf/task_manager.py`: Coerce to str at load
+- `macf/cli/task_commands.py`: Accept str arguments
+- `macf/hooks/handle_task_create.py`: Store as str
+
+## Verification
+- [ ] `task list` sorts correctly
+- [ ] CLI accepts both "8" and 8
+- [ ] JSON stores strings consistently
+```
+
+### 9.5 Integration with Task System
+
+BUG tasks reference BUG_FIX roadmaps via `plan_ca_ref` MTMD field:
+
+```bash
+macf_tools task create bug --parent 67 \
+  --plan-ca-ref "agent/public/roadmaps/2026-01-28_BUG_FIX_8_Task_ID_Type_Refactor/roadmap.md" \
+  "Type refactor"
+```
+
+This creates bidirectional link:
+- Task → Roadmap (via `plan_ca_ref`)
+- Roadmap → Task (via filename task_id)
+
+### 9.6 When to Use vs Simple fix_plan
+
+**Rule of Thumb**: If you went through EnterPlanMode, create BUG_FIX roadmap.
+
+| Indicator | Simple fix_plan | BUG_FIX roadmap |
+|-----------|-----------------|-----------------|
+| Time to fix | <1hr | >1hr |
+| Files affected | 1-2 | 3+ |
+| Planning phase | No investigation | EnterPlanMode used |
+| Alternatives | Obvious fix | Multiple approaches |
+| Impact | Localized | Systemic/architectural |
+
+---
+
 ## Anti-Patterns to Avoid
 
 ### Preliminary Phase Anti-Patterns

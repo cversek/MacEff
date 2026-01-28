@@ -202,7 +202,7 @@ updates:
 | 📋 | SUBPLAN | ✅ subplan CA | Detailed phase with own CA (under MISSION/DETOUR) |
 | 📦 | ARCHIVE | - | Archived/completed hierarchy |
 | 🔧 | AD_HOC | - | Urgent repair, no time to plan (task file IS the CA) |
-| 🐛 | BUG | - | Defect discovered during work, typically child of parent phase |
+| 🐛 | BUG | ⚠️ XOR | Defect - requires EITHER fix_plan OR plan_ca_ref |
 
 **Lightweight Phase Annotation**: For phases WITHOUT detailed subplan CAs, use `-` prefix:
 ```
@@ -210,7 +210,34 @@ updates:
   - 1.1: Create package structure
 ```
 
-### 2.2 Subject Line Format
+### 2.2 🐛 BUG Task Requirements
+
+BUG tasks require documentation of the fix approach via ONE of:
+
+| Field | Use Case | Format |
+|-------|----------|--------|
+| `fix_plan` | Simple fixes (<1hr, clear scope) | Inline text: "Root cause: X. Fix: Y" |
+| `plan_ca_ref` | Complex fixes (planning phase occurred) | Path to BUG_FIX roadmap CA |
+
+**Rule of Thumb**: If you went through a planning phase (EnterPlanMode), use `plan_ca_ref`.
+
+**CLI Examples**:
+```bash
+# Simple bug - inline fix_plan
+macf_tools task create bug --parent 67 --fix-plan "Root cause: int/str comparison. Fix: convert to str" "Sort failure"
+
+# Complex bug - reference to roadmap CA
+macf_tools task create bug --parent 67 --plan-ca-ref "agent/public/roadmaps/2026-01-28_BUG_FIX_8_Task_ID_Type_Refactor/roadmap.md" "Type refactor"
+```
+
+**Validation**: BUG tasks require exactly ONE of `fix_plan` or `plan_ca_ref` (XOR constraint).
+
+**Why This Matters**:
+- Simple bugs: Inline fix_plan keeps documentation lightweight
+- Complex bugs: BUG_FIX roadmap preserves planning context, affected files, verification approach
+- XOR validation prevents both missing documentation AND redundant documentation
+
+### 2.3 Subject Line Format
 
 Subject lines are **mostly immutable** once created. Keep them clean:
 
@@ -226,7 +253,7 @@ Subject lines are **mostly immutable** once created. Keep them clean:
 
 **Enhanced `macf_tools task list`** displays `plan_ca_ref` prominently - agents always see CA context.
 
-### 2.3 MISSION Pinning Protocol (MANDATORY)
+### 2.4 MISSION Pinning Protocol (MANDATORY)
 
 When a MISSION roadmap is approved, **pinning** creates the task hierarchy:
 
