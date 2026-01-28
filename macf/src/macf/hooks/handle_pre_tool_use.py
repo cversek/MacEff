@@ -106,91 +106,76 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         breadcrumb = get_breadcrumb()
         message_parts = [f"🏗️ MACF | {timestamp} | {breadcrumb}"]
 
-        # TaskCreate protection: MISSION/EXPERIMENT/DETOUR require plan_ca_ref
+        # TaskCreate DENIED - redirect to CLI
         if tool_name == "TaskCreate":
-            from macf.task.protection import check_task_create, check_grant_in_events
-
             subject = tool_input.get("subject", "")
-            description = tool_input.get("description", "")
-            auto_mode_flag, _, _ = detect_auto_mode(session_id)
+            error_msg = (
+                "❌ TaskCreate Blocked - Use CLI commands instead\n\n"
+                "The CLI embeds business logic (MTMD, breadcrumbs, folder creation).\n"
+                "Native TaskCreate is a primitive that misses framework requirements.\n\n"
+                "✅ Use these commands instead:\n"
+                "  macf_tools task create mission \"Title\"      # MISSION with roadmap\n"
+                "  macf_tools task create experiment \"Title\"   # EXPERIMENT with protocol\n"
+                "  macf_tools task create detour \"Title\"       # DETOUR for urgent work\n"
+                "  macf_tools task create phase --parent N \"Title\"  # Phase under parent\n"
+                "  macf_tools task create bug --parent N \"Title\"    # Bug under parent\n"
+                "  macf_tools task create adhoc \"Title\"        # Standalone AD_HOC\n\n"
+                "📚 For guidance: macf_tools policy navigate task_management"
+            )
+            return {
+                "continue": False,
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": error_msg
+                }
+            }
 
-            result = check_task_create(subject, description, auto_mode_flag)
-
-            if not result.allowed:
-                # Check for grant
-                has_grant, _ = check_grant_in_events("create")
-                if not has_grant:
-                    error_msg = (
-                        f"❌ TaskCreate Blocked - {result.reason}\n\n"
-                        f"{result.grant_hint or ''}"
-                    )
-                    return {
-                        "continue": False,
-                        "hookSpecificOutput": {
-                            "hookEventName": "PreToolUse",
-                            "permissionDecision": "deny",
-                            "permissionDecisionReason": error_msg
-                        }
-                    }
-
-            message_parts.append(f"📝 TaskCreate: {subject[:40]}...")
-
-        # TaskUpdate protection: description modifications require grant (with exceptions)
+        # TaskUpdate DENIED - redirect to CLI
         elif tool_name == "TaskUpdate":
-            from macf.task.protection import check_task_update_description, check_grant_in_events, clear_grant
-            from macf.task.reader import TaskReader
-
             task_id_str = tool_input.get("taskId", "")
-            new_description = tool_input.get("description")
+            status = tool_input.get("status")
 
-            # Only check if description is being updated
-            if new_description is not None:
-                try:
-                    task_id = int(task_id_str)
-                    auto_mode_flag, _, _ = detect_auto_mode(session_id)
+            # Build context-aware redirect message
+            if status == "completed":
+                hint = (
+                    "✅ For completion, use:\n"
+                    f"  macf_tools task complete #{task_id_str} --report \"Work done. Difficulties. Committed: hash\""
+                )
+            elif status == "in_progress":
+                hint = (
+                    "✅ For status change, use:\n"
+                    f"  macf_tools task edit #{task_id_str} status in_progress"
+                )
+            elif status == "deleted":
+                hint = (
+                    "✅ For deletion, use:\n"
+                    f"  macf_tools task delete #{task_id_str}"
+                )
+            else:
+                hint = (
+                    "✅ Use these commands instead:\n"
+                    f"  macf_tools task edit #{task_id_str} status <status>       # Change status\n"
+                    f"  macf_tools task edit #{task_id_str} subject \"New title\"   # Change subject\n"
+                    f"  macf_tools task metadata set #{task_id_str} <field> <value>  # Edit MTMD\n"
+                    f"  macf_tools task complete #{task_id_str} --report \"...\"    # Mark complete"
+                )
 
-                    # Get current task description
-                    reader = TaskReader()
-                    current_task = None
-                    for task in reader.read_tasks():
-                        if task.id == task_id:
-                            current_task = task
-                            break
-
-                    if current_task:
-                        # Check for grant
-                        has_grant, grant_event = check_grant_in_events("update", task_id)
-
-                        result = check_task_update_description(
-                            task_id,
-                            current_task.description,
-                            new_description,
-                            auto_mode_flag,
-                            has_grant
-                        )
-
-                        if not result.allowed:
-                            error_msg = (
-                                f"❌ TaskUpdate Blocked - {result.reason}\n\n"
-                                f"{result.grant_hint or ''}"
-                            )
-                            return {
-                                "continue": False,
-                                "hookSpecificOutput": {
-                                    "hookEventName": "PreToolUse",
-                                    "permissionDecision": "deny",
-                                    "permissionDecisionReason": error_msg
-                                }
-                            }
-
-                        # Clear grant if it was used
-                        if has_grant and result.level.value == "HIGH":
-                            clear_grant("update", task_id, "consumed_by_taskupdate")
-
-                except (ValueError, TypeError):
-                    pass  # Invalid task_id, let CC handle the error
-
-            message_parts.append(f"📝 TaskUpdate: #{task_id_str}")
+            error_msg = (
+                "❌ TaskUpdate Blocked - Use CLI commands instead\n\n"
+                "The CLI provides audit trails, breadcrumbs, and proper MTMD updates.\n"
+                "Native TaskUpdate bypasses framework requirements.\n\n"
+                f"{hint}\n\n"
+                "📚 For guidance: macf_tools policy navigate task_management"
+            )
+            return {
+                "continue": False,
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": error_msg
+                }
+            }
 
         # Enhanced context based on tool type
         elif tool_name == "Task":

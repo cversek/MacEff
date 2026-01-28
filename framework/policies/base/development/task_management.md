@@ -539,21 +539,21 @@ macf_tools task edit #67 status in_progress           # Change status
 macf_tools task edit #67 description "New desc..."    # Replace description
 
 # Edit MTMD fields (MEDIUM protection)
-macf_tools task edit-mtmd #67 target_version 0.4.0    # Set MTMD field
-macf_tools task edit-mtmd #67 plan_ca_ref "path/..."  # Update CA reference
-macf_tools task edit-mtmd #67 completion_breadcrumb "$(macf_tools breadcrumb)"
+macf_tools task metadata set #67 target_version 0.4.0    # Set MTMD field
+macf_tools task metadata set #67 plan_ca_ref "path/..."  # Update CA reference
+macf_tools task metadata set #67 completion_breadcrumb "$(macf_tools breadcrumb)"
 
 # Add custom MTMD fields (LOW protection)
-macf_tools task add-mtmd #67 priority high            # Add to custom section
-macf_tools task add-mtmd #67 label "v0.4.0"           # Add metadata tags
+macf_tools task metadata add #67 priority high           # Add to custom section
+macf_tools task metadata add #67 label "v0.4.0"          # Add metadata tags
 ```
 
 **Protection Levels**:
 
 | Level | Commands | AUTO_MODE | MANUAL_MODE |
 |-------|----------|-----------|-------------|
-| **MEDIUM** | `task edit`, `task edit-mtmd` | Self-grant | User grant required |
-| **LOW** | `task add-mtmd` | Auto-allowed | Auto-allowed |
+| **MEDIUM** | `task edit`, `task metadata set` | Self-grant | User grant required |
+| **LOW** | `task metadata add` | Auto-allowed | Auto-allowed |
 
 **Update Tracking**: All edit commands automatically append to the MTMD `updates` list with breadcrumb, description, and agent attribution. This provides forensic audit trail across compaction.
 
