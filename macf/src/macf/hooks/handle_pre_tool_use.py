@@ -177,6 +177,18 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 }
             }
 
+        # TaskList/TaskGet nudge - encourage CLI for richer formatting (not blocked)
+        elif tool_name == "TaskList":
+            message_parts.append(
+                "📋 TaskList | 💡 CLI has richer formatting: macf_tools task list --display tree"
+            )
+
+        elif tool_name == "TaskGet":
+            task_id_str = tool_input.get("taskId", "")
+            message_parts.append(
+                f"📋 TaskGet #{task_id_str} | 💡 CLI shows MTMD: macf_tools task get #{task_id_str}"
+            )
+
         # Enhanced context based on tool type
         elif tool_name == "Task":
             # DELEG_DRV start tracking
