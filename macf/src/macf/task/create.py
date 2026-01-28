@@ -646,19 +646,19 @@ def create_phase(
 
 
 def create_bug(
-    parent_id: int,
-    title: str
+    title: str,
+    parent_id: Optional[str] = None
 ) -> CreateResult:
     """
-    Create bug task under parent.
+    Create bug task (standalone or under parent).
 
     Creates:
-    - Task JSON file with MTMD (includes parent_id)
-    - Subject prefixed with [^#N] parent reference and 🐛 emoji
+    - Task JSON file with MTMD (includes parent_id if provided)
+    - Subject prefixed with 🐛 emoji (and [^#N] parent reference if parent)
 
     Args:
-        parent_id: Parent task ID
         title: Bug title (e.g., "Fix validation error")
+        parent_id: Optional parent task ID (string to support "000" etc.)
 
     Returns:
         CreateResult with task_id and mtmd
@@ -673,20 +673,24 @@ def create_bug(
     # Get next task ID
     task_id = _get_next_task_id()
 
-    # Create MTMD with parent_id
+    # Create MTMD with optional parent_id
     mtmd = MacfTaskMetaData(
         version="1.0",
         creation_breadcrumb=breadcrumb,
         created_cycle=cycle,
         created_by="PA",
+        task_type="BUG",
         parent_id=parent_id
     )
 
     # Build description with MTMD
     description = _generate_mtmd_block(mtmd)
 
-    # Create subject with dim ID prefix, dim parent reference and bug emoji
-    subject = f"{ANSI_DIM}#{task_id}{ANSI_RESET} {ANSI_DIM}[^#{parent_id}]{ANSI_RESET} 🐛 BUG: {title}"
+    # Create subject with bug emoji (and parent ref if provided)
+    if parent_id:
+        subject = f"{ANSI_DIM}#{task_id}{ANSI_RESET} {ANSI_DIM}[^#{parent_id}]{ANSI_RESET} 🐛 BUG: {title}"
+    else:
+        subject = f"{ANSI_DIM}#{task_id}{ANSI_RESET} 🐛 BUG: {title}"
 
     # Create task file
     _create_task_file(task_id, subject, description)

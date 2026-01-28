@@ -3383,19 +3383,21 @@ def cmd_task_create_phase(args: argparse.Namespace) -> int:
 
 
 def cmd_task_create_bug(args: argparse.Namespace) -> int:
-    """Create bug task under parent."""
+    """Create bug task (standalone or under parent)."""
     from .task.create import create_bug
 
-    # Parse parent ID
-    parent_id_str = args.parent.lstrip('#')
-    try:
-        parent_id = int(parent_id_str)
-    except ValueError:
-        print(f"❌ Invalid parent ID: {args.parent}")
-        return 1
+    # Parse optional parent ID
+    parent_id = None
+    if args.parent:
+        parent_id_str = args.parent.lstrip('#')
+        # Preserve string IDs (like "000") or convert numeric
+        if parent_id_str.lstrip('0') == '' or not parent_id_str.isdigit():
+            parent_id = parent_id_str  # Keep as string
+        else:
+            parent_id = parent_id_str  # Keep as string for consistency
 
     try:
-        result = create_bug(parent_id=parent_id, title=args.title)
+        result = create_bug(title=args.title, parent_id=parent_id)
 
         if args.json:
             # JSON output for automation
@@ -3413,12 +3415,18 @@ def cmd_task_create_bug(args: argparse.Namespace) -> int:
             print(json.dumps(output, indent=2))
         else:
             # Human-friendly output
-            print(f"✅ Created bug task #{result.task_id}")
+            print(f"✅ Created BUG task #{result.task_id}")
             print(f"🏷️  Subject: {result.subject}")
-            print(f"📎 Parent: #{parent_id}")
-            print()
-            print("Next steps:")
-            print(f"1. Run `macf_tools task tree #{parent_id}` to see hierarchy")
+            if parent_id:
+                print(f"📎 Parent: #{parent_id}")
+                print()
+                print("Next steps:")
+                print(f"1. Run `macf_tools task tree #{parent_id}` to see hierarchy")
+            else:
+                print()
+                print("Next steps:")
+                print(f"1. Run `macf_tools task get #{result.task_id}` to view details")
+                print("2. Mark in_progress when starting work")
 
         return 0
     except Exception as e:
@@ -4297,8 +4305,8 @@ def _build_parser() -> argparse.ArgumentParser:
     task_create_phase_parser.set_defaults(func=cmd_task_create_phase)
 
     # task create bug
-    task_create_bug_parser = task_create_sub.add_parser("bug", help="create bug task under parent")
-    task_create_bug_parser.add_argument("--parent", required=True, help="parent task ID (e.g., #67 or 67)")
+    task_create_bug_parser = task_create_sub.add_parser("bug", help="create bug task (standalone or under parent)")
+    task_create_bug_parser.add_argument("--parent", required=False, help="optional parent task ID (e.g., #67 or 67)")
     task_create_bug_parser.add_argument("title", help="bug title")
     task_create_bug_parser.add_argument("--json", dest="json", action="store_true",
                                         help="output as JSON")
