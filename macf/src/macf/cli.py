@@ -373,6 +373,26 @@ def _update_settings_file(settings_path: Path, hooks_prefix: str) -> bool:
                 }
             ]
 
+        # Merge permissions from template (grant commands require "ask")
+        try:
+            import macf
+            template_path = Path(macf.__file__).parent.parent.parent.parent / "framework" / "templates" / "settings.permissions.json"
+            if template_path.exists():
+                with open(template_path) as f:
+                    perm_template = json.load(f)
+                if "permissions" in perm_template:
+                    if "permissions" not in settings:
+                        settings["permissions"] = {}
+                    # Merge "ask" permissions
+                    if "ask" in perm_template["permissions"]:
+                        if "ask" not in settings["permissions"]:
+                            settings["permissions"]["ask"] = []
+                        for perm in perm_template["permissions"]["ask"]:
+                            if perm not in settings["permissions"]["ask"]:
+                                settings["permissions"]["ask"].append(perm)
+        except Exception:
+            pass  # Template not found in editable install - skip
+
         # Backup existing file
         if settings_path.exists():
             backup_path = settings_path.with_suffix('.json.backup')
