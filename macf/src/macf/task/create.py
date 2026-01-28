@@ -8,13 +8,52 @@ with automatic metadata population and skeleton CA file generation.
 import json
 import os
 import re
+import stat
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Generator
 
 from .models import MacfTaskMetaData
 from .reader import TaskReader
+
+
+@contextmanager
+def _unprotect_for_creation(dir_path: Path) -> Generator[None, None, None]:
+    """Context manager to temporarily unprotect task directory for file creation.
+
+    CC purges all task files when all tasks become completed. Protection (chmod 555)
+    prevents this, but blocks file creation. This context manager:
+    1. Checks if directory is protected (no write permission)
+    2. Temporarily enables write (chmod 755)
+    3. Yields for file creation
+    4. Re-protects directory (chmod 555)
+
+    If directory wasn't protected, does nothing special.
+    """
+    if not dir_path.exists():
+        # Directory doesn't exist yet, no protection to manage
+        yield
+        # After creation, protect the new directory
+        if dir_path.exists():
+            os.chmod(dir_path, stat.S_IRUSR | stat.S_IXUSR | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)  # 555
+        return
+
+    # Check current permissions
+    current_mode = dir_path.stat().st_mode
+    is_protected = not (current_mode & stat.S_IWUSR)  # No user write = protected
+
+    if is_protected:
+        # Temporarily enable write
+        os.chmod(dir_path, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)  # 755
+
+    try:
+        yield
+    finally:
+        # Always protect after creation (even if it wasn't protected before)
+        # This makes protection the default state
+        os.chmod(dir_path, stat.S_IRUSR | stat.S_IXUSR | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)  # 555
 
 # ANSI escape codes for dim text (CC UI renders these!)
 ANSI_DIM = "\033[2m"
@@ -105,18 +144,19 @@ def _create_task_file(
     status: str = "pending",
     session_uuid: Optional[str] = None
 ) -> Path:
-    """Create task JSON file directly."""
+    """Create task JSON file directly.
+
+    Automatically handles CC purge protection:
+    - Temporarily unprotects directory if protected
+    - Creates the task file
+    - Re-protects directory (protection becomes default state)
+    """
     reader = TaskReader(session_uuid)
 
     if not reader.session_path:
         raise RuntimeError("Could not determine session path")
 
-    # Ensure session directory exists
-    reader.session_path.mkdir(parents=True, exist_ok=True)
-
-    task_file = reader.session_path / f"{task_id}.json"
-
-    # Build task JSON structure
+    # Build task JSON structure before entering protection context
     # Generate activeForm from subject (present continuous form)
     # Strip ID prefix, emoji prefix and convert to gerund-style
     active_form = subject
@@ -143,9 +183,17 @@ def _create_task_file(
         "blockedBy": []
     }
 
-    # Write task file
-    with open(task_file, "w") as f:
-        json.dump(task_data, f, indent=2)
+    # Use protection context manager for directory operations
+    # This temporarily unprotects if needed, then re-protects after
+    with _unprotect_for_creation(reader.session_path):
+        # Ensure session directory exists
+        reader.session_path.mkdir(parents=True, exist_ok=True)
+
+        task_file = reader.session_path / f"{task_id}.json"
+
+        # Write task file
+        with open(task_file, "w") as f:
+            json.dump(task_data, f, indent=2)
 
     return task_file
 
