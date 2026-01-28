@@ -2850,6 +2850,94 @@ def cmd_task_delete(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_task_batch_delete(args: argparse.Namespace) -> int:
+    """Delete multiple tasks with single grant authorization."""
+    import os
+    import stat
+    from .task import TaskReader
+    from .task.protection import check_grant_in_events, clear_grant
+    from .task.create import SENTINEL_TASK_ID
+
+    # Parse task IDs
+    task_ids = []
+    for tid_str in args.task_ids:
+        tid_str = tid_str.lstrip('#')
+        if tid_str.startswith('0') and len(tid_str) > 1:
+            task_ids.append(tid_str)
+        else:
+            try:
+                task_ids.append(int(tid_str))
+            except ValueError:
+                task_ids.append(tid_str)
+
+    # Filter out sentinel
+    filtered_ids = []
+    for tid in task_ids:
+        if str(tid) == SENTINEL_TASK_ID:
+            print(f"⚠️  Skipping sentinel task #{SENTINEL_TASK_ID}")
+        else:
+            filtered_ids.append(tid)
+
+    if not filtered_ids:
+        print("❌ No valid tasks to delete")
+        return 1
+
+    # Check for batch delete grant (general grant, not task-specific)
+    has_grant, _ = check_grant_in_events("delete", None)
+    if not has_grant:
+        print(f"❌ Batch delete requires grant authorization")
+        print(f"   Run: macf_tools task grant-delete batch")
+        return 1
+
+    reader = TaskReader()
+
+    # Verify tasks exist and show what will be deleted
+    to_delete = []
+    for tid in filtered_ids:
+        task = reader.read_task(tid)
+        if task:
+            print(f"🗑️  #{tid}: {task.subject[:60]}")
+            to_delete.append(tid)
+        else:
+            print(f"⚠️  #{tid}: not found, skipping")
+
+    if not to_delete:
+        print("❌ No tasks found to delete")
+        return 1
+
+    # Confirmation
+    if not args.force:
+        print()
+        confirm = input(f"⚠️  Delete {len(to_delete)} task(s)? [y/N]: ").strip().lower()
+        if confirm != 'y':
+            print("❌ Cancelled")
+            return 1
+
+    # Temporarily unprotect directory
+    session_path = reader.session_path
+    if session_path and session_path.exists():
+        current_mode = session_path.stat().st_mode
+        if not (current_mode & stat.S_IWUSR):
+            os.chmod(session_path, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+
+    try:
+        deleted = 0
+        for tid in to_delete:
+            task_file = reader.session_path / f"{tid}.json"
+            if task_file.exists():
+                task_file.unlink()
+                deleted += 1
+                print(f"   ✓ Deleted #{tid}")
+    finally:
+        # Re-protect
+        if session_path and session_path.exists():
+            os.chmod(session_path, stat.S_IRUSR | stat.S_IXUSR | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+
+    clear_grant("delete", None, reason="consumed by batch-delete")
+    print(f"\n✅ Deleted {deleted} task(s)")
+    return 0
+
+
 def cmd_task_edit(args: argparse.Namespace) -> int:
     """Edit a top-level JSON field in a task file."""
     from .task import TaskReader, update_task_file
@@ -4128,6 +4216,13 @@ def _build_parser() -> argparse.ArgumentParser:
     task_delete_parser.add_argument("--force", "-f", action="store_true",
                                     help="skip confirmation prompt")
     task_delete_parser.set_defaults(func=cmd_task_delete)
+
+    # task batch-delete
+    task_batch_delete_parser = task_sub.add_parser("batch-delete", help="delete multiple tasks")
+    task_batch_delete_parser.add_argument("task_ids", nargs="+", help="task IDs to delete")
+    task_batch_delete_parser.add_argument("--force", "-f", action="store_true",
+                                          help="skip confirmation prompt")
+    task_batch_delete_parser.set_defaults(func=cmd_task_batch_delete)
 
     # task edit
     task_edit_parser = task_sub.add_parser("edit", help="edit task JSON field")
