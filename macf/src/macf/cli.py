@@ -2556,13 +2556,16 @@ def cmd_task_get(args: argparse.Namespace) -> int:
     """Get detailed information about a specific task."""
     from .task import TaskReader
 
-    # Parse task ID (handle #N or N format)
+    # Parse task ID (handle #N or N format, support string IDs like "000")
     task_id_str = args.task_id.lstrip('#')
-    try:
-        task_id = int(task_id_str)
-    except ValueError:
-        print(f"❌ Invalid task ID: {args.task_id}")
-        return 1
+    # Keep as string if it has leading zeros (like "000"), otherwise try int
+    if task_id_str.startswith('0') and len(task_id_str) > 1:
+        task_id = task_id_str  # Preserve leading zeros (e.g., "000")
+    else:
+        try:
+            task_id = int(task_id_str)
+        except ValueError:
+            task_id = task_id_str  # Use string directly for non-numeric IDs
 
     reader = TaskReader()
     task = reader.read_task(task_id)
