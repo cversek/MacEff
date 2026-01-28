@@ -367,6 +367,25 @@ When starting work on a task with `plan_ca_ref`:
 
 The agent ALWAYS has visibility into CA refs via enhanced `task list` display.
 
+### 5.3 CRITICAL: Mark Tasks `in_progress` (CC UI Visibility)
+
+**ALWAYS mark tasks `in_progress` when starting work**:
+
+```bash
+macf_tools task edit #67 status in_progress
+```
+
+**Why This Matters**: Claude Code's UI **truncates** the task list. Tasks marked `in_progress` appear at the **TOP** of the list, ensuring user visibility. Pending tasks may be hidden in the `+N pending` overflow.
+
+**The User Cannot See What You're Working On** if you leave tasks as `pending`.
+
+**Protocol**:
+1. Before ANY work on a task → mark `in_progress`
+2. User sees: `◼ #67 [in_progress]` at top of their truncated view
+3. On completion → use `task complete` which handles status automatically
+
+This is not optional - it's the **only way** the user maintains awareness of active work.
+
 ---
 
 ## 6 Completion Protocol
