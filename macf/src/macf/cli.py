@@ -2940,7 +2940,7 @@ def cmd_task_metadata_set(args: argparse.Namespace) -> int:
     # Validate MTMD field exists
     mtmd_fields = [
         "plan_ca_ref", "parent_id", "repo", "target_version", "release_branch",
-        "completion_breadcrumb", "unblock_breadcrumb", "archived", "archived_at",
+        "completion_breadcrumb", "completion_report", "unblock_breadcrumb", "archived", "archived_at",
         "creation_breadcrumb", "created_cycle", "created_by", "experiment_ca_ref"
     ]
     if field not in mtmd_fields:
@@ -3426,6 +3426,91 @@ def cmd_task_grant_delete(args: argparse.Namespace) -> int:
         print(f"   Reason: {args.reason}")
     print("   Grant is single-use and will be cleared after consumption.")
     return 0
+
+
+def cmd_task_complete(args: argparse.Namespace) -> int:
+    """Mark task complete with mandatory report, breadcrumb, and status change."""
+    from .task import TaskReader, update_task_file
+    from .utils.breadcrumbs import get_breadcrumb
+    import json
+
+    # Parse task ID
+    task_id_str = args.task_id.lstrip('#')
+    try:
+        task_id = int(task_id_str)
+    except ValueError:
+        print(f"❌ Invalid task ID: {args.task_id}")
+        return 1
+
+    # Check report is provided
+    if not args.report:
+        print("❌ Completion report is MANDATORY")
+        print()
+        print("   The --report flag documents work done, difficulties, future work, and git status.")
+        print()
+        print("   For format guidance:")
+        print("   macf_tools policy navigate task_management")
+        print("   (See section on Completion Protocol)")
+        print()
+        print("   Example:")
+        print('   macf_tools task complete #67 --report "Implemented X. No difficulties. Committed: abc1234"')
+        return 1
+
+    # Read task
+    reader = TaskReader()
+    task = reader.read_task(task_id)
+    if not task:
+        print(f"❌ Task #{task_id} not found")
+        return 1
+
+    if task.status == "completed":
+        print(f"⚠️  Task #{task_id} is already completed")
+        return 1
+
+    # Generate breadcrumb
+    breadcrumb = get_breadcrumb()
+
+    # Update MTMD with completion_breadcrumb and completion_report
+    if task.mtmd:
+        from .task.models import MacfTaskUpdate
+        import copy
+        new_mtmd = copy.deepcopy(task.mtmd)
+        new_mtmd.completion_breadcrumb = breadcrumb
+        new_mtmd.completion_report = args.report
+        new_mtmd.updates.append(MacfTaskUpdate(
+            breadcrumb=breadcrumb,
+            description="Task completed via CLI",
+            agent="PA"
+        ))
+    else:
+        from .task.models import MacfTaskMetaData, MacfTaskUpdate
+        new_mtmd = MacfTaskMetaData(
+            completion_breadcrumb=breadcrumb,
+            completion_report=args.report,
+            updates=[MacfTaskUpdate(
+                breadcrumb=breadcrumb,
+                description="Task completed via CLI",
+                agent="PA"
+            )]
+        )
+
+    # Embed updated MTMD in description
+    new_description = task.description_with_updated_mtmd(new_mtmd)
+
+    # Update task file with status and description
+    success = update_task_file(task_id, {
+        "status": "completed",
+        "description": new_description
+    })
+
+    if success:
+        print(f"✅ Task #{task_id} marked complete")
+        print(f"   Breadcrumb: {breadcrumb}")
+        print(f"   Report: {args.report[:80]}{'...' if len(args.report) > 80 else ''}")
+        return 0
+    else:
+        print(f"❌ Failed to update task #{task_id}")
+        return 1
 
 
 def cmd_task_metadata_validate(args: argparse.Namespace) -> int:
@@ -4069,6 +4154,13 @@ def _build_parser() -> argparse.ArgumentParser:
     task_grant_delete_parser.add_argument("task_id", help="task ID to grant delete permission (e.g., #67 or 67)")
     task_grant_delete_parser.add_argument("--reason", "-r", default="", help="reason for granting")
     task_grant_delete_parser.set_defaults(func=cmd_task_grant_delete)
+
+    # task complete
+    task_complete_parser = task_sub.add_parser("complete", help="mark task complete with report")
+    task_complete_parser.add_argument("task_id", help="task ID to complete (e.g., #67 or 67)")
+    task_complete_parser.add_argument("--report", "-r",
+                                      help="completion report (work done, difficulties, future work, git commit status)")
+    task_complete_parser.set_defaults(func=cmd_task_complete)
 
     # Search service commands
     search_service_parser = sub.add_parser("search-service", help="search service daemon management")

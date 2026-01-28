@@ -83,6 +83,7 @@ class MacfTaskMetaData:
 
     # Lifecycle breadcrumbs
     completion_breadcrumb: Optional[str] = None
+    completion_report: Optional[str] = None  # Brief report on completion (difficulties, future work)
     unblock_breadcrumb: Optional[str] = None
     updates: List[MacfTaskUpdate] = field(default_factory=list)  # Ordered list of updates
 
@@ -148,6 +149,7 @@ class MacfTaskMetaData:
             target_version=data.get("target_version"),
             release_branch=data.get("release_branch"),
             completion_breadcrumb=data.get("completion_breadcrumb"),
+            completion_report=data.get("completion_report"),
             unblock_breadcrumb=data.get("unblock_breadcrumb"),
             updates=updates,
             archived=data.get("archived", False),
