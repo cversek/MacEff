@@ -58,6 +58,63 @@ def _unprotect_for_creation(dir_path: Path) -> Generator[None, None, None]:
 # ANSI escape codes for dim text (CC UI renders these!)
 ANSI_DIM = "\033[2m"
 ANSI_RESET = "\033[0m"
+ANSI_BOLD = "\033[1m"
+ANSI_ORANGE = "\033[38;5;208m"
+
+# Sentinel task ID (reserved system ID)
+SENTINEL_TASK_ID = "000"
+
+
+def _ensure_sentinel_task(session_path: Path) -> None:
+    """Create sentinel task #000 if it doesn't exist.
+
+    The sentinel task prevents CC from purging all tasks when they're completed.
+    CC only purges when ALL tasks are completed - having one permanent in_progress
+    task prevents this.
+
+    Belt-and-suspenders protection alongside chmod 555 directory protection.
+    """
+    sentinel_file = session_path / f"{SENTINEL_TASK_ID}.json"
+
+    if sentinel_file.exists():
+        return  # Sentinel already exists
+
+    sentinel_data = {
+        "id": SENTINEL_TASK_ID,
+        "subject": f"{ANSI_BOLD}{ANSI_ORANGE}🛡️ MACF TASK LIST{ANSI_RESET}",
+        "description": """# MACF Task List Sentinel
+
+**Purpose**: This is a permanent system task that protects the task list from CC purge.
+
+## Why This Exists
+
+Claude Code purges ALL task files when all tasks become 'completed'. This sentinel task remains forever 'in_progress' to prevent that purge.
+
+## Rules
+
+1. **NEVER complete this task** - doing so may trigger task purge
+2. **NEVER delete this task** - it protects all other tasks
+3. This task is managed by MACF infrastructure, not agents
+
+## Technical Details
+
+- ID: 000 (reserved system ID)
+- Status: permanently in_progress
+- File permissions: read-only (444)
+
+*Belt-and-suspenders protection alongside chmod 555 directory protection.*""",
+        "activeForm": "Protecting task list",
+        "status": "in_progress",
+        "blocks": [],
+        "blockedBy": []
+    }
+
+    # Write sentinel file
+    with open(sentinel_file, "w") as f:
+        json.dump(sentinel_data, f, indent=2)
+
+    # Make sentinel read-only (444) - can't be accidentally modified
+    os.chmod(sentinel_file, stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
 
 
 @dataclass
@@ -188,6 +245,9 @@ def _create_task_file(
     with _unprotect_for_creation(reader.session_path):
         # Ensure session directory exists
         reader.session_path.mkdir(parents=True, exist_ok=True)
+
+        # Ensure sentinel task exists (belt-and-suspenders CC purge protection)
+        _ensure_sentinel_task(reader.session_path)
 
         task_file = reader.session_path / f"{task_id}.json"
 
