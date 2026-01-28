@@ -1,0 +1,9 @@
+{
+  "_comment": "MACF Task Permissions Template - merged by hooks install",
+  "permissions": {
+    "ask": [
+      "Bash(macf_tools task grant-update:*)",
+      "Bash(macf_tools task grant-delete:*)"
+    ]
+  }
+}
