@@ -2752,18 +2752,37 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
 def cmd_task_delete(args: argparse.Namespace) -> int:
     """Delete a task file with optional cascade to children.
 
-    HIGH protection level - requires user grant. Hook-based enforcement
-    will intercept this operation and require explicit permission.
-    Confirmation prompt provides basic protection at CLI level.
+    Requires grant-delete to have been run first (Always Ask permission).
+    Temporarily unprotects directory for deletion, then re-protects.
     """
+    import os
+    import stat
     from .task import TaskReader
+    from .task.protection import check_grant_in_events, clear_grant
+    from .task.create import SENTINEL_TASK_ID
 
-    # Parse task ID
+    # Parse task ID (handle #N or N format, support string IDs)
     task_id_str = args.task_id.lstrip('#')
-    try:
-        task_id = int(task_id_str)
-    except ValueError:
-        print(f"❌ Invalid task ID: {args.task_id}")
+    if task_id_str.startswith('0') and len(task_id_str) > 1:
+        task_id = task_id_str  # Preserve string ID like "000"
+    else:
+        try:
+            task_id = int(task_id_str)
+        except ValueError:
+            task_id = task_id_str
+
+    # Block deletion of sentinel task
+    if str(task_id) == SENTINEL_TASK_ID:
+        print(f"❌ Cannot delete sentinel task #{SENTINEL_TASK_ID}")
+        print("   This task protects the task list from CC purge.")
+        return 1
+
+    # Check for delete grant FIRST
+    has_grant, grant_event = check_grant_in_events("delete", task_id if isinstance(task_id, int) else None)
+    if not has_grant:
+        print(f"❌ Delete requires grant authorization")
+        print(f"   Run: macf_tools task grant-delete {task_id}")
+        print(f"   (This triggers Always Ask permission prompt)")
         return 1
 
     # Read task to verify it exists
@@ -2793,7 +2812,7 @@ def cmd_task_delete(args: argparse.Namespace) -> int:
             if child:
                 print(f"     #{cid}: {child.subject[:50]}...")
 
-    # Confirmation (basic CLI protection - hooks provide grant system)
+    # Confirmation (basic CLI protection)
     if not args.force:
         print()
         confirm = input("⚠️  Delete these tasks? [y/N]: ").strip().lower()
@@ -2801,14 +2820,31 @@ def cmd_task_delete(args: argparse.Namespace) -> int:
             print("❌ Cancelled")
             return 1
 
-    # Delete task files
-    deleted = 0
-    for tid in to_delete:
-        task_file = reader.session_path / f"{tid}.json"
-        if task_file.exists():
-            task_file.unlink()
-            deleted += 1
-            print(f"   ✓ Deleted #{tid}")
+    # Temporarily unprotect directory for deletion
+    session_path = reader.session_path
+    was_protected = False
+    if session_path and session_path.exists():
+        current_mode = session_path.stat().st_mode
+        was_protected = not (current_mode & stat.S_IWUSR)
+        if was_protected:
+            os.chmod(session_path, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)  # 755
+
+    try:
+        # Delete task files
+        deleted = 0
+        for tid in to_delete:
+            task_file = reader.session_path / f"{tid}.json"
+            if task_file.exists():
+                task_file.unlink()
+                deleted += 1
+                print(f"   ✓ Deleted #{tid}")
+    finally:
+        # Re-protect directory
+        if session_path and session_path.exists():
+            os.chmod(session_path, stat.S_IRUSR | stat.S_IXUSR | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)  # 555
+
+    # Clear the grant after use
+    clear_grant("delete", task_id if isinstance(task_id, int) else None, reason="consumed by delete")
 
     print(f"\n✅ Deleted {deleted} task(s)")
     return 0
