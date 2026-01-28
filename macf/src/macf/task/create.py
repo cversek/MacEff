@@ -588,3 +588,53 @@ def create_bug(
         subject=subject,
         mtmd=mtmd
     )
+
+
+def create_adhoc(
+    title: str
+) -> CreateResult:
+    """
+    Create standalone AD_HOC task for urgent unplanned work.
+
+    Creates:
+    - Task JSON file with MTMD (no parent)
+    - Subject with 🔧 AD_HOC marker
+
+    Args:
+        title: Task title (e.g., "Fix urgent CEP alignment issue")
+
+    Returns:
+        CreateResult with task_id and mtmd
+    """
+    from ..utils.breadcrumbs import get_breadcrumb, parse_breadcrumb
+
+    # Get breadcrumb and parse cycle
+    breadcrumb = get_breadcrumb()
+    parsed = parse_breadcrumb(breadcrumb)
+    cycle = parsed['cycle'] if parsed else 1
+
+    # Get next task ID
+    task_id = _get_next_task_id()
+
+    # Create MTMD (no parent_id for standalone AD_HOC)
+    mtmd = MacfTaskMetaData(
+        version="1.0",
+        creation_breadcrumb=breadcrumb,
+        created_cycle=cycle,
+        created_by="PA"
+    )
+
+    # Build description with MTMD
+    description = _generate_mtmd_block(mtmd)
+
+    # Create subject with dim ID prefix and AD_HOC marker
+    subject = f"{ANSI_DIM}#{task_id}{ANSI_RESET} 🔧 AD_HOC: {title}"
+
+    # Create task file
+    _create_task_file(task_id, subject, description)
+
+    return CreateResult(
+        task_id=task_id,
+        subject=subject,
+        mtmd=mtmd
+    )
