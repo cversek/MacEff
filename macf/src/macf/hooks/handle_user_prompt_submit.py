@@ -163,9 +163,13 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         from macf.utils.session import get_last_user_prompt_uuid
         current_prompt_uuid = get_last_user_prompt_uuid(session_id)
 
-        # Start Development Drive tracking with current UUID
+        # Extract prompt preview for forensic recovery (first 200 chars)
+        prompt = hook_input.get('prompt', '') if hook_input else ''
+        prompt_preview = prompt[:200] if prompt else None
+
+        # Start Development Drive tracking with current UUID and prompt preview
         # Note: start_dev_drv() emits dev_drv_started event internally
-        start_dev_drv(session_id, prompt_uuid=current_prompt_uuid)
+        start_dev_drv(session_id, prompt_uuid=current_prompt_uuid, prompt_preview=prompt_preview)
 
         # Get breadcrumb
         breadcrumb = get_breadcrumb()
@@ -193,7 +197,7 @@ Breadcrumb: {breadcrumb}"""
 
         # EXPERIMENT: Get associative memory injection (Cycle 337)
         # DISABLED: Testing if this causes CLUAC 17 limit
-        prompt = hook_input.get('prompt', '') if hook_input else ''
+        # Note: prompt already extracted above for prompt_preview
         memory_injection = ""  # get_memory_injection(prompt)
 
         # EXPERIMENT: Get policy recommendation injection (Cycle 338)
