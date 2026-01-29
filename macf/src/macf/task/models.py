@@ -67,6 +67,9 @@ class MacfTaskMetaData:
     # See task_management.md §2.1 for definitions
     task_type: Optional[str] = None
 
+    # Plain title without ANSI formatting (subject is composed from this + formatting)
+    title: Optional[str] = None
+
     # Required for MISSION/DETOUR/EXPERIMENT/DELEG_PLAN/SUBPLAN
     plan_ca_ref: Optional[str] = None
 
