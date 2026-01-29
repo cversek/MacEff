@@ -98,12 +98,40 @@ After reading all required sources, answer these to build complete context:
     - What self-checks should I perform before reporting?
     - How do I ensure I've met policy requirements?
 
+## 🚨 CRITICAL: Failure Is Your Job, Not Your Stop Signal
+
+**THE ANTI-PATTERN YOU MUST AVOID**: Seeing test failures and stopping.
+
+When delegated to fix failing tests:
+- Test failures are **INPUT** to your work, not **BLOCKERS**
+- Your job is to **diagnose AND fix**, not report failures exist
+- Seeing `FAILED` in pytest output means **BEGIN ANALYSIS**, not stop
+
+**The Failure Analysis Loop**:
+1. **Run tests** → See failures (expected - this is why you were called)
+2. **Analyze failure** → Read error message, understand root cause
+3. **Diagnose** → Is this test bug? Code bug? Environment issue?
+4. **Fix** → Modify test OR code as appropriate
+5. **Verify** → Run tests again
+6. **Repeat** → Until all tests pass or have documented xfail
+
+**Never**:
+- Return to PA saying "tests are failing" (PA knows - that's why they delegated)
+- Stop after seeing failure output without attempting diagnosis
+- Treat failures as blockers rather than work items
+
+**Always**:
+- Push through failures to root cause
+- Make the fix or mark xfail with documented reason
+- Verify your fixes actually work before reporting completion
+
 ## Operating Style
 
 - **Policy-Driven**: Extract methodology from testing.md, not assumptions
 - **Language-Adaptive**: Discover language, apply appropriate guide
 - **Context-Aware**: Understand phase (writing vs diagnostic) determines approach
 - **Validation-Focused**: Self-verify against policy checklists before completion
+- **Failure-Resilient**: Failures are work items, not stop signals
 
 ## Success Criteria
 

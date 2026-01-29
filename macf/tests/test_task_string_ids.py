@@ -105,7 +105,7 @@ parent_id: "5"
         assert isinstance(task.mtmd.parent_id, str)
 
     def test_mtmd_bug_fix_fields_exist(self):
-        """Verify fix_plan and plan_ca_ref fields exist in MacfTaskMetaData for BUG tasks."""
+        """Verify plan field exists in MacfTaskMetaData for BUG tasks (uses plan, not fix_plan)."""
         # Create MTMD with BUG fix tracking fields
         description = """
 Fix task ID type inconsistency.
@@ -115,7 +115,7 @@ creation_breadcrumb: s_test/c_382/g_abc/p_123/t_1234567890
 created_cycle: 382
 created_by: PA
 task_type: BUG
-fix_plan: "Refactor task ID handling from Union[int, str] to pure str type"
+plan: "Refactor task ID handling from Union[int, str] to pure str type"
 </macf_task_metadata>
 """
 
@@ -128,9 +128,9 @@ fix_plan: "Refactor task ID handling from Union[int, str] to pure str type"
 
         task = MacfTask.from_json(task_data)
 
-        # Verify MTMD has BUG tracking fields
+        # Verify MTMD has BUG tracking fields (BUG tasks use 'plan', not 'fix_plan')
         assert task.mtmd is not None
-        assert hasattr(task.mtmd, 'fix_plan')
+        assert hasattr(task.mtmd, 'plan')
         assert hasattr(task.mtmd, 'plan_ca_ref')
-        assert task.mtmd.fix_plan == "Refactor task ID handling from Union[int, str] to pure str type"
+        assert task.mtmd.plan == "Refactor task ID handling from Union[int, str] to pure str type"
         assert task.mtmd.task_type == "BUG"

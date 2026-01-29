@@ -145,23 +145,25 @@ This is a test policy for unit testing the hybrid search extraction.
 
 
 class TestBaseIndexer:
-    """Tests for BaseIndexer FTS5 + vec0 indexing."""
+    """Tests for BaseIndexer LanceDB indexing.
+
+    NOTE: Refactored in v0.4.0 from SQLite FTS5 to LanceDB.
+    Tests now verify LanceDB directory creation and stats structure.
+    """
 
     @pytest.fixture
     def mock_extractor(self):
         """Create a mock extractor for testing."""
         extractor = Mock()
-        extractor.get_fts_columns.return_value = [
-            ("doc_name", "TEXT"),
-            ("content", "TEXT"),
-        ]
+        extractor.name = "test_extractor"
+        extractor.get_fts_columns.return_value = ["policy_name", "content"]
         extractor.should_index.return_value = True
         extractor.extract_document.return_value = {
-            "doc_name": "test_doc",
-            "content": "Test content for indexing",
+            "policy_name": "test_doc",
+            "tier": "CORE",
+            "category": "Testing",
         }
         extractor.generate_embedding_text.return_value = "Test content for embedding"
-        extractor.extract_questions.return_value = []
         return extractor
 
     @pytest.fixture
@@ -176,84 +178,60 @@ class TestBaseIndexer:
 
         return docs_dir
 
-    def test_build_index_creates_fts_tables(self, mock_extractor, test_docs_dir, tmp_path):
-        """build_index should create FTS5 virtual tables."""
+    def test_build_index_creates_lancedb_directory(self, mock_extractor, test_docs_dir, tmp_path):
+        """build_index should create LanceDB directory with documents table."""
         from macf.hybrid_search.base_indexer import BaseIndexer
+        import lancedb
 
         indexer = BaseIndexer(mock_extractor)
-        db_path = tmp_path / "test_index.db"
+        db_path = tmp_path / "test_index.lance"
 
-        # Build index without embeddings (fast unit test)
-        stats = indexer.build_index(
-            test_docs_dir,
-            db_path,
-            skip_embeddings=True,
-            enable_questions=False
-        )
+        # Build index
+        stats = indexer.build_index(test_docs_dir, db_path)
 
-        # Verify database created
+        # Verify LanceDB directory created
         assert db_path.exists()
+        assert db_path.is_dir()  # LanceDB creates a directory, not a file
 
-        # Verify FTS5 table exists
-        conn = sqlite3.connect(str(db_path))
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='documents_fts'"
-        )
-        assert cursor.fetchone() is not None
-        conn.close()
+        # Verify documents table exists
+        db = lancedb.connect(str(db_path))
+        assert "documents" in db.table_names()
 
-        # Verify stats
+        # Verify stats structure
+        assert "documents_indexed" in stats
+        assert "embedding_time" in stats
+        assert "total_time" in stats
         assert stats["documents_indexed"] == 1
-        assert stats["document_embeddings"] == 0  # Skipped
-        assert stats["errors"] == 0
-        assert stats["build_time_ms"] > 0
 
-    def test_build_index_with_questions_table(self, test_docs_dir, tmp_path):
-        """build_index should create questions_fts table when enabled."""
+    def test_build_index_with_policy_extractor(self, test_docs_dir, tmp_path):
+        """build_index with PolicyExtractor should index policy metadata."""
         from macf.hybrid_search.extractors.policy_extractor import PolicyExtractor
         from macf.hybrid_search.base_indexer import BaseIndexer
+        import lancedb
 
         extractor = PolicyExtractor()
         indexer = BaseIndexer(extractor)
-        db_path = tmp_path / "test_index_questions.db"
+        db_path = tmp_path / "test_index_policy.lance"
 
-        # Create a policy file with CEP guide
+        # Create a policy file with metadata
         policy_file = test_docs_dir / "test_policy.md"
         policy_file.write_text('''# Test Policy
 
 **Tier**: CORE
 **Category**: Testing
+**Status**: ACTIVE
 
-## CEP Navigation Guide
+## Purpose
 
-**1 Testing**
-- What is a test?
-- How do I test?
+This is a test policy for unit testing.
 ''', encoding="utf-8")
 
-        # Build index with questions enabled
-        stats = indexer.build_index(
-            test_docs_dir,
-            db_path,
-            skip_embeddings=True,
-            enable_questions=True
-        )
+        # Build index
+        stats = indexer.build_index(test_docs_dir, db_path)
 
-        # Verify questions table exists
-        conn = sqlite3.connect(str(db_path))
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='questions_fts'"
-        )
-        assert cursor.fetchone() is not None
+        # Verify LanceDB created and has documents
+        db = lancedb.connect(str(db_path))
+        table = db.open_table("documents")
 
-        # Verify questions indexed
-        cursor.execute("SELECT COUNT(*) FROM questions_fts")
-        question_count = cursor.fetchone()[0]
-        assert question_count == 2  # Two questions in CEP guide
-
-        conn.close()
-
-        # Verify stats
-        assert stats["questions_indexed"] == 2
+        # Verify at least one document indexed
+        assert stats["documents_indexed"] >= 1

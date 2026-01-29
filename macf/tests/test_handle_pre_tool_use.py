@@ -117,7 +117,9 @@ def test_exception_handling(mock_dependencies):
 
 
 # ==================== TODO Collapse Authorization Tests ====================
+# DEPRECATED: v0.4.0 removes TODO system in favor of Task System
 
+@pytest.mark.xfail(reason="DEPRECATED: v0.4.0 removes TODO system")
 def test_todowrite_collapse_blocked_without_auth(mock_dependencies, isolated_events_log):
     """TodoWrite collapse is blocked when no authorization exists."""
     from macf.hooks.handle_pre_tool_use import run
@@ -141,6 +143,7 @@ def test_todowrite_collapse_blocked_without_auth(mock_dependencies, isolated_eve
     assert "10" in result["hookSpecificOutput"]["message"]
 
 
+@pytest.mark.xfail(reason="DEPRECATED: v0.4.0 removes TODO system")
 def test_todowrite_collapse_allowed_with_auth(mock_dependencies, isolated_events_log):
     """TodoWrite collapse is allowed when proper authorization exists."""
     from macf.hooks.handle_pre_tool_use import run
@@ -163,6 +166,7 @@ def test_todowrite_collapse_allowed_with_auth(mock_dependencies, isolated_events
     assert result["continue"] is True  # Allowed with auth
 
 
+@pytest.mark.xfail(reason="DEPRECATED: v0.4.0 removes TODO system")
 def test_todowrite_expansion_always_allowed(mock_dependencies, isolated_events_log):
     """TodoWrite expansion (adding items) is always allowed."""
     from macf.hooks.handle_pre_tool_use import run
@@ -183,6 +187,7 @@ def test_todowrite_expansion_always_allowed(mock_dependencies, isolated_events_l
     assert result["continue"] is True  # Expansion always allowed
 
 
+@pytest.mark.xfail(reason="DEPRECATED: v0.4.0 removes TODO system")
 def test_todowrite_auth_single_use(mock_dependencies, isolated_events_log):
     """Authorization is consumed after use (single-use)."""
     from macf.hooks.handle_pre_tool_use import run
