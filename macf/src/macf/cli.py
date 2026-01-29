@@ -2567,9 +2567,11 @@ def cmd_task_list(args: argparse.Namespace) -> int:
     # Build hierarchy for tree display
     task_map = {t.id: t for t in tasks}
     root_tasks = [t for t in tasks if t.parent_id is None or t.parent_id not in task_map]
+    # Sort root tasks numerically (zero-pad string IDs for proper ordering)
+    root_tasks = sorted(root_tasks, key=lambda t: str(t.id).zfill(10))
 
     def get_children(parent_id):
-        return sorted([t for t in tasks if t.parent_id == parent_id], key=lambda t: t.id)
+        return sorted([t for t in tasks if t.parent_id == parent_id], key=lambda t: str(t.id).zfill(10))
 
     def format_task(t: MacfTask, indent: int = 0) -> str:
         prefix = "  " * indent
@@ -2615,8 +2617,8 @@ def cmd_task_list(args: argparse.Namespace) -> int:
     print(f"📋 Tasks ({len(tasks)} total) - Session: {reader.session_uuid[:8]}...")
     print("-" * 60)
 
-    # Print tree from roots (sorted by ID)
-    for root in sorted(root_tasks, key=lambda t: t.id):
+    # Print tree from roots (sorted by ID with zero-padding for numeric order)
+    for root in sorted(root_tasks, key=lambda t: str(t.id).zfill(10)):
         print_tree(root)
 
     return 0
