@@ -6,12 +6,18 @@ Uses subprocess to invoke macf_tools CLI as real integration tests.
 
 CRITICAL: All subprocess tests must use isolated_cli_env fixture to prevent
 polluting production event logs with cli_command_invoked events.
+
+NOTE: This entire module is xfail'd as v0.4.0 removes the TODO system
+in favor of the Task System (see task_management.md policy).
 """
 
 import json
 import subprocess
 from pathlib import Path
 import pytest
+
+# DEPRECATED: v0.4.0 removes TODO system - entire module xfail'd
+pytestmark = pytest.mark.xfail(reason="DEPRECATED: v0.4.0 removes TODO system in favor of Task System")
 
 
 @pytest.fixture(autouse=True)

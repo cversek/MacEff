@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """
-Unit tests for LanceDB policy search.
+Unit tests for policy search (hybrid_search module).
 
-Tests macf.hybrid_search.lancedb_search module:
-- LanceDBPolicySearch initialization
+Tests macf.hybrid_search.policy_search module:
+- PolicySearch initialization
 - semantic_search() - Pure vector similarity
 - hybrid_search() - Vector + FTS with graceful fallback
 - Graceful handling when index doesn't exist
 
 Philosophy: 4-6 focused tests covering public API, not exhaustive permutations.
+
+NOTE: Refactored in v0.4.0 - LanceDBPolicySearch renamed to PolicySearch,
+module moved from lancedb_search to policy_search.
 """
 
 import pytest
@@ -17,8 +20,8 @@ from unittest.mock import Mock, patch, MagicMock
 import tempfile
 
 
-class TestLanceDBPolicySearch:
-    """Test LanceDBPolicySearch class."""
+class TestPolicySearch:
+    """Test PolicySearch class."""
 
     @pytest.fixture
     def mock_db_path(self, tmp_path):
@@ -27,13 +30,13 @@ class TestLanceDBPolicySearch:
 
     def test_initialization_with_lazy_loading(self, mock_db_path):
         """
-        LanceDBPolicySearch should initialize without loading model or DB.
+        PolicySearch should initialize without loading model or DB.
 
         Lazy loading pattern: model and table loaded on first access.
         """
-        from macf.hybrid_search.lancedb_search import LanceDBPolicySearch
+        from macf.hybrid_search.policy_search import PolicySearch
 
-        searcher = LanceDBPolicySearch(mock_db_path, model_name="all-MiniLM-L6-v2")
+        searcher = PolicySearch(mock_db_path, model_name="all-MiniLM-L6-v2")
 
         # Verify initialization
         assert searcher.db_path == mock_db_path
@@ -42,7 +45,7 @@ class TestLanceDBPolicySearch:
         # Verify lazy loading (not yet loaded)
         assert searcher._model is None
         assert searcher._db is None
-        assert searcher._table is None
+        assert searcher._documents_table is None
 
     def test_semantic_search_returns_correct_structure(self, mock_db_path):
         """
@@ -55,9 +58,9 @@ class TestLanceDBPolicySearch:
             'latency_ms': float
         }
         """
-        from macf.hybrid_search.lancedb_search import LanceDBPolicySearch
+        from macf.hybrid_search.policy_search import PolicySearch
 
-        searcher = LanceDBPolicySearch(mock_db_path)
+        searcher = PolicySearch(mock_db_path)
 
         # Mock model and table
         mock_model = Mock()
@@ -77,7 +80,7 @@ class TestLanceDBPolicySearch:
 
         # Inject mocks
         searcher._model = mock_model
-        searcher._table = mock_table
+        searcher._documents_table = mock_table
 
         # Execute search
         result = searcher.semantic_search("test query", limit=5)
@@ -105,9 +108,9 @@ class TestLanceDBPolicySearch:
 
         Should return search_type='hybrid' when successful.
         """
-        from macf.hybrid_search.lancedb_search import LanceDBPolicySearch
+        from macf.hybrid_search.policy_search import PolicySearch
 
-        searcher = LanceDBPolicySearch(mock_db_path)
+        searcher = PolicySearch(mock_db_path)
 
         # Mock model and table with FTS support
         mock_model = Mock()
@@ -126,7 +129,7 @@ class TestLanceDBPolicySearch:
         mock_table.search.return_value = mock_search
 
         searcher._model = mock_model
-        searcher._table = mock_table
+        searcher._documents_table = mock_table
 
         # Execute hybrid search
         result = searcher.hybrid_search("test query", limit=5)
@@ -144,9 +147,9 @@ class TestLanceDBPolicySearch:
 
         Should return search_type='semantic' on AttributeError or Exception.
         """
-        from macf.hybrid_search.lancedb_search import LanceDBPolicySearch
+        from macf.hybrid_search.policy_search import PolicySearch
 
-        searcher = LanceDBPolicySearch(mock_db_path)
+        searcher = PolicySearch(mock_db_path)
 
         # Mock model
         mock_model = Mock()
@@ -175,7 +178,7 @@ class TestLanceDBPolicySearch:
         mock_table.search.side_effect = search_side_effect
 
         searcher._model = mock_model
-        searcher._table = mock_table
+        searcher._documents_table = mock_table
 
         # Execute hybrid search
         result = searcher.hybrid_search("test query", limit=5)
@@ -191,13 +194,13 @@ class TestLanceDBPolicySearch:
 
         Should gracefully handle AttributeError when create_fts_index not available.
         """
-        from macf.hybrid_search.lancedb_search import LanceDBPolicySearch
+        from macf.hybrid_search.policy_search import PolicySearch
 
-        searcher = LanceDBPolicySearch(mock_db_path)
+        searcher = PolicySearch(mock_db_path)
 
         # Mock table without FTS support
         mock_table = Mock(spec=[])  # Empty spec = no methods
-        searcher._table = mock_table
+        searcher._documents_table = mock_table
 
         result = searcher.check_fts_support()
 
@@ -213,19 +216,19 @@ class TestLanceDBPolicySearch:
 
         LanceDB will raise FileNotFoundError when opening non-existent table.
         """
-        from macf.hybrid_search.lancedb_search import LanceDBPolicySearch
+        from macf.hybrid_search.policy_search import PolicySearch
 
         # Use non-existent path
         non_existent = mock_db_path / "does_not_exist.lance"
-        searcher = LanceDBPolicySearch(non_existent)
+        searcher = PolicySearch(non_existent)
 
         # Attempting to access table should raise (caught by user code)
         with pytest.raises(Exception):
             # This will fail when trying to open non-existent table
-            _ = searcher.table
+            _ = searcher.documents_table
 
 
-class TestLanceDBIntegration:
+class TestPolicySearchIntegration:
     """Integration-level test with mock LanceDB."""
 
     def test_run_test_queries_function_exists(self):
@@ -234,7 +237,7 @@ class TestLanceDBIntegration:
 
         Used in CLI testing and manual validation.
         """
-        from macf.hybrid_search.lancedb_search import run_test_queries
+        from macf.hybrid_search.policy_search import run_test_queries
 
         # Verify function exists and is callable
         assert callable(run_test_queries)

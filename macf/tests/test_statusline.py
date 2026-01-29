@@ -116,21 +116,22 @@ class TestDetectProject:
 
 
 class TestGetStatuslineData:
-    """Test statusline data gathering integration."""
+    """Test statusline data gathering integration.
 
-    @patch("macf.utils.statusline.ConsciousnessConfig")
+    NOTE: v0.4.0 refactored agent_name detection to use get_agent_identity()
+    instead of ConsciousnessConfig.agent_id.
+    """
+
+    @patch("macf.utils.statusline.get_agent_identity")
     @patch("macf.utils.statusline.detect_execution_environment")
     @patch("macf.utils.statusline.detect_project")
     @patch("macf.utils.statusline.get_token_info")
     def test_data_from_macf_sources(
-        self, mock_token_info, mock_detect_project, mock_detect_env, mock_config
+        self, mock_token_info, mock_detect_project, mock_detect_env, mock_agent_id
     ):
         """Gathers data from MACF sources when no CC JSON provided."""
         # Setup mocks
-        mock_config_instance = MagicMock()
-        mock_config_instance.agent_id = "test_agent"
-        mock_config.return_value = mock_config_instance
-
+        mock_agent_id.return_value = "test_agent"
         mock_detect_project.return_value = "TestProject"
         mock_detect_env.return_value = "Host macOS"
         mock_token_info.return_value = {
@@ -146,70 +147,74 @@ class TestGetStatuslineData:
         assert result["tokens_used"] == 50000
         assert result["cluac"] == 75
 
-    @patch("macf.utils.statusline.ConsciousnessConfig")
+    @patch("macf.utils.statusline.get_agent_identity")
     @patch("macf.utils.statusline.detect_execution_environment")
     @patch("macf.utils.statusline.detect_project")
-    def test_data_from_cc_json(self, mock_detect_project, mock_detect_env, mock_config):
-        """Claude Code JSON takes priority for token counts."""
-        # Setup mocks
-        mock_config_instance = MagicMock()
-        mock_config_instance.agent_id = "manny"
-        mock_config.return_value = mock_config_instance
+    @patch("macf.utils.statusline.get_token_info")
+    def test_data_uses_macf_token_info(
+        self, mock_token_info, mock_detect_project, mock_detect_env, mock_agent_id
+    ):
+        """Token counts come from MACF's get_token_info(), not CC JSON.
 
+        NOTE: v0.4.0 changed behavior - CC JSON token fields are ignored because
+        they represent session totals, not context window usage. MACF calculates
+        actual context window usage from event log.
+        """
+        # Setup mocks
+        mock_agent_id.return_value = "manny"
         mock_detect_project.return_value = "NeuroVEP"
         mock_detect_env.return_value = "Container Linux"
-
-        # Provide CC JSON with token data
-        cc_json = {
+        mock_token_info.return_value = {
             "tokens_used": 120000,
-            "tokens_total": 200000,
-            "cluac": 40
+            "cluac_level": 40
         }
 
+        # Even if CC JSON is passed, MACF token info is used
+        cc_json = {"tokens_used": 999999, "tokens_total": 999999, "cluac": 99}
         result = get_statusline_data(cc_json)
 
         assert result["agent_name"] == "manny"
         assert result["project"] == "NeuroVEP"
+        # Tokens come from mock_token_info, NOT cc_json
         assert result["tokens_used"] == 120000
-        assert result["tokens_total"] == 200000
         assert result["cluac"] == 40
 
-    @patch("macf.utils.statusline.ConsciousnessConfig")
+    @patch("macf.utils.statusline.get_agent_identity")
     @patch("macf.utils.statusline.detect_execution_environment")
     @patch("macf.utils.statusline.detect_project")
-    def test_cluac_calculation_from_cc_json(
-        self, mock_detect_project, mock_detect_env, mock_config
+    @patch("macf.utils.statusline.get_token_info")
+    def test_cluac_from_macf_token_info(
+        self, mock_token_info, mock_detect_project, mock_detect_env, mock_agent_id
     ):
-        """Calculates CLUAC from CC JSON when not provided."""
-        # Setup mocks
-        mock_config_instance = MagicMock()
-        mock_config_instance.agent_id = "agent"
-        mock_config.return_value = mock_config_instance
+        """CLUAC is calculated by MACF's get_token_info().
 
+        NOTE: v0.4.0 changed behavior - CLUAC comes from MACF event log analysis,
+        not CC JSON. CC JSON token fields don't represent context window.
+        """
+        # Setup mocks
+        mock_agent_id.return_value = "agent"
         mock_detect_project.return_value = None
         mock_detect_env.return_value = "Host"
-
-        # CC JSON with tokens but no CLUAC
-        cc_json = {
+        mock_token_info.return_value = {
             "tokens_used": 50000,
-            "tokens_total": 200000
+            "cluac_level": 75
         }
 
-        result = get_statusline_data(cc_json)
+        result = get_statusline_data()
 
-        # CLUAC = (200000 - 50000) / 200000 * 100 = 75%
+        # CLUAC comes from get_token_info(), pre-calculated
         assert result["cluac"] == 75
 
-    @patch("macf.utils.statusline.ConsciousnessConfig")
+    @patch("macf.utils.statusline.get_agent_identity")
     @patch("macf.utils.statusline.detect_execution_environment")
     @patch("macf.utils.statusline.detect_project")
     @patch("macf.utils.statusline.get_token_info")
     def test_graceful_failure_handling(
-        self, mock_token_info, mock_detect_project, mock_detect_env, mock_config
+        self, mock_token_info, mock_detect_project, mock_detect_env, mock_agent_id
     ):
         """Graceful fallback when components fail."""
-        # Config and env failures are caught, others return None
-        mock_config.side_effect = Exception("Config failed")
+        # Agent identity and env failures are caught
+        mock_agent_id.side_effect = Exception("Agent ID failed")
         mock_detect_project.return_value = None  # Returns None, doesn't raise
         mock_detect_env.side_effect = Exception("Env detection failed")
         mock_token_info.side_effect = Exception("Token info failed")
@@ -217,7 +222,7 @@ class TestGetStatuslineData:
         result = get_statusline_data()
 
         # Should return safe defaults for caught exceptions
-        assert result["agent_name"] == "unknown"
+        assert result["agent_name"] == "unknown@unknown"  # Fallback value from get_statusline_data
         assert result["project"] is None
         assert result["environment"] == "Unknown"
         assert result["tokens_used"] == 0
