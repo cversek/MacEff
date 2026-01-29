@@ -79,9 +79,9 @@ class MacfTaskMetaData:
     # Optional - hierarchy
     parent_id: Optional[str] = None
 
-    # Optional - BUG task fix tracking (XOR: exactly one required for BUG tasks)
-    fix_plan: Optional[str] = None      # Inline fix description (simple bugs)
-    plan_ca_ref: Optional[str] = None   # Path to BUG_FIX roadmap CA (complex bugs)
+    # Optional - inline plan (XOR with plan_ca_ref for BUG/DELEG_PLAN tasks)
+    plan: Optional[str] = None          # Inline plan description (simple tasks)
+    plan_ca_ref: Optional[str] = None   # Path to CA document (complex tasks)
 
     # Optional - version association
     repo: Optional[str] = None
@@ -150,7 +150,7 @@ class MacfTaskMetaData:
             created_by=data.get("created_by"),
             task_type=data.get("task_type"),
             plan_ca_ref=data.get("plan_ca_ref"),
-            fix_plan=data.get("fix_plan"),
+            plan=data.get("plan"),
             experiment_ca_ref=data.get("experiment_ca_ref"),
             parent_id=data.get("parent_id"),
             repo=data.get("repo"),
@@ -238,8 +238,8 @@ class MacfTaskMetaData:
             data["task_type"] = self.task_type
         if self.plan_ca_ref:
             data["plan_ca_ref"] = self.plan_ca_ref
-        if self.fix_plan:
-            data["fix_plan"] = self.fix_plan
+        if self.plan:
+            data["plan"] = self.plan
         if self.experiment_ca_ref:
             data["experiment_ca_ref"] = self.experiment_ca_ref
         if self.parent_id is not None:

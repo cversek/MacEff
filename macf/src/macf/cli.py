@@ -3456,15 +3456,15 @@ def cmd_task_create_bug(args: argparse.Namespace) -> int:
         else:
             parent_id = parent_id_str  # Keep as string for consistency
 
-    # Get fix_plan or plan_ca_ref (XOR enforced in create_bug)
-    fix_plan = getattr(args, 'fix_plan', None)
+    # Get plan or plan_ca_ref (XOR enforced in create_bug)
+    plan = getattr(args, 'plan', None)
     plan_ca_ref = getattr(args, 'plan_ca_ref', None)
 
     try:
         result = create_bug(
             title=args.title,
             parent_id=parent_id,
-            fix_plan=fix_plan,
+            plan=plan,
             plan_ca_ref=plan_ca_ref
         )
 
@@ -3500,6 +3500,57 @@ def cmd_task_create_bug(args: argparse.Namespace) -> int:
         return 0
     except Exception as e:
         print(f"❌ Failed to create bug: {e}")
+        return 1
+
+
+def cmd_task_create_deleg(args: argparse.Namespace) -> int:
+    """Create DELEG_PLAN task for delegation work."""
+    from .task.create import create_deleg
+
+    # Parse optional parent ID
+    parent_id = None
+    if args.parent:
+        parent_id_str = args.parent.lstrip('#')
+        parent_id = parent_id_str
+
+    # Get plan or plan_ca_ref (XOR enforced in create_deleg)
+    plan = getattr(args, 'plan', None)
+    plan_ca_ref = getattr(args, 'plan_ca_ref', None)
+
+    try:
+        result = create_deleg(
+            title=args.title,
+            parent_id=parent_id,
+            plan=plan,
+            plan_ca_ref=plan_ca_ref
+        )
+
+        if args.json:
+            output = {
+                "task_id": result.task_id,
+                "subject": result.subject,
+                "mtmd": {
+                    "version": result.mtmd.version,
+                    "creation_breadcrumb": result.mtmd.creation_breadcrumb,
+                    "created_cycle": result.mtmd.created_cycle,
+                    "created_by": result.mtmd.created_by,
+                    "parent_id": result.mtmd.parent_id
+                }
+            }
+            print(json.dumps(output, indent=2))
+        else:
+            print(f"✅ Created DELEG task #{result.task_id}")
+            print(f"🏷️  Subject: {result.subject}")
+            if parent_id:
+                print(f"📎 Parent: #{parent_id}")
+            print()
+            print("Next steps:")
+            print(f"1. Run `macf_tools task get #{result.task_id}` to view details")
+            print("2. Mark in_progress when starting delegation")
+
+        return 0
+    except Exception as e:
+        print(f"❌ Failed to create deleg: {e}")
         return 1
 
 
@@ -4383,11 +4434,23 @@ def _build_parser() -> argparse.ArgumentParser:
     task_create_bug_parser.add_argument("title", help="bug title")
     # XOR: exactly one of fix_plan or plan_ca_ref required
     bug_plan_group = task_create_bug_parser.add_mutually_exclusive_group(required=True)
-    bug_plan_group.add_argument("--fix-plan", dest="fix_plan", help="inline fix description (simple bugs)")
+    bug_plan_group.add_argument("--plan", dest="plan", help="inline plan description (simple bugs)")
     bug_plan_group.add_argument("--plan-ca-ref", dest="plan_ca_ref", help="path to BUG_FIX roadmap CA (complex bugs)")
     task_create_bug_parser.add_argument("--json", dest="json", action="store_true",
                                         help="output as JSON")
     task_create_bug_parser.set_defaults(func=cmd_task_create_bug)
+
+    # task create deleg
+    task_create_deleg_parser = task_create_sub.add_parser("deleg", help="create DELEG_PLAN task for delegation")
+    task_create_deleg_parser.add_argument("--parent", required=False, help="optional parent task ID (e.g., #67 or 67)")
+    task_create_deleg_parser.add_argument("title", help="delegation title")
+    # XOR: exactly one of plan or plan_ca_ref required
+    deleg_plan_group = task_create_deleg_parser.add_mutually_exclusive_group(required=True)
+    deleg_plan_group.add_argument("--plan", dest="plan", help="inline delegation plan (simple delegations)")
+    deleg_plan_group.add_argument("--plan-ca-ref", dest="plan_ca_ref", help="path to deleg_plan.md CA (complex delegations)")
+    task_create_deleg_parser.add_argument("--json", dest="json", action="store_true",
+                                          help="output as JSON")
+    task_create_deleg_parser.set_defaults(func=cmd_task_create_deleg)
 
     # task create task
     task_create_task_parser = task_create_sub.add_parser("task", help="create standalone task")

@@ -109,6 +109,7 @@ def compose_subject(task_id: str, task_type: str, title: str,
             "MISSION": "🗺️ MISSION:",
             "EXPERIMENT": "🧪 EXPERIMENT:",
             "DETOUR": "↩️ DETOUR:",
+            "DELEG_PLAN": "📜 DELEG:",
             "BUG": "🐛 BUG:",
             "TASK": "🔧",  # Generic task with wrench emoji
         }
@@ -717,7 +718,7 @@ def create_phase(
 def create_bug(
     title: str,
     parent_id: Optional[str] = None,
-    fix_plan: Optional[str] = None,
+    plan: Optional[str] = None,
     plan_ca_ref: Optional[str] = None
 ) -> CreateResult:
     """
@@ -730,18 +731,18 @@ def create_bug(
     Args:
         title: Bug title (e.g., "Fix validation error")
         parent_id: Optional parent task ID (string to support "000" etc.)
-        fix_plan: Inline fix description for simple bugs (XOR with plan_ca_ref)
-        plan_ca_ref: Path to BUG_FIX roadmap CA for complex bugs (XOR with fix_plan)
+        plan: Inline fix description for simple bugs (XOR with plan_ca_ref)
+        plan_ca_ref: Path to BUG_FIX roadmap CA for complex bugs (XOR with plan)
 
     Returns:
         CreateResult with task_id and mtmd
 
     Raises:
-        ValueError: If neither or both of fix_plan and plan_ca_ref are provided
+        ValueError: If neither or both of plan and plan_ca_ref are provided
     """
-    # Enforce XOR: exactly one of fix_plan or plan_ca_ref required
-    if bool(fix_plan) == bool(plan_ca_ref):
-        raise ValueError("BUG task requires exactly one of fix_plan or plan_ca_ref (XOR)")
+    # Enforce XOR: exactly one of plan or plan_ca_ref required
+    if bool(plan) == bool(plan_ca_ref):
+        raise ValueError("BUG task requires exactly one of plan or plan_ca_ref (XOR)")
 
     from ..utils.breadcrumbs import get_breadcrumb, parse_breadcrumb
 
@@ -765,7 +766,7 @@ def create_bug(
         task_type="BUG",
         title=title,
         parent_id=effective_parent_id,
-        fix_plan=fix_plan,
+        plan=plan,
         plan_ca_ref=plan_ca_ref
     )
 
@@ -774,6 +775,73 @@ def create_bug(
 
     # Compose subject with proper ANSI nesting
     subject = compose_subject(str(task_id), "BUG", title, parent_id=effective_parent_id)
+
+    # Create task file
+    _create_task_file(task_id, subject, description)
+
+    return CreateResult(
+        task_id=task_id,
+        subject=subject,
+        mtmd=mtmd
+    )
+
+
+def create_deleg(
+    title: str,
+    parent_id: Optional[str] = None,
+    plan: Optional[str] = None,
+    plan_ca_ref: Optional[str] = None
+) -> CreateResult:
+    """
+    Create DELEG_PLAN task for delegation work.
+
+    Args:
+        title: Delegation title
+        parent_id: Optional parent task ID (usually a MISSION or DETOUR)
+        plan: Inline delegation plan (simple delegations) - XOR with plan_ca_ref
+        plan_ca_ref: Path to deleg_plan.md CA (complex delegations) - XOR with plan
+
+    Returns:
+        CreateResult with task_id and mtmd
+
+    Raises:
+        ValueError: If neither or both of plan and plan_ca_ref are provided
+    """
+    # Enforce XOR: exactly one of plan or plan_ca_ref required
+    if bool(plan) == bool(plan_ca_ref):
+        raise ValueError("DELEG_PLAN task requires exactly one of plan or plan_ca_ref (XOR)")
+
+    from ..utils.breadcrumbs import get_breadcrumb, parse_breadcrumb
+
+    # Get breadcrumb and parse cycle
+    breadcrumb = get_breadcrumb()
+    parsed = parse_breadcrumb(breadcrumb)
+    cycle = parsed['cycle'] if parsed else 1
+
+    # Get next task ID
+    task_id = _get_next_task_id()
+
+    # Default parent_id to sentinel if not specified
+    effective_parent_id = parent_id if parent_id else SENTINEL_TASK_ID
+
+    # Create MTMD
+    mtmd = MacfTaskMetaData(
+        version="1.0",
+        creation_breadcrumb=breadcrumb,
+        created_cycle=cycle,
+        created_by="PA",
+        task_type="DELEG_PLAN",
+        title=title,
+        parent_id=effective_parent_id,
+        plan=plan,
+        plan_ca_ref=plan_ca_ref
+    )
+
+    # Build description with MTMD
+    description = _generate_mtmd_block(mtmd)
+
+    # Compose subject with proper ANSI nesting
+    subject = compose_subject(str(task_id), "DELEG_PLAN", title, parent_id=effective_parent_id)
 
     # Create task file
     _create_task_file(task_id, subject, description)
