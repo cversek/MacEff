@@ -86,11 +86,19 @@ def compose_subject(task_id: str, task_type: str, title: str,
     if task_type == "SENTINEL":
         return f"{ANSI_BOLD}{ANSI_ORANGE}🛡️ MACF TASK LIST{ANSI_RESET}"
 
-    # ID prefix (dim)
-    id_part = f"{ANSI_DIM}#{task_id}{ANSI_DIM_OFF}"
+    # ID prefix (dim, right-aligned to width 4 with space padding)
+    # E.g., "  #5", " #11", "#238", "#999"
+    id_str = f"#{task_id}"
+    padded_id = id_str.rjust(4)  # Right-align to width 4
+    id_part = f"{ANSI_DIM}{padded_id}{ANSI_DIM_OFF}"
 
-    # Parent reference if exists
-    parent_part = f" {ANSI_DIM}[^#{parent_id}]{ANSI_DIM_OFF}" if parent_id else ""
+    # Parent reference if exists (also right-aligned)
+    if parent_id:
+        parent_id_str = f"#{parent_id}"
+        padded_parent = parent_id_str.rjust(4)
+        parent_part = f" {ANSI_DIM}[^{padded_parent}]{ANSI_DIM_OFF}"
+    else:
+        parent_part = ""
 
     # Type emoji/marker
     # PHASE type: 📋 if has subplan (plan_ca_ref), - if not
