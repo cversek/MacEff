@@ -21,7 +21,7 @@ def _emit_event(event: str, data: dict) -> bool:
     from ..agent_events_log import append_event
     return append_event(event, data)
 
-def start_dev_drv(session_id: str, agent_id: Optional[str] = None, prompt_uuid: Optional[str] = None) -> bool:
+def start_dev_drv(session_id: str, agent_id: Optional[str] = None, prompt_uuid: Optional[str] = None, prompt_preview: Optional[str] = None) -> bool:
     """
     Mark Development Drive start.
 
@@ -32,6 +32,7 @@ def start_dev_drv(session_id: str, agent_id: Optional[str] = None, prompt_uuid: 
         session_id: Session identifier
         agent_id: Agent identifier (unused, kept for API compatibility)
         prompt_uuid: Prompt UUID (auto-detected from JSONL if None)
+        prompt_preview: First 200 chars of user prompt for forensic recovery (optional)
 
     Returns:
         True if successful, False otherwise
@@ -46,11 +47,15 @@ def start_dev_drv(session_id: str, agent_id: Optional[str] = None, prompt_uuid: 
         prompt_uuid = f"gen_{uuid.uuid4().hex[:8]}"
 
     # EVENT-FIRST: Event is sole truth
-    _emit_event("dev_drv_started", {
+    event_data = {
         "session_id": session_id,
         "prompt_uuid": prompt_uuid,
         "timestamp": started_at
-    })
+    }
+    # Include prompt preview for forensic recovery if provided
+    if prompt_preview:
+        event_data["prompt_preview"] = prompt_preview
+    _emit_event("dev_drv_started", event_data)
 
     return True
 
