@@ -401,7 +401,7 @@ def create_mission(
 
     roadmap_file.write_text(roadmap_content)
 
-    # Create MTMD with title for recomposition
+    # Create MTMD with title for recomposition (parent_id defaults to sentinel)
     mtmd = MacfTaskMetaData(
         version="1.0",
         creation_breadcrumb=breadcrumb,
@@ -409,6 +409,7 @@ def create_mission(
         created_by="PA",
         task_type="MISSION",
         title=title,
+        parent_id=SENTINEL_TASK_ID,
         plan_ca_ref=ca_path_relative,
         repo=repo,
         target_version=version
@@ -509,7 +510,7 @@ def create_experiment(
 
     protocol_file.write_text(protocol_content)
 
-    # Create MTMD with title for recomposition
+    # Create MTMD with title for recomposition (parent_id defaults to sentinel)
     mtmd = MacfTaskMetaData(
         version="1.0",
         creation_breadcrumb=breadcrumb,
@@ -517,6 +518,7 @@ def create_experiment(
         created_by="PA",
         task_type="EXPERIMENT",
         title=title,
+        parent_id=SENTINEL_TASK_ID,
         plan_ca_ref=ca_path_relative
     )
 
@@ -619,7 +621,7 @@ def create_detour(
 
     roadmap_file.write_text(roadmap_content)
 
-    # Create MTMD with title for recomposition
+    # Create MTMD with title for recomposition (parent_id defaults to sentinel)
     mtmd = MacfTaskMetaData(
         version="1.0",
         creation_breadcrumb=breadcrumb,
@@ -627,6 +629,7 @@ def create_detour(
         created_by="PA",
         task_type="DETOUR",
         title=title,
+        parent_id=SENTINEL_TASK_ID,
         plan_ca_ref=ca_path_relative,
         repo=repo,
         target_version=version
@@ -750,6 +753,9 @@ def create_bug(
     # Get next task ID
     task_id = _get_next_task_id()
 
+    # Default parent_id to sentinel if not specified
+    effective_parent_id = parent_id if parent_id else SENTINEL_TASK_ID
+
     # Create MTMD with title and fix tracking
     mtmd = MacfTaskMetaData(
         version="1.0",
@@ -758,7 +764,7 @@ def create_bug(
         created_by="PA",
         task_type="BUG",
         title=title,
-        parent_id=parent_id,
+        parent_id=effective_parent_id,
         fix_plan=fix_plan,
         plan_ca_ref=plan_ca_ref
     )
@@ -767,7 +773,7 @@ def create_bug(
     description = _generate_mtmd_block(mtmd)
 
     # Compose subject with proper ANSI nesting
-    subject = compose_subject(str(task_id), "BUG", title, parent_id=parent_id)
+    subject = compose_subject(str(task_id), "BUG", title, parent_id=effective_parent_id)
 
     # Create task file
     _create_task_file(task_id, subject, description)
@@ -786,7 +792,7 @@ def create_task(
     Create standalone TASK for general work.
 
     Creates:
-    - Task JSON file with MTMD (no parent)
+    - Task JSON file with MTMD (parent_id defaults to sentinel)
     - Subject with 🔧 marker
 
     Args:
@@ -805,14 +811,15 @@ def create_task(
     # Get next task ID
     task_id = _get_next_task_id()
 
-    # Create MTMD with title and task_type
+    # Create MTMD with title and task_type (parent_id defaults to sentinel)
     mtmd = MacfTaskMetaData(
         version="1.0",
         creation_breadcrumb=breadcrumb,
         created_cycle=cycle,
         created_by="PA",
         task_type="TASK",
-        title=title
+        title=title,
+        parent_id=SENTINEL_TASK_ID
     )
 
     # Build description with MTMD
