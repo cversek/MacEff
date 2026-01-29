@@ -411,11 +411,58 @@ def _update_settings_file(settings_path: Path, hooks_prefix: str) -> bool:
         return False
 
 
+def _check_hooks_in_settings(settings_path: Path) -> bool:
+    """Check if hooks section exists in a settings file."""
+    try:
+        if not settings_path.exists():
+            return False
+        with open(settings_path) as f:
+            settings = json.load(f)
+        return bool(settings.get("hooks"))
+    except Exception:
+        return False
+
+
+def _clear_hooks_from_settings(settings_path: Path) -> bool:
+    """Remove hooks section from a settings file to prevent duplicate execution."""
+    try:
+        if not settings_path.exists():
+            return True
+
+        with open(settings_path) as f:
+            settings = json.load(f)
+
+        if "hooks" not in settings:
+            return True
+
+        del settings["hooks"]
+
+        with open(settings_path, 'w') as f:
+            json.dump(settings, f, indent=2)
+
+        return True
+    except Exception as e:
+        print(f"Warning: Could not clear hooks from {settings_path}: {e}")
+        return False
+
+
 def cmd_hook_install(args: argparse.Namespace) -> int:
-    """Install all 10 consciousness hooks with local/global mode selection."""
+    """Install all 10 consciousness hooks with local/global mode selection.
+
+    IDEMPOTENT: Always clears hooks from the OTHER location to prevent duplicate execution.
+    If switching modes, prompts for confirmation.
+    """
     try:
         # Container detection (FP#27 fix - check /.dockerenv directly)
         in_container = Path("/.dockerenv").exists()
+
+        # Define both settings paths
+        global_settings = Path.home() / ".claude" / "settings.json"
+        local_settings = Path.cwd() / ".claude" / "settings.local.json"
+
+        # Check current state
+        has_global_hooks = _check_hooks_in_settings(global_settings)
+        has_local_hooks = _check_hooks_in_settings(local_settings)
 
         # Determine installation mode
         if in_container:
@@ -432,6 +479,29 @@ def cmd_hook_install(args: argparse.Namespace) -> int:
             print("[2] Global user directory (~/.claude/hooks/)")
             choice = input("\nPress Enter for [1], or enter choice: ").strip() or "1"
             mode = 'global' if choice == '2' else 'local'
+
+        # Check if switching modes (hooks exist in opposite location)
+        switching_to_global = (mode == 'global' and has_local_hooks)
+        switching_to_local = (mode == 'local' and has_global_hooks)
+
+        if switching_to_global or switching_to_local:
+            other_loc = "local (.claude/settings.local.json)" if switching_to_global else "global (~/.claude/settings.json)"
+            print(f"\n⚠️  Hooks currently exist in {other_loc}")
+            print(f"   Installing to {'global' if mode == 'global' else 'local'} will REMOVE hooks from {other_loc}")
+            confirm = input("   Continue? [y/N]: ").strip().lower()
+            if confirm != 'y':
+                print("❌ Cancelled")
+                return 1
+
+        # Clear hooks from the OTHER location (always, to ensure no duplicates)
+        if mode == 'local':
+            if has_global_hooks:
+                print(f"   Clearing hooks from global settings...")
+                _clear_hooks_from_settings(global_settings)
+        else:  # global
+            if has_local_hooks:
+                print(f"   Clearing hooks from local settings...")
+                _clear_hooks_from_settings(local_settings)
 
         # Set paths based on mode and environment
         if mode == 'global':
