@@ -2742,13 +2742,13 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
     """Display task hierarchy tree from a root task."""
     from .task import TaskReader
 
-    # Parse task ID
+    # Parse task ID (preserve string IDs like "000")
     task_id_str = args.task_id.lstrip('#')
-    try:
-        root_id = int(task_id_str)
-    except ValueError:
-        print(f"❌ Invalid task ID: {args.task_id}")
-        return 1
+    # Keep as string if it has leading zeros, otherwise normalize
+    if task_id_str.startswith('0') and len(task_id_str) > 1:
+        root_id = task_id_str  # Preserve leading zeros (e.g., "000")
+    else:
+        root_id = task_id_str  # Keep as string for consistent comparison
 
     reader = TaskReader()
     all_tasks = reader.read_all_tasks()
