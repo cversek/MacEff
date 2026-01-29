@@ -286,8 +286,7 @@ class MacfTask:
     # Parsed MTMD (None if no MTMD block in description)
     mtmd: Optional[MacfTaskMetaData] = None
 
-    # Computed hierarchy fields (from subject line parsing)
-    parent_ref: Optional[str] = None  # Extracted from [^#N] prefix
+    # Computed hierarchy fields
     task_type: Optional[str] = None   # MISSION, EXPERIMENT, DETOUR, PHASE, or None
 
     # Source tracking
@@ -314,12 +313,6 @@ class MacfTask:
         # Parse MTMD from description
         mtmd = MacfTaskMetaData.parse(description)
 
-        # Extract parent reference from subject [^#N]
-        parent_ref = None
-        parent_match = re.search(r'\[\^#(\d+)\]', subject)
-        if parent_match:
-            parent_ref = parent_match.group(1)  # Keep as string
-
         # Detect task type from emoji prefix
         task_type = None
         if "🗺️" in subject:
@@ -339,22 +332,19 @@ class MacfTask:
             blocks=blocks,
             blocked_by=blocked_by,
             mtmd=mtmd,
-            parent_ref=parent_ref,
             task_type=task_type,
             session_uuid=session_uuid,
             file_path=file_path,
         )
 
     @property
-    def parent_id(self) -> Optional[int]:
+    def parent_id(self) -> Optional[str]:
         """
-        Get parent ID from either MTMD or subject prefix.
-
-        MTMD parent_id takes precedence if present.
+        Get parent ID from MTMD (authoritative source).
         """
         if self.mtmd and self.mtmd.parent_id is not None:
-            return self.mtmd.parent_id
-        return self.parent_ref
+            return str(self.mtmd.parent_id)
+        return None
 
     @property
     def status_emoji(self) -> str:
