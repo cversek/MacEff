@@ -3454,8 +3454,17 @@ def cmd_task_create_bug(args: argparse.Namespace) -> int:
         else:
             parent_id = parent_id_str  # Keep as string for consistency
 
+    # Get fix_plan or plan_ca_ref (XOR enforced in create_bug)
+    fix_plan = getattr(args, 'fix_plan', None)
+    plan_ca_ref = getattr(args, 'plan_ca_ref', None)
+
     try:
-        result = create_bug(title=args.title, parent_id=parent_id)
+        result = create_bug(
+            title=args.title,
+            parent_id=parent_id,
+            fix_plan=fix_plan,
+            plan_ca_ref=plan_ca_ref
+        )
 
         if args.json:
             # JSON output for automation
@@ -3492,12 +3501,12 @@ def cmd_task_create_bug(args: argparse.Namespace) -> int:
         return 1
 
 
-def cmd_task_create_adhoc(args: argparse.Namespace) -> int:
-    """Create standalone AD_HOC task for urgent unplanned work."""
-    from .task.create import create_adhoc
+def cmd_task_create_task(args: argparse.Namespace) -> int:
+    """Create standalone TASK for general work."""
+    from .task.create import create_task
 
     try:
-        result = create_adhoc(title=args.title)
+        result = create_task(title=args.title)
 
         if args.json:
             # JSON output for automation
@@ -3514,7 +3523,7 @@ def cmd_task_create_adhoc(args: argparse.Namespace) -> int:
             print(json.dumps(output, indent=2))
         else:
             # Human-friendly output
-            print(f"✅ Created AD_HOC task #{result.task_id}")
+            print(f"✅ Created task #{result.task_id}")
             print(f"🏷️  Subject: {result.subject}")
             print()
             print("Next steps:")
@@ -3523,7 +3532,7 @@ def cmd_task_create_adhoc(args: argparse.Namespace) -> int:
 
         return 0
     except Exception as e:
-        print(f"❌ Failed to create AD_HOC task: {e}")
+        print(f"❌ Failed to create task: {e}")
         return 1
 
 
@@ -3816,8 +3825,8 @@ def cmd_task_metadata_validate(args: argparse.Namespace) -> int:
         task_type = "PHASE"
     elif "🐛" in subject or "BUG" in subject:
         task_type = "BUG"
-    elif "🔧" in subject or "AD_HOC" in subject:
-        task_type = "AD_HOC"
+    elif "🔧" in subject:
+        task_type = "TASK"
 
     print(f"   Type: {task_type}")
     print()
@@ -4370,16 +4379,20 @@ def _build_parser() -> argparse.ArgumentParser:
     task_create_bug_parser = task_create_sub.add_parser("bug", help="create bug task (standalone or under parent)")
     task_create_bug_parser.add_argument("--parent", required=False, help="optional parent task ID (e.g., #67 or 67)")
     task_create_bug_parser.add_argument("title", help="bug title")
+    # XOR: exactly one of fix_plan or plan_ca_ref required
+    bug_plan_group = task_create_bug_parser.add_mutually_exclusive_group(required=True)
+    bug_plan_group.add_argument("--fix-plan", dest="fix_plan", help="inline fix description (simple bugs)")
+    bug_plan_group.add_argument("--plan-ca-ref", dest="plan_ca_ref", help="path to BUG_FIX roadmap CA (complex bugs)")
     task_create_bug_parser.add_argument("--json", dest="json", action="store_true",
                                         help="output as JSON")
     task_create_bug_parser.set_defaults(func=cmd_task_create_bug)
 
-    # task create adhoc
-    task_create_adhoc_parser = task_create_sub.add_parser("adhoc", help="create standalone AD_HOC task")
-    task_create_adhoc_parser.add_argument("title", help="task title")
-    task_create_adhoc_parser.add_argument("--json", dest="json", action="store_true",
+    # task create task
+    task_create_task_parser = task_create_sub.add_parser("task", help="create standalone task")
+    task_create_task_parser.add_argument("title", help="task title")
+    task_create_task_parser.add_argument("--json", dest="json", action="store_true",
                                           help="output as JSON")
-    task_create_adhoc_parser.set_defaults(func=cmd_task_create_adhoc)
+    task_create_task_parser.set_defaults(func=cmd_task_create_task)
 
     # task archive
     task_archive_parser = task_sub.add_parser("archive", help="archive task to disk")

@@ -63,7 +63,7 @@ class MacfTaskMetaData:
     created_by: Optional[str] = None  # PA | SA:{agent_type}
 
     # Task type - AUTHORITATIVE source (takes precedence over subject line emoji parsing)
-    # Valid values: MISSION, EXPERIMENT, DETOUR, DELEG_PLAN, SUBPLAN, ARCHIVE, AD_HOC, BUG
+    # Valid values: MISSION, EXPERIMENT, DETOUR, PHASE, TASK, BUG, DELEG_PLAN, SUBPLAN, ARCHIVE
     # See task_management.md §2.1 for definitions
     task_type: Optional[str] = None
 
