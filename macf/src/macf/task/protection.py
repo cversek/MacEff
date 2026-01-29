@@ -52,8 +52,8 @@ TYPES_REQUIRING_PLAN_CA: Set[str] = {
 
 # All valid task types
 VALID_TASK_TYPES: Set[str] = {
-    "MISSION", "EXPERIMENT", "DETOUR", "DELEG_PLAN", "SUBPLAN",
-    "ARCHIVE", "AD_HOC", "BUG"
+    "MISSION", "EXPERIMENT", "DETOUR", "PHASE", "TASK", "BUG",
+    "DELEG_PLAN", "SUBPLAN", "ARCHIVE"
 }
 
 # Emoji to type mapping (fallback when MTMD task_type not set)
@@ -64,7 +64,7 @@ EMOJI_TO_TYPE: Dict[str, str] = {
     "📜": "DELEG_PLAN",
     "📋": "SUBPLAN",
     "📦": "ARCHIVE",
-    "🔧": "AD_HOC",
+    "🔧": "TASK",
     "🐛": "BUG",
 }
 

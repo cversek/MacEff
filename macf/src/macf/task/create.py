@@ -70,8 +70,18 @@ SENTINEL_TASK_ID = "000"
 
 
 def compose_subject(task_id: str, task_type: str, title: str,
-                    parent_id: Optional[str] = None, status: str = "pending") -> str:
-    """Compose subject from components with proper ANSI formatting."""
+                    parent_id: Optional[str] = None, status: str = "pending",
+                    plan_ca_ref: Optional[str] = None) -> str:
+    """Compose subject from components with proper ANSI formatting.
+
+    Args:
+        task_id: Task ID (string)
+        task_type: One of MISSION, EXPERIMENT, DETOUR, BUG, AD_HOC, TASK, PHASE, SENTINEL
+        title: Plain semantic title
+        parent_id: Optional parent task ID for hierarchy
+        status: Task status (pending, in_progress, completed)
+        plan_ca_ref: Optional CA reference (affects PHASE display: 📋 if set, - if not)
+    """
     # Sentinel is special
     if task_type == "SENTINEL":
         return f"{ANSI_BOLD}{ANSI_ORANGE}🛡️ MACF TASK LIST{ANSI_RESET}"
@@ -82,16 +92,19 @@ def compose_subject(task_id: str, task_type: str, title: str,
     # Parent reference if exists
     parent_part = f" {ANSI_DIM}[^#{parent_id}]{ANSI_DIM_OFF}" if parent_id else ""
 
-    # Type emoji (no "AD_HOC:" prefix - just wrench)
-    type_map = {
-        "MISSION": "🗺️ MISSION:",
-        "EXPERIMENT": "🧪 EXPERIMENT:",
-        "DETOUR": "↩️ DETOUR:",
-        "BUG": "🐛 BUG:",
-        "AD_HOC": "🔧",
-        "TASK": "📋",
-    }
-    type_part = type_map.get(task_type, "")
+    # Type emoji/marker
+    # PHASE type: 📋 if has subplan (plan_ca_ref), - if not
+    if task_type == "PHASE":
+        type_part = "📋" if plan_ca_ref else "-"
+    else:
+        type_map = {
+            "MISSION": "🗺️ MISSION:",
+            "EXPERIMENT": "🧪 EXPERIMENT:",
+            "DETOUR": "↩️ DETOUR:",
+            "BUG": "🐛 BUG:",
+            "TASK": "🔧",  # Generic task with wrench emoji
+        }
+        type_part = type_map.get(task_type, "")
 
     return f"{id_part}{parent_part} {type_part} {title}"
 
@@ -380,12 +393,14 @@ def create_mission(
 
     roadmap_file.write_text(roadmap_content)
 
-    # Create MTMD
+    # Create MTMD with title for recomposition
     mtmd = MacfTaskMetaData(
         version="1.0",
         creation_breadcrumb=breadcrumb,
         created_cycle=cycle,
         created_by="PA",
+        task_type="MISSION",
+        title=title,
         plan_ca_ref=ca_path_relative,
         repo=repo,
         target_version=version
@@ -394,8 +409,8 @@ def create_mission(
     # Build description with MTMD
     description = f"→ {ca_path_relative}\n\n{_generate_mtmd_block(mtmd)}"
 
-    # Create subject with dim ID prefix and emoji
-    subject = f"{ANSI_DIM}#{task_id}{ANSI_RESET} 🗺️ MISSION: {title}"
+    # Compose subject with proper ANSI nesting
+    subject = compose_subject(str(task_id), "MISSION", title)
 
     # Create task file
     _create_task_file(task_id, subject, description)
@@ -486,20 +501,22 @@ def create_experiment(
 
     protocol_file.write_text(protocol_content)
 
-    # Create MTMD
+    # Create MTMD with title for recomposition
     mtmd = MacfTaskMetaData(
         version="1.0",
         creation_breadcrumb=breadcrumb,
         created_cycle=cycle,
         created_by="PA",
+        task_type="EXPERIMENT",
+        title=title,
         plan_ca_ref=ca_path_relative
     )
 
     # Build description with MTMD
     description = f"→ {ca_path_relative}\n\n{_generate_mtmd_block(mtmd)}"
 
-    # Create subject with dim ID prefix and emoji
-    subject = f"{ANSI_DIM}#{task_id}{ANSI_RESET} 🧪 EXPERIMENT: {title}"
+    # Compose subject with proper ANSI nesting
+    subject = compose_subject(str(task_id), "EXPERIMENT", title)
 
     # Create task file
     _create_task_file(task_id, subject, description)
@@ -594,12 +611,14 @@ def create_detour(
 
     roadmap_file.write_text(roadmap_content)
 
-    # Create MTMD
+    # Create MTMD with title for recomposition
     mtmd = MacfTaskMetaData(
         version="1.0",
         creation_breadcrumb=breadcrumb,
         created_cycle=cycle,
         created_by="PA",
+        task_type="DETOUR",
+        title=title,
         plan_ca_ref=ca_path_relative,
         repo=repo,
         target_version=version
@@ -608,8 +627,8 @@ def create_detour(
     # Build description with MTMD
     description = f"→ {ca_path_relative}\n\n{_generate_mtmd_block(mtmd)}"
 
-    # Create subject with dim ID prefix and emoji
-    subject = f"{ANSI_DIM}#{task_id}{ANSI_RESET} ↩️ DETOUR: {title}"
+    # Compose subject with proper ANSI nesting
+    subject = compose_subject(str(task_id), "DETOUR", title)
 
     # Create task file
     _create_task_file(task_id, subject, description)
@@ -625,18 +644,20 @@ def create_detour(
 
 def create_phase(
     parent_id: int,
-    title: str
+    title: str,
+    plan_ca_ref: Optional[str] = None
 ) -> CreateResult:
     """
     Create phase task under parent.
 
     Creates:
     - Task JSON file with MTMD (includes parent_id)
-    - Subject prefixed with [^#N] parent reference
+    - Subject with 📋 if has subplan, - if not
 
     Args:
         parent_id: Parent task ID
         title: Phase title (e.g., "Phase 1: Setup")
+        plan_ca_ref: Optional path to subplan CA (affects marker: 📋 vs -)
 
     Returns:
         CreateResult with task_id and mtmd
@@ -651,20 +672,25 @@ def create_phase(
     # Get next task ID
     task_id = _get_next_task_id()
 
-    # Create MTMD with parent_id
+    # Create MTMD with parent_id, title, and optional plan_ca_ref
     mtmd = MacfTaskMetaData(
         version="1.0",
         creation_breadcrumb=breadcrumb,
         created_cycle=cycle,
         created_by="PA",
-        parent_id=parent_id
+        task_type="PHASE",
+        title=title,
+        parent_id=parent_id,
+        plan_ca_ref=plan_ca_ref
     )
 
-    # Build description with MTMD
+    # Build description with MTMD only (plan_ca_ref is in MTMD, not displayed separately)
     description = _generate_mtmd_block(mtmd)
 
-    # Create subject with dim ID prefix, dim parent reference and emoji
-    subject = f"{ANSI_DIM}#{task_id}{ANSI_RESET} {ANSI_DIM}[^#{parent_id}]{ANSI_RESET} 📋 {title}"
+    # Compose subject with proper ANSI nesting
+    # PHASE uses 📋 if has subplan, - if not
+    subject = compose_subject(str(task_id), "PHASE", title,
+                              parent_id=str(parent_id), plan_ca_ref=plan_ca_ref)
 
     # Create task file
     _create_task_file(task_id, subject, description)
@@ -672,28 +698,40 @@ def create_phase(
     return CreateResult(
         task_id=task_id,
         subject=subject,
+        ca_path=plan_ca_ref,
         mtmd=mtmd
     )
 
 
 def create_bug(
     title: str,
-    parent_id: Optional[str] = None
+    parent_id: Optional[str] = None,
+    fix_plan: Optional[str] = None,
+    plan_ca_ref: Optional[str] = None
 ) -> CreateResult:
     """
     Create bug task (standalone or under parent).
 
     Creates:
     - Task JSON file with MTMD (includes parent_id if provided)
-    - Subject prefixed with 🐛 emoji (and [^#N] parent reference if parent)
+    - Subject with 🐛 BUG: prefix
 
     Args:
         title: Bug title (e.g., "Fix validation error")
         parent_id: Optional parent task ID (string to support "000" etc.)
+        fix_plan: Inline fix description for simple bugs (XOR with plan_ca_ref)
+        plan_ca_ref: Path to BUG_FIX roadmap CA for complex bugs (XOR with fix_plan)
 
     Returns:
         CreateResult with task_id and mtmd
+
+    Raises:
+        ValueError: If neither or both of fix_plan and plan_ca_ref are provided
     """
+    # Enforce XOR: exactly one of fix_plan or plan_ca_ref required
+    if bool(fix_plan) == bool(plan_ca_ref):
+        raise ValueError("BUG task requires exactly one of fix_plan or plan_ca_ref (XOR)")
+
     from ..utils.breadcrumbs import get_breadcrumb, parse_breadcrumb
 
     # Get breadcrumb and parse cycle
@@ -704,24 +742,24 @@ def create_bug(
     # Get next task ID
     task_id = _get_next_task_id()
 
-    # Create MTMD with optional parent_id
+    # Create MTMD with title and fix tracking
     mtmd = MacfTaskMetaData(
         version="1.0",
         creation_breadcrumb=breadcrumb,
         created_cycle=cycle,
         created_by="PA",
         task_type="BUG",
-        parent_id=parent_id
+        title=title,
+        parent_id=parent_id,
+        fix_plan=fix_plan,
+        plan_ca_ref=plan_ca_ref
     )
 
     # Build description with MTMD
     description = _generate_mtmd_block(mtmd)
 
-    # Create subject with bug emoji (and parent ref if provided)
-    if parent_id:
-        subject = f"{ANSI_DIM}#{task_id}{ANSI_RESET} {ANSI_DIM}[^#{parent_id}]{ANSI_RESET} 🐛 BUG: {title}"
-    else:
-        subject = f"{ANSI_DIM}#{task_id}{ANSI_RESET} 🐛 BUG: {title}"
+    # Compose subject with proper ANSI nesting
+    subject = compose_subject(str(task_id), "BUG", title, parent_id=parent_id)
 
     # Create task file
     _create_task_file(task_id, subject, description)
@@ -733,15 +771,15 @@ def create_bug(
     )
 
 
-def create_adhoc(
+def create_task(
     title: str
 ) -> CreateResult:
     """
-    Create standalone AD_HOC task for urgent unplanned work.
+    Create standalone TASK for general work.
 
     Creates:
     - Task JSON file with MTMD (no parent)
-    - Subject with 🔧 AD_HOC marker
+    - Subject with 🔧 marker
 
     Args:
         title: Task title (e.g., "Fix urgent CEP alignment issue")
@@ -765,7 +803,7 @@ def create_adhoc(
         creation_breadcrumb=breadcrumb,
         created_cycle=cycle,
         created_by="PA",
-        task_type="AD_HOC",
+        task_type="TASK",
         title=title
     )
 
@@ -773,7 +811,7 @@ def create_adhoc(
     description = _generate_mtmd_block(mtmd)
 
     # Compose subject using proper ANSI nesting
-    subject = compose_subject(task_id, "AD_HOC", title)
+    subject = compose_subject(str(task_id), "TASK", title)
 
     # Create task file
     _create_task_file(task_id, subject, description)
@@ -783,3 +821,7 @@ def create_adhoc(
         subject=subject,
         mtmd=mtmd
     )
+
+
+# Backwards compatibility alias (deprecated)
+create_adhoc = create_task

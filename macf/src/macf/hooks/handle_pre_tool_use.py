@@ -119,7 +119,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 "  macf_tools task create detour \"Title\"       # DETOUR for urgent work\n"
                 "  macf_tools task create phase --parent N \"Title\"  # Phase under parent\n"
                 "  macf_tools task create bug --parent N \"Title\"    # Bug under parent\n"
-                "  macf_tools task create adhoc \"Title\"        # Standalone AD_HOC\n\n"
+                "  macf_tools task create task \"Title\"         # Standalone task\n\n"
                 "📚 For guidance: macf_tools policy navigate task_management"
             )
             return {
