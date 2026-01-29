@@ -19,7 +19,7 @@ This module is called from BOTH:
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, Any, Optional, Tuple, Set
+from typing import Dict, Any, Optional, Tuple, Set, List, Union
 import re
 
 from .models import MacfTaskMetaData
@@ -376,39 +376,46 @@ def _grant_hint_update(task_id: int) -> str:
 
 def check_grant_in_events(
     operation: str,
-    task_id: Optional[int] = None,
+    task_ids: Union[str, List[str]],
     field: Optional[str] = None,
     value: Any = None,
 ) -> Tuple[bool, Optional[Dict[str, Any]]]:
     """
-    Check if a grant exists for an operation.
+    Check if a grant exists for an operation on specific task(s).
 
     Looks for grant events in the event log:
     - task_grant_update: Grant for description update
     - task_grant_delete: Grant for task deletion
     - task_grant_create: Grant for creating type without plan_ca_ref
 
-    Also checks for "granted!" keyword in recent user messages
-    (via user_message events).
-
     Args:
         operation: Operation type (update, delete, create)
-        task_id: Task ID (optional, for specific grants)
+        task_ids: Task ID(s) to check - must match exactly (set equality)
 
     Returns:
         Tuple of (has_grant, grant_event)
     """
-    from macf.event_queries import get_latest_event, get_recent_events
+    from macf.event_queries import get_latest_event
+
+    # Normalize requested task_ids to set of strings
+    if isinstance(task_ids, list):
+        requested_set = set(str(tid) for tid in task_ids)
+    else:
+        requested_set = {str(task_ids)}
 
     # Check for explicit grant event
     grant_event_type = f"task_grant_{operation}"
     grant_event = get_latest_event(grant_event_type)
 
     if grant_event:
-        # Check if grant is for this task (or any task if task_id not specified)
         grant_data = grant_event.get("data", {})
-        grant_task_id = grant_data.get("task_id")
-        if task_id is None or grant_task_id == task_id or grant_task_id is None:
+        grant_task_ids = grant_data.get("task_ids", [])
+
+        # Normalize grant task_ids to set
+        granted_set = set(str(tid) for tid in grant_task_ids)
+
+        # Sets must match exactly
+        if requested_set == granted_set:
             # Check if grant was cleared
             cleared_event = get_latest_event(f"task_grant_{operation}_cleared")
             if cleared_event:
@@ -421,41 +428,38 @@ def check_grant_in_events(
             grant_field = grant_data.get("field")
             grant_value = grant_data.get("value")
 
-            # If grant has field specified, it must match
             if grant_field is not None:
                 if field != grant_field:
-                    return False, None  # Field mismatch
-                # If grant has value specified, it must match too
+                    return False, None
                 if grant_value is not None and value != grant_value:
-                    return False, None  # Value mismatch
+                    return False, None
 
             return True, grant_event
-
-    # Check for "granted!" keyword in recent user messages
-    recent_messages = get_recent_events("user_message", max_count=5)
-    for msg_event in recent_messages:
-        content = msg_event.get("data", {}).get("content", "").lower()
-        if "granted!" in content:
-            return True, msg_event
 
     return False, None
 
 
-def clear_grant(operation: str, task_id: Optional[int] = None, reason: str = "consumed"):
+def clear_grant(operation: str, task_ids: Union[str, List[str]], reason: str = "consumed"):
     """
     Clear a grant after it's been used.
 
     Args:
         operation: Operation type (update, delete, create)
-        task_id: Task ID (optional)
+        task_ids: Task ID(s) that were granted
         reason: Reason for clearing
     """
     from macf.agent_events_log import append_event
 
+    # Normalize to list
+    if isinstance(task_ids, list):
+        ids_list = [str(tid) for tid in task_ids]
+    else:
+        ids_list = [str(task_ids)]
+
     append_event(
         event=f"task_grant_{operation}_cleared",
         data={
-            "task_id": task_id,
+            "task_ids": ids_list,
             "reason": reason
         }
     )
@@ -463,7 +467,7 @@ def clear_grant(operation: str, task_id: Optional[int] = None, reason: str = "co
 
 def create_grant(
     operation: str,
-    task_id: Optional[int] = None,
+    task_ids: Union[str, List[str]],
     reason: str = "",
     field: Optional[str] = None,
     value: Any = None,
@@ -473,15 +477,21 @@ def create_grant(
 
     Args:
         operation: Operation type (update, delete, create)
-        task_id: Task ID (optional, None for general grants)
+        task_ids: Task ID(s) - single string or list of strings (REQUIRED)
         reason: Reason for granting
         field: Specific field to grant modification for (optional)
         value: Expected new value for field (optional, requires field)
     """
     from macf.agent_events_log import append_event
 
+    # Normalize to list
+    if isinstance(task_ids, list):
+        ids_list = [str(tid) for tid in task_ids]
+    else:
+        ids_list = [str(task_ids)]
+
     data = {
-        "task_id": task_id,
+        "task_ids": ids_list,
         "reason": reason,
     }
     if field is not None:

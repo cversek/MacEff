@@ -2750,9 +2750,9 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
 
 
 def cmd_task_delete(args: argparse.Namespace) -> int:
-    """Delete a task file with optional cascade to children.
+    """Delete one or more tasks with set-matching grant authorization.
 
-    Requires grant-delete to have been run first (Always Ask permission).
+    Requires grant-delete to have been run first with EXACTLY the same task IDs.
     Temporarily unprotects directory for deletion, then re-protects.
     """
     import os
@@ -2761,76 +2761,64 @@ def cmd_task_delete(args: argparse.Namespace) -> int:
     from .task.protection import check_grant_in_events, clear_grant
     from .task.create import SENTINEL_TASK_ID
 
-    # Parse task ID (handle #N or N format, support string IDs)
-    task_id_str = args.task_id.lstrip('#')
-    if task_id_str.startswith('0') and len(task_id_str) > 1:
-        task_id = task_id_str  # Preserve string ID like "000"
-    else:
-        try:
-            task_id = int(task_id_str)
-        except ValueError:
-            task_id = task_id_str
+    # Parse all task IDs (handle #N or N format, keep as strings)
+    task_ids = []
+    for tid_raw in args.task_ids:
+        tid_str = str(tid_raw).lstrip('#')
+        task_ids.append(tid_str)
 
     # Block deletion of sentinel task
-    if str(task_id) == SENTINEL_TASK_ID:
-        print(f"❌ Cannot delete sentinel task #{SENTINEL_TASK_ID}")
-        print("   This task protects the task list from CC purge.")
+    filtered_ids = []
+    for tid in task_ids:
+        if tid == SENTINEL_TASK_ID:
+            print(f"⚠️  Skipping sentinel task #{SENTINEL_TASK_ID}")
+        else:
+            filtered_ids.append(tid)
+
+    if not filtered_ids:
+        print("❌ No valid tasks to delete")
         return 1
 
-    # Check for delete grant FIRST
-    has_grant, grant_event = check_grant_in_events("delete", task_id if isinstance(task_id, int) else None)
+    # Check for delete grant - sets must match EXACTLY
+    has_grant, grant_event = check_grant_in_events("delete", filtered_ids)
     if not has_grant:
+        id_list = " ".join(filtered_ids)
         print(f"❌ Delete requires grant authorization")
-        print(f"   Run: macf_tools task grant-delete {task_id}")
-        print(f"   (This triggers Always Ask permission prompt)")
+        print(f"   Run: macf_tools task grant-delete {id_list}")
+        print(f"   (Grant must match EXACTLY the tasks to delete)")
         return 1
 
-    # Read task to verify it exists
+    # Verify tasks exist
     reader = TaskReader()
-    task = reader.read_task(task_id)
-    if not task:
-        print(f"❌ Task #{task_id} not found")
+    to_delete = []
+    for tid in filtered_ids:
+        task = reader.read_task(tid)
+        if task:
+            print(f"🗑️  #{tid}: {task.subject[:60]}")
+            to_delete.append(tid)
+        else:
+            print(f"⚠️  #{tid}: not found, skipping")
+
+    if not to_delete:
+        print("❌ No tasks found to delete")
         return 1
-
-    # Find children if cascade requested
-    children_ids = []
-    if args.cascade:
-        all_tasks = reader.read_all_tasks()
-        for t in all_tasks:
-            if t.mtmd and t.mtmd.parent_id == task_id:
-                children_ids.append(t.id)
-
-    # Build deletion list
-    to_delete = [task_id] + children_ids
-
-    # Show what will be deleted
-    print(f"🗑️  Task #{task_id}: {task.subject}")
-    if children_ids:
-        print(f"   + {len(children_ids)} child task(s):")
-        for cid in children_ids:
-            child = reader.read_task(cid)
-            if child:
-                print(f"     #{cid}: {child.subject[:50]}...")
 
     # Confirmation (basic CLI protection)
     if not args.force:
         print()
-        confirm = input("⚠️  Delete these tasks? [y/N]: ").strip().lower()
+        confirm = input(f"⚠️  Delete {len(to_delete)} task(s)? [y/N]: ").strip().lower()
         if confirm != 'y':
             print("❌ Cancelled")
             return 1
 
     # Temporarily unprotect directory for deletion
     session_path = reader.session_path
-    was_protected = False
     if session_path and session_path.exists():
         current_mode = session_path.stat().st_mode
-        was_protected = not (current_mode & stat.S_IWUSR)
-        if was_protected:
+        if not (current_mode & stat.S_IWUSR):
             os.chmod(session_path, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)  # 755
 
     try:
-        # Delete task files
         deleted = 0
         for tid in to_delete:
             task_file = reader.session_path / f"{tid}.json"
@@ -2844,7 +2832,7 @@ def cmd_task_delete(args: argparse.Namespace) -> int:
             os.chmod(session_path, stat.S_IRUSR | stat.S_IXUSR | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)  # 555
 
     # Clear the grant after use
-    clear_grant("delete", task_id if isinstance(task_id, int) else None, reason="consumed by delete")
+    clear_grant("delete", filtered_ids, reason="consumed by delete")
 
     print(f"\n✅ Deleted {deleted} task(s)")
     return 0
@@ -3599,22 +3587,28 @@ def cmd_task_grant_update(args: argparse.Namespace) -> int:
 
 
 def cmd_task_grant_delete(args: argparse.Namespace) -> int:
-    """Grant permission to delete a task."""
+    """Grant permission to delete one or more tasks (single grant for the set)."""
     from .task.protection import create_grant
 
-    # Parse task ID
-    task_id_str = args.task_id.lstrip('#')
-    try:
-        task_id = int(task_id_str)
-    except ValueError:
-        print(f"❌ Invalid task ID: {args.task_id}")
-        return 1
+    # Parse all task IDs into a normalized set
+    task_ids = []
+    for task_id_raw in args.task_ids:
+        task_id_str = str(task_id_raw).lstrip('#')
+        # Keep as string (per Cycle 382 string ID refactor)
+        task_ids.append(task_id_str)
 
-    create_grant("delete", task_id, args.reason)
-    print(f"✅ Grant created for deleting task #{task_id}")
+    # Create ONE grant for the entire set
+    create_grant("delete", task_ids, args.reason)
+
+    if len(task_ids) == 1:
+        print(f"✅ Grant created for deleting task #{task_ids[0]}")
+    else:
+        id_list = ", ".join(f"#{tid}" for tid in task_ids)
+        print(f"✅ Grant created for deleting {len(task_ids)} tasks: {id_list}")
     if args.reason:
         print(f"   Reason: {args.reason}")
     print("   Grant is single-use and will be cleared after consumption.")
+
     return 0
 
 
@@ -4217,10 +4211,8 @@ def _build_parser() -> argparse.ArgumentParser:
     task_tree_parser.set_defaults(func=cmd_task_tree)
 
     # task delete
-    task_delete_parser = task_sub.add_parser("delete", help="delete task (HIGH protection)")
-    task_delete_parser.add_argument("task_id", help="task ID (e.g., #67 or 67)")
-    task_delete_parser.add_argument("--cascade", action="store_true",
-                                    help="also delete child tasks")
+    task_delete_parser = task_sub.add_parser("delete", help="delete task(s) (HIGH protection)")
+    task_delete_parser.add_argument("task_ids", nargs='+', help="task ID(s) (e.g., #67 or 67, accepts multiple)")
     task_delete_parser.add_argument("--force", "-f", action="store_true",
                                     help="skip confirmation prompt")
     task_delete_parser.set_defaults(func=cmd_task_delete)
@@ -4354,8 +4346,8 @@ def _build_parser() -> argparse.ArgumentParser:
     task_grant_update_parser.set_defaults(func=cmd_task_grant_update)
 
     # task grant-delete
-    task_grant_delete_parser = task_sub.add_parser("grant-delete", help="grant permission to delete task")
-    task_grant_delete_parser.add_argument("task_id", help="task ID to grant delete permission (e.g., #67 or 67)")
+    task_grant_delete_parser = task_sub.add_parser("grant-delete", help="grant permission to delete tasks")
+    task_grant_delete_parser.add_argument("task_ids", nargs='+', help="task ID(s) to grant delete permission (e.g., #67 or 67, accepts multiple)")
     task_grant_delete_parser.add_argument("--reason", "-r", default="", help="reason for granting")
     task_grant_delete_parser.set_defaults(func=cmd_task_grant_delete)
 
