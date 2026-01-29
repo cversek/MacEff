@@ -3015,7 +3015,15 @@ def cmd_task_edit(args: argparse.Namespace) -> int:
     value = args.value
 
     # Validate field is editable
-    editable_fields = ["subject", "status", "description"]
+    # Note: 'subject' is NOT directly editable - it's composed from task_id, parent_id, type, and title
+    # To change the title portion, use: macf_tools task metadata set title "New Title"
+    if field == "subject":
+        print(f"❌ Direct subject editing is not allowed")
+        print(f"   Subject is composed from task metadata (id, parent, type, title)")
+        print(f"   To change the title: macf_tools task metadata set {task_id_str} title \"New Title\"")
+        return 1
+
+    editable_fields = ["status", "description"]
     if field not in editable_fields:
         print(f"❌ Field '{field}' is not editable")
         print(f"   Editable fields: {', '.join(editable_fields)}")
@@ -3144,15 +3152,12 @@ def cmd_task_metadata_set(args: argparse.Namespace) -> int:
         print(f"❌ Task #{task_id} not found")
         return 1
 
-    # Validate MTMD field exists
-    mtmd_fields = [
-        "plan_ca_ref", "parent_id", "repo", "target_version", "release_branch",
-        "completion_breadcrumb", "completion_report", "unblock_breadcrumb", "archived", "archived_at",
-        "creation_breadcrumb", "created_cycle", "created_by", "experiment_ca_ref"
-    ]
+    # Validate MTMD field exists - use dataclass as single source of truth
+    import dataclasses
+    mtmd_fields = [f.name for f in dataclasses.fields(MacfTaskMetaData) if f.name not in ("version", "updates")]
     if field not in mtmd_fields:
         print(f"❌ Unknown MTMD field: {field}")
-        print(f"   Valid fields: {', '.join(mtmd_fields)}")
+        print(f"   Valid fields: {', '.join(sorted(mtmd_fields))}")
         return 1
 
     # Parse value types for specific fields
@@ -3205,10 +3210,27 @@ def cmd_task_metadata_set(args: argparse.Namespace) -> int:
     # Embed updated MTMD in description
     new_description = task.description_with_updated_mtmd(new_mtmd)
 
+    # Build updates dict
+    updates = {"description": new_description}
+
+    # If title or other subject-affecting fields changed, recompose subject
+    if field in ("title", "task_type", "parent_id"):
+        from .task.create import compose_subject
+        # Use new MTMD values for recomposition
+        new_subject = compose_subject(
+            task_id=str(task_id),
+            task_type=new_mtmd.task_type,
+            title=new_mtmd.title or value if field == "title" else new_mtmd.title,
+            parent_id=new_mtmd.parent_id
+        )
+        updates["subject"] = new_subject
+
     # Apply update
-    if update_task_file(task_id, {"description": new_description}):
+    if update_task_file(task_id, updates):
         print(f"✅ Updated MTMD for task #{task_id}")
         print(f"   {field} = {value}")
+        if "subject" in updates:
+            print(f"   subject recomposed")
         return 0
     else:
         print(f"❌ Failed to update task #{task_id}")
