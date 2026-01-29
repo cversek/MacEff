@@ -92,11 +92,9 @@ def compose_subject(task_id: str, task_type: str, title: str,
     padded_id = id_str.rjust(4)  # Right-align to width 4
     id_part = f"{ANSI_DIM}{padded_id}{ANSI_DIM_OFF}"
 
-    # Parent reference if exists (also right-aligned)
-    if parent_id:
-        parent_id_str = f"#{parent_id}"
-        padded_parent = parent_id_str.rjust(4)
-        parent_part = f" {ANSI_DIM}[^{padded_parent}]{ANSI_DIM_OFF}"
+    # Parent reference if exists and not sentinel
+    if parent_id and parent_id != SENTINEL_TASK_ID:
+        parent_part = f" {ANSI_DIM}[^#{parent_id}]{ANSI_DIM_OFF}"
     else:
         parent_part = ""
 
