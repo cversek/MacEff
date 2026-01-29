@@ -60,9 +60,40 @@ ANSI_DIM = "\033[2m"
 ANSI_RESET = "\033[0m"
 ANSI_BOLD = "\033[1m"
 ANSI_ORANGE = "\033[38;5;208m"
+ANSI_STRIKE = "\033[9m"
+# Selective reset codes (don't break nesting)
+ANSI_DIM_OFF = "\033[22m"
+ANSI_STRIKE_OFF = "\033[29m"
 
 # Sentinel task ID (reserved system ID)
 SENTINEL_TASK_ID = "000"
+
+
+def compose_subject(task_id: str, task_type: str, title: str,
+                    parent_id: Optional[str] = None, status: str = "pending") -> str:
+    """Compose subject from components with proper ANSI formatting."""
+    # Sentinel is special
+    if task_type == "SENTINEL":
+        return f"{ANSI_BOLD}{ANSI_ORANGE}🛡️ MACF TASK LIST{ANSI_RESET}"
+
+    # ID prefix (dim)
+    id_part = f"{ANSI_DIM}#{task_id}{ANSI_DIM_OFF}"
+
+    # Parent reference if exists
+    parent_part = f" {ANSI_DIM}[^#{parent_id}]{ANSI_DIM_OFF}" if parent_id else ""
+
+    # Type emoji (no "AD_HOC:" prefix - just wrench)
+    type_map = {
+        "MISSION": "🗺️ MISSION:",
+        "EXPERIMENT": "🧪 EXPERIMENT:",
+        "DETOUR": "↩️ DETOUR:",
+        "BUG": "🐛 BUG:",
+        "AD_HOC": "🔧",
+        "TASK": "📋",
+    }
+    type_part = type_map.get(task_type, "")
+
+    return f"{id_part}{parent_part} {type_part} {title}"
 
 
 def _ensure_sentinel_task(session_path: Path) -> None:
@@ -728,19 +759,21 @@ def create_adhoc(
     # Get next task ID
     task_id = _get_next_task_id()
 
-    # Create MTMD (no parent_id for standalone AD_HOC)
+    # Create MTMD with title and task_type
     mtmd = MacfTaskMetaData(
         version="1.0",
         creation_breadcrumb=breadcrumb,
         created_cycle=cycle,
-        created_by="PA"
+        created_by="PA",
+        task_type="AD_HOC",
+        title=title
     )
 
     # Build description with MTMD
     description = _generate_mtmd_block(mtmd)
 
-    # Create subject with dim ID prefix and AD_HOC marker
-    subject = f"{ANSI_DIM}#{task_id}{ANSI_RESET} 🔧 AD_HOC: {title}"
+    # Compose subject using proper ANSI nesting
+    subject = compose_subject(task_id, "AD_HOC", title)
 
     # Create task file
     _create_task_file(task_id, subject, description)
