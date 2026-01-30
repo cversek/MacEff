@@ -3,7 +3,7 @@
 **Breadcrumb**: s_77270981/c_370/g_6b3cc9a/p_c9ae72f5/t_1769352307
 **Type**: Development Infrastructure
 **Scope**: All agents (PA and SA)
-**Status**: DRAFT (successor to todo_hygiene.md)
+**Status**: ACTIVE (successor to todo_hygiene.md)
 **Version**: 1.0
 
 ---
@@ -369,6 +369,19 @@ When starting work on a task with `plan_ca_ref`:
 1. **Read** the referenced CA document completely
 2. **Understand** the WHY and HOW, not just WHAT
 3. **Then** begin execution
+
+### 5.2.1 🚨 CRITICAL: Roadmap CA vs CC Plan Files
+
+**NEVER read Claude Code plan files (`~/.claude/plans/*.md`) as authoritative sources.**
+
+CC plan files are **ephemeral scratch space** for EnterPlanMode drafting. They are napkin drafts, not signed contracts.
+
+**The Authoritative Source**: MTMD `plan_ca_ref` → Roadmap CA in `agent/public/roadmaps/`
+
+**When starting MISSION/PHASE work**:
+1. Get parent MISSION's `plan_ca_ref` from MTMD: `macf_tools task get #N`
+2. Read THAT Roadmap CA file
+3. The Roadmap CA is the contract; CC plan files are drafts that may be stale
 
 The agent ALWAYS has visibility into CA refs via enhanced `task list` display.
 

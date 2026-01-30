@@ -470,7 +470,7 @@ argument-hint: [agent(s)] [date|description]            # Multiple args
 ```yaml
 allowed-tools: Read, Bash, Grep                    # Read-only analysis
 allowed-tools: Read, Write, Bash                   # Artifact creation
-allowed-tools: Read, TodoWrite, Bash(macf_tools:*) # TODO operations + framework CLI
+allowed-tools: Read, Bash(macf_tools:*) # Task operations via macf_tools task CLI
 allowed-tools: Read, Task                          # Delegation preparation
 # Omit allowed-tools                               # No restrictions
 ```
