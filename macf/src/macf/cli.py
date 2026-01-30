@@ -2776,16 +2776,15 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
         connector = "└── " if is_last else "├── "
 
         # CC-style markers with colors - subject now contains #N prefix
-        truncated = f"{task.subject[:50]}{'...' if len(task.subject) > 50 else ''}"
         if task.status == "completed":
             status_icon = f"{ANSI_GREEN}✔{ANSI_RESET}"
-            text = f"{ANSI_DIM}{ANSI_STRIKE}{truncated}{ANSI_RESET}"
+            text = f"{ANSI_DIM}{ANSI_STRIKE}{task.subject}{ANSI_RESET}"
         elif task.status == "in_progress":
             status_icon = f"{ANSI_RED}◼{ANSI_RESET}"
-            text = _dim_task_ids(truncated)
+            text = _dim_task_ids(task.subject)
         else:
             status_icon = "◻"
-            text = _dim_task_ids(truncated)
+            text = _dim_task_ids(task.subject)
 
         print(f"{prefix}{connector}{status_icon} {text}")
 
