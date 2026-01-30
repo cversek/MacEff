@@ -16,7 +16,13 @@ Complete command reference for `macf_tools` CLI.
 - [Policy Management](#policy-management)
 - [Search Service](#search-service)
 - [Event Sourcing](#event-sourcing)
-- [TODO Management](#todo-management)
+- [Task Commands](#task-commands-v040)
+  - [Task Creation Commands](#task-creation-commands)
+  - [Task Lifecycle Commands](#task-lifecycle-commands)
+  - [Task Metadata Commands](#task-metadata-commands)
+  - [Task Archive Commands](#task-archive-commands)
+  - [Task Protection Commands](#task-protection-commands)
+  - [Task Completion](#task-completion)
 
 ## Global Options
 
@@ -862,18 +868,215 @@ macf_tools events gaps [--threshold THRESHOLD]
 
 **Related:** `events query`, `hooks logs`
 
-## TODO Management
-
-Commands for TODO list state tracking and collapse authorization.
-
-
 ---
 
 ## Task Commands (v0.4.0+)
 
 Task commands provide CLI access to Claude Code's native Task* tools with MTMD (MacfTaskMetaData) enhancement.
 
-### task list
+**Policy Reference:** See `task_management.md` for comprehensive task lifecycle, hierarchy rules, and MTMD schema documentation.
+
+```bash
+macf_tools policy navigate task_management  # CEP navigation guide
+macf_tools policy read task_management      # Full policy
+```
+
+---
+
+### Task Creation Commands
+
+#### task create mission
+
+Create a MISSION task with associated roadmap. MISSIONs are strategic multi-phase work items.
+
+**Syntax:**
+```bash
+macf_tools task create mission <title> [--repo REPO] [--version VERSION] [--json]
+```
+
+**Arguments:**
+- `title` - Mission title (becomes task subject with 🗺️ prefix)
+
+**Options:**
+- `--repo REPO` - Repository name (e.g., MacEff)
+- `--version VERSION` - Target version (e.g., 0.4.0)
+- `--json` - Output as JSON
+
+**Smart Defaults:**
+- Creates `plan_ca_ref` pointing to `agent/public/roadmaps/{date}_{title}/roadmap.md`
+- Sets `task_type: MISSION` in MTMD
+- Prompts for roadmap creation workflow
+
+**Example:**
+```bash
+macf_tools task create mission "v0.5.0 Feature Release" --repo MacEff --version 0.5.0
+```
+
+#### task create experiment
+
+Create an EXPERIMENT task with associated protocol. Experiments are hypothesis-driven explorations.
+
+**Syntax:**
+```bash
+macf_tools task create experiment <title> [--json]
+```
+
+**Arguments:**
+- `title` - Experiment title (becomes task subject with 🧪 prefix)
+
+**Options:**
+- `--json` - Output as JSON
+
+**Smart Defaults:**
+- Creates `plan_ca_ref` pointing to `agent/public/experiments/{date}_{title}/protocol.md`
+- Sets `task_type: EXPERIMENT` in MTMD
+
+**Example:**
+```bash
+macf_tools task create experiment "LanceDB Hybrid Search Performance"
+```
+
+#### task create detour
+
+Create a DETOUR task for unplanned but necessary work branching from current mission.
+
+**Syntax:**
+```bash
+macf_tools task create detour <title> [--repo REPO] [--version VERSION] [--json]
+```
+
+**Arguments:**
+- `title` - Detour title (becomes task subject with 🔀 prefix)
+
+**Options:**
+- `--repo REPO` - Repository name
+- `--version VERSION` - Target version
+- `--json` - Output as JSON
+
+**Smart Defaults:**
+- Creates `plan_ca_ref` pointing to `agent/public/roadmaps/{date}_{title}/roadmap.md`
+- Sets `task_type: DETOUR` in MTMD
+
+**Example:**
+```bash
+macf_tools task create detour "Urgent Security Fix" --repo MacEff --version 0.4.1
+```
+
+#### task create phase
+
+Create a PHASE task as a child of a parent MISSION/EXPERIMENT/DETOUR.
+
+**Syntax:**
+```bash
+macf_tools task create phase <title> --parent <PARENT_ID> [--json]
+```
+
+**Arguments:**
+- `title` - Phase title
+
+**Required Options:**
+- `--parent PARENT_ID` - Parent task ID (e.g., #67 or 67)
+
+**Options:**
+- `--json` - Output as JSON
+
+**Smart Defaults:**
+- Sets `task_type: PHASE` in MTMD
+- Sets `parent_id` linking to parent task
+- Adds `[^#N]` prefix to subject for hierarchy display
+
+**Example:**
+```bash
+macf_tools task create phase "Phase 1: Core Implementation" --parent #26
+macf_tools task create phase "Phase 2: Testing" --parent 26
+```
+
+#### task create bug
+
+Create a BUG task for defect tracking. Can be standalone or linked to a parent.
+
+**Syntax:**
+```bash
+macf_tools task create bug <title> [--parent PARENT] (--plan PLAN | --plan-ca-ref PATH) [--json]
+```
+
+**Arguments:**
+- `title` - Bug title (becomes task subject with 🐛 prefix)
+
+**Options:**
+- `--parent PARENT` - Optional parent task ID
+- `--plan PLAN` - Inline plan description (for simple bugs)
+- `--plan-ca-ref PATH` - Path to BUG_FIX roadmap CA (for complex bugs)
+- `--json` - Output as JSON
+
+**Mutually Exclusive:** Must provide either `--plan` or `--plan-ca-ref`
+
+**Examples:**
+```bash
+# Simple bug with inline plan
+macf_tools task create bug "Fix null pointer in parser" --plan "Check for null before accessing"
+
+# Complex bug with roadmap
+macf_tools task create bug "Memory leak in session handler" --plan-ca-ref agent/public/roadmaps/2026-01-29_Memory_Leak/roadmap.md
+
+# Bug under a mission
+macf_tools task create bug "Test flakiness" --parent #26 --plan "Add retry logic"
+```
+
+#### task create deleg
+
+Create a DELEG_PLAN task for delegating work to subagents.
+
+**Syntax:**
+```bash
+macf_tools task create deleg <title> [--parent PARENT] (--plan PLAN | --plan-ca-ref PATH) [--json]
+```
+
+**Arguments:**
+- `title` - Delegation title (becomes task subject with 📜 prefix)
+
+**Options:**
+- `--parent PARENT` - Optional parent task ID
+- `--plan PLAN` - Inline delegation plan (for simple delegations)
+- `--plan-ca-ref PATH` - Path to DELEG_PLAN CA (for complex delegations)
+- `--json` - Output as JSON
+
+**Mutually Exclusive:** Must provide either `--plan` or `--plan-ca-ref`
+
+**Examples:**
+```bash
+# Simple delegation with inline plan
+macf_tools task create deleg "Write unit tests for parser" --plan "TestEng: Cover edge cases"
+
+# Complex delegation with CA
+macf_tools task create deleg "Refactor CLI architecture" --plan-ca-ref agent/public/roadmaps/2026-01-29_CLI_Refactor/deleg_plan.md
+```
+
+#### task create task
+
+Create a standalone TASK (🔧) for ad-hoc work items without strategic planning overhead.
+
+**Syntax:**
+```bash
+macf_tools task create task <title> [--json]
+```
+
+**Arguments:**
+- `title` - Task title (becomes subject with 🔧 prefix)
+
+**Options:**
+- `--json` - Output as JSON
+
+**Example:**
+```bash
+macf_tools task create task "Update README badges"
+```
+
+---
+
+### Task Lifecycle Commands
+
+#### task list
 
 List tasks with hierarchy and metadata.
 
@@ -1050,6 +1253,185 @@ macf_tools task metadata validate <task_id>
 
 ---
 
+### Task Archive Commands
+
+#### task archive
+
+Archive a task (and optionally its children) to disk. Archived tasks are moved out of the active session.
+
+**Syntax:**
+```bash
+macf_tools task archive <task_id> [--no-cascade] [--json]
+```
+
+**Arguments:**
+- `task_id` - Task ID to archive (e.g., #67 or 67)
+
+**Options:**
+- `--no-cascade` - Archive only this task, not children (default: cascade enabled)
+- `--json` - Output as JSON
+
+**Behavior:**
+- Default cascades to archive all child tasks
+- Writes archive files to `agent/public/task_archives/`
+- Archive filename: `{date}_task_{id}_{sanitized_subject}.json`
+
+**Example:**
+```bash
+# Archive mission and all phases
+macf_tools task archive #26
+
+# Archive single task only
+macf_tools task archive #67 --no-cascade
+```
+
+#### task restore
+
+Restore a previously archived task.
+
+**Syntax:**
+```bash
+macf_tools task restore <archive_path_or_id> [--json]
+```
+
+**Arguments:**
+- `archive_path_or_id` - Archive file path OR original task ID
+
+**Options:**
+- `--json` - Output as JSON
+
+**Examples:**
+```bash
+# Restore by archive file path
+macf_tools task restore agent/public/task_archives/2026-01-29_task_67_Mission.json
+
+# Restore by original task ID (searches archive directory)
+macf_tools task restore 67
+```
+
+#### task archived list
+
+List all archived tasks.
+
+**Syntax:**
+```bash
+macf_tools task archived list
+```
+
+**Output:**
+```
+📦 Archived Tasks
+============================================================
+  2026-01-29_task_5_Extend_grant-delete.json (#5)
+  2026-01-29_task_6_BUG_Hook_messages.json (#6)
+  ...
+```
+
+---
+
+### Task Protection Commands
+
+Tasks use a grant-based protection system. Destructive operations require explicit user grants.
+
+#### task grant-update
+
+Grant permission to update a task's description/MTMD fields.
+
+**Syntax:**
+```bash
+macf_tools task grant-update <task_id> [--field FIELD] [--value VALUE] [--reason REASON]
+```
+
+**Arguments:**
+- `task_id` - Task ID to grant update permission (e.g., #67 or 67)
+
+**Options:**
+- `--field, -f FIELD` - Specific MTMD field to grant modification for
+- `--value, -v VALUE` - Expected new value (requires --field)
+- `--reason, -r REASON` - Reason for granting (documentation)
+
+**Examples:**
+```bash
+# Grant general update permission
+macf_tools task grant-update #67 --reason "Updating completion report"
+
+# Grant specific field modification
+macf_tools task grant-update #67 --field plan_ca_ref --value "agent/public/roadmaps/new.md"
+```
+
+#### task grant-delete
+
+Grant permission to delete one or more tasks. Accepts multiple task IDs for batch operations.
+
+**Syntax:**
+```bash
+macf_tools task grant-delete <task_ids>... [--reason REASON]
+```
+
+**Arguments:**
+- `task_ids` - One or more task IDs (e.g., #67 68 #69)
+
+**Options:**
+- `--reason, -r REASON` - Reason for granting (documentation)
+
+**Protection:** Uses exact set-matching - grant covers precisely the specified tasks, no more.
+
+**Examples:**
+```bash
+# Grant delete for single task
+macf_tools task grant-delete #67 --reason "Obsolete task"
+
+# Grant delete for multiple tasks (set-matching)
+macf_tools task grant-delete #36 #37 #38 #39 --reason "Test cleanup"
+macf_tools task grant-delete 36 37 38 39 --reason "Test cleanup"
+```
+
+---
+
+### Task Completion
+
+#### task complete
+
+Mark a task as completed with a mandatory completion report.
+
+**Syntax:**
+```bash
+macf_tools task complete <task_id> --report <REPORT>
+```
+
+**Arguments:**
+- `task_id` - Task ID to complete (e.g., #67 or 67)
+
+**Required Options:**
+- `--report, -r REPORT` - Completion report documenting work done
+
+**What It Does:**
+1. Generates `completion_breadcrumb` automatically
+2. Sets `completion_report` in MTMD from `--report` flag
+3. Updates task status to `completed`
+4. Appends update entry to MTMD audit trail
+
+**Completion Report Format:**
+
+The `--report` should include:
+- **Work done**: What was accomplished
+- **Difficulties**: Any blockers (or "No difficulties")
+- **Future work**: Identified follow-up (or "None")
+- **Git status**: Commit hash or "pending"
+
+**Examples:**
+```bash
+macf_tools task complete #67 --report "Implemented task complete command. No difficulties. Committed: 97a11d3"
+
+macf_tools task complete #28 --report "Fixed test isolation. Difficulty: subprocess env inheritance. Future: Document pattern. Committed: 4cd30ce"
+
+macf_tools task complete #81 -r "Research complete. Difficulties: sparse docs. Future: Phase 2 implementation. Committed: pending"
+```
+
+**Related:** See `task_management.md` §6 for complete completion protocol.
+
+---
+
 ## Exit Codes
 
 - `0` - Success
@@ -1127,4 +1509,5 @@ macf_tools policy list --layer mandatory
 
 ## Version History
 
-- **0.3.0** - Current release with full CLI suite
+- **0.4.0** - Task System with MTMD, grant-based protection, archive/restore
+- **0.3.0** - Initial release with full CLI suite
