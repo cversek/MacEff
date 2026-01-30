@@ -5,6 +5,107 @@ All notable changes to MACF Tools (Multi-Agent Coordination Framework) will be d
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-01-29
+
+### Summary
+
+Major release introducing the **MACF Task CLI** with MTMD (MacfTaskMetaData) enhancement, **grant-based protection** for destructive operations, **task archive/restore** for lifecycle management, and comprehensive **subprocess test isolation**. The Task CLI provides enhanced alternatives to Claude Code's native Task* tools, operating on the same filesystem backend (`~/.claude/tasks/`) while adding forensic metadata, type-specific creation commands, and protection systems.
+
+### Added
+
+**Task CLI System** (`macf_tools task`):
+- `task create mission|experiment|detour|phase|bug|deleg|task` - Type-specific task creation with smart defaults
+- `task list` - Hierarchical task display with MTMD metadata
+- `task get <id>` - Full task details including MTMD
+- `task tree <id>` - Visual task hierarchy tree
+- `task edit <id> <field> <value>` - Direct field modification
+- `task delete <id>` - Protected deletion (requires grant)
+- `task complete <id> --report` - Atomic completion with mandatory documentation
+
+**Task Metadata (MTMD)**:
+- `task metadata get|set|add|validate` - MTMD field operations
+- Schema validation for task types (MISSION requires `plan_ca_ref`, PHASE requires `parent_id`)
+- Forensic breadcrumbs: `creation_breadcrumb`, `completion_breadcrumb`
+- Completion reports with work done, difficulties, future work, git status
+
+**Task Archive System**:
+- `task archive <id>` - Archive task with cascade to children (default)
+- `task restore <path_or_id>` - Restore from archive file or by original ID
+- `task archived list` - List all archived tasks
+- Archive location: `agent/public/task_archives/`
+
+**Grant-Based Protection**:
+- `task grant-update <id>` - Grant permission to modify task description/MTMD
+- `task grant-delete <ids...>` - Grant permission to delete (supports multiple IDs)
+- Exact set-matching: grant covers precisely specified tasks, no blanket approval
+- Hook enforcement blocks unauthorized destructive operations
+
+**Subprocess Test Isolation**:
+- `MACF_TASKS_DIR` environment variable for test isolation
+- `TaskReader` respects env var override for path-dependent operations
+- Explicit `env=` passing in subprocess.run() for boundary-crossing isolation
+- Session folder structure creation in test fixtures
+
+**Documentation**:
+- Comprehensive task CLI documentation in `cli-reference.md` (390+ lines added)
+- All task create commands documented with syntax, arguments, options, examples
+- Archive/restore/grant/complete commands documented
+- Cross-reference to `task_management.md` policy
+
+### Changed
+
+**Task Management Policy**:
+- `task_management.md` promoted to primary task governance policy
+- MTMD schema formalized with required/optional field rules
+- Completion protocol with mandatory `--report` flag
+- CC UI visibility: tasks must be marked `in_progress` to appear at top
+
+**CLI Reference**:
+- Removed deprecated TODO Management section
+- Updated Table of Contents with Task command subsections
+- Version history updated to 0.4.0
+
+### Removed
+
+- `task batch-delete` command - Redundant with `task delete` accepting multiple IDs
+- TODO Management CLI section from documentation (deprecated)
+
+### Fixed
+
+- **#6**: Hook messages printing twice - Idempotent hook output
+- **#8**: Task ID type inconsistency - Mixed int/str causing sort failures
+- **#14**: task edit status loses task_id prefix in subject
+- **#18**: Policy emphasis on marking tasks `in_progress` for CC UI visibility
+- **Subprocess test pollution**: Tests no longer create tasks in production `~/.claude/tasks/`
+
+### Breaking Changes
+
+1. **TodoWrite deprecated**: Use MACF Task CLI (`macf_tools task`) instead
+2. **batch-delete removed**: Use `task delete <id1> <id2> ...` with grant-delete for multiple tasks
+
+### Migration Guide
+
+**From TodoWrite to Task CLI:**
+```bash
+# Create tasks with type-specific commands
+macf_tools task create task "My task title"
+macf_tools task create mission "Release v0.5.0" --repo MacEff --version 0.5.0
+macf_tools task create phase "Phase 1" --parent #26
+
+# Manage task lifecycle
+macf_tools task edit <id> status in_progress
+macf_tools task complete <id> --report "Work done. Committed: abc1234"
+```
+
+**For test isolation:**
+```python
+# Set environment for subprocess isolation
+subprocess_env = {**os.environ, "MACF_TASKS_DIR": str(tmp_path)}
+result = subprocess.run([...], env=subprocess_env)
+```
+
+---
+
 ## [0.3.3] - 2026-01-24
 
 ### Summary
