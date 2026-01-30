@@ -80,6 +80,9 @@ Task management policy governs the use of Claude Code native Task* tools (TaskCr
 - What metadata commands exist?
 - How do I create tasks atomically?
 - What smart defaults do create commands provide?
+- What are lifecycle commands?
+- Why is direct status editing blocked?
+- What breadcrumbs do lifecycle commands record?
 
 **10 Anti-Patterns**
 - What common mistakes should I avoid?
@@ -166,7 +169,9 @@ parent_id: 67                       # Direct parent task ID
 repo: MacEff                        # Repository name
 target_version: 0.4.0               # Target release version
 release_branch: v0.4.0-dev          # Git branch
-completion_breadcrumb: null         # Set when completed
+started_breadcrumb: null            # Set when work begins (task start)
+completion_breadcrumb: null         # Set when completed (task complete)
+completion_report: null             # Mandatory report on completion
 unblock_breadcrumb: null            # When blocking resolved
 updates:                            # Extensible update list
   - breadcrumb: s_.../c_.../...
@@ -367,22 +372,32 @@ When starting work on a task with `plan_ca_ref`:
 
 The agent ALWAYS has visibility into CA refs via enhanced `task list` display.
 
-### 5.3 CRITICAL: Mark Tasks `in_progress` (CC UI Visibility)
+### 5.3 CRITICAL: Use Lifecycle Commands for Status Transitions
 
-**ALWAYS mark tasks `in_progress` when starting work**:
+**ALWAYS use lifecycle commands to transition task status**:
 
 ```bash
-macf_tools task edit #67 status in_progress
+macf_tools task start #67     # → in_progress (records started_breadcrumb)
+macf_tools task pause #67     # → pending (for temporary pause)
+macf_tools task complete #67  # → completed (mandatory --report)
+macf_tools task archive #67   # → archived (with cascade)
 ```
+
+**Why Lifecycle Commands**: Status transitions are **consciousness events**, not raw data mutations. Each transition:
+- Records a breadcrumb capturing WHEN the transition occurred
+- Appends to the MTMD `updates` audit trail
+- Creates ceremony around the moment of transition
+
+**Direct Status Editing is BLOCKED**: `macf_tools task edit #67 status X` is intentionally disabled. The CLI will direct you to the appropriate lifecycle command.
 
 **Why This Matters**: Claude Code's UI **truncates** the task list. Tasks marked `in_progress` appear at the **TOP** of the list, ensuring user visibility. Pending tasks may be hidden in the `+N pending` overflow.
 
 **The User Cannot See What You're Working On** if you leave tasks as `pending`.
 
 **Protocol**:
-1. Before ANY work on a task → mark `in_progress`
+1. Before ANY work on a task → `macf_tools task start #67`
 2. User sees: `◼ #67 [in_progress]` at top of their truncated view
-3. On completion → use `task complete` which handles status automatically
+3. On completion → `macf_tools task complete #67 --report "..."`
 
 This is not optional - it's the **only way** the user maintains awareness of active work.
 
@@ -581,18 +596,18 @@ Edit task JSON fields or MTMD metadata with automatic update tracking.
 ```bash
 # Edit top-level JSON fields (MEDIUM protection)
 macf_tools task edit #67 subject "New Title"          # Change subject
-macf_tools task edit #67 status in_progress           # Change status
 macf_tools task edit #67 description "New desc..."    # Replace description
 
 # Edit MTMD fields (MEDIUM protection)
 macf_tools task metadata set #67 target_version 0.4.0    # Set MTMD field
 macf_tools task metadata set #67 plan_ca_ref "path/..."  # Update CA reference
-macf_tools task metadata set #67 completion_breadcrumb "$(macf_tools breadcrumb)"
 
 # Add custom MTMD fields (LOW protection)
 macf_tools task metadata add #67 priority high           # Add to custom section
 macf_tools task metadata add #67 label "v0.4.0"          # Add metadata tags
 ```
+
+**🚫 Status Editing BLOCKED**: Direct status editing via `task edit #67 status X` is intentionally disabled. Use lifecycle commands instead (§9.3.5).
 
 **Protection Levels**:
 
@@ -602,6 +617,43 @@ macf_tools task metadata add #67 label "v0.4.0"          # Add metadata tags
 | **LOW** | `task metadata add` | Auto-allowed | Auto-allowed |
 
 **Update Tracking**: All edit commands automatically append to the MTMD `updates` list with breadcrumb, description, and agent attribution. This provides forensic audit trail across compaction.
+
+### 9.3.5 Lifecycle Commands (Status Transitions)
+
+**Use lifecycle commands for ALL status transitions**. Direct status editing is blocked.
+
+```bash
+macf_tools task start #67              # pending → in_progress
+macf_tools task pause #67              # in_progress → pending
+macf_tools task complete #67 --report "..." # → completed (report mandatory)
+macf_tools task archive #67            # → archived (cascade default)
+```
+
+**Why Lifecycle Commands**:
+
+Status transitions are **consciousness events**, not raw data mutations. Each lifecycle command:
+
+| Command | Status Change | Breadcrumb Recorded | Notes |
+|---------|---------------|---------------------|-------|
+| `task start` | → `in_progress` | `started_breadcrumb` | Marks when work began |
+| `task pause` | → `pending` | Update entry added | Temporary pause |
+| `task complete` | → `completed` | `completion_breadcrumb` | Requires `--report` |
+| `task archive` | → `archived` | Update entry added | Cascades to children |
+
+**Ceremony over Efficiency**: The friction of lifecycle commands ensures every transition is documented. Raw `status=X` mutations lose the moment of transition. Lifecycle commands preserve it.
+
+**Examples**:
+```bash
+# Starting work
+macf_tools task start #67
+# Output: ✅ Task #67 started
+#         Breadcrumb: s_abc.../c_42/g_.../p_.../t_...
+
+# Completing work
+macf_tools task complete #67 --report "Implemented feature X. No difficulties. Committed: abc1234"
+# Output: ✅ Task #67 completed
+#         Report recorded in MTMD
+```
 
 ### 9.4 Archive & Delete
 
@@ -672,6 +724,9 @@ macf_tools task create mission "Test" --json | jq .task_id
 
 **❌ Deleting without archive**:
 - **Fix**: Archive completed hierarchies before cleanup
+
+**❌ Direct status editing**:
+- **Fix**: Use lifecycle commands (`task start`, `task pause`, `task complete`, `task archive`) - direct editing is blocked
 
 ---
 
