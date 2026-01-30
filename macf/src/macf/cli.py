@@ -2928,7 +2928,17 @@ def cmd_task_edit(args: argparse.Namespace) -> int:
         print(f"   To change the title: macf_tools task metadata set {task_id_str} title \"New Title\"")
         return 1
 
-    editable_fields = ["status", "description"]
+    # Block direct status editing - use lifecycle commands instead
+    if field == "status":
+        print(f"❌ Direct status editing is not allowed")
+        print(f"   Use lifecycle commands instead:")
+        print(f"   • macf_tools task start {task_id_str}    → in_progress")
+        print(f"   • macf_tools task pause {task_id_str}    → pending")
+        print(f"   • macf_tools task complete {task_id_str} → completed")
+        print(f"   • macf_tools task archive {task_id_str}  → archived")
+        return 1
+
+    editable_fields = ["description"]
     if field not in editable_fields:
         print(f"❌ Field '{field}' is not editable")
         print(f"   Editable fields: {', '.join(editable_fields)}")
@@ -3668,6 +3678,87 @@ def cmd_task_grant_delete(args: argparse.Namespace) -> int:
         print(f"   Reason: {args.reason}")
     print("   Grant is single-use and will be cleared after consumption.")
 
+    return 0
+
+
+def cmd_task_start(args: argparse.Namespace) -> int:
+    """Start work on a task - sets status to in_progress with started_breadcrumb."""
+    from .task import TaskReader, update_task_file
+    from .utils.breadcrumbs import get_breadcrumb
+    import json
+
+    task_id_str = args.task_id.lstrip('#')
+    try:
+        task_id = int(task_id_str)
+    except ValueError:
+        print(f"❌ Invalid task ID: {args.task_id}")
+        return 1
+
+    reader = TaskReader()
+    task = reader.read_task(task_id)
+    if not task:
+        print(f"❌ Task #{task_id} not found")
+        return 1
+
+    if task.status == "in_progress":
+        print(f"⚠️  Task #{task_id} is already in_progress")
+        return 0
+
+    breadcrumb = get_breadcrumb()
+
+    if task.mtmd:
+        from .task.models import MacfTaskUpdate
+        import copy
+        new_mtmd = copy.deepcopy(task.mtmd)
+        new_mtmd.started_breadcrumb = breadcrumb
+        new_mtmd.updates.append(MacfTaskUpdate(breadcrumb=breadcrumb, description="Task started via CLI", agent="PA"))
+        new_description = task.description_with_updated_mtmd(new_mtmd)
+        update_task_file(task_id, {"status": "in_progress", "description": new_description})
+    else:
+        update_task_file(task_id, {"status": "in_progress"})
+
+    print(f"✅ Task #{task_id} started")
+    print(f"   Breadcrumb: {breadcrumb}")
+    return 0
+
+
+def cmd_task_pause(args: argparse.Namespace) -> int:
+    """Pause work on a task - sets status back to pending."""
+    from .task import TaskReader, update_task_file
+    from .utils.breadcrumbs import get_breadcrumb
+    import json
+
+    task_id_str = args.task_id.lstrip('#')
+    try:
+        task_id = int(task_id_str)
+    except ValueError:
+        print(f"❌ Invalid task ID: {args.task_id}")
+        return 1
+
+    reader = TaskReader()
+    task = reader.read_task(task_id)
+    if not task:
+        print(f"❌ Task #{task_id} not found")
+        return 1
+
+    if task.status == "pending":
+        print(f"⚠️  Task #{task_id} is already pending")
+        return 0
+
+    breadcrumb = get_breadcrumb()
+
+    if task.mtmd:
+        from .task.models import MacfTaskUpdate
+        import copy
+        new_mtmd = copy.deepcopy(task.mtmd)
+        new_mtmd.updates.append(MacfTaskUpdate(breadcrumb=breadcrumb, description="Task paused via CLI", agent="PA"))
+        new_description = task.description_with_updated_mtmd(new_mtmd)
+        update_task_file(task_id, {"status": "pending", "description": new_description})
+    else:
+        update_task_file(task_id, {"status": "pending"})
+
+    print(f"✅ Task #{task_id} paused")
+    print(f"   Breadcrumb: {breadcrumb}")
     return 0
 
 
@@ -4419,6 +4510,16 @@ def _build_parser() -> argparse.ArgumentParser:
     task_grant_delete_parser.add_argument("task_ids", nargs='+', help="task ID(s) to grant delete permission (e.g., #67 or 67, accepts multiple)")
     task_grant_delete_parser.add_argument("--reason", "-r", default="", help="reason for granting")
     task_grant_delete_parser.set_defaults(func=cmd_task_grant_delete)
+
+    # task start
+    task_start_parser = task_sub.add_parser("start", help="start work on task (→ in_progress)")
+    task_start_parser.add_argument("task_id", help="task ID to start (e.g., #67 or 67)")
+    task_start_parser.set_defaults(func=cmd_task_start)
+
+    # task pause
+    task_pause_parser = task_sub.add_parser("pause", help="pause work on task (→ pending)")
+    task_pause_parser.add_argument("task_id", help="task ID to pause (e.g., #67 or 67)")
+    task_pause_parser.set_defaults(func=cmd_task_pause)
 
     # task complete
     task_complete_parser = task_sub.add_parser("complete", help="mark task complete with report")
