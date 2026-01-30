@@ -2766,7 +2766,8 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
     root = task_map[root_id]
 
     def get_children(parent_id):
-        return sorted([t for t in all_tasks if t.parent_id == parent_id], key=lambda t: t.id)
+        # Zero-pad IDs for proper numeric string sorting
+        return sorted([t for t in all_tasks if t.parent_id == parent_id], key=lambda t: t.id.zfill(10))
 
     def count_descendants(task_id):
         children = get_children(task_id)
