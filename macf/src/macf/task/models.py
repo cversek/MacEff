@@ -89,6 +89,7 @@ class MacfTaskMetaData:
     release_branch: Optional[str] = None
 
     # Lifecycle breadcrumbs
+    started_breadcrumb: Optional[str] = None
     completion_breadcrumb: Optional[str] = None
     completion_report: Optional[str] = None  # Brief report on completion (difficulties, future work)
     unblock_breadcrumb: Optional[str] = None
