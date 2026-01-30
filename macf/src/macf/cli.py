@@ -2698,33 +2698,26 @@ def cmd_task_get(args: argparse.Namespace) -> int:
     if task.blocks:
         print(f"Blocks: {', '.join(f'#{b}' for b in task.blocks)}")
 
-    # MTMD section
+    # MTMD section - iterate dataclass fields in definition order
     if task.mtmd:
+        from dataclasses import fields
         print(f"\nℹ️ MacfTaskMetaData (v{task.mtmd.version})")
         print("-" * 40)
-        if task.mtmd.plan_ca_ref:
-            print(f"  plan_ca_ref: {task.mtmd.plan_ca_ref}")
-        if task.mtmd.experiment_ca_ref:
-            print(f"  experiment_ca_ref: {task.mtmd.experiment_ca_ref}")
-        if task.mtmd.creation_breadcrumb:
-            print(f"  created: {task.mtmd.creation_breadcrumb}")
-        if task.mtmd.created_cycle:
-            print(f"  cycle: {task.mtmd.created_cycle}")
-        if task.mtmd.created_by:
-            print(f"  by: {task.mtmd.created_by}")
-        if task.mtmd.repo:
-            print(f"  repo: {task.mtmd.repo}")
-        if task.mtmd.target_version:
-            print(f"  target: {task.mtmd.target_version}")
-        if task.mtmd.completion_breadcrumb:
-            print(f"  completed: {task.mtmd.completion_breadcrumb}")
-        if task.mtmd.unblock_breadcrumb:
-            print(f"  unblocked: {task.mtmd.unblock_breadcrumb}")
-        if task.mtmd.updates:
-            print(f"  updates: ({len(task.mtmd.updates)})")
-            for u in task.mtmd.updates:
-                desc = f" - {u.description}" if u.description else ""
-                print(f"    • {u.breadcrumb}{desc}")
+        for f in fields(task.mtmd):
+            if f.name == "version":
+                continue  # Already shown in header
+            value = getattr(task.mtmd, f.name)
+            # Skip None/empty/False values
+            if value is None or value == [] or value is False or value == {}:
+                continue
+            # Special handling for updates list
+            if f.name == "updates" and value:
+                print(f"  {f.name}: ({len(value)})")
+                for u in value:
+                    desc = f" - {u.description}" if u.description else ""
+                    print(f"    • {u.breadcrumb}{desc}")
+            else:
+                print(f"  {f.name}: {value}")
 
     # Description (without MTMD)
     desc_clean = task.description_without_mtmd()
