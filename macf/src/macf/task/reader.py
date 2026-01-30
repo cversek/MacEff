@@ -17,10 +17,24 @@ class TaskReader:
     Reads Claude Code native task JSON files.
 
     Task files location: ~/.claude/tasks/{session_uuid}/{id}.json
+
+    Environment variable override:
+        MACF_TASKS_DIR - If set, use this path instead of ~/.claude/tasks/
+                         (useful for testing isolation)
     """
 
-    CLAUDE_DIR = Path.home() / ".claude"
-    TASKS_DIR = CLAUDE_DIR / "tasks"
+    @classmethod
+    def _get_tasks_dir(cls) -> Path:
+        """Get tasks directory, respecting MACF_TASKS_DIR env var for test isolation."""
+        env_dir = os.environ.get("MACF_TASKS_DIR")
+        if env_dir:
+            return Path(env_dir)
+        return Path.home() / ".claude" / "tasks"
+
+    @property
+    def tasks_dir(self) -> Path:
+        """Tasks directory (may be overridden by MACF_TASKS_DIR env var)."""
+        return self._get_tasks_dir()
 
     def __init__(self, session_uuid: Optional[str] = None):
         """
@@ -44,10 +58,11 @@ class TaskReader:
             return env_session
 
         # Fall back to most recently modified session folder
-        if not cls.TASKS_DIR.exists():
+        tasks_dir = cls._get_tasks_dir()
+        if not tasks_dir.exists():
             return None
 
-        sessions = [d for d in cls.TASKS_DIR.iterdir() if d.is_dir()]
+        sessions = [d for d in tasks_dir.iterdir() if d.is_dir()]
         if not sessions:
             return None
 
@@ -60,7 +75,7 @@ class TaskReader:
         """Path to current session's task folder."""
         if not self.session_uuid:
             return None
-        return self.TASKS_DIR / self.session_uuid
+        return self.tasks_dir / self.session_uuid
 
     def list_task_files(self) -> List[Path]:
         """List all task JSON files in current session."""
@@ -112,11 +127,12 @@ class TaskReader:
     @classmethod
     def list_all_sessions(cls) -> List[str]:
         """List all available session UUIDs."""
-        if not cls.TASKS_DIR.exists():
+        tasks_dir = cls._get_tasks_dir()
+        if not tasks_dir.exists():
             return []
 
         return [
-            d.name for d in cls.TASKS_DIR.iterdir()
+            d.name for d in tasks_dir.iterdir()
             if d.is_dir() and (d / "*.json").parent.exists()
         ]
 

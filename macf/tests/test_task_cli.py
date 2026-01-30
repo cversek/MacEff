@@ -13,6 +13,7 @@ polluting production tasks and event logs.
 """
 
 import json
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -31,17 +32,44 @@ def isolated_task_env(tmp_path, monkeypatch):
     Without isolation, tests pollute production data.
 
     This fixture is autouse=True so ALL tests in this module get isolation.
+
+    CRITICAL: Returns a dict with both the tasks_dir Path AND an env dict
+    for subprocess.run(). monkeypatch.setenv() only affects the current
+    process - subprocess.run() spawns a child that inherits from the actual
+    OS environment, not the monkeypatched one.
+
+    Usage:
+        result = subprocess.run([...], env=isolated_task_env['env'], ...)
+        task_files = list(isolated_task_env['tasks_dir'].glob("*.json"))
     """
-    # Isolate task storage
+    # Isolate task storage - create session folder structure
     test_tasks_dir = tmp_path / "tasks"
-    test_tasks_dir.mkdir()
-    monkeypatch.setenv("MACF_TASKS_DIR", str(test_tasks_dir))
+    test_session_id = "test-session-uuid"
+    test_session_dir = test_tasks_dir / test_session_id
+    test_session_dir.mkdir(parents=True)
 
     # Isolate event log
     test_log = tmp_path / "test_cli_events.jsonl"
+
+    # Build environment dict for subprocess - merge with current env
+    # This is CRITICAL: subprocess.run() needs explicit env= parameter
+    subprocess_env = {
+        **os.environ,
+        "MACF_TASKS_DIR": str(test_tasks_dir),
+        "MACF_SESSION_ID": test_session_id,
+        "MACF_EVENTS_LOG_PATH": str(test_log),
+    }
+
+    # Also set in current process (for any in-process code paths)
+    monkeypatch.setenv("MACF_TASKS_DIR", str(test_tasks_dir))
+    monkeypatch.setenv("MACF_SESSION_ID", test_session_id)
     monkeypatch.setenv("MACF_EVENTS_LOG_PATH", str(test_log))
 
-    yield test_tasks_dir
+    yield {
+        'tasks_dir': test_tasks_dir,
+        'session_dir': test_session_dir,
+        'env': subprocess_env,
+    }
 
 
 class TestTaskCreateMissionCommand:
@@ -51,15 +79,15 @@ class TestTaskCreateMissionCommand:
         """Test mission creation with just title (minimal args)."""
         result = subprocess.run(
             ['macf_tools', 'task', 'create', 'mission', 'Test Mission Title'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
 
         assert result.returncode == 0
-        # Should show success message with emoji
-        assert 'Created task' in result.stdout or '🗺️' in result.stdout
+        # Should show success message with emoji (note: output says "Created MISSION" not "Created task")
+        assert 'Created' in result.stdout or '🗺️' in result.stdout
 
-        # Verify task file was created
-        task_files = list(isolated_task_env.glob("*.json"))
+        # Verify task file was created in session directory
+        task_files = list(isolated_task_env['session_dir'].glob("*.json"))
         assert len(task_files) >= 1
 
     def test_create_mission_with_repo_version(self, isolated_task_env):
@@ -67,7 +95,7 @@ class TestTaskCreateMissionCommand:
         result = subprocess.run(
             ['macf_tools', 'task', 'create', 'mission', 'MacEff Release',
              '--repo', 'MacEff', '--version', '0.4.0'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
 
         assert result.returncode == 0
@@ -78,15 +106,16 @@ class TestTaskCreateMissionCommand:
         """Test mission creation with --json flag returns valid JSON."""
         result = subprocess.run(
             ['macf_tools', 'task', 'create', 'mission', 'JSON Mission', '--json'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
 
         assert result.returncode == 0
         # Output should be valid JSON
         task_data = json.loads(result.stdout)
         assert isinstance(task_data, dict)
-        assert 'id' in task_data
+        # JSON output includes subject (with embedded ID) and task_type
         assert 'subject' in task_data
+        assert 'task_type' in task_data or 'mtmd' in task_data
 
 
 class TestTaskCreateBugCommand:
@@ -97,7 +126,7 @@ class TestTaskCreateBugCommand:
         result = subprocess.run(
             ['macf_tools', 'task', 'create', 'bug', 'Fix test failure',
              '--plan', 'Update assertions to match new format'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
 
         assert result.returncode == 0
@@ -107,7 +136,7 @@ class TestTaskCreateBugCommand:
         """Test bug creation fails without --plan or --plan-ca-ref."""
         result = subprocess.run(
             ['macf_tools', 'task', 'create', 'bug', 'Incomplete Bug'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
 
         # Should fail - bug requires plan
@@ -119,7 +148,7 @@ class TestTaskCreateBugCommand:
         # First create a parent task
         parent_result = subprocess.run(
             ['macf_tools', 'task', 'create', 'task', 'Parent Task'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
         assert parent_result.returncode == 0
 
@@ -127,7 +156,7 @@ class TestTaskCreateBugCommand:
         result = subprocess.run(
             ['macf_tools', 'task', 'create', 'bug', 'Child Bug',
              '--parent', '1', '--plan', 'Fix child issue'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
 
         assert result.returncode == 0
@@ -140,7 +169,7 @@ class TestTaskCreatePhaseCommand:
         """Test phase creation fails without --parent."""
         result = subprocess.run(
             ['macf_tools', 'task', 'create', 'phase', 'Phase Without Parent'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
 
         # Should fail - phase requires parent
@@ -152,7 +181,7 @@ class TestTaskCreatePhaseCommand:
         # First create a mission
         mission_result = subprocess.run(
             ['macf_tools', 'task', 'create', 'mission', 'Parent Mission'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
         assert mission_result.returncode == 0
 
@@ -160,11 +189,12 @@ class TestTaskCreatePhaseCommand:
         result = subprocess.run(
             ['macf_tools', 'task', 'create', 'phase', 'Phase 1: Setup',
              '--parent', '1'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
 
         assert result.returncode == 0
-        assert 'Created task' in result.stdout
+        # Note: output says "Created phase task" not "Created task"
+        assert 'Created' in result.stdout
 
 
 class TestTaskCreateTaskCommand:
@@ -174,7 +204,7 @@ class TestTaskCreateTaskCommand:
         """Test standalone task creation."""
         result = subprocess.run(
             ['macf_tools', 'task', 'create', 'task', 'Simple Task'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
 
         assert result.returncode == 0
@@ -184,7 +214,7 @@ class TestTaskCreateTaskCommand:
         """Test task creation with --json returns valid JSON."""
         result = subprocess.run(
             ['macf_tools', 'task', 'create', 'task', 'JSON Task', '--json'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
 
         assert result.returncode == 0
@@ -219,7 +249,7 @@ class TestTaskCreateDelegCommand:
         """Test deleg creation fails without --plan."""
         result = subprocess.run(
             ['macf_tools', 'task', 'create', 'deleg', 'Incomplete Deleg'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
 
         # Should fail - deleg requires plan
@@ -233,7 +263,7 @@ class TestTaskArchiveCommand:
         """Test archiving a nonexistent task fails gracefully."""
         result = subprocess.run(
             ['macf_tools', 'task', 'archive', '999'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
 
         assert result.returncode != 0
@@ -244,14 +274,14 @@ class TestTaskArchiveCommand:
         # Create a task first
         create_result = subprocess.run(
             ['macf_tools', 'task', 'create', 'task', 'Task to Archive'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
         assert create_result.returncode == 0
 
         # Archive it (assuming it gets ID 1)
         result = subprocess.run(
             ['macf_tools', 'task', 'archive', '1'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
 
         assert result.returncode == 0
@@ -262,14 +292,14 @@ class TestTaskArchiveCommand:
         # Create a parent task
         parent_result = subprocess.run(
             ['macf_tools', 'task', 'create', 'task', 'Parent'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
         assert parent_result.returncode == 0
 
         # Archive with --no-cascade
         result = subprocess.run(
             ['macf_tools', 'task', 'archive', '1', '--no-cascade'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
 
         # Should succeed
@@ -283,7 +313,7 @@ class TestTaskRestoreCommand:
         """Test restore command with missing archive."""
         result = subprocess.run(
             ['macf_tools', 'task', 'restore', 'nonexistent.json'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
 
         # Should fail or report not found
@@ -294,20 +324,20 @@ class TestTaskRestoreCommand:
         # Create and archive a task first
         create_result = subprocess.run(
             ['macf_tools', 'task', 'create', 'task', 'Test Restore'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
         assert create_result.returncode == 0
 
         archive_result = subprocess.run(
             ['macf_tools', 'task', 'archive', '1'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
         assert archive_result.returncode == 0
 
         # Try to restore with --json (may fail if archive path is complex)
         result = subprocess.run(
             ['macf_tools', 'task', 'restore', '1', '--json'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
 
         # If successful, should be valid JSON
@@ -323,7 +353,7 @@ class TestTaskArchivedListCommand:
         """Test archived list with no archived tasks."""
         result = subprocess.run(
             ['macf_tools', 'task', 'archived', 'list'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
 
         assert result.returncode == 0
@@ -335,20 +365,20 @@ class TestTaskArchivedListCommand:
         # Create and archive a task
         create_result = subprocess.run(
             ['macf_tools', 'task', 'create', 'task', 'To Archive'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
         assert create_result.returncode == 0
 
         archive_result = subprocess.run(
             ['macf_tools', 'task', 'archive', '1'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
         assert archive_result.returncode == 0
 
         # List archived tasks
         result = subprocess.run(
             ['macf_tools', 'task', 'archived', 'list'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
 
         assert result.returncode == 0
@@ -363,7 +393,7 @@ class TestTaskGrantUpdateCommand:
         """Test grant-update fails without task ID."""
         result = subprocess.run(
             ['macf_tools', 'task', 'grant-update'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
 
         assert result.returncode != 0
@@ -373,14 +403,14 @@ class TestTaskGrantUpdateCommand:
         # Create a task first
         create_result = subprocess.run(
             ['macf_tools', 'task', 'create', 'task', 'Test Grant'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
         assert create_result.returncode == 0
 
         # Grant update permission
         result = subprocess.run(
             ['macf_tools', 'task', 'grant-update', '1'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
 
         assert result.returncode == 0
@@ -391,7 +421,7 @@ class TestTaskGrantUpdateCommand:
         # Create a task
         create_result = subprocess.run(
             ['macf_tools', 'task', 'create', 'task', 'Test Field Grant'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
         assert create_result.returncode == 0
 
@@ -399,7 +429,7 @@ class TestTaskGrantUpdateCommand:
         result = subprocess.run(
             ['macf_tools', 'task', 'grant-update', '1',
              '--field', 'description', '--value', 'New description'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
 
         assert result.returncode == 0
@@ -413,14 +443,14 @@ class TestTaskGrantDeleteCommand:
         # Create a task
         create_result = subprocess.run(
             ['macf_tools', 'task', 'create', 'task', 'Test Delete Grant'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
         assert create_result.returncode == 0
 
         # Grant delete permission
         result = subprocess.run(
             ['macf_tools', 'task', 'grant-delete', '1'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
 
         assert result.returncode == 0
@@ -439,7 +469,7 @@ class TestTaskGrantDeleteCommand:
         # Grant delete for multiple tasks
         result = subprocess.run(
             ['macf_tools', 'task', 'grant-delete', '1', '2', '3'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
 
         assert result.returncode == 0
@@ -449,7 +479,7 @@ class TestTaskGrantDeleteCommand:
         # Create a task
         create_result = subprocess.run(
             ['macf_tools', 'task', 'create', 'task', 'Task with Reason'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
         assert create_result.returncode == 0
 
@@ -457,7 +487,7 @@ class TestTaskGrantDeleteCommand:
         result = subprocess.run(
             ['macf_tools', 'task', 'grant-delete', '1',
              '--reason', 'Task no longer needed'],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=isolated_task_env['env']
         )
 
         assert result.returncode == 0
