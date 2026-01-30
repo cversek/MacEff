@@ -4273,7 +4273,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # task tree
     task_tree_parser = task_sub.add_parser("tree", help="show task hierarchy tree")
-    task_tree_parser.add_argument("task_id", help="root task ID (e.g., #67 or 67)")
+    task_tree_parser.add_argument("task_id", nargs="?", default="000",
+                                  help="root task ID (default: 000 sentinel)")
     task_tree_parser.set_defaults(func=cmd_task_tree)
 
     # task delete
