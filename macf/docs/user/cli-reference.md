@@ -1120,8 +1120,11 @@ Display task hierarchy as tree.
 
 **Syntax:**
 ```bash
-macf_tools task tree <task_id>
+macf_tools task tree [task_id]
 ```
+
+**Arguments:**
+- `task_id` - Root task ID (default: `000` sentinel, shows all tasks)
 
 **Output:**
 ```
