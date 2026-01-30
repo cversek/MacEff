@@ -712,8 +712,28 @@ The legacy pattern used TodoWrite with manual archiving:
 
 ## Anti-Patterns to Avoid
 
+### 🚨 CRITICAL: CC Plan Files vs Roadmap CAs
+
+**Claude Code plan files (`~/.claude/plans/*.md`) are EPHEMERAL SCRATCH SPACE.**
+
+They are where you DRAFT during EnterPlanMode. They are NOT authoritative sources.
+
+**The Authoritative Source**: MTMD `plan_ca_ref` pointing to Roadmap CA in `agent/public/roadmaps/`
+
+**The Trap**: After compaction, CC plan files may still exist with stale content. Reading them instead of the Roadmap CA leads to:
+- Outdated phase definitions
+- Missing completion criteria updates
+- Lost context from post-approval edits
+- **Working from a napkin draft instead of the signed contract**
+
+**The Rule**: When starting work on a MISSION/PHASE:
+1. Get parent task's `plan_ca_ref` from MTMD
+2. Read THAT file - the Roadmap CA
+3. **NEVER** read `~/.claude/plans/*.md` as authoritative source
+
 ### Execution Anti-Patterns
 
+- ❌ **Reading CC plan files as authoritative** - Plan files are drafts; Roadmap CAs are the contract
 - ❌ **Skipping mandatory reading** - Starting work before reading embedded plans
 - ❌ **Clobbering without archiving** - Collapsing TODOs without preservation
 - ❌ **Missing archive contents** - Archive without breadcrumbs or todos JSON
