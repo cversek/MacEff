@@ -655,6 +655,7 @@ def create_detour(
 def create_phase(
     parent_id: int,
     title: str,
+    plan: Optional[str] = None,
     plan_ca_ref: Optional[str] = None
 ) -> CreateResult:
     """
@@ -667,7 +668,8 @@ def create_phase(
     Args:
         parent_id: Parent task ID
         title: Phase title (e.g., "Phase 1: Setup")
-        plan_ca_ref: Optional path to subplan CA (affects marker: 📋 vs -)
+        plan: Inline plan description (XOR with plan_ca_ref)
+        plan_ca_ref: Path to subplan CA (XOR with plan, affects marker: 📋 vs -)
 
     Returns:
         CreateResult with task_id and mtmd
@@ -682,7 +684,7 @@ def create_phase(
     # Get next task ID
     task_id = _get_next_task_id()
 
-    # Create MTMD with parent_id, title, and optional plan_ca_ref
+    # Create MTMD with parent_id, title, and plan (XOR)
     mtmd = MacfTaskMetaData(
         version="1.0",
         creation_breadcrumb=breadcrumb,
@@ -691,6 +693,7 @@ def create_phase(
         task_type="PHASE",
         title=title,
         parent_id=parent_id,
+        plan=plan,
         plan_ca_ref=plan_ca_ref
     )
 
@@ -852,7 +855,9 @@ def create_deleg(
 
 
 def create_task(
-    title: str
+    title: str,
+    plan: Optional[str] = None,
+    plan_ca_ref: Optional[str] = None
 ) -> CreateResult:
     """
     Create standalone TASK for general work.
@@ -863,6 +868,8 @@ def create_task(
 
     Args:
         title: Task title (e.g., "Fix urgent CEP alignment issue")
+        plan: Inline plan description (XOR with plan_ca_ref)
+        plan_ca_ref: Path to plan CA (XOR with plan)
 
     Returns:
         CreateResult with task_id and mtmd
@@ -885,7 +892,9 @@ def create_task(
         created_by="PA",
         task_type="TASK",
         title=title,
-        parent_id=SENTINEL_TASK_ID
+        parent_id=SENTINEL_TASK_ID,
+        plan=plan,
+        plan_ca_ref=plan_ca_ref
     )
 
     # Build description with MTMD

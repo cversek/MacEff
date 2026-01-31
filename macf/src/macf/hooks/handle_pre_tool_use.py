@@ -19,6 +19,7 @@ from macf.utils import (
     detect_auto_mode
 )
 from macf.agent_events_log import append_event
+from macf.event_queries import get_active_policy_injections_from_events
 from macf.hooks.hook_logging import log_hook_event
 
 
@@ -101,10 +102,48 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # Get token info for smoke test
         token_info = get_token_info(session_id)
 
+        # Build policy injection content (if any active injections)
+        # DESIGN: "Injection not IV" - policies fire ONCE then auto-clear
+        # This prevents brutal context cost on every tool call
+        injection_content = ""
+        injection_errors = []
+        injected_policies = []  # Track successful injections for auto-clear
+        active_injections = get_active_policy_injections_from_events()
+        for inj in active_injections:
+            policy_path = inj.get("policy_path", "")
+            policy_name = inj.get("policy_name", "unknown")
+            if policy_path:
+                from pathlib import Path
+                p = Path(policy_path)
+                if p.exists():
+                    try:
+                        policy_text = p.read_text()
+                        injection_content += f'<macf-policy-injection policy="{policy_name}">\n{policy_text}\n</macf-policy-injection>\n'
+                        injected_policies.append(policy_name)  # Mark for auto-clear
+                    except Exception as e:
+                        injection_errors.append(f"{policy_name}: {e}")
+                else:
+                    injection_errors.append(f"{policy_name}: file not found at {policy_path}")
+
+        # Auto-clear injections after they fire (injection, not IV)
+        for policy_name in injected_policies:
+            append_event(
+                event="policy_injection_cleared",
+                data={
+                    "policy_name": policy_name,
+                    "reason": "auto_clear_after_fire",
+                    "session_id": session_id
+                }
+            )
+
         # Base temporal message with breadcrumb
         timestamp = get_minimal_timestamp()
         breadcrumb = get_breadcrumb()
         message_parts = [f"🏗️ MACF | {timestamp} | {breadcrumb}"]
+
+        # Surface any injection errors to user
+        if injection_errors:
+            message_parts.append(f"❌ Policy injection errors: {'; '.join(injection_errors)}")
 
         # TaskCreate DENIED - redirect to CLI
         if tool_name == "TaskCreate":
@@ -274,12 +313,16 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
 
         # Pattern C: top-level systemMessage for user + hookSpecificOutput for agent
         user_message = f"{message} | {token_context_minimal}"
+        # Build additionalContext with policy injections prepended
+        base_context = f"<system-reminder>\n{user_message}\n</system-reminder>"
+        full_context = injection_content + base_context if injection_content else base_context
+
         return {
             "continue": True,
             "systemMessage": user_message,  # TOP LEVEL - user sees this
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
-                "additionalContext": f"<system-reminder>\n{user_message}\n</system-reminder>"
+                "additionalContext": full_context
             }
         }
 
