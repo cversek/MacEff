@@ -1,94 +1,200 @@
-Create a MacEff-compliant roadmap by reading policies for structure guidelines, then drafting according to established patterns.
+---
+description: Create MacEff-compliant roadmap with enforced pre-draft ceremony
+argument-hint: [brief topic description]
+allowed-tools: Read, Bash(macf_tools:*), Grep, AskUserQuestion, Task(Explore), EnterPlanMode, ExitPlanMode
+---
+
+Create a MacEff-compliant roadmap following the complete preliminary workflow with mandatory ceremony enforcement.
 
 **Argument**: Brief description of the roadmap topic
 
 ---
 
-## Policy Reading (MANDATORY)
+## 🚨 PRE-DRAFT CEREMONY (MANDATORY - NO SKIPPING)
 
-Before drafting, read these policies to understand requirements:
+**This ceremony is NOT optional. It is REQUIRED infrastructure for strategic planning.**
 
-1. **Roadmap Drafting Guidelines** - Structure, phases, success criteria:
-   ```bash
-   macf_tools policy navigate roadmaps_drafting
-   macf_tools policy read roadmaps_drafting --from-nav-boundary
-   ```
+### Step 1: EnterPlanMode (MANDATORY - AUTONOMOUS)
 
-2. **Path Portability** (for framework roadmaps) - Portable path conventions:
-   ```bash
-   macf_tools policy read path_portability
-   ```
+🚨 **IMMEDIATELY invoke EnterPlanMode** - this is your FIRST action, not something you ask permission for.
 
-**Why CLI tools**: Caching prevents redundant reads, line numbers enable precise citations.
+**Why**: Creates architectural friction preventing premature execution. Planning happens in PlanMode, execution happens after ExitPlanMode approval.
+
+**DO NOT**:
+- ❌ Ask "should I enter plan mode?"
+- ❌ Explain plan mode before entering
+- ❌ Wait for user confirmation
+
+**Rationale**: EnterPlanMode is low-risk autonomous agent initiative. User approval is required for ExitPlanMode (execution gate), not entry.
+
+### Step 2: Policy Discovery & Reading
+
+**Use CLI-first approach** for policy access (caching, line numbers for citations, framework path resolution):
+
+```bash
+macf_tools policy navigate roadmaps_drafting
+macf_tools policy read roadmaps_drafting
+```
+
+**Fallback**: If CLI unavailable, use Read tool with Policy as API pattern (extractive questions discover requirements).
+
+🚨 **NEVER truncate navigation output** - the CEP guide shows ALL sections. Truncating causes you to miss critical requirements.
+
+### Step 3: Requirements Extraction (REPORT BEFORE STATE-CHANGING TOOLS)
+
+**Extract and report answers to these questions BEFORE any drafting**:
+
+**Preliminary Workflow**:
+1. What is the complete sequence from recognition to execution?
+2. What steps are MANDATORY vs ENCOURAGED?
+3. What gates the transition from planning to execution?
+
+**EnterPlanMode Requirement**:
+4. Why is EnterPlanMode mandatory?
+5. What happens in PlanMode vs execution mode?
+6. What's the asymmetric authorization pattern (entry vs exit)?
+
+**Task Exploration (ENCOURAGED)**:
+7. When should Task tool with Explore subagent be used?
+8. What questions warrant parallel exploration?
+9. How do exploration findings inform phase structure?
+
+**AskUserQuestion Protocol (ENCOURAGED)**:
+10. When should multiple-choice questioning be used?
+11. What trade-offs should be surfaced to user?
+12. How to distinguish murky requirements from clear ones?
+
+**Roadmap Structure**:
+13. Where do roadmaps go? What subdirectories are required?
+14. What naming conventions apply?
+15. What sections must a roadmap contain?
+16. What header metadata is required?
+17. What phase structure format is mandated?
+
+**Delegation Strategy (MANDATORY)**:
+18. What executor options exist?
+19. What rationale requirements apply to each phase?
+20. When should delegation skill be invoked?
+
+**Phase Content Requirements (MANDATORY)**:
+21. What should phases specify?
+22. What is explicitly FORBIDDEN in phase descriptions?
+
+### Step 4: Exploration (ENCOURAGED if requirements murky)
+
+**If scope is unclear or requirements ambiguous**, use Task tool with Explore subagent to investigate:
+- Requirements discovery
+- Codebase patterns
+- Complexity assessment
+- Dependency identification
+
+**Benefits**: Informed planning based on actual state, discover complexity early, avoid blind planning.
+
+### Step 5: User Questioning (ENCOURAGED if trade-offs exist)
+
+**If architectural decisions or user preferences matter**, use AskUserQuestion to surface:
+- Multiple valid approaches
+- Speed vs safety trade-offs
+- Testing strategy preferences
+- Risk tolerance clarification
+
+**Benefits**: User-aligned roadmaps, early risk mitigation, strategic clarity, fewer mid-execution pivots.
 
 ---
 
-## Questions to Answer from Policy Reading
+## DRAFTING PHASE (After Ceremony Complete)
 
-After reading policies, **report answers to user before any state-changing tools**:
+### Claude Code Plan File Usage
 
-1. **What preliminary steps does roadmaps_drafting.md require?**
-   - What must happen before drafting begins?
-   - What exploration or user interaction is specified?
+**Pattern**: Use Claude Code's native plan mode for iterative drafting:
 
-2. **What folder structure does the policy specify?**
-   - Where do roadmaps go?
-   - What subdirectories are required?
+1. **Gather context** from policy extraction, exploration, user questions
+2. **Draft in plan file** - iterate freely
+3. **Refine structure** based on policy requirements
+4. **Present to user** for review
 
-3. **What sections must a roadmap contain?**
-   - Header format and required fields
-   - Phase structure requirements
-   - Success criteria format
+🚨 **CRITICAL**: Plan file is drafting workspace ONLY - NOT a MacEff consciousness artifact. Final roadmap MUST be transferred to compliant CA structure.
 
-4. **What path conventions apply to framework roadmaps?**
-   - How should policies be referenced?
-   - What patterns are prohibited?
+### Drafting Guidelines
 
-5. **What delegation strategy does §3.5 require?**
-   - What executor options exist (PA DIRECT vs DELEGATE)?
-   - What rationale must accompany each phase assignment?
-   - When should `/maceff-delegation` skill be invoked?
+**Apply policy requirements**:
+- Folder structure per policy
+- Required sections per policy
+- Phase breakdown guidelines
+- Delegation strategy table
+- Phase content requirements
+- Portable paths for framework roadmaps
 
-6. **What phase content requirements does §3.6 specify?**
-   - What should phases specify (interface/behavior)?
-   - What is explicitly forbidden in phase descriptions?
-
-7. **What task pinning protocol does task_management.md require?**
-   - What must happen when a roadmap is approved?
-   - How are roadmap phases represented in the task system?
+**Present to user**: Show draft, request feedback, iterate until approved.
 
 ---
 
-## Execution
+## POST-DRAFT CEREMONY (MANDATORY - NO SKIPPING)
 
-After reporting policy-extracted answers:
+**This ceremony happens AFTER user approves draft, BEFORE execution.**
 
-1. **Follow preliminary requirements** as specified by policy
-2. **Create artifacts** per policy-specified structure
-3. **Apply content requirements** extracted from policy
-4. **Verify against policy checklist** before completion
+### Step 1: Create Mission Task (Atomically)
 
-🚨 **CRITICAL - Roadmap vs Plan File**:
-- Claude Code's native plan files (`~/.claude/plans/`) are **NOT compliant** consciousness artifacts
-- Plan file content is for drafting only - it must be **transferred to a compliant roadmap CA**
-- This command creates the ROADMAP only - implementation via `/maceff:todos:start` separately
-- Roadmap must be comprehensive enough to resume after complete context loss
+Use CLI to create task atomically - this creates folder structure, skeleton roadmap.md, and mission task in one operation.
+
+### Step 2: Transfer Plan Content to Roadmap CA
+
+🚨 **Read skeleton FIRST**: The CLI output shows the skeleton path. You MUST read it before writing (Claude Code requires reading existing files first).
+
+**Then transfer your plan file content** to the skeleton roadmap.md.
+
+**Preserve**:
+- Header metadata from skeleton
+- Task management fields
+- Policy-compliant structure
+
+### Step 3: Report to User
+
+**Report**:
+- Task ID
+- Roadmap path
+- Phase count and delegation assignments
+
+### Step 4: 🛑 STOP (Execution Gate)
+
+**DO NOT start implementation.** The user MUST authorize execution separately.
+
+**Why**: Roadmap drafting is planning. Task start is execution commitment. These are separate approval gates.
 
 ---
 
-## Post-Drafting Checklist (MANDATORY)
+## Workflow Summary (Recognition → Draft → Execution)
 
-After ExitPlanMode approval, complete these steps **before any implementation**:
+```
+1. RECOGNIZE roadmap trigger (user invokes command)
+         ↓
+2. 🚨 EnterPlanMode (MANDATORY - autonomous, immediate)
+         ↓
+3. Policy reading (MANDATORY - navigate + read via CLI)
+         ↓
+4. Extract requirements (MANDATORY - report answers to user)
+         ↓
+5. Task exploration (ENCOURAGED if murky - use Explore subagent)
+         ↓
+6. AskUserQuestion (ENCOURAGED if trade-offs - surface decisions)
+         ↓
+7. Draft in plan file (iterative - apply policy requirements)
+         ↓
+8. Present to user (get feedback, iterate until approved)
+         ↓
+9. Create mission task (MANDATORY - CLI creates skeleton)
+         ↓
+10. Transfer content to roadmap.md (MANDATORY - populate skeleton)
+         ↓
+11. Report task ID and path (MANDATORY - user needs reference)
+         ↓
+12. 🛑 STOP (MANDATORY - await execution authorization)
+```
 
-1. **Create task atomically**:
-   ```bash
-   macf_tools task create mission "Title" --repo REPO --version VERSION
-   ```
-2. **Copy plan content** to the skeleton roadmap.md created by CLI
-3. **Report** task ID and roadmap path
-4. **🛑 STOP** - Await `/maceff:task:start #{TASK_ID}` for phase expansion
-
-**Note**: The CLI creates the folder structure, skeleton roadmap.md, and task with MTMD automatically.
+**Critical Gates**:
+- **Step 2**: EnterPlanMode - autonomous, no skipping
+- **Step 9-12**: Post-draft ceremony - required before execution
+- **Step 12**: STOP - user approval required for execution transition
 
 ---
 
@@ -96,8 +202,14 @@ After ExitPlanMode approval, complete these steps **before any implementation**:
 
 🚨 **Never use naked `cd` commands** - causes session failures. Use absolute paths.
 
-⚠️ **Path portability required** - Use `{FRAMEWORK_ROOT}` for policy references.
+🚨 **Path portability required** - Use `{FRAMEWORK_ROOT}` for policy references in framework roadmaps.
+
+🚨 **EnterPlanMode is MANDATORY** - No exceptions. Autonomous invocation, not permission-seeking.
+
+🚨 **Pre-draft ceremony is REQUIRED** - Cannot skip to "just draft". Policy reading, extraction, exploration/questioning (when applicable) are infrastructure.
+
+🚨 **Post-draft ceremony is REQUIRED** - Cannot skip to "start implementing". Task creation, content transfer, reporting, STOP are mandatory.
 
 ---
 
-**Meta-Pattern**: Policy as API - this command uses `macf_tools policy` CLI commands for reading policies. CLI tools handle framework path resolution, provide caching, and output line numbers for citations.
+**Meta-Pattern**: CLI-First with Policy as API fallback. Use CLI tools when available (caching, citations, path resolution). If CLI unavailable, use Read tool with extractive questions to discover requirements from policies. Commands point to policy knowledge, don't duplicate it.
