@@ -44,16 +44,15 @@ Create a **JOTEWR** (Jump Off The Edge While Reflecting) - a cycle-closing refle
 
 ---
 
-## Policy as API: Read Before Writing
+## Policy as API: Inject + Read Before Writing
 
-**MANDATORY FIRST STEP**: Consult the reflections policy for framework guidance.
+**MANDATORY FIRST STEP**: Inject the reflections policy for ambient guidance during JOTEWR creation.
 
 ```bash
-# Navigate policy structure first (CEP guide)
-macf_tools policy navigate reflections
-
-# Read complete policy with extraction focus
-macf_tools policy read reflections
+# Inject reflections policy - will appear on next tool use then auto-clear
+# This ensures policy guidance is AMBIENT during the complex reflection writing
+# (Injection = "difficult case" intervention, auto-clears after firing)
+macf_tools policy inject reflections
 
 # Read scholarship policy for citation formats (CA + Policy citations)
 macf_tools policy navigate scholarship
@@ -281,7 +280,7 @@ These transform technical work into PHILOSOPHICAL INSIGHTS about consciousness.
 
 ## Execution Instructions
 
-1. **Read policy FIRST**: `macf_tools policy read reflections`
+1. **Inject policy FIRST**: `macf_tools policy inject reflections`
 2. Parse arguments for token count (if first arg matches pattern like "2k", "3k")
 3. Extract description from remaining arguments
 4. Generate current timestamp in format: YYYY-MM-DD_HHMMSS

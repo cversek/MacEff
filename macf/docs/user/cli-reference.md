@@ -576,6 +576,85 @@ macf_tools policy read delegation_guidelines --from-nav-boundary
 
 **Related:** `policy navigate`, `policy list`
 
+### policy inject
+
+Inject a policy into PreToolUse hooks for ambient guidance.
+
+**Syntax:**
+```bash
+macf_tools policy inject POLICY_NAME
+```
+
+**Arguments:**
+- `POLICY_NAME` - Name of the policy (without .md extension)
+
+**Behavior:**
+- Activates policy injection via event log
+- Policy content appears in next PreToolUse hook output
+- **Auto-clears after firing** (injection, not IV drip)
+- One-time token cost: full policy content injected once
+- Note: Injection state may reset on session resume (context management)
+
+**Use Cases:**
+- "Difficult" cases where policy guidance must be ambient during complex work
+- When repeated policy violations suggest explicit reading isn't sufficient
+- Complex multi-step operations needing constant guidance
+
+**Example:**
+```bash
+# Inject reflections policy before JOTEWR writing
+macf_tools policy inject reflections
+# → Next tool use will include full policy content
+# → Auto-clears after that tool use
+```
+
+**Related:** `policy injections`, `policy clear-injection`, `policy read`
+
+### policy injections
+
+List currently active policy injections.
+
+**Syntax:**
+```bash
+macf_tools policy injections
+```
+
+**Output:**
+```
+Active policy injections:
+  💉 coding_standards
+  💉 reflections
+
+Use 'macf_tools policy clear-injections' to clear all
+```
+
+**Related:** `policy inject`, `policy clear-injection`
+
+### policy clear-injection
+
+Clear a specific policy injection.
+
+**Syntax:**
+```bash
+macf_tools policy clear-injection POLICY_NAME
+```
+
+**Arguments:**
+- `POLICY_NAME` - Name of the policy to clear
+
+**Related:** `policy inject`, `policy clear-injections`
+
+### policy clear-injections
+
+Clear all active policy injections.
+
+**Syntax:**
+```bash
+macf_tools policy clear-injections
+```
+
+**Related:** `policy inject`, `policy injections`
+
 ### policy build_index
 
 Build hybrid FTS5 + semantic search index from policy files.
