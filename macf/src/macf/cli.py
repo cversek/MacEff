@@ -17,6 +17,7 @@ from .config import ConsciousnessConfig
 from .hooks.compaction import detect_compaction, inject_recovery
 from .agent_events_log import append_event
 from .event_queries import get_cycle_number_from_events
+from .task.reader import TaskReader
 from .utils import (
     get_current_session_id,
     get_dev_scripts_dir,
@@ -28,7 +29,8 @@ from .utils import (
     detect_auto_mode,
     find_agent_home,
     get_env_var_report,
-    get_agent_identity
+    get_agent_identity,
+    find_project_root
 )
 
 # -------- ANSI escape codes --------
@@ -116,6 +118,22 @@ def cmd_env(args: argparse.Namespace) -> int:
     # Get agent identity
     agent_identity = get_agent_identity()
 
+    # Compute CC internal paths
+    try:
+        project_root = find_project_root()
+        # Encode project path (/ → -)
+        encoded_path = str(project_root).replace("/", "-")
+        cc_project_dir = Path.home() / ".claude" / "projects" / encoded_path
+    except Exception:
+        cc_project_dir = None
+
+    # CC Tasks path (use TaskReader for session detection)
+    try:
+        reader = TaskReader()
+        cc_tasks_dir = reader.session_path if reader.session_path else None
+    except Exception:
+        cc_tasks_dir = None
+
     # Gather all data
     data = {
         "identity": {
@@ -138,6 +156,10 @@ def cmd_env(args: argparse.Namespace) -> int:
             "hooks_dir": resolve_path(hooks_dir),
             "checkpoints_dir": resolve_path(agent_home / "agent" / "private" / "checkpoints") if agent_home else "(not set)",
             "settings_local": resolve_path(agent_home / ".claude" / "settings.local.json") if agent_home else "(not set)"
+        },
+        "cc_internal": {
+            "cc_project_dir": resolve_path(cc_project_dir),
+            "cc_tasks_dir": resolve_path(cc_tasks_dir)
         },
         "session": {
             "session_id": session_id or "(unknown)",
@@ -190,6 +212,11 @@ def cmd_env(args: argparse.Namespace) -> int:
         print(f"  Hooks Dir:    {data['paths']['hooks_dir']}")
         print(f"  Checkpoints:  {data['paths']['checkpoints_dir']}")
         print(f"  Settings:     {data['paths']['settings_local']}")
+        print()
+
+        print("Claude Code Internal")
+        print(f"  CC Project Dir: {data['cc_internal']['cc_project_dir']}")
+        print(f"  CC Tasks Dir:   {data['cc_internal']['cc_tasks_dir']}")
         print()
 
         print("Session")
@@ -4401,6 +4428,83 @@ def cmd_search_service_status(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_transcripts_search(args: argparse.Namespace) -> int:
+    """Search transcripts by breadcrumb with context window."""
+    from .forensics.transcript_search import search_by_breadcrumb, search_all_transcripts
+    import json as json_lib
+
+    breadcrumb = args.breadcrumb
+    before = args.before
+    after = args.after
+    output_format = args.format
+
+    if args.search_all:
+        window = search_all_transcripts(breadcrumb, before, after)
+    else:
+        window = search_by_breadcrumb(breadcrumb, before, after)
+
+    if not window:
+        print(f"❌ Breadcrumb not found: {breadcrumb}")
+        return 1
+
+    if output_format == "json":
+        result = {
+            "breadcrumb": window.breadcrumb,
+            "target_index": window.target_index,
+            "total_messages": window.total_messages,
+            "transcript_path": window.transcript_path,
+            "before": [{"index": m.index, "role": m.role, "content": m.content} for m in window.before],
+            "target": {"index": window.target_message.index, "role": window.target_message.role, "content": window.target_message.content},
+            "after": [{"index": m.index, "role": m.role, "content": m.content} for m in window.after],
+        }
+        print(json_lib.dumps(result, indent=2))
+    elif output_format == "compact":
+        print(f"📍 Found at index {window.target_index}/{window.total_messages} in {window.transcript_path}")
+        print(f"   Breadcrumb: {window.breadcrumb}")
+        for msg in window.all_messages():
+            marker = "→" if msg.index == window.target_index else " "
+            role_emoji = "👤" if msg.role == "user" else "🤖"
+            preview = msg.content[:80].replace("\n", " ")
+            print(f"{marker} [{msg.index}] {role_emoji} {preview}...")
+    else:  # full
+        print(f"{'='*60}")
+        print(f"📍 Breadcrumb Search Results")
+        print(f"{'='*60}")
+        print(f"Breadcrumb: {window.breadcrumb}")
+        print(f"Transcript: {window.transcript_path}")
+        print(f"Target Index: {window.target_index} / {window.total_messages}")
+        print(f"Window: {before} before, {after} after")
+        print(f"{'='*60}")
+        print()
+        for msg in window.all_messages():
+            is_target = msg.index == window.target_index
+            marker = "🎯 TARGET" if is_target else ""
+            role_emoji = "👤 USER" if msg.role == "user" else "🤖 ASSISTANT"
+            border = "=" if is_target else "-"
+            print(f"{border*40} [{msg.index}] {role_emoji} {marker}")
+            print(msg.content)
+            print()
+
+    return 0
+
+
+def cmd_transcripts_list(args: argparse.Namespace) -> int:
+    """List all transcript files."""
+    from .forensics.transcript_search import list_all_transcripts
+    import json as json_lib
+
+    transcripts = list_all_transcripts()
+
+    if args.json_output:
+        print(json_lib.dumps(transcripts, indent=2))
+    else:
+        print(f"📂 Found {len(transcripts)} transcripts:")
+        for path in transcripts:
+            print(f"   {path}")
+
+    return 0
+
+
 # -------- parser --------
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -4953,6 +5057,29 @@ def _build_parser() -> argparse.ArgumentParser:
     status_parser.add_argument("--json", dest="json_output", action="store_true",
                               help="output as JSON")
     status_parser.set_defaults(func=cmd_search_service_status)
+
+    # Transcripts command group
+    transcripts_parser = sub.add_parser("transcripts", help="transcript forensics and search")
+    transcripts_sub = transcripts_parser.add_subparsers(dest="transcripts_cmd")
+
+    # transcripts search
+    transcripts_search_parser = transcripts_sub.add_parser("search", help="search transcripts by breadcrumb")
+    transcripts_search_parser.add_argument("breadcrumb", help="breadcrumb to search for (e.g., s_abc123/c_42/g_xyz/p_def456/t_123)")
+    transcripts_search_parser.add_argument("--before", "-B", type=int, default=3,
+                                           help="number of messages before target (default: 3)")
+    transcripts_search_parser.add_argument("--after", "-A", type=int, default=3,
+                                           help="number of messages after target (default: 3)")
+    transcripts_search_parser.add_argument("--all", dest="search_all", action="store_true",
+                                           help="search all transcripts (not just session from breadcrumb)")
+    transcripts_search_parser.add_argument("--format", choices=["full", "compact", "json"], default="full",
+                                           help="output format (default: full)")
+    transcripts_search_parser.set_defaults(func=cmd_transcripts_search)
+
+    # transcripts list
+    transcripts_list_parser = transcripts_sub.add_parser("list", help="list all transcript files")
+    transcripts_list_parser.add_argument("--json", dest="json_output", action="store_true",
+                                         help="output as JSON")
+    transcripts_list_parser.set_defaults(func=cmd_transcripts_list)
 
     return p
 
