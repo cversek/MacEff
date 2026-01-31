@@ -1814,10 +1814,14 @@ def cmd_policy_search(args: argparse.Namespace) -> int:
 def cmd_policy_list(args: argparse.Namespace) -> int:
     """List policy files from framework with optional filtering."""
     from .utils import list_policy_files
+    from .event_queries import get_active_policy_injections_from_events
 
     try:
         tier = getattr(args, 'tier', None)
         category = getattr(args, 'category', None)
+
+        # Get active injections for 💉 marker
+        active_injections = {inj["policy_name"] for inj in get_active_policy_injections_from_events()}
 
         # Always extract tier info for all policies
         policies = list_policy_files(tier=tier, category=category, include_tier=True)
@@ -1859,7 +1863,8 @@ def cmd_policy_list(args: argparse.Namespace) -> int:
                     tier_str = f" [{policy_tier}]"
                 else:
                     tier_str = ""
-                print(f"  {p['name']}.md{tier_str}")
+                inject_marker = "💉 " if p['name'] in active_injections else "  "
+                print(f"{inject_marker}{p['name']}.md{tier_str}")
 
         # Summary with CORE highlight
         print(f"\nTotal: {len(policies)} policies ({core_count} CORE)")
@@ -2065,6 +2070,143 @@ def cmd_policy_build_index(args: argparse.Namespace) -> int:
             print(json.dumps({"error": str(e)}))
         else:
             print(f"❌ Error building index: {e}")
+        return 1
+
+
+# -------- Policy Injection Commands --------
+
+def cmd_policy_inject(args: argparse.Namespace) -> int:
+    """Activate policy injection into PreToolUse hooks."""
+    from .utils import find_policy_file
+    from .agent_events_log import append_event
+    from .event_queries import get_active_policy_injections_from_events
+
+    try:
+        policy_name = args.policy_name
+        # Parse optional parent from path-like input
+        parents = None
+        if '/' in policy_name:
+            parts = policy_name.split('/')
+            policy_name = parts[-1]
+            parents = parts[:-1]
+
+        policy_path = find_policy_file(policy_name, parents=parents)
+
+        if not policy_path:
+            print(f"❌ Policy not found: {args.policy_name}")
+            print("\nUse 'macf_tools policy list' to see available policies")
+            return 1
+
+        # Emit activation event
+        append_event("policy_injection_activated", {
+            "policy_name": policy_name,
+            "policy_path": str(policy_path)
+        })
+
+        # Show confirmation with active list
+        active = get_active_policy_injections_from_events()
+        active_names = [inj["policy_name"] for inj in active]
+
+        print(f"✅ Injecting: {policy_name}.md")
+        print(f"   Active injections: {active_names}")
+        print("   Content will appear in PreToolUse hooks")
+        return 0
+
+    except Exception as e:
+        print(f"❌ Error injecting policy: {e}")
+        return 1
+
+
+def cmd_policy_clear_injection(args: argparse.Namespace) -> int:
+    """Clear a specific policy injection."""
+    from .agent_events_log import append_event
+    from .event_queries import get_active_policy_injections_from_events
+
+    try:
+        policy_name = args.policy_name
+        # Strip path prefix if provided
+        if '/' in policy_name:
+            policy_name = policy_name.split('/')[-1]
+
+        # Check if currently active
+        active = get_active_policy_injections_from_events()
+        active_names = [inj["policy_name"] for inj in active]
+
+        if policy_name not in active_names:
+            print(f"⚠️ Policy '{policy_name}' is not currently injected")
+            if active_names:
+                print(f"   Active injections: {active_names}")
+            else:
+                print("   No active injections")
+            return 0
+
+        # Emit clear event
+        append_event("policy_injection_cleared", {
+            "policy_name": policy_name
+        })
+
+        # Show remaining
+        remaining = get_active_policy_injections_from_events()
+        remaining_names = [inj["policy_name"] for inj in remaining]
+
+        print(f"✅ Cleared injection: {policy_name}.md")
+        if remaining_names:
+            print(f"   Remaining: {remaining_names}")
+        else:
+            print("   No remaining injections")
+        return 0
+
+    except Exception as e:
+        print(f"❌ Error clearing injection: {e}")
+        return 1
+
+
+def cmd_policy_clear_injections(args: argparse.Namespace) -> int:
+    """Clear all policy injections."""
+    from .agent_events_log import append_event
+    from .event_queries import get_active_policy_injections_from_events
+
+    try:
+        # Get current count
+        active = get_active_policy_injections_from_events()
+        count = len(active)
+
+        if count == 0:
+            print("✅ No active injections to clear")
+            return 0
+
+        # Emit clear-all event
+        append_event("policy_injections_cleared_all", {})
+
+        print(f"✅ Cleared all policy injections (was {count} active)")
+        return 0
+
+    except Exception as e:
+        print(f"❌ Error clearing injections: {e}")
+        return 1
+
+
+def cmd_policy_injections(args: argparse.Namespace) -> int:
+    """List active policy injections."""
+    from .event_queries import get_active_policy_injections_from_events
+
+    try:
+        active = get_active_policy_injections_from_events()
+
+        if not active:
+            print("No active policy injections")
+            print("\nUse 'macf_tools policy inject <name>' to activate")
+            return 0
+
+        print("Active policy injections:")
+        for inj in active:
+            print(f"  💉 {inj['policy_name']} ({inj['policy_path']})")
+
+        print(f"\nTotal: {len(active)} active")
+        return 0
+
+    except Exception as e:
+        print(f"❌ Error listing injections: {e}")
         return 1
 
 
@@ -2733,7 +2875,98 @@ def cmd_task_get(args: argparse.Namespace) -> int:
 
 def cmd_task_tree(args: argparse.Namespace) -> int:
     """Display task hierarchy tree from a root task."""
+    import time
+    from pathlib import Path
     from .task import TaskReader
+
+    def display_tree(root_id: str):
+        """Display the task tree for given root_id."""
+        reader = TaskReader()
+        all_tasks = reader.read_all_tasks()
+        task_map = {t.id: t for t in all_tasks}
+
+        if root_id not in task_map:
+            print(f"❌ Task #{root_id} not found")
+            print(f"   Session: {reader.session_uuid}")
+            print(f"   Tasks loaded: {len(all_tasks)}")
+            if all_tasks:
+                ids = sorted(t.id for t in all_tasks)
+                print(f"   Available IDs: {ids[:10]}{'...' if len(ids) > 10 else ''}")
+            return False
+
+        root = task_map[root_id]
+
+        def get_children(parent_id):
+            # Zero-pad IDs for proper numeric string sorting
+            return sorted([t for t in all_tasks if t.parent_id == parent_id], key=lambda t: t.id.zfill(10))
+
+        def count_descendants(task_id):
+            children = get_children(task_id)
+            return len(children) + sum(count_descendants(c.id) for c in children)
+
+        def print_tree(task, prefix="", is_last=True):
+            connector = "└── " if is_last else "├── "
+
+            # CC-style markers with colors - subject now contains #N prefix
+            if task.status == "completed":
+                status_icon = f"{ANSI_GREEN}✔{ANSI_RESET}"
+                text = f"{ANSI_DIM}{ANSI_STRIKE}{task.subject}{ANSI_RESET}"
+            elif task.status == "in_progress":
+                status_icon = f"{ANSI_RED}◼{ANSI_RESET}"
+                text = _dim_task_ids(task.subject)
+            else:
+                status_icon = "◻"
+                text = _dim_task_ids(task.subject)
+
+            print(f"{prefix}{connector}{status_icon} {text}")
+
+            children = get_children(task.id)
+            for i, child in enumerate(children):
+                extension = "    " if is_last else "│   "
+                print_tree(child, prefix + extension, i == len(children) - 1)
+
+        # Print header
+        total = 1 + count_descendants(root_id)
+        print(f"🌳 Task Tree from #{root_id} ({total} tasks)")
+        print("=" * 60)
+
+        # Print root specially with CC-style markers - subject now contains #N prefix
+        if root.status == "completed":
+            status_icon = f"{ANSI_GREEN}✔{ANSI_RESET}"
+            root_text = f"{ANSI_DIM}{ANSI_STRIKE}{root.subject}{ANSI_RESET}"
+        elif root.status == "in_progress":
+            status_icon = f"{ANSI_RED}◼{ANSI_RESET}"
+            root_text = _dim_task_ids(root.subject)
+        else:
+            status_icon = "◻"
+            root_text = _dim_task_ids(root.subject)
+        print(f"{status_icon} {root_text}")
+        if root.mtmd and root.mtmd.plan_ca_ref:
+            print(f"   → {root.mtmd.plan_ca_ref}")
+
+        # Print children
+        children = get_children(root_id)
+        for i, child in enumerate(children):
+            print_tree(child, "", i == len(children) - 1)
+
+        return True
+
+    def get_tasks_mtime(tasks_dir: Path) -> float:
+        """Get latest modification time of any file in tasks directory."""
+        try:
+            if not tasks_dir.exists():
+                return 0.0
+
+            # Get mtime of all JSON files in session subdirectories
+            mtimes = []
+            for session_dir in tasks_dir.iterdir():
+                if session_dir.is_dir():
+                    for task_file in session_dir.glob("*.json"):
+                        mtimes.append(task_file.stat().st_mtime)
+
+            return max(mtimes) if mtimes else 0.0
+        except Exception:
+            return 0.0
 
     # Parse task ID (preserve string IDs like "000")
     task_id_str = args.task_id.lstrip('#')
@@ -2743,75 +2976,36 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
     else:
         root_id = task_id_str  # Keep as string for consistent comparison
 
-    reader = TaskReader()
-    all_tasks = reader.read_all_tasks()
-    task_map = {t.id: t for t in all_tasks}
+    # Loop mode - monitor for changes
+    if args.loop:
+        reader = TaskReader()
+        tasks_dir = reader.tasks_dir
+        last_mtime = 0.0
 
-    if root_id not in task_map:
-        print(f"❌ Task #{root_id} not found")
-        print(f"   Session: {reader.session_uuid}")
-        print(f"   Tasks loaded: {len(all_tasks)}")
-        if all_tasks:
-            ids = sorted(t.id for t in all_tasks)
-            print(f"   Available IDs: {ids[:10]}{'...' if len(ids) > 10 else ''}")
-        return 1
+        try:
+            while True:
+                current_mtime = get_tasks_mtime(tasks_dir)
 
-    root = task_map[root_id]
+                # Display tree if tasks changed or first iteration
+                if current_mtime != last_mtime:
+                    # Clear screen using ANSI escape code (works on macOS/Linux)
+                    print("\033[2J\033[H", end="")
 
-    def get_children(parent_id):
-        # Zero-pad IDs for proper numeric string sorting
-        return sorted([t for t in all_tasks if t.parent_id == parent_id], key=lambda t: t.id.zfill(10))
+                    if not display_tree(root_id):
+                        return 1
 
-    def count_descendants(task_id):
-        children = get_children(task_id)
-        return len(children) + sum(count_descendants(c.id) for c in children)
+                    print()  # Add blank line
+                    print(f"{ANSI_DIM}[Monitoring for changes... Press Ctrl+C to exit]{ANSI_RESET}")
+                    last_mtime = current_mtime
 
-    def print_tree(task, prefix="", is_last=True):
-        connector = "└── " if is_last else "├── "
+                time.sleep(1)  # Poll every second
 
-        # CC-style markers with colors - subject now contains #N prefix
-        if task.status == "completed":
-            status_icon = f"{ANSI_GREEN}✔{ANSI_RESET}"
-            text = f"{ANSI_DIM}{ANSI_STRIKE}{task.subject}{ANSI_RESET}"
-        elif task.status == "in_progress":
-            status_icon = f"{ANSI_RED}◼{ANSI_RESET}"
-            text = _dim_task_ids(task.subject)
-        else:
-            status_icon = "◻"
-            text = _dim_task_ids(task.subject)
+        except KeyboardInterrupt:
+            print()  # Clean newline after Ctrl+C
+            return 0
 
-        print(f"{prefix}{connector}{status_icon} {text}")
-
-        children = get_children(task.id)
-        for i, child in enumerate(children):
-            extension = "    " if is_last else "│   "
-            print_tree(child, prefix + extension, i == len(children) - 1)
-
-    # Print header
-    total = 1 + count_descendants(root_id)
-    print(f"🌳 Task Tree from #{root_id} ({total} tasks)")
-    print("=" * 60)
-
-    # Print root specially with CC-style markers - subject now contains #N prefix
-    if root.status == "completed":
-        status_icon = f"{ANSI_GREEN}✔{ANSI_RESET}"
-        root_text = f"{ANSI_DIM}{ANSI_STRIKE}{root.subject}{ANSI_RESET}"
-    elif root.status == "in_progress":
-        status_icon = f"{ANSI_RED}◼{ANSI_RESET}"
-        root_text = _dim_task_ids(root.subject)
-    else:
-        status_icon = "◻"
-        root_text = _dim_task_ids(root.subject)
-    print(f"{status_icon} {root_text}")
-    if root.mtmd and root.mtmd.plan_ca_ref:
-        print(f"   → {root.mtmd.plan_ca_ref}")
-
-    # Print children
-    children = get_children(root_id)
-    for i, child in enumerate(children):
-        print_tree(child, "", i == len(children) - 1)
-
-    return 0
+    # Normal mode - single display
+    return 0 if display_tree(root_id) else 1
 
 
 def cmd_task_delete(args: argparse.Namespace) -> int:
@@ -3347,8 +3541,12 @@ def cmd_task_create_phase(args: argparse.Namespace) -> int:
         print(f"❌ Invalid parent ID: {args.parent}")
         return 1
 
+    # Get plan or plan_ca_ref (XOR enforced by argparse)
+    plan = getattr(args, 'plan', None)
+    plan_ca_ref = getattr(args, 'plan_ca_ref', None)
+
     try:
-        result = create_phase(parent_id=parent_id, title=args.title)
+        result = create_phase(parent_id=parent_id, title=args.title, plan=plan, plan_ca_ref=plan_ca_ref)
 
         if args.json:
             # JSON output for automation
@@ -3495,8 +3693,12 @@ def cmd_task_create_task(args: argparse.Namespace) -> int:
     """Create standalone TASK for general work."""
     from .task.create import create_task
 
+    # Get plan or plan_ca_ref (XOR enforced by argparse)
+    plan = getattr(args, 'plan', None)
+    plan_ca_ref = getattr(args, 'plan_ca_ref', None)
+
     try:
-        result = create_task(title=args.title)
+        result = create_task(title=args.title, plan=plan, plan_ca_ref=plan_ca_ref)
 
         if args.json:
             # JSON output for automation
@@ -3759,6 +3961,157 @@ def cmd_task_pause(args: argparse.Namespace) -> int:
 
     print(f"✅ Task #{task_id} paused")
     print(f"   Breadcrumb: {breadcrumb}")
+    return 0
+
+
+def cmd_task_block(args: argparse.Namespace) -> int:
+    """Add blocking relationship: task blocks another task."""
+    from .task import TaskReader, update_task_file
+    from .utils.breadcrumbs import get_breadcrumb
+
+    task_id_str = args.task_id.lstrip('#')
+    target_id_str = args.target_id.lstrip('#')
+    try:
+        task_id = int(task_id_str)
+        target_id = int(target_id_str)
+    except ValueError:
+        print(f"❌ Invalid task ID(s): {args.task_id} or {args.target_id}")
+        return 1
+
+    reader = TaskReader()
+    task = reader.read_task(task_id)
+    if not task:
+        print(f"❌ Task #{task_id} not found")
+        return 1
+
+    # Verify target exists
+    target = reader.read_task(target_id)
+    if not target:
+        print(f"❌ Target task #{target_id} not found")
+        return 1
+
+    # Get current blocks array
+    current_blocks = task.blocks or []
+    if str(target_id) in current_blocks or target_id in current_blocks:
+        print(f"⚠️  Task #{task_id} already blocks #{target_id}")
+        return 0
+
+    # Add to blocks
+    new_blocks = current_blocks + [str(target_id)]
+    update_task_file(task_id, {"blocks": new_blocks})
+
+    print(f"✅ Task #{task_id} now blocks #{target_id}")
+    print(f"   Breadcrumb: {get_breadcrumb()}")
+    return 0
+
+
+def cmd_task_unblock(args: argparse.Namespace) -> int:
+    """Remove blocking relationship."""
+    from .task import TaskReader, update_task_file
+    from .utils.breadcrumbs import get_breadcrumb
+
+    task_id_str = args.task_id.lstrip('#')
+    target_id_str = args.target_id.lstrip('#')
+    try:
+        task_id = int(task_id_str)
+        target_id = int(target_id_str)
+    except ValueError:
+        print(f"❌ Invalid task ID(s): {args.task_id} or {args.target_id}")
+        return 1
+
+    reader = TaskReader()
+    task = reader.read_task(task_id)
+    if not task:
+        print(f"❌ Task #{task_id} not found")
+        return 1
+
+    current_blocks = task.blocks or []
+    # Check both str and int forms
+    if str(target_id) not in current_blocks and target_id not in current_blocks:
+        print(f"⚠️  Task #{task_id} does not block #{target_id}")
+        return 0
+
+    # Remove from blocks
+    new_blocks = [b for b in current_blocks if str(b) != str(target_id)]
+    update_task_file(task_id, {"blocks": new_blocks})
+
+    print(f"✅ Task #{task_id} no longer blocks #{target_id}")
+    print(f"   Breadcrumb: {get_breadcrumb()}")
+    return 0
+
+
+def cmd_task_blocked_by(args: argparse.Namespace) -> int:
+    """Add blocked-by relationship: task is blocked by another task."""
+    from .task import TaskReader, update_task_file
+    from .utils.breadcrumbs import get_breadcrumb
+
+    task_id_str = args.task_id.lstrip('#')
+    blocker_id_str = args.blocker_id.lstrip('#')
+    try:
+        task_id = int(task_id_str)
+        blocker_id = int(blocker_id_str)
+    except ValueError:
+        print(f"❌ Invalid task ID(s): {args.task_id} or {args.blocker_id}")
+        return 1
+
+    reader = TaskReader()
+    task = reader.read_task(task_id)
+    if not task:
+        print(f"❌ Task #{task_id} not found")
+        return 1
+
+    # Verify blocker exists
+    blocker = reader.read_task(blocker_id)
+    if not blocker:
+        print(f"❌ Blocker task #{blocker_id} not found")
+        return 1
+
+    # Get current blockedBy array (Python attr is blocked_by, JSON field is blockedBy)
+    current_blocked_by = task.blocked_by or []
+    if str(blocker_id) in current_blocked_by or blocker_id in current_blocked_by:
+        print(f"⚠️  Task #{task_id} is already blocked by #{blocker_id}")
+        return 0
+
+    # Add to blockedBy
+    new_blocked_by = current_blocked_by + [str(blocker_id)]
+    update_task_file(task_id, {"blockedBy": new_blocked_by})
+
+    print(f"✅ Task #{task_id} is now blocked by #{blocker_id}")
+    print(f"   Breadcrumb: {get_breadcrumb()}")
+    return 0
+
+
+def cmd_task_unblocked_by(args: argparse.Namespace) -> int:
+    """Remove blocked-by relationship."""
+    from .task import TaskReader, update_task_file
+    from .utils.breadcrumbs import get_breadcrumb
+
+    task_id_str = args.task_id.lstrip('#')
+    blocker_id_str = args.blocker_id.lstrip('#')
+    try:
+        task_id = int(task_id_str)
+        blocker_id = int(blocker_id_str)
+    except ValueError:
+        print(f"❌ Invalid task ID(s): {args.task_id} or {args.blocker_id}")
+        return 1
+
+    reader = TaskReader()
+    task = reader.read_task(task_id)
+    if not task:
+        print(f"❌ Task #{task_id} not found")
+        return 1
+
+    current_blocked_by = task.blocked_by or []
+    if str(blocker_id) not in current_blocked_by and blocker_id not in current_blocked_by:
+        print(f"⚠️  Task #{task_id} is not blocked by #{blocker_id}")
+        return 0
+
+    # Remove from blockedBy (JSON field name)
+    new_blocked_by = [b for b in current_blocked_by if str(b) != str(blocker_id)]
+    update_task_file(task_id, {"blockedBy": new_blocked_by})
+
+    print(f"✅ Task #{task_id} is no longer blocked by #{blocker_id}")
+    print(f"   Breadcrumb: {get_breadcrumb()}")
     return 0
 
 
@@ -4262,6 +4615,24 @@ def _build_parser() -> argparse.ArgumentParser:
                                     help="output stats as JSON")
     build_index_parser.set_defaults(func=cmd_policy_build_index)
 
+    # policy inject
+    inject_parser = policy_sub.add_parser("inject", help="activate policy injection into PreToolUse hooks")
+    inject_parser.add_argument("policy_name", help="policy name to inject (e.g., task_management)")
+    inject_parser.set_defaults(func=cmd_policy_inject)
+
+    # policy clear-injection
+    clear_inj_parser = policy_sub.add_parser("clear-injection", help="clear a specific policy injection")
+    clear_inj_parser.add_argument("policy_name", help="policy name to clear")
+    clear_inj_parser.set_defaults(func=cmd_policy_clear_injection)
+
+    # policy clear-injections
+    clear_all_parser = policy_sub.add_parser("clear-injections", help="clear all policy injections")
+    clear_all_parser.set_defaults(func=cmd_policy_clear_injections)
+
+    # policy injections
+    injections_parser = policy_sub.add_parser("injections", help="list active policy injections")
+    injections_parser.set_defaults(func=cmd_policy_injections)
+
     # Mode commands
     mode_parser = sub.add_parser("mode", help="operating mode management (MANUAL_MODE/AUTO_MODE)")
     mode_sub = mode_parser.add_subparsers(dest="mode_cmd")
@@ -4359,6 +4730,8 @@ def _build_parser() -> argparse.ArgumentParser:
     task_tree_parser = task_sub.add_parser("tree", help="show task hierarchy tree")
     task_tree_parser.add_argument("task_id", nargs="?", default="000",
                                   help="root task ID (default: 000 sentinel)")
+    task_tree_parser.add_argument("--loop", action="store_true",
+                                  help="monitor tasks directory and auto-refresh on changes")
     task_tree_parser.set_defaults(func=cmd_task_tree)
 
     # task delete
@@ -4436,6 +4809,10 @@ def _build_parser() -> argparse.ArgumentParser:
     task_create_phase_parser = task_create_sub.add_parser("phase", help="create phase task under parent")
     task_create_phase_parser.add_argument("--parent", required=True, help="parent task ID (e.g., #67 or 67)")
     task_create_phase_parser.add_argument("title", help="phase title")
+    # XOR: exactly one of plan or plan_ca_ref required (uniform requirement)
+    phase_plan_group = task_create_phase_parser.add_mutually_exclusive_group(required=True)
+    phase_plan_group.add_argument("--plan", dest="plan", help="inline plan description")
+    phase_plan_group.add_argument("--plan-ca-ref", dest="plan_ca_ref", help="path to plan CA")
     task_create_phase_parser.add_argument("--json", dest="json", action="store_true",
                                           help="output as JSON")
     task_create_phase_parser.set_defaults(func=cmd_task_create_phase)
@@ -4467,6 +4844,10 @@ def _build_parser() -> argparse.ArgumentParser:
     # task create task
     task_create_task_parser = task_create_sub.add_parser("task", help="create standalone task")
     task_create_task_parser.add_argument("title", help="task title")
+    # XOR: exactly one of plan or plan_ca_ref required (uniform requirement)
+    task_plan_group = task_create_task_parser.add_mutually_exclusive_group(required=True)
+    task_plan_group.add_argument("--plan", dest="plan", help="inline plan description")
+    task_plan_group.add_argument("--plan-ca-ref", dest="plan_ca_ref", help="path to plan CA")
     task_create_task_parser.add_argument("--json", dest="json", action="store_true",
                                           help="output as JSON")
     task_create_task_parser.set_defaults(func=cmd_task_create_task)
@@ -4527,6 +4908,30 @@ def _build_parser() -> argparse.ArgumentParser:
     task_complete_parser.add_argument("--report", "-r",
                                       help="completion report (work done, difficulties, future work, git commit status)")
     task_complete_parser.set_defaults(func=cmd_task_complete)
+
+    # task block - add blocking relationship
+    task_block_parser = task_sub.add_parser("block", help="set task to block another task")
+    task_block_parser.add_argument("task_id", help="task ID that will block (e.g., #60)")
+    task_block_parser.add_argument("target_id", help="task ID to be blocked (e.g., #42)")
+    task_block_parser.set_defaults(func=cmd_task_block)
+
+    # task unblock - remove blocking relationship
+    task_unblock_parser = task_sub.add_parser("unblock", help="remove blocking relationship")
+    task_unblock_parser.add_argument("task_id", help="task ID that blocks (e.g., #60)")
+    task_unblock_parser.add_argument("target_id", help="task ID to unblock (e.g., #42)")
+    task_unblock_parser.set_defaults(func=cmd_task_unblock)
+
+    # task blocked-by - add blocked-by relationship
+    task_blocked_by_parser = task_sub.add_parser("blocked-by", help="set task as blocked by another task")
+    task_blocked_by_parser.add_argument("task_id", help="task ID that is blocked (e.g., #60)")
+    task_blocked_by_parser.add_argument("blocker_id", help="task ID that blocks (e.g., #26)")
+    task_blocked_by_parser.set_defaults(func=cmd_task_blocked_by)
+
+    # task unblocked-by - remove blocked-by relationship
+    task_unblocked_by_parser = task_sub.add_parser("unblocked-by", help="remove blocked-by relationship")
+    task_unblocked_by_parser.add_argument("task_id", help="task ID that was blocked (e.g., #60)")
+    task_unblocked_by_parser.add_argument("blocker_id", help="task ID to remove as blocker (e.g., #26)")
+    task_unblocked_by_parser.set_defaults(func=cmd_task_unblocked_by)
 
     # Search service commands
     search_service_parser = sub.add_parser("search-service", help="search service daemon management")

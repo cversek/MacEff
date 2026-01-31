@@ -584,3 +584,67 @@ def get_auto_mode_from_events(session_id: str) -> Tuple[bool, str, float]:
                 best_confidence = confidence
 
     return (best_auto_mode, best_source, best_confidence)
+
+
+def get_active_policy_injections_from_events() -> List[Dict[str, str]]:
+    """
+    Get list of currently active policy injections from event log.
+
+    Scans in REVERSE (most recent first) for efficiency, stopping at:
+    - policy_injections_cleared_all event (explicit clear)
+    - compaction_detected event (cycle boundary - injections reset)
+
+    **Design Note**: Injections do NOT persist across compaction. After compaction,
+    agents must re-inject policies. This simplifies implementation (bounded search)
+    and aligns with fresh-context-fresh-injections philosophy.
+
+    Event types:
+    - policy_injection_activated: Activates injection for a policy
+    - policy_injection_cleared: Deactivates specific policy
+    - policy_injections_cleared_all: Deactivates ALL policies (early exit)
+
+    Returns:
+        List of dicts with keys:
+        - policy_name: Name of the policy (e.g., "task_management")
+        - policy_path: Absolute path to the policy file
+
+    Example:
+        >>> injections = get_active_policy_injections_from_events()
+        >>> for inj in injections:
+        ...     print(f"{inj['policy_name']}: {inj['policy_path']}")
+    """
+    # Track active policies found during reverse scan
+    # Key: policy_name, Value: {"policy_path": "...", "state": "active"|"cleared"}
+    policy_final_states: Dict[str, Dict[str, str]] = {}
+
+    # Reverse scan - first event for each policy determines its state
+    for event in read_events(limit=None, reverse=True):
+        event_type = event.get("event")
+        data = event.get("data", {})
+
+        # Early exit conditions (compaction boundary or explicit clear-all)
+        if event_type in ("policy_injections_cleared_all", "compaction_detected"):
+            break
+
+        elif event_type == "policy_injection_cleared":
+            policy_name = data.get("policy_name")
+            if policy_name and policy_name not in policy_final_states:
+                # First time seeing this policy - it's cleared
+                policy_final_states[policy_name] = {"state": "cleared"}
+
+        elif event_type == "policy_injection_activated":
+            policy_name = data.get("policy_name")
+            policy_path = data.get("policy_path", "")
+            if policy_name and policy_name not in policy_final_states:
+                # First time seeing this policy - it's active
+                policy_final_states[policy_name] = {
+                    "state": "active",
+                    "policy_path": policy_path
+                }
+
+    # Filter to only active policies and format output
+    return [
+        {"policy_name": name, "policy_path": state["policy_path"]}
+        for name, state in policy_final_states.items()
+        if state.get("state") == "active"
+    ]
