@@ -7,9 +7,10 @@ Tasks are stored at: ~/.claude/tasks/{session_uuid}/*.json
 import json
 import os
 from pathlib import Path
-from typing import List, Optional, Dict, Any, Union
+from typing import List, Optional, Dict, Any, Union, Set
 
 from .models import MacfTask
+from ..utils.paths import find_project_root
 
 
 class TaskReader:
@@ -46,18 +47,46 @@ class TaskReader:
         self.session_uuid = session_uuid or self._detect_current_session()
 
     @classmethod
+    def _get_project_sessions(cls) -> Set[str]:
+        """
+        Get session UUIDs that belong to the current project.
+
+        Claude Code stores session transcripts in:
+            ~/.claude/projects/{path-encoded-project}/{session_uuid}.jsonl
+
+        Path encoding: /Users/foo/bar -> -Users-foo-bar
+        """
+        try:
+            project_root = find_project_root()
+            # Encode path Claude Code style: / -> -
+            encoded_path = str(project_root).replace("/", "-")
+            if encoded_path.startswith("-"):
+                encoded_path = encoded_path  # Keep leading dash
+
+            projects_dir = Path.home() / ".claude" / "projects" / encoded_path
+            if not projects_dir.exists():
+                return set()
+
+            # Session UUIDs are JSONL filenames (without extension)
+            return {f.stem for f in projects_dir.glob("*.jsonl")}
+        except Exception:
+            return set()
+
+    @classmethod
     def _detect_current_session(cls) -> Optional[str]:
         """
-        Detect current session UUID from environment or most recent session.
+        Detect current session UUID from environment or most recent PROJECT-SCOPED session.
 
-        Returns most recently modified session folder if not determinable.
+        Priority:
+        1. MACF_SESSION_ID env var (set by MACF hooks)
+        2. Most recent session from current project (via Claude Code's project directories)
+        3. Most recent session globally (legacy fallback)
         """
-        # Check environment variable (set by MACF hooks)
+        # Priority 1: Check environment variable (set by MACF hooks)
         env_session = os.environ.get("MACF_SESSION_ID")
         if env_session:
             return env_session
 
-        # Fall back to most recently modified session folder
         tasks_dir = cls._get_tasks_dir()
         if not tasks_dir.exists():
             return None
@@ -66,7 +95,17 @@ class TaskReader:
         if not sessions:
             return None
 
-        # Sort by modification time, most recent first
+        # Priority 2: Filter to sessions belonging to current project
+        project_sessions = cls._get_project_sessions()
+        if project_sessions:
+            # Only consider sessions that belong to this project
+            project_scoped = [d for d in sessions if d.name in project_sessions]
+            if project_scoped:
+                # Sort by modification time, most recent first
+                project_scoped.sort(key=lambda d: d.stat().st_mtime, reverse=True)
+                return project_scoped[0].name
+
+        # Priority 3: Legacy fallback - most recent globally (cross-project leakage risk)
         sessions.sort(key=lambda d: d.stat().st_mtime, reverse=True)
         return sessions[0].name
 
