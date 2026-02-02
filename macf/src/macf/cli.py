@@ -30,7 +30,8 @@ from .utils import (
     find_agent_home,
     get_env_var_report,
     get_agent_identity,
-    find_project_root
+    find_project_root,
+    get_hooks_dir
 )
 
 # -------- ANSI escape codes --------
