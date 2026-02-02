@@ -46,11 +46,25 @@ Major release introducing the **MACF Task CLI** with MTMD (MacfTaskMetaData) enh
 - Explicit `env=` passing in subprocess.run() for boundary-crossing isolation
 - Session folder structure creation in test fixtures
 
+**Task Lifecycle & Dependencies**:
+- `task start <id>` and `task pause <id>` - Lifecycle status commands
+- `task edit <id> blocks <id>` - Mark task as blocking another
+- `task edit <id> blockedBy <id>` - Mark task as blocked by another
+- `task tree --loop` - Live monitoring of task hierarchy changes
+
+**Extended env Command**:
+- Claude Code internal paths (`.claude/`, settings locations)
+- Better debugging and environment discovery
+
+**Event Forensics**:
+- `prompt_preview` field in dev_drv_started events for context recovery
+
 **Documentation**:
 - Comprehensive task CLI documentation in `cli-reference.md` (390+ lines added)
 - All task create commands documented with syntax, arguments, options, examples
 - Archive/restore/grant/complete commands documented
 - Cross-reference to `task_management.md` policy
+- **Host Mode Installation** (#71): Complete macOS (Homebrew + Conda) and Ubuntu (System Python + Conda) setup guides
 
 ### Changed
 
@@ -76,6 +90,13 @@ Major release introducing the **MACF Task CLI** with MTMD (MacfTaskMetaData) enh
 - **#8**: Task ID type inconsistency - Mixed int/str causing sort failures
 - **#14**: task edit status loses task_id prefix in subject
 - **#18**: Policy emphasis on marking tasks `in_progress` for CC UI visibility
+- **#65**: Task create commands missing `--parent` arg (now defaults to 000)
+- **#67**: Task CLI test suite failures (13 tests needed --plan arg)
+- **#68**: `hooks status` and `hooks logs` crash on missing get_hooks_dir import
+- **#69**: PyYAML missing from main dependencies, blocking fresh installations
+- **Task Tree Sorting**: Task IDs sort correctly numerically (5,6,8 ordering fix)
+- **Task Subject Display**: Hide sentinel parent `[^#000]` from subject (no redundant info)
+- **Project-Scoped Session Detection**: task tree --loop prevents cross-project leakage
 - **Subprocess test pollution**: Tests no longer create tasks in production `~/.claude/tasks/`
 
 ### Breaking Changes
