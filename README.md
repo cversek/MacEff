@@ -136,15 +136,140 @@ MACF Tools v0.2.0 is fully adapted to Claude Code 2.0 changes:
 
 ### Installation & Usage
 
-MACF Tools is included in the MacEff container by default. For host system use:
+MACF Tools is included in the MacEff container by default. For host system use, see the platform-specific instructions below.
+
+---
+
+## Host Mode Installation (No Docker Required)
+
+MACF Tools can run directly on your host system without Docker containers. This is useful for:
+- Personal development environments
+- Testing consciousness infrastructure locally
+- Projects that don't need container isolation
+
+### Prerequisites
+
+**Python 3.10 or higher is required.** macOS ships with Python 3.9.6 which is insufficient.
+
+### macOS Installation
+
+#### Option A: Homebrew (Recommended)
 
 ```bash
-# From MacEff/tools directory
+# Install Python 3.11+ via Homebrew
+brew install python@3.11
+
+# Create a virtual environment
+/opt/homebrew/opt/python@3.11/bin/python3.11 -m venv ~/macf_venv
+
+# Activate the environment
+source ~/macf_venv/bin/activate
+
+# Verify Python version
+python --version  # Should show 3.11.x
+
+# Clone and install MacEff
+git clone https://github.com/cversek/MacEff.git
+cd MacEff/macf
 pip install -e .
 
-# Or install from PyPI (when published)
-pip install macf-tools
+# Verify installation
+macf_tools --version  # Should show 0.4.0
 ```
+
+#### Option B: Conda/Mamba
+
+```bash
+# Create environment with Python 3.11
+conda create -n macf python=3.11 -y
+conda activate macf
+
+# Clone and install MacEff
+git clone https://github.com/cversek/MacEff.git
+cd MacEff/macf
+pip install -e .
+
+# Verify installation
+macf_tools --version
+```
+
+### Ubuntu Linux Installation
+
+#### Option A: System Python (Ubuntu 22.04+)
+
+Ubuntu 22.04+ ships with Python 3.10+:
+
+```bash
+# Ensure Python 3.10+ is available
+python3 --version  # Should show 3.10.x or higher
+
+# Install venv package if needed
+sudo apt install python3-venv python3-pip
+
+# Create virtual environment
+python3 -m venv ~/macf_venv
+source ~/macf_venv/bin/activate
+
+# Clone and install MacEff
+git clone https://github.com/cversek/MacEff.git
+cd MacEff/macf
+pip install -e .
+
+# Verify installation
+macf_tools --version
+```
+
+#### Option B: Conda/Mamba (Any Ubuntu version)
+
+```bash
+# Install Miniforge (if not already installed)
+wget https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh
+bash Miniforge3-Linux-x86_64.sh
+
+# Create environment with Python 3.11
+conda create -n macf python=3.11 -y
+conda activate macf
+
+# Clone and install MacEff
+git clone https://github.com/cversek/MacEff.git
+cd MacEff/macf
+pip install -e .
+
+# Verify installation
+macf_tools --version
+```
+
+### Post-Installation Setup
+
+After installing MACF Tools, set up hooks for Claude Code:
+
+```bash
+# Install hooks (interactive - choose local or global)
+macf_tools hooks install
+
+# Verify environment
+macf_tools env
+
+# List available policies
+macf_tools policy list
+```
+
+### Troubleshooting
+
+**"ModuleNotFoundError: No module named 'yaml'"**
+- This indicates dependencies weren't installed. Run: `pip install pyyaml`
+- If using editable install, try: `pip install -e ".[test]"`
+
+**"macf_tools: command not found"**
+- Ensure your virtual environment is activated
+- Check PATH: `which macf_tools` should show the venv path
+- Try: `hash -r` to clear shell command cache
+
+**"Package 'macf' requires a different Python: 3.9.x not in '>=3.10'"**
+- Install Python 3.10+ using Homebrew (macOS) or system package manager (Linux)
+- Create a new virtual environment with the newer Python
+
+---
 
 **Hook installation** (Claude Code projects):
 ```bash
