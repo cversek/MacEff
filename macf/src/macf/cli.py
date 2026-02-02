@@ -3428,9 +3428,13 @@ def cmd_task_create_mission(args: argparse.Namespace) -> int:
     """Create MISSION task with roadmap folder."""
     from .task.create import create_mission
 
+    # Parse parent ID (normalize)
+    parent_id = args.parent.lstrip('#') if args.parent else "000"
+
     try:
         result = create_mission(
             title=args.title,
+            parent_id=parent_id,
             repo=args.repo,
             version=args.version
         )
@@ -3474,8 +3478,11 @@ def cmd_task_create_experiment(args: argparse.Namespace) -> int:
     """Create EXPERIMENT task with protocol folder."""
     from .task.create import create_experiment
 
+    # Parse parent ID (normalize)
+    parent_id = args.parent.lstrip('#') if args.parent else "000"
+
     try:
-        result = create_experiment(title=args.title)
+        result = create_experiment(title=args.title, parent_id=parent_id)
 
         if args.json:
             # JSON output for automation
@@ -3514,9 +3521,13 @@ def cmd_task_create_detour(args: argparse.Namespace) -> int:
     """Create DETOUR task with roadmap folder."""
     from .task.create import create_detour
 
+    # Parse parent ID (normalize)
+    parent_id = args.parent.lstrip('#') if args.parent else "000"
+
     try:
         result = create_detour(
             title=args.title,
+            parent_id=parent_id,
             repo=args.repo,
             version=args.version
         )
@@ -3720,12 +3731,15 @@ def cmd_task_create_task(args: argparse.Namespace) -> int:
     """Create standalone TASK for general work."""
     from .task.create import create_task
 
+    # Parse parent ID (normalize)
+    parent_id = args.parent.lstrip('#') if args.parent else "000"
+
     # Get plan or plan_ca_ref (XOR enforced by argparse)
     plan = getattr(args, 'plan', None)
     plan_ca_ref = getattr(args, 'plan_ca_ref', None)
 
     try:
-        result = create_task(title=args.title, plan=plan, plan_ca_ref=plan_ca_ref)
+        result = create_task(title=args.title, parent_id=parent_id, plan=plan, plan_ca_ref=plan_ca_ref)
 
         if args.json:
             # JSON output for automation
@@ -4886,6 +4900,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # task create mission
     task_create_mission_parser = task_create_sub.add_parser("mission", help="create MISSION task with roadmap")
+    task_create_mission_parser.add_argument("--parent", default="000", help="parent task ID (default: 000)")
     task_create_mission_parser.add_argument("title", help="mission title")
     task_create_mission_parser.add_argument("--repo", help="repository name (e.g., MacEff)")
     task_create_mission_parser.add_argument("--version", help="target version (e.g., 0.4.0)")
@@ -4895,6 +4910,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # task create experiment
     task_create_experiment_parser = task_create_sub.add_parser("experiment", help="create EXPERIMENT task with protocol")
+    task_create_experiment_parser.add_argument("--parent", default="000", help="parent task ID (default: 000)")
     task_create_experiment_parser.add_argument("title", help="experiment title")
     task_create_experiment_parser.add_argument("--json", dest="json", action="store_true",
                                                help="output as JSON")
@@ -4902,6 +4918,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # task create detour
     task_create_detour_parser = task_create_sub.add_parser("detour", help="create DETOUR task with roadmap")
+    task_create_detour_parser.add_argument("--parent", default="000", help="parent task ID (default: 000)")
     task_create_detour_parser.add_argument("title", help="detour title")
     task_create_detour_parser.add_argument("--repo", help="repository name (e.g., MacEff)")
     task_create_detour_parser.add_argument("--version", help="target version (e.g., 0.4.0)")
@@ -4923,7 +4940,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # task create bug
     task_create_bug_parser = task_create_sub.add_parser("bug", help="create bug task (standalone or under parent)")
-    task_create_bug_parser.add_argument("--parent", required=False, help="optional parent task ID (e.g., #67 or 67)")
+    task_create_bug_parser.add_argument("--parent", default="000", help="parent task ID (default: 000)")
     task_create_bug_parser.add_argument("title", help="bug title")
     # XOR: exactly one of fix_plan or plan_ca_ref required
     bug_plan_group = task_create_bug_parser.add_mutually_exclusive_group(required=True)
@@ -4935,7 +4952,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # task create deleg
     task_create_deleg_parser = task_create_sub.add_parser("deleg", help="create DELEG_PLAN task for delegation")
-    task_create_deleg_parser.add_argument("--parent", required=False, help="optional parent task ID (e.g., #67 or 67)")
+    task_create_deleg_parser.add_argument("--parent", default="000", help="parent task ID (default: 000)")
     task_create_deleg_parser.add_argument("title", help="delegation title")
     # XOR: exactly one of plan or plan_ca_ref required
     deleg_plan_group = task_create_deleg_parser.add_mutually_exclusive_group(required=True)
@@ -4947,6 +4964,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # task create task
     task_create_task_parser = task_create_sub.add_parser("task", help="create standalone task")
+    task_create_task_parser.add_argument("--parent", default="000", help="parent task ID (default: 000)")
     task_create_task_parser.add_argument("title", help="task title")
     # XOR: exactly one of plan or plan_ca_ref required (uniform requirement)
     task_plan_group = task_create_task_parser.add_mutually_exclusive_group(required=True)
