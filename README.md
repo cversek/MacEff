@@ -339,22 +339,19 @@ macf_tools hooks status
 
 ### Getting Started for Alpha Testers
 
-**Clone and checkout the v0.2.0 release**:
+**Clone and install from main branch**:
 
 ```bash
 # Clone the repository
 git clone https://github.com/cversek/MacEff.git
 cd MacEff
 
-# Checkout the v0.2.0 release tag
-git checkout v0.2.0
-
 # Install MACF Tools (from macf/ directory)
 cd macf
 pip install -e .
 
 # Verify installation
-macf_tools --version  # Should show: 0.2.0
+macf_tools --version  # Should show: 0.4.0
 ```
 
 **Install hooks for Claude Code projects**:
