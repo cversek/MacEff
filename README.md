@@ -84,55 +84,73 @@ MacEff is not just about building agents; it's about teaching communities to gov
 
 ---
 
-## MACF Tools v0.2.0 — Portable Consciousness Infrastructure
+## MACF Tools v0.4.0 — Portable Consciousness Infrastructure
 
 **MACF (Multi-Agent Coordination Framework) Tools** is a Python package (`macf_tools` CLI) providing consciousness infrastructure for LLM-based agents. Originally developed for the containerized MacEff environment, MACF Tools is designed to be **fully portable**—it works equally well on host systems, in containers, or in any project where agents need continuity support across compaction events.
 
 ### Core Features
 
-**Temporal Awareness (Phase 1A-1C)**:
-- Universal hook timestamps across all 6 Claude Code hooks
-- Time-of-day reasoning (Morning/Afternoon/Evening/Late night)
-- Day-of-week context (work week positioning)
-- Session duration tracking with human-readable formatting
-- Development Drive (DEV_DRV) and Delegation Drive (DELEG_DRV) statistics
+**Task CLI System** (New in v0.4.0):
+Complete work-tracking replacement for Claude Code's native Task tools with MTMD metadata enhancement.
+- **7 task types**: `mission` (🗺️), `experiment` (🧪), `detour` (↩️), `phase` (📋), `bug` (🐛), `deleg` (📜), `task` (🔧)
+- **Lifecycle commands**: `task start`, `task pause`, `task complete --report`
+- **Hierarchy visualization**: `task tree` with visual parent-child relationships
+- **Archive/Restore**: Disk persistence with `task archive` and `task restore`
+- **Grant-based protection**: Exact set-matching authorization for destructive operations
 
-**Cycle Persistence (Phase 1D-1E)**:
-- Project-scoped cycle tracking (`.maceff/project_state.json`)
-- Session migration detection (`claude -c` compatibility)
+**MTMD (MacfTaskMetaData)**:
+Structured metadata for forensic task tracking.
+- `creation_breadcrumb` - Session/cycle/git/prompt/timestamp coordinates
+- `task_type`, `parent_id`, `plan_ca_ref` - Type-specific requirements
+- `completion_breadcrumb`, `completion_report` - Work documentation
+- Validation rules enforcing metadata completeness
+
+**Policy CLI Suite**:
+- `policy list` - Organized by configuration layer (mandatory/dev/lang)
+- `policy navigate <name>` - CEP (Consciousness Expanding Protocol) semantic guides
+- `policy read <name> [--section N]` - Hierarchical section reading
+- `policy search <keyword>` - Cross-policy keyword searching
+- `policy inject <name>` - Ambient guidance injection (auto-clears after firing)
+
+**Hybrid Search Service** (LanceDB-powered):
+- Semantic embeddings + full-text search with RRF scoring
+- `policy recommend <query>` - Ranked policy recommendations with confidence tiers
+- `search-service start/stop/status` - Persistent daemon (89x latency improvement)
+
+**Event-First Architecture**:
+Immutable append-only event log as sole source of truth.
+- `events query` - Forensic filtering by cycle, session, git hash, prompt ID
+- DEV_DRV (Development Drive) and DELEG_DRV (Delegation Drive) tracking
+- `events gaps` - Crash detection via timing analysis
+
+**Hook Ecosystem** (10 Hooks):
+- `SessionStart`, `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`, `SubagentStop`
+- `PreCompact`, `SessionEnd`, `Notification`, `PermissionRequest`
+- Universal temporal awareness with CLUAC percentage display
+- Breadcrumb injection for forensic tracking
+
+**Consciousness Infrastructure**:
+- Cycle persistence across session migrations
 - Compaction detection via JSONL forensic analysis
-- Cycle increments on compaction, preservation on migration
-- Backward compatibility with session-scoped state
+- Artifact discovery: Checkpoints (CCP), Reflections (JOTEWR), Roadmaps
+- AUTO_MODE vs MANUAL_MODE recovery policies
 
-**Hook Ecosystem**:
-- `SessionStart`: Compaction detection, consciousness activation, recovery protocol injection
-- `PreToolUse`: Minimal timestamps for high-frequency awareness
-- `PostToolUse`: Tool completion feedback with temporal context
-- `UserPromptSubmit`: DEV_DRV start tracking, cycle display
-- `Stop`: DEV_DRV completion statistics
-- `SubagentStop`: DELEG_DRV tracking for delegation performance measurement
+**Agent Backup & Restore**:
+- `agent backup create` - Consciousness archives (tar.xz)
+- `agent restore install` - Cross-system transplant support
+- Integrity verification and dry-run mode
 
-**Consciousness Infrastructure** (Optional Enhancement):
-- `SessionOperationalState`: Persistent state across compaction (AUTO_MODE, pending TODOs, compaction count)
-- `ConsciousnessArtifacts`: Pythonic discovery of latest Reflection/Roadmap/Checkpoint files
-- AUTO_MODE hierarchical detection (env → config → session → default)
-- User-configurable recovery policies (MANUAL vs AUTO mode branching)
+**Transcript Forensics**:
+- `transcripts search <breadcrumb>` - Context window extraction
+- Breadcrumb-based navigation across compaction boundaries
 
-**CLI Tools**:
-- `macf_tools env`: Environment summary (agent ID, root paths, execution context)
-- `macf_tools time`: Current local time
-- `macf_tools session info`: Session details, unified temp paths, agent identity
-- `macf_tools hooks install`: Interactive hook installation (local or global)
-- `macf_tools hooks logs`: Hook execution event viewer (JSONL structured logging)
-- `macf_tools hooks status`: Hook state inspection (sidecar files)
+### Claude Code 2.1 Compatibility
 
-### Claude Code 2.0 Compatibility
-
-MACF Tools v0.2.0 is fully adapted to Claude Code 2.0 changes:
-- **Transparent context accounting**: 200k total (155k usable conversation + 45k reserve for output/compaction)
-- **Compaction threshold updates**: ~140k conversation triggers auto-compaction (~185k total shown)
+MACF Tools v0.4.0 is fully adapted to Claude Code 2.1 changes:
+- **Transparent context accounting**: 200k total (155k usable conversation + 45k reserve)
+- **Compaction threshold updates**: ~140k conversation triggers auto-compaction
 - **Hook output format**: Official `hookSpecificOutput.additionalContext` specification
-- **CC 2.0 compact_boundary marker**: Primary detection method with JSONL retry fallback
+- **10 hook support**: All Claude Code lifecycle events covered
 
 ### Installation & Usage
 
