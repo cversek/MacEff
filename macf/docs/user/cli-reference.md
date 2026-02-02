@@ -15,6 +15,7 @@ Complete command reference for `macf_tools` CLI.
 - [Development Drives](#development-drives)
 - [Policy Management](#policy-management)
 - [Search Service](#search-service)
+- [Transcripts](#transcripts)
 - [Event Sourcing](#event-sourcing)
 - [Task Commands](#task-commands-v040)
   - [Task Creation Commands](#task-creation-commands)
@@ -832,6 +833,59 @@ macf_tools search-service status [--json]
 ```
 
 **Related:** `search-service start`, `search-service stop`
+
+## Transcripts
+
+### transcripts search
+
+Search transcript JSONL files by breadcrumb with context window. Enables post-compaction archaeology by locating exact messages using breadcrumb coordinates.
+
+**Syntax:**
+```bash
+macf_tools transcripts search BREADCRUMB [--before N] [--after N] [--all] [--format FORMAT]
+```
+
+**Arguments:**
+- `BREADCRUMB` - Breadcrumb string (e.g., `s_abc123/c_42/g_xyz/p_def456/t_123`)
+
+**Options:**
+- `--before, -B N` - Number of messages before target (default: 3)
+- `--after, -A N` - Number of messages after target (default: 3)
+- `--all` - Search all transcripts (not just session from breadcrumb)
+- `--format FORMAT` - Output format: `full`, `compact`, `json` (default: full)
+
+**Examples:**
+```bash
+# Search with default context (3 before, 3 after)
+macf_tools transcripts search "s_d4abc33b/c_394/g_98feb06/p_2a0e25c0/t_1769827794"
+
+# Compact output with custom window
+macf_tools transcripts search "s_abc123/c_42/p_xyz/t_123" -B 5 -A 5 --format compact
+
+# JSON output for programmatic use
+macf_tools transcripts search "s_abc123/c_42/p_xyz/t_123" --format json
+```
+
+**Related:** `transcripts list`, `breadcrumb`
+
+### transcripts list
+
+List all transcript JSONL files in the Claude projects directory.
+
+**Syntax:**
+```bash
+macf_tools transcripts list [--json]
+```
+
+**Options:**
+- `--json` - Output as JSON array
+
+**Example:**
+```bash
+macf_tools transcripts list
+```
+
+**Related:** `transcripts search`
 
 ## Event Sourcing
 

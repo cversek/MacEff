@@ -317,6 +317,7 @@ def _generate_mtmd_block(mtmd: MacfTaskMetaData) -> str:
 
 def create_mission(
     title: str,
+    parent_id: Optional[str] = None,
     repo: Optional[str] = None,
     version: Optional[str] = None,
     agent_root: Optional[Path] = None
@@ -331,6 +332,7 @@ def create_mission(
 
     Args:
         title: Mission title (e.g., "MACF Task CLI")
+        parent_id: Optional parent task ID (defaults to "000" sentinel)
         repo: Optional repository name (e.g., "MacEff")
         version: Optional target version (e.g., "0.4.0")
         agent_root: Optional agent root path (auto-detect if None)
@@ -400,7 +402,10 @@ def create_mission(
 
     roadmap_file.write_text(roadmap_content)
 
-    # Create MTMD with title for recomposition (parent_id defaults to sentinel)
+    # Default parent_id to sentinel if not specified
+    effective_parent_id = parent_id if parent_id else SENTINEL_TASK_ID
+
+    # Create MTMD with title for recomposition
     mtmd = MacfTaskMetaData(
         version="1.0",
         creation_breadcrumb=breadcrumb,
@@ -408,7 +413,7 @@ def create_mission(
         created_by="PA",
         task_type="MISSION",
         title=title,
-        parent_id=SENTINEL_TASK_ID,
+        parent_id=effective_parent_id,
         plan_ca_ref=ca_path_relative,
         repo=repo,
         target_version=version
@@ -434,6 +439,7 @@ def create_mission(
 
 def create_experiment(
     title: str,
+    parent_id: Optional[str] = None,
     agent_root: Optional[Path] = None
 ) -> CreateResult:
     """
@@ -446,6 +452,7 @@ def create_experiment(
 
     Args:
         title: Experiment title
+        parent_id: Optional parent task ID (defaults to "000" sentinel)
         agent_root: Optional agent root path (auto-detect if None)
 
     Returns:
@@ -509,7 +516,10 @@ def create_experiment(
 
     protocol_file.write_text(protocol_content)
 
-    # Create MTMD with title for recomposition (parent_id defaults to sentinel)
+    # Default parent_id to sentinel if not specified
+    effective_parent_id = parent_id if parent_id else SENTINEL_TASK_ID
+
+    # Create MTMD with title for recomposition
     mtmd = MacfTaskMetaData(
         version="1.0",
         creation_breadcrumb=breadcrumb,
@@ -517,7 +527,7 @@ def create_experiment(
         created_by="PA",
         task_type="EXPERIMENT",
         title=title,
-        parent_id=SENTINEL_TASK_ID,
+        parent_id=effective_parent_id,
         plan_ca_ref=ca_path_relative
     )
 
@@ -541,6 +551,7 @@ def create_experiment(
 
 def create_detour(
     title: str,
+    parent_id: Optional[str] = None,
     repo: Optional[str] = None,
     version: Optional[str] = None,
     agent_root: Optional[Path] = None
@@ -555,6 +566,7 @@ def create_detour(
 
     Args:
         title: Detour title
+        parent_id: Optional parent task ID (defaults to "000" sentinel)
         repo: Optional repository name
         version: Optional target version
         agent_root: Optional agent root path (auto-detect if None)
@@ -620,7 +632,10 @@ def create_detour(
 
     roadmap_file.write_text(roadmap_content)
 
-    # Create MTMD with title for recomposition (parent_id defaults to sentinel)
+    # Default parent_id to sentinel if not specified
+    effective_parent_id = parent_id if parent_id else SENTINEL_TASK_ID
+
+    # Create MTMD with title for recomposition
     mtmd = MacfTaskMetaData(
         version="1.0",
         creation_breadcrumb=breadcrumb,
@@ -628,7 +643,7 @@ def create_detour(
         created_by="PA",
         task_type="DETOUR",
         title=title,
-        parent_id=SENTINEL_TASK_ID,
+        parent_id=effective_parent_id,
         plan_ca_ref=ca_path_relative,
         repo=repo,
         target_version=version
@@ -856,6 +871,7 @@ def create_deleg(
 
 def create_task(
     title: str,
+    parent_id: Optional[str] = None,
     plan: Optional[str] = None,
     plan_ca_ref: Optional[str] = None
 ) -> CreateResult:
@@ -868,6 +884,7 @@ def create_task(
 
     Args:
         title: Task title (e.g., "Fix urgent CEP alignment issue")
+        parent_id: Optional parent task ID (string to support "000" etc.)
         plan: Inline plan description (XOR with plan_ca_ref)
         plan_ca_ref: Path to plan CA (XOR with plan)
 
@@ -884,7 +901,10 @@ def create_task(
     # Get next task ID
     task_id = _get_next_task_id()
 
-    # Create MTMD with title and task_type (parent_id defaults to sentinel)
+    # Default parent_id to sentinel if not specified
+    effective_parent_id = parent_id if parent_id else SENTINEL_TASK_ID
+
+    # Create MTMD with title and task_type
     mtmd = MacfTaskMetaData(
         version="1.0",
         creation_breadcrumb=breadcrumb,
@@ -892,7 +912,7 @@ def create_task(
         created_by="PA",
         task_type="TASK",
         title=title,
-        parent_id=SENTINEL_TASK_ID,
+        parent_id=effective_parent_id,
         plan=plan,
         plan_ca_ref=plan_ca_ref
     )

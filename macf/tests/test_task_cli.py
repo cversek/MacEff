@@ -147,7 +147,7 @@ class TestTaskCreateBugCommand:
         """Test bug creation under a parent task."""
         # First create a parent task
         parent_result = subprocess.run(
-            ['macf_tools', 'task', 'create', 'task', 'Parent Task'],
+            ['macf_tools', 'task', 'create', 'task', 'Parent Task', '--plan', 'Parent test'],
             capture_output=True, text=True, env=isolated_task_env['env']
         )
         assert parent_result.returncode == 0
@@ -188,7 +188,7 @@ class TestTaskCreatePhaseCommand:
         # Create phase under mission (assuming mission gets ID 1)
         result = subprocess.run(
             ['macf_tools', 'task', 'create', 'phase', 'Phase 1: Setup',
-             '--parent', '1'],
+             '--parent', '1', '--plan', 'Phase test'],
             capture_output=True, text=True, env=isolated_task_env['env']
         )
 
@@ -203,7 +203,7 @@ class TestTaskCreateTaskCommand:
     def test_create_standalone_task(self, isolated_task_env):
         """Test standalone task creation."""
         result = subprocess.run(
-            ['macf_tools', 'task', 'create', 'task', 'Simple Task'],
+            ['macf_tools', 'task', 'create', 'task', 'Simple Task', '--plan', 'Test plan'],
             capture_output=True, text=True, env=isolated_task_env['env']
         )
 
@@ -213,7 +213,7 @@ class TestTaskCreateTaskCommand:
     def test_create_task_json_output(self, isolated_task_env):
         """Test task creation with --json returns valid JSON."""
         result = subprocess.run(
-            ['macf_tools', 'task', 'create', 'task', 'JSON Task', '--json'],
+            ['macf_tools', 'task', 'create', 'task', 'JSON Task', '--plan', 'JSON test plan', '--json'],
             capture_output=True, text=True, env=isolated_task_env['env']
         )
 
@@ -273,7 +273,7 @@ class TestTaskArchiveCommand:
         """Test archiving an existing task."""
         # Create a task first
         create_result = subprocess.run(
-            ['macf_tools', 'task', 'create', 'task', 'Task to Archive'],
+            ['macf_tools', 'task', 'create', 'task', 'Task to Archive', '--plan', 'Archive test'],
             capture_output=True, text=True, env=isolated_task_env['env']
         )
         assert create_result.returncode == 0
@@ -291,7 +291,7 @@ class TestTaskArchiveCommand:
         """Test archive --no-cascade flag."""
         # Create a parent task
         parent_result = subprocess.run(
-            ['macf_tools', 'task', 'create', 'task', 'Parent'],
+            ['macf_tools', 'task', 'create', 'task', 'Parent', '--plan', 'Parent test'],
             capture_output=True, text=True, env=isolated_task_env['env']
         )
         assert parent_result.returncode == 0
@@ -323,7 +323,7 @@ class TestTaskRestoreCommand:
         """Test restore --json flag format."""
         # Create and archive a task first
         create_result = subprocess.run(
-            ['macf_tools', 'task', 'create', 'task', 'Test Restore'],
+            ['macf_tools', 'task', 'create', 'task', 'Test Restore', '--plan', 'Restore test'],
             capture_output=True, text=True, env=isolated_task_env['env']
         )
         assert create_result.returncode == 0
@@ -364,7 +364,7 @@ class TestTaskArchivedListCommand:
         """Test archived list shows archived tasks."""
         # Create and archive a task
         create_result = subprocess.run(
-            ['macf_tools', 'task', 'create', 'task', 'To Archive'],
+            ['macf_tools', 'task', 'create', 'task', 'To Archive', '--plan', 'Archive list test'],
             capture_output=True, text=True, env=isolated_task_env['env']
         )
         assert create_result.returncode == 0
@@ -402,7 +402,7 @@ class TestTaskGrantUpdateCommand:
         """Test grant-update with valid task ID."""
         # Create a task first
         create_result = subprocess.run(
-            ['macf_tools', 'task', 'create', 'task', 'Test Grant'],
+            ['macf_tools', 'task', 'create', 'task', 'Test Grant', '--plan', 'Grant test'],
             capture_output=True, text=True, env=isolated_task_env['env']
         )
         assert create_result.returncode == 0
@@ -420,7 +420,7 @@ class TestTaskGrantUpdateCommand:
         """Test grant-update with specific field and value."""
         # Create a task
         create_result = subprocess.run(
-            ['macf_tools', 'task', 'create', 'task', 'Test Field Grant'],
+            ['macf_tools', 'task', 'create', 'task', 'Test Field Grant', '--plan', 'Field grant test'],
             capture_output=True, text=True, env=isolated_task_env['env']
         )
         assert create_result.returncode == 0
@@ -442,7 +442,7 @@ class TestTaskGrantDeleteCommand:
         """Test grant-delete with single task ID."""
         # Create a task
         create_result = subprocess.run(
-            ['macf_tools', 'task', 'create', 'task', 'Test Delete Grant'],
+            ['macf_tools', 'task', 'create', 'task', 'Test Delete Grant', '--plan', 'Delete grant test'],
             capture_output=True, text=True, env=isolated_task_env['env']
         )
         assert create_result.returncode == 0
@@ -461,7 +461,7 @@ class TestTaskGrantDeleteCommand:
         # Create multiple tasks
         for i in range(3):
             create_result = subprocess.run(
-                ['macf_tools', 'task', 'create', 'task', f'Task {i+1}'],
+                ['macf_tools', 'task', 'create', 'task', f'Task {i+1}', '--plan', f'Test {i+1}'],
                 capture_output=True, text=True
             )
             assert create_result.returncode == 0
@@ -478,7 +478,7 @@ class TestTaskGrantDeleteCommand:
         """Test grant-delete with --reason flag."""
         # Create a task
         create_result = subprocess.run(
-            ['macf_tools', 'task', 'create', 'task', 'Task with Reason'],
+            ['macf_tools', 'task', 'create', 'task', 'Task with Reason', '--plan', 'Reason test'],
             capture_output=True, text=True, env=isolated_task_env['env']
         )
         assert create_result.returncode == 0
