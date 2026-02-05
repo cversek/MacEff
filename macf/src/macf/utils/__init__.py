@@ -3,6 +3,7 @@ MACF Utilities - Modular package structure.
 """
 
 from .paths import (
+    get_macf_package_path,
     find_maceff_root,
     find_project_root,
     find_agent_home,
@@ -83,6 +84,7 @@ from .manifest import (
 )
 from .formatting import (
     format_macf_footer,
+    format_proprioception_awareness,
     get_claude_code_version,
 )
 from .identity import (
@@ -114,6 +116,7 @@ __all__ = [
     "format_breadcrumb",
     "format_duration",
     "format_macf_footer",
+    "format_proprioception_awareness",
     "get_agent_identity",
     "get_claude_code_version",
     "format_manifest_awareness",

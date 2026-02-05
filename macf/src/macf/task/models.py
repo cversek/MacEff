@@ -23,6 +23,7 @@ class MacfTaskUpdate:
 
     # Future extensibility
     agent: Optional[str] = None  # Who made the update (PA, SA:DevOpsEng, etc.)
+    type: Optional[str] = None   # None=lifecycle update, "note"=user note
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "MacfTaskUpdate":
@@ -34,6 +35,7 @@ class MacfTaskUpdate:
             breadcrumb=data.get("breadcrumb", ""),
             description=data.get("description", ""),
             agent=data.get("agent"),
+            type=data.get("type"),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -43,6 +45,8 @@ class MacfTaskUpdate:
             result["description"] = self.description
         if self.agent:
             result["agent"] = self.agent
+        if self.type:
+            result["type"] = self.type
         return result
 
 
@@ -253,6 +257,8 @@ class MacfTaskMetaData:
             data["release_branch"] = self.release_branch
         if self.completion_breadcrumb:
             data["completion_breadcrumb"] = self.completion_breadcrumb
+        if self.completion_report:
+            data["completion_report"] = self.completion_report
         if self.unblock_breadcrumb:
             data["unblock_breadcrumb"] = self.unblock_breadcrumb
         if self.updates:

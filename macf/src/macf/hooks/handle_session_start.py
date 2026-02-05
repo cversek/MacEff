@@ -17,6 +17,7 @@ from macf.utils import (
     get_rich_environment_string,
     format_duration,
     format_macf_footer,
+    format_proprioception_awareness,
     get_token_info,
     format_token_context_full,
     get_boundary_guidance,
@@ -426,6 +427,13 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # Format manifest awareness
         manifest_section = format_manifest_awareness()
 
+        # Format proprioception awareness (CLI capabilities + environment)
+        # Only inject on fresh sessions, not resumes (token economy)
+        # Fresh = first session, /clear, or significant time gap
+        # Resume = source == 'resume' (continuing existing session)
+        is_fresh_session = source != 'resume'
+        proprioception_section = format_proprioception_awareness() if is_fresh_session else ""
+
         # Get compaction count from events (events are sole source)
         compaction_info = get_compaction_count_from_events(session_id)
         compaction_count = compaction_info.get('count', 0)
@@ -445,6 +453,8 @@ Session Context:
 {token_section}
 
 {manifest_section}
+
+{proprioception_section}
 
 {format_macf_footer()}"""
 

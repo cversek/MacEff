@@ -31,6 +31,8 @@ from .utils import (
     get_env_var_report,
     get_agent_identity,
     find_project_root,
+    find_maceff_root,
+    get_macf_package_path,
     get_hooks_dir
 )
 
@@ -38,6 +40,7 @@ from .utils import (
 ANSI_RESET = "\033[0m"
 ANSI_RED = "\033[31m"
 ANSI_GREEN = "\033[32m"
+ANSI_YELLOW = "\033[33m"
 ANSI_DIM = "\033[2m"
 ANSI_STRIKE = "\033[9m"
 
@@ -91,6 +94,95 @@ def _format_time_ago(file_path: Path) -> str:
         return "unknown"
 
 # -------- commands --------
+def cmd_tree(args: argparse.Namespace, root_parser: argparse.ArgumentParser = None) -> int:
+    """Print command tree by introspecting argparse parser structure.
+
+    Modeled after unix 'tree' command - minimal token output showing
+    subcommand structure with usage strings at leaves.
+
+    Uses argparse internal attributes:
+    - parser._actions to find all actions
+    - isinstance(action, argparse._SubParsersAction) to identify subparsers
+    - action.choices to get {name: parser} mapping
+    """
+    if root_parser is None:
+        # Parser will be injected by main() after construction
+        print("Error: Parser not available", file=sys.stderr)
+        return 1
+
+    def get_args_string(parser: argparse.ArgumentParser) -> str:
+        """Build args string from parser actions (cleaner than parsing usage)."""
+        parts = []
+
+        # Optional arguments (skip help)
+        for action in parser._actions:
+            if isinstance(action, argparse._HelpAction):
+                continue
+            if isinstance(action, argparse._SubParsersAction):
+                continue
+            if action.option_strings:
+                # Optional argument
+                opts = action.option_strings[0]  # Use shortest form
+                if action.nargs == 0:  # Flag
+                    parts.append(f"[{opts}]")
+                elif action.required:
+                    parts.append(f"{opts} {action.metavar or action.dest.upper()}")
+                else:
+                    parts.append(f"[{opts} {action.metavar or action.dest.upper()}]")
+            else:
+                # Positional argument
+                name = action.metavar or action.dest
+                if action.nargs in ('?', '*'):
+                    parts.append(f"[{name}]")
+                elif action.nargs == '+':
+                    parts.append(f"{name} [{name} ...]")
+                else:
+                    parts.append(name)
+
+        return ' '.join(parts)
+
+    def get_subparsers(parser: argparse.ArgumentParser) -> dict:
+        """Get {name: parser} dict of subcommands from parser."""
+        for action in parser._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                return dict(action.choices)
+        return {}
+
+    def print_tree(parser: argparse.ArgumentParser, prefix: str = "", name: str = "macf_tools", is_last: bool = True):
+        """Recursively print parser tree in unix tree format."""
+        # Connector characters
+        connector = "└── " if is_last else "├── "
+        extension = "    " if is_last else "│   "
+
+        # Get subparsers for this parser
+        subparsers = get_subparsers(parser)
+
+        if subparsers:
+            # Has subcommands - print name only
+            print(f"{prefix}{connector}{name}")
+            # Recurse into subcommands
+            items = sorted(subparsers.items())
+            for i, (subcmd_name, subcmd_parser) in enumerate(items):
+                is_last_child = (i == len(items) - 1)
+                print_tree(subcmd_parser, prefix + extension, subcmd_name, is_last_child)
+        else:
+            # Leaf node - print name with args
+            args_str = get_args_string(parser)
+            if args_str:
+                print(f"{prefix}{connector}{name} {args_str}")
+            else:
+                print(f"{prefix}{connector}{name}")
+
+    print("macf_tools")
+    subparsers = get_subparsers(root_parser)
+    items = sorted(subparsers.items())
+    for i, (name, parser) in enumerate(items):
+        is_last = (i == len(items) - 1)
+        print_tree(parser, "", name, is_last)
+
+    return 0
+
+
 def cmd_env(args: argparse.Namespace) -> int:
     """Print comprehensive environment summary."""
     temporal = get_temporal_context()
@@ -135,6 +227,18 @@ def cmd_env(args: argparse.Namespace) -> int:
     except Exception:
         cc_tasks_dir = None
 
+    # Get framework paths
+    try:
+        macf_package = get_macf_package_path()
+    except Exception:
+        macf_package = None
+
+    try:
+        maceff_root = find_maceff_root()
+        framework_dir = maceff_root / "framework" if maceff_root else None
+    except Exception:
+        framework_dir = None
+
     # Gather all data
     data = {
         "identity": {
@@ -161,6 +265,10 @@ def cmd_env(args: argparse.Namespace) -> int:
         "cc_internal": {
             "cc_project_dir": resolve_path(cc_project_dir),
             "cc_tasks_dir": resolve_path(cc_tasks_dir)
+        },
+        "framework": {
+            "macf_package": resolve_path(macf_package),
+            "framework_dir": resolve_path(framework_dir)
         },
         "session": {
             "session_id": session_id or "(unknown)",
@@ -218,6 +326,11 @@ def cmd_env(args: argparse.Namespace) -> int:
         print("Claude Code Internal")
         print(f"  CC Project Dir: {data['cc_internal']['cc_project_dir']}")
         print(f"  CC Tasks Dir:   {data['cc_internal']['cc_tasks_dir']}")
+        print()
+
+        print("Framework")
+        print(f"  MACF Package:   {data['framework']['macf_package']}")
+        print(f"  Framework Dir:  {data['framework']['framework_dir']}")
         print()
 
         print("Session")
@@ -1359,18 +1472,28 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
         if env_templates:
             template_locations.append(Path(env_templates) / "PA_PREAMBLE.md")
 
-        # 2. MacEff standard location (with MACEFF_ROOT support)
-        maceff_root = os.getenv("MACEFF_ROOT", "/opt/maceff")
-        template_locations.append(Path(maceff_root) / "framework" / "templates" / "PA_PREAMBLE.md")
+        # 2. MacEff installation root (via find_maceff_root - works in container and host)
+        try:
+            maceff_root = find_maceff_root()
+            if maceff_root:
+                template_locations.append(maceff_root / "framework" / "templates" / "PA_PREAMBLE.md")
+        except Exception:
+            pass
 
-        # 3. Development mode (relative to current directory)
-        template_locations.append(Path.cwd() / "templates" / "PA_PREAMBLE.md")
+        # 3. Development mode (relative to current directory - fallback with warning)
+        cwd_fallback = Path.cwd() / "templates" / "PA_PREAMBLE.md"
+        template_locations.append(cwd_fallback)
 
         preamble_template_path = None
         for loc in template_locations:
             if loc.exists():
                 preamble_template_path = loc
                 break
+
+        # Warn if using CWD fallback (likely unintended)
+        if preamble_template_path == cwd_fallback:
+            print(f"⚠️  Warning: Using CWD fallback for template: {cwd_fallback}", file=sys.stderr)
+            print("   Consider setting MACEFF_TEMPLATES_DIR or MACEFF_ROOT_DIR", file=sys.stderr)
 
         if not preamble_template_path:
             print("Error: PA_PREAMBLE.md template not found")
@@ -1397,11 +1520,20 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
             # If boundary exists, extract user content above it
             if "<!-- ⚠️ DO NOT WRITE BELOW THIS LINE" in existing_content:
                 user_content = existing_content.split("<!-- ⚠️ DO NOT WRITE BELOW THIS LINE")[0].rstrip()
-                print(f"Updating PA Preamble in existing CLAUDE.md at {claude_md_path}")
+                action_desc = "Update PA Preamble in existing"
             else:
                 # No boundary = first time, preserve all existing content
                 user_content = existing_content.rstrip()
-                print(f"Adding PA Preamble to existing CLAUDE.md at {claude_md_path}")
+                action_desc = "⚠️  Add PA Preamble to existing"
+
+            # Confirmation prompt for modifying existing file
+            print(f"\n{action_desc} CLAUDE.md:")
+            print(f"  📄 {claude_md_path}")
+            if not getattr(args, 'yes', False):
+                response = input("\nProceed? [y/N]: ").strip().lower()
+                if response != 'y':
+                    print("Aborted.")
+                    return 0
 
             # Append: user + boundary + preamble
             new_content = user_content + "\n\n" + UPGRADE_BOUNDARY + "\n\n" + preamble_content
@@ -1409,7 +1541,13 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
             print(f"✅ PA Preamble appended successfully")
         else:
             # Create new CLAUDE.md with just the preamble (no boundary needed)
-            print(f"Creating new CLAUDE.md with PA Preamble at {claude_md_path}")
+            print(f"\nCreate new CLAUDE.md with PA Preamble:")
+            print(f"  📄 {claude_md_path}")
+            if not getattr(args, 'yes', False):
+                response = input("\nProceed? [y/N]: ").strip().lower()
+                if response != 'y':
+                    print("Aborted.")
+                    return 0
             claude_md_path.write_text(preamble_content)
             print(f"✅ CLAUDE.md created successfully")
 
@@ -2844,8 +2982,9 @@ def cmd_task_get(args: argparse.Namespace) -> int:
                 "target_version": task.mtmd.target_version,
                 "release_branch": task.mtmd.release_branch,
                 "completion_breadcrumb": task.mtmd.completion_breadcrumb,
+                "completion_report": task.mtmd.completion_report,
                 "unblock_breadcrumb": task.mtmd.unblock_breadcrumb,
-                "updates": [{"breadcrumb": u.breadcrumb, "description": u.description, "agent": u.agent} for u in task.mtmd.updates],
+                "updates": [u.to_dict() for u in task.mtmd.updates],
                 "archived": task.mtmd.archived,
             }
         print(json.dumps(output, indent=2))
@@ -2885,7 +3024,8 @@ def cmd_task_get(args: argparse.Namespace) -> int:
                 print(f"  {f.name}: ({len(value)})")
                 for u in value:
                     desc = f" - {u.description}" if u.description else ""
-                    print(f"    • {u.breadcrumb}{desc}")
+                    marker = "📝" if getattr(u, 'type', None) == "note" else "•"
+                    print(f"    {marker} {u.breadcrumb}{desc}")
             else:
                 print(f"  {f.name}: {value}")
 
@@ -2906,6 +3046,9 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
     import time
     from pathlib import Path
     from .task import TaskReader
+
+    succinct = getattr(args, 'succinct', False)
+    verbose = getattr(args, 'verbose', False)
 
     def display_tree(root_id: str):
         """Display the task tree for given root_id."""
@@ -2928,14 +3071,185 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
             # Zero-pad IDs for proper numeric string sorting
             return sorted([t for t in all_tasks if t.parent_id == parent_id], key=lambda t: t.id.zfill(10))
 
+        def has_active_sibling(task, siblings):
+            """Check if any sibling is active (in_progress or pending)."""
+            for s in siblings:
+                if s.id != task.id and s.status in ("in_progress", "pending"):
+                    return True
+            return False
+
+        def should_show_task(task, siblings, depth):
+            """Determine if task should be shown in succinct mode."""
+            if not succinct:
+                return True
+            # Always show root sentinel (depth 0)
+            if depth == 0:
+                return True
+            # Show if active/pending
+            if task.status in ("in_progress", "pending"):
+                return True
+            # Top tier (depth 1): hide ALL completed - too many to show siblings
+            if depth == 1:
+                return False
+            # Deeper tiers: show completed only if has active sibling (provides context)
+            if task.status == "completed" and has_active_sibling(task, siblings):
+                return True
+            return False
+
         def count_descendants(task_id):
             children = get_children(task_id)
             return len(children) + sum(count_descendants(c.id) for c in children)
 
-        def print_tree(task, prefix="", is_last=True):
+        def get_task_notes(task):
+            """Extract notes from task MTMD updates."""
+            if not task.mtmd or not task.mtmd.updates:
+                return []
+            return [u for u in task.mtmd.updates if getattr(u, 'type', None) == 'note']
+
+        def get_task_plan(task):
+            """Get plan or plan_ca_ref from task MTMD."""
+            if not task.mtmd:
+                return None, None
+            return task.mtmd.plan, task.mtmd.plan_ca_ref
+
+        def truncate(text, max_len=70):
+            """Truncate text to max_len with ellipsis."""
+            if not text:
+                return ""
+            text = text.replace('\n', ' ').strip()
+            if len(text) <= max_len:
+                return text
+            return text[:max_len-3] + "..."
+
+        def get_last_update_timestamp(task):
+            """Extract Unix timestamp from last update's breadcrumb t_ field."""
+            if not task.mtmd or not task.mtmd.updates:
+                # Fall back to creation_breadcrumb if no updates
+                bc = task.mtmd.creation_breadcrumb if task.mtmd else None
+            else:
+                # Get last update's breadcrumb
+                bc = task.mtmd.updates[-1].breadcrumb
+            if not bc:
+                return None
+            # Extract t_ timestamp from breadcrumb (format: s_.../c_.../g_.../p_.../t_XXXXXXXX)
+            import re
+            match = re.search(r't_(\d+)', bc)
+            return int(match.group(1)) if match else None
+
+        def format_task_suffix(task):
+            """Format suffix: [repo version] timestamp with status-colored timestamp."""
+            from datetime import datetime
+            parts = []
+            # Repo and version
+            if task.mtmd:
+                repo = task.mtmd.repo
+                version = task.mtmd.target_version
+                if repo or version:
+                    rv = " ".join(filter(None, [repo, version]))
+                    parts.append(f"[{rv}]")
+            # Timestamp from last update
+            ts = get_last_update_timestamp(task)
+            if ts:
+                dt = datetime.fromtimestamp(ts)
+                time_str = dt.strftime("%m/%d %H:%M")
+                # Color based on status
+                if task.status == "in_progress":
+                    time_str = f"{ANSI_RED}{time_str}{ANSI_RESET}"
+                elif task.status == "pending":
+                    time_str = f"{ANSI_YELLOW}{time_str}{ANSI_RESET}"
+                else:  # completed
+                    time_str = f"{ANSI_GREEN}{time_str}{ANSI_RESET}"
+                parts.append(time_str)
+            return " ".join(parts) if parts else ""
+
+        def print_task_details(task, detail_prefix):
+            """Print plan and notes for a task."""
+            if succinct:
+                return
+
+            # Apply strikethrough + dim to completed task details
+            is_completed = task.status == "completed"
+            def fmt(text):
+                if is_completed:
+                    return f"{ANSI_DIM}{ANSI_STRIKE}{text}{ANSI_RESET}"
+                return text
+
+            def fmt_green(text):
+                return f"{ANSI_GREEN}{text}{ANSI_RESET}"
+
+            plan, plan_ca_ref = get_task_plan(task)
+
+            # Show plan_ca_ref or plan
+            if plan_ca_ref:
+                if verbose:
+                    print(f"{detail_prefix}{fmt('📄 ' + plan_ca_ref)}")
+                else:
+                    print(f"{detail_prefix}{fmt('→ ' + truncate(plan_ca_ref, 60))}")
+            elif plan:
+                if verbose:
+                    for line in plan.split('\n'):
+                        print(f"{detail_prefix}{fmt('📋 ' + line)}")
+                else:
+                    print(f"{detail_prefix}{fmt('→ ' + truncate(plan, 60))}")
+
+            # Show notes
+            notes = get_task_notes(task)
+            for note in notes:
+                if verbose:
+                    print(f"{detail_prefix}{fmt('📝 ' + note.description)}")
+                    if note.breadcrumb:
+                        print(f"{detail_prefix}{fmt('   🔖 ' + note.breadcrumb)}")
+                else:
+                    print(f"{detail_prefix}{fmt('📝 ' + truncate(note.description, 60))}")
+
+            # In verbose mode, show all updates (not just notes, excluding completion reports)
+            if verbose and task.mtmd and task.mtmd.updates:
+                lifecycle_updates = [u for u in task.mtmd.updates
+                                   if getattr(u, 'type', None) not in ('note', 'completion')]
+                for update in lifecycle_updates:
+                    desc = update.description or "(lifecycle update)"
+                    print(f"{detail_prefix}{fmt('🔄 ' + desc)}")
+                    if update.breadcrumb:
+                        print(f"{detail_prefix}{fmt('   🔖 ' + update.breadcrumb)}")
+
+            # Always show completion reports (both modes)
+            # Last completion report = green, previous = strikethrough
+            completion_reports = []
+            if task.mtmd:
+                # Get completion reports from updates with type='completion'
+                for u in (task.mtmd.updates or []):
+                    if getattr(u, 'type', None) == 'completion' and u.description:
+                        completion_reports.append((u.description, u.breadcrumb))
+                # Always check completion_report field (may be the primary source)
+                if task.mtmd.completion_report:
+                    bc = getattr(task.mtmd, 'completion_breadcrumb', None)
+                    completion_reports.append((task.mtmd.completion_report, bc))
+
+            for i, (report, breadcrumb) in enumerate(completion_reports):
+                is_last = (i == len(completion_reports) - 1)
+                if is_last:
+                    # Last completion report: green
+                    if verbose:
+                        print(f"{detail_prefix}{fmt_green('✅ ' + report)}")
+                        if breadcrumb:
+                            print(f"{detail_prefix}{fmt_green('   🔖 ' + breadcrumb)}")
+                    else:
+                        print(f"{detail_prefix}{fmt_green('✅ ' + truncate(report, 60))}")
+                else:
+                    # Previous completion reports: strikethrough
+                    if verbose:
+                        print(f"{detail_prefix}{fmt('✅ ' + report)}")
+                        if breadcrumb:
+                            print(f"{detail_prefix}{fmt('   🔖 ' + breadcrumb)}")
+                    else:
+                        print(f"{detail_prefix}{fmt('✅ ' + truncate(report, 60))}")
+
+        def print_tree(task, prefix="", is_last=True, depth=0, siblings=None):
             connector = "└── " if is_last else "├── "
+            extension = "    " if is_last else "│   "
 
             # CC-style markers with colors - subject now contains #N prefix
+            suffix = format_task_suffix(task)
             if task.status == "completed":
                 status_icon = f"{ANSI_GREEN}✔{ANSI_RESET}"
                 text = f"{ANSI_DIM}{ANSI_STRIKE}{task.subject}{ANSI_RESET}"
@@ -2946,12 +3260,22 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
                 status_icon = "◻"
                 text = _dim_task_ids(task.subject)
 
+            # Append suffix (repo, version, timestamp) after subject
+            if suffix:
+                text = f"{text} {suffix}"
+
             print(f"{prefix}{connector}{status_icon} {text}")
 
+            # Print task details (plan, notes) with proper indentation
+            detail_prefix = prefix + extension + "   "  # Extra indent beyond task header
+            print_task_details(task, detail_prefix)
+
             children = get_children(task.id)
-            for i, child in enumerate(children):
-                extension = "    " if is_last else "│   "
-                print_tree(child, prefix + extension, i == len(children) - 1)
+            # Filter children in succinct mode
+            visible_children = [c for c in children if should_show_task(c, children, depth + 1)]
+
+            for i, child in enumerate(visible_children):
+                print_tree(child, prefix + extension, i == len(visible_children) - 1, depth + 1, children)
 
         # Print header
         total = 1 + count_descendants(root_id)
@@ -2959,6 +3283,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
         print("=" * 60)
 
         # Print root specially with CC-style markers - subject now contains #N prefix
+        root_suffix = format_task_suffix(root)
         if root.status == "completed":
             status_icon = f"{ANSI_GREEN}✔{ANSI_RESET}"
             root_text = f"{ANSI_DIM}{ANSI_STRIKE}{root.subject}{ANSI_RESET}"
@@ -2968,14 +3293,18 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
         else:
             status_icon = "◻"
             root_text = _dim_task_ids(root.subject)
+        if root_suffix:
+            root_text = f"{root_text} {root_suffix}"
         print(f"{status_icon} {root_text}")
-        if root.mtmd and root.mtmd.plan_ca_ref:
-            print(f"   → {root.mtmd.plan_ca_ref}")
+
+        # Print root task details (plan, notes) - extra indent beyond header
+        print_task_details(root, "      ")
 
         # Print children
         children = get_children(root_id)
-        for i, child in enumerate(children):
-            print_tree(child, "", i == len(children) - 1)
+        visible_children = [c for c in children if should_show_task(c, children, 1)]
+        for i, child in enumerate(visible_children):
+            print_tree(child, "", i == len(visible_children) - 1, depth=1, siblings=children)
 
         return True
 
@@ -3261,7 +3590,8 @@ def cmd_task_metadata_get(args: argparse.Namespace) -> int:
     if mtmd.updates:
         print(f"  updates: ({len(mtmd.updates)})")
         for u in mtmd.updates:
-            print(f"    • {u.breadcrumb} - {u.description}")
+            marker = "📝" if getattr(u, 'type', None) == "note" else "•"
+            print(f"    {marker} {u.breadcrumb} - {u.description}")
 
     return 0
 
@@ -4006,6 +4336,48 @@ def cmd_task_pause(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_task_note(args: argparse.Namespace) -> int:
+    """Add a note to a task's updates list (type='note')."""
+    from .task import TaskReader, update_task_file
+    from .utils.breadcrumbs import get_breadcrumb
+    from .task.models import MacfTaskUpdate
+    import copy
+
+    task_id_str = args.task_id.lstrip('#')
+    try:
+        task_id = int(task_id_str)
+    except ValueError:
+        print(f"❌ Invalid task ID: {args.task_id}")
+        return 1
+
+    reader = TaskReader()
+    task = reader.read_task(task_id)
+    if not task:
+        print(f"❌ Task #{task_id} not found")
+        return 1
+
+    if not task.mtmd:
+        print(f"⚠️  Task #{task_id} has no MTMD - cannot add note")
+        return 1
+
+    breadcrumb = get_breadcrumb()
+
+    new_mtmd = copy.deepcopy(task.mtmd)
+    new_mtmd.updates.append(MacfTaskUpdate(
+        breadcrumb=breadcrumb,
+        description=args.message,
+        agent="PA",
+        type="note",
+    ))
+    new_description = task.description_with_updated_mtmd(new_mtmd)
+    update_task_file(task_id, {"description": new_description})
+
+    print(f"📝 Note added to task #{task_id}")
+    print(f"   {args.message}")
+    print(f"   Breadcrumb: {breadcrumb}")
+    return 0
+
+
 def cmd_task_block(args: argparse.Namespace) -> int:
     """Add blocking relationship: task blocks another task."""
     from .task import TaskReader, update_task_file
@@ -4527,6 +4899,13 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--version", action="version", version=f"%(prog)s {_ver}")
     sub = p.add_subparsers(dest="cmd")  # keep non-required for compatibility
+
+    # cmd-tree: introspect parser structure (like unix tree command)
+    # Note: parser 'p' captured via closure, passed to cmd_tree at runtime
+    sub.add_parser("cmd-tree", help="print command tree structure").set_defaults(
+        func=lambda args: cmd_tree(args, root_parser=p)
+    )
+
     env_parser = sub.add_parser("env", help="print environment summary")
     env_parser.add_argument("--json", action="store_true", help="output as JSON")
     env_parser.set_defaults(func=cmd_env)
@@ -4595,7 +4974,9 @@ def _build_parser() -> argparse.ArgumentParser:
     agent_parser = sub.add_parser("agent", help="agent initialization and management")
     agent_sub = agent_parser.add_subparsers(dest="agent_cmd")
 
-    agent_sub.add_parser("init", help="initialize agent with PA preamble").set_defaults(func=cmd_agent_init)
+    agent_init_parser = agent_sub.add_parser("init", help="initialize agent with PA preamble")
+    agent_init_parser.add_argument("-y", "--yes", action="store_true", help="skip confirmation prompt")
+    agent_init_parser.set_defaults(func=cmd_agent_init)
 
     # Agent backup subcommands
     backup_parser = agent_sub.add_parser("backup", help="consciousness backup operations")
@@ -4851,6 +5232,10 @@ def _build_parser() -> argparse.ArgumentParser:
                                   help="root task ID (default: 000 sentinel)")
     task_tree_parser.add_argument("--loop", action="store_true",
                                   help="monitor tasks directory and auto-refresh on changes")
+    task_tree_parser.add_argument("--succinct", "-s", action="store_true",
+                                  help="hide notes/plans, show only active/pending tasks")
+    task_tree_parser.add_argument("--verbose", "-v", action="store_true",
+                                  help="show full plans, breadcrumbs, and all updates")
     task_tree_parser.set_defaults(func=cmd_task_tree)
 
     # task delete
@@ -5024,6 +5409,12 @@ def _build_parser() -> argparse.ArgumentParser:
     task_pause_parser = task_sub.add_parser("pause", help="pause work on task (→ pending)")
     task_pause_parser.add_argument("task_id", help="task ID to pause (e.g., #67 or 67)")
     task_pause_parser.set_defaults(func=cmd_task_pause)
+
+    # task note - append note to updates
+    task_note_parser = task_sub.add_parser("note", help="add a note to task (appends to updates with type='note')")
+    task_note_parser.add_argument("task_id", help="task ID (e.g., #67 or 67)")
+    task_note_parser.add_argument("message", help="note text")
+    task_note_parser.set_defaults(func=cmd_task_note)
 
     # task complete
     task_complete_parser = task_sub.add_parser("complete", help="mark task complete with report")

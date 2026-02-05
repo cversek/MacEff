@@ -11,6 +11,28 @@ from typing import Optional
 
 
 @lru_cache(maxsize=1)
+def get_macf_package_path() -> Optional[Path]:
+    """Get the path to the installed macf package directory.
+
+    Walks upward from this file looking for .macf_root_marker file.
+    This explicit marker avoids false positives from generic files.
+
+    Works for both:
+    - Regular pip install (site-packages/macf/)
+    - Editable install (src/macf/)
+
+    Returns:
+        Path to macf package root, or None if marker not found
+    """
+    current = Path(__file__).resolve().parent
+    while current != current.parent:
+        if (current / ".macf_root_marker").exists():
+            return current
+        current = current.parent
+    return None
+
+
+@lru_cache(maxsize=1)
 def find_maceff_root() -> Path:
     """Find MacEff installation root.
 

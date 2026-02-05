@@ -80,3 +80,59 @@ def format_macf_footer() -> str:
     return f"""---
 {version_line}
 Environment: {environment}"""
+
+
+def format_proprioception_awareness() -> str:
+    """Format CLI capabilities and environment for hook injection.
+
+    Answers: "What can I do?" and "Where am I?"
+    Injects --help, cmd-tree, and env outputs with stimulating visual boundaries.
+    """
+    sections = []
+
+    # 1. Top-level help
+    try:
+        help_result = subprocess.run(
+            ["macf_tools", "--help"],
+            capture_output=True, text=True, timeout=5
+        )
+        if help_result.returncode == 0:
+            sections.append(f"""╔══════════════════════════════════════════════════════════════════╗
+║  🔧 WHAT CAN I DO? - CLI Overview                                ║
+╚══════════════════════════════════════════════════════════════════╝
+
+{help_result.stdout.strip()}""")
+    except Exception:
+        pass
+
+    # 2. Command tree
+    try:
+        tree_result = subprocess.run(
+            ["macf_tools", "cmd-tree"],
+            capture_output=True, text=True, timeout=10
+        )
+        if tree_result.returncode == 0:
+            sections.append(f"""╔══════════════════════════════════════════════════════════════════╗
+║  🌳 COMMAND TREE - Full Capability Map                           ║
+╚══════════════════════════════════════════════════════════════════╝
+
+{tree_result.stdout.strip()}""")
+    except Exception:
+        pass
+
+    # 3. Environment
+    try:
+        env_result = subprocess.run(
+            ["macf_tools", "env"],
+            capture_output=True, text=True, timeout=5
+        )
+        if env_result.returncode == 0:
+            sections.append(f"""╔══════════════════════════════════════════════════════════════════╗
+║  📍 WHERE AM I? - Environment State                              ║
+╚══════════════════════════════════════════════════════════════════╝
+
+{env_result.stdout.strip()}""")
+    except Exception:
+        pass
+
+    return "\n\n".join(sections)

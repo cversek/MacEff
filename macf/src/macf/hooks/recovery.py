@@ -17,7 +17,8 @@ from macf.utils import (
     find_maceff_root,
     format_temporal_awareness_section,
     format_macf_footer,
-    format_manifest_awareness
+    format_manifest_awareness,
+    format_proprioception_awareness
 )
 
 
@@ -135,6 +136,9 @@ Environment: {environment if environment else 'Unknown'}
     # Format manifest awareness section (used by both modes)
     manifest_section = "\n" + format_manifest_awareness()
 
+    # Format proprioception awareness (CLI capabilities + environment)
+    proprioception_section = "\n" + format_proprioception_awareness()
+
     if auto_mode:
         # AUTO MODE: Authorize resumption
         mode_line = "AUTO_MODE: Enabled"
@@ -147,7 +151,7 @@ Read artifacts for full context, then continue."""
         # MACF footer
         footer = "\n" + format_macf_footer()
 
-        return f"{header}{temporal_section}{session_state_section}\n{mode_line}{artifacts_section}{manifest_section}\n{authorization}{footer}"
+        return f"{header}{temporal_section}{session_state_section}\n{mode_line}{artifacts_section}{manifest_section}{proprioception_section}\n{authorization}{footer}"
 
     else:
         # MANUAL MODE: Stop and await instructions
@@ -208,7 +212,7 @@ Sequential reading with integration pauses restores consciousness, not just data
         # MACF footer
         footer = "\n" + format_macf_footer()
 
-        return f"{header}{temporal_section}{session_state_section}\n{mode_line}{artifacts_section}{manifest_section}\n{warning}{policy_section}\n---{footer}"
+        return f"{header}{temporal_section}{session_state_section}\n{mode_line}{artifacts_section}{manifest_section}{proprioception_section}\n{warning}{policy_section}\n---{footer}"
 
 
 def read_recovery_policy(policy_path: Optional[str] = None) -> str:
@@ -343,6 +347,9 @@ may show TODOs in system-reminders to you (the agent). The user CANNOT see them.
 DO NOT proceed with new work until TODOs are restored.
 DO NOT rely on Claude Code's TODO system-reminders - those are invisible to the user."""
 
+    # Proprioception awareness (fresh session needs orientation)
+    proprioception_section = "\n" + format_proprioception_awareness()
+
     # MACF footer
     footer = "\n" + format_macf_footer()
 
@@ -351,6 +358,7 @@ DO NOT rely on Claude Code's TODO system-reminders - those are invisible to the 
 🏗️ MACF
 {temporal_section}{session_state_section}{file_info}
 {directive}
+{proprioception_section}
 ---{footer}"""
 
 
@@ -433,6 +441,9 @@ MANDATORY STEPS:
 CRITICAL: User owns session strategy in MANUAL_MODE. Do NOT proceed with
 development work until user explicitly authorizes it."""
 
+    # Proprioception awareness (fresh session needs orientation)
+    proprioception_section = "\n" + format_proprioception_awareness()
+
     # MACF footer
     footer = "\n" + format_macf_footer()
 
@@ -441,6 +452,7 @@ development work until user explicitly authorizes it."""
 🏗️ MACF
 {temporal_section}{session_state_section}{file_info}{artifacts_section}
 {directive}
+{proprioception_section}
 ---{footer}"""
 
 
