@@ -39,6 +39,35 @@ Hooks run automatically at specific points in the Claude Code lifecycle without 
 
 **Key output:** System-reminder with consciousness activation or calm TODO restoration.
 
+**Proprioception injection (fresh sessions only):**
+
+On fresh sessions (compaction, `/clear`, migration — NOT `/resume`), the SessionStart hook injects CLI proprioception awareness answering two foundational questions:
+
+1. **"What can I do?"** — `macf_tools --help` output + `macf_tools cmd-tree` full command tree
+2. **"Where am I?"** — `macf_tools env` environment state
+
+These are wrapped in visual boundary boxes:
+```
+╔══════════════════════════════════════════════════════════════════╗
+║  🔧 WHAT CAN I DO? - CLI Overview                                ║
+╚══════════════════════════════════════════════════════════════════╝
+[--help output]
+
+╔══════════════════════════════════════════════════════════════════╗
+║  🌳 COMMAND TREE - Full Capability Map                           ║
+╚══════════════════════════════════════════════════════════════════╝
+[cmd-tree output]
+
+╔══════════════════════════════════════════════════════════════════╗
+║  📍 WHERE AM I? - Environment State                              ║
+╚══════════════════════════════════════════════════════════════════╝
+[env output]
+```
+
+**Why conditional:** Resume sessions retain working memory — injecting ~2000 tokens of CLI help would waste context. Fresh sessions after compaction have no memory and need full orientation. This matches awareness intensity to context loss severity.
+
+**Token cost:** ~2000 tokens per fresh session start (zero cost on resume).
+
 ### 2. user_prompt_submit
 
 **When it runs:** After user submits a prompt.
