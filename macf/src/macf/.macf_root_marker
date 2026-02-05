@@ -1,0 +1,7 @@
+# MACF Package Root Marker
+#
+# This file marks the root directory of the macf Python package.
+# It is used by macf_tools to locate the package installation.
+#
+# DO NOT DELETE THIS FILE
+# Removing it will break path resolution in macf_tools.
