@@ -73,6 +73,41 @@ export PATH="$HOME/.local/bin:$PATH"
 | `BASH_ENV` | Points to `.bash_init` for non-interactive shells |
 | `CLAUDE_PROJECT_DIR` | Claude Code project workspace |
 
+## CLI Proprioception Discovery
+
+MACF provides automatic CLI awareness injection at session start, answering foundational orientation questions for agents:
+
+### What Gets Injected
+
+On fresh sessions (compaction recovery, `/clear`, migration), the SessionStart hook runs three CLI commands and injects their output:
+
+| Command | Question Answered | Content |
+|---------|-------------------|---------|
+| `macf_tools --help` | "What can I do?" | Top-level command overview |
+| `macf_tools cmd-tree` | "What's the full capability map?" | Complete command tree with arguments |
+| `macf_tools env` | "Where am I?" | Environment state, paths, versions |
+
+### When It Fires
+
+Proprioception injection is **conditional on session freshness**:
+
+- **Fresh session** (post-compaction, `/clear`, migration): Full injection (~2000 tokens)
+- **Resume session** (`/resume`): No injection (agent retains working memory)
+
+This matches awareness intensity to actual context loss — maximum awareness for maximum amnesia, minimal disruption for continuity.
+
+### Manual Discovery
+
+Agents can always run these commands manually for orientation:
+
+```bash
+macf_tools --help       # Command overview
+macf_tools cmd-tree     # Full command tree with arguments
+macf_tools env          # Environment state
+```
+
+See [Hooks Guide](hooks.md#1-session_start) for implementation details.
+
 ## Debugging
 
 Use `macf_tools env` to display current environment configuration:

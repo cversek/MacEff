@@ -6,6 +6,10 @@ Complete command reference for `macf_tools` CLI.
 
 - [Global Options](#global-options)
 - [Environment Commands](#environment-commands)
+  - [env](#env)
+  - [time](#time)
+  - [budget](#budget)
+  - [cmd-tree](#cmd-tree)
 - [Session Commands](#session-commands)
 - [Context & Token Management](#context--token-management)
 - [Hook Management](#hook-management)
@@ -130,6 +134,52 @@ macf_tools budget
 **Description:** Returns CLUAC (Context Left Until Auto-Compaction) threshold configuration.
 
 **Related:** `context`
+
+### cmd-tree
+
+Display the full command tree showing all subcommands and their arguments.
+
+**Syntax:**
+```bash
+macf_tools cmd-tree
+```
+
+**Description:** Introspects the argparse parser structure to generate a Unix-style tree of all available commands with their arguments. Useful for discovering the full CLI capability surface at a glance.
+
+**Output (excerpt):**
+```
+macf_tools
+├── agent
+│   ├── backup
+│   │   ├── create [--output OUTPUT] [--no-transcripts] [--quick]
+│   │   ├── info archive [--json]
+│   │   └── list [--dir DIR] [--json]
+│   ├── init [-y]
+│   └── restore
+│       ├── install archive [--target TARGET] [--transplant] [--force] [--dry-run]
+│       └── verify archive [-v]
+├── breadcrumb [--json]
+├── cmd-tree
+├── env [--json]
+├── policy
+│   ├── list [--tier TIER] [--category CATEGORY]
+│   ├── navigate policy_name
+│   ├── read policy_name [--section SECTION] [--force] [--from-nav-boundary]
+│   └── recommend query [--json] [--explain] [--limit LIMIT]
+├── task
+│   ├── create
+│   │   ├── mission [--parent PARENT] title [--repo REPO] [--version VERSION]
+│   │   ├── phase --parent PARENT title
+│   │   └── bug [--parent PARENT] title [--plan PLAN]
+│   ├── tree [task_id] [--loop] [--succinct] [--verbose]
+│   └── complete task_id [--report REPORT]
+└── transcripts
+    └── search breadcrumb [--before BEFORE] [--after AFTER]
+```
+
+**Implementation:** Uses argparse internal attributes (`_actions`, `_SubParsersAction.choices`) to introspect the parser tree directly rather than parsing `--help` text output.
+
+**Related:** `env`, `--help`
 
 ## Session Commands
 
@@ -1249,23 +1299,34 @@ macf_tools task get #67  # Leading # is optional
 
 ### task tree
 
-Display task hierarchy as tree.
+Display task hierarchy as a visual tree with status indicators, notes, and metadata.
 
 **Syntax:**
 ```bash
-macf_tools task tree [task_id]
+macf_tools task tree [task_id] [--loop] [--succinct] [--verbose]
 ```
 
 **Arguments:**
 - `task_id` - Root task ID (default: `000` sentinel, shows all tasks)
 
+**Options:**
+- `--loop` - Continuously refresh the tree display (live monitoring)
+- `--succinct` - Hide completed top-tier tasks; show only active/pending work
+- `--verbose` - Show all task details including update breadcrumbs
+
+**Display Features:**
+- Status-colored timestamps: red (in_progress), yellow (pending), green (completed)
+- Repository and version tags: `[MacEff 0.4.1]`
+- Task notes and completion reports with extra indentation
+- Strikethrough formatting on completed task details
+- Completion reports displayed in green
+
 **Output:**
 ```
-🌳 Task Tree from #67 (19 tasks)
-├── ✔ #68 [^#67] 📋 Phase 1: Core CLI Commands
-│   ├── ✔ #69 [^#68] 1.1: Create package structure
-│   └── ✔ #70 [^#68] 1.2: Implement task list
-├── ◻ #81 [^#67] 📋 Phase 2: Metadata Management
+🌳 Task Tree from #78 (7 tasks)
+├── ✔ #79 [^#78] - Phase 0: Version Audit & Bump [MacEff 0.4.1] 02/04 23:42
+├── ✔ #80 [^#78] - Phase 1: CLI help-tree Command 02/05 00:10
+├── ◼ #85 [^#78] 📋 Phase 5: Documentation Updates 02/05 18:14
 ```
 
 ### task delete
@@ -1645,5 +1706,6 @@ macf_tools policy list --layer mandatory
 
 ## Version History
 
+- **0.4.1** - CLI proprioception (`cmd-tree`), task tree enhancements (`--succinct`, `--verbose`, `--loop`, status-colored timestamps)
 - **0.4.0** - Task System with MTMD, grant-based protection, archive/restore
 - **0.3.0** - Initial release with full CLI suite
