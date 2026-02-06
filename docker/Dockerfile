@@ -13,6 +13,7 @@ RUN --mount=type=cache,target=/var/cache/apt \
       nodejs npm \
       acl jq tini \
       tree \
+      libgl1 libxrender1 libxext6 libx11-6 libosmesa6 \
  && rm -rf /var/lib/apt/lists/* \
  && git lfs install --system
 
