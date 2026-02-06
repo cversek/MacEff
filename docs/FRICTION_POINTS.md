@@ -102,9 +102,41 @@ Running log of deployment friction discovered during operations. Informs fixes a
 
 ---
 
+## FP#8: projects.yaml required `context` field causes crash loop
+
+**Date Discovered**: 2026-02-05
+
+**Symptom**: Container `start.py` crash-loops with Pydantic validation error: `projects.VoxelCAD.context - Field required`. User `pa_manny` never created, all subsequent commands fail with "no matching entries in passwd file".
+
+**Root Cause**: `ProjectsConfig` Pydantic model requires `context` field for every project, but it was commented out in `projects.yaml` with a TODO. The validation runs before user creation, so the entire startup fails silently in a retry loop.
+
+**Fix**: Created `framework/projects/VoxelCAD_context.md` and uncommented the `context:` line in `projects.yaml`. Status: Fixed locally, pending rebuild.
+
+**Prevention**: Either make `context` optional in the Pydantic schema (`Optional[str] = None`) or require it at project creation time with a clear error message. Consider: `maceff-init` should validate projects.yaml before overlay copy.
+
+---
+
 ## Template
 
 ```markdown
+## FP#9: deploy.py install Hardcodes Project Name
+
+**Date Discovered**: 2026-02-05
+
+**Symptom**: `make install` only clones NeuroVEP repos. VoxelCAD declared in `projects.yaml` but never cloned or given worktrees.
+
+**Root Cause**: Two issues:
+1. `deploy.py install` hardcodes `"NeuroVEP"` for clone and worktree steps (lines 639-651) instead of iterating `projects.yaml`
+2. `agents.yaml` `assigned_projects` only listed `[NeuroVEP]` — `start.py` only creates workspaces for assigned projects
+
+**Fix**:
+1. `agents.yaml`: Added VoxelCAD to `assigned_projects: [NeuroVEP, VoxelCAD]`
+2. `deploy.py`: Replaced hardcoded project name with iteration over `projects_config.projects.keys()` — uses existing `clone_all_projects()` pattern
+
+**Key Learning**: `start.py` correctly iterates projects from YAML config. `deploy.py` was written before multi-project support and never updated. The `clone_all_projects()` method already existed but wasn't wired into the `install` command.
+
+---
+
 ## FP#N: Title
 
 **Date Discovered**: YYYY-MM-DD
