@@ -17,6 +17,7 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
+from unittest.mock import Mock, patch
 import pytest
 
 
@@ -491,3 +492,236 @@ class TestTaskGrantDeleteCommand:
         )
 
         assert result.returncode == 0
+
+
+class TestTaskCreateGHIssueCommand:
+    """Test GH_ISSUE task creation function."""
+
+    def test_create_gh_issue_from_url(self, isolated_task_env, monkeypatch):
+        """Test GH_ISSUE creation by auto-fetching metadata from GitHub."""
+        from macf.task.create import create_gh_issue
+
+        # Mock subprocess.run to return fake gh CLI JSON response
+        fake_gh_output = json.dumps({
+            "title": "Fix broken tests",
+            "labels": [{"name": "bug"}, {"name": "testing"}],
+            "state": "OPEN",
+            "url": "https://github.com/owner/repo/issues/42"
+        })
+
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_result.stdout = fake_gh_output
+        mock_result.stderr = ""
+
+        # Mock breadcrumb generation and subprocess
+        with patch('macf.utils.breadcrumbs.get_breadcrumb', return_value='s_test/c_1/g_abc/p_123/t_456'):
+            with patch('macf.utils.breadcrumbs.parse_breadcrumb', return_value={'cycle': 1}):
+                with patch('subprocess.run', return_value=mock_result):
+                    result = create_gh_issue('https://github.com/owner/repo/issues/42')
+
+        # Verify result contains expected metadata
+        assert result.task_id is not None
+        assert result.mtmd.task_type == 'GH_ISSUE'
+        assert result.mtmd.title == 'Fix broken tests'
+        assert result.mtmd.plan_ca_ref == 'https://github.com/owner/repo/issues/42'
+
+        # Verify custom fields
+        custom = result.mtmd.custom
+        assert custom['gh_owner'] == 'owner'
+        assert custom['gh_repo'] == 'repo'
+        assert custom['gh_issue_number'] == 42
+        assert custom['gh_labels'] == ['bug', 'testing']
+        assert custom['gh_state'] == 'OPEN'
+        assert custom['gh_url'] == 'https://github.com/owner/repo/issues/42'
+
+        # Verify task file was created
+        task_files = list(isolated_task_env['session_dir'].glob("*.json"))
+        assert len(task_files) >= 1
+
+    def test_create_gh_issue_display_format(self, isolated_task_env, monkeypatch):
+        """Test GH_ISSUE subject line renders correctly with labels."""
+        from macf.task.create import compose_subject
+
+        # Mock custom data with labels
+        custom = {
+            "gh_owner": "owner",
+            "gh_repo": "repo",
+            "gh_issue_number": 3,
+            "gh_labels": ["bug", "frontend"],
+        }
+
+        subject = compose_subject(
+            "97", "GH_ISSUE", "Fix navigation menu",
+            custom=custom
+        )
+
+        # Should match format: 🐙 GH/owner/repo#3 [bug]: Fix navigation menu
+        # (Note: ANSI codes may be present, so check key components)
+        assert '🐙' in subject
+        assert 'GH/owner/repo#3' in subject
+        assert '[bug]' in subject  # First label only
+        assert 'Fix navigation menu' in subject
+
+    def test_create_gh_issue_no_labels(self, isolated_task_env, monkeypatch):
+        """Test GH_ISSUE subject line when issue has no labels."""
+        from macf.task.create import compose_subject
+
+        # Mock custom data with empty labels
+        custom = {
+            "gh_owner": "cversek",
+            "gh_repo": "MacEff",
+            "gh_issue_number": 5,
+            "gh_labels": [],  # No labels
+        }
+
+        subject = compose_subject(
+            "99", "GH_ISSUE", "Update documentation",
+            custom=custom
+        )
+
+        # Should match format: 🐙 GH/cversek/MacEff#5: Update documentation
+        # (No label bracket when labels empty - check for label pattern, not raw '[')
+        assert '🐙' in subject
+        assert 'GH/cversek/MacEff#5:' in subject
+        # Check that there's no label pattern like [bug] or [feature]
+        import re
+        assert not re.search(r'\]\s*\[[\w-]+\]:', subject), "Should not have label bracket pattern"
+        assert 'Update documentation' in subject
+
+    def test_create_gh_issue_gh_cli_failure(self, isolated_task_env, monkeypatch):
+        """Test error handling when gh CLI command fails."""
+        from macf.task.create import create_gh_issue
+
+        # Mock subprocess.run to return non-zero exit code
+        mock_result = Mock()
+        mock_result.returncode = 1
+        mock_result.stdout = ""
+        mock_result.stderr = "Error: Could not resolve to a Repository with the name 'owner/repo'"
+
+        # Mock breadcrumb generation and subprocess
+        with patch('macf.utils.breadcrumbs.get_breadcrumb', return_value='s_test/c_1/g_abc/p_123/t_456'):
+            with patch('macf.utils.breadcrumbs.parse_breadcrumb', return_value={'cycle': 1}):
+                with patch('subprocess.run', return_value=mock_result):
+                    # Should raise ValueError
+                    with pytest.raises(ValueError, match="gh issue view failed"):
+                        create_gh_issue('https://github.com/owner/repo/issues/999')
+
+
+class TestGHIssueCompletionGate:
+    """Test GH_ISSUE completion gate that enforces --commit and --verified."""
+
+    def _create_gh_issue_task(self, session_dir, task_id=1):
+        """Create a GH_ISSUE task JSON file directly."""
+        mtmd_yaml = ("task_type: GH_ISSUE\n"
+                     "creation_breadcrumb: s_test/c_1/g_abc/p_def/t_123\n"
+                     "created_cycle: 1\ncreated_by: PA\nparent_id: '000'\n"
+                     "custom:\n  gh_owner: testowner\n  gh_repo: testrepo\n"
+                     "  gh_issue_number: 42\n  gh_labels: [bug]\n"
+                     "  gh_state: OPEN\n"
+                     "  gh_url: https://github.com/testowner/testrepo/issues/42\n")
+        desc = f'Test GH_ISSUE\n\n<macf_task_metadata version="1.0">\n{mtmd_yaml}</macf_task_metadata>'
+        task_data = {"id": str(task_id), "subject": "🐙 GH/testowner/testrepo#42 [bug]: Test",
+                     "description": desc, "status": "in_progress"}
+        (session_dir / f"{task_id}.json").write_text(json.dumps(task_data))
+        return task_id
+
+    def _create_regular_task(self, session_dir, task_id=2):
+        """Create a regular TASK type."""
+        mtmd_yaml = ("task_type: TASK\n"
+                     "creation_breadcrumb: s_test/c_1/g_abc/p_def/t_123\n"
+                     "created_cycle: 1\ncreated_by: PA\nparent_id: '000'\n")
+        desc = f'Regular task\n\n<macf_task_metadata version="1.0">\n{mtmd_yaml}</macf_task_metadata>'
+        task_data = {"id": str(task_id), "subject": "🔧 Regular task",
+                     "description": desc, "status": "in_progress"}
+        (session_dir / f"{task_id}.json").write_text(json.dumps(task_data))
+        return task_id
+
+    def test_gh_issue_without_commit_verified_rejected(self, isolated_task_env):
+        """GH_ISSUE without --commit/--verified is rejected with redirect."""
+        tid = self._create_gh_issue_task(isolated_task_env['session_dir'])
+        result = subprocess.run(
+            ['macf_tools', 'task', 'complete', f'#{tid}', '--report', 'Test'],
+            capture_output=True, text=True, env=isolated_task_env['env'])
+        assert result.returncode != 0
+        out = result.stdout + result.stderr
+        assert 'requires structured closeout' in out
+        assert 'macf_tools policy navigate task_management' in out
+
+    def test_gh_issue_missing_verified_rejected(self, isolated_task_env):
+        """GH_ISSUE with --commit but no --verified is rejected."""
+        tid = self._create_gh_issue_task(isolated_task_env['session_dir'])
+        result = subprocess.run(
+            ['macf_tools', 'task', 'complete', f'#{tid}', '--report', 'Test',
+             '--commit', 'abc123'],
+            capture_output=True, text=True, env=isolated_task_env['env'])
+        assert result.returncode != 0
+        assert '--verified' in (result.stdout + result.stderr)
+
+    def test_non_gh_issue_completes_without_closeout_fields(self, isolated_task_env):
+        """Non-GH_ISSUE task completes normally without --commit/--verified."""
+        tid = self._create_regular_task(isolated_task_env['session_dir'])
+        result = subprocess.run(
+            ['macf_tools', 'task', 'complete', f'#{tid}', '--report', 'Done'],
+            capture_output=True, text=True, env=isolated_task_env['env'])
+        assert result.returncode == 0
+
+    def test_gh_issue_with_all_fields_completes(self, isolated_task_env):
+        """GH_ISSUE with all fields completes (gh CLI errors are warnings)."""
+        tid = self._create_gh_issue_task(isolated_task_env['session_dir'])
+        result = subprocess.run(
+            ['macf_tools', 'task', 'complete', f'#{tid}', '--report', 'Fixed',
+             '--commit', 'abc123', '--verified', 'tests pass'],
+            capture_output=True, text=True, env=isolated_task_env['env'])
+        assert result.returncode == 0
+        # Verify MTMD stored closeout data
+        task_data = json.loads((isolated_task_env['session_dir'] / f"{tid}.json").read_text())
+        assert 'closeout_commits' in task_data['description']
+        assert 'closeout_verified' in task_data['description']
+
+
+class TestGHIssueCloseoutFunction:
+    """Test _gh_issue_closeout helper directly with mocked subprocess."""
+
+    def test_posts_comment_with_calling_card(self):
+        """Verify comment format includes report, commits, verification, calling card."""
+        from macf.cli import _gh_issue_closeout
+        from macf.task.models import MacfTaskMetaData
+
+        mtmd = MacfTaskMetaData(task_type='GH_ISSUE', custom={
+            'gh_owner': 'testowner', 'gh_repo': 'testrepo', 'gh_issue_number': 42})
+        args = Mock()
+        args.report = 'Fixed the API bug'
+        args.commit = ['abc1234567890']
+        args.verified = 'Unit tests pass'
+        bc = 's_test/c_1/g_abc/p_def/t_123'
+
+        with patch('subprocess.run', return_value=Mock(returncode=0, stdout='', stderr='')) as mock_run:
+            _gh_issue_closeout(42, mtmd, args, bc)
+            assert mock_run.call_count >= 2
+            # Find the comment call (gh issue comment ...)
+            comment_call = [c for c in mock_run.call_args_list
+                            if c[0][0][:3] == ['gh', 'issue', 'comment']][0]
+            cmd = comment_call[0][0]
+            body = cmd[cmd.index('--body') + 1]
+            assert 'Close-out Report' in body
+            assert 'Fixed the API bug' in body
+            assert 'abc12345' in body  # truncated hash link
+            assert 'Unit tests pass' in body
+            assert 'task#42' in body
+            assert bc in body
+
+    def test_handles_missing_gh_cli(self):
+        """_gh_issue_closeout handles FileNotFoundError gracefully."""
+        from macf.cli import _gh_issue_closeout
+        from macf.task.models import MacfTaskMetaData
+
+        mtmd = MacfTaskMetaData(task_type='GH_ISSUE', custom={
+            'gh_owner': 'testowner', 'gh_repo': 'testrepo', 'gh_issue_number': 42})
+        args = Mock()
+        args.report = 'Fixed'
+        args.commit = ['abc123']
+        args.verified = 'Verified'
+
+        with patch('subprocess.run', side_effect=FileNotFoundError("gh not found")):
+            _gh_issue_closeout(42, mtmd, args, 's_test/c_1/g_abc/p_def/t_123')
