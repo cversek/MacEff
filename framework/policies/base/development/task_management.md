@@ -1,10 +1,10 @@
 # Task Management Policy
 
-**Breadcrumb**: s_77270981/c_370/g_6b3cc9a/p_c9ae72f5/t_1769352307
+**Breadcrumb**: s_d4abc33b/c_410/g_6cd0bc4/p_02c3f10e/t_1770625420
 **Type**: Development Infrastructure
 **Scope**: All agents (PA and SA)
 **Status**: ACTIVE (successor to todo_hygiene.md)
-**Version**: 1.0
+**Version**: 1.1
 
 ---
 
@@ -41,7 +41,13 @@ Task management policy governs the use of Claude Code native Task* tools (TaskCr
 - When should I create a 🐛 BUG task?
 - What requires a CA reference?
 
-**2.3 MISSION Pinning Protocol**
+**2.3 GH_ISSUE Type**
+- How do I create a GH_ISSUE task?
+- What metadata is auto-fetched from GitHub?
+- What subject format does GH_ISSUE use?
+- What custom fields are stored in MTMD?
+
+**2.5 MISSION Pinning Protocol**
 - What happens when a MISSION roadmap is approved?
 - What tasks are created during pinning?
 - Why must phase tasks be created sequentially?
@@ -65,6 +71,8 @@ Task management policy governs the use of Claude Code native Task* tools (TaskCr
 - What is the completion_report format?
 - What elements are required in completion reports?
 - How do I handle partial work?
+- What type-specific completion gates exist?
+- How does GH_ISSUE closeout work?
 
 **7 Archive Protocol**
 - How do I archive completed tasks?
@@ -83,6 +91,9 @@ Task management policy governs the use of Claude Code native Task* tools (TaskCr
 - What are lifecycle commands?
 - Why is direct status editing blocked?
 - What breadcrumbs do lifecycle commands record?
+- How do I add notes to tasks?
+- How do I manage task dependencies?
+- What tree display modes exist?
 
 **10 Anti-Patterns**
 - What common mistakes should I avoid?
@@ -178,8 +189,17 @@ updates:                            # Extensible update list
     description: Architecture design
 archived: false
 archived_at: null
-custom: {}
+custom: {}                             # Type-specific extension fields
 ```
+
+**The `custom` Dict**: Extensible key-value storage for type-specific metadata that doesn't fit standard MTMD fields. Task types use `custom` to store domain-specific data:
+
+| Task Type | Custom Fields | Purpose |
+|-----------|--------------|---------|
+| GH_ISSUE | `github_url`, `github_owner`, `github_repo`, `github_number`, `github_labels`, `github_state` | External system linkage |
+| (future) | Type-specific fields as needed | Extensibility without schema changes |
+
+`custom` fields are populated automatically by `task create` commands (e.g., `task create gh_issue` fetches from GitHub API). Manual population via `task metadata add` is also supported.
 
 ### 1.4 MacfTaskUpdate Pattern
 
@@ -205,8 +225,9 @@ updates:
 | ↩️ | DETOUR | ✅ roadmap.md | Unplanned necessary work |
 | 📜 | DELEG_PLAN | ✅ deleg_plan.md | Active delegation (usually under MISSION/DETOUR) |
 | 📋 | SUBPLAN | ✅ subplan CA | Detailed phase with own CA (under MISSION/DETOUR) |
+| 🐙 | GH_ISSUE | - (GitHub is CA) | External GitHub issue tracked as task |
 | 📦 | ARCHIVE | - | Archived/completed hierarchy |
-| 🔧 | AD_HOC | - | Urgent repair, no time to plan (task file IS the CA) |
+| 🔧 | TASK | - | General work item (task file IS the CA) |
 | 🐛 | BUG | ⚠️ XOR | Defect - requires EITHER fix_plan OR plan_ca_ref |
 
 **Lightweight Phase Annotation**: For phases WITHOUT detailed subplan CAs, use `-` prefix:
@@ -242,7 +263,37 @@ macf_tools task create bug --parent 67 --plan-ca-ref "agent/public/roadmaps/2026
 - Complex bugs: BUG_FIX roadmap preserves planning context, affected files, verification approach
 - XOR validation prevents both missing documentation AND redundant documentation
 
-### 2.3 Subject Line Format
+### 2.3 🐙 GH_ISSUE Type
+
+GH_ISSUE tasks bridge external GitHub issues into the MACF task system. The GitHub issue itself serves as the external CA — no `plan_ca_ref` required.
+
+**Creation**:
+```bash
+macf_tools task create gh_issue https://github.com/owner/repo/issues/3
+```
+
+**Auto-Fetched Metadata**: The CLI invokes `gh issue view --json` to populate:
+- `github_url` — Full issue URL
+- `github_owner` — Repository owner
+- `github_repo` — Repository name
+- `github_number` — Issue number
+- `github_labels` — Issue labels (list)
+- `github_state` — Current state (OPEN/CLOSED)
+
+These are stored in the MTMD `custom` dict, preserving the external system's state at task creation time.
+
+**Subject Format**:
+```
+🐙 GH/{owner}/{repo}#{number} [{label}]: {title}
+🐙 GH/cversek/MacEff#3 [bug]: task create puts folders in wrong directory
+🐙 GH/cversek/MacEff#2: framework install fails outside MacEff repo
+```
+
+Labels appear in brackets if present. Multiple labels use the first one. No labels omits the brackets entirely.
+
+**Requirements**: The `gh` CLI must be authenticated with access to the target repository.
+
+### 2.4 Subject Line Format
 
 Subject lines are **mostly immutable** once created. Keep them clean:
 
@@ -258,7 +309,7 @@ Subject lines are **mostly immutable** once created. Keep them clean:
 
 **Enhanced `macf_tools task list`** displays `plan_ca_ref` prominently - agents always see CA context.
 
-### 2.4 MISSION Pinning Protocol (MANDATORY)
+### 2.5 MISSION Pinning Protocol (MANDATORY)
 
 When a MISSION roadmap is approved, **pinning** creates the task hierarchy:
 
@@ -466,6 +517,76 @@ If CLI unavailable, complete manually:
 
 Keep status `in_progress`, document blocker, create subtask for remaining work.
 
+### 6.5 Type-Specific Completion Gates
+
+Certain task types have completion requirements beyond the standard `--report`. When `task complete` is invoked on a gated type without meeting requirements, the system **redirects the agent to read the relevant policy section** rather than encoding the full policy in the error message. This ensures agents engage with the nuanced requirements in the policy itself.
+
+**Redirect Pattern**: The error message provides CEP navigation questions and the `macf_tools policy navigate task_management` command, directing the agent to the correct section by name (never by number).
+
+#### 6.5.1 GH_ISSUE Closeout
+
+GH_ISSUE tasks bridge to external GitHub issues. Completion requires the agent to act as an **excellent OSS maintainer** — closing the loop with the issue's originator with professionalism and comprehensiveness.
+
+**Closeout Responsibilities**:
+
+1. **Commit Citations**: The commit hash(es) that resolve the issue. These bear witness to the outcome — they are the verifiable evidence that work was done and can be audited.
+
+2. **Verification Method**: Not merely a boolean flag — describe HOW the fix was verified. Examples:
+   - "29/29 tests passing including 4 new GH_ISSUE-specific tests"
+   - "Manual verification: ran `macf_tools task create mission` from non-agent-home directory, folder created in correct location"
+   - "Reproduced original bug, applied fix, confirmed expected behavior"
+
+3. **Comprehensive Report**: The completion report should be detailed enough to serve as the basis for a GitHub issue close-out comment. Include:
+   - Root cause analysis
+   - What was changed and why
+   - Verification evidence
+   - Any related follow-up work identified
+
+4. **GitHub Issue Comment**: On successful completion, the system automatically posts a structured close-out comment on the GitHub issue and closes it. The comment contains:
+   - The agent's `--report` text as the body (the agent's conscious, professional contribution)
+   - Commit links (automated from `--commit` hashes)
+   - Verification method (automated from `--verified` text)
+   - Agent calling card footer: `[AgentName: task#N breadcrumb]` for traceability
+   - Issue closed with reason "completed"
+
+   **Agent Responsibility in the Report**: The `--report` text IS the professional contribution. Draft it with the posture of an excellent OSS maintainer:
+   - Thank the contributor for the report (if filed by someone other than the closing agent)
+   - Politely correct the contributor if the issue was based on misunderstanding
+   - Include root cause analysis, what was changed and why
+   - The system handles structured metadata; the agent handles professional communication
+
+**CLI Invocation**:
+```bash
+macf_tools task complete #97 \
+  --report "Root cause: _get_agent_root() in create.py used fragile cwd walk-up. Fix: replaced with canonical find_agent_home() in create.py and archive.py. Verified: 29/29 tests passing. Committed: abc1234" \
+  --commit abc1234 \
+  --verified "29/29 tests passing, manual verification from non-agent-home cwd"
+```
+
+**If Requirements Not Met**: The system redirects:
+```
+GH_ISSUE tasks require structured closeout before completion.
+
+To understand requirements, read the "GH_ISSUE Closeout" section:
+  macf_tools policy navigate task_management
+  → Look for: "How does GH_ISSUE closeout work?"
+
+Required: --commit HASH --verified "method description"
+```
+
+**Why Redirect Instead of Encode**: The nuanced expectations (thanking contributors, describing verification methods, writing comprehensive reports) cannot be captured in a canned error message. The policy section contains the full context. The gate's job is to ensure the agent reads and engages with that context, not to summarize it.
+
+#### 6.5.2 Future Type Gates (Extensible)
+
+The gate pattern generalizes to any task type. Each gate redirects to its own policy section:
+
+| Type | Gate Concept | Status |
+|------|-------------|--------|
+| GH_ISSUE | Commit citations + verification method + GitHub closeout + calling card | Implemented (DETOUR #99) |
+| MISSION | All phases completed | Future |
+| EXPERIMENT | Results documented | Future |
+| DELEG_PLAN | Delegation executed | Future |
+
 ---
 
 ## 7 Archive Protocol
@@ -521,8 +642,9 @@ Task operations are protected by PreToolUse hook and CLI enforcement. Protection
 - 📋 SUBPLAN
 
 **Tasks NOT requiring `plan_ca_ref`** (allowed freely):
-- 🔧 AD_HOC
+- 🔧 TASK
 - 🐛 BUG
+- 🐙 GH_ISSUE (GitHub issue is the external reference)
 - 📦 ARCHIVE
 - Regular tasks (no type marker)
 
@@ -687,7 +809,9 @@ Atomic task creation with smart MTMD defaults:
 | `task create detour "Title"` | Create DETOUR atomically | Folder + roadmap.md + task |
 | `task create phase --parent N "Title"` | Create phase under parent | Task with parent_id |
 | `task create bug --parent N "Title"` | Create bug under parent | Task with 🐛 marker |
-| `task create adhoc "Title"` | Create standalone AD_HOC task | Task with 🔧 marker |
+| `task create task "Title"` | Create general TASK | Task with 🔧 marker |
+| `task create deleg "Title"` | Create DELEG_PLAN | Task with 📜 marker |
+| `task create gh_issue URL` | Create GH_ISSUE from GitHub URL | Task with 🐙 + auto-fetched metadata |
 
 **Smart Defaults** (zero LLM token cost):
 - `creation_breadcrumb` - Auto-generated
@@ -712,11 +836,46 @@ macf_tools task create experiment "Hook Performance Testing"
 # Create phase under MISSION
 macf_tools task create phase --parent 67 "Phase 3: Task Creation"
 
-# Create standalone AD_HOC task for urgent unplanned work
-macf_tools task create adhoc "Fix urgent CEP alignment issue"
+# Create general task
+macf_tools task create task "Fix urgent CEP alignment issue"
+
+# Create GH_ISSUE from GitHub URL
+macf_tools task create gh_issue https://github.com/owner/repo/issues/3
 
 # JSON output for automation
 macf_tools task create mission "Test" --json | jq .task_id
+```
+
+### 9.6 Task Notes
+
+Add timestamped notes to tasks for progress tracking without full MTMD updates:
+
+```bash
+macf_tools task note #67 "Investigated root cause, found in create.py"
+macf_tools task note #67 "Fix applied, awaiting user verification"
+```
+
+Notes appear in `task tree --verbose` output and provide lightweight progress documentation.
+
+### 9.7 Dependency Management
+
+Manage task blocking relationships:
+
+```bash
+macf_tools task block #67 #68          # #67 blocks #68
+macf_tools task unblock #67 #68        # Remove block
+macf_tools task blocked-by #68 #67     # #68 is blocked by #67
+macf_tools task unblocked-by #68 #67   # Remove blocked-by
+```
+
+### 9.8 Tree Display Modes
+
+```bash
+macf_tools task tree                   # Default: from sentinel #000
+macf_tools task tree #67               # From specific task
+macf_tools task tree --succinct        # Compact one-line display
+macf_tools task tree --verbose         # Full details with notes and reports
+macf_tools task tree --loop            # Live monitoring (refreshes)
 ```
 
 ---
@@ -796,4 +955,4 @@ macf_tools task create mission "Test" --json | jq .task_id
 ---
 
 🔧 Generated with Claude Code
-Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
