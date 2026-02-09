@@ -716,24 +716,17 @@ def cmd_hook_install(args: argparse.Namespace) -> int:
 def cmd_framework_install(args: argparse.Namespace) -> int:
     """Install framework artifacts (hooks, commands, skills) to .claude directory."""
     try:
-        import subprocess
-
         # Determine what to install
         hooks_only = getattr(args, 'hooks_only', False)
         skip_hooks = getattr(args, 'skip_hooks', False)
 
-        # Find framework root (git repo root + /framework)
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, cwd=Path.cwd()
-        )
-        if result.returncode != 0:
-            print("Error: Not in a git repository")
-            return 1
-
-        framework_root = Path(result.stdout.strip()) / "framework"
+        # Find framework root using standard path resolution
+        maceff_root = find_maceff_root()
+        framework_root = maceff_root / "framework"
         if not framework_root.exists():
             print(f"Error: Framework directory not found at {framework_root}")
+            print(f"   MacEff root resolved to: {maceff_root}")
+            print(f"   Fix: Set MACEFF_ROOT_DIR to your MacEff installation")
             return 1
 
         claude_dir = Path.cwd() / ".claude"
@@ -757,18 +750,25 @@ def cmd_framework_install(args: argparse.Namespace) -> int:
             print(f"\n✅ Hooks-only installation complete")
             return 0
 
-        # Install commands (symlink maceff_*.md files)
+        # Install commands (symlink maceff*/ namespace directories)
         print("\n📦 Installing commands...")
         commands_src = framework_root / "commands"
         if commands_src.exists():
             commands_dir.mkdir(parents=True, exist_ok=True)
-            for cmd_file in commands_src.glob("maceff_*.md"):
-                target = commands_dir / cmd_file.name
-                if target.exists() or target.is_symlink():
-                    target.unlink()
-                target.symlink_to(cmd_file)
-                installed_count["commands"] += 1
-                print(f"   ✓ {cmd_file.name}")
+            for cmd_ns in commands_src.glob("maceff*/"):
+                if cmd_ns.is_dir():
+                    target = commands_dir / cmd_ns.name
+                    if target.exists() or target.is_symlink():
+                        if target.is_symlink():
+                            target.unlink()
+                        else:
+                            import shutil
+                            shutil.rmtree(target)
+                    target.symlink_to(cmd_ns)
+                    # Count .md files in namespace for reporting
+                    md_count = sum(1 for _ in cmd_ns.rglob("*.md"))
+                    installed_count["commands"] += md_count
+                    print(f"   ✓ {cmd_ns.name}/ ({md_count} commands)")
         else:
             print(f"   No commands directory at {commands_src}")
 
