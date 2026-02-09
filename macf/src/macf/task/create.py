@@ -17,6 +17,7 @@ from typing import Optional, Generator
 
 from .models import MacfTaskMetaData
 from .reader import TaskReader
+from ..utils.paths import find_agent_home
 
 
 @contextmanager
@@ -71,7 +72,8 @@ SENTINEL_TASK_ID = "000"
 
 def compose_subject(task_id: str, task_type: str, title: str,
                     parent_id: Optional[str] = None, status: str = "pending",
-                    plan_ca_ref: Optional[str] = None) -> str:
+                    plan_ca_ref: Optional[str] = None,
+                    custom: Optional[dict] = None) -> str:
     """Compose subject from components with proper ANSI formatting.
 
     Args:
@@ -111,7 +113,16 @@ def compose_subject(task_id: str, task_type: str, title: str,
             "BUG": "🐛 BUG:",
             "TASK": "🔧",  # Generic task with wrench emoji
         }
-        type_part = type_map.get(task_type, "")
+        # GH_ISSUE has special format: 🐙 GH/owner/repo#N [label]: title
+        if task_type == "GH_ISSUE" and custom:
+            owner = custom.get("gh_owner", "?")
+            repo = custom.get("gh_repo", "?")
+            issue_num = custom.get("gh_issue_number", "?")
+            labels = custom.get("gh_labels", [])
+            label_str = f" [{labels[0]}]" if labels else ""
+            type_part = f"🐙 GH/{owner}/{repo}#{issue_num}{label_str}:"
+        else:
+            type_part = type_map.get(task_type, "")
 
     return f"{id_part}{parent_part} {type_part} {title}"
 
@@ -187,25 +198,6 @@ def _sanitize_title(title: str) -> str:
     # Remove leading/trailing underscores
     return sanitized.strip('_')
 
-
-def _get_agent_root() -> Path:
-    """Get agent root directory from MACF_AGENT_ROOT or detect from cwd."""
-    env_root = os.environ.get("MACF_AGENT_ROOT")
-    if env_root:
-        return Path(env_root)
-
-    # Detect from cwd - look for agent/ directory
-    cwd = Path.cwd()
-    if (cwd / "agent").exists():
-        return cwd
-
-    # Check parent directories
-    for parent in cwd.parents:
-        if (parent / "agent").exists():
-            return parent
-
-    # Default to cwd
-    return cwd
 
 
 def _get_next_task_id(session_uuid: Optional[str] = None) -> int:
@@ -344,7 +336,7 @@ def create_mission(
 
     # Get agent root
     if agent_root is None:
-        agent_root = _get_agent_root()
+        agent_root = find_agent_home()
 
     # Get breadcrumb and parse cycle
     breadcrumb = get_breadcrumb()
@@ -462,7 +454,7 @@ def create_experiment(
 
     # Get agent root
     if agent_root is None:
-        agent_root = _get_agent_root()
+        agent_root = find_agent_home()
 
     # Get breadcrumb and parse cycle
     breadcrumb = get_breadcrumb()
@@ -578,7 +570,7 @@ def create_detour(
 
     # Get agent root
     if agent_root is None:
-        agent_root = _get_agent_root()
+        agent_root = find_agent_home()
 
     # Get breadcrumb and parse cycle
     breadcrumb = get_breadcrumb()
@@ -793,6 +785,99 @@ def create_bug(
     subject = compose_subject(str(task_id), "BUG", title, parent_id=effective_parent_id)
 
     # Create task file
+    _create_task_file(task_id, subject, description)
+
+    return CreateResult(
+        task_id=task_id,
+        subject=subject,
+        mtmd=mtmd
+    )
+
+
+def create_gh_issue(
+    issue_url: str,
+    parent_id: Optional[str] = None,
+) -> CreateResult:
+    """
+    Create GH_ISSUE task by auto-fetching metadata from GitHub.
+
+    Parses issue URL, calls `gh issue view --json` to fetch title, labels, state,
+    and creates a task with rich GitHub metadata in custom fields.
+
+    Args:
+        issue_url: GitHub issue URL (https://github.com/owner/repo/issues/N)
+        parent_id: Optional parent task ID
+
+    Returns:
+        CreateResult with task_id and mtmd
+
+    Raises:
+        ValueError: If URL can't be parsed or gh CLI fails
+    """
+    import subprocess as _subprocess
+
+    # Parse URL: https://github.com/owner/repo/issues/N
+    url_match = re.match(r'https?://github\.com/([^/]+)/([^/]+)/issues/(\d+)', issue_url)
+    if not url_match:
+        raise ValueError(f"Cannot parse GitHub issue URL: {issue_url}\n"
+                         f"Expected: https://github.com/owner/repo/issues/N")
+    owner, repo, issue_number = url_match.group(1), url_match.group(2), int(url_match.group(3))
+
+    # Fetch issue metadata via gh CLI
+    gh_result = _subprocess.run(
+        ["gh", "issue", "view", str(issue_number),
+         "--repo", f"{owner}/{repo}",
+         "--json", "title,labels,state,url"],
+        capture_output=True, text=True, timeout=15
+    )
+    if gh_result.returncode != 0:
+        raise ValueError(f"gh issue view failed: {gh_result.stderr.strip()}")
+
+    import json as _json
+    gh_data = _json.loads(gh_result.stdout)
+    title = gh_data["title"]
+    labels = [label["name"] for label in gh_data.get("labels", [])]
+    state = gh_data.get("state", "OPEN")
+    url = gh_data.get("url", issue_url)
+
+    from ..utils.breadcrumbs import get_breadcrumb, parse_breadcrumb
+
+    breadcrumb = get_breadcrumb()
+    parsed = parse_breadcrumb(breadcrumb)
+    cycle = parsed['cycle'] if parsed else 1
+
+    task_id = _get_next_task_id()
+    effective_parent_id = parent_id if parent_id else SENTINEL_TASK_ID
+
+    # GitHub metadata stored in custom fields
+    custom = {
+        "gh_owner": owner,
+        "gh_repo": repo,
+        "gh_issue_number": issue_number,
+        "gh_labels": labels,
+        "gh_state": state,
+        "gh_url": url,
+    }
+
+    mtmd = MacfTaskMetaData(
+        version="1.0",
+        creation_breadcrumb=breadcrumb,
+        created_cycle=cycle,
+        created_by="PA",
+        task_type="GH_ISSUE",
+        title=title,
+        parent_id=effective_parent_id,
+        plan_ca_ref=issue_url,
+        custom=custom,
+    )
+
+    description = _generate_mtmd_block(mtmd)
+
+    subject = compose_subject(
+        str(task_id), "GH_ISSUE", title,
+        parent_id=effective_parent_id, custom=custom
+    )
+
     _create_task_file(task_id, subject, description)
 
     return CreateResult(
