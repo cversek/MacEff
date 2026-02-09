@@ -18,6 +18,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Tuple
 
+from ..utils.paths import find_agent_home
+
 from .reader import TaskReader, update_task_file
 from .models import MacfTask
 
@@ -49,20 +51,9 @@ def get_archive_dir() -> Path:
     """
     Get the task archives directory.
 
-    Uses MACF_AGENT_ROOT if set, otherwise falls back to cwd.
+    Uses find_agent_home() canonical path resolution.
     """
-    agent_root = os.environ.get("MACF_AGENT_ROOT")
-    if agent_root:
-        return Path(agent_root) / "agent" / "public" / "task_archives"
-
-    # Fall back to cwd-based detection
-    cwd = Path.cwd()
-    # Look for agent/public structure
-    if (cwd / "agent" / "public").exists():
-        return cwd / "agent" / "public" / "task_archives"
-
-    # Last resort: use home directory
-    return Path.home() / ".macf" / "task_archives"
+    return find_agent_home() / "agent" / "public" / "task_archives"
 
 
 def sanitize_filename(text: str, max_length: int = 50) -> str:
