@@ -4007,6 +4007,51 @@ def cmd_task_create_bug(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_task_create_gh_issue(args: argparse.Namespace) -> int:
+    """Create GH_ISSUE task by auto-fetching from GitHub."""
+    from .task.create import create_gh_issue
+
+    parent_id = None
+    if args.parent:
+        parent_id = args.parent.lstrip('#')
+
+    try:
+        result = create_gh_issue(
+            issue_url=args.issue_url,
+            parent_id=parent_id,
+        )
+
+        if args.json:
+            output = {
+                "task_id": result.task_id,
+                "subject": result.subject,
+                "mtmd": {
+                    "version": result.mtmd.version,
+                    "creation_breadcrumb": result.mtmd.creation_breadcrumb,
+                    "created_cycle": result.mtmd.created_cycle,
+                    "created_by": result.mtmd.created_by,
+                    "parent_id": result.mtmd.parent_id,
+                    "custom": result.mtmd.custom,
+                }
+            }
+            print(json.dumps(output, indent=2))
+        else:
+            custom = result.mtmd.custom
+            labels = custom.get("gh_labels", [])
+            print(f"✅ Created GH_ISSUE task #{result.task_id}")
+            print(f"🏷️  Subject: {result.subject}")
+            if labels:
+                print(f"🏷️  Labels: {', '.join(labels)}")
+            print(f"🔗 {custom.get('gh_url', args.issue_url)}")
+            if parent_id:
+                print(f"📎 Parent: #{parent_id}")
+
+        return 0
+    except Exception as e:
+        print(f"❌ Failed to create GH_ISSUE: {e}")
+        return 1
+
+
 def cmd_task_create_deleg(args: argparse.Namespace) -> int:
     """Create DELEG_PLAN task for delegation work."""
     from .task.create import create_deleg
@@ -4529,6 +4574,97 @@ def cmd_task_unblocked_by(args: argparse.Namespace) -> int:
     return 0
 
 
+def _gh_issue_closeout(task_id: int, mtmd, args, breadcrumb: str) -> None:
+    """Post close-out comment and close GitHub issue.
+
+    The --report is the agent's conscious, professional contribution — passed
+    through as the comment body. Automation adds structured metadata (commits,
+    verification) and a calling card footer for agent traceability.
+
+    Failures are warnings, not errors — the task is already marked complete.
+    """
+    import subprocess as _subprocess
+
+    custom = mtmd.custom
+    gh_owner = custom.get("gh_owner")
+    gh_repo = custom.get("gh_repo")
+    gh_issue_number = custom.get("gh_issue_number")
+
+    if not (gh_owner and gh_repo and gh_issue_number):
+        print("   ⚠️  Missing GitHub metadata — skipping GitHub closeout")
+        return
+
+    # Resolve agent identity for calling card
+    try:
+        from .utils.identity import get_agent_identity
+        agent_name = get_agent_identity()
+    except Exception:
+        agent_name = "unknown"
+
+    repo_slug = f"{gh_owner}/{gh_repo}"
+
+    # Compose close-out comment:
+    # - Report body (agent's conscious contribution)
+    # - Structured commits and verification
+    # - Calling card footer
+    comment_lines = ["## Close-out Report", ""]
+    comment_lines.append(args.report)
+
+    if args.commit:
+        comment_lines.append("")
+        comment_lines.append("**Commits:**")
+        for c in args.commit:
+            comment_lines.append(f"- [`{c[:8]}`](https://github.com/{repo_slug}/commit/{c})")
+
+    if args.verified:
+        comment_lines.append("")
+        comment_lines.append(f"**Verification:** {args.verified}")
+
+    comment_lines.append("")
+    comment_lines.append("---")
+    comment_lines.append(f"*[{agent_name}: task#{task_id} {breadcrumb}]*")
+
+    comment_body = "\n".join(comment_lines)
+
+    # Post comment
+    try:
+        comment_result = _subprocess.run(
+            ["gh", "issue", "comment", str(gh_issue_number),
+             "--repo", repo_slug,
+             "--body", comment_body],
+            capture_output=True, text=True, timeout=15
+        )
+        if comment_result.returncode == 0:
+            print(f"   📝 Close-out comment posted to {repo_slug}#{gh_issue_number}")
+        else:
+            print(f"   ⚠️  Failed to post comment: {comment_result.stderr.strip()}")
+    except FileNotFoundError:
+        print("   ⚠️  gh CLI not found — skipping GitHub comment")
+    except _subprocess.TimeoutExpired:
+        print("   ⚠️  gh CLI timed out — skipping GitHub comment")
+
+    # Close issue
+    try:
+        close_result = _subprocess.run(
+            ["gh", "issue", "close", str(gh_issue_number),
+             "--repo", repo_slug,
+             "--reason", "completed"],
+            capture_output=True, text=True, timeout=15
+        )
+        if close_result.returncode == 0:
+            print(f"   🔒 Issue {repo_slug}#{gh_issue_number} closed")
+        else:
+            stderr = close_result.stderr.strip()
+            if "already closed" in stderr.lower():
+                print(f"   ℹ️  Issue {repo_slug}#{gh_issue_number} already closed")
+            else:
+                print(f"   ⚠️  Failed to close issue: {stderr}")
+    except FileNotFoundError:
+        print("   ⚠️  gh CLI not found — skipping issue close")
+    except _subprocess.TimeoutExpired:
+        print("   ⚠️  gh CLI timed out — skipping issue close")
+
+
 def cmd_task_complete(args: argparse.Namespace) -> int:
     """Mark task complete with mandatory report, breadcrumb, and status change."""
     from .task import TaskReader, update_task_file
@@ -4568,6 +4704,24 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
         print(f"⚠️  Task #{task_id} is already completed")
         return 1
 
+    # Type-specific completion gate: GH_ISSUE
+    task_type = getattr(task.mtmd, 'task_type', None) if task.mtmd else None
+    if task_type == "GH_ISSUE":
+        missing = []
+        if not args.commit:
+            missing.append("--commit HASH")
+        if not args.verified:
+            missing.append('--verified "description of verification method"')
+        if missing:
+            print(f"GH_ISSUE #{task_id} requires structured closeout before completion.")
+            print()
+            print("To understand requirements, read the \"GH_ISSUE Closeout\" section:")
+            print("  macf_tools policy navigate task_management")
+            print('  → Look for: "How does GH_ISSUE closeout work?"')
+            print()
+            print(f"Missing: {', '.join(missing)}")
+            return 1
+
     # Generate breadcrumb
     breadcrumb = get_breadcrumb()
 
@@ -4595,6 +4749,13 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
             )]
         )
 
+    # Store GH_ISSUE closeout fields in MTMD custom dict
+    if task_type == "GH_ISSUE" and (args.commit or args.verified):
+        if args.commit:
+            new_mtmd.custom["closeout_commits"] = args.commit
+        if args.verified:
+            new_mtmd.custom["closeout_verified"] = args.verified
+
     # Embed updated MTMD in description
     new_description = task.description_with_updated_mtmd(new_mtmd)
 
@@ -4608,6 +4769,15 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
         print(f"✅ Task #{task_id} marked complete")
         print(f"   Breadcrumb: {breadcrumb}")
         print(f"   Report: {args.report[:80]}{'...' if len(args.report) > 80 else ''}")
+        if task_type == "GH_ISSUE":
+            if args.commit:
+                print(f"   Commits: {', '.join(args.commit)}")
+            if args.verified:
+                print(f"   Verified: {args.verified[:80]}{'...' if len(args.verified) > 80 else ''}")
+
+            # GitHub integration: post close-out comment and close issue
+            _gh_issue_closeout(task_id, new_mtmd, args, breadcrumb)
+
         return 0
     else:
         print(f"❌ Failed to update task #{task_id}")
@@ -5336,6 +5506,14 @@ def _build_parser() -> argparse.ArgumentParser:
                                         help="output as JSON")
     task_create_bug_parser.set_defaults(func=cmd_task_create_bug)
 
+    # task create gh_issue
+    task_create_gh_issue_parser = task_create_sub.add_parser("gh_issue", help="create task from GitHub issue (auto-fetches metadata)")
+    task_create_gh_issue_parser.add_argument("issue_url", help="GitHub issue URL (https://github.com/owner/repo/issues/N)")
+    task_create_gh_issue_parser.add_argument("--parent", default="000", help="parent task ID (default: 000)")
+    task_create_gh_issue_parser.add_argument("--json", dest="json", action="store_true",
+                                             help="output as JSON")
+    task_create_gh_issue_parser.set_defaults(func=cmd_task_create_gh_issue)
+
     # task create deleg
     task_create_deleg_parser = task_create_sub.add_parser("deleg", help="create DELEG_PLAN task for delegation")
     task_create_deleg_parser.add_argument("--parent", default="000", help="parent task ID (default: 000)")
@@ -5421,6 +5599,10 @@ def _build_parser() -> argparse.ArgumentParser:
     task_complete_parser.add_argument("task_id", help="task ID to complete (e.g., #67 or 67)")
     task_complete_parser.add_argument("--report", "-r",
                                       help="completion report (work done, difficulties, future work, git commit status)")
+    task_complete_parser.add_argument("--commit", action="append", default=[],
+                                      help="commit hash(es) that fix the issue (repeatable, required for GH_ISSUE)")
+    task_complete_parser.add_argument("--verified",
+                                      help="verification method description (required for GH_ISSUE)")
     task_complete_parser.set_defaults(func=cmd_task_complete)
 
     # task block - add blocking relationship
