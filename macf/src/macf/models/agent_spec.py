@@ -223,11 +223,11 @@ class AgentsConfig(BaseModel):
           sparrow:
             username: pa_sparrow
             personality: ../custom/agents/sparrow_personality.md
-            subagents: [devops_eng, test_eng]
+            subagents: [DevOpsEng, TestEng]
             assigned_projects: [Orchard]
 
         subagents:
-          devops_eng:
+          DevOpsEng:
             role: Infrastructure and deployment specialist
             tool_access: Read, Write, Edit, Bash, Glob, Grep
 

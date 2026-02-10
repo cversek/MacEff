@@ -187,12 +187,12 @@ agent/public/dev_scripts/2025-10-21_114730_test_yaml_parsing.py
 
 ### ❌ Violation: SA script in PA workspace
 ```
-agent/public/dev_scripts/devops_eng_validation.py  # SA work in PA space
+agent/public/dev_scripts/DevOpsEng_validation.py  # SA work in PA space
 ```
 
 ### ✅ Correct: SA script in delegation trail
 ```
-agent/subagents/devops_eng/public/delegation_trails/2025-10-21_112620_Phase1B1_Pydantic_Models/dev_scripts/2025-10-21_114730_validation.py
+agent/subagents/DevOpsEng/public/delegation_trails/2025-10-21_112620_Phase1B1_Pydantic_Models/dev_scripts/2025-10-21_114730_validation.py
 ```
 
 ---
