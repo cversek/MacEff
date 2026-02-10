@@ -29,7 +29,7 @@ from pydantic import ValidationError
 # Add macf package to path for model imports
 sys.path.insert(0, '/opt/macf_tools/src')
 
-from macf.models.agent_spec import AgentsConfig, AgentSpec, SubagentSpec, ClaudeCodeConfig
+from macf.models.agent_spec import AgentsConfig, AgentSpec, SubagentSpec, ClaudeCodeConfig, ConsciousnessArtifactsConfig
 from macf.models.project_spec import ProjectsConfig, ProjectSpec
 
 
@@ -1107,11 +1107,18 @@ def main() -> int:
             # Create Subagent workspaces
             if agent_spec.subagents:
                 for sa_name in agent_spec.subagents:
-                    if sa_name not in agents_config.subagents:
-                        log(f"WARNING: Subagent '{sa_name}' not defined in subagents section")
-                        continue
-
-                    sa_spec = agents_config.subagents[sa_name]
+                    if sa_name in agents_config.subagents:
+                        sa_spec = agents_config.subagents[sa_name]
+                    else:
+                        # Framework-provided subagent: create workspace using defaults
+                        log(f"Subagent '{sa_name}' not in subagents section, using defaults")
+                        default_ca = defaults_dict.get('consciousness_artifacts') if defaults_dict else None
+                        ca_config = ConsciousnessArtifactsConfig(**default_ca) if default_ca else None
+                        sa_spec = SubagentSpec(
+                            role="Framework-provided specialist",
+                            tool_access="Read, Write, Edit, Bash, Glob, Grep",
+                            consciousness_artifacts=ca_config
+                        )
                     log(f"Creating workspace: {agent_spec.username}/{sa_name}")
                     create_subagent_workspace(agent_spec.username, sa_name, sa_spec)
 
