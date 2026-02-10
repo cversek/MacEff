@@ -14,6 +14,7 @@ Design principles:
 import sys
 import os
 import json
+import shutil
 import subprocess
 import pwd
 import grp
@@ -479,10 +480,16 @@ def create_subagent_workspace(username: str, sa_name: str, sa_spec: SubagentSpec
     sa_root.mkdir(mode=0o555, exist_ok=True)
     run_command(['chown', 'root:root', str(sa_root)])
 
-    # Create SUBAGENT_DEF.md placeholder
+    # Populate SUBAGENT_DEF.md from framework definition if available
     sa_def = sa_root / 'SUBAGENT_DEF.md'
     if not sa_def.exists():
-        sa_def.touch(mode=0o644)
+        framework_def = FRAMEWORK_ROOT / 'subagents' / f'{sa_name}.md'
+        if framework_def.exists():
+            shutil.copy2(str(framework_def), str(sa_def))
+            log(f"Populated SUBAGENT_DEF.md from framework: {framework_def.name}")
+        else:
+            sa_def.touch(mode=0o644)
+            log(f"WARNING: No framework definition found for '{sa_name}', created empty SUBAGENT_DEF.md")
         run_command(['chown', 'root:root', str(sa_def)])
 
     # Create private and public directories
@@ -1110,6 +1117,14 @@ def main() -> int:
 
                 # Create symlinks to SUBAGENT_DEF.md
                 create_subagent_definition_symlinks(agent_spec.username, agent_spec.subagents)
+
+                # Validate SUBAGENT_DEF.md files are non-empty (catches misconfigured names)
+                home = Path(f'/home/{agent_spec.username}')
+                for sa_name in agent_spec.subagents:
+                    sa_def = home / 'agent' / 'subagents' / sa_name / 'SUBAGENT_DEF.md'
+                    if sa_def.exists() and sa_def.stat().st_size == 0:
+                        log(f"WARNING: {sa_def} is empty - delegation to '{sa_name}' will fail. "
+                            f"Check that framework/subagents/{sa_name}.md exists.")
 
         # Create project workspaces
         if projects_config:

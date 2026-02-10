@@ -5,7 +5,7 @@ agents:
   testpa:
     username: pa_testpa
     personality: ../test_configs/test_personality.md
-    subagents: [devops_eng, test_eng]
+    subagents: [DevOpsEng, TestEng]
     assigned_projects: [TestProject]
     consciousness_artifacts:
       private: [checkpoints, reflections, learnings]
@@ -14,13 +14,13 @@ agents:
       enabled: [session_start, stop]
 
 subagents:
-  devops_eng:
+  DevOpsEng:
     role: Infrastructure and deployment specialist
     tool_access: "Read, Write, Edit, Bash, Glob, Grep"
     consciousness_artifacts:
       public: [delegation_trails]
 
-  test_eng:
+  TestEng:
     role: Test-driven development and quality assurance
     tool_access: "Read, Write, Edit, Bash"
     consciousness_artifacts:

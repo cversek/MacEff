@@ -842,7 +842,7 @@ Files created:
 
 # SA (TestEng) in delegation:
 Files created:
-- agent/subagents/test_eng/public/delegation_trails/breadcrumb_tests/tests/test_breadcrumb.py (124 lines)
+- agent/subagents/TestEng/public/delegation_trails/breadcrumb_tests/tests/test_breadcrumb.py (124 lines)
 ```
 
 ### 6.2 Testing Integration

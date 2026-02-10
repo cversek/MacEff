@@ -223,11 +223,11 @@ class AgentsConfig(BaseModel):
           manny:
             username: pa_manny
             personality: ../custom/agents/manny_personality.md
-            subagents: [devops_eng, test_eng]
+            subagents: [DevOpsEng, TestEng]
             assigned_projects: [NeuroVEP]
 
         subagents:
-          devops_eng:
+          DevOpsEng:
             role: Infrastructure and deployment specialist
             tool_access: Read, Write, Edit, Bash, Glob, Grep
 

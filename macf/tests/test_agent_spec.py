@@ -37,7 +37,7 @@ def test_agent_spec_valid_full():
     agent = AgentSpec(
         username="pa_builder",
         personality="../custom/agents/builder.md",
-        subagents=["devops_eng", "test_eng"],
+        subagents=["DevOpsEng", "TestEng"],
         assigned_projects=["MacEff", "TestProject"],
         consciousness_artifacts=ConsciousnessArtifactsConfig(
             private=["checkpoints", "reflections"],
@@ -47,7 +47,7 @@ def test_agent_spec_valid_full():
     )
 
     assert len(agent.subagents) == 2
-    assert "devops_eng" in agent.subagents
+    assert "DevOpsEng" in agent.subagents
     assert agent.consciousness_artifacts.private == ["checkpoints", "reflections"]
 
 
@@ -99,12 +99,12 @@ def test_agents_config_valid():
             "manny": AgentSpec(
                 username="pa_manny",
                 personality="../custom/agents/manny.md",
-                subagents=["devops_eng"],
+                subagents=["DevOpsEng"],
                 assigned_projects=["NeuroVEP"]
             )
         },
         subagents={
-            "devops_eng": SubagentSpec(
+            "DevOpsEng": SubagentSpec(
                 role="Infrastructure specialist",
                 tool_access="Read, Write, Bash"
             )
@@ -112,7 +112,7 @@ def test_agents_config_valid():
     )
 
     assert "manny" in config.agents
-    assert "devops_eng" in config.subagents
+    assert "DevOpsEng" in config.subagents
     assert config.defaults is None
 
 
@@ -123,7 +123,7 @@ def test_agents_config_with_defaults():
             "manny": AgentSpec(username="pa_manny", personality="../agents/manny.md")
         },
         subagents={
-            "devops_eng": SubagentSpec(role="DevOps", tool_access="Read, Bash")
+            "DevOpsEng": SubagentSpec(role="DevOps", tool_access="Read, Bash")
         },
         defaults=DefaultsConfig(
             consciousness_artifacts=ConsciousnessArtifactsConfig(
@@ -143,7 +143,7 @@ def test_agents_config_missing_required_sections():
     with pytest.raises(ValidationError) as exc_info:
         AgentsConfig(
             subagents={
-                "devops_eng": SubagentSpec(role="DevOps", tool_access="Read")
+                "DevOpsEng": SubagentSpec(role="DevOps", tool_access="Read")
             }
         )
     assert "agents" in str(exc_info.value)
