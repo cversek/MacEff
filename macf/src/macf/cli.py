@@ -3914,8 +3914,13 @@ def cmd_task_create_phase(args: argparse.Namespace) -> int:
     plan = getattr(args, 'plan', None)
     plan_ca_ref = getattr(args, 'plan_ca_ref', None)
 
+    # Parse blocked-by IDs (strip # prefix)
+    blocked_by = None
+    if getattr(args, 'blocked_by', None):
+        blocked_by = [bid.lstrip('#') for bid in args.blocked_by]
+
     try:
-        result = create_phase(parent_id=parent_id, title=args.title, plan=plan, plan_ca_ref=plan_ca_ref)
+        result = create_phase(parent_id=parent_id, title=args.title, plan=plan, plan_ca_ref=plan_ca_ref, blocked_by=blocked_by)
 
         if args.json:
             # JSON output for automation
@@ -3936,6 +3941,8 @@ def cmd_task_create_phase(args: argparse.Namespace) -> int:
             print(f"✅ Created phase task #{result.task_id}")
             print(f"🏷️  Subject: {result.subject}")
             print(f"📎 Parent: #{parent_id}")
+            if blocked_by:
+                print(f"🚧 Blocked by: {', '.join(f'#{b}' for b in blocked_by)}")
             print()
             print("Next steps:")
             print(f"1. Run `macf_tools task tree #{parent_id}` to see hierarchy")
@@ -5490,6 +5497,8 @@ def _build_parser() -> argparse.ArgumentParser:
     phase_plan_group = task_create_phase_parser.add_mutually_exclusive_group(required=True)
     phase_plan_group.add_argument("--plan", dest="plan", help="inline plan description")
     phase_plan_group.add_argument("--plan-ca-ref", dest="plan_ca_ref", help="path to plan CA")
+    task_create_phase_parser.add_argument("--blocked-by", dest="blocked_by", nargs="+",
+                                          help="task IDs that block this phase (e.g., #50 51)")
     task_create_phase_parser.add_argument("--json", dest="json", action="store_true",
                                           help="output as JSON")
     task_create_phase_parser.set_defaults(func=cmd_task_create_phase)
