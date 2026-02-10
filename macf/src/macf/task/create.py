@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Generator
+from typing import List, Optional, Generator
 
 from .models import MacfTaskMetaData
 from .reader import TaskReader
@@ -242,7 +242,8 @@ def _create_task_file(
     subject: str,
     description: str,
     status: str = "pending",
-    session_uuid: Optional[str] = None
+    session_uuid: Optional[str] = None,
+    blocked_by: Optional[List[str]] = None
 ) -> Path:
     """Create task JSON file directly.
 
@@ -280,7 +281,7 @@ def _create_task_file(
         "activeForm": active_form,  # Required for CC UI visibility
         "status": status,
         "blocks": [],
-        "blockedBy": []
+        "blockedBy": blocked_by or []
     }
 
     # Use protection context manager for directory operations
@@ -663,7 +664,8 @@ def create_phase(
     parent_id: int,
     title: str,
     plan: Optional[str] = None,
-    plan_ca_ref: Optional[str] = None
+    plan_ca_ref: Optional[str] = None,
+    blocked_by: Optional[List[str]] = None
 ) -> CreateResult:
     """
     Create phase task under parent.
@@ -713,7 +715,7 @@ def create_phase(
                               parent_id=str(parent_id), plan_ca_ref=plan_ca_ref)
 
     # Create task file
-    _create_task_file(task_id, subject, description)
+    _create_task_file(task_id, subject, description, blocked_by=blocked_by)
 
     return CreateResult(
         task_id=task_id,
