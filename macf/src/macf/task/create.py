@@ -20,6 +20,32 @@ from .reader import TaskReader
 from ..utils.paths import find_agent_home
 
 
+def validate_plan_ca_ref(plan_ca_ref: Optional[str]) -> None:
+    """Reject CC native plan paths that are not MacEff-compliant CAs.
+
+    CC plan files (~/.claude/plans/*.md) are ephemeral and lack MacEff metadata
+    (breadcrumbs, timestamps, CA type headers). Tasks referencing them create
+    broken forensic trails after compaction.
+
+    Raises:
+        ValueError: If plan_ca_ref matches CC native plan path pattern
+    """
+    if plan_ca_ref is None:
+        return
+
+    # Expand ~ and resolve to catch both literal and expanded forms
+    expanded = str(Path(plan_ca_ref).expanduser())
+    home = str(Path.home())
+    cc_plans_dir = os.path.join(home, '.claude', 'plans')
+
+    if expanded.startswith(cc_plans_dir) or '/.claude/plans/' in plan_ca_ref:
+        raise ValueError(
+            "CC native plans (~/.claude/plans/) are not MacEff-compliant CAs.\n"
+            "Transfer plan content to a compliant CA under ~/agent/public/roadmaps/.\n\n"
+            "For guidance: macf_tools policy navigate roadmaps_drafting"
+        )
+
+
 @contextmanager
 def _unprotect_for_creation(dir_path: Path) -> Generator[None, None, None]:
     """Context manager to temporarily unprotect task directory for file creation.
@@ -683,6 +709,7 @@ def create_phase(
     Returns:
         CreateResult with task_id and mtmd
     """
+    validate_plan_ca_ref(plan_ca_ref)
     from ..utils.breadcrumbs import get_breadcrumb, parse_breadcrumb
 
     # Get breadcrumb and parse cycle
@@ -750,6 +777,7 @@ def create_bug(
     Raises:
         ValueError: If neither or both of plan and plan_ca_ref are provided
     """
+    validate_plan_ca_ref(plan_ca_ref)
     # Enforce XOR: exactly one of plan or plan_ca_ref required
     if bool(plan) == bool(plan_ca_ref):
         raise ValueError("BUG task requires exactly one of plan or plan_ca_ref (XOR)")
@@ -910,6 +938,7 @@ def create_deleg(
     Raises:
         ValueError: If neither or both of plan and plan_ca_ref are provided
     """
+    validate_plan_ca_ref(plan_ca_ref)
     # Enforce XOR: exactly one of plan or plan_ca_ref required
     if bool(plan) == bool(plan_ca_ref):
         raise ValueError("DELEG_PLAN task requires exactly one of plan or plan_ca_ref (XOR)")
@@ -978,6 +1007,7 @@ def create_task(
     Returns:
         CreateResult with task_id and mtmd
     """
+    validate_plan_ca_ref(plan_ca_ref)
     from ..utils.breadcrumbs import get_breadcrumb, parse_breadcrumb
 
     # Get breadcrumb and parse cycle
