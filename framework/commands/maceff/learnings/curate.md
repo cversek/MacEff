@@ -37,6 +37,25 @@ macf_tools policy read scholarship
 
 ---
 
+## Pre-Curation Discovery (REQUIRED for "multiple" mode)
+
+Before writing learnings, survey the existing knowledge web to identify cross-link targets:
+
+1. **List existing learnings**: `ls agent/private/learnings/` (scan filenames for topic clusters)
+2. **Group by topic**: Identify thematic clusters from filenames or quick content scan
+3. **Identify cross-link targets**: For each new learning, which existing learnings relate?
+4. **Note back-link candidates**: Which existing learnings should receive new `## Cross-References` entries pointing to the new learning?
+
+**For single curation** (topic hint mode): A targeted search suffices:
+```bash
+# Search existing learnings for the topic
+grep -ri "topic_keyword" agent/private/learnings/
+```
+
+**Why**: Cross-references are edges in the knowledge graph. Without pre-curation discovery, agents either skip cross-links (degrading the web) or guess at them (creating broken references). Discovery before writing makes good scholarship the default.
+
+---
+
 ## Semantic Web Considerations
 
 **Before writing, consider discovery contexts**:
@@ -52,10 +71,12 @@ macf_tools policy read scholarship
 ## Execution
 
 1. Read policies per PEP above
-2. Generate breadcrumb: `macf_tools breadcrumb`
-3. Apply formats discovered from policy reading
-4. Write to location specified by learnings.md
-5. Create cross-links per scholarship.md patterns
+2. **Pre-curation discovery** per section above (REQUIRED for "multiple" mode)
+3. Generate breadcrumb: `macf_tools breadcrumb`
+4. Apply formats discovered from policy reading
+5. Write to location specified by learnings.md
+6. Create cross-links per scholarship.md patterns
+7. **Update existing learnings** with back-links where identified in step 2
 
 **Multiple mode**: Create separate files, cross-link related learnings
 

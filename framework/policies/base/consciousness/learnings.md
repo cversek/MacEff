@@ -67,6 +67,12 @@ Agents accumulate reusable wisdom through learnings - compact, cross-referenced 
 - Build knowledge web?
 - Navigation patterns?
 
+3.3 Pre-Curation Discovery
+- What existing learnings relate to the topic I'm about to curate?
+- What topic clusters exist in the knowledge web?
+- Which learnings might need bidirectional cross-link updates?
+- How does discovery differ for single vs batch curation?
+
 4 Knowledge Web Architecture
 - What's the knowledge web?
 - How to navigate it?
@@ -254,6 +260,27 @@ YYYY-MM-DD_HHMMSS_{topic}_learning.md
 - Create topic clusters
 - Track evolution (learning → policy)
 - Enable discovery paths
+
+### 3.3 Pre-Curation Discovery
+
+Before writing new learnings, survey the existing knowledge web to identify cross-link targets. Discovery depth scales with curation mode:
+
+**Batch Curation** ("multiple" mode — REQUIRED):
+1. List all files in `agent/private/learnings/`
+2. Group by topic cluster (from filenames or quick content scan)
+3. Identify potential cross-link targets for each new learning
+4. Note existing learnings that should receive back-links (bidirectional updates)
+
+**Single Curation** (topic hint mode — targeted):
+1. Search existing learnings for the topic keyword: `grep -ri "topic" agent/private/learnings/`
+2. Identify 0-3 most relevant cross-link targets
+3. Check if any existing learning needs a back-link update
+
+**Why Discovery Matters**:
+- Cross-references are edges in the knowledge graph — without them, learnings are isolated nodes
+- Back-links ensure bidirectional discovery (A references B, B references A)
+- Topic cluster awareness prevents duplicate learnings on the same insight
+- Discovery before writing makes good scholarship the default, not an afterthought
 
 ## 4. Knowledge Web Architecture
 
