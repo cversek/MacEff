@@ -480,17 +480,16 @@ def create_subagent_workspace(username: str, sa_name: str, sa_spec: SubagentSpec
     sa_root.mkdir(mode=0o555, exist_ok=True)
     run_command(['chown', 'root:root', str(sa_root)])
 
-    # Populate SUBAGENT_DEF.md from framework definition if available
+    # Always overwrite SUBAGENT_DEF.md from framework/deployment definition
     sa_def = sa_root / 'SUBAGENT_DEF.md'
-    if not sa_def.exists():
-        framework_def = FRAMEWORK_ROOT / 'subagents' / f'{sa_name}.md'
-        if framework_def.exists():
-            shutil.copy2(str(framework_def), str(sa_def))
-            log(f"Populated SUBAGENT_DEF.md from framework: {framework_def.name}")
-        else:
-            sa_def.touch(mode=0o644)
-            log(f"WARNING: No framework definition found for '{sa_name}', created empty SUBAGENT_DEF.md")
-        run_command(['chown', 'root:root', str(sa_def)])
+    framework_def = FRAMEWORK_ROOT / 'subagents' / f'{sa_name}.md'
+    if framework_def.exists():
+        shutil.copy2(str(framework_def), str(sa_def))
+        log(f"Populated SUBAGENT_DEF.md from framework: {framework_def.name}")
+    elif not sa_def.exists():
+        sa_def.touch(mode=0o644)
+        log(f"WARNING: No framework definition found for '{sa_name}', created empty SUBAGENT_DEF.md")
+    run_command(['chown', 'root:root', str(sa_def)])
 
     # Create private and public directories
     private = sa_root / 'private'
