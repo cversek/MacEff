@@ -4895,6 +4895,155 @@ def cmd_task_metadata_validate(args: argparse.Namespace) -> int:
         return 0
 
 
+def cmd_proxy_start(args: argparse.Namespace) -> int:
+    """Start the API proxy."""
+    try:
+        from macf.proxy.server import is_proxy_running, run_proxy, start_proxy_daemon
+    except ImportError as e:
+        print("⚠️ Proxy requires aiohttp:")
+        print("   pip install aiohttp")
+        print(f"\nImport error: {e}")
+        return 1
+
+    if is_proxy_running():
+        print("⚠️  Proxy is already running")
+        print("   Use 'macf_tools proxy stop' to stop it first")
+        return 1
+
+    port = getattr(args, 'port', 8019)
+    daemonize = getattr(args, 'daemon', False)
+
+    try:
+        if daemonize:
+            pid = start_proxy_daemon(port=port)
+            print(f"✅ Proxy started (PID {pid}) on port {port}")
+            print(f"   Activate: ANTHROPIC_BASE_URL=http://localhost:{port} claude")
+            return 0
+        else:
+            print(f"Starting proxy on port {port}...", file=sys.stderr)
+            run_proxy(port=port)
+            return 0
+    except Exception as e:
+        print(f"❌ Error starting proxy: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_proxy_stop(args: argparse.Namespace) -> int:
+    """Stop the running proxy."""
+    try:
+        from macf.proxy.server import stop_proxy, is_proxy_running
+    except ImportError as e:
+        print(f"Import error: {e}")
+        return 1
+
+    if not is_proxy_running():
+        print("Proxy is not running")
+        return 0
+
+    try:
+        if stop_proxy():
+            print("✅ Proxy stopped")
+            return 0
+        else:
+            print("⚠️  Proxy was not running")
+            return 0
+    except Exception as e:
+        print(f"❌ Error stopping proxy: {e}")
+        return 1
+
+
+def cmd_proxy_status(args: argparse.Namespace) -> int:
+    """Show proxy status."""
+    try:
+        from macf.proxy.server import get_proxy_status
+    except ImportError as e:
+        print(f"Import error: {e}")
+        return 1
+
+    status = get_proxy_status()
+    json_output = getattr(args, 'json_output', False)
+
+    if json_output:
+        print(json.dumps(status, indent=2))
+    else:
+        running = status.get('running', False)
+        if running:
+            print(f"✅ Proxy running (PID {status['pid']}, port {status['port']})")
+            print(f"   Log: {status['log_path']}")
+            print(f"   Activate: ANTHROPIC_BASE_URL=http://localhost:{status['port']} claude")
+        else:
+            print("⭕ Proxy not running")
+            print("   Start: macf_tools proxy start --daemon")
+    return 0
+
+
+def cmd_proxy_stats(args: argparse.Namespace) -> int:
+    """Show aggregate token/cost statistics."""
+    try:
+        from macf.proxy.server import get_proxy_stats
+    except ImportError as e:
+        print(f"Import error: {e}")
+        return 1
+
+    stats = get_proxy_stats()
+    if "error" in stats:
+        print(f"⚠️  {stats['error']}")
+        print(f"   Expected at: {stats.get('log_path', 'unknown')}")
+        return 1
+
+    print(f"📊 API Proxy Statistics")
+    print(f"   Log: {stats['log_path']}")
+    print(f"   Requests: {stats['total_requests']}")
+    print(f"   Input tokens:  {stats['total_input_tokens']:,}")
+    print(f"   Output tokens: {stats['total_output_tokens']:,}")
+    print(f"   Cache read:    {stats['total_cache_read']:,}")
+    print(f"   Cache create:  {stats['total_cache_creation']:,}")
+    print(f"   Avg latency:   {stats['avg_latency_ms']}ms")
+    print(f"   Est. cost:     ${stats['estimated_cost_usd']:.4f}")
+    if stats.get('models'):
+        print(f"   Models: {stats['models']}")
+    return 0
+
+
+def cmd_proxy_log(args: argparse.Namespace) -> int:
+    """Show recent API call events."""
+    try:
+        from macf.proxy.server import get_recent_log
+    except ImportError as e:
+        print(f"Import error: {e}")
+        return 1
+
+    limit = getattr(args, 'limit', 10)
+    events = get_recent_log(limit=limit)
+
+    if not events:
+        print("No proxy events logged yet")
+        return 0
+
+    for event in events:
+        etype = event.get("type", "?")
+        ts = event.get("ts", 0)
+        ts_str = datetime.fromtimestamp(ts).strftime("%H:%M:%S") if ts else "?"
+
+        if etype == "api_request":
+            model = event.get("model", "?")
+            msgs = event.get("message_count", 0)
+            tools = event.get("tool_count", 0)
+            sys_chars = event.get("system_prompt_chars", 0)
+            print(f"  [{ts_str}] → REQ  model={model}  msgs={msgs}  tools={tools}  sys={sys_chars:,}ch")
+        elif etype == "api_response":
+            inp = event.get("input_tokens", 0)
+            out = event.get("output_tokens", 0)
+            lat = event.get("latency_ms", 0)
+            stop = event.get("stop_reason", "?")
+            cache = event.get("cache_read_input_tokens", 0)
+            print(f"  [{ts_str}] ← RESP in={inp:,}  out={out:,}  cache={cache:,}  {lat}ms  stop={stop}")
+        else:
+            print(f"  [{ts_str}] {json.dumps(event)}")
+
+    return 0
+
+
 def cmd_search_service_start(args: argparse.Namespace) -> int:
     """Start the search service daemon."""
     try:
@@ -5637,6 +5786,36 @@ def _build_parser() -> argparse.ArgumentParser:
     task_unblocked_by_parser.add_argument("task_id", help="task ID that was blocked (e.g., #60)")
     task_unblocked_by_parser.add_argument("blocker_id", help="task ID to remove as blocker (e.g., #26)")
     task_unblocked_by_parser.set_defaults(func=cmd_task_unblocked_by)
+
+    # Proxy commands
+    proxy_parser = sub.add_parser("proxy", help="API proxy for CC call interception")
+    proxy_sub = proxy_parser.add_subparsers(dest="proxy_cmd")
+
+    # proxy start
+    proxy_start_parser = proxy_sub.add_parser("start", help="start proxy daemon")
+    proxy_start_parser.add_argument("--daemon", "-d", action="store_true",
+                                    help="run in background (daemonize)")
+    proxy_start_parser.add_argument("--port", type=int, default=8019,
+                                    help="port to listen on (default: 8019)")
+    proxy_start_parser.set_defaults(func=cmd_proxy_start)
+
+    # proxy stop
+    proxy_sub.add_parser("stop", help="stop running proxy").set_defaults(func=cmd_proxy_stop)
+
+    # proxy status
+    proxy_status_parser = proxy_sub.add_parser("status", help="show proxy status")
+    proxy_status_parser.add_argument("--json", dest="json_output", action="store_true",
+                                     help="output as JSON")
+    proxy_status_parser.set_defaults(func=cmd_proxy_status)
+
+    # proxy stats
+    proxy_sub.add_parser("stats", help="show aggregate token/cost statistics").set_defaults(func=cmd_proxy_stats)
+
+    # proxy log
+    proxy_log_parser = proxy_sub.add_parser("log", help="show recent API call events")
+    proxy_log_parser.add_argument("--limit", "-n", type=int, default=10,
+                                  help="number of recent events (default: 10)")
+    proxy_log_parser.set_defaults(func=cmd_proxy_log)
 
     # Search service commands
     search_service_parser = sub.add_parser("search-service", help="search service daemon management")
