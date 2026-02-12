@@ -22,6 +22,9 @@ test = [
     "PyYAML>=6.0.0",
     "psutil>=5.9.0",  # For performance testing
 ]
+proxy = [
+    "aiohttp>=3.9.0",  # For API proxy streaming
+]
 recommend = [
     "sentence-transformers>=2.2.0",  # For semantic embeddings
     "lancedb>=0.26.0",               # For vector similarity and hybrid search
