@@ -64,6 +64,9 @@ Task management policy governs the use of Claude Code native Task* tools (TaskCr
 **5 Mandatory Reading Discipline**
 - When must I read CA references?
 - How does MTMD enforce this?
+- What note-taking discipline does the policy require during task execution?
+- When should I add notes to tasks?
+- What developments warrant task notes vs routine steps?
 
 **6 Completion Protocol**
 - How do I mark tasks complete?
@@ -464,6 +467,76 @@ macf_tools task archive #67   # → archived (with cascade)
 3. On completion → `macf_tools task complete #67 --report "..."`
 
 This is not optional - it's the **only way** the user maintains awareness of active work.
+
+### 5.4 Note-Taking Discipline During Task Execution
+
+**Requirement**: When working on tasks, add timestamped notes via `macf_tools task note` as significant developments occur.
+
+**CLI Command**:
+```bash
+macf_tools task note <task_id> "message"
+```
+
+**What Triggers a Note** (significant developments only):
+
+1. **Progress Milestones**: Partial completion of multi-step work
+   - "Phase 1 complete, moving to Phase 2"
+   - "Core implementation done, starting tests"
+   - "Research complete, beginning design"
+
+2. **Setbacks and Blockers**: Obstacles encountered during work
+   - "API test failing — investigating root cause"
+   - "Dependency version conflict blocking build"
+   - "Awaiting user clarification on requirement X"
+
+3. **Surprises and Discoveries**: Unexpected findings that change approach
+   - "Found that hook API is append-only — changes approach"
+   - "Discovered existing implementation in legacy code"
+   - "User requirement differs from initial understanding"
+
+4. **Key Decisions**: Important choices made during execution
+   - "Decided to scope code to experiment folder, not framework package"
+   - "Chose SQLite over JSON for persistence due to query needs"
+   - "Split into two phases after complexity assessment"
+
+5. **User Direction**: Explicit guidance received mid-task
+   - "User redirected: add Phase 5 to roadmap for proxy docs"
+   - "User approved simplified approach, dropping X requirement"
+   - "User requested priority shift to address blocker in #45"
+
+**What NOT to Document** (routine, unsurprising steps):
+- ❌ "Starting work on task" (use `task start` instead)
+- ❌ "Reading policy X" (expected preparation)
+- ❌ "Running tests" (routine verification)
+- ❌ "Fixed typo in documentation" (trivial changes)
+
+**Why Notes Matter**:
+- **Forensic Recovery**: Post-compaction context restoration relies on task notes trail
+- **User Visibility**: Notes appear in `task tree --verbose`, giving user insight into progress
+- **Handoff Context**: If task is delegated or resumed later, notes preserve decision rationale
+- **Completion Reports**: Notes inform comprehensive `--report` text at task completion
+
+**Note Format**:
+- Brief, informative, action-oriented
+- Focus on WHAT happened and WHY it matters
+- No need for breadcrumbs (automatically timestamped by CLI)
+
+**Examples**:
+```bash
+# Good notes (significant developments)
+macf_tools task note #67 "Phase 1 tests passing (12/12). Moving to Phase 2 implementation."
+macf_tools task note #67 "API design changed after user feedback - switching from REST to CLI-first"
+macf_tools task note #67 "Blocker: PyYAML missing from deps, adding to pyproject.toml"
+
+# Unnecessary notes (routine steps)
+macf_tools task note #67 "Reading task_management policy"  # ❌ Expected preparation
+macf_tools task note #67 "Fixed whitespace"                # ❌ Trivial change
+```
+
+**Integration with Task Lifecycle**:
+- Notes supplement status transitions, they don't replace them
+- `task start` marks beginning, notes document journey, `task complete --report` summarizes outcome
+- Notes are lightweight progress tracking; completion report is comprehensive summary
 
 ---
 

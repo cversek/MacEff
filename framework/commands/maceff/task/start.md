@@ -51,6 +51,9 @@ After reading policies, you should be able to answer:
 11. **When does the policy permit direct execution?** What conditions allow skipping planning?
 12. **How does the policy define meaningful updates?** What events warrant documentation?
 13. **What expansion check does the policy require for parent tasks?** What must happen if phases exist in roadmap but not as child tasks?
+14. **What note-taking discipline does the policy require during task execution?** When should notes be added?
+15. **What types of developments warrant task notes?** What distinguishes significant events from routine steps?
+16. **How do task notes integrate with the task lifecycle?** What is their relationship to completion reports?
 
 ---
 
