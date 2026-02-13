@@ -163,8 +163,9 @@ def _extract_request_meta(body: bytes) -> dict:
 def _capture_response(data, resp_meta: dict, model: str, streaming: bool = True) -> None:
     """Capture API response to capture dir if enabled.
 
-    For streaming: data is list of SSE chunk bytes, parsed into structured JSON.
-    For non-streaming: data is raw response bytes, saved directly.
+    For streaming: reassembles content from SSE chunks and merges with resp_meta
+    (which already has usage/stop_reason from _parse_sse_chunk).
+    For non-streaming: saves raw response JSON directly.
     """
     capture_dir = os.environ.get("MACF_PROXY_CAPTURE_DIR")
     if not capture_dir:
@@ -176,12 +177,8 @@ def _capture_response(data, resp_meta: dict, model: str, streaming: bool = True)
     model_safe = model.replace("/", "_")
 
     if streaming:
-        # Parse SSE chunks into structured response
+        # Reassemble content text from SSE chunks
         content_blocks = []
-        usage = {}
-        resp_model = ""
-        message_id = ""
-
         raw = b"".join(data).decode("utf-8", errors="replace")
         for line in raw.split("\n"):
             if not line.startswith("data: "):
@@ -192,35 +189,21 @@ def _capture_response(data, resp_meta: dict, model: str, streaming: bool = True)
             try:
                 event = json.loads(data_str)
                 etype = event.get("type", "")
-
-                if etype == "message_start":
-                    msg = event.get("message", {})
-                    usage = msg.get("usage", {})
-                    resp_model = msg.get("model", "")
-                    message_id = msg.get("id", "")
-
-                elif etype == "content_block_delta":
+                if etype == "content_block_delta":
                     delta = event.get("delta", {})
                     if delta.get("type") == "text_delta":
                         content_blocks.append(delta.get("text", ""))
                     elif delta.get("type") == "input_json_delta":
                         content_blocks.append(delta.get("partial_json", ""))
-
-                elif etype == "message_delta":
-                    delta_usage = event.get("usage", {})
-                    usage.update(delta_usage)
-
             except json.JSONDecodeError:
                 pass
 
-        captured = {
-            "message_id": message_id,
-            "model": resp_model,
-            "usage": usage,
-            "content_text": "".join(content_blocks),
-            "latency_ms": resp_meta.get("latency_ms", 0),
-            "ts": ts,
-        }
+        # Merge ALL fields from resp_meta (usage, stop_reason, model, etc.)
+        # plus reassembled content text
+        captured = dict(resp_meta)  # includes stop_reason, tokens, model, message_id
+        captured["content_text"] = "".join(content_blocks)
+        captured["ts"] = ts
+
         (cap / f"{ts}_{model_safe}_response.json").write_text(
             json.dumps(captured, indent=2, default=str)
         )
