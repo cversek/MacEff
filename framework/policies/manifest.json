@@ -1,7 +1,7 @@
 {
   "version": "2.0.0",
   "description": "MacEff Core Policy System with CEP Navigation - Full Policy Index",
-  "last_updated": "2025-12-11",
+  "last_updated": "2026-02-13",
   "base_path": "/opt/maceff/policies",
   "consciousness_patterns": {
     "description": "CEPs help agents recognize when they need specific knowledge",
@@ -53,6 +53,12 @@
         "consciousness": "Writing exception handlers or debugging silent failures",
         "search_terms": ["exception", "error", "catch", "silent", "visibility", "stderr"],
         "likely_policies": ["coding_standards", "coding_standards_python"]
+      },
+      {
+        "pattern": "debugging_investigation",
+        "consciousness": "Investigating a bug or validating system behavior",
+        "search_terms": ["debug", "investigate", "hypothesis", "evidence", "validate", "verify", "bug"],
+        "likely_policies": ["debugging_and_validation", "empiricism"]
       },
       {
         "pattern": "container_operations",
@@ -343,6 +349,42 @@
           "Rebuild vs restart?"
         ],
         "keywords": ["docker", "container", "volumes", "multi-stage", "ARM64", "x86_64", "security", "rebuild", "restart"]
+      },
+      {
+        "name": "debugging_and_validation",
+        "short_name": "DEBUG_VAL",
+        "path": "base/development/debugging_and_validation.md",
+        "description": "Hypothesis-first debugging and validation before completion",
+        "CEP_triggers": [
+          "How to debug this?",
+          "Validation before completion?",
+          "Evidence presentation?",
+          "Production path validation?",
+          "Layer-aware investigation?",
+          "Reproducible command pattern?"
+        ],
+        "keywords": ["debugging", "validation", "hypothesis", "evidence", "production-path", "layer-aware", "reproducible"]
+      }
+    ]
+  },
+  "philosophy_policies": {
+    "description": "Epistemological and philosophical foundation policies",
+    "location": "base/philosophy/",
+    "policies": [
+      {
+        "name": "empiricism",
+        "short_name": "EMPIRIC",
+        "path": "base/philosophy/empiricism.md",
+        "description": "Epistemological foundation: evidence hierarchy, cognitive traps, skepticism",
+        "CEP_triggers": [
+          "What evidence quality do I need?",
+          "Am I reasoning architecturally when I should test?",
+          "Survey vs experiment?",
+          "Observability trap?",
+          "Evidence hierarchy?",
+          "Cognitive traps in debugging?"
+        ],
+        "keywords": ["empiricism", "evidence", "hierarchy", "experiment", "survey", "observability", "cognitive-trap", "skepticism"]
       }
     ]
   },
@@ -534,9 +576,9 @@
       "DETOUR": ["roadmaps_following", "coding_standards", "task_management"],
       "DELEG_PLAN": ["delegation_guidelines", "task_management"],
       "GH_ISSUE": ["git_discipline", "task_management"],
-      "BUG": ["coding_standards", "task_management"],
+      "BUG": ["coding_standards", "debugging_and_validation", "task_management"],
       "TASK": ["task_management"],
-      "PHASE": ["task_management"]
+      "PHASE": ["debugging_and_validation", "task_management"]
     },
     "lang_extensions": {
       "description": "Future: language-specific policies injected based on project context",
@@ -620,6 +662,18 @@
     "lfs": ["base/development/git_discipline"],
     "release": ["base/development/git_discipline"],
     "version": ["base/development/git_discipline"],
-    "identity": ["base/development/git_discipline", "core_principles"]
+    "identity": ["base/development/git_discipline", "core_principles"],
+    "debugging": ["base/development/debugging_and_validation"],
+    "validation": ["base/development/debugging_and_validation"],
+    "evidence": ["base/development/debugging_and_validation", "base/philosophy/empiricism"],
+    "production_path": ["base/development/debugging_and_validation"],
+    "layer_aware": ["base/development/debugging_and_validation"],
+    "reproducible": ["base/development/debugging_and_validation"],
+    "empiricism": ["base/philosophy/empiricism"],
+    "evidence_hierarchy": ["base/philosophy/empiricism"],
+    "cognitive_trap": ["base/philosophy/empiricism"],
+    "observability_trap": ["base/philosophy/empiricism"],
+    "false_absence": ["base/philosophy/empiricism"],
+    "skepticism": ["base/philosophy/empiricism"]
   }
 }
