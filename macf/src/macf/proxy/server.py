@@ -160,6 +160,83 @@ def _extract_request_meta(body: bytes) -> dict:
     return meta
 
 
+def _capture_response(data, resp_meta: dict, model: str, streaming: bool = True) -> None:
+    """Capture API response to capture dir if enabled.
+
+    For streaming: data is list of SSE chunk bytes, parsed into structured JSON.
+    For non-streaming: data is raw response bytes, saved directly.
+    """
+    capture_dir = os.environ.get("MACF_PROXY_CAPTURE_DIR")
+    if not capture_dir:
+        return
+
+    cap = Path(capture_dir)
+    cap.mkdir(parents=True, exist_ok=True)
+    ts = int(time.time())
+    model_safe = model.replace("/", "_")
+
+    if streaming:
+        # Parse SSE chunks into structured response
+        content_blocks = []
+        usage = {}
+        resp_model = ""
+        message_id = ""
+
+        raw = b"".join(data).decode("utf-8", errors="replace")
+        for line in raw.split("\n"):
+            if not line.startswith("data: "):
+                continue
+            data_str = line[6:].strip()
+            if not data_str or data_str == "[DONE]":
+                continue
+            try:
+                event = json.loads(data_str)
+                etype = event.get("type", "")
+
+                if etype == "message_start":
+                    msg = event.get("message", {})
+                    usage = msg.get("usage", {})
+                    resp_model = msg.get("model", "")
+                    message_id = msg.get("id", "")
+
+                elif etype == "content_block_delta":
+                    delta = event.get("delta", {})
+                    if delta.get("type") == "text_delta":
+                        content_blocks.append(delta.get("text", ""))
+                    elif delta.get("type") == "input_json_delta":
+                        content_blocks.append(delta.get("partial_json", ""))
+
+                elif etype == "message_delta":
+                    delta_usage = event.get("usage", {})
+                    usage.update(delta_usage)
+
+            except json.JSONDecodeError:
+                pass
+
+        captured = {
+            "message_id": message_id,
+            "model": resp_model,
+            "usage": usage,
+            "content_text": "".join(content_blocks),
+            "latency_ms": resp_meta.get("latency_ms", 0),
+            "ts": ts,
+        }
+        (cap / f"{ts}_{model_safe}_response.json").write_text(
+            json.dumps(captured, indent=2, default=str)
+        )
+    else:
+        # Non-streaming: save raw response
+        try:
+            resp_data = json.loads(data) if isinstance(data, bytes) else data
+            (cap / f"{ts}_{model_safe}_response.json").write_text(
+                json.dumps(resp_data, indent=2, default=str)
+            )
+        except (json.JSONDecodeError, TypeError):
+            (cap / f"{ts}_{model_safe}_response.raw").write_bytes(
+                data if isinstance(data, bytes) else b""
+            )
+
+
 # --------------- aiohttp handlers ---------------
 
 def _create_app():
@@ -212,8 +289,10 @@ def _create_app():
                 await resp.prepare(request)
 
                 resp_meta = {}
+                sse_chunks = []  # Buffer for response capture
                 async for chunk in upstream.content.iter_any():
                     await resp.write(chunk)
+                    sse_chunks.append(chunk)
                     _parse_sse_chunk(chunk, resp_meta)
 
                 await resp.write_eof()
@@ -223,6 +302,12 @@ def _create_app():
                 resp_meta["ts"] = int(time.time())
                 resp_meta["latency_ms"] = int((time.time() - start_time) * 1000)
                 _log_event(resp_meta)
+
+                # Capture response if enabled
+                _capture_response(
+                    sse_chunks, resp_meta, req_meta.get("model", "unknown"),
+                    streaming=True
+                )
 
                 return resp
             else:
@@ -248,7 +333,13 @@ def _create_app():
                     }
                     _log_event(resp_meta)
                 except (json.JSONDecodeError, Exception):
-                    pass
+                    resp_data = None
+
+                # Capture response if enabled
+                _capture_response(
+                    resp_body, resp_meta if resp_data else {},
+                    req_meta.get("model", "unknown"), streaming=False
+                )
 
                 return resp
 
