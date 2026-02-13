@@ -254,6 +254,31 @@ def _create_app():
         req_meta = _extract_request_meta(body)
         _log_event(req_meta)
 
+        # Rewrite stale policy injections in request body
+        try:
+            from .message_rewriter import (
+                rewrite_messages, detect_replacement_mode, get_event_log_path,
+            )
+            body_json = json.loads(body)
+            messages = body_json.get("messages", [])
+            if messages:
+                last_ts = request.app.get("last_api_call_ts", 0.0)
+                event_log = get_event_log_path()
+                mode = detect_replacement_mode(event_log, last_ts)
+                messages, rewrite_stats = rewrite_messages(messages, mode)
+                if rewrite_stats["replacements_made"] > 0:
+                    body_json["messages"] = messages
+                    body = json.dumps(body_json).encode("utf-8")
+                    print(
+                        f"[proxy] Rewrote {rewrite_stats['replacements_made']} "
+                        f"policy injection(s), saved ~{rewrite_stats['bytes_saved']} bytes "
+                        f"(mode={mode}, policies={rewrite_stats['policies_replaced']})",
+                        file=sys.stderr,
+                    )
+            request.app["last_api_call_ts"] = time.time()
+        except Exception as e:
+            print(f"[proxy] ERROR in message rewrite (forwarding original): {e}", file=sys.stderr)
+
         headers = _forward_headers(request)
         target_url = f"{ANTHROPIC_API_URL}{request.path}"
         start_time = time.time()
