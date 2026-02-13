@@ -725,3 +725,118 @@ class TestGHIssueCloseoutFunction:
 
         with patch('subprocess.run', side_effect=FileNotFoundError("gh not found")):
             _gh_issue_closeout(42, mtmd, args, 's_test/c_1/g_abc/p_def/t_123')
+
+
+class TestTaskLifecycleEvents:
+    """Test task_started and task_completed event emission."""
+
+    def _create_mission_task(self, session_dir, task_id=10):
+        """Create a MISSION task with plan_ca_ref."""
+        mtmd_yaml = ("task_type: MISSION\n"
+                     "creation_breadcrumb: s_test/c_1/g_abc/p_def/t_123\n"
+                     "created_cycle: 1\ncreated_by: PA\nparent_id: '000'\n"
+                     "plan_ca_ref: agent/public/roadmaps/test/roadmap.md\n")
+        desc = f'Test mission\n\n<macf_task_metadata version="1.0">\n{mtmd_yaml}</macf_task_metadata>'
+        task_data = {"id": str(task_id), "subject": "Test Mission",
+                     "description": desc, "status": "pending"}
+        (session_dir / f"{task_id}.json").write_text(json.dumps(task_data))
+        return task_id
+
+    def _read_events(self, env):
+        """Read events from the isolated event log."""
+        log_path = Path(env["MACF_EVENTS_LOG_PATH"])
+        if not log_path.exists():
+            return []
+        events = []
+        for line in log_path.read_text().strip().split('\n'):
+            if line.strip():
+                events.append(json.loads(line))
+        return events
+
+    def test_task_start_emits_event(self, isolated_task_env):
+        """task start emits task_started event with task_type and breadcrumb."""
+        tid = self._create_mission_task(isolated_task_env['session_dir'])
+        result = subprocess.run(
+            ['macf_tools', 'task', 'start', str(tid)],
+            capture_output=True, text=True, env=isolated_task_env['env'])
+        assert result.returncode == 0
+
+        events = self._read_events(isolated_task_env['env'])
+        started = [e for e in events if e.get('event') == 'task_started']
+        assert len(started) == 1
+        assert started[0]['data']['task_id'] == str(tid)
+        assert started[0]['data']['task_type'] == 'MISSION'
+        assert started[0]['data']['plan_ca_ref'] == 'agent/public/roadmaps/test/roadmap.md'
+        assert 'breadcrumb' in started[0]['data']
+
+    def test_task_complete_emits_event(self, isolated_task_env):
+        """task complete emits task_completed event with report."""
+        tid = self._create_mission_task(isolated_task_env['session_dir'])
+        # Start first (must be in_progress to complete)
+        subprocess.run(
+            ['macf_tools', 'task', 'start', str(tid)],
+            capture_output=True, text=True, env=isolated_task_env['env'])
+        # Complete
+        result = subprocess.run(
+            ['macf_tools', 'task', 'complete', str(tid), '--report', 'All done'],
+            capture_output=True, text=True, env=isolated_task_env['env'])
+        assert result.returncode == 0
+
+        events = self._read_events(isolated_task_env['env'])
+        completed = [e for e in events if e.get('event') == 'task_completed']
+        assert len(completed) == 1
+        assert completed[0]['data']['task_id'] == str(tid)
+        assert completed[0]['data']['task_type'] == 'MISSION'
+        assert completed[0]['data']['report'] == 'All done'
+
+    def test_task_start_event_with_phase_type(self, isolated_task_env):
+        """Phase tasks emit task_started with task_type=PHASE."""
+        mtmd_yaml = ("task_type: PHASE\n"
+                     "creation_breadcrumb: s_test/c_1/g_abc/p_def/t_123\n"
+                     "created_cycle: 1\ncreated_by: PA\nparent_id: '10'\n")
+        desc = f'Phase 1\n\n<macf_task_metadata version="1.0">\n{mtmd_yaml}</macf_task_metadata>'
+        task_data = {"id": "11", "subject": "Phase 1",
+                     "description": desc, "status": "pending"}
+        (isolated_task_env['session_dir'] / "11.json").write_text(json.dumps(task_data))
+
+        result = subprocess.run(
+            ['macf_tools', 'task', 'start', '11'],
+            capture_output=True, text=True, env=isolated_task_env['env'])
+        assert result.returncode == 0
+
+        events = self._read_events(isolated_task_env['env'])
+        started = [e for e in events if e.get('event') == 'task_started']
+        assert len(started) == 1
+        assert started[0]['data']['task_type'] == 'PHASE'
+        assert started[0]['data']['plan_ca_ref'] is None
+
+    def test_task_start_no_duplicate_on_already_started(self, isolated_task_env):
+        """Starting an already in_progress task emits no event."""
+        tid = self._create_mission_task(isolated_task_env['session_dir'])
+        subprocess.run(
+            ['macf_tools', 'task', 'start', str(tid)],
+            capture_output=True, text=True, env=isolated_task_env['env'])
+        # Start again - should be no-op
+        result = subprocess.run(
+            ['macf_tools', 'task', 'start', str(tid)],
+            capture_output=True, text=True, env=isolated_task_env['env'])
+        assert result.returncode == 0
+        assert 'already in_progress' in result.stdout
+
+        events = self._read_events(isolated_task_env['env'])
+        started = [e for e in events if e.get('event') == 'task_started']
+        assert len(started) == 1  # Only from first start
+
+    def test_events_queryable_via_cli(self, isolated_task_env):
+        """Events are queryable via macf_tools events query."""
+        tid = self._create_mission_task(isolated_task_env['session_dir'])
+        subprocess.run(
+            ['macf_tools', 'task', 'start', str(tid)],
+            capture_output=True, text=True, env=isolated_task_env['env'])
+
+        result = subprocess.run(
+            ['macf_tools', 'events', 'query', '--event', 'task_started', '--verbose'],
+            capture_output=True, text=True, env=isolated_task_env['env'])
+        assert result.returncode == 0
+        assert 'task_started' in result.stdout
+        assert 'MISSION' in result.stdout
