@@ -840,3 +840,21 @@ class TestTaskLifecycleEvents:
         assert result.returncode == 0
         assert 'task_started' in result.stdout
         assert 'MISSION' in result.stdout
+
+    def test_task_start_auto_injects_policies(self, isolated_task_env):
+        """task start on MISSION emits policy_injection_activated with source=task_type_auto."""
+        tid = self._create_mission_task(isolated_task_env['session_dir'])
+        result = subprocess.run(
+            ['macf_tools', 'task', 'start', str(tid)],
+            capture_output=True, text=True, env=isolated_task_env['env'])
+        assert result.returncode == 0
+        assert 'Auto-injected policies' in result.stdout
+
+        events = self._read_events(isolated_task_env['env'])
+        injections = [e for e in events if e.get('event') == 'policy_injection_activated'
+                      and e.get('data', {}).get('source') == 'task_type_auto']
+        # MISSION should inject roadmaps_following, coding_standards, task_management
+        injected_names = [e['data']['policy_name'] for e in injections]
+        assert 'task_management' in injected_names
+        assert 'roadmaps_following' in injected_names
+        assert all(e['data']['task_id'] == str(tid) for e in injections)

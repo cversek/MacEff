@@ -526,6 +526,23 @@
       }
     }
   },
+  "task_type_policies": {
+    "description": "Policies auto-injected when task of this type is started via task start",
+    "mappings": {
+      "MISSION": ["roadmaps_following", "coding_standards", "task_management"],
+      "EXPERIMENT": ["experiments", "task_management"],
+      "DETOUR": ["roadmaps_following", "coding_standards", "task_management"],
+      "DELEG_PLAN": ["delegation_guidelines", "task_management"],
+      "GH_ISSUE": ["git_discipline", "task_management"],
+      "BUG": ["coding_standards", "task_management"],
+      "TASK": ["task_management"],
+      "PHASE": ["task_management"]
+    },
+    "lang_extensions": {
+      "description": "Future: language-specific policies injected based on project context",
+      "example": "python project -> testing_python, coding_standards_python"
+    }
+  },
   "discovery_index": {
     "compaction": ["context_management#compaction-readiness", "context_recovery"],
     "delegation": ["delegation_guidelines", "core_principles#delegation"],

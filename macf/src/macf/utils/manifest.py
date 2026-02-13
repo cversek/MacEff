@@ -319,6 +319,26 @@ def load_merged_manifest(maceff_root: Optional[Path] = None) -> Dict[str, Any]:
 
     return manifest
 
+def get_policies_for_task_type(task_type: str, manifest: Optional[Dict[str, Any]] = None) -> list:
+    """
+    Look up policies to auto-inject for a given task type.
+
+    Reads task_type_policies.mappings from manifest.json.
+
+    Args:
+        task_type: Task type string (e.g., "MISSION", "EXPERIMENT", "BUG")
+        manifest: Pre-loaded manifest dict, or None to load fresh
+
+    Returns:
+        List of policy name strings to inject, or empty list if no mapping
+    """
+    if manifest is None:
+        manifest = load_merged_manifest()
+
+    mappings = manifest.get("task_type_policies", {}).get("mappings", {})
+    return mappings.get(task_type, [])
+
+
 def filter_active_policies(manifest: Dict[str, Any]) -> Dict[str, Any]:
     """
     Filter merged manifest to active policies only (token efficiency).
