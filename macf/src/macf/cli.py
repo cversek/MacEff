@@ -4353,8 +4353,27 @@ def cmd_task_start(args: argparse.Namespace) -> int:
         "plan_ca_ref": plan_ca_ref,
     })
 
+    # Auto-inject policies mapped to this task type via manifest
+    injected_policies = []
+    if task_type:
+        from .utils.manifest import get_policies_for_task_type
+        from .utils import find_policy_file
+        policies = get_policies_for_task_type(task_type)
+        for policy_name in policies:
+            policy_path = find_policy_file(policy_name)
+            if policy_path:
+                append_event("policy_injection_activated", {
+                    "policy_name": policy_name,
+                    "policy_path": str(policy_path),
+                    "source": "task_type_auto",
+                    "task_id": str(task_id),
+                })
+                injected_policies.append(policy_name)
+
     print(f"✅ Task #{task_id} started")
     print(f"   Breadcrumb: {breadcrumb}")
+    if injected_policies:
+        print(f"   Auto-injected policies: {injected_policies}")
     return 0
 
 

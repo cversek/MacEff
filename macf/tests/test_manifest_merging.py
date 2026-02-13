@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from macf.utils import load_merged_manifest, _deep_merge
+from macf.utils.manifest import get_policies_for_task_type
 
 
 class TestDeepMerge:
@@ -286,3 +287,57 @@ class TestLoadMergedManifest:
         result = load_merged_manifest(maceff_root=tmp_path)
 
         assert result["explicit_test"] is True
+
+
+class TestGetPoliciesForTaskType:
+    """Tests for task_type → policy mapping from manifest."""
+
+    def test_mission_returns_expected_policies(self):
+        """MISSION type should return roadmaps_following, coding_standards, task_management."""
+        manifest = {
+            "task_type_policies": {
+                "mappings": {
+                    "MISSION": ["roadmaps_following", "coding_standards", "task_management"],
+                    "EXPERIMENT": ["experiments", "task_management"],
+                }
+            }
+        }
+        result = get_policies_for_task_type("MISSION", manifest=manifest)
+        assert result == ["roadmaps_following", "coding_standards", "task_management"]
+
+    def test_experiment_returns_expected_policies(self):
+        """EXPERIMENT type should return experiments, task_management."""
+        manifest = {
+            "task_type_policies": {
+                "mappings": {
+                    "MISSION": ["roadmaps_following", "coding_standards", "task_management"],
+                    "EXPERIMENT": ["experiments", "task_management"],
+                }
+            }
+        }
+        result = get_policies_for_task_type("EXPERIMENT", manifest=manifest)
+        assert result == ["experiments", "task_management"]
+
+    def test_unknown_type_returns_empty(self):
+        """Unknown task type should return empty list."""
+        manifest = {
+            "task_type_policies": {
+                "mappings": {
+                    "MISSION": ["roadmaps_following"],
+                }
+            }
+        }
+        result = get_policies_for_task_type("UNKNOWN_TYPE", manifest=manifest)
+        assert result == []
+
+    def test_missing_task_type_policies_section(self):
+        """Manifest without task_type_policies should return empty list."""
+        manifest = {"version": "1.0.0"}
+        result = get_policies_for_task_type("MISSION", manifest=manifest)
+        assert result == []
+
+    def test_live_manifest_has_mission_mapping(self):
+        """Live manifest.json should have MISSION mapping (integration check)."""
+        result = get_policies_for_task_type("MISSION")
+        assert "task_management" in result
+        assert "roadmaps_following" in result
