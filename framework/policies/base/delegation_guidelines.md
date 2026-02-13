@@ -3,7 +3,7 @@
 ## Meta-Policy: Policy Classification
 - **Tier**: MANDATORY
 - **Category**: Framework Foundation
-- **Version**: 1.0.0
+- **Version**: 1.1.0
 - **Dependencies**: policy_awareness, core_principles
 - **Authority**: MacEff Framework
 - **Status**: ACTIVE
@@ -84,6 +84,12 @@ Primary Agents must delegate specialized tasks appropriately, understanding when
 - Format requirements?
 - Reflection mandatory?
 - Where to save work?
+
+3.5 Foreground vs Background Execution
+- When should I use foreground delegation?
+- When is background delegation appropriate?
+- How does operating mode affect the choice?
+- What happens when background SA needs Write/Edit?
 
 4 Specialist Capabilities
 - What specialists exist?
@@ -306,6 +312,56 @@ At task completion, create TWO artifacts:
 **PA Responsibility**: Read BOTH SA artifacts after delegation - CCP for deliverable verification, reflection to learn from outcomes and improve future delegations.
 
 **Why Critical**: SAs have mandatory dual-artifact requirement. Without explicit paths in delegation prompt, they cannot fulfill requirement, blocking framework operation.
+
+### 3.5 Foreground vs Background Execution
+
+The Task tool's `run_in_background` parameter controls whether delegation runs in parallel (background) or inline (foreground). This choice has governance implications beyond performance.
+
+**Foreground Delegation** (`run_in_background=false`, default):
+- SA tool calls surface to the user in real-time
+- User sees each Write/Edit attempt and can approve or deny per-file
+- User can observe progress and redirect mid-execution
+- PA waits for SA completion before continuing
+
+**Background Delegation** (`run_in_background=true`):
+- SA runs in parallel, PA continues other work
+- User does NOT see SA tool calls in real-time
+- Write/Edit attempts that need approval will BLOCK silently
+- PA must check output file later for results
+
+**Decision Matrix**:
+
+| Condition | Use Foreground | Use Background |
+|-----------|---------------|----------------|
+| SA needs Write/Edit and permissions not pre-granted | **REQUIRED** | **NEVER** |
+| MANUAL_MODE (user wants code review) | **REQUIRED** for code-producing tasks | Only for read-only research |
+| AUTO_MODE with pre-granted Write/Edit | Either (PA choice) | Appropriate |
+| Read-only research or exploration | Either (PA choice) | Appropriate |
+
+**Why This Matters**:
+
+When operating in MANUAL_MODE, the user has explicitly chosen to review agent actions before approval. Background delegation removes the user from this review loop — Write/Edit attempts either block silently (wasting SA tokens on permission diagnosis) or require blanket permission grants that bypass the review the user configured.
+
+Foreground delegation preserves the governance model: the user sees each file modification attempt, decides whether to approve it, and can redirect the SA's approach mid-execution. The user's review is a **feature of MANUAL_MODE, not friction to optimize away**.
+
+**Anti-Pattern**:
+```
+# WRONG in MANUAL_MODE: Background delegation for code-producing task
+Task(subagent_type="devops-eng", run_in_background=True, prompt="Implement feature X...")
+# SA hits Write permission denial → spends tokens diagnosing → blocks → wastes context
+```
+
+**Correct Pattern**:
+```
+# RIGHT in MANUAL_MODE: Foreground delegation for code-producing task
+Task(subagent_type="devops-eng", run_in_background=False, prompt="Implement feature X...")
+# User sees each Write/Edit → approves per-file → can redirect mid-execution
+```
+
+**Background is appropriate when**:
+- Task is read-only (research, exploration, code analysis)
+- Write/Edit permissions are already granted in project settings
+- Operating in AUTO_MODE where blanket grants are acceptable
 
 ## 4. Specialist Capabilities
 
