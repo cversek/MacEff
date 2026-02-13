@@ -40,7 +40,7 @@ def set_log_path(path: Optional[Path]) -> None:
     _TEST_LOG_PATH = path
 
 
-def _get_log_path() -> Path:
+def get_log_path() -> Path:
     """
     Get path to agent events log file.
 
@@ -120,7 +120,7 @@ def append_event(
         True
     """
     try:
-        log_path = _get_log_path()
+        log_path = get_log_path()
 
         # Generate breadcrumb for forensic querying (cached for performance)
         breadcrumb = _get_cached_breadcrumb()
@@ -174,7 +174,7 @@ def read_events(
         ...     print(event["event"], event["timestamp"])
     """
     try:
-        log_path = _get_log_path()
+        log_path = get_log_path()
 
         if not log_path.exists():
             return

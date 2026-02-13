@@ -4959,7 +4959,7 @@ def cmd_proxy_start(args: argparse.Namespace) -> int:
             print(f"   Activate: ANTHROPIC_BASE_URL=http://localhost:{port} claude")
             return 0
         else:
-            print(f"Starting proxy on port {port}...", file=sys.stderr)
+            print(f"[proxy] Starting on port {port}...", file=sys.stderr)
             run_proxy(port=port)
             return 0
     except Exception as e:

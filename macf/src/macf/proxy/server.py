@@ -154,9 +154,12 @@ def _extract_request_meta(body: bytes) -> dict:
         cap.mkdir(parents=True, exist_ok=True)
         ts = int(time.time())
         model = data.get("model", "unknown").replace("/", "_")
-        (cap / f"{ts}_{model}_request.json").write_text(
+        filename = f"{ts}_{model}_request.json"
+        (cap / filename).write_text(
             json.dumps(data, indent=2, default=str)
         )
+        # VERBOSE: Echo captured filename
+        print(f"[proxy:capture] → {filename}", file=sys.stderr)
 
     return meta
 
@@ -205,20 +208,101 @@ def _capture_response(data, resp_meta: dict, model: str, streaming: bool = True)
         captured["content_text"] = "".join(content_blocks)
         captured["ts"] = ts
 
-        (cap / f"{ts}_{model_safe}_response.json").write_text(
+        filename = f"{ts}_{model_safe}_response.json"
+        (cap / filename).write_text(
             json.dumps(captured, indent=2, default=str)
         )
+        # VERBOSE: Echo captured filename
+        print(f"[proxy:capture] ← {filename}", file=sys.stderr)
     else:
         # Non-streaming: save raw response
         try:
             resp_data = json.loads(data) if isinstance(data, bytes) else data
-            (cap / f"{ts}_{model_safe}_response.json").write_text(
+            filename = f"{ts}_{model_safe}_response.json"
+            (cap / filename).write_text(
                 json.dumps(resp_data, indent=2, default=str)
             )
+            print(f"[proxy:capture] ← {filename}", file=sys.stderr)
         except (json.JSONDecodeError, TypeError):
-            (cap / f"{ts}_{model_safe}_response.raw").write_bytes(
+            filename = f"{ts}_{model_safe}_response.raw"
+            (cap / filename).write_bytes(
                 data if isinstance(data, bytes) else b""
             )
+            print(f"[proxy:capture] ← {filename}", file=sys.stderr)
+
+
+# --------------- Policy injection state tracking ---------------
+
+def _detect_expected_injections() -> set:
+    """
+    Proactive startup detection: Read event log to find in_progress tasks,
+    lookup manifest mappings, return expected policy names.
+
+    Uses canonical reverse scan pattern from event_queries.py.
+    Scans in REVERSE (most recent first) with first-event-wins deduplication.
+
+    Returns set of policy names that should be active based on task state.
+    """
+    try:
+        from ..agent_events_log import get_log_path
+        from ..task.events import get_active_tasks_from_events
+        from ..policy.injection import get_expected_policies_for_active_tasks
+
+        event_log_path = get_log_path()
+        print(f"[proxy:startup] 📂 Event log path: {event_log_path}", file=sys.stderr)
+
+        if not event_log_path.exists():
+            print(f"[proxy:startup] ❌ Event log not found at path", file=sys.stderr)
+            return set()
+
+        active_tasks = get_active_tasks_from_events()
+
+        print(f"[proxy:startup] 🔍 Found {len(active_tasks)} in_progress task(s)", file=sys.stderr)
+        for task_id, task_type in active_tasks.items():
+            print(f"[proxy:startup]   - Task #{task_id} ({task_type})", file=sys.stderr)
+
+        if not active_tasks:
+            return set()
+
+        expected = get_expected_policies_for_active_tasks(active_tasks)
+        for task_id, task_type in active_tasks.items():
+            from ..utils.manifest import get_policies_for_task_type
+            policies = get_policies_for_task_type(task_type)
+            if policies:
+                print(f"[proxy:startup]   → {task_type}: {policies}", file=sys.stderr)
+
+        return expected
+
+    except Exception as e:
+        print(f"[proxy:startup] ERROR in expected injection detection: {e}", file=sys.stderr)
+        return set()
+
+
+def _detect_current_injections(messages: list) -> set:
+    """
+    Scan messages for currently active policy injections.
+    Returns set of policy names that have full injection blocks.
+    """
+    import re
+
+    FULL_INJECTION_PATTERN = re.compile(
+        r'<macf-policy-injection\s+policy="([^"]+)">',
+        re.DOTALL
+    )
+
+    active = set()
+    for msg in messages:
+        content = msg.get("content", "")
+        if isinstance(content, str):
+            for match in FULL_INJECTION_PATTERN.finditer(content):
+                active.add(match.group(1))
+        elif isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    text = block.get("text", "")
+                    for match in FULL_INJECTION_PATTERN.finditer(text):
+                        active.add(match.group(1))
+    return active
 
 
 # --------------- aiohttp handlers ---------------
@@ -254,30 +338,86 @@ def _create_app():
         req_meta = _extract_request_meta(body)
         _log_event(req_meta)
 
+        # Detect and report policy injection state changes
+        try:
+            body_json = json.loads(body)
+            messages = body_json.get("messages", [])
+
+            if messages:
+                # Detect current injections BEFORE rewriting
+                current_injections = _detect_current_injections(messages)
+                previous_injections = request.app.get("previous_injections", None)
+
+                # On first request, report initial detection AND compare vs expected
+                if previous_injections is None:
+                    expected = request.app.get("expected_injections_on_startup", set())
+
+                    # Report what we found in messages
+                    if current_injections:
+                        print(
+                            f"[proxy:injection] ⚡ FIRST REQUEST: "
+                            f"{len(current_injections)} policy injection(s) in messages: "
+                            f"{sorted(current_injections)}",
+                            file=sys.stderr
+                        )
+                    else:
+                        print("[proxy:injection] ⚡ FIRST REQUEST: No policy injections in messages", file=sys.stderr)
+
+                    # Compare expected vs actual
+                    missing = expected - current_injections
+                    unexpected = current_injections - expected
+
+                    if missing or unexpected:
+                        print(f"[proxy:injection] ⚠️  MISMATCH DETECTED:", file=sys.stderr)
+                        if missing:
+                            print(f"  ❌ MISSING: {sorted(missing)} (expected but not in messages)", file=sys.stderr)
+                        if unexpected:
+                            print(f"  ❓ UNEXPECTED: {sorted(unexpected)} (in messages but not expected)", file=sys.stderr)
+                    elif expected:
+                        print(f"[proxy:injection] ✅ MATCH: Expected and actual injections align", file=sys.stderr)
+                else:
+                    # Report STATE CHANGES only (no reassertions)
+                    added = current_injections - previous_injections
+                    removed = previous_injections - current_injections
+
+                    if added or removed:
+                        print(f"[proxy:injection] 🔄 STATE CHANGE:", file=sys.stderr)
+                        if added:
+                            print(f"  ➕ Added: {sorted(added)}", file=sys.stderr)
+                        if removed:
+                            print(f"  ➖ Removed: {sorted(removed)}", file=sys.stderr)
+                        print(f"  = Active: {sorted(current_injections)} ({len(current_injections)} total)", file=sys.stderr)
+
+                # Store current state for next request
+                request.app["previous_injections"] = current_injections
+        except Exception as e:
+            print(f"[proxy:injection] ERROR in state detection: {e}", file=sys.stderr)
+
         # Rewrite stale policy injections in request body
         try:
             from .message_rewriter import (
-                rewrite_messages, detect_replacement_mode, get_event_log_path,
+                rewrite_messages, detect_replacement_mode,
             )
+            from ..agent_events_log import get_log_path
             body_json = json.loads(body)
             messages = body_json.get("messages", [])
             if messages:
                 last_ts = request.app.get("last_api_call_ts", 0.0)
-                event_log = get_event_log_path()
+                event_log = str(get_log_path())
                 mode = detect_replacement_mode(event_log, last_ts)
                 messages, rewrite_stats = rewrite_messages(messages, mode)
                 if rewrite_stats["replacements_made"] > 0:
                     body_json["messages"] = messages
                     body = json.dumps(body_json).encode("utf-8")
                     print(
-                        f"[proxy] Rewrote {rewrite_stats['replacements_made']} "
-                        f"policy injection(s), saved ~{rewrite_stats['bytes_saved']} bytes "
+                        f"[proxy:rewrite] Replaced {rewrite_stats['replacements_made']} "
+                        f"injection(s), saved ~{rewrite_stats['bytes_saved']} bytes "
                         f"(mode={mode}, policies={rewrite_stats['policies_replaced']})",
                         file=sys.stderr,
                     )
             request.app["last_api_call_ts"] = time.time()
         except Exception as e:
-            print(f"[proxy] ERROR in message rewrite (forwarding original): {e}", file=sys.stderr)
+            print(f"[proxy:rewrite] ERROR in message rewrite (forwarding original): {e}", file=sys.stderr)
 
         headers = _forward_headers(request)
         target_url = f"{ANTHROPIC_API_URL}{request.path}"
@@ -388,6 +528,10 @@ def run_proxy(port: int = DEFAULT_PORT, host: str = DEFAULT_HOST) -> None:
     app = _create_app()
     _write_pid(os.getpid())
 
+    # Proactive startup detection: detect expected injections BEFORE first request
+    expected_injections = _detect_expected_injections()
+    app["expected_injections_on_startup"] = expected_injections
+
     # Register cleanup for PID file
     def _cleanup_handler(signum, frame):
         _remove_pid()
@@ -395,9 +539,19 @@ def run_proxy(port: int = DEFAULT_PORT, host: str = DEFAULT_HOST) -> None:
 
     signal.signal(signal.SIGTERM, _cleanup_handler)
 
-    print(f"macf proxy listening on {host}:{port}", file=sys.stderr)
-    print(f"Log: {get_log_path()}", file=sys.stderr)
-    print(f"Activate: ANTHROPIC_BASE_URL=http://{host}:{port} claude", file=sys.stderr)
+    print(f"[proxy] listening on {host}:{port}", file=sys.stderr)
+    print(f"[proxy] Log: {get_log_path()}", file=sys.stderr)
+    print(f"[proxy] Activate: ANTHROPIC_BASE_URL=http://{host}:{port} claude", file=sys.stderr)
+
+    # Report expected injection state at startup
+    if expected_injections:
+        print(
+            f"[proxy:startup] 🎯 EXPECTED INJECTIONS: "
+            f"{len(expected_injections)} policies should be active: {sorted(expected_injections)}",
+            file=sys.stderr
+        )
+    else:
+        print("[proxy:startup] 🎯 EXPECTED INJECTIONS: No in_progress tasks, no policies expected", file=sys.stderr)
 
     try:
         web.run_app(app, host=host, port=port, print=None)

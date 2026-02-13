@@ -146,11 +146,11 @@ def list_policy_files(
         rel_path = md_file.relative_to(base_path)
         path_parts = rel_path.parts
 
-        # Determine category from path
-        file_category = path_parts[0] if len(path_parts) > 1 else 'root'
+        # Determine category from path (full parent path for nested dirs)
+        file_category = str(rel_path.parent) if len(path_parts) > 1 else 'root'
 
-        # Apply category filter
-        if category and file_category != category:
+        # Apply category filter (prefix match for nested categories)
+        if category and not file_category.startswith(category):
             continue
 
         # Read tier from file if filtering by tier OR include_tier requested
@@ -335,8 +335,22 @@ def get_policies_for_task_type(task_type: str, manifest: Optional[Dict[str, Any]
     if manifest is None:
         manifest = load_merged_manifest()
 
-    mappings = manifest.get("task_type_policies", {}).get("mappings", {})
-    return mappings.get(task_type, [])
+    task_type_policies = manifest.get("task_type_policies")
+    if task_type_policies is None:
+        print("[manifest] ⚠️ Missing 'task_type_policies' section", file=sys.stderr)
+        return []
+
+    mappings = task_type_policies.get("mappings")
+    if mappings is None:
+        print("[manifest] ⚠️ 'task_type_policies' missing 'mappings' key", file=sys.stderr)
+        return []
+
+    policies = mappings.get(task_type)
+    if policies is None:
+        print(f"[manifest] ⚠️ No mapping for task type '{task_type}'", file=sys.stderr)
+        return []
+
+    return policies
 
 
 def filter_active_policies(manifest: Dict[str, Any]) -> Dict[str, Any]:
