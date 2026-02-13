@@ -83,7 +83,11 @@ def _log_event(event: dict) -> None:
 # --------------- SSE metadata extraction ---------------
 
 def _parse_sse_chunk(chunk: bytes, meta: dict) -> None:
-    """Extract metadata from SSE event chunk. Updates meta dict in place."""
+    """Extract metadata from SSE event chunk. Updates meta dict in place.
+
+    Generic: captures ALL fields from message_start and message_delta
+    events so new API fields are automatically included.
+    """
     text = chunk.decode("utf-8", errors="replace")
     for line in text.split("\n"):
         if not line.startswith("data: "):
@@ -96,23 +100,20 @@ def _parse_sse_chunk(chunk: bytes, meta: dict) -> None:
             event_type = data.get("type", "")
 
             if event_type == "message_start":
+                # Dump entire message object (minus content)
                 msg = data.get("message", {})
-                usage = msg.get("usage", {})
-                meta["input_tokens"] = usage.get("input_tokens", 0)
-                meta["cache_read_input_tokens"] = usage.get(
-                    "cache_read_input_tokens", 0
-                )
-                meta["cache_creation_input_tokens"] = usage.get(
-                    "cache_creation_input_tokens", 0
-                )
-                meta["model"] = msg.get("model", "")
-                meta["message_id"] = msg.get("id", "")
+                msg.pop("content", None)
+                meta.update(msg)
 
             elif event_type == "message_delta":
-                usage = data.get("usage", {})
-                meta["output_tokens"] = usage.get("output_tokens", 0)
+                # Merge usage updates and delta fields
+                delta_usage = data.get("usage", {})
+                if "usage" in meta:
+                    meta["usage"].update(delta_usage)
+                else:
+                    meta["usage"] = delta_usage
                 delta = data.get("delta", {})
-                meta["stop_reason"] = delta.get("stop_reason")
+                meta.update(delta)
 
         except json.JSONDecodeError:
             pass  # Partial JSON across chunk boundary — acceptable loss
@@ -302,18 +303,15 @@ def _create_app():
                     if k.lower() not in skip_resp:
                         resp.headers[k] = v
 
-                # Extract response metadata
+                # Log full response metadata
                 try:
                     resp_data = json.loads(resp_body)
-                    usage = resp_data.get("usage", {})
-                    resp_meta = {
-                        "type": "api_response",
-                        "ts": int(time.time()),
-                        "latency_ms": int((time.time() - start_time) * 1000),
-                        "input_tokens": usage.get("input_tokens", 0),
-                        "output_tokens": usage.get("output_tokens", 0),
-                        "model": resp_data.get("model", ""),
-                    }
+                    resp_meta = resp_data.copy()
+                    resp_meta["type"] = "api_response"
+                    resp_meta["ts"] = int(time.time())
+                    resp_meta["latency_ms"] = int((time.time() - start_time) * 1000)
+                    # Remove content array to keep log manageable
+                    resp_meta.pop("content", None)
                     _log_event(resp_meta)
                 except (json.JSONDecodeError, Exception):
                     resp_data = None
