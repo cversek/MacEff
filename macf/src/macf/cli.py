@@ -4343,6 +4343,16 @@ def cmd_task_start(args: argparse.Namespace) -> int:
     else:
         update_task_file(task_id, {"status": "in_progress"})
 
+    # Emit task lifecycle event for downstream hooks and proxy integration
+    task_type = getattr(task.mtmd, 'task_type', None) if task.mtmd else None
+    plan_ca_ref = getattr(task.mtmd, 'plan_ca_ref', None) if task.mtmd else None
+    append_event("task_started", {
+        "task_id": str(task_id),
+        "task_type": task_type,
+        "breadcrumb": breadcrumb,
+        "plan_ca_ref": plan_ca_ref,
+    })
+
     print(f"✅ Task #{task_id} started")
     print(f"   Breadcrumb: {breadcrumb}")
     return 0
@@ -4773,6 +4783,16 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
     })
 
     if success:
+        # Emit task lifecycle event for downstream hooks and proxy integration
+        plan_ca_ref = getattr(new_mtmd, 'plan_ca_ref', None)
+        append_event("task_completed", {
+            "task_id": str(task_id),
+            "task_type": task_type,
+            "breadcrumb": breadcrumb,
+            "plan_ca_ref": plan_ca_ref,
+            "report": args.report,
+        })
+
         print(f"✅ Task #{task_id} marked complete")
         print(f"   Breadcrumb: {breadcrumb}")
         print(f"   Report: {args.report[:80]}{'...' if len(args.report) > 80 else ''}")
