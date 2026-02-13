@@ -223,7 +223,3 @@ def detect_replacement_mode(event_log_path: str, since_ts: float) -> str:
     return "deduplicate"
 
 
-def get_event_log_path() -> str:
-    """Get the event log path for mode detection."""
-    agent_home = os.environ.get("MACEFF_AGENT_HOME_DIR", os.getcwd())
-    return os.path.join(agent_home, ".maceff", "agent_events_log.jsonl")
