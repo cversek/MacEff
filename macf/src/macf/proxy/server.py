@@ -233,87 +233,40 @@ def _capture_response(data, resp_meta: dict, model: str, streaming: bool = True)
 
 # --------------- Policy injection state tracking ---------------
 
-def _detect_expected_injections() -> set:
+def _detect_current_injections(messages: list) -> dict:
     """
-    Proactive startup detection: Read event log to find in_progress tasks,
-    lookup manifest mappings, return expected policy names.
-
-    Uses canonical reverse scan pattern from event_queries.py.
-    Scans in REVERSE (most recent first) with first-event-wins deduplication.
-
-    Returns set of policy names that should be active based on task state.
-    """
-    try:
-        from ..agent_events_log import get_log_path
-        from ..task.events import get_active_tasks_from_events
-        from ..policy.injection import get_expected_policies_for_active_tasks
-
-        event_log_path = get_log_path()
-        print(f"[proxy:startup] 📂 Event log path: {event_log_path}", file=sys.stderr)
-
-        if not event_log_path.exists():
-            print(f"[proxy:startup] ❌ Event log not found at path", file=sys.stderr)
-            return set()
-
-        active_tasks = get_active_tasks_from_events()
-
-        print(f"[proxy:startup] 🔍 Found {len(active_tasks)} in_progress task(s)", file=sys.stderr)
-        for task_id, task_type in active_tasks.items():
-            print(f"[proxy:startup]   - Task #{task_id} ({task_type})", file=sys.stderr)
-
-        if not active_tasks:
-            return set()
-
-        expected = get_expected_policies_for_active_tasks(active_tasks)
-        for task_id, task_type in active_tasks.items():
-            from ..utils.manifest import get_policies_for_task_type
-            policies = get_policies_for_task_type(task_type)
-            if policies:
-                print(f"[proxy:startup]   → {task_type}: {policies}", file=sys.stderr)
-
-        return expected
-
-    except Exception as e:
-        print(f"[proxy:startup] ERROR in expected injection detection: {e}", file=sys.stderr)
-        return set()
-
-
-def _detect_current_injections(messages: list) -> set:
-    """
-    Scan messages for currently active policy injections.
-    Returns set of policy names that have full injection blocks.
+    Scan request messages for policy injection content.
+    Returns dict of {policy_name: byte_size} for full injection blocks found.
+    Only scans user-role messages to avoid false positives from assistant
+    messages that quote/discuss the tag format in code output.
     """
     import re
 
-    FULL_INJECTION_PATTERN = re.compile(
-        r'<macf-policy-injection\s+policy="([^"]+)">',
+    FULL_BLOCK_PATTERN = re.compile(
+        r'(<macf-policy-injection\s+policy="([^"]+)">.*?</macf-policy-injection>)',
         re.DOTALL
     )
 
-    active = set()
+    found = {}
     for msg in messages:
-        # Only scan user messages — hook additionalContext appears as
-        # system-reminders in user-role messages. Skip assistant messages
-        # which may quote/discuss the tag format in code output, causing
-        # false positives.
         if msg.get("role") != "user":
             continue
         content = msg.get("content", "")
         if isinstance(content, str):
-            for match in FULL_INJECTION_PATTERN.finditer(content):
-                name = match.group(1)
+            for match in FULL_BLOCK_PATTERN.finditer(content):
+                name = match.group(2)
                 # Skip template strings from source code (e.g., "{policy_name}")
                 if "{" not in name and "}" not in name:
-                    active.add(name)
+                    found[name] = found.get(name, 0) + len(match.group(1).encode('utf-8'))
         elif isinstance(content, list):
             for block in content:
                 if isinstance(block, dict) and block.get("type") == "text":
                     text = block.get("text", "")
-                    for match in FULL_INJECTION_PATTERN.finditer(text):
-                        name = match.group(1)
+                    for match in FULL_BLOCK_PATTERN.finditer(text):
+                        name = match.group(2)
                         if "{" not in name and "}" not in name:
-                            active.add(name)
-    return active
+                            found[name] = found.get(name, 0) + len(match.group(1).encode('utf-8'))
+    return found
 
 
 # --------------- aiohttp handlers ---------------
@@ -364,53 +317,28 @@ def _create_app():
 
             if messages and is_main_conversation:
                 # Detect current injections BEFORE rewriting
+                # Stateless: scan this request independently, report content found
                 current_injections = _detect_current_injections(messages)
-                previous_injections = request.app.get("previous_injections", None)
-
-                # On first request, report initial detection AND compare vs expected
-                if previous_injections is None:
-                    expected = request.app.get("expected_injections_on_startup", set())
-
-                    # Report what we found in messages
-                    if current_injections:
+                if current_injections:
+                    total_bytes = sum(current_injections.values())
+                    total_tokens = total_bytes // 4  # ~4 bytes per token estimate
+                    print(
+                        f"[proxy:injection] 📋 {len(current_injections)} "
+                        f"policy injection(s) in request:",
+                        file=sys.stderr
+                    )
+                    for name, size in sorted(current_injections.items()):
+                        est_tok = size // 4
                         print(
-                            f"[proxy:injection] ⚡ FIRST REQUEST: "
-                            f"{len(current_injections)} policy injection(s) in messages: "
-                            f"{sorted(current_injections)}",
+                            f"  {name}: {size:,} bytes (~{est_tok:,} tok)",
                             file=sys.stderr
                         )
-                    else:
-                        print("[proxy:injection] ⚡ FIRST REQUEST: No policy injections in messages", file=sys.stderr)
-
-                    # Compare expected vs actual
-                    missing = expected - current_injections
-                    unexpected = current_injections - expected
-
-                    if missing or unexpected:
-                        print(f"[proxy:injection] ℹ️  FIRST REQUEST (policies not yet injected — hooks fire on tool calls):", file=sys.stderr)
-                        if missing:
-                            print(f"  ⏳ PENDING: {sorted(missing)} (will inject on next tool call)", file=sys.stderr)
-                        if unexpected:
-                            print(f"  ❓ UNEXPECTED: {sorted(unexpected)} (in messages but not expected)", file=sys.stderr)
-                    elif expected:
-                        print(f"[proxy:injection] ✅ MATCH: Expected and actual injections align", file=sys.stderr)
-                else:
-                    # Report STATE CHANGES only (no reassertions)
-                    added = current_injections - previous_injections
-                    removed = previous_injections - current_injections
-
-                    if added or removed:
-                        print(f"[proxy:injection] 🔄 STATE CHANGE:", file=sys.stderr)
-                        if added:
-                            print(f"  ➕ Added: {sorted(added)}", file=sys.stderr)
-                        if removed:
-                            print(f"  ➖ Removed: {sorted(removed)}", file=sys.stderr)
-                        print(f"  = Active: {sorted(current_injections)} ({len(current_injections)} total)", file=sys.stderr)
-
-                # Store current state for next request
-                request.app["previous_injections"] = current_injections
+                    print(
+                        f"  ─── Total: {total_bytes:,} bytes (~{total_tokens:,} tok)",
+                        file=sys.stderr
+                    )
         except Exception as e:
-            print(f"[proxy:injection] ERROR in state detection: {e}", file=sys.stderr)
+            print(f"[proxy:injection] ERROR in detection: {e}", file=sys.stderr)
 
         # Rewrite stale policy injections in request body
         try:
@@ -547,10 +475,6 @@ def run_proxy(port: int = DEFAULT_PORT, host: str = DEFAULT_HOST) -> None:
     app = _create_app()
     _write_pid(os.getpid())
 
-    # Proactive startup detection: detect expected injections BEFORE first request
-    expected_injections = _detect_expected_injections()
-    app["expected_injections_on_startup"] = expected_injections
-
     # Register cleanup for PID file
     def _cleanup_handler(signum, frame):
         _remove_pid()
@@ -561,16 +485,6 @@ def run_proxy(port: int = DEFAULT_PORT, host: str = DEFAULT_HOST) -> None:
     print(f"[proxy] listening on {host}:{port}", file=sys.stderr)
     print(f"[proxy] Log: {get_log_path()}", file=sys.stderr)
     print(f"[proxy] Activate: ANTHROPIC_BASE_URL=http://{host}:{port} claude", file=sys.stderr)
-
-    # Report expected injection state at startup
-    if expected_injections:
-        print(
-            f"[proxy:startup] 🎯 EXPECTED INJECTIONS: "
-            f"{len(expected_injections)} policies should be active: {sorted(expected_injections)}",
-            file=sys.stderr
-        )
-    else:
-        print("[proxy:startup] 🎯 EXPECTED INJECTIONS: No in_progress tasks, no policies expected", file=sys.stderr)
 
     try:
         web.run_app(app, host=host, port=port, print=None)
