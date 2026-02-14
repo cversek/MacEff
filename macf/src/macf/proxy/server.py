@@ -320,21 +320,27 @@ def _create_app():
                 # Stateless: scan this request independently, report content found
                 current_injections = _detect_current_injections(messages)
                 if current_injections:
-                    total_bytes = sum(current_injections.values())
-                    total_tokens = total_bytes // 4  # ~4 bytes per token estimate
+                    policy_bytes = sum(current_injections.values())
+                    policy_ktok = round(policy_bytes / 4 / 1000)
+                    request_bytes = len(body)
+                    request_ktok = round(request_bytes / 4 / 1000)
                     print(
                         f"[proxy:injection] 📋 {len(current_injections)} "
                         f"policy injection(s) in request:",
                         file=sys.stderr
                     )
                     for name, size in sorted(current_injections.items()):
-                        est_tok = size // 4
+                        est_ktok = round(size / 4 / 1000)
                         print(
-                            f"  {name}: {size:,} bytes (~{est_tok:,} tok)",
+                            f"  {name}: {size:,} bytes (~{est_ktok}k tok)",
                             file=sys.stderr
                         )
                     print(
-                        f"  ─── Total: {total_bytes:,} bytes (~{total_tokens:,} tok)",
+                        f"  ─── Policy Injection: {policy_bytes:,} bytes (~{policy_ktok}k tok)",
+                        file=sys.stderr
+                    )
+                    print(
+                        f"  ─── Request Total: {request_bytes:,} bytes (~{request_ktok}k tok)",
                         file=sys.stderr
                     )
         except Exception as e:
