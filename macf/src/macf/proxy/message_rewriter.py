@@ -286,7 +286,11 @@ def rewrite_messages(
         return messages, stats
 
     # Stateless: determine what should be active RIGHT NOW
-    active_policies = get_active_policies(event_log_path)
+    # No event log = no retraction authority (treat all as active, dedup only)
+    if not event_log_path or not os.path.exists(event_log_path):
+        active_policies = {inj[2] for inj in injections}  # all active
+    else:
+        active_policies = get_active_policies(event_log_path)
     found_policies = {inj[2] for inj in injections}
     retract_policies = found_policies - active_policies
 
