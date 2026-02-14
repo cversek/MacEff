@@ -4381,6 +4381,7 @@ def cmd_task_pause(args: argparse.Namespace) -> int:
     """Pause work on a task - sets status back to pending."""
     from .task import TaskReader, update_task_file
     from .utils.breadcrumbs import get_breadcrumb
+    from .agent_events_log import append_event
     import json
 
     task_id_str = args.task_id.lstrip('#')
@@ -4412,8 +4413,30 @@ def cmd_task_pause(args: argparse.Namespace) -> int:
     else:
         update_task_file(task_id, {"status": "pending"})
 
+    # Emit task lifecycle event for downstream hooks and proxy integration
+    task_type = getattr(task.mtmd, 'task_type', None) if task.mtmd else None
+    append_event("task_paused", {
+        "task_id": str(task_id),
+        "task_type": task_type,
+        "breadcrumb": breadcrumb,
+    })
+
+    # Clear policy injections that were activated for this task type
+    cleared_policies = []
+    if task_type:
+        from .utils.manifest import get_policies_for_task_type
+        policies = get_policies_for_task_type(task_type)
+        for policy_name in policies:
+            append_event("policy_injection_cleared", {
+                "policy_name": policy_name,
+                "reason": f"task_paused:{task_id}",
+            })
+            cleared_policies.append(policy_name)
+
     print(f"✅ Task #{task_id} paused")
     print(f"   Breadcrumb: {breadcrumb}")
+    if cleared_policies:
+        print(f"   Cleared policies: {cleared_policies}")
     return 0
 
 

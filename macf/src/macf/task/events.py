@@ -32,7 +32,7 @@ class TaskCompletedData(TypedDict):
 
 
 class TaskPausedData(TypedDict):
-    """Schema for 'task_paused' event data. Not yet emitted by CLI."""
+    """Schema for 'task_paused' event data. Emitted by cmd_task_pause."""
     task_id: str
     task_type: str
     breadcrumb: str
