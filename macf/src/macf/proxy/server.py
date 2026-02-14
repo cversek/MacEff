@@ -292,6 +292,12 @@ def _detect_current_injections(messages: list) -> set:
 
     active = set()
     for msg in messages:
+        # Only scan user messages — hook additionalContext appears as
+        # system-reminders in user-role messages. Skip assistant messages
+        # which may quote/discuss the tag format in code output, causing
+        # false positives.
+        if msg.get("role") != "user":
+            continue
         content = msg.get("content", "")
         if isinstance(content, str):
             for match in FULL_INJECTION_PATTERN.finditer(content):
