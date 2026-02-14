@@ -600,8 +600,7 @@ def get_active_policy_injections_from_events() -> List[Dict[str, str]]:
 
     Event types:
     - policy_injection_activated: Activates injection for a policy
-    - policy_injection_delivered: Policy injected but still task-bound (skip re-injection)
-    - policy_injection_cleared: Deactivates specific policy
+    - policy_injection_cleared: Deactivates specific policy (auto-clear or lifecycle)
     - policy_injections_cleared_all: Deactivates ALL policies (early exit)
 
     Returns:
@@ -627,11 +626,10 @@ def get_active_policy_injections_from_events() -> List[Dict[str, str]]:
         if event_type in ("policy_injections_cleared_all", "compaction_detected"):
             break
 
-        elif event_type in ("policy_injection_cleared", "policy_injection_delivered"):
+        elif event_type == "policy_injection_cleared":
             policy_name = data.get("policy_name")
             if policy_name and policy_name not in policy_final_states:
-                # First time seeing this policy - it's cleared or already delivered
-                # Both mean "don't re-inject" (delivered = task-bound but already fired)
+                # First time seeing this policy - it's cleared (don't re-inject)
                 policy_final_states[policy_name] = {"state": "cleared"}
 
         elif event_type == "policy_injection_activated":
