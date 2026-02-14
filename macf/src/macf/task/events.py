@@ -8,7 +8,8 @@ NOTE: Task events are currently constructed manually in cli.py (lines ~4349, ~48
 Future refactor should use these schemas as the single source of truth for
 event construction, replacing inline dict literals with schema-based builders.
 """
-from typing import Dict, Optional, TypedDict
+import sys
+from typing import Dict, List, Optional, TypedDict
 
 
 # --- Event Schemas ---
@@ -94,3 +95,35 @@ def get_active_tasks_from_events() -> Dict[str, str]:
         for tid, state in task_final_states.items()
         if state["state"] == "active" and state["task_type"]
     }
+
+
+def emit_task_started_for_recovery(active_tasks: Dict[str, str], source: str = "compaction_recovery") -> List[str]:
+    """
+    Re-emit task_started events for in_progress tasks after compaction boundary.
+
+    Without this, get_active_tasks_from_events() cannot see pre-compaction
+    task_started events (they're behind the compaction_detected boundary).
+
+    Args:
+        active_tasks: Dict of {task_id: task_type} from pre-boundary scan
+        source: Provenance marker for the re-emitted events
+
+    Returns:
+        List of task_ids for which events were emitted
+    """
+    from ..agent_events_log import append_event
+
+    emitted = []
+    for task_id, task_type in active_tasks.items():
+        event_data: TaskStartedData = {
+            "task_id": str(task_id),
+            "task_type": task_type,
+            "breadcrumb": "",
+            "plan_ca_ref": "",
+        }
+        # Add provenance outside schema — source marks this as recovery, not original
+        append_event(TASK_STARTED, {**event_data, "source": source})
+        emitted.append(str(task_id))
+        print(f"[task:recovery] Re-emitted task_started for #{task_id} ({task_type})", file=sys.stderr)
+
+    return emitted

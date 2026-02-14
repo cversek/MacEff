@@ -341,19 +341,30 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 hook_input=data
             )
 
-            # AFTER compaction boundary: re-emit policy injections for in_progress tasks
-            # These events land AFTER the boundary, visible to post-compaction scans
+            # AFTER compaction boundary: re-emit task_started AND policy injections
+            # for in_progress tasks. Both must land AFTER the boundary so
+            # post-compaction reverse scans find them.
             if pre_compaction_active_tasks:
+                # Re-emit task_started events (so proxy/queries see active tasks)
+                from macf.task.events import emit_task_started_for_recovery
+                restarted = emit_task_started_for_recovery(
+                    pre_compaction_active_tasks,
+                    source="compaction_recovery",
+                )
+
+                # Re-emit policy injections (so PreToolUse injects policies)
                 from macf.policy.injection import emit_policy_injections_for_tasks
                 reinjected = emit_policy_injections_for_tasks(
                     pre_compaction_active_tasks,
                     source="compaction_recovery",
                 )
-                if reinjected:
+
+                if restarted or reinjected:
                     log_hook_event({
                         "hook_name": "session_start",
-                        "event_type": "POLICY_REINJECTION",
+                        "event_type": "COMPACTION_RECOVERY",
                         "tasks": dict(pre_compaction_active_tasks),
+                        "tasks_restarted": restarted,
                         "policies_reinjected": reinjected,
                     })
 
