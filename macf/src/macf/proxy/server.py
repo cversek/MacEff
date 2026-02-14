@@ -327,9 +327,7 @@ def _create_app():
                 rewrite_stats = None
                 try:
                     from .message_rewriter import rewrite_messages
-                    from ..agent_events_log import get_log_path
-                    event_log = str(get_log_path())
-                    messages, rewrite_stats = rewrite_messages(messages, event_log)
+                    messages, rewrite_stats = rewrite_messages(messages)
                     if rewrite_stats["replacements_made"] > 0:
                         body_json["messages"] = messages
                         body = json.dumps(body_json).encode("utf-8")

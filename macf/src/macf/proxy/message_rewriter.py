@@ -43,44 +43,32 @@ def make_marker(policy_name: str, marker_type: str, msg_idx: int) -> str:
     return f'<macf-policy-injection policy="{policy_name}" {marker_type}="{msg_idx}" />'
 
 
-def get_active_policies(event_log_path: str) -> set[str]:
+def get_active_policies() -> set[str]:
     """
-    Scan event log to determine which policies should currently be active.
+    Determine which policies should currently be active based on TASK STATE.
 
-    Stateless: scans full log, returns set of policy names whose most recent
-    event is 'policy_injection_activated' (not 'cleared').
+    Derives active policies from in_progress tasks and their manifest mappings,
+    NOT from injection events (which are always 'cleared' due to one-shot
+    auto-clear pattern).
+
+    Uses existing infrastructure:
+    - get_active_tasks_from_events() → {task_id: task_type} for in_progress tasks
+    - get_policies_for_task_type() → policy list per task type from manifest
     """
-    if not event_log_path or not os.path.exists(event_log_path):
-        return set()
-
-    policy_states: dict[str, str] = {}
+    active_policies: set[str] = set()
 
     try:
-        with open(event_log_path, "r") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
+        from ..task.events import get_active_tasks_from_events
+        from ..utils.manifest import get_policies_for_task_type
 
-                evt_type = event.get("event", "")
-                data = event.get("data", {})
-                policy_name = data.get("policy_name", "")
+        active_tasks = get_active_tasks_from_events()
+        for task_id, task_type in active_tasks.items():
+            policies = get_policies_for_task_type(task_type)
+            active_policies.update(policies)
+    except Exception as e:
+        print(f"[message_rewriter] ERROR determining active policies: {e}", file=sys.stderr)
 
-                if not policy_name:
-                    continue
-
-                if evt_type == "policy_injection_activated":
-                    policy_states[policy_name] = "activated"
-                elif evt_type == "policy_injection_cleared":
-                    policy_states[policy_name] = "cleared"
-    except (OSError, IOError) as e:
-        print(f"[message_rewriter] ERROR reading event log: {e}", file=sys.stderr)
-
-    return {name for name, state in policy_states.items() if state == "activated"}
+    return active_policies
 
 
 def _find_injections(messages: list[dict[str, Any]]) -> list[tuple]:
@@ -256,19 +244,17 @@ def _apply_replacements(
 
 def rewrite_messages(
     messages: list[dict[str, Any]],
-    event_log_path: str,
 ) -> tuple[list[dict[str, Any]], dict]:
     """
     Stateless policy injection rewriter.
 
     On each call:
     1. Find all policy injections in messages
-    2. Determine which policies are currently active (from event log)
+    2. Determine which policies are currently active (from task state)
     3. Retract inactive policies, deduplicate active ones
 
     Args:
         messages: The messages array from the API request body
-        event_log_path: Path to the MACF event log
 
     Returns:
         (modified_messages, stats)
@@ -285,12 +271,8 @@ def rewrite_messages(
     if not injections:
         return messages, stats
 
-    # Stateless: determine what should be active RIGHT NOW
-    # No event log = no retraction authority (treat all as active, dedup only)
-    if not event_log_path or not os.path.exists(event_log_path):
-        active_policies = {inj[2] for inj in injections}  # all active
-    else:
-        active_policies = get_active_policies(event_log_path)
+    # Stateless: determine what should be active RIGHT NOW from task state
+    active_policies = get_active_policies()
     found_policies = {inj[2] for inj in injections}
     retract_policies = found_policies - active_policies
 
