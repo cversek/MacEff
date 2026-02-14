@@ -323,21 +323,16 @@ def _create_app():
                 # 1. Detect injections BEFORE rewrite
                 pre_injections = _detect_current_injections(messages)
 
-                # 2. Run rewrite (dedup or cleanup_all)
+                # 2. Run stateless rewrite (retract inactive + dedup active)
                 rewrite_stats = None
                 try:
-                    from .message_rewriter import (
-                        rewrite_messages, detect_replacement_mode,
-                    )
+                    from .message_rewriter import rewrite_messages
                     from ..agent_events_log import get_log_path
-                    last_ts = request.app.get("last_api_call_ts", 0.0)
                     event_log = str(get_log_path())
-                    mode = detect_replacement_mode(event_log, last_ts)
-                    messages, rewrite_stats = rewrite_messages(messages, mode)
+                    messages, rewrite_stats = rewrite_messages(messages, event_log)
                     if rewrite_stats["replacements_made"] > 0:
                         body_json["messages"] = messages
                         body = json.dumps(body_json).encode("utf-8")
-                    request.app["last_api_call_ts"] = time.time()
                 except Exception as e:
                     print(f"[proxy:rewrite] ERROR (forwarding original): {e}", file=sys.stderr)
 
@@ -362,9 +357,9 @@ def _create_app():
                         ktok = round(info["bytes"] / 4 / 1000)
                         suffix = ""
                         if name not in post_injections:
-                            suffix = f" [retracted_at=t_{ts}]"
+                            suffix = f" [retracted_at={idx}]"
                         elif post_injections[name]["msg_idx"] != idx:
-                            suffix = f" [replaced_at=t_{ts}] -> {post_injections[name]['msg_idx']:3d}"
+                            suffix = f" [replaced_at={post_injections[name]['msg_idx']}]"
                         print(
                             f"  {idx:3d}: {name} ~{ktok}k ({kb} kb){suffix}",
                             file=sys.stderr
@@ -377,6 +372,18 @@ def _create_app():
                         f"  ─── Request Total: ~{request_ktok}k ({round(request_bytes / 1000, 1)} kb)",
                         file=sys.stderr
                     )
+                    if rewrite_stats and rewrite_stats["replacements_made"] > 0:
+                        saved_ktok = round(rewrite_stats["bytes_saved"] / 4 / 1000)
+                        parts = []
+                        if rewrite_stats["retracted"]:
+                            parts.append(f"retracted: {', '.join(rewrite_stats['retracted'])}")
+                        if rewrite_stats["deduplicated"]:
+                            parts.append(f"deduped: {', '.join(rewrite_stats['deduplicated'])}")
+                        print(
+                            f"  ─── Rewrite: {rewrite_stats['replacements_made']} replacement(s), "
+                            f"~{saved_ktok}k saved | {' | '.join(parts)}",
+                            file=sys.stderr
+                        )
         except Exception as e:
             print(f"[proxy:injection] ERROR: {e}", file=sys.stderr)
 
