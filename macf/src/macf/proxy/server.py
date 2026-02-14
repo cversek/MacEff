@@ -343,7 +343,15 @@ def _create_app():
             body_json = json.loads(body)
             messages = body_json.get("messages", [])
 
-            if messages:
+            # Skip hook sub-calls: only track injection state for main
+            # conversation requests. Hook sub-calls (PreToolUse, PostToolUse,
+            # etc.) are separate API calls that don't carry policy injections,
+            # causing false oscillation if tracked. The `context_management`
+            # key is present only in main conversation requests, regardless
+            # of model choice.
+            is_main_conversation = "context_management" in body_json
+
+            if messages and is_main_conversation:
                 # Detect current injections BEFORE rewriting
                 current_injections = _detect_current_injections(messages)
                 previous_injections = request.app.get("previous_injections", None)
