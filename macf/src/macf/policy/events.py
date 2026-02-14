@@ -31,25 +31,14 @@ class PolicyInjectionActivatedData(TypedDict, total=False):
 
 
 class PolicyInjectionClearedData(TypedDict):
-    """Schema for 'policy_injection_cleared' event data."""
+    """Schema for 'policy_injection_cleared' event data.
+
+    Emitted after one-shot injection fires (auto_clear_after_fire),
+    or when task pauses/completes, or on manual clear.
+    """
     policy_name: str
     reason: Optional[str]   # e.g., "auto_clear_after_fire", or omitted for manual clear
     session_id: Optional[str]
-
-
-class PolicyInjectionDeliveredData(TypedDict):
-    """Schema for 'policy_injection_delivered' event data.
-
-    Emitted when a task-bound policy has been injected into additionalContext
-    but should remain "active" for proxy tracking until the task ends.
-    Prevents re-injection on subsequent tool calls without clearing the
-    injection (which would make the proxy report it as missing).
-
-    Contrast with 'cleared': delivered = injected but still task-bound,
-    cleared = no longer needed (task paused/completed/manual clear).
-    """
-    policy_name: str
-    source: str             # original source: "task_type_auto", "compaction_recovery"
 
 
 class PolicyInjectionsClearedAllData(TypedDict):
@@ -59,16 +48,11 @@ class PolicyInjectionsClearedAllData(TypedDict):
 
 # Event type constants
 POLICY_INJECTION_ACTIVATED = "policy_injection_activated"
-POLICY_INJECTION_DELIVERED = "policy_injection_delivered"
 POLICY_INJECTION_CLEARED = "policy_injection_cleared"
 POLICY_INJECTIONS_CLEARED_ALL = "policy_injections_cleared_all"
 
-# Sources that indicate task-bound injections (don't auto-clear)
-TASK_BOUND_SOURCES = {"task_type_auto", "compaction_recovery"}
-
 POLICY_LIFECYCLE_EVENTS = {
     POLICY_INJECTION_ACTIVATED,
-    POLICY_INJECTION_DELIVERED,
     POLICY_INJECTION_CLEARED,
     POLICY_INJECTIONS_CLEARED_ALL,
 }

@@ -382,9 +382,9 @@ def _create_app():
                     unexpected = current_injections - expected
 
                     if missing or unexpected:
-                        print(f"[proxy:injection] ⚠️  MISMATCH DETECTED:", file=sys.stderr)
+                        print(f"[proxy:injection] ℹ️  FIRST REQUEST (policies not yet injected — hooks fire on tool calls):", file=sys.stderr)
                         if missing:
-                            print(f"  ❌ MISSING: {sorted(missing)} (expected but not in messages)", file=sys.stderr)
+                            print(f"  ⏳ PENDING: {sorted(missing)} (will inject on next tool call)", file=sys.stderr)
                         if unexpected:
                             print(f"  ❓ UNEXPECTED: {sorted(unexpected)} (in messages but not expected)", file=sys.stderr)
                     elif expected:
