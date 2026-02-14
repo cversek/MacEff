@@ -236,9 +236,9 @@ def _capture_response(data, resp_meta: dict, model: str, streaming: bool = True)
 def _detect_current_injections(messages: list) -> dict:
     """
     Scan request messages for policy injection content.
-    Returns dict of {policy_name: byte_size} for full injection blocks found.
-    Only scans user-role messages to avoid false positives from assistant
-    messages that quote/discuss the tag format in code output.
+    Returns dict of {policy_name: {"bytes": int, "msg_idx": int}} for full
+    injection blocks found. Only scans user-role messages to avoid false
+    positives from assistant messages that quote/discuss the tag format.
     """
     import re
 
@@ -248,24 +248,27 @@ def _detect_current_injections(messages: list) -> dict:
     )
 
     found = {}
-    for msg in messages:
+    for i, msg in enumerate(messages):
         if msg.get("role") != "user":
             continue
         content = msg.get("content", "")
+        texts = []
         if isinstance(content, str):
-            for match in FULL_BLOCK_PATTERN.finditer(content):
-                name = match.group(2)
-                # Skip template strings from source code (e.g., "{policy_name}")
-                if "{" not in name and "}" not in name:
-                    found[name] = found.get(name, 0) + len(match.group(1).encode('utf-8'))
+            texts.append(content)
         elif isinstance(content, list):
             for block in content:
                 if isinstance(block, dict) and block.get("type") == "text":
-                    text = block.get("text", "")
-                    for match in FULL_BLOCK_PATTERN.finditer(text):
-                        name = match.group(2)
-                        if "{" not in name and "}" not in name:
-                            found[name] = found.get(name, 0) + len(match.group(1).encode('utf-8'))
+                    texts.append(block.get("text", ""))
+        for text in texts:
+            for match in FULL_BLOCK_PATTERN.finditer(text):
+                name = match.group(2)
+                # Skip template strings from source code (e.g., "{policy_name}")
+                if "{" not in name and "}" not in name:
+                    block_bytes = len(match.group(1).encode('utf-8'))
+                    if name in found:
+                        found[name]["bytes"] += block_bytes
+                    else:
+                        found[name] = {"bytes": block_bytes, "msg_idx": i}
     return found
 
 
@@ -274,6 +277,7 @@ def _detect_current_injections(messages: list) -> dict:
 def _create_app():
     """Create aiohttp application with proxy routes."""
     from aiohttp import web, ClientSession, TCPConnector
+    from aiohttp.client_exceptions import ClientConnectionResetError
 
     # Shared client session for connection reuse
     _client_session = None
@@ -302,75 +306,79 @@ def _create_app():
         req_meta = _extract_request_meta(body)
         _log_event(req_meta)
 
-        # Detect and report policy injection state changes
+        # Detect policy injections, rewrite if needed, report
         try:
             body_json = json.loads(body)
             messages = body_json.get("messages", [])
 
-            # Skip hook sub-calls: only track injection state for main
-            # conversation requests. Hook sub-calls (PreToolUse, PostToolUse,
-            # etc.) are separate API calls that don't carry policy injections,
-            # causing false oscillation if tracked. The `context_management`
-            # key is present only in main conversation requests, regardless
-            # of model choice.
+            # Skip hook sub-calls: only process main conversation requests.
+            # Hook sub-calls don't carry policy injections. The
+            # `context_management` key distinguishes main requests.
             is_main_conversation = "context_management" in body_json
 
             if messages and is_main_conversation:
-                # Detect current injections BEFORE rewriting
-                # Stateless: scan this request independently, report content found
-                current_injections = _detect_current_injections(messages)
-                if current_injections:
-                    policy_bytes = sum(current_injections.values())
-                    policy_ktok = round(policy_bytes / 4 / 1000)
+                n_messages = len(messages)
+                ts = int(time.time())
+
+                # 1. Detect injections BEFORE rewrite
+                pre_injections = _detect_current_injections(messages)
+
+                # 2. Run rewrite (dedup or cleanup_all)
+                rewrite_stats = None
+                try:
+                    from .message_rewriter import (
+                        rewrite_messages, detect_replacement_mode,
+                    )
+                    from ..agent_events_log import get_log_path
+                    last_ts = request.app.get("last_api_call_ts", 0.0)
+                    event_log = str(get_log_path())
+                    mode = detect_replacement_mode(event_log, last_ts)
+                    messages, rewrite_stats = rewrite_messages(messages, mode)
+                    if rewrite_stats["replacements_made"] > 0:
+                        body_json["messages"] = messages
+                        body = json.dumps(body_json).encode("utf-8")
+                    request.app["last_api_call_ts"] = time.time()
+                except Exception as e:
+                    print(f"[proxy:rewrite] ERROR (forwarding original): {e}", file=sys.stderr)
+
+                # 3. Detect injections AFTER rewrite
+                post_injections = _detect_current_injections(messages) if rewrite_stats and rewrite_stats["replacements_made"] > 0 else pre_injections
+
+                # 4. Report
+                if pre_injections:
                     request_bytes = len(body)
                     request_ktok = round(request_bytes / 4 / 1000)
+                    policy_bytes = sum(info["bytes"] for info in pre_injections.values())
+                    policy_ktok = round(policy_bytes / 4 / 1000)
                     print(
-                        f"[proxy:injection] 📋 {len(current_injections)} "
-                        f"policy injection(s) in request:",
+                        f"[proxy:injection] 📋 {len(pre_injections)} "
+                        f"policy injection(s) in request ({n_messages} messages):",
                         file=sys.stderr
                     )
-                    for name, size in sorted(current_injections.items()):
-                        est_ktok = round(size / 4 / 1000)
+                    for name in sorted(pre_injections):
+                        info = pre_injections[name]
+                        idx = info["msg_idx"]
+                        kb = round(info["bytes"] / 1000, 1)
+                        ktok = round(info["bytes"] / 4 / 1000)
+                        suffix = ""
+                        if name not in post_injections:
+                            suffix = f" [retracted_at=t_{ts}]"
+                        elif post_injections[name]["msg_idx"] != idx:
+                            suffix = f" [replaced_at=t_{ts}] -> {post_injections[name]['msg_idx']:3d}"
                         print(
-                            f"  {name}: {size:,} bytes (~{est_ktok}k tok)",
+                            f"  {idx:3d}: {name} ~{ktok}k ({kb} kb){suffix}",
                             file=sys.stderr
                         )
                     print(
-                        f"  ─── Policy Injection: {policy_bytes:,} bytes (~{policy_ktok}k tok)",
+                        f"  ─── Policy Injection: ~{policy_ktok}k ({round(policy_bytes / 1000, 1)} kb)",
                         file=sys.stderr
                     )
                     print(
-                        f"  ─── Request Total: {request_bytes:,} bytes (~{request_ktok}k tok)",
+                        f"  ─── Request Total: ~{request_ktok}k ({round(request_bytes / 1000, 1)} kb)",
                         file=sys.stderr
                     )
         except Exception as e:
-            print(f"[proxy:injection] ERROR in detection: {e}", file=sys.stderr)
-
-        # Rewrite stale policy injections in request body
-        try:
-            from .message_rewriter import (
-                rewrite_messages, detect_replacement_mode,
-            )
-            from ..agent_events_log import get_log_path
-            body_json = json.loads(body)
-            messages = body_json.get("messages", [])
-            if messages:
-                last_ts = request.app.get("last_api_call_ts", 0.0)
-                event_log = str(get_log_path())
-                mode = detect_replacement_mode(event_log, last_ts)
-                messages, rewrite_stats = rewrite_messages(messages, mode)
-                if rewrite_stats["replacements_made"] > 0:
-                    body_json["messages"] = messages
-                    body = json.dumps(body_json).encode("utf-8")
-                    print(
-                        f"[proxy:rewrite] Replaced {rewrite_stats['replacements_made']} "
-                        f"injection(s), saved ~{rewrite_stats['bytes_saved']} bytes "
-                        f"(mode={mode}, policies={rewrite_stats['policies_replaced']})",
-                        file=sys.stderr,
-                    )
-            request.app["last_api_call_ts"] = time.time()
-        except Exception as e:
-            print(f"[proxy:rewrite] ERROR in message rewrite (forwarding original): {e}", file=sys.stderr)
+            print(f"[proxy:injection] ERROR: {e}", file=sys.stderr)
 
         headers = _forward_headers(request)
         target_url = f"{ANTHROPIC_API_URL}{request.path}"
@@ -392,12 +400,25 @@ def _create_app():
 
                 resp_meta = {}
                 sse_chunks = []  # Buffer for response capture
+                client_disconnected = False
                 async for chunk in upstream.content.iter_any():
-                    await resp.write(chunk)
+                    if not client_disconnected:
+                        try:
+                            await resp.write(chunk)
+                        except (ConnectionResetError, ConnectionError,
+                                ClientConnectionResetError):
+                            client_disconnected = True
+                            print(
+                                f"[proxy] Client disconnected during stream "
+                                f"(model={req_meta.get('model', '?')}), "
+                                f"continuing capture",
+                                file=sys.stderr
+                            )
                     sse_chunks.append(chunk)
                     _parse_sse_chunk(chunk, resp_meta)
 
-                await resp.write_eof()
+                if not client_disconnected:
+                    await resp.write_eof()
 
                 # Log response metadata
                 resp_meta["type"] = "api_response"
