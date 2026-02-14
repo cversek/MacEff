@@ -301,13 +301,18 @@ def _detect_current_injections(messages: list) -> set:
         content = msg.get("content", "")
         if isinstance(content, str):
             for match in FULL_INJECTION_PATTERN.finditer(content):
-                active.add(match.group(1))
+                name = match.group(1)
+                # Skip template strings from source code (e.g., "{policy_name}")
+                if "{" not in name and "}" not in name:
+                    active.add(name)
         elif isinstance(content, list):
             for block in content:
                 if isinstance(block, dict) and block.get("type") == "text":
                     text = block.get("text", "")
                     for match in FULL_INJECTION_PATTERN.finditer(text):
-                        active.add(match.group(1))
+                        name = match.group(1)
+                        if "{" not in name and "}" not in name:
+                            active.add(name)
     return active
 
 
