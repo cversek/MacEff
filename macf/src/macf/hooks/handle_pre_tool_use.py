@@ -103,8 +103,9 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         token_info = get_token_info(session_id)
 
         # Build policy injection content (if any active injections)
-        # DESIGN: "Injection not IV" - policies fire ONCE then auto-clear
-        # This prevents brutal context cost on every tool call
+        # DESIGN: "Injection not IV" - policies fire ONCE then mark delivered/cleared
+        # One-shot injections auto-clear; task-bound injections mark "delivered"
+        # (won't re-inject but stay "active" for proxy tracking until task ends)
         injection_content = ""
         injection_errors = []
         injected_policies = []  # Track successful injections for auto-clear
@@ -125,16 +126,30 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 else:
                     injection_errors.append(f"{policy_name}: file not found at {policy_path}")
 
-        # Auto-clear injections after they fire (injection, not IV)
+        # Auto-clear or mark-delivered after injection fires
+        # Task-bound injections (task_type_auto, compaction_recovery) persist
+        # until task pause/complete — emit "delivered" instead of "cleared"
+        from macf.policy.events import TASK_BOUND_SOURCES
         for policy_name in injected_policies:
-            append_event(
-                event="policy_injection_cleared",
-                data={
-                    "policy_name": policy_name,
-                    "reason": "auto_clear_after_fire",
-                    "session_id": session_id
-                }
-            )
+            inj_data = next((i for i in active_injections if i.get("policy_name") == policy_name), {})
+            source = inj_data.get("source", "")
+            if source in TASK_BOUND_SOURCES:
+                append_event(
+                    event="policy_injection_delivered",
+                    data={
+                        "policy_name": policy_name,
+                        "source": source,
+                    }
+                )
+            else:
+                append_event(
+                    event="policy_injection_cleared",
+                    data={
+                        "policy_name": policy_name,
+                        "reason": "auto_clear_after_fire",
+                        "session_id": session_id
+                    }
+                )
 
         # Base temporal message with breadcrumb
         timestamp = get_minimal_timestamp()

@@ -600,6 +600,7 @@ def get_active_policy_injections_from_events() -> List[Dict[str, str]]:
 
     Event types:
     - policy_injection_activated: Activates injection for a policy
+    - policy_injection_delivered: Policy injected but still task-bound (skip re-injection)
     - policy_injection_cleared: Deactivates specific policy
     - policy_injections_cleared_all: Deactivates ALL policies (early exit)
 
@@ -626,25 +627,28 @@ def get_active_policy_injections_from_events() -> List[Dict[str, str]]:
         if event_type in ("policy_injections_cleared_all", "compaction_detected"):
             break
 
-        elif event_type == "policy_injection_cleared":
+        elif event_type in ("policy_injection_cleared", "policy_injection_delivered"):
             policy_name = data.get("policy_name")
             if policy_name and policy_name not in policy_final_states:
-                # First time seeing this policy - it's cleared
+                # First time seeing this policy - it's cleared or already delivered
+                # Both mean "don't re-inject" (delivered = task-bound but already fired)
                 policy_final_states[policy_name] = {"state": "cleared"}
 
         elif event_type == "policy_injection_activated":
             policy_name = data.get("policy_name")
             policy_path = data.get("policy_path", "")
+            source = data.get("source", "")
             if policy_name and policy_name not in policy_final_states:
                 # First time seeing this policy - it's active
                 policy_final_states[policy_name] = {
                     "state": "active",
-                    "policy_path": policy_path
+                    "policy_path": policy_path,
+                    "source": source,
                 }
 
     # Filter to only active policies and format output
     return [
-        {"policy_name": name, "policy_path": state["policy_path"]}
+        {"policy_name": name, "policy_path": state["policy_path"], "source": state.get("source", "")}
         for name, state in policy_final_states.items()
         if state.get("state") == "active"
     ]
