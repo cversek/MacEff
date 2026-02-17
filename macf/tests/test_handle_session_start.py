@@ -381,5 +381,83 @@ def test_source_compact_logs_method(mock_dependencies):
         assert 'session_id' in event
 
 
+def test_source_resume_skips_compaction_detection(mock_dependencies):
+    """Test μC resume skips JSONL fallback — no false cycle increment.
+
+    Bug #151: When source='resume' (μC), the JSONL transcript still contains
+    compact_boundary markers from an earlier real compaction. Without the fix,
+    PHASE 3 fallback scanning finds these stale markers and falsely increments
+    the cycle counter.
+
+    This test sets detect_compaction to return True (simulating stale markers)
+    and verifies that resume bypasses it entirely.
+    """
+    from macf.hooks.handle_session_start import run
+    import json
+    from unittest.mock import patch
+
+    # Prepare input with source='resume'
+    input_data = {"source": "resume", "session_id": "test123"}
+    stdin_json = json.dumps(input_data)
+
+    # CRITICAL: Set detect_compaction to True — simulates stale compact_boundary
+    # markers in the JSONL from an earlier real compaction. The fix must ensure
+    # this is never called for resume.
+    mock_dependencies['detect_compaction'].return_value = True
+
+    # Mock temporal context for the non-compaction path
+    with patch('macf.hooks.handle_session_start.get_temporal_context') as mock_temporal, \
+         patch('macf.hooks.handle_session_start.get_rich_environment_string') as mock_env, \
+         patch('macf.hooks.handle_session_start.get_breadcrumb') as mock_breadcrumb, \
+         patch('macf.hooks.handle_session_start.get_last_session_end_time_from_events') as mock_last_end, \
+         patch('macf.hooks.handle_session_start.get_token_info') as mock_token, \
+         patch('macf.hooks.handle_session_start.format_token_context_full') as mock_token_fmt, \
+         patch('macf.hooks.handle_session_start.format_manifest_awareness') as mock_manifest, \
+         patch('macf.hooks.handle_session_start.format_macf_footer') as mock_footer, \
+         patch('macf.hooks.handle_session_start.get_compaction_count_from_events') as mock_compact_count, \
+         patch('macf.hooks.handle_session_start.log_hook_event') as mock_log, \
+         patch('time.time') as mock_time:
+
+        mock_temporal.return_value = {
+            'timestamp_formatted': 'Tuesday, Feb 17, 2026 at 09:30:00 AM EST',
+            'day_of_week': 'Tuesday',
+            'time_of_day': 'Morning'
+        }
+        mock_env.return_value = 'Host System'
+        mock_breadcrumb.return_value = 's_d4abc33b/c_460/g_35aa682/p_test/t_1771338000'
+        mock_token.return_value = {}
+        mock_token_fmt.return_value = 'Token: 73k/200k (37%)'
+        mock_manifest.return_value = ''
+        mock_footer.return_value = 'MACF Tools'
+        mock_time.return_value = 1771338000.0
+        mock_last_end.return_value = 1771338000.0 - 10.0  # 10 seconds ago
+        mock_compact_count.return_value = {'count': 66, 'from_snapshot': True}
+
+        result = run(stdin_json)
+
+        # 1. No compaction recovery — normal temporal awareness message
+        assert result["continue"] is True
+        context = result["hookSpecificOutput"]["additionalContext"]
+        assert "🏗️ MACF | Session Start" in context
+        assert "Session Context:" in context
+
+        # 2. Recovery message was NOT formatted (no compaction path)
+        mock_dependencies['format_message'].assert_not_called()
+
+        # 3. detect_compaction was NEVER called (JSONL fallback skipped)
+        mock_dependencies['detect_compaction'].assert_not_called()
+
+        # 4. detect_session_migration was NEVER called (resume skips migration)
+        mock_dependencies['detect_migration'].assert_not_called()
+
+        # 5. RESUME_DETECTED event was logged
+        resume_events = [
+            call for call in mock_log.call_args_list
+            if call[0][0].get('event_type') == 'RESUME_DETECTED'
+        ]
+        assert len(resume_events) == 1
+        assert resume_events[0][0][0]['source'] == 'resume'
+
+
 # NOTE: test_cycle_increments_on_compaction removed - tested deleted increment_agent_cycle function
 # Event-first architecture: cycle tracked via compaction_detected events, not state mutations

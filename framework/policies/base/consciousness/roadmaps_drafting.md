@@ -1024,7 +1024,7 @@ BUG_FIX roadmaps document complex bug fixes that required a planning phase.
 - Simple single-file fixes (<1hr)
 - Clear scope with obvious solution
 - No architectural decisions required
-- Use `fix_plan` field in BUG task instead
+- Use `plan` field in BUG task instead
 
 ### 9.2 Naming Convention
 
@@ -1104,11 +1104,11 @@ This creates bidirectional link:
 - Task → Roadmap (via `plan_ca_ref`)
 - Roadmap → Task (via filename task_id)
 
-### 9.6 When to Use vs Simple fix_plan
+### 9.6 When to Use vs Simple plan
 
 **Rule of Thumb**: If you went through EnterPlanMode, create BUG_FIX roadmap.
 
-| Indicator | Simple fix_plan | BUG_FIX roadmap |
+| Indicator | Simple plan | BUG_FIX roadmap |
 |-----------|-----------------|-----------------|
 | Time to fix | <1hr | >1hr |
 | Files affected | 1-2 | 3+ |

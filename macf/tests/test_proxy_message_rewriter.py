@@ -18,7 +18,7 @@ from macf.proxy.message_rewriter import (
 
 def _make_injection(policy_name: str, content: str = "policy content here") -> str:
     """Helper to create a full policy injection tag."""
-    return f'<macf-policy-injection policy="{policy_name}">{content}</macf-policy-injection>'
+    return f'<macf-policy-nav-guide-injection policy="{policy_name}">{content}</macf-policy-nav-guide-injection>'
 
 
 def _make_msg(role: str, content) -> dict:
@@ -39,11 +39,11 @@ class TestMakeMarker:
 
     def test_replaced_at_marker(self):
         marker = make_marker("task_management", "replaced_at", 94)
-        assert marker == '<macf-policy-injection policy="task_management" replaced_at="94" />'
+        assert marker == '<macf-policy-nav-guide-injection policy="task_management" replaced_at="94" />'
 
     def test_retracted_at_marker(self):
         marker = make_marker("task_management", "retracted_at", 50)
-        assert marker == '<macf-policy-injection policy="task_management" retracted_at="50" />'
+        assert marker == '<macf-policy-nav-guide-injection policy="task_management" retracted_at="50" />'
 
     def test_marker_matches_pattern(self):
         marker = make_marker("coding_standards", "replaced_at", 12)

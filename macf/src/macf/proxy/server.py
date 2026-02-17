@@ -243,7 +243,7 @@ def _detect_current_injections(messages: list) -> dict:
     import re
 
     FULL_BLOCK_PATTERN = re.compile(
-        r'(<macf-policy-injection\s+policy="([^"]+)">.*?</macf-policy-injection>)',
+        r'(<macf-policy-nav-guide-injection\s+policy="([^"]+)">.*?</macf-policy-nav-guide-injection>)',
         re.DOTALL
     )
 

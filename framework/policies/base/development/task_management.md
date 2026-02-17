@@ -231,7 +231,7 @@ updates:
 | 🐙 | GH_ISSUE | - (GitHub is CA) | External GitHub issue tracked as task |
 | 📦 | ARCHIVE | - | Archived/completed hierarchy |
 | 🔧 | TASK | - | General work item (task file IS the CA) |
-| 🐛 | BUG | ⚠️ XOR | Defect - requires EITHER fix_plan OR plan_ca_ref |
+| 🐛 | BUG | ⚠️ XOR | Defect - requires EITHER plan OR plan_ca_ref |
 
 **Lightweight Phase Annotation**: For phases WITHOUT detailed subplan CAs, use `-` prefix:
 ```
@@ -245,24 +245,24 @@ BUG tasks require documentation of the fix approach via ONE of:
 
 | Field | Use Case | Format |
 |-------|----------|--------|
-| `fix_plan` | Simple fixes (<1hr, clear scope) | Inline text: "Root cause: X. Fix: Y" |
+| `plan` | Simple fixes (<1hr, clear scope) | Inline text: "Root cause: X. Fix: Y" |
 | `plan_ca_ref` | Complex fixes (planning phase occurred) | Path to BUG_FIX roadmap CA |
 
 **Rule of Thumb**: If you went through a planning phase (EnterPlanMode), use `plan_ca_ref`.
 
 **CLI Examples**:
 ```bash
-# Simple bug - inline fix_plan
-macf_tools task create bug --parent 67 --fix-plan "Root cause: int/str comparison. Fix: convert to str" "Sort failure"
+# Simple bug - inline plan
+macf_tools task create bug --parent 67 --plan "Root cause: int/str comparison. Fix: convert to str" "Sort failure"
 
 # Complex bug - reference to roadmap CA
 macf_tools task create bug --parent 67 --plan-ca-ref "agent/public/roadmaps/2026-01-28_BUG_FIX_8_Task_ID_Type_Refactor/roadmap.md" "Type refactor"
 ```
 
-**Validation**: BUG tasks require exactly ONE of `fix_plan` or `plan_ca_ref` (XOR constraint).
+**Validation**: BUG tasks require exactly ONE of `plan` or `plan_ca_ref` (XOR constraint).
 
 **Why This Matters**:
-- Simple bugs: Inline fix_plan keeps documentation lightweight
+- Simple bugs: Inline plan keeps documentation lightweight
 - Complex bugs: BUG_FIX roadmap preserves planning context, affected files, verification approach
 - XOR validation prevents both missing documentation AND redundant documentation
 
