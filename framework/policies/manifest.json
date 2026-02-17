@@ -578,7 +578,8 @@
       "GH_ISSUE": ["git_discipline", "task_management"],
       "BUG": ["coding_standards", "debugging_and_validation", "task_management"],
       "TASK": ["task_management"],
-      "PHASE": ["debugging_and_validation", "task_management"]
+      "PHASE": ["debugging_and_validation", "task_management"],
+      "SENTINEL": ["core_principles", "policy_awareness"]
     },
     "lang_extensions": {
       "description": "Future: language-specific policies injected based on project context",

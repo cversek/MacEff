@@ -490,6 +490,8 @@ def format_manifest_awareness() -> str:
             "🎯 FIRST COMMAND: `macf_tools policy list`",
             "",
             "Discovery flow: list → navigate → read",
+            "",
+            "Task System auto-surfaces CEP Nav Guides when you start work — scan questions, read sections you need",
         ]
 
         return "\n".join(lines)

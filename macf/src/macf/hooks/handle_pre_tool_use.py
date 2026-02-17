@@ -260,15 +260,10 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 },
                 hook_input=data
             )
-            message_parts.append(f"⚡ Delegating to: {subagent_type}")
+            message_parts.append("📜")
 
         elif tool_name in ["Read", "Write", "Edit"]:
-            # File operation tracking
-            file_path = tool_input.get("file_path", "")
-            if file_path:
-                # Show just filename for brevity
-                filename = file_path.split("/")[-1] if "/" in file_path else file_path
-                message_parts.append(f"📄 {tool_name}: {filename}")
+            message_parts.append("📄")
 
         elif tool_name == "Bash":
             # Command tracking (first 40 chars)
@@ -309,17 +304,16 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                             }
                         }
 
-                short_cmd = command[:40] + "..." if len(command) > 40 else command
-                message_parts.append(f"⚙️ {short_cmd}")
+                message_parts.append("⚙️")
 
-        # Format message (single line for user visibility)
-        message = " | ".join(message_parts)
+        # Format message (compact single line)
+        message = " ".join(message_parts)
 
         # Add minimal token context (high-frequency hook = minimal overhead)
         token_context_minimal = format_token_context_minimal(token_info)
 
         # Pattern C: top-level systemMessage for user + hookSpecificOutput for agent
-        user_message = f"{message} | {token_context_minimal}"
+        user_message = f"{message} {token_context_minimal}"
         # Build additionalContext with policy injections prepended
         base_context = f"<system-reminder>\n{user_message}\n</system-reminder>"
         full_context = injection_content + base_context if injection_content else base_context

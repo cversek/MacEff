@@ -276,10 +276,8 @@ def format_token_context_minimal(token_info: Dict[str, Any]) -> str:
     Returns:
         One-line string like "🌅 Fresh context | CLUAC 42 (58% used)"
     """
-    cluac = token_info['cluac_level']
-    percentage_used = token_info['percentage_used']
-    weather = get_cluac_weather(cluac)
-    return f"{weather} | CLUAC {cluac} ({percentage_used:.0f}% used)"
+    context_left_pct = token_info['cluac_level']
+    return f"CL{context_left_pct}"
 
 def format_token_context_full(token_info: Dict[str, Any]) -> str:
     """
