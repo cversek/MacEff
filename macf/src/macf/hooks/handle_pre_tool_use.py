@@ -120,7 +120,12 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 if p.exists():
                     try:
                         policy_text = p.read_text()
-                        injection_content += f'<macf-policy-injection policy="{policy_name}">\n{policy_text}\n</macf-policy-injection>\n'
+                        # Extract CEP Navigation Guide only (above boundary marker)
+                        # Full policy available via: macf_tools policy read <name>
+                        boundary = "=== CEP_NAV_BOUNDARY ==="
+                        if boundary in policy_text:
+                            policy_text = policy_text[:policy_text.index(boundary)].rstrip()
+                        injection_content += f'<macf-policy-nav-guide-injection policy="{policy_name}">\n{policy_text}\n</macf-policy-nav-guide-injection>\n'
                         injected_policies.append(policy_name)
                     except Exception as e:
                         injection_errors.append(f"{policy_name}: {e}")

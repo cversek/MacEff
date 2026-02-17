@@ -19,15 +19,15 @@ from typing import Any
 
 # Regex to match full policy injection tags (multiline content)
 FULL_INJECTION_PATTERN = re.compile(
-    r'<macf-policy-injection\s+policy="([^"]+)">'
+    r'<macf-policy-nav-guide-injection\s+policy="([^"]+)">'
     r'(.*?)'
-    r'</macf-policy-injection>',
+    r'</macf-policy-nav-guide-injection>',
     re.DOTALL
 )
 
 # Regex to match self-closing marker (already replaced/retracted)
 MARKER_PATTERN = re.compile(
-    r'<macf-policy-injection\s+policy="[^"]+"\s+(?:replaced|retracted)_at="\d+"\s*/>'
+    r'<macf-policy-nav-guide-injection\s+policy="[^"]+"\s+(?:replaced|retracted)_at="\d+"\s*/>'
 )
 
 
@@ -40,7 +40,7 @@ def make_marker(policy_name: str, marker_type: str, msg_idx: int) -> str:
                      "retracted_at" (chain terminator, self-referential)
         msg_idx: Message index this marker points to
     """
-    return f'<macf-policy-injection policy="{policy_name}" {marker_type}="{msg_idx}" />'
+    return f'<macf-policy-nav-guide-injection policy="{policy_name}" {marker_type}="{msg_idx}" />'
 
 
 def get_active_policies() -> set[str]:
