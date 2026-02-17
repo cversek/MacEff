@@ -604,7 +604,7 @@ When referencing prior checkpoints for strategic continuity:
 
 **Roadmap-Specific Pattern**:
 ```markdown
-[📦 Archive 2025-10-27 "Phases 1-4 Complete": s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890](archived_todos/2025-10-27_215009_Phases1-4_COMPLETED.md)
+[📦 Archive 2025-10-27 "Phases 1-4 Complete": s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890](archived_tasks/2025-10-27_215009_Phases1-4_COMPLETED.md)
 ```
 
 ### 5.4 Delegation Guidelines Integration

@@ -393,7 +393,7 @@ roadmaps/YYYY-MM-DD_Descriptive_Name/
 │   └── ...
 ├── friction_points/                # Friction documentation (optional)
 │   └── friction_points.md
-└── archived_todos/                 # Collapsed TODO hierarchies (MANDATORY)
+└── archived_tasks/                 # Collapsed TODO hierarchies (MANDATORY)
     ├── YYYY-MM-DD_HHMMSS_Plan_Description_COMPLETED.md
     ├── YYYY-MM-DD_HHMMSS_Plan_Description_PARTIAL.md
     ├── YYYY-MM-DD_HHMMSS_Plan_Description_ABORTED.md

@@ -183,7 +183,7 @@ Applies to all Primary Agents (PA) and Subagents (SA) with consciousness artifac
 4. **Solution exists**: Chronological filenames + breadcrumb queries provide flexible reorganization without structural mutation
 
 **Future Refinement Consideration**: "Perhaps future permissions refinements will only allow folder creation for specific CAs" - per-CA-type folder rules could restrict:
-- **Roadmaps**: Allow `subplans/`, `delegation_plans/`, `archived_todos/` (semantic components)
+- **Roadmaps**: Allow `subplans/`, `delegation_plans/`, `archived_tasks/` (semantic components)
 - **Experiments**: Allow `protocols/`, `data/`, `analysis/` (semantic components)
 - **Checkpoints**: Disallow folders entirely (flat chronological structure)
 

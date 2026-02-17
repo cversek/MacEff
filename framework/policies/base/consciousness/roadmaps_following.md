@@ -188,8 +188,8 @@ Roadmaps preserve strategic intent across context loss. This policy ensures agen
 - **Subplan paths** (Phase nodes): `subplans/phase_{num}_{desc}.md`
   - Example: `subplans/phase_2_docker.md`
   - Relative to roadmap folder
-- **Archive paths** (📦 nodes): `archived_todos/{timestamped_file}.md`
-  - Example: `archived_todos/2025-10-27_215009_Phases1-4_COMPLETED.md`
+- **Archive paths** (📦 nodes): `archived_tasks/{timestamped_file}.md`
+  - Example: `archived_tasks/2025-10-27_215009_Phases1-4_COMPLETED.md`
   - Relative to roadmap folder
 
 **Why Relative Paths**:
@@ -659,7 +659,7 @@ Archived 23 tasks to agent/public/task_archives/MacEff/v0.4.0/
 **⚠️ This section documents the OLD TodoWrite pattern for reference during transition.**
 
 The legacy pattern used TodoWrite with manual archiving:
-1. Archive hierarchical TODO tree to `archived_todos/` file
+1. Archive hierarchical TODO tree to `archived_tasks/` file
 2. Replace collapsed subtree with 📦 emoji in active TODO list
 3. Manual file creation and formatting
 
