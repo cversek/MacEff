@@ -112,7 +112,7 @@ After ExitPlanMode approval, complete these steps:
    macf_tools task create experiment "Your Title"
    ```
 2. **Copy plan content** to the skeleton protocol.md created by CLI
-3. **Create subdirectories** if needed: `artifacts/`, `archived_todos/`
+3. **Create subdirectories** if needed: `artifacts/`, `archived_tasks/`
 4. **Report** task ID and protocol path
 5. **🛑 STOP** - Await `/maceff:task:start #{TASK_ID}`
 

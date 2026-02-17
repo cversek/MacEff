@@ -1332,7 +1332,7 @@ agent/public/roadmaps/YYYY-MM-DD_{Experiment_Name}/
 ├── roadmap.md          # Main strategic plan
 ├── phases/             # Phase-specific docs
 ├── friction_points/    # If needed during execution
-└── archived_todos/     # If needed during execution
+└── archived_tasks/     # If needed during execution
 ```
 
 **4. Draft roadmap.md**:
@@ -1473,7 +1473,7 @@ MISSION: [Capability Name] → agent/public/roadmaps/YYYY-MM-DD_{Name}/roadmap.m
 
 If experiment had TODO items during execution, archive them:
 ```bash
-# Archive experimental TODOs to roadmap's archived_todos/
+# Archive experimental TODOs to roadmap's archived_tasks/
 # Per task_management.md archive protocol
 ```
 
