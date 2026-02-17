@@ -2,7 +2,7 @@
 """
 handle_post_tool_use - PostToolUse hook runner.
 
-Tool completion awareness + TodoWrite tracking.
+Silent hook: emits tool_call_completed events for forensics, no message output.
 """
 import json
 import sys
@@ -20,33 +20,15 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
     """
     Run PostToolUse hook logic.
 
-    Tracks tool completions with minimal overhead:
-    - Task tool: Show delegation completion
-    - File operations: Show filename only
-    - Bash: Truncate long commands
-    - Grep/Glob: Show search patterns
-    - TodoWrite: Count status summary
-    - Minimal timestamp for high-frequency hook
-    - Stable breadcrumb (enhanced format)
-    - Minimal token context (CLUAC indicator)
-
-    Enhanced breadcrumb format (Cycle 42+): c_42/s_abc12345/p_def6789
-    - c_42: Cycle number from event log (self-describing prefix)
-    - s_abc12345: Session ID (first 8 chars, self-describing prefix)
-    - p_def6789: DEV_DRV prompt UUID (last 7 chars) - stable for entire drive
-    - No t_ timestamp in PostToolUse (only added when TODO completed)
-
-    Old format (Cycle 40): C40/abc12345/5539d35
-
-    Side effects: None (PostToolUse is read-only, no state mutations)
+    Silent: emits tool_call_completed event for forensics, returns no message.
+    PreToolUse handles all user/agent awareness output.
 
     Args:
         stdin_json: JSON string from stdin (Claude Code hook input)
-                 Currently no side-effects in PostToolUse.
         **kwargs: Additional parameters for future extensibility
 
     Returns:
-        Dict with tool completion message including stable breadcrumb
+        Dict with continue=True (no hookSpecificOutput)
     """
     try:
         # Parse hook input

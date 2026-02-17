@@ -1,124 +1,83 @@
-"""Tests for handle_post_tool_use hook module."""
+"""Tests for handle_post_tool_use hook module (silenced output, event-only)."""
+import json
 import pytest
 from unittest.mock import patch, MagicMock
 
 
 @pytest.fixture
 def mock_dependencies():
-    """Mock all external dependencies for post_tool_use handler."""
+    """Mock external dependencies for post_tool_use handler."""
     with patch('macf.hooks.handle_post_tool_use.get_current_session_id') as mock_session, \
-         patch('macf.hooks.handle_post_tool_use.get_minimal_timestamp') as mock_timestamp:
+         patch('macf.hooks.handle_post_tool_use.append_event') as mock_append, \
+         patch('macf.hooks.handle_post_tool_use.log_hook_event') as mock_log:
 
         mock_session.return_value = "test-session-123"
-        mock_timestamp.return_value = "11:45:23 PM"
 
         yield {
             'session_id': mock_session,
-            'timestamp': mock_timestamp
+            'append_event': mock_append,
+            'log_hook_event': mock_log,
         }
 
 
-def test_todowrite_status_summary(mock_dependencies, hook_stdin_todowrite):
-    """Test TodoWrite displays status summary with emoji counts."""
+def test_silent_output(mock_dependencies, hook_stdin_read_tool):
+    """PostToolUse returns continue=True with no hookSpecificOutput."""
     from macf.hooks.handle_post_tool_use import run
-
-    result = run(hook_stdin_todowrite)
-
-    assert "hookSpecificOutput" in result
-    context = result["hookSpecificOutput"]["additionalContext"]
-
-    # Should show counts: 2 completed, 1 in_progress, 3 pending
-    assert "Todos:" in context
-    assert "2" in context  # 2 completed
-    assert "1" in context  # 1 in_progress
-    assert "3" in context  # 3 pending
-
-
-def test_task_completion_display(mock_dependencies, hook_stdin_task_tool):
-    """Test Task tool shows completion message."""
-    from macf.hooks.handle_post_tool_use import run
-
-    result = run(hook_stdin_task_tool)
-
-    context = result["hookSpecificOutput"]["additionalContext"]
-
-    # Should show delegation completion
-    assert "Delegated to: devops-eng" in context or "devops-eng" in context
-
-
-def test_grep_pattern_tracking(mock_dependencies, hook_stdin_grep_tool):
-    """Test Grep pattern is truncated to 30 characters."""
-    from macf.hooks.handle_post_tool_use import run
-
-    result = run(hook_stdin_grep_tool)
-
-    context = result["hookSpecificOutput"]["additionalContext"]
-
-    # Pattern should be truncated
-    assert "..." in context
-    # Full pattern should not be present
-    assert "very long pattern that should be truncated to thirty characters" not in context
-
-
-def test_glob_pattern_tracking(mock_dependencies, hook_stdin_glob_tool):
-    """Test Glob pattern is displayed."""
-    from macf.hooks.handle_post_tool_use import run
-
-    result = run(hook_stdin_glob_tool)
-
-    context = result["hookSpecificOutput"]["additionalContext"]
-
-    # Should show glob pattern
-    assert "Glob:" in context or "**/*.py" in context
-
-
-def test_file_operation_tracking(mock_dependencies):
-    """Test Edit tool shows filename only."""
-    from macf.hooks.handle_post_tool_use import run
-
-    stdin = '{"tool_name": "Edit", "tool_input": {"file_path": "/some/path/config.yaml"}}'
-    result = run(stdin)
-
-    context = result["hookSpecificOutput"]["additionalContext"]
-
-    # Should show filename only
-    assert "config.yaml" in context
-
-
-def test_bash_command_tracking(mock_dependencies, hook_stdin_bash_tool):
-    """Test Bash command is truncated to 40 characters."""
-    from macf.hooks.handle_post_tool_use import run
-
-    result = run(hook_stdin_bash_tool)
-
-    context = result["hookSpecificOutput"]["additionalContext"]
-
-    # Command should be truncated
-    assert "..." in context
-
-
-def test_minimal_timestamp_included(mock_dependencies, hook_stdin_read_tool):
-    """Test output starts with MACF tag and timestamp."""
-    from macf.hooks.handle_post_tool_use import run
-
-    mock_dependencies['timestamp'].return_value = "11:45:23 PM"
 
     result = run(hook_stdin_read_tool)
 
-    context = result["hookSpecificOutput"]["additionalContext"]
+    assert result["continue"] is True
+    assert "hookSpecificOutput" not in result
 
-    # Should start with MACF tag and timestamp
-    assert "MACF" in context
-    assert "11:45:23 PM" in context
+
+def test_event_emission(mock_dependencies, hook_stdin_read_tool):
+    """PostToolUse emits tool_call_completed event."""
+    from macf.hooks.handle_post_tool_use import run
+
+    run(hook_stdin_read_tool)
+
+    mock_dependencies['append_event'].assert_called_once()
+    call_args = mock_dependencies['append_event'].call_args
+    assert call_args[1]['event'] == 'tool_call_completed' or call_args[0][0] == 'tool_call_completed'
+
+
+def test_event_contains_tool_name(mock_dependencies, hook_stdin_bash_tool):
+    """Event data includes tool name."""
+    from macf.hooks.handle_post_tool_use import run
+
+    run(hook_stdin_bash_tool)
+
+    call_args = mock_dependencies['append_event'].call_args
+    # data is second positional arg or keyword
+    event_data = call_args[1].get('data') or call_args[0][1]
+    assert event_data['tool'] == 'Bash'
+    assert event_data['success'] is True
+
+
+def test_large_stdout_sanitized(mock_dependencies):
+    """Large tool_response stdout is replaced with size metadata."""
+    from macf.hooks.handle_post_tool_use import run
+
+    large_output = "x" * 1000
+    stdin = json.dumps({
+        "tool_name": "Bash",
+        "tool_input": {"command": "echo hello"},
+        "tool_response": {"stdout": large_output}
+    })
+
+    run(stdin)
+
+    call_args = mock_dependencies['append_event'].call_args
+    hook_input = call_args[1].get('hook_input') or call_args[0][2]
+    assert hook_input['tool_response']['stdout'] == '[1000 bytes]'
+    assert hook_input['tool_response']['stdout_size'] == 1000
 
 
 def test_exception_handling(mock_dependencies):
-    """Test hook handles JSON parsing errors gracefully."""
+    """Hook handles JSON parsing errors gracefully."""
     from macf.hooks.handle_post_tool_use import run
 
-    # Invalid JSON should not crash
     result = run("{invalid json}")
 
-    # Should return minimal valid output
     assert result["continue"] is True
-    assert "hookSpecificOutput" in result
+    assert "hookSpecificOutput" not in result

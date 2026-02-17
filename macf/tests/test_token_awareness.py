@@ -29,10 +29,8 @@ def test_format_token_context_minimal_structure():
 
     result = format_token_context_minimal(token_info)
 
-    # Validate structure (not exact string)
-    assert "CLUAC" in result
-    assert "40" in result
-    assert "60%" in result
+    # Validate CL format (compact, no verbose CLUAC)
+    assert result == "CL40"
     assert result.count('\n') == 0  # Single line
 
 
