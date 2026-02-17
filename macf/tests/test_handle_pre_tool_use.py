@@ -31,10 +31,10 @@ def test_task_tool_deleg_drv_start(mock_dependencies, hook_stdin_task_tool):
     # start_deleg_drv should be called (event-first architecture - events isolated via fixtures)
     mock_dependencies['start_deleg'].assert_called_once()
 
-    # Verify output contains delegation message
+    # Verify output contains delegation emoji (compressed format — no descriptions)
     assert "hookSpecificOutput" in result
     context = result["hookSpecificOutput"]["additionalContext"]
-    assert "Delegating to: devops-eng" in context or "devops-eng" in context
+    assert "📜" in context
 
 
 def test_read_file_tracking(mock_dependencies, hook_stdin_read_tool):
@@ -45,9 +45,8 @@ def test_read_file_tracking(mock_dependencies, hook_stdin_read_tool):
 
     context = result["hookSpecificOutput"]["additionalContext"]
 
-    # Should show filename only, not full path
-    assert "test.py" in context
-    assert "/foo/bar/test.py" not in context or "Read: test.py" in context
+    # Should show file emoji (compressed format — no filenames)
+    assert "📄" in context
 
 
 def test_write_file_tracking(mock_dependencies, hook_stdin_write_tool):
@@ -58,8 +57,8 @@ def test_write_file_tracking(mock_dependencies, hook_stdin_write_tool):
 
     context = result["hookSpecificOutput"]["additionalContext"]
 
-    # Should show filename only
-    assert "config.yaml" in context
+    # Should show file emoji (compressed format — no filenames)
+    assert "📄" in context
 
 
 def test_bash_command_tracking(mock_dependencies, hook_stdin_bash_tool):
@@ -70,8 +69,8 @@ def test_bash_command_tracking(mock_dependencies, hook_stdin_bash_tool):
 
     context = result["hookSpecificOutput"]["additionalContext"]
 
-    # Command should be truncated
-    assert "..." in context
+    # Should show bash emoji (compressed format — no commands)
+    assert "⚙️" in context
     # Full command should not be present
     assert "very long command that exceeds forty characters and needs truncation" not in context
 
