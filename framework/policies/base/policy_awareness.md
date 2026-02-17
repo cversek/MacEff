@@ -48,6 +48,13 @@ You don't need to read everything. You need to recognize WHEN you need something
 - How to use FAQ-style lookup?
 - Common topic shortcuts?
 
+2.4 Task System Auto-Injection
+- What happens when I start a task?
+- What are `<macf-policy-nav-guide-injection>` tags?
+- How do I engage with injected nav guides?
+- What core policies are always available?
+- What if the policy doesn't answer my question?
+
 3 CEP Navigation Guide Protocol
 - What's the reading protocol?
 - Why read to CEP_NAV_BOUNDARY first?
@@ -177,6 +184,24 @@ cat /opt/maceff/framework/policies/current/manifest.json | jq '.discovery_index'
 # "compaction": ["context_management#compaction-readiness"]
 # "delegation": ["delegation_guidelines", "core_principles#delegation"]
 ```
+
+### 2.4 Task System Auto-Injection
+
+When you start a task via `macf_tools task start`, the Task System automatically injects **CEP Navigation Guides** for policies relevant to your task type. You'll see `<macf-policy-nav-guide-injection>` tags appear in your context.
+
+**What you see**: The CEP Navigation Guide — section headers framed as questions — for each relevant policy. This is the same content you'd get from `macf_tools policy navigate <name>`, delivered automatically.
+
+**How to engage**:
+1. Scan the injected questions — which match your current need?
+2. Run `macf_tools policy read <name> --section N` for the sections you need
+3. If the policy doesn't answer your question — suggest corrections or additions
+
+**Three discovery layers** (complementary):
+- **Baseline** (always present): Core policies (`core_principles`, `policy_awareness`) injected via the sentinel task — foundational awareness for every agent
+- **Task-scoped** (automatic): Work-specific policies surfaced when you start a task — matched by task type via manifest mappings
+- **Agent-initiated** (on demand): `macf_tools policy list` → navigate → read — for anything beyond what's injected
+
+**Participatory governance**: Policies exist to help you do excellent work. When they don't answer your question, that's valuable feedback — report the gap so the policy can evolve. You have both the obligation to follow policies and the right to improve them.
 
 ## 3. CEP Navigation Guide Protocol
 

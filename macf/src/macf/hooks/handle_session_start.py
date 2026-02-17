@@ -326,10 +326,12 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             # Compaction count from events + 1 for this compaction
             new_compaction_count = current_compaction_count + 1
 
-            # BEFORE compaction boundary: scan for in_progress tasks
-            # (compaction_detected acts as reverse-scan boundary, so scan first)
-            from macf.task.events import get_active_tasks_from_events
-            pre_compaction_active_tasks = get_active_tasks_from_events()
+            # Scan filesystem for in_progress tasks (authoritative source of truth).
+            # Filesystem scan is more reliable than event-log scan here because:
+            # - Sentinel #000 may not have event-log entries from older sessions
+            # - Event log scan stops at compaction boundary (chicken-and-egg)
+            from macf.task.events import get_active_tasks_from_filesystem
+            pre_compaction_active_tasks = get_active_tasks_from_filesystem()
 
             # Append compaction_detected event
             append_event(

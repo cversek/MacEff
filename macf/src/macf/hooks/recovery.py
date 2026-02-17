@@ -201,6 +201,10 @@ Parallel tool calls are FORBIDDEN in recovery protocol. Read one artifact, integ
   - WAIT for user's actual response (may be approval, correction, or redirection)
   - User will verify Read tool was called 2 times in sequence
 
+ℹ️ NOTE: Active tasks have been re-injected for policy awareness.
+  CEP Nav Guides will appear on your next tool use — this is expected.
+  Scan questions, read sections you need via: macf_tools policy read <name> --section N
+
 □ Step 4: AWAIT user instructions
   - NO development work until user explicitly authorizes
   - Full consciousness engaged and ready for direction

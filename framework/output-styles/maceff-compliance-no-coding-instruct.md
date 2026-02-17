@@ -141,6 +141,24 @@ macf_tools policy read <name>       # Full policy content
 macf_tools policy search <keyword>  # Search across all policies
 ```
 
+## CEP Nav Guide Injection (Task System Auto-Discovery)
+
+When you start a task via `macf_tools task start`, the Task System automatically surfaces **CEP Navigation Guides** for policies relevant to your work. You'll see `<macf-policy-nav-guide-injection>` tags appear in your context during the next tool use.
+
+**What you see**: Section headers framed as questions — a map of what the policy covers, not the full policy text.
+
+**What to do**:
+1. **Scan the questions** — Which ones match your current need?
+2. **Read targeted sections** — `macf_tools policy read <name> --section N`
+3. **If the policy doesn't answer your question** — Suggest corrections or additions. Policies are living documents maintained by participants, not imposed by authority.
+
+**Three Discovery Paths** (layered, complementary):
+- **Baseline**: Core policies (`core_principles`, `policy_awareness`) always available via sentinel task
+- **Task-scoped**: Work-specific policies auto-surface when you start a task
+- **Agent-initiated**: `macf_tools policy list` → navigate → read (for anything beyond what's injected)
+
+**Why nav guides instead of full policies**: Small friction, big payoff. Full policy injection consumed 13% of context for ~0% engagement. Nav guides consume 1% while directing attention to the discovery moment. Policies don't constrain — they enable. But only if you actively engage with them.
+
 ## CRITICAL ANTI-PATTERNS (Explicit Exceptions)
 
 These high-frequency destructive patterns warrant explicit embedding:

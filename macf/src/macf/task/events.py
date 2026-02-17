@@ -97,6 +97,41 @@ def get_active_tasks_from_events() -> Dict[str, str]:
     }
 
 
+def get_active_tasks_from_filesystem() -> Dict[str, str]:
+    """
+    Get all in_progress tasks by reading task JSON files from disk.
+
+    Filesystem-based complement to get_active_tasks_from_events().
+    Reads task files directly, extracts task_type from MTMD metadata.
+    Useful for recovery scenarios where event log may be incomplete
+    (e.g., sentinel task #000 created before event emission existed,
+    or after compaction clears event history).
+
+    Returns:
+        Dict of {task_id: task_type} for tasks with status "in_progress".
+    """
+    from .reader import TaskReader
+    from .protection import get_task_type
+
+    active: Dict[str, str] = {}
+    try:
+        reader = TaskReader()
+        for task in reader.read_all_tasks():
+            if task.status == "in_progress":
+                # Extract task_type: MTMD is authoritative, subject emoji is fallback
+                task_type = None
+                if task.mtmd and task.mtmd.task_type:
+                    task_type = task.mtmd.task_type
+                else:
+                    task_type = get_task_type(task.description or "", task.subject or "")
+                if task_type:
+                    active[task.id] = task_type
+    except (FileNotFoundError, OSError) as e:
+        print(f"⚠️ MACF: Filesystem task scan failed: {e}", file=sys.stderr)
+
+    return active
+
+
 def emit_task_started_for_recovery(active_tasks: Dict[str, str], source: str = "compaction_recovery") -> List[str]:
     """
     Re-emit task_started events for in_progress tasks after compaction boundary.

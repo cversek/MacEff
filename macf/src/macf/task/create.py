@@ -170,7 +170,13 @@ def _ensure_sentinel_task(session_path: Path) -> None:
     sentinel_data = {
         "id": SENTINEL_TASK_ID,
         "subject": f"{ANSI_BOLD}{ANSI_ORANGE}🛡️ MACF TASK LIST{ANSI_RESET}",
-        "description": """# MACF Task List Sentinel
+        "description": """<macf_task_metadata version="1.0">
+task_type: SENTINEL
+created_by: MACF
+parent_id: null
+</macf_task_metadata>
+
+# MACF Task List Sentinel
 
 **Purpose**: This is a permanent system task that protects the task list from CC purge.
 
@@ -203,6 +209,21 @@ Claude Code purges ALL task files when all tasks become 'completed'. This sentin
 
     # Make sentinel read-only (444) - can't be accidentally modified
     os.chmod(sentinel_file, stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
+
+    # Emit task_started event so sentinel appears in get_active_tasks_from_events()
+    # This enables core policy injection via manifest task_type_policies SENTINEL mapping
+    try:
+        from ..agent_events_log import append_event
+        from .events import TASK_STARTED
+        append_event(TASK_STARTED, {
+            "task_id": SENTINEL_TASK_ID,
+            "task_type": "SENTINEL",
+            "breadcrumb": "",
+            "plan_ca_ref": "",
+            "source": "sentinel_creation",
+        })
+    except Exception as e:
+        print(f"⚠️ MACF: Sentinel event emission failed: {e}", file=sys.stderr)
 
 
 @dataclass
