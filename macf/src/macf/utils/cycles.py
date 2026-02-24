@@ -14,21 +14,21 @@ from .json_io import read_json
 # NOTE: event_queries imported lazily inside functions to avoid circular import
 # (cycles.py -> event_queries -> agent_events_log -> utils -> cycles.py)
 
-def detect_auto_mode(session_id: str) -> Tuple[bool, str, float]:
+def detect_auto_mode(session_id: str) -> Tuple[bool, str]:
     """
-    Hierarchical AUTO_MODE detection with confidence scoring.
+    Hierarchical AUTO_MODE detection.
 
     Priority (highest to lowest):
-    1. CLI flag --auto-mode (not implemented yet, return None)
-    2. Environment variable MACF_AUTO_MODE=true/false - confidence 0.9
-    3. Event log (previous setting) - confidence 0.5
-    4. Default (False, "default", 0.0)
+    1. CLI flag --auto-mode (not implemented yet)
+    2. Environment variable MACF_AUTO_MODE=true/false
+    3. Event log (most recent mode_change event)
+    4. Default (False, "default")
 
     Args:
         session_id: Session identifier
 
     Returns:
-        Tuple of (enabled: bool, source: str, confidence: float)
+        Tuple of (enabled: bool, source: str)
     """
     try:
         # 1. CLI flag (not implemented yet)
@@ -37,25 +37,24 @@ def detect_auto_mode(session_id: str) -> Tuple[bool, str, float]:
         # 2. Environment variable
         env_value = os.environ.get('MACF_AUTO_MODE', '').lower()
         if env_value in ('true', '1', 'yes'):
-            return (True, "env", 0.9)
+            return (True, "env")
         elif env_value in ('false', '0', 'no'):
-            return (False, "env", 0.9)
+            return (False, "env")
 
         # 3. Event log (previous setting) - EVENT-FIRST architecture
         try:
             from ..event_queries import get_auto_mode_from_events
-            auto_mode, source, confidence = get_auto_mode_from_events(session_id)
+            auto_mode, source = get_auto_mode_from_events(session_id)
             if source != "default":
-                # Only use if it was set explicitly before
-                return (auto_mode, "session", 0.5)
+                return (auto_mode, "event")
         except Exception as e:
             print(f"⚠️ MACF: Event log auto_mode query failed: {e}", file=sys.stderr)
 
-        # 5. Default
-        return (False, "default", 0.0)
+        # 4. Default
+        return (False, "default")
     except Exception as e:
         print(f"⚠️ MACF: Auto-mode detection failed (fallback: MANUAL): {e}", file=sys.stderr)
-        return (False, "default", 0.0)
+        return (False, "default")
 
 def set_auto_mode(
     enabled: bool,

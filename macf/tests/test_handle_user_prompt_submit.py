@@ -30,7 +30,7 @@ def mock_dependencies():
             'tokens_used': 100000,
             'tokens_remaining': 100000
         }
-        mock_auto.return_value = (False, "default", 0.0)
+        mock_auto.return_value = (False, "default")
         mock_breadcrumb.return_value = "s_test/c_1/g_abc1234/p_def5678/t_1234567890"
         mock_env.return_value = "Host System"
         mock_prompt_uuid.return_value = "prompt-uuid-abc123"

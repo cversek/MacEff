@@ -19,59 +19,43 @@ class TestDetectAutoMode:
     """Tests for detect_auto_mode() function."""
 
     def test_env_var_true_returns_auto_mode_enabled(self, monkeypatch):
-        """Environment variable 'true' enables AUTO_MODE with high confidence."""
+        """Environment variable 'true' enables AUTO_MODE."""
         monkeypatch.setenv('MACF_AUTO_MODE', 'true')
 
-        enabled, source, confidence = detect_auto_mode("test-session")
+        enabled, source = detect_auto_mode("test-session")
 
         assert enabled is True
         assert source == "env"
-        assert confidence == 0.9
 
     def test_env_var_false_returns_manual_mode(self, monkeypatch):
-        """Environment variable 'false' disables AUTO_MODE with high confidence."""
+        """Environment variable 'false' disables AUTO_MODE."""
         monkeypatch.setenv('MACF_AUTO_MODE', 'false')
 
-        enabled, source, confidence = detect_auto_mode("test-session")
+        enabled, source = detect_auto_mode("test-session")
 
         assert enabled is False
         assert source == "env"
-        assert confidence == 0.9
-
-    # NOTE: test_config_file_auto_mode_when_no_env_var removed in Cycle 314
-    # Config.json path was removed in Cycle 313 (commit ce6089e) - event-first architecture
 
     def test_defaults_to_manual_mode_when_no_config(self, monkeypatch, isolated_events_log):
         """Returns MANUAL_MODE (False) with default source when no config found."""
         monkeypatch.delenv('MACF_AUTO_MODE', raising=False)
 
-        # Mock find_agent_home to raise exception (no agent home found)
         with patch('macf.utils.cycles.find_agent_home', side_effect=OSError("No agent home")):
-            enabled, source, confidence = detect_auto_mode("test-session")
+            enabled, source = detect_auto_mode("test-session")
 
             assert enabled is False
             assert source == "default"
-            assert confidence == 0.0
 
-    def test_confidence_scores_in_valid_range(self, monkeypatch, isolated_events_log):
-        """Confidence scores are between 0.0 and 1.0."""
+    def test_source_values_are_valid(self, monkeypatch, isolated_events_log):
+        """Source strings are from expected set."""
         test_cases = [
-            ('true', 'env', 0.9),
-            ('false', 'env', 0.9),
-            ('', 'default', 0.0)
+            ('true', 'env'),
+            ('false', 'env'),
         ]
 
-        for env_value, expected_source, expected_confidence in test_cases:
-            if env_value:
-                monkeypatch.setenv('MACF_AUTO_MODE', env_value)
-            else:
-                monkeypatch.delenv('MACF_AUTO_MODE', raising=False)
-                with patch('macf.utils.cycles.find_agent_home', side_effect=OSError()):
-                    pass
-
-            enabled, source, confidence = detect_auto_mode("test-session")
-
-            assert 0.0 <= confidence <= 1.0
+        for env_value, expected_source in test_cases:
+            monkeypatch.setenv('MACF_AUTO_MODE', env_value)
+            enabled, source = detect_auto_mode("test-session")
             assert source == expected_source
 
 

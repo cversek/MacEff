@@ -16,7 +16,7 @@ def mock_dependencies():
 
         mock_session.return_value = "test-session-123"
         mock_detect.return_value = False
-        mock_auto.return_value = (False, "default", 0.0)
+        mock_auto.return_value = (False, "default")
         # Mock detect_session_migration to return no migration by default
         mock_detect_migration.return_value = (False, "", "")
         # Mock cycle number (event-first)
@@ -148,7 +148,7 @@ def test_compaction_detected_manual_mode(mock_dependencies):
     from macf.hooks.handle_session_start import run
 
     mock_dependencies['detect_compaction'].return_value = True
-    mock_dependencies['auto_mode'].return_value = (False, "default", 0.0)
+    mock_dependencies['auto_mode'].return_value = (False, "default")
     mock_dependencies['format_message'].return_value = "MANUAL mode recovery instructions"
 
     result = run("", testing=True)
@@ -174,7 +174,7 @@ def test_compaction_detected_auto_mode(mock_dependencies):
     stdin_json = json.dumps(input_data)
 
     mock_dependencies['detect_compaction'].return_value = True
-    mock_dependencies['auto_mode'].return_value = (True, "env", 0.9)
+    mock_dependencies['auto_mode'].return_value = (True, "env")
     mock_dependencies['format_message'].return_value = "AUTO mode authorization message"
 
     with patch('macf.hooks.handle_session_start.get_temporal_context') as mock_temporal, \
