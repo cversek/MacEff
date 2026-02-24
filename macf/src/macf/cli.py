@@ -199,7 +199,7 @@ def cmd_env(args: argparse.Namespace) -> int:
     hooks_count = len(list(hooks_dir.glob("*.py"))) if hooks_dir and hooks_dir.exists() else 0
 
     # Get auto mode status
-    auto_enabled, _, _ = detect_auto_mode(session_id)
+    auto_enabled, _ = detect_auto_mode(session_id)
 
     # Resolve paths safely
     def resolve_path(p):
@@ -2384,7 +2384,7 @@ def cmd_mode_get(args: argparse.Namespace) -> int:
 
     try:
         session_id = get_current_session_id()
-        enabled, source, confidence = detect_auto_mode(session_id)
+        enabled, source = detect_auto_mode(session_id)
 
         mode = "AUTO_MODE" if enabled else "MANUAL_MODE"
 
@@ -2393,13 +2393,12 @@ def cmd_mode_get(args: argparse.Namespace) -> int:
                 "mode": mode,
                 "enabled": enabled,
                 "source": source,
-                "confidence": confidence,
                 "session_id": session_id
             }
             print(json.dumps(data, indent=2))
         else:
             print(f"Mode: {mode}")
-            print(f"Source: {source} (confidence: {confidence})")
+            print(f"Source: {source}")
 
         return 0
 

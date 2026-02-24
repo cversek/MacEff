@@ -229,7 +229,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 environment = get_rich_environment_string()
 
                 # Detect AUTO_MODE for fresh sessions
-                auto_mode, mode_source, mode_confidence = detect_auto_mode(session_id)
+                auto_mode, mode_source = detect_auto_mode(session_id)
 
                 # Log mode detection for fresh session
                 log_hook_event({
@@ -237,8 +237,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                     "event_type": "FRESH_SESSION_MODE_DETECTED",
                     "session_id": session_id,
                     "auto_mode": auto_mode,
-                    "mode_source": mode_source,
-                    "mode_confidence": mode_confidence
+                    "mode_source": mode_source
                 })
 
                 # Branch based on mode
@@ -302,7 +301,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             # Get current values from events BEFORE modifications
             compaction_info = get_compaction_count_from_events(session_id)
             current_compaction_count = compaction_info.get('count', 0)
-            auto_mode, auto_mode_source, confidence = detect_auto_mode(session_id)
+            auto_mode, auto_mode_source = detect_auto_mode(session_id)
 
             # Emit state snapshot BEFORE modifications (preserves historical baseline)
             # All values from events, no state files
@@ -370,8 +369,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                     "session_id": session_id,
                     "cycle": cycle_number,
                     "auto_mode": auto_mode,
-                    "source": auto_mode_source,
-                    "confidence": confidence
+                    "source": auto_mode_source
                 },
                 hook_input=data
             )

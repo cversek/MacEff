@@ -68,12 +68,12 @@ def realistic_session_events(test_session_id):
         "timestamp": 1000.0
     })
 
-    # Auto mode detection
-    append_event("auto_mode_detected", {
+    # Mode change (authoritative setting - what macf_tools mode set emits)
+    append_event("mode_change", {
+        "mode": "AUTO_MODE",
+        "enabled": True,
         "session_id": test_session_id,
-        "auto_mode": True,
-        "source": "env_var",
-        "confidence": 1.0
+        "auth_validated": True
     })
 
     # First DEV_DRV cycle
@@ -156,12 +156,11 @@ def test_event_first_auto_mode(realistic_session_events):
 
     This test will FAIL until implementation switches to event-first reads.
     """
-    auto_mode, source, confidence = get_auto_mode_from_events(realistic_session_events)
+    auto_mode, source = get_auto_mode_from_events(realistic_session_events)
 
-    # Should detect from events
-    assert auto_mode is True, "Should detect auto_mode from events"
-    assert source == "env_var", "Should preserve source information"
-    assert confidence == 1.0, "Should preserve confidence value"
+    # Should detect from mode_change event (authoritative setting)
+    assert auto_mode is True, "Should detect auto_mode from mode_change event"
+    assert source == "event", "Should report event as source"
 
 
 # =============================================================================
@@ -195,10 +194,9 @@ def test_event_first_with_missing_events(test_session_id):
     result = get_compaction_count_from_events(test_session_id)
     assert result["count"] == 0
 
-    auto_mode, source, confidence = get_auto_mode_from_events(test_session_id)
+    auto_mode, source = get_auto_mode_from_events(test_session_id)
     assert auto_mode is False
     assert source == "default"
-    assert confidence == 0.0
 
 
 def test_event_first_partial_events(test_session_id):

@@ -273,7 +273,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 # AUTO_MODE: warn but continue (safeguards warn, don't block)
                 # MANUAL_MODE: block violation
                 if _is_bare_cd_command(command):
-                    auto_mode, _, _ = detect_auto_mode(session_id)
+                    auto_mode, _ = detect_auto_mode(session_id)
 
                     # Truncate command for display
                     cmd_preview = command[:80] + "..." if len(command) > 80 else command

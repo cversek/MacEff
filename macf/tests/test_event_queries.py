@@ -154,12 +154,12 @@ def populated_auto_mode_events(test_session_id):
         "cycle": 202
     })
 
-    # Auto mode detected from environment variable
-    append_event("auto_mode_detected", {
+    # Mode change (authoritative setting)
+    append_event("mode_change", {
+        "mode": "AUTO_MODE",
+        "enabled": True,
         "session_id": test_session_id,
-        "auto_mode": True,
-        "source": "env_var",
-        "confidence": 1.0
+        "auth_validated": True
     })
 
     return test_session_id
@@ -434,74 +434,69 @@ def test_compaction_count_distinguishes_sources(test_session_id):
 # =============================================================================
 
 def test_auto_mode_basic_detection(populated_auto_mode_events):
-    """Test auto_mode detection from events."""
+    """Test auto_mode detection from mode_change events."""
     from macf.event_queries import get_auto_mode_from_events
 
-    auto_mode, source, confidence = get_auto_mode_from_events(populated_auto_mode_events)
+    auto_mode, source = get_auto_mode_from_events(populated_auto_mode_events)
 
     assert auto_mode is True
-    assert source == "env_var"
-    assert confidence == 1.0
+    assert source == "event"
 
 
 def test_auto_mode_empty_log(test_session_id):
     """Test auto_mode with no events (should return defaults)."""
     from macf.event_queries import get_auto_mode_from_events
 
-    auto_mode, source, confidence = get_auto_mode_from_events(test_session_id)
+    auto_mode, source = get_auto_mode_from_events(test_session_id)
 
-    # Should return default (False, "default", 0.0)
     assert auto_mode is False
     assert source == "default"
-    assert confidence == 0.0
 
 
 def test_auto_mode_priority_ordering(test_session_id):
-    """Test auto_mode detection respects source priority."""
+    """Test most recent mode_change wins."""
     from macf.event_queries import get_auto_mode_from_events
 
-    # Lower priority source first
-    append_event("auto_mode_detected", {
+    # First: enable AUTO_MODE
+    append_event("mode_change", {
+        "mode": "AUTO_MODE",
+        "enabled": True,
         "session_id": test_session_id,
-        "auto_mode": False,
-        "source": "config",
-        "confidence": 0.8
+        "auth_validated": True
     })
 
-    # Higher priority source later
-    append_event("auto_mode_detected", {
+    # Later: disable back to MANUAL_MODE
+    append_event("mode_change", {
+        "mode": "MANUAL_MODE",
+        "enabled": False,
         "session_id": test_session_id,
-        "auto_mode": True,
-        "source": "env_var",
-        "confidence": 1.0
+        "auth_validated": False
     })
 
-    auto_mode, source, confidence = get_auto_mode_from_events(test_session_id)
+    auto_mode, source = get_auto_mode_from_events(test_session_id)
 
-    # Should return higher priority source (env_var)
-    assert auto_mode is True
-    assert source == "env_var"
-    assert confidence == 1.0
+    # Most recent mode_change wins — MANUAL_MODE was last
+    assert auto_mode is False
+    assert source == "event"
 
 
 def test_auto_mode_session_isolation(populated_auto_mode_events, different_session_id):
     """Test auto_mode only uses events from specified session."""
     from macf.event_queries import get_auto_mode_from_events
 
-    # Add auto_mode event for different session
-    append_event("auto_mode_detected", {
+    # Add mode_change for different session (should be ignored)
+    append_event("mode_change", {
+        "mode": "MANUAL_MODE",
+        "enabled": False,
         "session_id": different_session_id,
-        "auto_mode": False,
-        "source": "config",
-        "confidence": 0.9
+        "auth_validated": False
     })
 
-    # Query original session
-    auto_mode, source, confidence = get_auto_mode_from_events(populated_auto_mode_events)
+    # Query original session — should still see AUTO_MODE
+    auto_mode, source = get_auto_mode_from_events(populated_auto_mode_events)
 
-    # Should return original session's values, not other session's
     assert auto_mode is True
-    assert source == "env_var"
+    assert source == "event"
 
 
 # ==================== get_nth_event tests ====================

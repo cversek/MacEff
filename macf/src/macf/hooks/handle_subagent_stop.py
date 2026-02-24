@@ -79,7 +79,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
 
         # Get token context and auto_mode
         token_info = get_token_info(session_id)
-        auto_mode, _, _ = detect_auto_mode(session_id)
+        auto_mode, _ = detect_auto_mode(session_id)
 
         # Format duration from seconds
         def format_duration_local(seconds):

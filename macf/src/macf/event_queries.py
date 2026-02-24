@@ -525,39 +525,32 @@ def get_last_session_end_time_from_events() -> Optional[float]:
     return None
 
 
-def get_auto_mode_from_events(session_id: str) -> Tuple[bool, str, float]:
+def get_auto_mode_from_events(session_id: str) -> Tuple[bool, str]:
     """
-    Get auto_mode setting from most recent auto_mode_detected event.
+    Get auto_mode setting from most recent mode_change event.
 
-    Searches for most recent auto_mode_detected event for the specified session.
-    Higher priority sources (env_var) override lower priority (config).
+    Searches for the most recent mode_change event (the authoritative setting)
+    to determine current operating mode. mode_change events are emitted by
+    `macf_tools mode set` and by SessionStart tunneling after compaction.
+
+    Note: Previously searched auto_mode_detected events, which are forensic
+    records emitted BY SessionStart — creating a chicken-and-egg bug where
+    the function would find its own previous (false) output instead of the
+    user's actual mode_change setting.
 
     Args:
         session_id: Session ID to filter events (uses first 8 chars for matching)
 
     Returns:
-        Tuple of (auto_mode: bool, source: str, confidence: float)
-        Default: (False, "default", 0.0)
+        Tuple of (auto_mode: bool, source: str)
+        Default: (False, "default")
     """
     # Use first 8 chars of session_id for matching
     session_prefix = session_id[:8] if session_id else ""
 
-    # Track highest priority detection
-    best_auto_mode = False
-    best_source = "default"
-    best_confidence = 0.0
-
-    # Priority order: env_var > config > default
-    priority_order = {
-        "env_var": 3,
-        "config": 2,
-        "session": 1,
-        "default": 0
-    }
-
-    # Read most recent events first
-    for event in read_events(limit=100, reverse=True):
-        if event.get("event") == "auto_mode_detected":
+    # Read most recent events first — find the latest mode_change
+    for event in read_events(limit=200, reverse=True):
+        if event.get("event") == "mode_change":
             data = event.get("data", {})
             event_session = data.get("session_id", "")
 
@@ -565,25 +558,13 @@ def get_auto_mode_from_events(session_id: str) -> Tuple[bool, str, float]:
             if session_prefix and event_session and not event_session.startswith(session_prefix):
                 continue
 
-            auto_mode = data.get("auto_mode", False)
-            source = data.get("source", "default")
-            confidence = data.get("confidence", 0.0)
+            mode = data.get("mode", "MANUAL_MODE")
+            enabled = data.get("enabled", False)
+            auto_mode = (mode == "AUTO_MODE" and enabled)
 
-            # Check if this source has higher priority
-            current_priority = priority_order.get(source, 0)
-            best_priority = priority_order.get(best_source, 0)
+            return (auto_mode, "event")
 
-            if current_priority > best_priority:
-                best_auto_mode = auto_mode
-                best_source = source
-                best_confidence = confidence
-            elif current_priority == best_priority and best_source == "default":
-                # First detection found (reading in reverse)
-                best_auto_mode = auto_mode
-                best_source = source
-                best_confidence = confidence
-
-    return (best_auto_mode, best_source, best_confidence)
+    return (False, "default")
 
 
 def get_active_policy_injections_from_events() -> List[Dict[str, str]]:

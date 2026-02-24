@@ -204,7 +204,7 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
                     #   tokens_used_with_buffer = current_tokens + buffer
                     try:
                         from .cycles import detect_auto_mode
-                        auto_mode, _, _ = detect_auto_mode(session_id)
+                        auto_mode, _ = detect_auto_mode(session_id)
                         if auto_mode:
                             cluac_level = max(0, cluac_level - 16)
                     except (ImportError, OSError, KeyError) as e:
