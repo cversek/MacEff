@@ -66,12 +66,10 @@ def set_auto_mode(
     """
     Set AUTO_MODE for current session with optional auth token validation.
 
-    Mode persistence is SOURCE-AWARE (per autonomous_operation.md policy):
-    - compact (auto-compaction): Mode PRESERVED across compaction
-    - resume (crash/restart): Mode RESET to MANUAL_MODE
-
-    This function sets mode for the current session. SessionStart hook
-    handles persistence logic based on source field.
+    Mode persistence across compaction is handled by SessionStart hook:
+    the hook detects AUTO_MODE before emitting compact_boundary, then
+    re-emits a mode_change event after the boundary so the post-compaction
+    agent can detect it via normal event query.
 
     Args:
         enabled: True for AUTO_MODE, False for MANUAL_MODE
@@ -125,5 +123,3 @@ def set_auto_mode(
 
     except Exception as e:
         return (False, f"Error setting mode: {e}")
-
-

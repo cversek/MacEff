@@ -345,6 +345,23 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 hook_input=data
             )
 
+            # Tunnel AUTO_MODE through compaction boundary:
+            # Re-emit mode_change event AFTER compact_boundary so
+            # post-compaction detect_auto_mode() finds it via event query.
+            if auto_mode:
+                append_event(
+                    event="mode_change",
+                    data={
+                        "mode": "AUTO_MODE",
+                        "enabled": True,
+                        "session_id": session_id,
+                        "auth_validated": True,
+                        "tunneled_through_compaction": True,
+                        "cycle": cycle_number
+                    },
+                    hook_input=data
+                )
+
             # Append auto_mode_detected event for forensic reconstruction
             # (auto_mode already detected earlier for state snapshot)
             append_event(

@@ -537,6 +537,7 @@ Configure HTTP/HTTPS proxies for corporate environments. All Claude Code network
 | `HTTP_PROXY` | HTTP proxy server | ✅ Official docs |
 | `HTTPS_PROXY` | HTTPS proxy server | ✅ Official docs |
 | `NO_PROXY` | Domains/IPs to bypass proxy | ✅ Official docs |
+| `ANTHROPIC_BASE_URL` | Override Anthropic API endpoint. Set to `http://localhost:PORT` to route through local proxy for API call interception. Works with Claude Max OAuth — no API key needed. | ✅ Anthropic SDK standard; empirically validated Cycle 425 (Experiment #008) |
 
 ---
 
@@ -622,6 +623,8 @@ These settings work but are not officially documented. Use with caution—they m
 | Field/Variable | Type | Description | Source |
 |----------------|------|-------------|--------|
 | `alwaysThinkingEnabled` | boolean | Enable extended thinking for all requests | ❓ GitHub #8780, empirical |
+| `CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE` | env (int) | Override token count at which CC blocks further input. Default calculates from model context window. Set to e.g. `197000` to delay blocking. Found in `qc()` function (cli.js:3463 v2.1.39). | ❓ [#19018 comment](https://github.com/anthropics/claude-code/issues/19018#issuecomment-3774787319); empirical Cycle 420 |
+| `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` | env (int?) | May override autocompact percentage threshold. Extracted from CC source but **NOT empirically validated**. | ❓ CC source forensics Cycle 420; UNVERIFIED |
 
 **Discovery Note**: Undocumented settings may change without notice. Verify against official docs before relying on them in production.
 
@@ -647,6 +650,9 @@ Command-line arguments override settings.json values. This table maps CLI flags 
 | Issue | Description | Status |
 |-------|-------------|--------|
 | #8780 | `alwaysThinkingEnabled` not documented | Open |
+| [#22671](https://github.com/anthropics/claude-code/issues/22671) | CC reads `message_start` not `message_delta` for token tracking — causes 60x undercounting of output_tokens in JSONL | Open |
+| [#24856](https://github.com/anthropics/claude-code/issues/24856) | Blocking limit fires at ~85% instead of ~99% due to token tracking bug | Open (filed Cycle 419) |
+| [#16785](https://github.com/anthropics/claude-code/issues/16785) | Proxy `stop_reason` handling inconsistency | Open |
 
 ---
 
@@ -658,6 +664,13 @@ MACF maintains its own settings file at `.maceff/settings.json` in the project r
 |-------|------|-------------|
 | `auto_mode_auth_token` | string | Authorization token for AUTO_MODE activation |
 | `description` | string | Human-readable description of the settings file |
+
+### MACF Environment Variables
+
+| Variable | Description | Source |
+|----------|-------------|--------|
+| `MACF_PROXY_CAPTURE_DIR` | Directory for full API request/response JSON dumps when proxy is running. Enables forensic analysis of CC API behavior. | MACF proxy system (Experiment #008, Cycle 425) |
+| `MACF_AGENT_ROOT` | Override agent root directory for consciousness artifact path resolution. | MACF configuration system |
 
 ### AUTO_MODE Authorization
 
@@ -723,6 +736,10 @@ For containerized agents, use default permissions and disable sandboxing (contai
 | Official Settings Docs | https://code.claude.com/docs/en/settings | 2025-12-09 |
 | Official Hooks Docs | https://code.claude.com/docs/en/hooks | 2025-12-09 |
 | GitHub #8780 | https://github.com/anthropics/claude-code/issues/8780 | 2025-12-09 |
+| GitHub #19018 (blocking limit workaround) | https://github.com/anthropics/claude-code/issues/19018#issuecomment-3774787319 | 2026-02-10 |
+| GitHub #22671 (message_delta) | https://github.com/anthropics/claude-code/issues/22671 | 2026-02-10 |
+| GitHub #24856 (blocking limit bug) | https://github.com/anthropics/claude-code/issues/24856 | 2026-02-10 |
+| GitHub #16785 (proxy stop_reason) | https://github.com/anthropics/claude-code/issues/16785 | 2026-02-10 |
 
 ---
 
@@ -731,6 +748,7 @@ For containerized agents, use default permissions and disable sandboxing (contai
 | Date | Version | Changes | Breadcrumb |
 |------|---------|---------|------------|
 | 2025-12-09 | 1.0.0 | Initial comprehensive documentation with hooks schema | s_1b969d39/c_227/g_6d0bf44 |
+| 2026-02-17 | 1.1.0 | Added ANTHROPIC_BASE_URL, MACF_PROXY_CAPTURE_DIR, MACF_AGENT_ROOT, CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE, CLAUDE_AUTOCOMPACT_PCT_OVERRIDE. Added 4 known issues. Added MACF env vars section. | s_d4abc33b/c_463/g_c2c5bf2 |
 
 ---
 
