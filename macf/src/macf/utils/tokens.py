@@ -185,15 +185,8 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
                         current_tokens = last_assistant_tokens
 
                 if current_tokens > 0:
-                    # Add autocompact buffer dynamically based on settings
-                    # Buffer is 45k if autocompact enabled, 0 if disabled
-                    autocompact_enabled = get_autocompact_setting()
-                    buffer = 45000 if autocompact_enabled else 0
-                    tokens_used_with_buffer = current_tokens + buffer
-                    tokens_remaining = max_tokens - tokens_used_with_buffer
-
-                    # CLUAC is percentage REMAINING (not used)
-                    # This matches the original CLUAC protocol where higher numbers = more danger
+                    # Calculate raw CLUAC from actual token usage
+                    tokens_remaining = max_tokens - current_tokens
                     percentage_remaining = (
                         (tokens_remaining / max_tokens) * 100 if max_tokens > 0 else 0
                     )
@@ -201,6 +194,21 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
                     # CLUAC100 = 100% remaining (0% used)
                     # CLUAC1 = 1% remaining (99% used)
                     cluac_level = round(percentage_remaining)
+
+                    # AUTO_MODE penalty: subtract 16 CL points to account for
+                    # autocompaction buffer (~45k reserve that CC holds back).
+                    # In MANUAL_MODE autocompaction is off so no penalty needed.
+                    # OLD METHOD (revert if needed): added 45k buffer to tokens_used
+                    #   autocompact_enabled = get_autocompact_setting()
+                    #   buffer = 45000 if autocompact_enabled else 0
+                    #   tokens_used_with_buffer = current_tokens + buffer
+                    try:
+                        from .cycles import detect_auto_mode
+                        auto_mode, _, _ = detect_auto_mode(session_id)
+                        if auto_mode:
+                            cluac_level = max(0, cluac_level - 16)
+                    except (ImportError, OSError, KeyError) as e:
+                        print(f"⚠️ MACF: AUTO_MODE detection failed (using raw CLUAC): {e}", file=sys.stderr)
 
                     # Smart cache update: detect compaction events
                     # If current is significantly less than cached (>1k difference), update cache
@@ -218,9 +226,9 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
                         )
 
                     return {
-                        "tokens_used": tokens_used_with_buffer,
+                        "tokens_used": current_tokens,
                         "tokens_remaining": tokens_remaining,
-                        "percentage_used": (tokens_used_with_buffer / max_tokens) * 100,
+                        "percentage_used": (current_tokens / max_tokens) * 100,
                         "percentage_remaining": percentage_remaining,
                         "cluac_level": cluac_level,
                         "last_updated": last_timestamp,
