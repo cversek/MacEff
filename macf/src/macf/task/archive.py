@@ -105,7 +105,19 @@ def archive_task(
 
     # Create archive directory
     archive_dir = get_archive_dir()
-    archive_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        archive_dir.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        return ArchiveResult(
+            success=False,
+            task_id=task_id,
+            error=(
+                f"Permission denied creating {archive_dir}. "
+                f"The parent directory (agent/public/) may be read-only (550). "
+                f"Fix: create task_archives/ as root with 750 permissions, "
+                f"or upgrade MacEff to a version where start.py creates it at init time."
+            ),
+        )
 
     # Build list of tasks to archive (task + children if cascade)
     tasks_to_archive = [task]

@@ -442,6 +442,14 @@ def create_agent_tree(username: str, agent_spec: AgentSpec, defaults_config: Opt
                 run_command(['chown', f'{username}:agents_all', str(artifact_dir)])
                 run_command(['chmod', '750', str(artifact_dir)])
 
+    # Create task_archives directory (MACF infrastructure, always needed)
+    # This is NOT a consciousness artifact type — it's where task archive JSON goes.
+    # Must be created at init time because agent/public/ is immutable (550).
+    task_archives = public / 'task_archives'
+    task_archives.mkdir(mode=0o750, exist_ok=True)
+    run_command(['chown', f'{username}:agents_all', str(task_archives)])
+    run_command(['chmod', '750', str(task_archives)])
+
     # Create subagents directory (owner-only, like private)
     subagents = agent / 'subagents'
     subagents.mkdir(mode=0o500, exist_ok=True)
