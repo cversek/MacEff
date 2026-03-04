@@ -146,9 +146,11 @@ def create_pa_user(agent_name: str, agent_spec: AgentSpec, defaults_dict: Option
         log(f"PA user created: {username}")
 
     # Ensure home directory exists with correct permissions
+    # 710 + group=agents_all: owner full access, other PAs can traverse (for agent/public/ access)
     home_dir = Path(f'/home/{username}')
-    home_dir.mkdir(mode=0o755, exist_ok=True)
-    run_command(['chown', f'{username}:{username}', str(home_dir)])
+    home_dir.mkdir(mode=0o710, exist_ok=True)
+    run_command(['chown', f'{username}:agents_all', str(home_dir)])
+    run_command(['chmod', '710', str(home_dir)])
 
     # Provision persistent agent identity (UUID + GECOS field)
     display_name = getattr(agent_spec, 'display_name', None)
@@ -382,9 +384,10 @@ def create_agent_tree(username: str, agent_spec: AgentSpec, defaults_config: Opt
     home = Path(f'/home/{username}')
     agent = home / 'agent'
 
-    # Create root agent directory (read-only parent)
-    agent.mkdir(mode=0o555, exist_ok=True)
-    run_command(['chown', 'root:root', str(agent)])
+    # Create root agent directory (group=agents_all for cross-PA traversal)
+    agent.mkdir(mode=0o550, exist_ok=True)
+    run_command(['chown', f'root:agents_all', str(agent)])
+    run_command(['chmod', '550', str(agent)])
 
     # Create private and public directories
     private = agent / 'private'
@@ -398,48 +401,52 @@ def create_agent_tree(username: str, agent_spec: AgentSpec, defaults_config: Opt
     # Check immutable_structure flag (defaults to True for governance)
     immutable = getattr(ca_config, 'immutable_structure', True) if ca_config else True
 
+    # Private: owner-only (other PAs cannot read)
+    # Public: group-readable via agents_all (other PAs can read)
     if immutable:
-        # Read-only parent dirs prevent agents from creating new CA types
-        parent_mode_private = 0o555  # r-xr-xr-x (read-only, no mkdir)
-        parent_mode_public = 0o555   # r-xr-xr-x (read-only, no mkdir)
+        parent_mode_private = 0o500  # r-x------ (owner-only, no mkdir)
+        parent_mode_public = 0o550   # r-xr-x--- (group=agents_all readable, no mkdir)
     else:
-        # Standard permissions allow agents to create new directories
-        parent_mode_private = 0o750  # rwxr-x--- (writable)
-        parent_mode_public = 0o755   # rwxr-xr-x (writable)
+        parent_mode_private = 0o700  # rwx------ (owner-only, writable)
+        parent_mode_public = 0o750   # rwxr-x--- (group=agents_all readable, writable)
 
     private.mkdir(mode=parent_mode_private, exist_ok=True)
     public.mkdir(mode=parent_mode_public, exist_ok=True)
 
+    # Private: owner's group only; Public: agents_all for cross-PA access
     run_command(['chown', f'{username}:{username}', str(private)])
-    run_command(['chown', f'{username}:{username}', str(public)])
+    run_command(['chown', f'{username}:agents_all', str(public)])
 
     # Explicitly enforce permissions (mkdir mode= is unreliable due to umask)
     if immutable:
-        run_command(['chmod', '555', str(private)])
-        run_command(['chmod', '555', str(public)])
+        run_command(['chmod', '500', str(private)])
+        run_command(['chmod', '550', str(public)])
     else:
-        run_command(['chmod', '750', str(private)])
-        run_command(['chmod', '755', str(public)])
+        run_command(['chmod', '700', str(private)])
+        run_command(['chmod', '750', str(public)])
 
     if ca_config:
-        # Private artifacts
+        # Private artifacts (owner-only: other PAs cannot access)
         if ca_config.private:
             for artifact_type in ca_config.private:
                 artifact_dir = private / artifact_type
-                artifact_dir.mkdir(mode=0o750, exist_ok=True)
+                artifact_dir.mkdir(mode=0o700, exist_ok=True)
                 run_command(['chown', f'{username}:{username}', str(artifact_dir)])
+                run_command(['chmod', '700', str(artifact_dir)])
 
-        # Public artifacts
+        # Public artifacts (group=agents_all: other PAs can read)
         if ca_config.public:
             for artifact_type in ca_config.public:
                 artifact_dir = public / artifact_type
-                artifact_dir.mkdir(mode=0o755, exist_ok=True)
-                run_command(['chown', f'{username}:{username}', str(artifact_dir)])
+                artifact_dir.mkdir(mode=0o750, exist_ok=True)
+                run_command(['chown', f'{username}:agents_all', str(artifact_dir)])
+                run_command(['chmod', '750', str(artifact_dir)])
 
-    # Create subagents directory (read-only parent)
+    # Create subagents directory (owner-only, like private)
     subagents = agent / 'subagents'
-    subagents.mkdir(mode=0o555, exist_ok=True)
-    run_command(['chown', 'root:root', str(subagents)])
+    subagents.mkdir(mode=0o500, exist_ok=True)
+    run_command(['chown', f'{username}:{username}', str(subagents)])
+    run_command(['chmod', '500', str(subagents)])
 
 
 def create_personal_policies(username: str) -> None:
