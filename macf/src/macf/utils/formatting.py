@@ -82,21 +82,15 @@ def get_claude_code_version() -> str:
         except Exception:
             pass
 
-    # Strategy 2: Use user's shell to resolve aliases
-    user_shell = os.environ.get('SHELL', '')
-    if user_shell:
-        try:
-            result = subprocess.run(
-                [user_shell, '-ic', 'claude --version 2>/dev/null'],
-                capture_output=True, text=True, timeout=10,
-                env={**os.environ, 'PS1': ''},  # Suppress prompt
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                version = _parse_version(result.stdout)
-                if version:
-                    return version
-        except Exception:
-            pass
+    # Strategy 2: Extract version from the claude binary file content
+    # The claude binary is a self-contained node script with version embedded.
+    # This avoids executing it (which could trigger npx downloads or TTY issues).
+    import shutil
+    claude_path = shutil.which("claude")
+    if claude_path:
+        version = _extract_version_from_script(claude_path)
+        if version:
+            return version
 
     # Strategy 3: Direct binary (may find stale global install)
     try:
