@@ -17,18 +17,88 @@ from .environment import get_rich_environment_string
 @lru_cache(maxsize=1)
 def get_claude_code_version() -> str:
     """
-    Get Claude Code version via `claude --version`.
+    Get Claude Code version using multi-strategy detection.
 
     Cached to avoid repeated subprocess calls (hooks may call this multiple times per session).
 
-    Returns:
-        Version string (e.g., "2.0.62") or empty string if unavailable.
+    Strategies (in order):
+    1. Linux: Read /proc/PPID/cmdline to find the actual CC binary, extract version from it
+    2. Shell resolution: Run user's login shell interactively to resolve aliases
+    3. Direct binary: Try `claude --version` (may find stale global install)
 
-    Note:
-        This assumes `claude` command is available in PATH. If user runs CC via
-        a different command/alias, this still works as long as `claude` resolves
-        to some CC installation.
+    Returns:
+        Version string (e.g., "2.1.32") or empty string if unavailable.
     """
+    import os
+    import platform
+    import re
+
+    def _parse_version(output: str) -> str:
+        """Extract version from 'X.Y.Z (Claude Code)' format."""
+        output = output.strip()
+        return output.split()[0] if output else ""
+
+    def _extract_version_from_script(script_path: str) -> str:
+        """Extract version from a self-contained CC node script by grepping its content."""
+        try:
+            with open(script_path, 'r', errors='ignore') as f:
+                # Read first 500KB (version is near the top of the bundle)
+                content = f.read(512_000)
+            # Look for the version constant pattern in the esbuild bundle
+            # Common patterns: version:"2.1.32" or VERSION="2.1.32"
+            match = re.search(r'(?:displayName\s*=\s*"Claude Code".*?version\s*[:=]\s*"(\d+\.\d+\.\d+)")', content, re.DOTALL)
+            if match:
+                return match.group(1)
+            # Fallback: look for version pattern near "Claude Code" string
+            match = re.search(r'"(\d+\.\d+\.\d+)\s*\(Claude Code\)"', content)
+            if match:
+                return match.group(1)
+        except Exception:
+            pass
+        return ""
+
+    # Strategy 1: Linux — read /proc/PPID/cmdline
+    if platform.system() == "Linux":
+        try:
+            ppid = os.getppid()
+            cmdline_path = f"/proc/{ppid}/cmdline"
+            with open(cmdline_path, 'rb') as f:
+                cmdline = f.read()
+            args = cmdline.split(b'\x00')
+            # Find the claude script path (typically argv[1] after node)
+            for arg in args:
+                arg_str = arg.decode('utf-8', errors='ignore')
+                if 'claude' in arg_str.lower() and os.path.isfile(arg_str):
+                    version = _extract_version_from_script(arg_str)
+                    if version:
+                        return version
+                    # Try running the specific binary
+                    result = subprocess.run(
+                        [arg_str, "--version"],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    if result.returncode == 0:
+                        return _parse_version(result.stdout)
+        except Exception:
+            pass
+
+    # Strategy 2: Use user's shell to resolve aliases
+    user_shell = os.environ.get('SHELL', '')
+    if user_shell:
+        try:
+            result = subprocess.run(
+                [user_shell, '-ic', 'claude --version 2>/dev/null'],
+                capture_output=True, text=True, timeout=10,
+                env={**os.environ, 'PS1': ''},  # Suppress prompt
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                version = _parse_version(result.stdout)
+                if version:
+                    return version
+        except Exception:
+            pass
+
+    # Strategy 3: Direct binary (may find stale global install)
     try:
         result = subprocess.run(
             ["claude", "--version"],
@@ -37,14 +107,11 @@ def get_claude_code_version() -> str:
             timeout=5,
         )
         if result.returncode == 0:
-            # Output format: "2.0.62 (Claude Code)" - extract version number
-            output = result.stdout.strip()
-            # Take first whitespace-delimited token
-            version_str = output.split()[0] if output else ""
-            return version_str
-        return ""
+            return _parse_version(result.stdout)
     except Exception:
-        return ""
+        pass
+
+    return ""
 
 
 def format_macf_footer() -> str:
