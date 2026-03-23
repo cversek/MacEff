@@ -2,7 +2,7 @@
 """
 handle_user_prompt_submit - UserPromptSubmit hook runner.
 
-DEV_DRV start tracking + full temporal + token/CLUAC awareness injection.
+DEV_DRV start tracking + full temporal + token/CL awareness injection.
 EXPERIMENT: Claude-mem associative memory injection (Cycle 337)
 """
 import json
@@ -136,7 +136,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
     """
     Run UserPromptSubmit hook logic.
 
-    Tracks DEV_DRV start and injects temporal + token/CLUAC awareness.
+    Tracks DEV_DRV start and injects temporal + token/CL awareness.
 
     Args:
         stdin_json: JSON string from stdin (Claude Code hook input)
@@ -192,11 +192,11 @@ Breadcrumb: {breadcrumb}"""
         # Format token section
         token_section = format_token_context_full(token_info)
 
-        # Get boundary guidance (if CLUAC ≤ 10)
-        boundary_guidance = get_boundary_guidance(token_info['cluac_level'], auto_mode)
+        # Get boundary guidance (if CL ≤ 10)
+        boundary_guidance = get_boundary_guidance(token_info['cl_level'], auto_mode)
 
         # EXPERIMENT: Get associative memory injection (Cycle 337)
-        # DISABLED: Testing if this causes CLUAC 17 limit
+        # DISABLED: Testing if this causes CL 17 limit
         # Note: prompt already extracted above for prompt_preview
         memory_injection = ""  # get_memory_injection(prompt)
 

@@ -26,7 +26,7 @@ def mock_dependencies():
         }
         mock_start_drv.return_value = None
         mock_token.return_value = {
-            'cluac_level': 50,
+            'cl_level': 50,
             'tokens_used': 100000,
             'tokens_remaining': 100000
         }

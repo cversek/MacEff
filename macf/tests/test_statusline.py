@@ -51,22 +51,22 @@ class TestFormatStatusline:
     def test_full_statusline_with_project(self):
         """Full statusline with all fields."""
         result = format_statusline("manny", "NeuroVEP", "Container Linux", 60000, 200000, 70)
-        assert result == "manny | NeuroVEP | Container Linux | 60k/200k CLUAC 70"
+        assert result == "manny | NeuroVEP | Container Linux | 60k/200k CL 70"
 
     def test_statusline_without_project(self):
         """Project field omitted when None."""
         result = format_statusline("agent", None, "Host macOS", 60000, 200000, 70)
-        assert result == "agent | Host macOS | 60k/200k CLUAC 70"
+        assert result == "agent | Host macOS | 60k/200k CL 70"
 
     def test_statusline_low_tokens(self):
         """Small token values remain numeric."""
         result = format_statusline("test", "Project", "Host", 5000, 9500, 95)
-        assert result == "test | Project | Host | 5000/9500 CLUAC 95"
+        assert result == "test | Project | Host | 5000/9500 CL 95"
 
-    def test_statusline_zero_cluac(self):
-        """CLUAC can be zero (context exhausted)."""
+    def test_statusline_zero_cl(self):
+        """CL can be zero (context exhausted)."""
         result = format_statusline("agent", "proj", "Env", 200000, 200000, 0)
-        assert result == "agent | proj | Env | 200k/200k CLUAC 0"
+        assert result == "agent | proj | Env | 200k/200k CL 0"
 
 
 class TestDetectProject:
@@ -136,7 +136,7 @@ class TestGetStatuslineData:
         mock_detect_env.return_value = "Host macOS"
         mock_token_info.return_value = {
             "tokens_used": 50000,
-            "cluac_level": 75
+            "cl_level": 75
         }
 
         result = get_statusline_data()
@@ -145,7 +145,7 @@ class TestGetStatuslineData:
         assert result["project"] == "TestProject"
         assert result["environment"] == "Host macOS"
         assert result["tokens_used"] == 50000
-        assert result["cluac"] == 75
+        assert result["cl"] == 75
 
     @patch("macf.utils.statusline.get_agent_identity")
     @patch("macf.utils.statusline.detect_execution_environment")
@@ -166,29 +166,29 @@ class TestGetStatuslineData:
         mock_detect_env.return_value = "Container Linux"
         mock_token_info.return_value = {
             "tokens_used": 120000,
-            "cluac_level": 40
+            "cl_level": 40
         }
 
         # Even if CC JSON is passed, MACF token info is used
-        cc_json = {"tokens_used": 999999, "tokens_total": 999999, "cluac": 99}
+        cc_json = {"tokens_used": 999999, "tokens_total": 999999, "cl": 99}
         result = get_statusline_data(cc_json)
 
         assert result["agent_name"] == "manny"
         assert result["project"] == "NeuroVEP"
         # Tokens come from mock_token_info, NOT cc_json
         assert result["tokens_used"] == 120000
-        assert result["cluac"] == 40
+        assert result["cl"] == 40
 
     @patch("macf.utils.statusline.get_agent_identity")
     @patch("macf.utils.statusline.detect_execution_environment")
     @patch("macf.utils.statusline.detect_project")
     @patch("macf.utils.statusline.get_token_info")
-    def test_cluac_from_macf_token_info(
+    def test_cl_from_macf_token_info(
         self, mock_token_info, mock_detect_project, mock_detect_env, mock_agent_id
     ):
-        """CLUAC is calculated by MACF's get_token_info().
+        """CL is calculated by MACF's get_token_info().
 
-        NOTE: v0.4.0 changed behavior - CLUAC comes from MACF event log analysis,
+        NOTE: v0.4.0 changed behavior - CL comes from MACF event log analysis,
         not CC JSON. CC JSON token fields don't represent context window.
         """
         # Setup mocks
@@ -197,13 +197,13 @@ class TestGetStatuslineData:
         mock_detect_env.return_value = "Host"
         mock_token_info.return_value = {
             "tokens_used": 50000,
-            "cluac_level": 75
+            "cl_level": 75
         }
 
         result = get_statusline_data()
 
-        # CLUAC comes from get_token_info(), pre-calculated
-        assert result["cluac"] == 75
+        # CL comes from get_token_info(), pre-calculated
+        assert result["cl"] == 75
 
     @patch("macf.utils.statusline.get_agent_identity")
     @patch("macf.utils.statusline.detect_execution_environment")
@@ -226,4 +226,4 @@ class TestGetStatuslineData:
         assert result["project"] is None
         assert result["environment"] == "Unknown"
         assert result["tokens_used"] == 0
-        assert result["cluac"] == 100
+        assert result["cl"] == 100

@@ -179,7 +179,7 @@ def test_saves_session_end_time_to_project_state(mock_dependencies):
         }
         mock_env.return_value = 'Host System'
         mock_breadcrumb.return_value = 's/c/g/p/t'
-        mock_token.return_value = {'cluac_level': 50, 'tokens_used': 100000, 'tokens_remaining': 100000}
+        mock_token.return_value = {'cl_level': 50, 'tokens_used': 100000, 'tokens_remaining': 100000}
         mock_auto.return_value = (False, "default", 0.0)
         mock_token_fmt.return_value = "Token context"
         mock_boundary.return_value = ""

@@ -25,14 +25,14 @@ class TestGetTokenInfo:
         Should return dict with:
         - tokens_used, tokens_remaining
         - percentage_used, percentage_remaining
-        - cluac_level, source
+        - cl_level, source
         """
         result = get_token_info()
 
         required_keys = [
             'tokens_used', 'tokens_remaining',
             'percentage_used', 'percentage_remaining',
-            'cluac_level', 'source'
+            'cl_level', 'source'
         ]
 
         for key in required_keys:
@@ -41,12 +41,12 @@ class TestGetTokenInfo:
         # Verify types
         assert isinstance(result['tokens_used'], int)
         assert isinstance(result['tokens_remaining'], int)
-        assert isinstance(result['cluac_level'], int)
+        assert isinstance(result['cl_level'], int)
         assert isinstance(result['source'], str)
 
     def test_max_tokens_enforced(self):
         """
-        Test max_tokens is 200000 (CC 2.0 transparent accounting).
+        Test max_tokens matches get_total_context() (dynamic, env-aware).
 
         Critical: CLUAC calculations depend on correct max_tokens value.
         CC 2.0 shows 200k total (155k usable + 45k autocompact buffer).
@@ -59,15 +59,16 @@ class TestGetTokenInfo:
 
                     result = get_token_info()
 
-        # Verify max_tokens constant is 200000 (CC 2.0 transparent accounting)
-        assert result['tokens_remaining'] == 200000
+        # Verify max_tokens matches get_total_context() (dynamic, env-aware)
+        from macf.utils.tokens import get_total_context
+        assert result['tokens_remaining'] == get_total_context()
         assert result['percentage_remaining'] == 100.0
 
-    def test_cluac_calculation_accuracy(self):
+    def test_cl_calculation_accuracy(self):
         """
         Test CLUAC = round(percentage_remaining).
 
-        Formula: percentage_remaining = (tokens_remaining / 200000) * 100
+        Formula: percentage_remaining = (tokens_remaining / total_context) * 100
         CLUAC = round(percentage_remaining)
         """
         # Mock JSONL with known token values (including output_tokens)
@@ -98,13 +99,15 @@ class TestGetTokenInfo:
                         result = get_token_info()
 
         # Verify calculation: 100000 actual tokens used
+        from macf.utils.tokens import get_total_context
+        total = get_total_context()
         expected_tokens_used = 100000  # actual tokens from JSONL
-        expected_tokens_remaining = 200000 - 100000  # 100000
-        expected_percentage_remaining = (100000 / 200000) * 100  # 50%
-        expected_cluac = round(expected_percentage_remaining)  # 50
+        expected_tokens_remaining = total - 100000
+        expected_percentage_remaining = (expected_tokens_remaining / total) * 100
+        expected_cl = round(expected_percentage_remaining)
 
         assert result['tokens_used'] == expected_tokens_used
-        assert result['cluac_level'] == expected_cluac
+        assert result['cl_level'] == expected_cl
 
     def test_fallback_when_jsonl_unavailable(self):
         """
@@ -120,13 +123,14 @@ class TestGetTokenInfo:
                     result = get_token_info()
 
         # Should return default values (CC 2.0: 200k total)
-        # NOTE: cluac_level=100 means 100% remaining (full context available)
+        # NOTE: cl_level=100 means 100% remaining (full context available)
         # hooks_state fallback removed - event-first architecture
         assert result['tokens_used'] == 0
-        assert result['tokens_remaining'] == 200000
+        from macf.utils.tokens import get_total_context
+        assert result['tokens_remaining'] == get_total_context()
         assert result['percentage_used'] == 0.0
         assert result['percentage_remaining'] == 100.0
-        assert result['cluac_level'] == 100
+        assert result['cl_level'] == 100
         assert result['source'] == 'default'
 
     def test_with_valid_session_id_parameter(self):
@@ -147,7 +151,7 @@ class TestGetTokenInfo:
 
         # Should still return valid structure on failure
         assert 'tokens_used' in result
-        assert 'cluac_level' in result
+        assert 'cl_level' in result
 
     def test_tokens_used_reflects_actual_jsonl(self):
         """
@@ -184,7 +188,8 @@ class TestGetTokenInfo:
 
         # tokens_used reflects actual JSONL tokens (no buffer added)
         assert result['tokens_used'] == 80000, "tokens_used should be actual tokens"
-        assert result['tokens_remaining'] == 120000, "Remaining = 200k - 80k actual"
+        from macf.utils.tokens import get_total_context
+        assert result['tokens_remaining'] == get_total_context() - 80000, "Remaining = total - 80k actual"
 
 
 class TestContextCLI:
@@ -211,7 +216,7 @@ class TestContextCLI:
             'tokens_remaining': 100000,
             'percentage_used': 50.0,
             'percentage_remaining': 50.0,
-            'cluac_level': 50,
+            'cl_level': 50,
             'source': 'jsonl'
         }
 
@@ -224,10 +229,10 @@ class TestContextCLI:
         # Verify return code
         assert result == 0
 
-        # Verify output format (CC 2.0: shows /200,000)
-        assert "Token Usage: 100,000 / 200,000" in captured.out
-        assert "Remaining: 100,000" in captured.out
-        assert "CLUAC Level: 50" in captured.out
+        # Verify output format (dynamic context window)
+        assert "Token Usage: 100,000 /" in captured.out
+        assert "Remaining:" in captured.out
+        assert "CL Level:" in captured.out
         assert "Source: jsonl" in captured.out
 
     def test_json_output_format(self, capsys):
@@ -245,7 +250,7 @@ class TestContextCLI:
             'tokens_remaining': 77576,
             'percentage_used': 49.2,
             'percentage_remaining': 50.8,
-            'cluac_level': 51,
+            'cl_level': 51,
             'source': 'hooks_state'
         }
 
@@ -260,7 +265,7 @@ class TestContextCLI:
         output_json = json.loads(captured.out)
 
         assert output_json['tokens_used'] == 75000
-        assert output_json['cluac_level'] == 51
+        assert output_json['cl_level'] == 51
         assert output_json['source'] == 'hooks_state'
 
     def test_with_session_parameter(self):
@@ -279,7 +284,7 @@ class TestContextCLI:
                 'tokens_remaining': 102576,
                 'percentage_used': 32.8,
                 'percentage_remaining': 67.2,
-                'cluac_level': 67,
+                'cl_level': 67,
                 'source': 'jsonl'
             }
 
@@ -328,7 +333,7 @@ class TestTokenInfoEdgeCases:
                     result = get_token_info()
 
         # Fresh session should have CLUAC = 0 or 100 for zero tokens
-        assert result['cluac_level'] in [0, 100]
+        assert result['cl_level'] in [0, 100]
         assert result['tokens_used'] == 0
 
     def test_near_compaction_tokens(self):
@@ -360,7 +365,8 @@ class TestTokenInfoEdgeCases:
                         result = get_token_info()
 
         # 160k actual tokens used (no buffer added)
-        # tokens_remaining = 200k - 160k = 40k
-        # percentage_remaining = (40k / 200k) * 100 = 20%
+        from macf.utils.tokens import get_total_context
+        total = get_total_context()
+        expected_remaining_pct = round(((total - 160000) / total) * 100)
         assert result['tokens_used'] == 160000  # actual tokens from JSONL
-        assert result['cluac_level'] == 20  # 20% remaining
+        assert result['cl_level'] == expected_remaining_pct

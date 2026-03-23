@@ -66,7 +66,7 @@ def format_statusline(
     environment: str,
     tokens_used: int,
     tokens_total: int,
-    cluac: int
+    cl: int
 ) -> str:
     """
     Format statusline string for Claude Code display.
@@ -77,13 +77,13 @@ def format_statusline(
         environment: Execution environment string
         tokens_used: Current token usage
         tokens_total: Maximum token capacity
-        cluac: CLUAC level (percentage remaining)
+        cl: CL level (percentage remaining)
 
     Returns:
-        Formatted statusline: "agent | project | env | tokens CLUAC level"
+        Formatted statusline: "agent | project | env | tokens CL level"
 
     Example:
-        "manny | NeuroVEP | Container Linux | 60k/200k CLUAC 70"
+        "manny | NeuroVEP | Container Linux | 60k/200k CL 70"
     """
     # Format tokens
     tokens_str = f"{format_tokens(tokens_used)}/{format_tokens(tokens_total)}"
@@ -95,7 +95,7 @@ def format_statusline(
         fields.append(project)
 
     fields.append(environment)
-    fields.append(f"{tokens_str} CLUAC {cluac}")
+    fields.append(f"{tokens_str} CL {cl}")
 
     return " | ".join(fields)
 
@@ -117,7 +117,7 @@ def get_statusline_data(cc_json: Optional[Dict[str, Any]] = None) -> Dict[str, A
         - environment: str
         - tokens_used: int
         - tokens_total: int
-        - cluac: int
+        - cl: int
     """
     # Get MACF-sourced data
     try:
@@ -148,12 +148,12 @@ def get_statusline_data(cc_json: Optional[Dict[str, Any]] = None) -> Dict[str, A
             token_info = get_token_info()
             tokens_used = token_info.get("tokens_used", 0)
             tokens_total = get_total_context()
-            cluac = token_info.get("cluac_level", 100)
+            cl = token_info.get("cl_level", 100)
         except Exception as e:
             print(f"⚠️ MACF: Token info failed: {e}", file=sys.stderr)
             tokens_used = 0
             tokens_total = get_total_context()
-            cluac = 100
+            cl = 100
 
     return {
         "agent_name": agent_name,
@@ -161,5 +161,5 @@ def get_statusline_data(cc_json: Optional[Dict[str, Any]] = None) -> Dict[str, A
         "environment": environment,
         "tokens_used": tokens_used,
         "tokens_total": tokens_total,
-        "cluac": cluac
+        "cl": cl
     }

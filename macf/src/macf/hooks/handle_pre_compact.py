@@ -62,7 +62,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 "breadcrumb": breadcrumb,
                 "timestamp": time.time(),
                 "tokens_used": token_info.get('tokens_used', 0),
-                "cluac_level": token_info.get('cluac_level', 0),
+                "cl_level": token_info.get('cl_level', 0),
                 "source": data.get("source", "auto")  # "auto" or "manual"
             },
             hook_input=data
@@ -74,7 +74,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         message = f"""🏗️ MACF | Pre-Compact
 Time: {temporal_ctx['timestamp_formatted']}
 Breadcrumb: {breadcrumb}
-CLUAC: {token_info.get('cluac_level', 'N/A')}
+CL: {token_info.get('cl_level', 'N/A')}
 {format_macf_footer()}"""
 
         return {

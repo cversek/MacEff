@@ -1086,7 +1086,7 @@ def cmd_claude_config_show(args: argparse.Namespace) -> int:
 
 
 def cmd_context(args: argparse.Namespace) -> int:
-    """Show current token usage and CLUAC level."""
+    """Show current token usage and CL (Context Left) level."""
     try:
         # Get session_id from args or use current
         session_id = getattr(args, 'session', None)
@@ -1103,12 +1103,13 @@ def cmd_context(args: argparse.Namespace) -> int:
         tokens_used = token_info['tokens_used']
         tokens_remaining = token_info['tokens_remaining']
         percentage_used = token_info['percentage_used']
-        cluac_level = token_info['cluac_level']
+        cl_level = token_info['cl_level']
         source = token_info['source']
+        total = get_total_context()
 
-        print(f"Token Usage: {tokens_used:,} / 200,000 ({percentage_used:.1f}%)")
+        print(f"Token Usage: {tokens_used:,} / {total:,} ({percentage_used:.1f}%)")
         print(f"Remaining: {tokens_remaining:,} tokens")
-        print(f"CLUAC Level: {cluac_level} (Context Left Until Auto-Compaction)")
+        print(f"CL Level: {cl_level} (Context Left)")
         print(f"Source: {source}")
 
         return 0
@@ -1144,7 +1145,7 @@ def cmd_statusline(args: argparse.Namespace) -> int:
             environment=data["environment"],
             tokens_used=data["tokens_used"],
             tokens_total=data["tokens_total"],
-            cluac=data["cluac"]
+            cl=data["cl"]
         )
 
         print(statusline)
@@ -5410,7 +5411,7 @@ def _build_parser() -> argparse.ArgumentParser:
     restore_install.set_defaults(func=cmd_restore_install)
 
     # Context command
-    context_parser = sub.add_parser("context", help="show token usage and CLUAC level")
+    context_parser = sub.add_parser("context", help="show token usage and CL (Context Left) level")
     context_parser.add_argument("--json", dest="json_output", action="store_true",
                                help="output as JSON")
     context_parser.add_argument("--session", help="specific session ID (default: current)")

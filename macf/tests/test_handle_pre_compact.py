@@ -19,7 +19,7 @@ class TestPreCompactHook:
         with patch('macf.hooks.handle_pre_compact.get_current_session_id', return_value="test-session"):
             with patch('macf.hooks.handle_pre_compact.get_cycle_number_from_events', return_value=5):
                 with patch('macf.hooks.handle_pre_compact.get_breadcrumb', return_value='s_abc/c_5/g_def/p_ghi/t_123'):
-                    with patch('macf.hooks.handle_pre_compact.get_token_info', return_value={'tokens_used': 140000, 'cluac_level': 5}):
+                    with patch('macf.hooks.handle_pre_compact.get_token_info', return_value={'tokens_used': 140000, 'cl_level': 5}):
                         with patch('macf.hooks.handle_pre_compact.get_temporal_context', return_value={'timestamp_formatted': '2025-10-08 12:00 PM'}):
                             result = run("", testing=True)
 
@@ -27,25 +27,25 @@ class TestPreCompactHook:
                             assert 'systemMessage' in result
 
     def test_includes_breadcrumb_and_cluac_in_message(self, isolated_events_log):
-        """System message includes breadcrumb and CLUAC level."""
+        """System message includes breadcrumb and CL level."""
         with patch('macf.hooks.handle_pre_compact.get_current_session_id', return_value="test-session"):
             with patch('macf.hooks.handle_pre_compact.get_cycle_number_from_events', return_value=10):
                 with patch('macf.hooks.handle_pre_compact.get_breadcrumb', return_value='s_abc/c_10/g_def/p_ghi/t_123'):
-                    with patch('macf.hooks.handle_pre_compact.get_token_info', return_value={'cluac_level': 3}):
+                    with patch('macf.hooks.handle_pre_compact.get_token_info', return_value={'cl_level': 3}):
                         with patch('macf.hooks.handle_pre_compact.get_temporal_context', return_value={'timestamp_formatted': '2025-10-08 12:00 PM'}):
                             result = run("", testing=True)
 
                             message = result['systemMessage']
                             assert 'Pre-Compact' in message
                             assert 's_abc/c_10/g_def/p_ghi/t_123' in message
-                            assert '3' in message  # CLUAC level
+                            assert '3' in message  # CL level
 
     def test_logs_pre_compact_event_with_token_info(self, isolated_events_log):
         """Appends pre_compact event with token usage data."""
         with patch('macf.hooks.handle_pre_compact.get_current_session_id', return_value="test-session"):
             with patch('macf.hooks.handle_pre_compact.get_cycle_number_from_events', return_value=7):
                 with patch('macf.hooks.handle_pre_compact.get_breadcrumb', return_value='s_abc/c_7/g_def/p_ghi/t_123'):
-                    with patch('macf.hooks.handle_pre_compact.get_token_info', return_value={'tokens_used': 145000, 'cluac_level': 2}):
+                    with patch('macf.hooks.handle_pre_compact.get_token_info', return_value={'tokens_used': 145000, 'cl_level': 2}):
                         with patch('macf.hooks.handle_pre_compact.get_temporal_context', return_value={'timestamp_formatted': '2025-10-08 12:00 PM'}):
                             result = run("", testing=True)
 
@@ -59,7 +59,7 @@ class TestPreCompactHook:
                             assert last_event['data']['session_id'] == 'test-session'
                             assert last_event['data']['cycle'] == 7
                             assert last_event['data']['tokens_used'] == 145000
-                            assert last_event['data']['cluac_level'] == 2
+                            assert last_event['data']['cl_level'] == 2
 
     def test_captures_compaction_source_from_stdin(self, isolated_events_log):
         """Captures source field (auto/manual) from stdin."""

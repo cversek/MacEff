@@ -1,7 +1,7 @@
 """
 Integration tests for context CLI command.
 
-Tests the `macf_tools context` command for token/CLUAC awareness.
+Tests the `macf_tools context` command for token/CL awareness.
 Uses subprocess to invoke macf_tools CLI as real integration tests.
 
 CRITICAL: All subprocess tests must use isolated_cli_env fixture to prevent
@@ -42,14 +42,14 @@ class TestContextCommand:
         # Should show token usage information
 
     def test_context_shows_expected_fields(self):
-        """Test context command shows expected token/CLUAC fields."""
+        """Test context command shows expected token/CL fields."""
         result = subprocess.run(
             ['macf_tools', 'context'],
             capture_output=True, text=True
         )
 
         assert result.returncode == 0
-        # Output should contain key CLUAC-related terms
+        # Output should contain key CL-related terms
         output_lower = result.stdout.lower()
         assert 'token' in output_lower or 'cluac' in output_lower
 
@@ -68,7 +68,7 @@ class TestContextCommand:
         # Should contain expected fields
         assert 'tokens_used' in data
         assert 'tokens_remaining' in data
-        assert 'cluac_level' in data
+        assert 'cl_level' in data
 
     def test_context_json_field_types(self):
         """Test context JSON output has correct field types."""
@@ -83,7 +83,7 @@ class TestContextCommand:
         # Verify numeric fields
         assert isinstance(data['tokens_used'], int)
         assert isinstance(data['tokens_remaining'], int)
-        assert isinstance(data['cluac_level'], int)
+        assert isinstance(data['cl_level'], int)
         assert isinstance(data['percentage_used'], (int, float))
 
     def test_context_with_session_parameter(self):
