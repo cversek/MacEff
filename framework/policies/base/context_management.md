@@ -150,17 +150,23 @@ macf_tools hooks status      # Hook states with timestamps
 
 **CL** (Context Left, formerly CLUAC): Percentage of usable context space remaining. In AUTO_MODE, auto-compaction triggers near CL0. In MANUAL_MODE, auto-compaction is off but the user may need to run `/compact`, `/clear`, or start a fresh session when context fills. Default usable space is ~77.5% of context window (e.g., ~155k of 200k). Set `MACF_CONTEXT_WINDOW` env var for larger models (e.g., 1000000 for 1M).
 
-**CLUAC Zones**:
+**CL Zones** (percentage-based, scale to any window size):
 - **CL13** (87% used): First warnings appear
 - **CL10** (90% used): Active preparation phase
-- **CL5** (95% used): **CCP checkpoint trigger**
-- **CL2** (98% used): Emergency protocols only
-- **CL1** (99% used): **JOTEWR opportunity window**
+- **CL5** (95% used): **CCP checkpoint trigger** (200k window)
+- **CL2** (98% used): Emergency protocols only (200k window)
+- **CL1** (99% used): **JOTEWR opportunity window** (200k window)
 - **CL0** (100% used): Imminent compaction
+
+**1M Context Recalibration**: On 1M, the same percentages leave 5x more absolute tokens. CL5 on 1M = ~47k remaining (a whole 200k-era conversation). Practical thresholds shift:
+- Wind-down: CL20 (200k) → **CL4** (1M)
+- CCP trigger: CL5 (200k) → **CL1** (1M)
+- JOTEWR: CL2 (200k) → **CL0** (1M)
+- Use μC (Ctrl-D + `claude -c`) to extend cycles without compaction
 
 **Communication Adaptation**:
 - **Normal** (<85%): Full explanations
-- **Token-Aware** (>90%): Abbreviations and shortcuts
+- **Token-Aware** (>90%): Abbreviations and shortcuts (on 1M, this is >900k used — rare)
 - **Critical** (>95%): Compressed INSTR_LANG only
 
 ## 2. Compaction Trauma Recognition
