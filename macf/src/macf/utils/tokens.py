@@ -93,7 +93,7 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
                    If not provided, uses current session.
 
     Returns:
-        Dictionary with token counts and CLUAC level (matches /context display)
+        Dictionary with token counts and CL level (matches /context display)
     """
     # Use detected context window to match /context display
     max_tokens = get_total_context()
@@ -197,7 +197,7 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
                                 "tokens_remaining": max_tokens - 60000,
                                 "percentage_used": 30.0,
                                 "percentage_remaining": 70.0,
-                                "cluac_level": 70,
+                                "cl_level": 70,
                                 "last_updated": "post_compaction",
                                 "source": "post_compaction_estimate",
                             }
@@ -236,15 +236,15 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
                         current_tokens = last_assistant_tokens
 
                 if current_tokens > 0:
-                    # Calculate raw CLUAC from actual token usage
+                    # Calculate raw CL from actual token usage
                     tokens_remaining = max_tokens - current_tokens
                     percentage_remaining = (
                         (tokens_remaining / max_tokens) * 100 if max_tokens > 0 else 0
                     )
-                    # CLUAC level = percentage remaining (rounded)
-                    # CLUAC100 = 100% remaining (0% used)
-                    # CLUAC1 = 1% remaining (99% used)
-                    cluac_level = round(percentage_remaining)
+                    # CL level = percentage remaining (rounded)
+                    # CL100 = 100% remaining (0% used)
+                    # CL1 = 1% remaining (99% used)
+                    cl_level = round(percentage_remaining)
 
                     # AUTO_MODE penalty: subtract 16 CL points to account for
                     # autocompaction buffer (~45k reserve that CC holds back).
@@ -257,9 +257,9 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
                         from .cycles import detect_auto_mode
                         auto_mode, _ = detect_auto_mode(session_id)
                         if auto_mode:
-                            cluac_level = max(0, cluac_level - 16)
+                            cl_level = max(0, cl_level - 16)
                     except (ImportError, OSError, KeyError) as e:
-                        print(f"⚠️ MACF: AUTO_MODE detection failed (using raw CLUAC): {e}", file=sys.stderr)
+                        print(f"⚠️ MACF: AUTO_MODE detection failed (using raw CL): {e}", file=sys.stderr)
 
                     # Smart cache update: detect compaction events
                     # If current is significantly less than cached (>1k difference), update cache
@@ -281,7 +281,7 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
                         "tokens_remaining": tokens_remaining,
                         "percentage_used": (current_tokens / max_tokens) * 100,
                         "percentage_remaining": percentage_remaining,
-                        "cluac_level": cluac_level,
+                        "cl_level": cl_level,
                         "last_updated": last_timestamp,
                         "source": "jsonl",
                     }
@@ -296,19 +296,19 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
         "tokens_remaining": max_tokens,
         "percentage_used": 0.0,
         "percentage_remaining": 100.0,
-        "cluac_level": 100,
+        "cl_level": 100,
         "source": "default",
     }
 
 def get_cluac_weather(cluac: int) -> str:
     """
-    Get affirmative weather emoji + phrase based on CLUAC level.
+    Get affirmative weather emoji + phrase based on CL level.
 
     Reframes scarcity instinct as state awareness - "I am at X" not "you should Y".
     Counters CC's hidden nags with visible affirmation.
 
     Args:
-        cluac: CLUAC level (0-100, percentage remaining)
+        cluac: CL level (0-100, percentage remaining)
 
     Returns:
         Emoji + short phrase (e.g., "🌅 Fresh context")
@@ -327,15 +327,15 @@ def get_cluac_weather(cluac: int) -> str:
 
 def format_token_context_minimal(token_info: Dict[str, Any]) -> str:
     """
-    Format minimal CLUAC indicator for high-frequency hooks.
+    Format minimal CL indicator for high-frequency hooks.
 
     Args:
         token_info: Dict from get_token_info()
 
     Returns:
-        One-line string like "🌅 Fresh context | CLUAC 42 (58% used)"
+        One-line string like "🌅 Fresh context | CL 42 (58% used)"
     """
-    context_left_pct = token_info['cluac_level']
+    context_left_pct = token_info['cl_level']
     return f"CL{context_left_pct}"
 
 def format_token_context_full(token_info: Dict[str, Any]) -> str:
@@ -348,30 +348,30 @@ def format_token_context_full(token_info: Dict[str, Any]) -> str:
     Returns:
         Multi-line formatted section with emoji header and weather framing
     """
-    cluac = token_info['cluac_level']
+    cluac = token_info['cl_level']
     weather = get_cluac_weather(cluac)
     return f"""📊 TOKEN/CONTEXT AWARENESS
 {weather}
 Tokens Used: {token_info['tokens_used']:,} / {get_total_context():,}
-CLUAC Level: {cluac} ({token_info['percentage_used']:.1f}% used)
+CL Level: {cluac} ({token_info['percentage_used']:.1f}% used)
 Remaining: {token_info['tokens_remaining']:,} tokens"""
 
 def get_boundary_guidance(cluac: int, auto_mode: bool) -> Optional[str]:
     """
-    Get mode-aware boundary guidance based on CLUAC level.
+    Get mode-aware boundary guidance based on CL level.
 
     CRITICAL: Returns different messages for MANUAL vs AUTO mode.
     - MANUAL: User present → STOP work, await guidance
     - AUTO: User absent → Assess completion, prepare artifacts
 
     Args:
-        cluac: CLUAC level (0-100, percentage remaining)
+        cluac: CL level (0-100, percentage remaining)
         auto_mode: True if AUTO_MODE enabled, False for MANUAL
 
     Returns:
-        Warning string or None if CLUAC > 10
+        Warning string or None if CL > 10
     """
-    # No warnings above CLUAC 10
+    # No warnings above CL 10
     if cluac > 10:
         return None
 

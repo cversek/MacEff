@@ -97,7 +97,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
 
         # Format token context sections
         token_section = format_token_context_full(token_info)
-        boundary_guidance = get_boundary_guidance(token_info['cluac_level'], auto_mode)
+        boundary_guidance = get_boundary_guidance(token_info['cl_level'], auto_mode)
 
         # Format message with full timestamp and DELEG_DRV summary
         message = f"""🏗️ MACF | DELEG_DRV Complete

@@ -19,17 +19,17 @@ from macf.utils.tokens import get_cluac_weather
 
 
 def test_format_token_context_minimal_structure():
-    """Minimal format returns one-line CLUAC indicator."""
+    """Minimal format returns one-line CL indicator."""
     token_info = {
         'tokens_used': 120000,
         'tokens_remaining': 80000,
         'percentage_used': 60.0,
-        'cluac_level': 40
+        'cl_level': 40
     }
 
     result = format_token_context_minimal(token_info)
 
-    # Validate CL format (compact, no verbose CLUAC)
+    # Validate CL format (compact, no verbose CL)
     assert result == "CL40"
     assert result.count('\n') == 0  # Single line
 
@@ -40,7 +40,7 @@ def test_format_token_context_full_all_fields():
         'tokens_used': 120000,
         'tokens_remaining': 80000,
         'percentage_used': 60.0,
-        'cluac_level': 40
+        'cl_level': 40
     }
 
     result = format_token_context_full(token_info)
@@ -49,7 +49,7 @@ def test_format_token_context_full_all_fields():
     assert "📊 TOKEN/CONTEXT AWARENESS" in result
     assert "Tokens Used:" in result
     assert "120,000" in result  # Comma formatting
-    assert "CLUAC Level:" in result
+    assert "CL Level:" in result
     assert "40" in result
     assert "60.0%" in result
     assert "Remaining:" in result
@@ -58,7 +58,7 @@ def test_format_token_context_full_all_fields():
 
 
 def test_boundary_guidance_manual_mode_cluac2():
-    """MANUAL mode CLUAC<=2 returns emergency stop message."""
+    """MANUAL mode CL<=2 returns emergency stop message."""
     result = get_boundary_guidance(cluac=2, auto_mode=False)
 
     assert result is not None
@@ -68,7 +68,7 @@ def test_boundary_guidance_manual_mode_cluac2():
 
 
 def test_boundary_guidance_auto_mode_cluac5():
-    """AUTO mode CLUAC<=5 returns preparation message."""
+    """AUTO mode CL<=5 returns preparation message."""
     result = get_boundary_guidance(cluac=5, auto_mode=True)
 
     assert result is not None
@@ -78,15 +78,15 @@ def test_boundary_guidance_auto_mode_cluac5():
 
 
 def test_boundary_guidance_none_when_cluac_high():
-    """No warnings above CLUAC 10."""
-    # Test various high CLUAC values
+    """No warnings above CL 10."""
+    # Test various high CL values
     assert get_boundary_guidance(cluac=11, auto_mode=False) is None
     assert get_boundary_guidance(cluac=50, auto_mode=True) is None
     assert get_boundary_guidance(cluac=100, auto_mode=False) is None
 
 
 def test_boundary_guidance_mode_aware_branching():
-    """MANUAL vs AUTO return different messages for same CLUAC."""
+    """MANUAL vs AUTO return different messages for same CL."""
     manual_msg = get_boundary_guidance(cluac=2, auto_mode=False)
     auto_msg = get_boundary_guidance(cluac=2, auto_mode=True)
 
@@ -105,7 +105,7 @@ def test_boundary_guidance_mode_aware_branching():
 
 
 def test_get_cluac_weather_affirmative_framing():
-    """Weather function returns affirmative emoji+phrase for each CLUAC band."""
+    """Weather function returns affirmative emoji+phrase for each CL band."""
     # Fresh context (70+)
     assert "🌅" in get_cluac_weather(100)
     assert "🌅" in get_cluac_weather(70)
