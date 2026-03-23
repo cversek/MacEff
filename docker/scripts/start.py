@@ -1174,6 +1174,12 @@ def main() -> int:
         # Propagate environment
         propagate_container_env()
 
+        # Start sshd EARLY so SSH access is available during slow init steps
+        log("Starting sshd (background)...")
+        import subprocess as _sp
+        sshd_proc = _sp.Popen(['/usr/sbin/sshd', '-D'])
+        log(f"sshd started (pid {sshd_proc.pid})")
+
         # Build policy index for first PA (required for search service)
         build_policy_index(agents_config)
 
@@ -1182,8 +1188,9 @@ def main() -> int:
 
         log("Startup complete")
         log("Run 'python scripts/deploy.py install' to deploy repos and worktrees")
-        log("Starting sshd...")
-        os.execv('/usr/sbin/sshd', ['/usr/sbin/sshd', '-D'])
+
+        # Wait on sshd (keeps container alive)
+        sshd_proc.wait()
 
     except Exception as e:
         log(f"FATAL ERROR during startup: {e}")
