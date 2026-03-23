@@ -12,7 +12,60 @@ from .session import get_current_session_id
 from .json_io import read_json, write_json_safely
 from .claude_settings import get_autocompact_setting
 
-CC2_TOTAL_CONTEXT = 200000
+_DEFAULT_CONTEXT = 200_000
+
+# Known model context windows
+_MODEL_CONTEXT_MAP = {
+    "claude-opus-4-6[1m]": 1_000_000,
+    "claude-opus-4-6": 200_000,
+    "claude-sonnet-4-6": 200_000,
+    "claude-haiku-4-5": 200_000,
+}
+
+
+_1M_WARNING_SHOWN = False
+
+
+def get_total_context() -> int:
+    """
+    Get total context window size.
+
+    Detection priority:
+    1. MACF_CONTEXT_WINDOW env var (explicit override)
+    2. Default 200k
+
+    Emits one-time warning if model is claude-opus-4-6 and env var not set.
+
+    Returns:
+        Total context window in tokens
+    """
+    global _1M_WARNING_SHOWN
+    env_val = os.environ.get("MACF_CONTEXT_WINDOW")
+    if env_val:
+        try:
+            return int(env_val)
+        except ValueError:
+            pass
+
+    if not _1M_WARNING_SHOWN:
+        _1M_WARNING_SHOWN = True
+        try:
+            from .environment import detect_model
+            model = detect_model()
+            if model == "claude-opus-4-6":
+                print(
+                    "⚠️ MACF: Model 'claude-opus-4-6' detected. 1M context may be available.\n"
+                    "   Check with /context. If 1M, set: export MACF_CONTEXT_WINDOW=1000000",
+                    file=sys.stderr,
+                )
+        except Exception:
+            pass
+
+    return _DEFAULT_CONTEXT
+
+
+# Backward compatibility alias
+CC2_TOTAL_CONTEXT = _DEFAULT_CONTEXT
 
 
 def get_usable_context() -> int:
@@ -20,13 +73,12 @@ def get_usable_context() -> int:
     Calculate usable context based on autocompact setting.
 
     Returns:
-        Usable context in tokens:
-        - 155k (200k - 45k buffer) if autocompact enabled
-        - 200k (full) if autocompact disabled
+        Usable context in tokens (total minus buffer if autocompact enabled)
     """
+    total = get_total_context()
     autocompact_enabled = get_autocompact_setting()
     buffer = 45000 if autocompact_enabled else 0
-    return CC2_TOTAL_CONTEXT - buffer
+    return total - buffer
 
 def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
     """Get current token usage information from session JSONL or hooks state.
@@ -43,9 +95,8 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
     Returns:
         Dictionary with token counts and CLUAC level (matches /context display)
     """
-    # Use CC2_TOTAL_CONTEXT to match /context display exactly
-    # /context shows: actual_usage + autocompact_buffer = total displayed
-    max_tokens = CC2_TOTAL_CONTEXT
+    # Use detected context window to match /context display
+    max_tokens = get_total_context()
 
     # If session_id provided, try to get tokens from JSONL file
     if session_id or (session_id := get_current_session_id()) != "unknown":
@@ -301,7 +352,7 @@ def format_token_context_full(token_info: Dict[str, Any]) -> str:
     weather = get_cluac_weather(cluac)
     return f"""📊 TOKEN/CONTEXT AWARENESS
 {weather}
-Tokens Used: {token_info['tokens_used']:,} / {CC2_TOTAL_CONTEXT:,}
+Tokens Used: {token_info['tokens_used']:,} / {get_total_context():,}
 CLUAC Level: {cluac} ({token_info['percentage_used']:.1f}% used)
 Remaining: {token_info['tokens_remaining']:,} tokens"""
 
