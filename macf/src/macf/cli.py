@@ -33,8 +33,10 @@ from .utils import (
     find_project_root,
     find_maceff_root,
     get_macf_package_path,
-    get_hooks_dir
+    get_hooks_dir,
+    get_total_context,
 )
+from .utils.environment import detect_model
 
 # -------- ANSI escape codes --------
 ANSI_RESET = "\033[0m"
@@ -247,6 +249,8 @@ def cmd_env(args: argparse.Namespace) -> int:
         "versions": {
             "macf": _ver,
             "claude_code": get_claude_code_version() or "(unavailable)",
+            "model": detect_model(),
+            "context_window": f"{get_total_context():,}",
             "python_path": sys.executable,
             "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
         },
@@ -306,6 +310,8 @@ def cmd_env(args: argparse.Namespace) -> int:
         print("Versions")
         print(f"  MACF:         {data['versions']['macf']}")
         print(f"  Claude Code:  {data['versions']['claude_code']}")
+        print(f"  Model:        {data['versions']['model']}")
+        print(f"  Context:      {data['versions']['context_window']} tokens")
         print(f"  Python:       {data['versions']['python_path']} ({data['versions']['python_version']})")
         print()
 

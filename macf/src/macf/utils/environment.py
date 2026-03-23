@@ -4,16 +4,18 @@ Environment detection utilities.
 Cross-platform system information detection using Python stdlib only.
 """
 
+import json
 import os
 import platform
 import socket
 import sys
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 # Key environment variables to always report in diagnostics
 # These are checked explicitly and shown as "(not set)" if missing
 KEY_ENV_VARS = [
+    "MACF_CONTEXT_WINDOW",
     "MACEFF_AGENT_HOME_DIR",
     "MACEFF_AGENT_NAME",
     "MACEFF_ROOT_DIR",
@@ -123,3 +125,52 @@ def get_rich_environment_string() -> str:
 
     # Compose rich string
     return f"{base_env} - {hostname} {os_name} {os_version}"
+
+
+def detect_model(session_id: Optional[str] = None) -> str:
+    """Detect current model from JSONL transcript.
+
+    Reads last 100KB of session transcript, extracts model field
+    from the most recent assistant message.
+
+    Args:
+        session_id: Optional session ID. Auto-detected if not provided.
+
+    Returns:
+        Model string (e.g., 'claude-opus-4-6') or 'unknown'
+    """
+    # Lazy imports to avoid circular dependency
+    from .session import get_current_session_id
+    from .paths import get_session_transcript_path
+
+    if not session_id:
+        session_id = get_current_session_id()
+    if session_id == "unknown":
+        return "unknown"
+
+    jsonl_path = get_session_transcript_path(session_id)
+    if not jsonl_path or not Path(jsonl_path).exists():
+        return "unknown"
+
+    try:
+        with open(jsonl_path, "rb") as f:
+            file_size = f.seek(0, os.SEEK_END)
+            scan_size = min(100 * 1024, file_size)
+            if scan_size > 0:
+                f.seek(-scan_size, os.SEEK_END)
+                content = f.read().decode("utf-8", errors="ignore")
+                model = "unknown"
+                for line in content.split("\n"):
+                    if not line.strip():
+                        continue
+                    try:
+                        data = json.loads(line)
+                        if data.get("type") == "assistant":
+                            m = data.get("message", {}).get("model")
+                            if m:
+                                model = m
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        continue
+                return model
+    except Exception:
+        return "unknown"

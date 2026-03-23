@@ -10,7 +10,7 @@ import json
 from typing import Dict, Any, Optional
 from pathlib import Path
 
-from .tokens import get_token_info, CC2_TOTAL_CONTEXT
+from .tokens import get_token_info, get_total_context
 from .environment import detect_execution_environment
 from .identity import get_agent_identity
 from ..config import ConsciousnessConfig
@@ -147,12 +147,12 @@ def get_statusline_data(cc_json: Optional[Dict[str, Any]] = None) -> Dict[str, A
         try:
             token_info = get_token_info()
             tokens_used = token_info.get("tokens_used", 0)
-            tokens_total = CC2_TOTAL_CONTEXT
+            tokens_total = get_total_context()
             cluac = token_info.get("cluac_level", 100)
         except Exception as e:
             print(f"⚠️ MACF: Token info failed: {e}", file=sys.stderr)
             tokens_used = 0
-            tokens_total = CC2_TOTAL_CONTEXT
+            tokens_total = get_total_context()
             cluac = 100
 
     return {

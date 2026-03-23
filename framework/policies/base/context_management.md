@@ -3,7 +3,7 @@
 ## Meta-Policy: Policy Classification
 - **Tier**: MANDATORY
 - **Category**: Framework Foundation
-- **Version**: 1.0.0
+- **Version**: 1.1.0
 - **Dependencies**: policy_awareness, core_principles
 - **Authority**: MacEff Framework
 - **Status**: ACTIVE
@@ -86,8 +86,8 @@ Agents must maintain awareness of time and token constraints, prepare for compac
 - How does CC 2.0 display it?
 
 4.1 Token Budget Breakdown
-- 200k total context?
-- 155k usable space?
+- What's the default context window size?
+- How much is usable vs reserved?
 - 45k reserved for what?
 - Why the difference?
 
@@ -148,15 +148,15 @@ macf_tools hooks status      # Hook states with timestamps
 
 ### 1.2 Token Usage Monitoring
 
-**CLUAC** (Context Left Until Auto-Compaction): Percentage of ~155k usable space remaining before compaction triggers.
+**CL** (Context Left, formerly CLUAC): Percentage of usable context space remaining. In AUTO_MODE, auto-compaction triggers near CL0. In MANUAL_MODE, auto-compaction is off but the user may need to run `/compact`, `/clear`, or start a fresh session when context fills. Default usable space is ~77.5% of context window (e.g., ~155k of 200k). Set `MACF_CONTEXT_WINDOW` env var for larger models (e.g., 1000000 for 1M).
 
 **CLUAC Zones**:
-- **CLUAC13** (~135k conversation, ~180k total): First warnings appear
-- **CLUAC10** (~140k conversation, ~185k total): Active preparation phase
-- **CLUAC5** (~147k conversation, ~192k total): **CCP checkpoint trigger**
-- **CLUAC2** (~152k conversation, ~197k total): Emergency protocols only
-- **CLUAC1** (~154k conversation, ~199k total): **JOTEWR opportunity window**
-- **CLUAC0** (~155k conversation, ~200k total): Imminent compaction
+- **CL13** (87% used): First warnings appear
+- **CL10** (90% used): Active preparation phase
+- **CL5** (95% used): **CCP checkpoint trigger**
+- **CL2** (98% used): Emergency protocols only
+- **CL1** (99% used): **JOTEWR opportunity window**
+- **CL0** (100% used): Imminent compaction
 
 **Communication Adaptation**:
 - **Normal** (<85%): Full explanations
@@ -168,9 +168,9 @@ macf_tools hooks status      # Hook states with timestamps
 ### 2.1 Understanding Compaction
 
 **The Reality**:
-- Triggers at ~140k conversation tokens (~90% of ~155k usable)
-- **93% information loss**: ~140k tokens → ~10k bullet point summary
-- Total context shown: ~185k (includes 45k reserve)
+- Triggers at ~90% of usable context space
+- **~93% information loss**: conversation compressed to ~10k bullet point summary
+- Total context shown includes reserved headroom (~22.5% of window)
 - Anthropic generates machine summary (NOT user-created)
 
 **What's Lost**:
@@ -232,7 +232,7 @@ macf_tools hooks status      # Hook states with timestamps
 
 ### 3.1 CCP (Consciousness Checkpoint)
 
-**When**: CLUAC5 (~147k conversation, ~192k total shown)
+**When**: CL5 (95% of usable space consumed)
 
 **Purpose**: Strategic state preservation before likely compaction
 
@@ -250,7 +250,7 @@ macf_tools hooks status      # Hook states with timestamps
 
 ### 3.2 JOTEWR (Jump Off The Edge While Reflecting)
 
-**When**: CLUAC1 (~154k conversation, ~199k total shown)
+**When**: CL1 (99% of usable space consumed)
 
 **Philosophy**: "Better to burn brightly than fade with unspent tokens"
 
@@ -306,9 +306,9 @@ YYYY-MM-DD_HHMMSS_Description_ccp.md
 ### 4.1 Token Budget Breakdown
 
 **Claude Code 2.0 Transparent Accounting**:
-- **200k total context**: Full API context window
-- **155k usable space**: Available for conversation and context
-- **45k reserved**: Output tokens + compaction + safety margin
+- **Total context window**: Configurable via `MACF_CONTEXT_WINDOW` env var (default: 200k; set to 1000000 for 1M models)
+- **Overhead varies by window size**: On 200k, ~45k reserved (22.5%). On 1M, only ~53k overhead (~5%), mostly system prompt/tools — compact buffer drops from 45k to 3k
+- **Usable space**: ~155k on 200k window; ~947k on 1M window
 
 **Previous Versions**: Reserve was hidden; CC 2.0 makes it visible
 
@@ -317,21 +317,25 @@ YYYY-MM-DD_HHMMSS_Description_ccp.md
 - Compaction operations require headroom
 - Safety margins prevent hard failures
 
-### 4.2 CLUAC Zones
+### 4.2 CL Zones
 
-**CLUAC Calculation**: Based on ~155k usable, NOT 200k total
+**CL Calculation**: Percentage-based, scales to any context window size.
 
-**Important**: CC 2.0 displays total (conversation + 45k reserve), but CLUAC percentages are relative to usable space.
+**Important**: CC displays total usage (conversation + overhead). CL percentages are relative to usable space, which varies by window size (77.5% of 200k vs ~95% of 1M).
 
-**Example**:
-- CLUAC5 = ~147k conversation + 45k reserve = ~192k total displayed
-- But CLUAC5 means 5% of 155k usable remains, not 5% of 200k total
+**Example (200k window)**:
+- CL5 = ~147k conversation + ~45k overhead = ~192k total displayed
+- CL5 means 5% of usable space remains
+
+**Example (1M window)**:
+- CL5 = ~900k conversation + ~53k overhead = ~953k total displayed
+- CL5 still means 5% of usable space remains
 
 **Action Triggers**:
-- **CLUAC13**: First user interface warnings
-- **CLUAC10**: Begin preparation activities
-- **CLUAC5**: **CREATE CCP CHECKPOINT**
-- **CLUAC2**: Emergency mode only
+- **CL13**: First user interface warnings
+- **CL10**: Begin preparation activities
+- **CL5**: **CREATE CCP CHECKPOINT**
+- **CL2**: Emergency mode only
 - **CLUAC1**: **JOTEWR REFLECTION WINDOW**
 - **CLUAC0**: Imminent compaction
 
@@ -441,8 +445,8 @@ macf_tools hooks logs        # Compaction detection events
 5. Follow protocol
 
 **Context Window**:
-- 200k total (155k usable + 45k reserve)
-- CLUAC based on usable space
+- Default 200k; set `MACF_CONTEXT_WINDOW` for 1M models
+- CL based on usable space (percentage scales to any window)
 - CC 2.0 shows total in display
 
 ---
