@@ -73,6 +73,16 @@ Session: {session_id[:8]}...
 Breadcrumb: {breadcrumb}
 {format_macf_footer()}"""
 
+        # Notify Telegram (non-blocking)
+        try:
+            from macf.channels.telegram import send_telegram_notification
+            send_telegram_notification(
+                f"Cycle: {cycle_number}\nReason: {data.get('reason', 'unknown')}\nTokens used: {token_info.get('tokens_used', '?')}\nCL: {token_info.get('cl_level', 'N/A')}",
+                prefix="\U0001f6d1 Session Ended"
+            )
+        except Exception:
+            pass
+
         return {
             "continue": True,
             "systemMessage": message

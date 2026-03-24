@@ -117,6 +117,16 @@ Delegation Drive Stats:
 
 {format_macf_footer()}"""
 
+        # Notify Telegram (non-blocking)
+        try:
+            from macf.channels.telegram import send_telegram_notification
+            send_telegram_notification(
+                f"Agent: {subagent_type}\nDuration: {duration_str}\nTotal delegations: {stats['count']}\nCL: {token_info.get('cl_level', 'N/A')}",
+                prefix="\U0001f4dc DELEG_DRV Complete"
+            )
+        except Exception:
+            pass
+
         # Return with systemMessage (user display only - SubagentStop hook doesn't support hookSpecificOutput)
         return {
             "continue": True,
