@@ -3508,10 +3508,18 @@ def cmd_task_edit(args: argparse.Namespace) -> int:
         print(f"   • macf_tools task archive {task_id_str}  → archived")
         return 1
 
-    editable_fields = ["description"]
+    # Block direct description editing - preserves MTMD metadata
+    if field == "description":
+        print(f"❌ Direct description editing is not allowed")
+        print(f"   Description contains MTMD metadata set during creation.")
+        print(f"   Use structured commands instead:")
+        print(f"   • macf_tools task note {task_id_str} \"message\"  → append notes")
+        print(f"   • macf_tools task edit {task_id_str} plan \"ref\" → update plan reference")
+        return 1
+
+    editable_fields = []
     if field not in editable_fields:
         print(f"❌ Field '{field}' is not editable")
-        print(f"   Editable fields: {', '.join(editable_fields)}")
         return 1
 
     # Validate status values
