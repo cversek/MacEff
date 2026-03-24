@@ -741,6 +741,20 @@ bot.on('message:text', async ctx => {
         let reply = `✅ Permission ${behavior === 'allow' ? 'granted' : 'denied'} [${requestId}]`
         if (feedback) {
           reply += `\n💬 ${feedback}`
+          // Forward feedback as channel message so agent sees it
+          mcp.notification({
+            method: 'notifications/claude/channel',
+            params: {
+              content: `💬 Permission feedback (${behavior}): ${feedback}`,
+              meta: {
+                chat_id: String(ctx.chat.id),
+                message_id: String(ctx.message.message_id),
+                user: ctx.from?.username ?? String(ctx.from?.id ?? ''),
+                user_id: String(ctx.from?.id ?? ''),
+                ts: new Date().toISOString(),
+              },
+            },
+          }).catch((err: unknown) => log(`FEEDBACK FORWARD FAILED: ${err}`))
         }
         await ctx.reply(reply)
       } catch (err) {
