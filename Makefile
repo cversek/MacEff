@@ -6,7 +6,7 @@ PORT     ?= 2222
 KEYS_DIR ?= keys
 PROJ     ?= demo
 
-.PHONY: help init build build-deploy up logs down mirror mirror-watch ssh-pa ssh-admin sa-test claude claude-doctor
+.PHONY: help init build build-deploy up logs down mirror mirror-watch ssh-pa ssh-admin sa-test claude claude-doctor test
 
 # Forward everything after the first goal as ARGS (and ignore a literal --)
 RAW_ARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
@@ -29,6 +29,7 @@ help:
 	@echo "  make sa-test       - run a small SA job from the PA"
 	@echo "  make claude        - launch Claude in /shared_workspace/\$(PROJ) (args forwarded)"
 	@echo "  make claude-doctor - run 'claude doctor' inside the container"
+	@echo "  make test            - run pytest suite (macf/tests/)"
 	@echo "  make policy-sync     - sync policies/<set> (default: base) into container & link current"
 	@echo "  make policy-sync-SET - sync policies/SET (e.g., policy-sync-base)"
 
@@ -75,6 +76,9 @@ policy-sync-%:
 
 init:
 	maceff_tools/maceff-init
+
+test:
+	pytest macf/tests/ -x -q
 
 build-deploy:
 	@echo "Building deployment image (framework baked in)..."
