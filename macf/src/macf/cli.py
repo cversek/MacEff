@@ -113,26 +113,45 @@ def cmd_tree(args: argparse.Namespace, root_parser: argparse.ArgumentParser = No
         return 1
 
     def get_args_string(parser: argparse.ArgumentParser) -> str:
-        """Build args string from parser actions (cleaner than parsing usage)."""
+        """Build args string from parser actions (cleaner than parsing usage).
+
+        Distinguishes required from optional args and renders mutually
+        exclusive required groups with (--a A | --b B) notation.
+        """
         parts = []
 
-        # Optional arguments (skip help)
+        # Collect actions that belong to required mutually exclusive groups
+        mutex_actions = set()
+        mutex_groups = []
+        for group in parser._mutually_exclusive_groups:
+            if group.required:
+                group_parts = []
+                for action in group._group_actions:
+                    mutex_actions.add(id(action))
+                    opts = action.option_strings[0] if action.option_strings else action.dest
+                    meta = action.metavar or action.dest.upper()
+                    if action.nargs == 0:
+                        group_parts.append(opts)
+                    else:
+                        group_parts.append(f"{opts} {meta}")
+                mutex_groups.append(f"({' | '.join(group_parts)})")
+
         for action in parser._actions:
             if isinstance(action, argparse._HelpAction):
                 continue
             if isinstance(action, argparse._SubParsersAction):
                 continue
+            if id(action) in mutex_actions:
+                continue  # Rendered as group below
             if action.option_strings:
-                # Optional argument
-                opts = action.option_strings[0]  # Use shortest form
-                if action.nargs == 0:  # Flag
+                opts = action.option_strings[0]
+                if action.nargs == 0:
                     parts.append(f"[{opts}]")
                 elif action.required:
                     parts.append(f"{opts} {action.metavar or action.dest.upper()}")
                 else:
                     parts.append(f"[{opts} {action.metavar or action.dest.upper()}]")
             else:
-                # Positional argument
                 name = action.metavar or action.dest
                 if action.nargs in ('?', '*'):
                     parts.append(f"[{name}]")
@@ -141,7 +160,8 @@ def cmd_tree(args: argparse.Namespace, root_parser: argparse.ArgumentParser = No
                 else:
                     parts.append(name)
 
-        return ' '.join(parts)
+        # Insert mutex groups after required positional/named args, before optional flags
+        return ' '.join(mutex_groups + parts)
 
     def get_subparsers(parser: argparse.ArgumentParser) -> dict:
         """Get {name: parser} dict of subcommands from parser."""
