@@ -4207,6 +4207,13 @@ def cmd_task_restore(args: argparse.Namespace) -> int:
     result = restore_task(args.archive_path_or_id)
 
     if not result.success:
+        if result.task_json:
+            # PermissionError fallback: output task JSON for manual TaskCreate
+            print(f"⚠️ MACF: {result.error}")
+            print(f"   Original ID: #{result.old_id}")
+            print(f"\nTask JSON for TaskCreate:")
+            print(result.task_json)
+            return 2  # Distinct exit code: recoverable via TaskCreate
         print(f"❌ Restore failed: {result.error}")
         return 1
 
