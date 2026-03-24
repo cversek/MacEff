@@ -45,6 +45,7 @@ class RestoreResult:
     old_id: str
     new_id: Optional[str] = None
     error: Optional[str] = None
+    task_json: Optional[str] = None  # JSON payload for manual TaskCreate fallback
 
 
 def get_archive_dir() -> Path:
@@ -260,16 +261,26 @@ def restore_task(
     restoration_note = f"\n\n---\n_Restored from archive on {datetime.now().strftime('%Y-%m-%d %H:%M')}. Original ID: #{old_id}_"
     task_data["description"] = task_data.get("description", "") + restoration_note
 
-    # Write new task file
+    # Write new task file (may fail in containers where CC owns the tasks dir)
     new_task_file = reader.session_path / f"{new_id}.json"
-    with open(new_task_file, "w") as f:
-        json.dump(task_data, f, indent=2)
-
-    return RestoreResult(
-        success=True,
-        old_id=old_id,
-        new_id=new_id,
-    )
+    try:
+        with open(new_task_file, "w") as f:
+            json.dump(task_data, f, indent=2)
+        return RestoreResult(
+            success=True,
+            old_id=old_id,
+            new_id=new_id,
+        )
+    except PermissionError:
+        # CC tasks directory is read-only (container environment).
+        # Return task JSON so the agent can use CC's native TaskCreate tool.
+        task_json_str = json.dumps(task_data, indent=2)
+        return RestoreResult(
+            success=False,
+            old_id=old_id,
+            error="CC tasks directory is read-only. Use TaskCreate with the provided JSON.",
+            task_json=task_json_str,
+        )
 
 
 def list_archived_tasks() -> List[Dict[str, Any]]:
