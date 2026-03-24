@@ -330,8 +330,13 @@ def run_loop(cmd_args: list, name: str = "", restart_delay: int = 5):
         )
 
 
-def list_processes():
-    """List all managed processes with stats."""
+def list_processes(show_all: bool = False):
+    """List managed processes with stats.
+
+    Default: show only running processes.
+    --all: show all including stopped/dead (history).
+    Auto-cleans stale entries that are not running.
+    """
     if not REGISTRY_DIR.exists():
         print("No managed processes.")
         return
@@ -341,23 +346,53 @@ def list_processes():
         print("No managed processes.")
         return
 
+    # Categorize entries
+    active = []
+    stale = []
+    for entry in entries:
+        if entry.name == "supervisor_crash.log":
+            continue
+        data = json.loads(entry.read_text())
+        pid = data.get("supervisor_pid", 0)
+        alive = _is_alive(pid)
+        data["_alive"] = alive
+        data["_path"] = entry
+        if alive:
+            active.append(data)
+        else:
+            stale.append(data)
+
+    # Auto-clean stale entries (unless --all requested)
+    if not show_all:
+        for data in stale:
+            data["_path"].unlink(missing_ok=True)
+        if not active:
+            cleaned = len(stale)
+            msg = f"No running processes."
+            if cleaned:
+                msg += f" (cleaned {cleaned} stale entries)"
+            print(msg)
+            return
+        display = active
+    else:
+        display = active + stale
+
     # Header
     print(f"{'PID':>8}  {'NAME':<20}  {'STATUS':<10}  {'RESTARTS':>8}  {'UPTIME':>8}  {'COMMAND'}")
     print("-" * 90)
 
-    for entry in entries:
-        data = json.loads(entry.read_text())
+    for data in display:
         pid = data.get("supervisor_pid", 0)
         name = data.get("name", "?")
         status = data.get("status", "?")
+        alive = data.get("_alive", False)
         restarts = data.get("restart_count", 0)
         created = data.get("created", 0)
         cmd = " ".join(data.get("command", []))
 
-        # Check if actually alive
-        alive = _is_alive(pid)
-        if not alive and status == "running":
-            status = "dead"
+        # Normalize: dead and stopped both mean "not running"
+        if not alive and status in ("running", "dead"):
+            status = "stopped"
 
         uptime = _format_duration(time.time() - created) if created else "?"
 
@@ -366,17 +401,12 @@ def list_processes():
             status_display = f"\033[32m{status}\033[0m"
         elif status == "disabled":
             status_display = f"\033[33m{status}\033[0m"
-        else:
+        elif status == "killed":
             status_display = f"\033[31m{status}\033[0m"
+        else:
+            status_display = f"\033[2m{status}\033[0m"  # dim for stopped
 
         print(f"{pid:>8}  {name:<20}  {status_display:<21}  {restarts:>8}  {uptime:>8}  {cmd[:40]}")
-
-    # Clean up dead entries
-    for entry in entries:
-        data = json.loads(entry.read_text())
-        pid = data.get("supervisor_pid", 0)
-        if not _is_alive(pid) and data.get("status") != "running":
-            pass  # Keep stopped entries for history; user can clean manually
 
 
 def restart(pid: int):

@@ -5344,9 +5344,10 @@ def _cmd_ar_launch(args):
     return launch_in_terminal(cmd, name=args.name, restart_delay=args.delay,
                               terminal=getattr(args, 'terminal', 'auto'))
 
-def _cmd_ar_list():
+def _cmd_ar_list(args=None):
     from .supervisor import list_processes
-    list_processes()
+    show_all = getattr(args, 'show_all', False) if args else False
+    list_processes(show_all=show_all)
     return 0
 
 def _cmd_ar_restart(args):
@@ -6033,8 +6034,10 @@ def _build_parser() -> argparse.ArgumentParser:
     ar_launch.set_defaults(func=lambda args: _cmd_ar_launch(args))
 
     # auto-restart list
-    ar_sub.add_parser("list", help="list all managed processes with stats").set_defaults(
-        func=lambda args: _cmd_ar_list())
+    ar_list = ar_sub.add_parser("list", help="list managed processes (default: running only)")
+    ar_list.add_argument("--all", "-a", action="store_true", dest="show_all",
+                         help="show all including stopped/dead history")
+    ar_list.set_defaults(func=lambda args: _cmd_ar_list(args))
 
     # auto-restart restart
     ar_restart = ar_sub.add_parser("restart", help="trigger restart (μC) for a supervised process")
