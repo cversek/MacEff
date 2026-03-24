@@ -143,6 +143,17 @@ Development Drive Stats:
 
 {format_macf_footer()}"""
 
+        # Notify Telegram if configured (non-blocking to main return)
+        try:
+            input_data = json.loads(stdin_json) if stdin_json else {}
+            last_msg = input_data.get('last_assistant_message', '')
+            if last_msg:
+                from macf.channels.telegram import send_telegram_notification
+                stop_text = f"Agent stopped\n\n{last_msg[:500]}"
+                send_telegram_notification(stop_text)
+        except Exception as e:
+            print(f"MACF: Stop hook Telegram notification error: {e}", file=sys.stderr)
+
         # Return with systemMessage only (Stop hook doesn't support hookSpecificOutput)
         return {
             "continue": True,
