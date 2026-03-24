@@ -312,12 +312,34 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # Add minimal token context (high-frequency hook = minimal overhead)
         token_context_minimal = format_token_context_minimal(token_info)
 
-        # Notify Telegram (non-blocking, concise)
+        # Notify Telegram (non-blocking, descriptive)
         try:
-            from macf.channels.telegram import send_telegram_notification
+            from macf.channels.telegram import send_telegram_notification, _html_escape
+            tg_details = ""
+            if tool_name == "Bash":
+                cmd = tool_input.get("command", "")[:500]
+                desc = tool_input.get("description", "")
+                tg_details = f"\n<pre>{_html_escape(cmd)}</pre>"
+                if desc:
+                    tg_details = f"\n{_html_escape(desc)}{tg_details}"
+            elif tool_name in ("Read", "Write", "Edit"):
+                fp = tool_input.get("file_path", "")
+                tg_details = f"\n<code>{_html_escape(fp)}</code>"
+            elif tool_name == "Grep":
+                pattern = tool_input.get("pattern", "")
+                path = tool_input.get("path", "")
+                tg_details = f"\n<code>{_html_escape(pattern)}</code> in {_html_escape(path)}"
+            elif tool_name == "Glob":
+                pattern = tool_input.get("pattern", "")
+                tg_details = f"\n<code>{_html_escape(pattern)}</code>"
+            elif tool_name == "Agent":
+                desc = tool_input.get("description", "")
+                sa_type = tool_input.get("subagent_type", "")
+                tg_details = f"\n{sa_type}: {_html_escape(desc)}"
             send_telegram_notification(
-                f"{tool_name} {token_context_minimal}",
-                prefix="\u2699\ufe0f Tool"
+                f"<b>{_html_escape(tool_name)}</b> {_html_escape(token_context_minimal)}{tg_details}",
+                prefix="\u2699\ufe0f",
+                parse_mode="HTML"
             )
         except Exception:
             pass
