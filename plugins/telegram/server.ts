@@ -709,8 +709,9 @@ bot.on('message:text', async ctx => {
   const allVerdictWords = new Set([...allowWords, ...denyWords])
 
   // Split into tokens: first word might be verdict
+  // Strip punctuation from first word (voice dictation adds periods: "Approved.")
   const tokens = text.split(/\s+/)
-  const firstWord = tokens[0]?.toLowerCase() ?? ''
+  const firstWord = tokens[0]?.toLowerCase().replace(/[^a-z]/g, '') ?? ''
 
   if (allVerdictWords.has(firstWord) && pendingPermissions.size > 0) {
     let requestId: string
