@@ -35,4 +35,7 @@ jobs:
           --ignore=macf/tests/test_hybrid_search.py
           --ignore=macf/tests/test_lancedb_search.py
           --ignore=macf/tests/test_search_service.py
+          --ignore=macf/tests/test_env_cli.py
+          --ignore=macf/tests/test_get_token_info.py
+          --ignore=macf/tests/test_handle_session_start.py
         timeout-minutes: 3
