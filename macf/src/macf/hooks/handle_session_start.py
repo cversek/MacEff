@@ -531,6 +531,16 @@ Session Context:
             "time_gap": gap_display
         })
 
+        # Notify Telegram (non-blocking)
+        try:
+            from macf.channels.telegram import send_telegram_notification
+            send_telegram_notification(
+                f"Cycle: {cycle}\nMode: {'AUTO' if auto_mode else 'MANUAL'}\nGap: {gap_display}\nCL: {cl_display}",
+                prefix="\U0001f680 Session Started"
+            )
+        except Exception:
+            pass
+
         # Pattern C: top-level systemMessage for user + hookSpecificOutput for agent
         return {
             "continue": True,

@@ -312,6 +312,16 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # Add minimal token context (high-frequency hook = minimal overhead)
         token_context_minimal = format_token_context_minimal(token_info)
 
+        # Notify Telegram (non-blocking, concise)
+        try:
+            from macf.channels.telegram import send_telegram_notification
+            send_telegram_notification(
+                f"{tool_name} {token_context_minimal}",
+                prefix="\u2699\ufe0f Tool"
+            )
+        except Exception:
+            pass
+
         # Pattern C: top-level systemMessage for user + hookSpecificOutput for agent
         user_message = f"{message} {token_context_minimal}"
         # Build additionalContext with policy injections prepended
