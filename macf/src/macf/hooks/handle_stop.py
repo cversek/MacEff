@@ -149,7 +149,10 @@ Development Drive Stats:
             last_msg = input_data.get('last_assistant_message', '')
             if last_msg:
                 from macf.channels.telegram import send_telegram_notification
-                stop_text = f"Agent stopped\n\n{last_msg[:500]}"
+                stop_reason = input_data.get('stop_reason', '')
+                is_error = 'error' in stop_reason.lower() if stop_reason else False
+                prefix = "\u274c" if is_error else "\u23f9\ufe0f"
+                stop_text = f"{prefix} Agent stopped\n\n{last_msg[:500]}"
                 send_telegram_notification(stop_text)
         except Exception as e:
             print(f"MACF: Stop hook Telegram notification error: {e}", file=sys.stderr)
