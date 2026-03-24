@@ -423,23 +423,43 @@ def status(pid: int):
 # Entry point for running inside new terminal
 if __name__ == "__main__":
     import argparse
+    import traceback
 
-    # Split argv on -- : supervisor args before, command after
-    argv = sys.argv[1:]
-    if "--" in argv:
-        split_idx = argv.index("--")
-        supervisor_argv = argv[:split_idx]
-        cmd = argv[split_idx + 1:]
-    else:
-        supervisor_argv = argv
-        cmd = []
+    LOG_FILE = REGISTRY_DIR / "supervisor_crash.log"
 
-    parser = argparse.ArgumentParser(description="Auto-restart supervisor")
-    parser.add_argument("action", choices=["_run_loop"])
-    parser.add_argument("--name", default="")
-    parser.add_argument("--delay", type=int, default=2)
+    try:
+        # Split argv on -- : supervisor args before, command after
+        argv = sys.argv[1:]
+        if "--" in argv:
+            split_idx = argv.index("--")
+            supervisor_argv = argv[:split_idx]
+            cmd = argv[split_idx + 1:]
+        else:
+            supervisor_argv = argv
+            cmd = []
 
-    args = parser.parse_args(supervisor_argv)
+        parser = argparse.ArgumentParser(description="Auto-restart supervisor")
+        parser.add_argument("action", choices=["_run_loop"])
+        parser.add_argument("--name", default="")
+        parser.add_argument("--delay", type=int, default=2)
 
-    if args.action == "_run_loop":
-        run_loop(cmd, name=args.name, restart_delay=args.delay)
+        args = parser.parse_args(supervisor_argv)
+
+        if args.action == "_run_loop":
+            run_loop(cmd, name=args.name, restart_delay=args.delay)
+
+    except Exception as e:
+        error_msg = traceback.format_exc()
+        print(f"\n[auto-restart] CRASH:\n{error_msg}", file=sys.stderr)
+        # Log to file (persists after window closes)
+        REGISTRY_DIR.mkdir(parents=True, exist_ok=True)
+        with open(LOG_FILE, "a") as f:
+            f.write(f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
+            f.write(f"argv: {sys.argv}\n")
+            f.write(error_msg)
+        print(f"[auto-restart] Crash log: {LOG_FILE}")
+        print("[auto-restart] Press Enter to close...")
+        try:
+            input()
+        except (EOFError, KeyboardInterrupt):
+            pass
