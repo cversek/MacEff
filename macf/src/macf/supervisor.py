@@ -281,6 +281,9 @@ def run_loop(cmd_args: list, name: str = "", restart_delay: int = 5):
                 print(f"[auto-restart] Disabled. Not restarting.")
                 break
 
+            # Restore default SIGINT handler (interactive shell may have set SIG_IGN)
+            signal.signal(signal.SIGINT, signal.default_int_handler)
+
             print(f"\n[auto-restart] Exited (code {exit_code}). Restart #{restart_count}.")
             print(f"[auto-restart] Ctrl-C during countdown to stop (will NOT restart).\n")
             _notify_telegram(
