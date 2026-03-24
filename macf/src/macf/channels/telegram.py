@@ -74,35 +74,72 @@ def resolve_telegram_config() -> Optional[Tuple[str, str]]:
     return None
 
 
-def send_telegram_notification(text: str, max_length: int = 4000) -> bool:
-    """Send a message to the configured Telegram chat.
+def send_telegram_notification(text: str, prefix: str = "",
+                               page_size: int = 4000) -> bool:
+    """Send a message to the configured Telegram chat, paginating if needed.
 
     Returns False silently if Telegram is not configured.
     Logs to stderr on API errors (visible but non-fatal).
 
+    Long messages are split into multiple pages. When paginated, the prefix
+    is augmented with (page/total) on each message.
+
     Args:
-        text: Message text (truncated to max_length)
-        max_length: Telegram limit is 4096, we use 4000 for safety
+        text: Message body text.
+        prefix: Optional prefix line (e.g. emoji + "Agent stopped").
+            Placed before body on each page.
+        page_size: Max chars per Telegram message (API limit 4096, default 4000 for safety).
 
     Returns:
-        True if sent successfully, False if not configured or failed.
+        True if all pages sent successfully, False if not configured or failed.
     """
     config = resolve_telegram_config()
     if not config:
         return False
 
     token, chat_id = config
-    truncated = text[:max_length] + ('...' if len(text) > max_length else '')
 
+    # Calculate available body space per page (prefix + newlines overhead)
+    prefix_base_len = len(prefix) + 2 if prefix else 0  # +2 for \n\n
+    page_tag_reserve = 10  # " (NN/NN)" max
+    body_budget = page_size - prefix_base_len - page_tag_reserve
+
+    # Split text into pages
+    if body_budget <= 0:
+        body_budget = page_size  # Fallback: skip prefix if too long
+    pages = []
+    remaining = text
+    while remaining:
+        pages.append(remaining[:body_budget])
+        remaining = remaining[body_budget:]
+
+    total = len(pages)
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    data = urllib.parse.urlencode({
-        'chat_id': chat_id,
-        'text': truncated
-    }).encode()
+    success = True
 
-    try:
-        urllib.request.urlopen(url, data, timeout=5)
-        return True
-    except Exception as e:
-        print(f"MACF: Telegram notification failed: {e}", file=sys.stderr)
-        return False
+    for i, page_body in enumerate(pages, 1):
+        if prefix:
+            if total > 1:
+                header = f"{prefix} ({i}/{total})"
+            else:
+                header = prefix
+            message = f"{header}\n\n{page_body}"
+        else:
+            if total > 1:
+                message = f"({i}/{total})\n\n{page_body}"
+            else:
+                message = page_body
+
+        data = urllib.parse.urlencode({
+            'chat_id': chat_id,
+            'text': message
+        }).encode()
+
+        try:
+            urllib.request.urlopen(url, data, timeout=5)
+        except Exception as e:
+            print(f"MACF: Telegram notification failed (page {i}/{total}): {e}",
+                  file=sys.stderr)
+            success = False
+
+    return success
