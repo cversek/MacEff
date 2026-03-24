@@ -88,6 +88,7 @@ class ClaudeCodeConfig(BaseModel):
     Separates settings by concern into two sub-configs:
     - settings: Project/capability settings (-> ~/.claude/settings.json)
     - preferences: Person/UI settings (-> ~/.claude.json)
+    - channels: Launch-time channel plugins (-> --channels flag)
 
     Per-agent values override deployment-level defaults.
     """
@@ -99,6 +100,10 @@ class ClaudeCodeConfig(BaseModel):
     preferences: Optional[ClaudeCodePreferencesConfig] = Field(
         default=None,
         description="Person/UI preferences for ~/.claude.json"
+    )
+    channels: Optional[List[str]] = Field(
+        default=None,
+        description="Channel plugins to activate at launch (e.g., ['plugin:telegram@claude-plugins-official']). Passed as --channels flag to claude."
     )
 
 
