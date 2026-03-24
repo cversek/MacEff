@@ -47,6 +47,12 @@ Task management policy governs the use of Claude Code native Task* tools (TaskCr
 - What subject format does GH_ISSUE use?
 - What custom fields are stored in MTMD?
 
+**2.3.1 GH_ISSUE Fix Workflow (PR-Based)**
+- What is the PR-based fix workflow?
+- When must DADTTT be read?
+- What branch naming convention is used?
+- How does the PR auto-close the issue?
+
 **2.5 MISSION Pinning Protocol**
 - What happens when a MISSION roadmap is approved?
 - What tasks are created during pinning?
@@ -295,6 +301,83 @@ These are stored in the MTMD `custom` dict, preserving the external system's sta
 Labels appear in brackets if present. Multiple labels use the first one. No labels omits the brackets entirely.
 
 **Requirements**: The `gh` CLI must be authenticated with access to the target repository.
+
+### 2.3.1 GH_ISSUE Fix Workflow (PR-Based)
+
+**Design Principle — Selective Friction**: GH_ISSUE tasks use a PR-based workflow; all other task types (MISSION, DETOUR, EXPERIMENT, TASK, BUG) continue with direct-to-main commits. Community-facing work earns more ceremony because it produces public history, triggers CI validation, and engages external contributors.
+
+**Workflow**:
+
+1. **Verify identity** before any repo operations:
+   ```bash
+   gh auth switch --user <identity>
+   gh auth status
+   ```
+
+2. **Create feature branch** using the convention `fix/gh-N-short-description`:
+   ```bash
+   git -C /path/to/repo checkout -b fix/gh-3-wrong-directory
+   ```
+
+3. **Read DADTTT policy** before writing any public-facing text (issue comments, PR title/body, review responses):
+   ```bash
+   macf_tools policy read dadttt   # or equivalent path
+   ```
+   DADTTT shapes public voice for community engagement — read it every time, not just once.
+
+4. **Implement the fix** on the feature branch. Commit with standard semantic messages.
+
+5. **Run tests locally**:
+   ```bash
+   make test
+   ```
+   Do not push until tests pass.
+
+6. **Commit with `Fixes #N`** in the message body (not the subject line):
+   ```bash
+   git commit -m "fix(scope): one-line description
+
+   Fixes #3"
+   ```
+
+7. **Push and create PR**:
+   ```bash
+   git push origin fix/gh-3-wrong-directory
+   gh pr create \
+     --title "fix(scope): one-line description" \
+     --body "$(cat <<'EOF'
+   Fixes #3
+
+   Brief description of root cause and approach.
+
+   **Test evidence**: `make test` passes locally (N tests).
+   EOF
+   )"
+   ```
+
+   **PR body requirements**:
+   - `Fixes #N` on its own line (GitHub keyword for auto-close)
+   - Brief description of the fix
+   - Test evidence (local `make test` result)
+
+8. **Wait for CI**:
+   ```bash
+   gh pr checks --watch
+   ```
+   All checks must pass before merging.
+
+9. **Merge with squash**:
+   ```bash
+   gh pr merge --squash --delete-branch
+   ```
+   The `Fixes #N` keyword in the PR body auto-closes the GitHub issue on merge.
+
+10. **Complete the task** referencing CI as verification:
+    ```bash
+    macf_tools task complete N --verified "CI passed (GitHub Actions), make test green, PR merged"
+    ```
+
+**What This Does NOT Change**: MISSION phases, DETOUR tasks, EXPERIMENT tasks, and standalone TASK/BUG items all continue using direct-to-main commits. The PR ceremony is exclusive to GH_ISSUE task type.
 
 ### 2.4 Subject Line Format
 
