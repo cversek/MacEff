@@ -3055,11 +3055,24 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
 
     succinct = getattr(args, 'succinct', False)
     verbose = getattr(args, 'verbose', False)
+    show_archived_only = getattr(args, 'archived', False)
+    show_all = getattr(args, 'show_all', False)
 
     def display_tree(root_id: str):
         """Display the task tree for given root_id."""
         reader = TaskReader()
         all_tasks = reader.read_all_tasks()
+
+        # Archive filtering (default: hide archived)
+        def is_archived(task):
+            return task.mtmd and getattr(task.mtmd, 'archived', False)
+
+        if show_archived_only:
+            all_tasks = [t for t in all_tasks if is_archived(t)]
+        elif not show_all:
+            all_tasks = [t for t in all_tasks if not is_archived(t)]
+        # else show_all: no filtering
+
         task_map = {t.id: t for t in all_tasks}
 
         if root_id not in task_map:
@@ -5637,6 +5650,11 @@ def _build_parser() -> argparse.ArgumentParser:
                                   help="hide notes/plans, show only active/pending tasks")
     task_tree_parser.add_argument("--verbose", "-v", action="store_true",
                                   help="show full plans, breadcrumbs, and all updates")
+    tree_archive_group = task_tree_parser.add_mutually_exclusive_group()
+    tree_archive_group.add_argument("--archived", action="store_true",
+                                    help="show ONLY archived tasks")
+    tree_archive_group.add_argument("--all", action="store_true", dest="show_all",
+                                    help="show all tasks including archived (default hides archived)")
     task_tree_parser.set_defaults(func=cmd_task_tree)
 
     # task delete
