@@ -214,6 +214,7 @@ def run_loop(cmd_args: list, name: str = "", restart_delay: int = 5):
 
     child = None
     restart_count = 0
+    stop_requested = False  # Flag for Ctrl-C during countdown
 
     def handle_restart(signum, frame):
         nonlocal child
@@ -229,6 +230,10 @@ def run_loop(cmd_args: list, name: str = "", restart_delay: int = 5):
         nonlocal child
         if child and child.poll() is None:
             child.send_signal(signal.SIGINT)
+
+    def handle_sigint_countdown(signum, frame):
+        nonlocal stop_requested
+        stop_requested = True
 
     signal.signal(signal.SIGUSR1, handle_restart)
     signal.signal(signal.SIGUSR2, handle_disable)
@@ -281,8 +286,9 @@ def run_loop(cmd_args: list, name: str = "", restart_delay: int = 5):
                 print(f"[auto-restart] Disabled. Not restarting.")
                 break
 
-            # Restore default SIGINT handler (interactive shell may have set SIG_IGN)
-            signal.signal(signal.SIGINT, signal.default_int_handler)
+            # Install countdown SIGINT handler (interactive shell corrupts default handler)
+            stop_requested = False
+            signal.signal(signal.SIGINT, handle_sigint_countdown)
 
             print(f"\n[auto-restart] Exited (code {exit_code}). Restart #{restart_count}.")
             print(f"[auto-restart] Ctrl-C during countdown to stop (will NOT restart).\n")
@@ -291,12 +297,18 @@ def run_loop(cmd_args: list, name: str = "", restart_delay: int = 5):
                 prefix="\U0001f504 Auto-Restart"
             )
 
-            # Countdown with visual trail
-            try:
-                for remaining in range(restart_delay, 0, -1):
-                    print(f"[auto-restart] Restarting in {remaining}s...", flush=True)
-                    time.sleep(1)
-            except KeyboardInterrupt:
+            # Countdown with visual trail (polling flag instead of catching KeyboardInterrupt)
+            for remaining in range(restart_delay, 0, -1):
+                if stop_requested:
+                    break
+                print(f"[auto-restart] Restarting in {remaining}s...", flush=True)
+                # Poll in short intervals so flag is checked promptly
+                for _ in range(10):
+                    if stop_requested:
+                        break
+                    time.sleep(0.1)
+
+            if stop_requested:
                 print(f"\n[auto-restart] Ctrl-C caught. Stopping auto-restart.")
                 _notify_telegram(
                     f"Process: {name}\nStopped by Ctrl-C during countdown",
