@@ -254,9 +254,15 @@ def run_loop(cmd_args: list, name: str = "", restart_delay: int = 2):
                 break
 
             # Use shell=True to resolve aliases (e.g., claude_autoupdating)
+            # Interactive shell (-i) needed to source alias definitions from rc files
             cmd_string = " ".join(cmd_args)
-            user_shell = os.environ.get("SHELL", "/bin/zsh")
-            child = subprocess.Popen(cmd_string, shell=True, executable=user_shell)
+            user_shell = os.environ.get("SHELL", "")
+            if not user_shell:
+                # Cross-platform default: zsh on macOS, bash on Linux
+                user_shell = "/bin/zsh" if platform.system() == "Darwin" else "/bin/bash"
+            child = subprocess.Popen(
+                [user_shell, "-ic", cmd_string]
+            )
             _update_registry(pid, child_pid=child.pid, status="running")
 
             exit_code = child.wait()
