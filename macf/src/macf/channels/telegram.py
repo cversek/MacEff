@@ -9,12 +9,19 @@ Required files in config dir:
 - access.json: contains allowFrom list with chat IDs
 """
 
+import io
 import json
+import os
 import sys
 import urllib.request
 import urllib.parse
 from pathlib import Path
 from typing import Optional, Tuple
+
+
+def _html_escape(text: str) -> str:
+    """Escape text for Telegram HTML parse_mode (only <, >, & need escaping)."""
+    return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
 
 def _read_token(config_dir: Path) -> Optional[str]:
@@ -75,7 +82,8 @@ def resolve_telegram_config() -> Optional[Tuple[str, str]]:
 
 
 def send_telegram_notification(text: str, prefix: str = "",
-                               page_size: int = 4000) -> bool:
+                               page_size: int = 4000,
+                               parse_mode: Optional[str] = None) -> bool:
     """Send a message to the configured Telegram chat, paginating if needed.
 
     Returns False silently if Telegram is not configured.
@@ -89,6 +97,9 @@ def send_telegram_notification(text: str, prefix: str = "",
         prefix: Optional prefix line (e.g. emoji + "Agent stopped").
             Placed before body on each page.
         page_size: Max chars per Telegram message (API limit 4096, default 4000 for safety).
+        parse_mode: Optional Telegram parse mode ("HTML" or "MarkdownV2").
+            Default None sends plain text. When using HTML, caller must
+            escape content with _html_escape().
 
     Returns:
         True if all pages sent successfully, False if not configured or failed.
@@ -130,10 +141,14 @@ def send_telegram_notification(text: str, prefix: str = "",
             else:
                 message = page_body
 
-        data = urllib.parse.urlencode({
+        params = {
             'chat_id': chat_id,
             'text': message
-        }).encode()
+        }
+        if parse_mode:
+            params['parse_mode'] = parse_mode
+
+        data = urllib.parse.urlencode(params).encode()
 
         try:
             urllib.request.urlopen(url, data, timeout=5)
@@ -143,3 +158,63 @@ def send_telegram_notification(text: str, prefix: str = "",
             success = False
 
     return success
+
+
+def send_telegram_document(content: str, filename: str,
+                           caption: str = "") -> bool:
+    """Send a text file as a Telegram document attachment.
+
+    Uses multipart/form-data encoding (required by sendDocument API).
+
+    Args:
+        content: File content as string.
+        filename: Display filename (e.g. "file.py", "diff.txt").
+        caption: Optional caption text (max 1024 chars).
+
+    Returns:
+        True if sent successfully, False if not configured or failed.
+    """
+    config = resolve_telegram_config()
+    if not config:
+        return False
+
+    token, chat_id = config
+    url = f"https://api.telegram.org/bot{token}/sendDocument"
+
+    # Build multipart/form-data manually (stdlib only, no requests)
+    boundary = '----MacfTelegramBoundary'
+    body = io.BytesIO()
+
+    # chat_id field
+    body.write(f'--{boundary}\r\n'.encode())
+    body.write(b'Content-Disposition: form-data; name="chat_id"\r\n\r\n')
+    body.write(f'{chat_id}\r\n'.encode())
+
+    # caption field (if provided)
+    if caption:
+        body.write(f'--{boundary}\r\n'.encode())
+        body.write(b'Content-Disposition: form-data; name="caption"\r\n\r\n')
+        body.write(f'{caption[:1024]}\r\n'.encode())
+
+    # document field (file upload)
+    body.write(f'--{boundary}\r\n'.encode())
+    body.write(f'Content-Disposition: form-data; name="document"; filename="{filename}"\r\n'.encode())
+    body.write(b'Content-Type: application/octet-stream\r\n\r\n')
+    body.write(content.encode('utf-8'))
+    body.write(b'\r\n')
+
+    # Closing boundary
+    body.write(f'--{boundary}--\r\n'.encode())
+
+    req = urllib.request.Request(
+        url,
+        data=body.getvalue(),
+        headers={'Content-Type': f'multipart/form-data; boundary={boundary}'}
+    )
+
+    try:
+        urllib.request.urlopen(req, timeout=10)
+        return True
+    except Exception as e:
+        print(f"MACF: Telegram document send failed: {e}", file=sys.stderr)
+        return False

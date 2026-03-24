@@ -18,6 +18,50 @@ from macf.agent_events_log import append_event
 from macf.hooks.hook_logging import log_hook_event
 
 
+def _send_permission_preview(tool_name, tool_input, send_notification, send_document, html_escape):
+    """Format and send file preview to Telegram based on tool type."""
+    import os
+
+    if tool_name == "Write":
+        file_path = tool_input.get("file_path", "unknown")
+        content = tool_input.get("content", "")
+        fname = os.path.basename(file_path)
+
+        # HTML message with truncated preview
+        preview = html_escape(content[:3000])
+        if len(content) > 3000:
+            preview += f"\n\n... ({len(content)} chars total)"
+        msg = f"\U0001f4dd <b>Write</b>: <code>{html_escape(file_path)}</code>\n\n<pre>{preview}</pre>"
+        send_notification(msg, parse_mode="HTML")
+
+        # Full file as document attachment
+        if len(content) > 3000:
+            send_document(content, fname, caption=f"Full content: {file_path}")
+
+    elif tool_name == "Edit":
+        file_path = tool_input.get("file_path", "unknown")
+        old_str = tool_input.get("old_string", "")
+        new_str = tool_input.get("new_string", "")
+
+        old_preview = html_escape(old_str[:1500])
+        new_preview = html_escape(new_str[:1500])
+        msg = (
+            f"\u270f\ufe0f <b>Edit</b>: <code>{html_escape(file_path)}</code>\n\n"
+            f"<b>Replace:</b>\n<pre>{old_preview}</pre>\n\n"
+            f"<b>With:</b>\n<pre>{new_preview}</pre>"
+        )
+        send_notification(msg, parse_mode="HTML")
+
+    elif tool_name == "Bash":
+        command = tool_input.get("command", "")
+        desc = tool_input.get("description", "")
+        msg = f"\u2699\ufe0f <b>Bash</b>"
+        if desc:
+            msg += f": {html_escape(desc)}"
+        msg += f"\n\n<pre>{html_escape(command[:3000])}</pre>"
+        send_notification(msg, parse_mode="HTML")
+
+
 def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
     """
     Run PermissionRequest hook logic.
@@ -68,6 +112,18 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         timestamp = get_minimal_timestamp()
         breadcrumb = get_breadcrumb()
         message = f"🏗️ MACF | {timestamp} | {breadcrumb} | 🔐 Permission: {tool_name}"
+
+        # Send file preview to Telegram (non-blocking, never fails the hook)
+        try:
+            from macf.channels.telegram import (
+                send_telegram_notification, send_telegram_document, _html_escape
+            )
+            _send_permission_preview(tool_name, tool_input,
+                                     send_telegram_notification,
+                                     send_telegram_document,
+                                     _html_escape)
+        except Exception as e:
+            print(f"MACF: Permission preview Telegram error: {e}", file=sys.stderr)
 
         return {
             "continue": True,
