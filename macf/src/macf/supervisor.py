@@ -92,7 +92,7 @@ def _format_duration(seconds: float) -> str:
 
 
 def launch_in_terminal(cmd_args: list, name: str = "",
-                       restart_delay: int = 2,
+                       restart_delay: int = 5,
                        terminal: str = "auto") -> int:
     """Launch a supervised process in a new terminal window.
 
@@ -192,7 +192,7 @@ def launch_in_terminal(cmd_args: list, name: str = "",
     return 0
 
 
-def run_loop(cmd_args: list, name: str = "", restart_delay: int = 2):
+def run_loop(cmd_args: list, name: str = "", restart_delay: int = 5):
     """Run the supervisor loop (called inside the new terminal).
 
     This is the actual supervisor process — manages the child.
@@ -281,16 +281,24 @@ def run_loop(cmd_args: list, name: str = "", restart_delay: int = 2):
                 print(f"[auto-restart] Disabled. Not restarting.")
                 break
 
-            print(f"\n[auto-restart] Exited (code {exit_code}). Restart #{restart_count} in {restart_delay}s...")
+            print(f"\n[auto-restart] Exited (code {exit_code}). Restart #{restart_count}.")
+            print(f"[auto-restart] Ctrl-C during countdown to stop (will NOT restart).\n")
             _notify_telegram(
                 f"Process: {name}\nExit code: {exit_code}\nRestart #{restart_count}",
                 prefix="\U0001f504 Auto-Restart"
             )
 
+            # Countdown with visual trail
             try:
-                time.sleep(restart_delay)
+                for remaining in range(restart_delay, 0, -1):
+                    print(f"[auto-restart] Restarting in {remaining}s...", flush=True)
+                    time.sleep(1)
             except KeyboardInterrupt:
-                print("\n[auto-restart] Interrupted. Exiting.")
+                print(f"\n[auto-restart] Ctrl-C caught. Stopping auto-restart.")
+                _notify_telegram(
+                    f"Process: {name}\nStopped by Ctrl-C during countdown",
+                    prefix="\U0001f6d1 Supervisor Stopped"
+                )
                 break
 
     except KeyboardInterrupt:

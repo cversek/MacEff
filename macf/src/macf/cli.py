@@ -6025,7 +6025,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # auto-restart launch
     ar_launch = ar_sub.add_parser("launch", help="launch supervised process in new terminal")
     ar_launch.add_argument("--name", "-n", default="", help="display name (default: command basename)")
-    ar_launch.add_argument("--delay", "-d", type=int, default=2, help="restart delay in seconds (default: 2)")
+    ar_launch.add_argument("--delay", "-d", type=int, default=5, help="restart delay in seconds (default: 5)")
     ar_launch.add_argument("--terminal", "-t", default="auto",
                            choices=["auto", "terminal", "iterm2", "gnome-terminal", "xterm", "konsole"],
                            help="terminal app (default: auto-detect)")
