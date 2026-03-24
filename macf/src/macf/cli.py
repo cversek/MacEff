@@ -5341,7 +5341,8 @@ def _cmd_ar_launch(args):
     if not cmd:
         print("Usage: macf_tools auto-restart launch -- <command> [args...]")
         return 1
-    return launch_in_terminal(cmd, name=args.name, restart_delay=args.delay)
+    return launch_in_terminal(cmd, name=args.name, restart_delay=args.delay,
+                              terminal=getattr(args, 'terminal', 'auto'))
 
 def _cmd_ar_list():
     from .supervisor import list_processes
@@ -6025,6 +6026,9 @@ def _build_parser() -> argparse.ArgumentParser:
     ar_launch = ar_sub.add_parser("launch", help="launch supervised process in new terminal")
     ar_launch.add_argument("--name", "-n", default="", help="display name (default: command basename)")
     ar_launch.add_argument("--delay", "-d", type=int, default=2, help="restart delay in seconds (default: 2)")
+    ar_launch.add_argument("--terminal", "-t", default="auto",
+                           choices=["auto", "terminal", "iterm2", "gnome-terminal", "xterm", "konsole"],
+                           help="terminal app (default: auto-detect)")
     ar_launch.add_argument("cmd", nargs=argparse.REMAINDER, help="command to supervise (after --)")
     ar_launch.set_defaults(func=lambda args: _cmd_ar_launch(args))
 

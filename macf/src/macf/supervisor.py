@@ -92,13 +92,16 @@ def _format_duration(seconds: float) -> str:
 
 
 def launch_in_terminal(cmd_args: list, name: str = "",
-                       restart_delay: int = 2) -> int:
+                       restart_delay: int = 2,
+                       terminal: str = "auto") -> int:
     """Launch a supervised process in a new terminal window.
 
     Args:
         cmd_args: Command and arguments to supervise
         name: Optional display name (defaults to command basename)
         restart_delay: Seconds between restarts
+        terminal: Terminal app to use: "auto", "terminal", "iterm2",
+            "gnome-terminal", "xterm", "konsole"
 
     Returns:
         Supervisor PID
@@ -119,21 +122,41 @@ def launch_in_terminal(cmd_args: list, name: str = "",
         "--",
     ] + cmd_args
 
+    escaped_cmd = " ".join(
+        arg.replace("\\", "\\\\").replace('"', '\\"')
+        for arg in supervisor_cmd
+    )
+
     system = platform.system()
     if system == "Darwin":
-        # macOS: open new Terminal.app window via osascript
-        escaped_cmd = " ".join(
-            arg.replace("\\", "\\\\").replace('"', '\\"')
-            for arg in supervisor_cmd
-        )
-        osascript = f'''
-            tell application "Terminal"
-                activate
-                do script "{escaped_cmd}"
-            end tell
-        '''
+        # Resolve terminal choice
+        if terminal == "auto":
+            # Prefer iTerm2 if running, else Terminal.app
+            try:
+                result = subprocess.run(
+                    ["osascript", "-e", 'tell application "System Events" to (name of processes) contains "iTerm2"'],
+                    capture_output=True, text=True, timeout=3
+                )
+                terminal = "iterm2" if "true" in result.stdout.lower() else "terminal"
+            except Exception:
+                terminal = "terminal"
+
+        if terminal == "iterm2":
+            osascript = f'''
+                tell application "iTerm2"
+                    activate
+                    create window with default profile command "{escaped_cmd}"
+                end tell
+            '''
+        else:
+            osascript = f'''
+                tell application "Terminal"
+                    activate
+                    do script "{escaped_cmd}"
+                end tell
+            '''
+
         subprocess.Popen(["osascript", "-e", osascript])
-        # Wait briefly for the process to start and write registry
         time.sleep(1.5)
 
     elif system == "Linux":
@@ -401,15 +424,22 @@ def status(pid: int):
 if __name__ == "__main__":
     import argparse
 
+    # Split argv on -- : supervisor args before, command after
+    argv = sys.argv[1:]
+    if "--" in argv:
+        split_idx = argv.index("--")
+        supervisor_argv = argv[:split_idx]
+        cmd = argv[split_idx + 1:]
+    else:
+        supervisor_argv = argv
+        cmd = []
+
     parser = argparse.ArgumentParser(description="Auto-restart supervisor")
     parser.add_argument("action", choices=["_run_loop"])
     parser.add_argument("--name", default="")
     parser.add_argument("--delay", type=int, default=2)
-    parser.add_argument("cmd", nargs=argparse.REMAINDER)
 
-    args = parser.parse_args()
-    # Strip leading -- from remainder
-    cmd = [a for a in args.cmd if a != "--"]
+    args = parser.parse_args(supervisor_argv)
 
     if args.action == "_run_loop":
         run_loop(cmd, name=args.name, restart_delay=args.delay)
