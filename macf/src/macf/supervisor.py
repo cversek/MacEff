@@ -253,7 +253,10 @@ def run_loop(cmd_args: list, name: str = "", restart_delay: int = 2):
                 print("[auto-restart] Disabled. Exiting.")
                 break
 
-            child = subprocess.Popen(cmd_args)
+            # Use shell=True to resolve aliases (e.g., claude_autoupdating)
+            cmd_string = " ".join(cmd_args)
+            user_shell = os.environ.get("SHELL", "/bin/zsh")
+            child = subprocess.Popen(cmd_string, shell=True, executable=user_shell)
             _update_registry(pid, child_pid=child.pid, status="running")
 
             exit_code = child.wait()
