@@ -30,9 +30,13 @@ done
 build_remote_cmd() {
   # Pre-create and cd into the workspace dir, then run claude with forwarded args
   # WORKSPACE_ROOT defaults to ~/workspace (Named Agents pattern)
+  # MACEFF_CHANNELS env var (set by start.py from agents.yaml) injects --channels flags
   local ws="${WORKSPACE_ROOT:-\$HOME/workspace}"
-  printf 'set -e; mkdir -p %s/%q && cd %s/%q; claude' \
+  printf 'set -e; mkdir -p %s/%q && cd %s/%q;' \
     "${ws}" "${PROJ}" "${ws}" "${PROJ}"
+  # Inject --channels from MACEFF_CHANNELS if set in container environment
+  printf ' channels_args=""; if [ -n "${MACEFF_CHANNELS:-}" ]; then for ch in $MACEFF_CHANNELS; do channels_args="$channels_args --channels $ch"; done; fi;'
+  printf ' claude $channels_args'
   for a in "$@"; do
     printf ' %q' "$a"
   done

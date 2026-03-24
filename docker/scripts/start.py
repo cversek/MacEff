@@ -161,7 +161,10 @@ def create_pa_user(agent_name: str, agent_spec: AgentSpec, defaults_dict: Option
 
     # Create bash_init.sh (MUST come before configure_bashrc)
     # This is the single source of truth for PA environment setup
-    create_bash_init(username, agent_name)
+    channels = None
+    if agent_spec.claude_config and agent_spec.claude_config.channels:
+        channels = agent_spec.claude_config.channels
+    create_bash_init(username, agent_name, channels=channels)
 
     # Configure .bashrc to source bash_init.sh
     configure_bashrc(username)
@@ -189,7 +192,7 @@ def install_ssh_key(username: str) -> None:
         log(f"SSH key installed: {username}")
 
 
-def create_bash_init(username: str, agent_name: str) -> None:
+def create_bash_init(username: str, agent_name: str, channels: list = None) -> None:
     """Create ~/.bash_init.sh for shell initialization (interactive + non-interactive).
 
     This file is the single source of truth for PA-specific environment setup.
@@ -206,9 +209,19 @@ def create_bash_init(username: str, agent_name: str) -> None:
     Args:
         username: Linux username (e.g., 'pa_manny')
         agent_name: Agent identity name (e.g., 'manny')
+        channels: Optional list of channel plugin strings for --channels flag
     """
     home_dir = Path(f'/home/{username}')
     bash_init = home_dir / '.bash_init.sh'
+
+    # Build channels env var block if configured
+    channels_block = ''
+    if channels:
+        channels_str = ' '.join(channels)
+        channels_block = f'''
+# CC Channels configuration (from agents.yaml claude_config.channels)
+export MACEFF_CHANNELS="{channels_str}"
+'''
 
     bash_init_content = f'''#!/bin/bash
 # MacEff: Shell initialization for both interactive and non-interactive shells
@@ -221,7 +234,7 @@ export BASH_ENV="$HOME/.bash_init.sh"
 # PA-specific environment (container-wide vars in /etc/environment)
 export MACEFF_AGENT_HOME_DIR="$HOME"
 export MACEFF_AGENT_NAME="{agent_name}"
-
+{channels_block}
 # Source deployment-provided environment scripts (alphanumeric order)
 # Scripts: 00-core, 10-lang-managers, 20-path, 50-custom, 90-final
 if [ -d /opt/maceff/framework/env.d ]; then
