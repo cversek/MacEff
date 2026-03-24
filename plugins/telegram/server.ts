@@ -702,20 +702,41 @@ bot.on('message:text', async ctx => {
   const text = ctx.message.text.trim()
 
   // Intercept permission verdicts: voice-dictation-friendly word matching
-  // Accepts: yes/approved/granted/allow/accept + <id> → allow
-  //          no/denied/deny/rejected/reject/block + <id> → deny
-  const verdictMatch = text.match(/^(yes|no|approved|granted|allow|accept|denied|deny|rejected|reject|block)\s+([a-zA-Z0-9]+)$/i)
-  if (verdictMatch) {
-    const [, decision, requestId] = verdictMatch
+  // Bare word (no ID): auto-resolves to most recent pending permission
+  // With ID: targets specific permission (for disambiguation)
+  const allowWords = new Set(['yes', 'approved', 'granted', 'allow', 'accept'])
+  const denyWords = new Set(['no', 'denied', 'deny', 'rejected', 'reject', 'block'])
+  const allVerdictWords = new Set([...allowWords, ...denyWords])
+  const textLower = text.toLowerCase()
+
+  // Match: bare word OR word + request_id
+  const verdictWithId = text.match(/^(yes|no|approved|granted|allow|accept|denied|deny|rejected|reject|block)\s+([a-zA-Z0-9]+)$/i)
+  const isBareVerdict = allVerdictWords.has(textLower)
+
+  if (verdictWithId || (isBareVerdict && pendingPermissions.size > 0)) {
+    let requestId: string
+    let decision: string
+
+    if (verdictWithId) {
+      // Explicit: "approved abc123"
+      decision = verdictWithId[1]
+      requestId = verdictWithId[2]
+    } else {
+      // Bare: "approved" — resolve to most recent pending
+      decision = textLower
+      // Get last added entry (most recent permission request)
+      requestId = Array.from(pendingPermissions.keys()).pop()!
+    }
+
     if (pendingPermissions.has(requestId)) {
       pendingPermissions.delete(requestId)
-      const allowWords = new Set(['yes', 'approved', 'granted', 'allow', 'accept'])
       const behavior = allowWords.has(decision.toLowerCase()) ? 'allow' : 'deny'
       try {
-        await mcp.notification({
+        // Fire-and-forget pattern (await trap — see tutorial)
+        mcp.notification({
           method: 'notifications/claude/channel/permission',
           params: { request_id: requestId, behavior },
-        })
+        }).catch((err: unknown) => log(`VERDICT SEND FAILED: ${err}`))
         await ctx.reply(`✅ Permission ${behavior === 'allow' ? 'granted' : 'denied'} [${requestId}]`)
       } catch (err) {
         await ctx.reply(`❌ Failed to send verdict: ${err}`)
