@@ -5334,6 +5334,41 @@ def cmd_transcripts_list(args: argparse.Namespace) -> int:
     return 0
 
 
+# -------- auto-restart handlers --------
+def _cmd_ar_launch(args):
+    from .supervisor import launch_in_terminal
+    cmd = [a for a in args.cmd if a != "--"]
+    if not cmd:
+        print("Usage: macf_tools auto-restart launch -- <command> [args...]")
+        return 1
+    return launch_in_terminal(cmd, name=args.name, restart_delay=args.delay)
+
+def _cmd_ar_list():
+    from .supervisor import list_processes
+    list_processes()
+    return 0
+
+def _cmd_ar_restart(args):
+    from .supervisor import restart
+    restart(args.pid)
+    return 0
+
+def _cmd_ar_disable(args):
+    from .supervisor import disable
+    disable(args.pid)
+    return 0
+
+def _cmd_ar_status(args):
+    from .supervisor import status
+    status(args.pid)
+    return 0
+
+def _cmd_ar_kill(args):
+    from .supervisor import kill_process
+    kill_process(args.pid)
+    return 0
+
+
 # -------- parser --------
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -5981,6 +6016,41 @@ def _build_parser() -> argparse.ArgumentParser:
     transcripts_list_parser.add_argument("--json", dest="json_output", action="store_true",
                                          help="output as JSON")
     transcripts_list_parser.set_defaults(func=cmd_transcripts_list)
+
+    # auto-restart: process supervisor
+    ar_parser = sub.add_parser("auto-restart", help="auto-restarting process supervisor")
+    ar_sub = ar_parser.add_subparsers(dest="ar_cmd")
+
+    # auto-restart launch
+    ar_launch = ar_sub.add_parser("launch", help="launch supervised process in new terminal")
+    ar_launch.add_argument("--name", "-n", default="", help="display name (default: command basename)")
+    ar_launch.add_argument("--delay", "-d", type=int, default=2, help="restart delay in seconds (default: 2)")
+    ar_launch.add_argument("cmd", nargs=argparse.REMAINDER, help="command to supervise (after --)")
+    ar_launch.set_defaults(func=lambda args: _cmd_ar_launch(args))
+
+    # auto-restart list
+    ar_sub.add_parser("list", help="list all managed processes with stats").set_defaults(
+        func=lambda args: _cmd_ar_list())
+
+    # auto-restart restart
+    ar_restart = ar_sub.add_parser("restart", help="trigger restart (μC) for a supervised process")
+    ar_restart.add_argument("pid", type=int, help="supervisor PID")
+    ar_restart.set_defaults(func=lambda args: _cmd_ar_restart(args))
+
+    # auto-restart disable
+    ar_disable = ar_sub.add_parser("disable", help="disable auto-restart for a supervised process")
+    ar_disable.add_argument("pid", type=int, help="supervisor PID")
+    ar_disable.set_defaults(func=lambda args: _cmd_ar_disable(args))
+
+    # auto-restart status
+    ar_status = ar_sub.add_parser("status", help="detailed status of a supervised process")
+    ar_status.add_argument("pid", type=int, help="supervisor PID")
+    ar_status.set_defaults(func=lambda args: _cmd_ar_status(args))
+
+    # auto-restart kill
+    ar_kill = ar_sub.add_parser("kill", help="kill supervisor and child (nuclear option)")
+    ar_kill.add_argument("pid", type=int, help="supervisor PID")
+    ar_kill.set_defaults(func=lambda args: _cmd_ar_kill(args))
 
     return p
 
