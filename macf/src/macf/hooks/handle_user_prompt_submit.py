@@ -217,6 +217,16 @@ Breadcrumb: {breadcrumb}"""
         ]
         plain_content = chr(10).join([s for s in sections if s])
 
+        # Notify Telegram (non-blocking)
+        try:
+            from macf.channels.telegram import send_telegram_notification
+            send_telegram_notification(
+                f"{token_section}",
+                prefix="\U0001f4ac DEV_DRV Started"
+            )
+        except Exception:
+            pass
+
         # Pattern C: top-level systemMessage for user + hookSpecificOutput for agent
         return {
             "continue": True,

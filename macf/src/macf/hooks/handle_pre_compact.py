@@ -77,6 +77,16 @@ Breadcrumb: {breadcrumb}
 CL: {token_info.get('cl_level', 'N/A')}
 {format_macf_footer()}"""
 
+        # CRITICAL: Notify Telegram of imminent compaction
+        try:
+            from macf.channels.telegram import send_telegram_notification
+            send_telegram_notification(
+                f"Cycle: {cycle_number}\nCL: {token_info.get('cl_level', 'N/A')}\nTokens: {token_info.get('tokens_used', '?')} / {token_info.get('context_window', '?')}\nSource: {data.get('source', 'auto')}",
+                prefix="\U0001f6a8 COMPACTION IMMINENT"
+            )
+        except Exception:
+            pass
+
         return {
             "continue": True,
             "systemMessage": message
