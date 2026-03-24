@@ -702,42 +702,47 @@ bot.on('message:text', async ctx => {
   const text = ctx.message.text.trim()
 
   // Intercept permission verdicts: voice-dictation-friendly word matching
-  // Bare word (no ID): auto-resolves to most recent pending permission
-  // With ID: targets specific permission (for disambiguation)
+  // Supports: bare word, word + request_id, word + feedback, word + request_id + feedback
+  // Disambiguation: if second token matches a pending request ID, it's targeting; otherwise feedback
   const allowWords = new Set(['yes', 'approved', 'granted', 'allow', 'accept'])
   const denyWords = new Set(['no', 'denied', 'deny', 'rejected', 'reject', 'block'])
   const allVerdictWords = new Set([...allowWords, ...denyWords])
-  const textLower = text.toLowerCase()
 
-  // Match: bare word OR word + request_id
-  const verdictWithId = text.match(/^(yes|no|approved|granted|allow|accept|denied|deny|rejected|reject|block)\s+([a-zA-Z0-9]+)$/i)
-  const isBareVerdict = allVerdictWords.has(textLower)
+  // Split into tokens: first word might be verdict
+  const tokens = text.split(/\s+/)
+  const firstWord = tokens[0]?.toLowerCase() ?? ''
 
-  if (verdictWithId || (isBareVerdict && pendingPermissions.size > 0)) {
+  if (allVerdictWords.has(firstWord) && pendingPermissions.size > 0) {
     let requestId: string
-    let decision: string
+    let decision: string = firstWord
+    let feedback: string = ''
 
-    if (verdictWithId) {
-      // Explicit: "approved abc123"
-      decision = verdictWithId[1]
-      requestId = verdictWithId[2]
+    const secondToken = tokens[1]?.toLowerCase() ?? ''
+
+    if (secondToken && pendingPermissions.has(secondToken)) {
+      // "approved abc123" or "approved abc123 looks good"
+      requestId = secondToken
+      feedback = tokens.slice(2).join(' ')
     } else {
-      // Bare: "approved" — resolve to most recent pending
-      decision = textLower
-      // Get last added entry (most recent permission request)
+      // "approved" or "approved great work" — auto-resolve to most recent
       requestId = Array.from(pendingPermissions.keys()).pop()!
+      feedback = tokens.slice(1).join(' ')
     }
 
     if (pendingPermissions.has(requestId)) {
       pendingPermissions.delete(requestId)
-      const behavior = allowWords.has(decision.toLowerCase()) ? 'allow' : 'deny'
+      const behavior = allowWords.has(decision) ? 'allow' : 'deny'
       try {
         // Fire-and-forget pattern (await trap — see tutorial)
         mcp.notification({
           method: 'notifications/claude/channel/permission',
           params: { request_id: requestId, behavior },
         }).catch((err: unknown) => log(`VERDICT SEND FAILED: ${err}`))
-        await ctx.reply(`✅ Permission ${behavior === 'allow' ? 'granted' : 'denied'} [${requestId}]`)
+        let reply = `✅ Permission ${behavior === 'allow' ? 'granted' : 'denied'} [${requestId}]`
+        if (feedback) {
+          reply += `\n💬 ${feedback}`
+        }
+        await ctx.reply(reply)
       } catch (err) {
         await ctx.reply(`❌ Failed to send verdict: ${err}`)
       }
