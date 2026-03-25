@@ -4,7 +4,24 @@ Create a MacEff-compliant experiment protocol by reading policies for structure 
 
 ---
 
-## EnterPlanMode (MANDATORY)
+## 🚨 CHANNEL-INITIATED EXCEPTION (Telegram / Remote)
+
+**If this command was triggered by a message from a `<channel source=...>` tag** (e.g., Telegram), the following modal tools are BLOCKED because CC does not relay them to channels:
+
+- ❌ **EnterPlanMode** / **ExitPlanMode** — causes silent deadlock for channel users
+- ❌ **AskUserQuestion** — renders only in terminal, invisible to channel
+
+**Channel-mode workflow instead**:
+1. Skip EnterPlanMode entirely
+2. Create EXPERIMENT task via `macf_tools task create experiment`
+3. Read the skeleton protocol.md
+4. Write experiment content directly to the CA (user approves via Write permission + inline feedback)
+5. Use `mcp__plugin_telegram_telegram__reply` for questions instead of AskUserQuestion
+6. Do NOT use ExitPlanMode — the Write approval IS the execution gate
+
+---
+
+## EnterPlanMode (MANDATORY — terminal only, see channel exception above)
 
 🚨 **FIRST ACTION**: Enter PlanMode before any exploration or drafting.
 

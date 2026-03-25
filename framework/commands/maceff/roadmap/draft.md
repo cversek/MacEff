@@ -10,6 +10,23 @@ Create a MacEff-compliant roadmap following the complete preliminary workflow wi
 
 ---
 
+## 🚨 CHANNEL-INITIATED EXCEPTION (Telegram / Remote)
+
+**If this command was triggered by a message from a `<channel source=...>` tag** (e.g., Telegram), the following modal tools are BLOCKED because CC does not relay them to channels:
+
+- ❌ **EnterPlanMode** / **ExitPlanMode** — causes silent deadlock for channel users
+- ❌ **AskUserQuestion** — renders only in terminal, invisible to channel
+
+**Channel-mode workflow instead**:
+1. Skip EnterPlanMode entirely
+2. Create MISSION task via `macf_tools task create mission`
+3. Read the skeleton roadmap.md
+4. Write plan content directly to the roadmap CA (user approves via Write permission + inline feedback)
+5. Use `mcp__plugin_telegram_telegram__reply` for questions instead of AskUserQuestion
+6. Do NOT use ExitPlanMode — the Write approval IS the execution gate
+
+---
+
 ## 🚨 PRE-DRAFT CEREMONY (MANDATORY - NO SKIPPING)
 
 **This ceremony is NOT optional. It is REQUIRED infrastructure for strategic planning.**
