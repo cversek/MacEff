@@ -1,5 +1,5 @@
 # tools/src/maceff/cli.py
-import argparse, json, os, sys, glob, platform, socket
+import argparse, json, os, subprocess, sys, glob, platform, socket
 from pathlib import Path
 from datetime import datetime, timezone
 try:
@@ -5011,6 +5011,29 @@ def cmd_task_metadata_validate(args: argparse.Namespace) -> int:
         return 0
 
 
+def _check_port_available(port: int, host: str = "127.0.0.1") -> tuple:
+    """Check if port is available. Returns (available: bool, owner_pid: int|None)."""
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind((host, port))
+            return True, None
+        except OSError:
+            pass
+    # Port in use — try to find owner via lsof
+    try:
+        result = subprocess.run(
+            ["lsof", "-ti", f":{port}"],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            owner_pid = int(result.stdout.strip().split("\n")[0])
+            return False, owner_pid
+    except (subprocess.TimeoutExpired, ValueError, FileNotFoundError):
+        pass
+    return False, None
+
+
 def cmd_proxy_start(args: argparse.Namespace) -> int:
     """Start the API proxy."""
     try:
@@ -5028,6 +5051,18 @@ def cmd_proxy_start(args: argparse.Namespace) -> int:
 
     port = getattr(args, 'port', 8019)
     daemonize = getattr(args, 'daemon', False)
+
+    # Pre-check port availability (catches zombies without PID files)
+    available, owner_pid = _check_port_available(port)
+    if not available:
+        print(f"❌ Port {port} is already in use", file=sys.stderr)
+        if owner_pid:
+            print(f"   Held by PID {owner_pid}", file=sys.stderr)
+            print(f"   Fix: kill {owner_pid} && macf_tools proxy start --daemon", file=sys.stderr)
+        else:
+            print(f"   Fix: lsof -i :{port}  # find the process", file=sys.stderr)
+            print(f"        kill <PID> && macf_tools proxy start --daemon", file=sys.stderr)
+        return 1
 
     try:
         if daemonize:
