@@ -181,8 +181,12 @@ def _capture_response(data, resp_meta: dict, model: str, streaming: bool = True)
     model_safe = model.replace("/", "_")
 
     if streaming:
-        # Reassemble content text from SSE chunks
-        content_blocks = []
+        # Reassemble content from SSE chunks — track blocks by type
+        current_block_type = None
+        current_block_parts = []
+        content_blocks = []  # list of {type, text/thinking/json}
+        text_parts = []  # flat text for backward compat
+
         raw = b"".join(data).decode("utf-8", errors="replace")
         for line in raw.split("\n"):
             if not line.startswith("data: "):
@@ -193,19 +197,44 @@ def _capture_response(data, resp_meta: dict, model: str, streaming: bool = True)
             try:
                 event = json.loads(data_str)
                 etype = event.get("type", "")
-                if etype == "content_block_delta":
+
+                if etype == "content_block_start":
+                    block = event.get("content_block", {})
+                    current_block_type = block.get("type", "unknown")
+                    current_block_parts = []
+
+                elif etype == "content_block_delta":
                     delta = event.get("delta", {})
-                    if delta.get("type") == "text_delta":
-                        content_blocks.append(delta.get("text", ""))
-                    elif delta.get("type") == "input_json_delta":
-                        content_blocks.append(delta.get("partial_json", ""))
+                    dtype = delta.get("type", "")
+                    if dtype == "text_delta":
+                        chunk = delta.get("text", "")
+                        current_block_parts.append(chunk)
+                        text_parts.append(chunk)
+                    elif dtype == "thinking_delta":
+                        current_block_parts.append(delta.get("thinking", ""))
+                    elif dtype == "input_json_delta":
+                        chunk = delta.get("partial_json", "")
+                        current_block_parts.append(chunk)
+                        text_parts.append(chunk)
+
+                elif etype == "content_block_stop":
+                    assembled = "".join(current_block_parts)
+                    if current_block_type and assembled:
+                        content_blocks.append({
+                            "type": current_block_type,
+                            "content": assembled,
+                        })
+                    current_block_type = None
+                    current_block_parts = []
+
             except json.JSONDecodeError:
                 pass
 
         # Merge ALL fields from resp_meta (usage, stop_reason, model, etc.)
-        # plus reassembled content text
+        # plus reassembled content
         captured = dict(resp_meta)  # includes stop_reason, tokens, model, message_id
-        captured["content_text"] = "".join(content_blocks)
+        captured["content_text"] = "".join(text_parts)  # backward compat
+        captured["content_blocks"] = content_blocks  # structured blocks
         captured["ts"] = ts
 
         filename = f"{ts}_{model_safe}_response.json"
