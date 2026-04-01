@@ -4315,10 +4315,11 @@ def cmd_task_hide_completed(args: argparse.Namespace) -> int:
         print("❌ No task session found")
         return 1
 
-    # Read all visible task files (not already hidden)
+    # Snapshot visible task files before iterating (glob is lazy, files rename during loop)
     hidden_count = 0
     skipped_count = 0
-    for task_file in reader.session_path.glob("*.json"):
+    visible_files = list(reader.session_path.glob("*.json"))
+    for task_file in visible_files:
         try:
             with open(task_file, "r") as f:
                 data = json.load(f)
@@ -4331,11 +4332,13 @@ def cmd_task_hide_completed(args: argparse.Namespace) -> int:
         except (json.JSONDecodeError, IOError):
             continue
 
-    visible_remaining = len(list(reader.session_path.glob("*.json")))
+    # Re-count after all renames complete
+    visible_after = len(list(reader.session_path.glob("*.json")))
+    hidden_after = len(list(reader.session_path.glob(".*.json")))
     print(f"✅ Hidden {hidden_count} completed task files from CC scanner")
     if skipped_count:
         print(f"   ⚠️  {skipped_count} files failed to hide")
-    print(f"   📁 CC-visible files remaining: {visible_remaining}")
+    print(f"   📁 CC-visible: {visible_after} | Hidden: {hidden_after}")
     return 0
 
 
