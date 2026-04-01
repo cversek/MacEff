@@ -22,9 +22,11 @@ def get_claude_code_version() -> str:
     Cached to avoid repeated subprocess calls (hooks may call this multiple times per session).
 
     Strategies (in order):
+    0. MACF_CC_VERSION env var (explicit override — required for Mac alias-launched CC)
     1. Linux: Read /proc/PPID/cmdline to find the actual CC binary, extract version from it
-    2. Shell resolution: Run user's login shell interactively to resolve aliases
-    3. Direct binary: Try `claude --version` (may find stale global install)
+    2. Auto-updater filename: ~/.local/share/claude/versions/X.Y.Z (version is the filename)
+    3. Binary content: Read shutil.which("claude") resolved target for version pattern
+    4. Direct binary: Try `claude --version` (may find stale global install)
 
     Returns:
         Version string (e.g., "2.1.32") or empty string if unavailable.
@@ -32,6 +34,13 @@ def get_claude_code_version() -> str:
     import os
     import platform
     import re
+
+    # Strategy 0: Explicit env var override (highest priority)
+    # Required for Mac when CC is launched via alias (e.g., claude-2.1.86)
+    # because Mac provides no way to trace the running binary from a subprocess.
+    env_version = os.environ.get("MACF_CC_VERSION")
+    if env_version:
+        return env_version
 
     def _parse_version(output: str) -> str:
         """Extract version from 'X.Y.Z (Claude Code)' format."""
