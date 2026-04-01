@@ -2,10 +2,14 @@
 Task file reader for Claude Code native task storage.
 
 Tasks are stored at: ~/.claude/tasks/{session_uuid}/*.json
+
+Completed tasks may be dot-prefixed (.{id}.json) to hide them from CC's native
+scanner while remaining fully accessible to MACF CLI commands.
 """
 
 import json
 import os
+import stat
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Union, Set
 
@@ -116,23 +120,35 @@ class TaskReader:
             return None
         return self.tasks_dir / self.session_uuid
 
-    def list_task_files(self) -> List[Path]:
-        """List all task JSON files in current session."""
+    def list_task_files(self, include_hidden: bool = True) -> List[Path]:
+        """List task JSON files in current session.
+
+        Args:
+            include_hidden: If True (default), include dot-prefixed completed task files.
+                          Our CLI always uses True. False is useful for CC-perspective views.
+        """
         if not self.session_path or not self.session_path.exists():
             return []
 
+        files = list(self.session_path.glob("*.json"))
+        if include_hidden:
+            files.extend(self.session_path.glob(".*.json"))
+
         return sorted(
-            self.session_path.glob("*.json"),
-            key=lambda p: p.stem.zfill(10)  # String-safe sorting with zero-padding
+            files,
+            key=lambda p: p.stem.lstrip('.').zfill(10)
         )
 
     def read_task(self, task_id: str) -> Optional[MacfTask]:
-        """Read a single task by ID (supports int or string IDs like '000')."""
+        """Read a single task by ID (supports int or string IDs like '000').
+
+        Checks both visible ({id}.json) and hidden (.{id}.json) paths.
+        """
         if not self.session_path:
             return None
 
-        task_file = self.session_path / f"{task_id}.json"
-        if not task_file.exists():
+        task_file = resolve_task_file(self.session_path, task_id)
+        if not task_file:
             return None
 
         try:
@@ -198,6 +214,89 @@ def get_all_session_tasks() -> Dict[str, List[MacfTask]]:
     return TaskReader.read_all_sessions()
 
 
+def resolve_task_file(session_path: Path, task_id: str) -> Optional[Path]:
+    """Find task file whether visible ({id}.json) or hidden (.{id}.json).
+
+    Args:
+        session_path: Path to session task directory
+        task_id: Task ID (string, e.g. "100" or "000")
+
+    Returns:
+        Path to task file, or None if not found in either location.
+    """
+    visible = session_path / f"{task_id}.json"
+    if visible.exists():
+        return visible
+    hidden = session_path / f".{task_id}.json"
+    if hidden.exists():
+        return hidden
+    return None
+
+
+def _unprotect_dir(dir_path: Path):
+    """Temporarily enable write on a chmod 555 protected directory."""
+    os.chmod(dir_path, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)  # 755
+
+
+def _protect_dir(dir_path: Path):
+    """Re-protect directory to chmod 555."""
+    os.chmod(dir_path, stat.S_IRUSR | stat.S_IXUSR | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)  # 555
+
+
+def hide_task_file(session_path: Path, task_id: str) -> bool:
+    """Rename {id}.json -> .{id}.json to hide from CC's native scanner.
+
+    Idempotent: no-op if already hidden or file doesn't exist.
+    Handles chmod 555 directory protection.
+    """
+    visible = session_path / f"{task_id}.json"
+    hidden = session_path / f".{task_id}.json"
+
+    if not visible.exists():
+        return hidden.exists()  # Already hidden = success
+
+    is_protected = not (session_path.stat().st_mode & stat.S_IWUSR)
+    try:
+        if is_protected:
+            _unprotect_dir(session_path)
+        visible.rename(hidden)
+        return True
+    except OSError as e:
+        import sys
+        print(f"⚠️ MACF: hide_task_file failed for #{task_id}: {e}", file=sys.stderr)
+        return False
+    finally:
+        if session_path.exists():
+            _protect_dir(session_path)
+
+
+def unhide_task_file(session_path: Path, task_id: str) -> bool:
+    """Rename .{id}.json -> {id}.json to show to CC's native scanner.
+
+    Idempotent: no-op if already visible or file doesn't exist.
+    Handles chmod 555 directory protection.
+    """
+    hidden = session_path / f".{task_id}.json"
+    visible = session_path / f"{task_id}.json"
+
+    if not hidden.exists():
+        return visible.exists()  # Already visible = success
+
+    is_protected = not (session_path.stat().st_mode & stat.S_IWUSR)
+    try:
+        if is_protected:
+            _unprotect_dir(session_path)
+        hidden.rename(visible)
+        return True
+    except OSError as e:
+        import sys
+        print(f"⚠️ MACF: unhide_task_file failed for #{task_id}: {e}", file=sys.stderr)
+        return False
+    finally:
+        if session_path.exists():
+            _protect_dir(session_path)
+
+
 def update_task_file(task_id: str, updates: Dict[str, Any], session_uuid: Optional[str] = None) -> bool:
     """
     Update a task JSON file with new field values.
@@ -214,8 +313,8 @@ def update_task_file(task_id: str, updates: Dict[str, Any], session_uuid: Option
     if not reader.session_path:
         return False
 
-    task_file = reader.session_path / f"{task_id}.json"
-    if not task_file.exists():
+    task_file = resolve_task_file(reader.session_path, task_id)
+    if not task_file:
         return False
 
     try:

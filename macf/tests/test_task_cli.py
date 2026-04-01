@@ -674,8 +674,11 @@ class TestGHIssueCompletionGate:
              '--commit', 'abc123', '--verified', 'tests pass'],
             capture_output=True, text=True, env=isolated_task_env['env'])
         assert result.returncode == 0
-        # Verify MTMD stored closeout data
-        task_data = json.loads((isolated_task_env['session_dir'] / f"{tid}.json").read_text())
+        # Verify MTMD stored closeout data (file may be dot-prefixed after completion)
+        from macf.task.reader import resolve_task_file
+        task_file = resolve_task_file(isolated_task_env['session_dir'], str(tid))
+        assert task_file is not None, f"Task file not found for #{tid} (checked both visible and hidden)"
+        task_data = json.loads(task_file.read_text())
         assert 'closeout_commits' in task_data['description']
         assert 'closeout_verified' in task_data['description']
 
