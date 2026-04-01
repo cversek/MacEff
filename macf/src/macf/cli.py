@@ -4304,6 +4304,63 @@ def cmd_task_archived_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_task_hide_completed(args: argparse.Namespace) -> int:
+    """Bulk dot-prefix all completed task files to hide from CC scanner."""
+    from .task import TaskReader
+    from .task.reader import hide_task_file
+    import json
+
+    reader = TaskReader()
+    if not reader.session_path or not reader.session_path.exists():
+        print("❌ No task session found")
+        return 1
+
+    # Read all visible task files (not already hidden)
+    hidden_count = 0
+    skipped_count = 0
+    for task_file in reader.session_path.glob("*.json"):
+        try:
+            with open(task_file, "r") as f:
+                data = json.load(f)
+            if data.get("status") == "completed":
+                task_id = task_file.stem
+                if hide_task_file(reader.session_path, task_id):
+                    hidden_count += 1
+                else:
+                    skipped_count += 1
+        except (json.JSONDecodeError, IOError):
+            continue
+
+    visible_remaining = len(list(reader.session_path.glob("*.json")))
+    print(f"✅ Hidden {hidden_count} completed task files from CC scanner")
+    if skipped_count:
+        print(f"   ⚠️  {skipped_count} files failed to hide")
+    print(f"   📁 CC-visible files remaining: {visible_remaining}")
+    return 0
+
+
+def cmd_task_unhide_all(args: argparse.Namespace) -> int:
+    """Restore all hidden (dot-prefixed) task files to visible state."""
+    from .task import TaskReader
+    from .task.reader import unhide_task_file
+
+    reader = TaskReader()
+    if not reader.session_path or not reader.session_path.exists():
+        print("❌ No task session found")
+        return 1
+
+    unhidden_count = 0
+    for task_file in reader.session_path.glob(".*.json"):
+        task_id = task_file.stem.lstrip('.')
+        if unhide_task_file(reader.session_path, task_id):
+            unhidden_count += 1
+
+    total = len(list(reader.session_path.glob("*.json")))
+    print(f"✅ Restored {unhidden_count} hidden task files")
+    print(f"   📁 Total CC-visible files: {total}")
+    return 0
+
+
 def cmd_task_grant_update(args: argparse.Namespace) -> int:
     """Grant permission to update a task's description."""
     from .task.protection import create_grant
@@ -4375,6 +4432,12 @@ def cmd_task_start(args: argparse.Namespace) -> int:
         return 1
 
     reader = TaskReader()
+
+    # Unhide task file if it was completed (dot-prefixed) — must happen before update
+    from .task.reader import unhide_task_file
+    if reader.session_path:
+        unhide_task_file(reader.session_path, str(task_id))
+
     task = reader.read_task(task_id)
     if not task:
         print(f"❌ Task #{task_id} not found")
@@ -4446,6 +4509,12 @@ def cmd_task_pause(args: argparse.Namespace) -> int:
         return 1
 
     reader = TaskReader()
+
+    # Unhide task file if it was completed (dot-prefixed) — must happen before update
+    from .task.reader import unhide_task_file
+    if reader.session_path:
+        unhide_task_file(reader.session_path, str(task_id))
+
     task = reader.read_task(task_id)
     if not task:
         print(f"❌ Task #{task_id} not found")
@@ -4879,6 +4948,13 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
     })
 
     if success:
+        # Hide completed task file from CC's native scanner (dot-prefix)
+        from .task.reader import hide_task_file
+        if reader.session_path:
+            hidden = hide_task_file(reader.session_path, str(task_id))
+            if hidden:
+                print(f"   📁 Hidden from CC scanner (.{task_id}.json)")
+
         # Emit task lifecycle event for downstream hooks and proxy integration
         plan_ca_ref = getattr(new_mtmd, 'plan_ca_ref', None)
         append_event("task_completed", {
@@ -5914,6 +5990,16 @@ def _build_parser() -> argparse.ArgumentParser:
     task_archived_list_parser.add_argument("--json", dest="json_output", action="store_true",
                                            help="output as JSON")
     task_archived_list_parser.set_defaults(func=cmd_task_archived_list)
+
+    # task hide-completed
+    task_hide_parser = task_sub.add_parser("hide-completed",
+                                           help="dot-prefix all completed task files to hide from CC scanner")
+    task_hide_parser.set_defaults(func=cmd_task_hide_completed)
+
+    # task unhide-all
+    task_unhide_parser = task_sub.add_parser("unhide-all",
+                                             help="restore all hidden task files to visible state")
+    task_unhide_parser.set_defaults(func=cmd_task_unhide_all)
 
     # task grant-update
     task_grant_update_parser = task_sub.add_parser("grant-update", help="grant permission to update task description")

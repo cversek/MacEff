@@ -248,18 +248,23 @@ def _sanitize_title(title: str) -> str:
 
 
 def _get_next_task_id(session_uuid: Optional[str] = None) -> int:
-    """Get next available task ID by scanning existing task files."""
+    """Get next available task ID by scanning existing task files.
+
+    Includes hidden (dot-prefixed) files to prevent ID collisions
+    with completed tasks that have been hidden from CC's scanner.
+    """
     reader = TaskReader(session_uuid)
-    task_files = reader.list_task_files()
+    task_files = reader.list_task_files(include_hidden=True)
 
     if not task_files:
         return 1
 
-    # Extract IDs and find max
+    # Extract IDs and find max — strip leading dots from hidden file stems
     ids = []
     for tf in task_files:
-        if tf.stem.isdigit():
-            ids.append(int(tf.stem))
+        stem = tf.stem.lstrip('.')
+        if stem.isdigit():
+            ids.append(int(stem))
 
     return max(ids) + 1 if ids else 1
 
