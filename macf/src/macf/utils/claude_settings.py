@@ -186,3 +186,60 @@ def set_permission_mode(mode: str, project_root: Optional[Path] = None) -> bool:
     except (OSError, json.JSONDecodeError, TypeError, KeyError) as e:
         print(f"⚠️ MACF: Settings write failed (permission mode): {e}", file=sys.stderr)
         return False
+
+
+def toggle_write_ask_for_auto_mode(enable_auto: bool, project_root: Optional[Path] = None) -> bool:
+    """
+    Toggle Write tool between 'ask' and implicit bypass for AUTO_MODE.
+
+    CC's permission resolution: deny > ask > allow > defaultMode.
+    Write in 'ask' always prompts regardless of defaultMode.
+    For AUTO_MODE to work autonomously, Write must be removed from 'ask'
+    so it falls through to defaultMode (bypassPermissions).
+
+    Args:
+        enable_auto: True = remove Write from ask (AUTO_MODE entry),
+                     False = restore Write to ask (MANUAL_MODE return)
+        project_root: Project root path. If None, attempts auto-detection.
+
+    Returns:
+        True if successfully updated, False on error
+    """
+    try:
+        if project_root is None:
+            from .paths import find_project_root
+            project_root = find_project_root()
+
+        settings_path = project_root / ".claude" / "settings.local.json"
+
+        if not settings_path.exists():
+            return False
+
+        with open(settings_path, 'r') as f:
+            settings = json.load(f)
+
+        permissions = settings.get('permissions', {})
+        ask_list = permissions.get('ask', [])
+
+        if enable_auto:
+            # Remove Write from ask so bypassPermissions covers it
+            if 'Write' in ask_list:
+                ask_list.remove('Write')
+        else:
+            # Restore Write to ask for MANUAL_MODE prompting
+            if 'Write' not in ask_list:
+                ask_list.append('Write')
+
+        permissions['ask'] = ask_list
+        settings['permissions'] = permissions
+
+        # Write atomically via temp file
+        temp_path = settings_path.with_suffix('.tmp')
+        with open(temp_path, 'w') as f:
+            json.dump(settings, f, indent=2)
+        temp_path.replace(settings_path)
+
+        return True
+    except (OSError, json.JSONDecodeError, TypeError, KeyError) as e:
+        print(f"⚠️ MACF: Settings write failed (toggle_write_ask): {e}", file=sys.stderr)
+        return False
