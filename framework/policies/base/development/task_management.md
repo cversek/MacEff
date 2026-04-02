@@ -927,9 +927,20 @@ Status transitions are **consciousness events**, not raw data mutations. Each li
 | Command | Status Change | Breadcrumb Recorded | Notes |
 |---------|---------------|---------------------|-------|
 | `task start` | → `in_progress` | `started_breadcrumb` | Marks when work began |
-| `task pause` | → `pending` | Update entry added | Temporary pause |
+| `task pause` | → `pending` | Update entry added | Correction only (see below) |
 | `task complete` | → `completed` | `completion_breadcrumb` | Requires `--report` |
 | `task archive` | → `archived` | Update entry added | Cascades to children |
+
+**`task pause` — Corrections Only**:
+
+`task pause` returns a task to `pending` and clears any injected policies. It is for **error correction**, not routine workflow:
+- ✅ Started a task by accident → `task pause` to undo
+- ✅ User explicitly instructs you to pause → `task pause`
+- ❌ End-of-cycle wind-down → use notes, leave `in_progress`
+- ❌ Switching between tasks → leave previous `in_progress` with notes
+- ❌ Routine status cycling → adds noise without clarity
+
+The normal task lifecycle is **start → work → complete**. Pause is the exception, not part of the flow.
 
 **Ceremony over Efficiency**: The friction of lifecycle commands ensures every transition is documented. Raw `status=X` mutations lose the moment of transition. Lifecycle commands preserve it.
 
