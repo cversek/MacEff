@@ -188,6 +188,84 @@ def set_permission_mode(mode: str, project_root: Optional[Path] = None) -> bool:
         return False
 
 
+def _read_settings(project_root: Optional[Path] = None) -> tuple:
+    """Read settings.local.json, returning (settings_dict, settings_path) or raise."""
+    if project_root is None:
+        from .paths import find_project_root
+        project_root = find_project_root()
+
+    settings_path = project_root / ".claude" / "settings.local.json"
+
+    if settings_path.exists():
+        with open(settings_path, 'r') as f:
+            settings = json.load(f)
+    else:
+        settings = {}
+
+    return settings, settings_path
+
+
+def _write_settings(settings: dict, settings_path: Path) -> None:
+    """Write settings atomically via temp file."""
+    temp_path = settings_path.with_suffix('.tmp')
+    with open(temp_path, 'w') as f:
+        json.dump(settings, f, indent=2)
+    temp_path.replace(settings_path)
+
+
+# Permissions that must always be in 'ask' (escalation requires human approval)
+_PERMANENT_ASK = [
+    "Bash(macf_tools task grant:*)",
+    "Bash(macf_tools task grant-update:*)",
+    "Bash(macf_tools task grant-delete:*)",
+    "Bash(macf_tools mode set AUTO_MODE:*)",
+]
+
+# Permissions that must always be in 'allow' (agent can always de-escalate)
+_PERMANENT_ALLOW = [
+    "Bash(macf_tools mode set MANUAL_MODE:*)",
+]
+
+
+def ensure_mode_safety_permissions(project_root: Optional[Path] = None) -> bool:
+    """
+    Ensure infrastructure permission entries exist in settings.local.json.
+
+    Installs permanent permission entries for mode switching safety:
+    - AUTO_MODE activation in 'ask' (escalation always requires human approval)
+    - MANUAL_MODE activation in 'allow' (agent can always de-escalate freely)
+    - Task grant operations in 'ask' (destructive task manipulation needs approval)
+
+    These entries are mode-independent — they persist across AUTO/MANUAL switches.
+    Called by mode set command to ensure safety infrastructure is always present.
+
+    Returns:
+        True if successfully updated, False on error
+    """
+    try:
+        settings, settings_path = _read_settings(project_root)
+        permissions = settings.setdefault('permissions', {})
+        ask_list = permissions.setdefault('ask', [])
+        allow_list = permissions.setdefault('allow', [])
+
+        changed = False
+        for entry in _PERMANENT_ASK:
+            if entry not in ask_list:
+                ask_list.append(entry)
+                changed = True
+        for entry in _PERMANENT_ALLOW:
+            if entry not in allow_list:
+                allow_list.append(entry)
+                changed = True
+
+        if changed:
+            _write_settings(settings, settings_path)
+        return True
+    except (OSError, json.JSONDecodeError, TypeError, KeyError) as e:
+        print(f"⚠️ MACF: Settings write failed (ensure_mode_safety): {e}", file=sys.stderr)
+        return False
+
+
 def toggle_write_ask_for_auto_mode(enable_auto: bool, project_root: Optional[Path] = None) -> bool:
     """
     Toggle Write tool between 'ask' and implicit bypass for AUTO_MODE.
@@ -206,20 +284,9 @@ def toggle_write_ask_for_auto_mode(enable_auto: bool, project_root: Optional[Pat
         True if successfully updated, False on error
     """
     try:
-        if project_root is None:
-            from .paths import find_project_root
-            project_root = find_project_root()
-
-        settings_path = project_root / ".claude" / "settings.local.json"
-
-        if not settings_path.exists():
-            return False
-
-        with open(settings_path, 'r') as f:
-            settings = json.load(f)
-
-        permissions = settings.get('permissions', {})
-        ask_list = permissions.get('ask', [])
+        settings, settings_path = _read_settings(project_root)
+        permissions = settings.setdefault('permissions', {})
+        ask_list = permissions.setdefault('ask', [])
 
         if enable_auto:
             # Remove Write from ask so bypassPermissions covers it
@@ -230,15 +297,7 @@ def toggle_write_ask_for_auto_mode(enable_auto: bool, project_root: Optional[Pat
             if 'Write' not in ask_list:
                 ask_list.append('Write')
 
-        permissions['ask'] = ask_list
-        settings['permissions'] = permissions
-
-        # Write atomically via temp file
-        temp_path = settings_path.with_suffix('.tmp')
-        with open(temp_path, 'w') as f:
-            json.dump(settings, f, indent=2)
-        temp_path.replace(settings_path)
-
+        _write_settings(settings, settings_path)
         return True
     except (OSError, json.JSONDecodeError, TypeError, KeyError) as e:
         print(f"⚠️ MACF: Settings write failed (toggle_write_ask): {e}", file=sys.stderr)
