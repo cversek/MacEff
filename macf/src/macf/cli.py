@@ -2470,7 +2470,7 @@ def cmd_mode_set(args: argparse.Namespace) -> int:
 
             # If enabling AUTO_MODE, also enable autocompact and bypass permissions
             if enabled:
-                from .utils.claude_settings import set_autocompact_enabled, set_permission_mode
+                from .utils.claude_settings import set_autocompact_enabled, set_permission_mode, toggle_write_ask_for_auto_mode
                 if set_autocompact_enabled(True):
                     print("✅ autoCompactEnabled set to true in ~/.claude.json")
                 else:
@@ -2479,12 +2479,17 @@ def cmd_mode_set(args: argparse.Namespace) -> int:
                     print("✅ permissions.defaultMode set to bypassPermissions")
                 else:
                     print("⚠️  Could not update permissions.defaultMode setting")
+                if toggle_write_ask_for_auto_mode(True):
+                    print("✅ Write removed from 'ask' list (bypassed in AUTO_MODE)")
+                else:
+                    print("⚠️  Could not toggle Write permission for AUTO_MODE")
             else:
                 # Returning to MANUAL_MODE - restore default permissions
-                from .utils.claude_settings import set_autocompact_enabled, set_permission_mode
+                from .utils.claude_settings import set_autocompact_enabled, set_permission_mode, toggle_write_ask_for_auto_mode
                 set_autocompact_enabled(False)
                 set_permission_mode("default")
-                print("✅ Restored default settings (autocompact disabled, default permissions)")
+                toggle_write_ask_for_auto_mode(False)
+                print("✅ Restored default settings (autocompact disabled, default permissions, Write back in ask)")
         else:
             print(f"❌ {message}")
             return 1
