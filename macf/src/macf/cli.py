@@ -6536,7 +6536,58 @@ def _build_parser() -> argparse.ArgumentParser:
     ar_kill.add_argument("pid", type=int, help="supervisor PID")
     ar_kill.set_defaults(func=lambda args: _cmd_ar_kill(args))
 
+    # ── voice ────────────────────────────────────────────────────────────
+    voice_parser = sub.add_parser("voice", help="voice transcription (speech-to-text)")
+    voice_sub = voice_parser.add_subparsers(dest="voice_cmd")
+
+    voice_transcribe = voice_sub.add_parser("transcribe", help="transcribe audio file to text")
+    voice_transcribe.add_argument("file", help="path to audio file (OGA, WAV, MP3, etc.)")
+    voice_transcribe.add_argument("--engine", choices=["mlx", "faster-whisper", "whisper"],
+                                  help="force specific engine (auto-detect if omitted)")
+    voice_transcribe.add_argument("--model", help="model name/path (engine-specific default)")
+    voice_transcribe.add_argument("--language", default="en", help="language code (default: en)")
+    voice_transcribe.add_argument("--prompt", dest="initial_prompt",
+                                  help="Whisper initial_prompt for vocabulary conditioning")
+    voice_transcribe.add_argument("--json", dest="json_output", action="store_true",
+                                  help="output JSON with segments and metadata")
+    voice_transcribe.set_defaults(func=cmd_voice_transcribe)
+
     return p
+
+
+def cmd_voice_transcribe(args) -> int:
+    """Transcribe audio file to text."""
+    from .voice.transcribe import transcribe
+    import json as json_mod
+
+    audio_path = args.file
+    if not Path(audio_path).exists():
+        print(f"❌ File not found: {audio_path}")
+        return 1
+
+    try:
+        result = transcribe(
+            audio_path=audio_path,
+            engine=args.engine,
+            model=args.model,
+            language=args.language,
+            initial_prompt=args.initial_prompt,
+        )
+    except RuntimeError as e:
+        print(f"❌ {e}")
+        return 1
+    except Exception as e:
+        print(f"❌ Transcription failed: {e}")
+        return 1
+
+    if args.json_output:
+        print(json_mod.dumps(result.to_dict(), indent=2))
+    else:
+        print(result.text)
+        print(f"\n[{result.engine}/{result.model} | {result.duration_audio:.1f}s audio | {result.duration_transcribe:.1f}s transcribe]",
+              file=sys.stderr)
+
+    return 0
 
 def main(argv=None) -> None:
     parser = _build_parser()
