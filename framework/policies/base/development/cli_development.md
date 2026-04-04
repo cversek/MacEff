@@ -926,7 +926,43 @@ tool other --output-format json  # Different flag for same thing
 
 ---
 
-## 9 Evolution & Feedback
+## 9 Full Disclosure Principle
+
+CLI tools that modify system state must report EVERY individual change they make. Not summaries, not counts - each state transition gets its own output line.
+
+**Why this matters for both audiences**:
+- **Users** see exactly what changed and can verify correctness or identify problems
+- **Agents** receive the output as proprioception - confirmation that actions completed, enabling confident next steps without re-verification
+
+**The pattern**:
+```
+# WRONG: summary hides details
+✅ 19 deny entries installed
+
+# RIGHT: every entry visible
+✅ Deny list installed:
+   🚫 Bash(git push --force:*)
+   🚫 Bash(git push -f:*)
+   🚫 Bash(rm -rf /:*)
+   ...
+```
+
+**Implementation**: Functions that modify state should return WHAT CHANGED (lists, dicts), not just success/failure (bool). The caller (CLI) is responsible for printing each item.
+
+```python
+# WRONG: returns bool, caller can only say "done" or "failed"
+def install_permissions() -> bool: ...
+
+# RIGHT: returns what changed, caller prints each one
+def install_permissions() -> dict:
+    return {'deny_added': [...], 'ask_added': [...]}
+```
+
+**When to apply**: Any command that modifies permissions, configuration, task state, file permissions, or environment settings. The more consequential the change, the more important full disclosure becomes.
+
+---
+
+## 10 Evolution & Feedback
 
 This policy evolves through:
 - Learnings from MacEff CLI development (`macf_tools`, `maceff-init`)
