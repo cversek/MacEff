@@ -158,13 +158,9 @@ Development Drive Stats:
 
         # Scope gate: block stop if active scoped tasks remain in AUTO_MODE
         try:
-            from macf.utils.cycles import detect_auto_mode, get_current_session_id
-            session_id = get_current_session_id()
-            auto_mode, _ = detect_auto_mode(session_id)
-            if auto_mode:
-                from macf.task.scope import get_scope_check
-                scope = get_scope_check()
-                if scope["active_count"] > 0:
+            from macf.task.scope import get_scope_check
+            scope = get_scope_check()
+            if scope["active_count"] > 0 and auto_mode:
                     task_list = "\n".join(
                         f"  - #{t['id']}: {t['subject']}" for t in scope["active"]
                     )
@@ -178,8 +174,8 @@ Development Drive Stats:
                             f"To de-escalate: `macf_tools mode set MANUAL_MODE` bypasses scope gate."
                         )
                     }
-        except Exception as e:
-            print(f"MACF: Scope gate check error: {e}", file=sys.stderr)
+        except Exception:
+            pass  # Scope gate failure must never block normal stop
 
         # Return with systemMessage only (Stop hook doesn't support hookSpecificOutput)
         return {
