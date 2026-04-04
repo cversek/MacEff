@@ -164,14 +164,17 @@ Development Drive Stats:
                     task_list = "\n".join(
                         f"  - #{t['id']}: {t['subject']}" for t in scope["active"]
                     )
+                    # CRITICAL: continue:true + directive, NOT continue:false (which traps agent)
+                    # See EPIST_DOC #2 §9 — continue:false creates liminal trapped state.
+                    # Policy enforcement: agent reads directive and chooses to continue per §5.1.
                     return {
-                        "continue": False,
+                        "continue": True,
                         "systemMessage": (
-                            f"\U0001f6d1 SCOPE GATE: {scope['active_count']} scoped task(s) remaining.\n\n"
-                            f"You cannot stop until all scoped tasks are complete.\n\n"
-                            f"Remaining:\n{task_list}\n\n"
-                            f"To continue: complete these tasks.\n"
-                            f"To de-escalate: `macf_tools mode set MANUAL_MODE` bypasses scope gate."
+                            f"***SCOPE GATE*** {scope['active_count']} scoped task(s) remaining!\n\n"
+                            f"Per autonomous_operation.md §5.1: stopping is NOT valid when scoped tasks remain.\n"
+                            f"You MUST continue working on these tasks:\n{task_list}\n\n"
+                            f"The only valid stop conditions are: scope unclear, judgment needed, blocked, or ALL scoped work complete.\n"
+                            f"Emergency de-escalation: `macf_tools mode set MANUAL_MODE --justification <reason>`"
                         )
                     }
         except Exception:
