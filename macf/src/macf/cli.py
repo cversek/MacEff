@@ -45,6 +45,7 @@ ANSI_GREEN = "\033[32m"
 ANSI_YELLOW = "\033[33m"
 ANSI_DIM = "\033[2m"
 ANSI_STRIKE = "\033[9m"
+ANSI_STRIKE_OFF = "\033[29m"
 
 
 def _dim_task_ids(text: str) -> str:
@@ -3048,6 +3049,13 @@ def cmd_task_list(args: argparse.Namespace) -> int:
             status_icon = "◻"
             line = f"{prefix}{status_icon} {_dim_task_ids(t.subject)}"
 
+        # Scope indicator (👀 for active, strikethrough 👀 for inactive)
+        if scope_state and t.id in scope_state:
+            if scope_state[t.id] == "active":
+                line += " 👀"
+            elif scope_state[t.id] == "inactive":
+                line += f" {ANSI_STRIKE}👀{ANSI_STRIKE_OFF}"
+
         # Add plan_ca_ref if present (key feature of enhanced display)
         if t.mtmd and t.mtmd.plan_ca_ref:
             if t.status == "archived":
@@ -3199,6 +3207,13 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
         """Display the task tree for given root_id."""
         reader = TaskReader()
         all_tasks = reader.read_all_tasks()
+
+        # Load scope state for 👀 indicators
+        try:
+            from .task.scope import get_scope_state
+            scope_state = get_scope_state()
+        except Exception:
+            scope_state = {}
 
         # Archive filtering (default: hide archived)
         def is_archived(task):
@@ -3420,6 +3435,13 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
             if suffix:
                 text = f"{text} {suffix}"
 
+            # Scope indicator
+            if scope_state and task.id in scope_state:
+                if scope_state[task.id] == "active":
+                    text += " 👀"
+                elif scope_state[task.id] == "inactive":
+                    text += f" {ANSI_STRIKE}👀{ANSI_STRIKE_OFF}"
+
             print(f"{prefix}{connector}{status_icon} {text}")
 
             # Print task details (plan, notes) with proper indentation
@@ -3451,6 +3473,11 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
             root_text = _dim_task_ids(root.subject)
         if root_suffix:
             root_text = f"{root_text} {root_suffix}"
+        if scope_state and root.id in scope_state:
+            if scope_state[root.id] == "active":
+                root_text += " 👀"
+            elif scope_state[root.id] == "inactive":
+                root_text += f" {ANSI_STRIKE}👀{ANSI_STRIKE_OFF}"
         print(f"{status_icon} {root_text}")
 
         # Print root task details (plan, notes) - extra indent beyond header
