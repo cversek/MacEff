@@ -164,6 +164,15 @@ Development Drive Stats:
                     task_list = "\n".join(
                         f"  - #{t['id']}: {t['subject']}" for t in scope["active"]
                     )
+                    # Notify Telegram that scope gate blocked the stop
+                    try:
+                        from macf.channels.telegram import send_telegram_notification
+                        send_telegram_notification(
+                            f"{scope['active_count']} scoped task(s) remaining",
+                            prefix="\U0001f6ab Scope gate blocked stop"
+                        )
+                    except Exception:
+                        pass  # Notification failure must not affect scope gate
                     # Use decision:"block" — this forces CC to continue the agent's turn
                     # (blocking errors re-enter the message loop, query.ts:1282).
                     # continue:false would STOP the agent (preventContinuation).
