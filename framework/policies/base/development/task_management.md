@@ -1089,7 +1089,43 @@ macf_tools task tree --loop            # Live monitoring (refreshes)
 
 ---
 
-## 12 Future Experiments
+## 12 Task Scope System
+
+Task scope defines the boundary of authorized work in AUTO_MODE. Scoped tasks are tracked via the event system and visualized in the task tree.
+
+### MTMD Field
+
+Optional field `scope_status`: `active` | `inactive` | `null`
+- Set by `macf_tools task scope set`
+- Transitions to `inactive` when task is completed while scoped
+- Cleared by `macf_tools task scope clear`
+
+### Lifecycle
+
+```
+scope set → task is "active" (👀 in tree)
+task complete → task becomes "inactive" (~~👀~~ in tree)
+scope clear → task removed from scope (no indicator)
+```
+
+### Interaction with Stop Hook
+
+In AUTO_MODE, the Stop hook queries `macf_tools task scope check`. If active scoped tasks remain, the hook returns `continue: false` - blocking the stop. The agent must complete all scoped tasks. De-escalation to MANUAL_MODE bypasses the scope gate but is reserved for EMERGENCY situations only (security concerns, OPSEC risks, genuine blockers) - not for convenience or task avoidance.
+
+See `autonomous_operation.md` §8 for full scope system documentation.
+
+### CLI Commands
+
+```bash
+macf_tools task scope set <task_ids...>   # Scope tasks (parent expands to children)
+macf_tools task scope show                 # Display scope with status
+macf_tools task scope clear                # Remove all (Always Ask)
+macf_tools task scope check                # JSON output for Stop hook
+```
+
+---
+
+## 13 Future Experiments
 
 **Knowledge Gaps Requiring Empirical Validation**:
 
