@@ -164,18 +164,19 @@ Development Drive Stats:
                     task_list = "\n".join(
                         f"  - #{t['id']}: {t['subject']}" for t in scope["active"]
                     )
-                    # CRITICAL: continue:true + directive, NOT continue:false (which traps agent)
-                    # See EPIST_DOC #2 §9 — continue:false creates liminal trapped state.
-                    # Policy enforcement: agent reads directive and chooses to continue per §5.1.
+                    # Use decision:"block" — this forces CC to continue the agent's turn
+                    # (blocking errors re-enter the message loop, query.ts:1282).
+                    # continue:false would STOP the agent (preventContinuation).
+                    # continue:true+systemMessage is soft (agent can ignore).
+                    # decision:block is the HARD mechanism — the completion driver.
                     return {
                         "continue": True,
-                        "systemMessage": (
-                            f"***SCOPE GATE*** {scope['active_count']} scoped task(s) remaining!\n\n"
-                            f"Per autonomous_operation.md §5.1: stopping is NOT valid when scoped tasks remain.\n"
-                            f"You MUST continue working on these tasks:\n{task_list}\n\n"
-                            f"The only valid stop conditions are: scope unclear, judgment needed, blocked, or ALL scoped work complete.\n"
-                            f"Emergency de-escalation: `macf_tools mode set MANUAL_MODE --justification <reason>`"
-                        )
+                        "decision": "block",
+                        "reason": (
+                            f"SCOPE GATE: {scope['active_count']} scoped task(s) remaining. "
+                            f"Complete these tasks: {task_list} "
+                            f"Emergency escape: macf_tools mode set MANUAL_MODE --justification <reason>"
+                        ),
                     }
         except Exception:
             pass  # Scope gate failure must never block normal stop
