@@ -226,44 +226,115 @@ _PERMANENT_ALLOW = [
     "Bash(macf_tools mode set MANUAL_MODE:*)",
 ]
 
+# Operations that are NEVER legitimate in normal development (permanent deny)
+_PERMANENT_DENY = [
+    "Bash(git push --force:*)",
+    "Bash(git push -f:*)",
+    "Bash(git reflog expire:*)",
+    "Bash(git rebase -i:*)",
+    "Bash(rm -rf /:*)",
+    "Bash(rm -rf ~:*)",
+    "Bash(dd if=:*)",
+    "Bash(mkfs:*)",
+    "Bash(sudo:*)",
+    "Bash(npm publish:*)",
+    "Bash(npm unpublish:*)",
+    "Bash(pip upload:*)",
+    "Bash(twine upload:*)",
+    "Bash(gh repo delete:*)",
+    "Bash(kill -9:*)",
+    "Bash(killall:*)",
+    "Bash(reboot:*)",
+    "Bash(shutdown:*)",
+    "Bash(ssh -o StrictHostKeyChecking=no:*)",
+]
 
-def ensure_mode_safety_permissions(project_root: Optional[Path] = None) -> bool:
+# Operations that need user approval ONLY in AUTO_MODE (added on entry, removed on return)
+_AUTO_MODE_ASK = [
+    "Bash(macf_tools task scope clear:*)",
+    "Bash(git push:*)",
+    "Bash(gh pr create:*)",
+    "Bash(gh pr merge:*)",
+    "Bash(gh issue create:*)",
+    "Bash(gh issue close:*)",
+    "Bash(gh release:*)",
+    "Bash(git reset --hard:*)",
+    "Bash(git branch -D:*)",
+    "Bash(git clean -f:*)",
+    "Bash(docker rm:*)",
+    "Bash(docker volume rm:*)",
+    "Bash(docker system prune:*)",
+    "Bash(docker compose down -v:*)",
+    "Bash(rm -r:*)",
+]
+
+
+def ensure_mode_safety_permissions(project_root: Optional[Path] = None) -> dict:
     """
     Ensure infrastructure permission entries exist in settings.local.json.
 
-    Installs permanent permission entries for mode switching safety:
-    - AUTO_MODE activation in 'ask' (escalation always requires human approval)
-    - MANUAL_MODE activation in 'allow' (agent can always de-escalate freely)
-    - Task grant operations in 'ask' (destructive task manipulation needs approval)
-
-    These entries are mode-independent — they persist across AUTO/MANUAL switches.
-    Called by mode set command to ensure safety infrastructure is always present.
-
     Returns:
-        True if successfully updated, False on error
+        Dict with 'deny_added', 'ask_added', 'allow_added' lists, or None on error.
     """
     try:
         settings, settings_path = _read_settings(project_root)
         permissions = settings.setdefault('permissions', {})
         ask_list = permissions.setdefault('ask', [])
         allow_list = permissions.setdefault('allow', [])
+        deny_list = permissions.setdefault('deny', [])
 
-        changed = False
+        result = {'deny_added': [], 'ask_added': [], 'allow_added': []}
+        for entry in _PERMANENT_DENY:
+            if entry not in deny_list:
+                deny_list.append(entry)
+                result['deny_added'].append(entry)
         for entry in _PERMANENT_ASK:
             if entry not in ask_list:
                 ask_list.append(entry)
-                changed = True
+                result['ask_added'].append(entry)
         for entry in _PERMANENT_ALLOW:
             if entry not in allow_list:
                 allow_list.append(entry)
-                changed = True
+                result['allow_added'].append(entry)
+
+        if any(result.values()):
+            _write_settings(settings, settings_path)
+        return result
+    except (OSError, json.JSONDecodeError, TypeError, KeyError) as e:
+        print(f"⚠️ MACF: Settings write failed (ensure_mode_safety): {e}", file=sys.stderr)
+        return None
+
+
+def toggle_auto_mode_ask_permissions(enable_auto: bool, project_root: Optional[Path] = None) -> list:
+    """
+    Toggle AUTO_MODE-specific ask permissions.
+
+    Returns:
+        List of entries added (enable) or removed (disable), or None on error.
+    """
+    try:
+        settings, settings_path = _read_settings(project_root)
+        permissions = settings.setdefault('permissions', {})
+        ask_list = permissions.setdefault('ask', [])
+
+        changed = []
+        if enable_auto:
+            for entry in _AUTO_MODE_ASK:
+                if entry not in ask_list:
+                    ask_list.append(entry)
+                    changed.append(entry)
+        else:
+            for entry in _AUTO_MODE_ASK:
+                if entry in ask_list:
+                    ask_list.remove(entry)
+                    changed.append(entry)
 
         if changed:
             _write_settings(settings, settings_path)
-        return True
+        return changed
     except (OSError, json.JSONDecodeError, TypeError, KeyError) as e:
-        print(f"⚠️ MACF: Settings write failed (ensure_mode_safety): {e}", file=sys.stderr)
-        return False
+        print(f"⚠️ MACF: Settings write failed (toggle_auto_ask): {e}", file=sys.stderr)
+        return None
 
 
 def toggle_write_ask_for_auto_mode(enable_auto: bool, project_root: Optional[Path] = None) -> bool:
