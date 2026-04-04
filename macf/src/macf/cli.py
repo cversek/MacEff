@@ -4807,6 +4807,112 @@ def cmd_task_unblocked_by(args: argparse.Namespace) -> int:
     return 0
 
 
+# -------- Task Scope Commands --------
+
+
+def cmd_task_scope_set(args: argparse.Namespace) -> int:
+    """Scope tasks for AUTO_MODE boundary enforcement."""
+    from .task import TaskReader
+    from .task.scope import set_scope
+    from .utils.breadcrumbs import get_breadcrumb
+
+    reader = TaskReader()
+    raw_ids = [tid.lstrip('#') for tid in args.task_ids]
+
+    # Expand parent tasks to their pending/in_progress children
+    expanded = []
+    for tid in raw_ids:
+        task = reader.read_task(tid)
+        if not task:
+            print(f"⚠️  Task #{tid} not found, skipping")
+            continue
+        expanded.append(tid)
+        # Check for children
+        all_tasks = reader.read_all_tasks()
+        children = [t for t in all_tasks if t.mtmd and str(getattr(t.mtmd, "parent_id", "")) == tid]
+        if children:
+            for child in children:
+                if child.status in ("pending", "in_progress"):
+                    child_id = child.id
+                    if child_id not in expanded:
+                        expanded.append(child_id)
+
+    if not expanded:
+        print("❌ No valid tasks to scope")
+        return 1
+
+    result = set_scope(expanded, parent_expanded=len(expanded) > len(raw_ids),
+                       expanded_from=raw_ids[0] if len(raw_ids) == 1 else None)
+
+    if result["success"]:
+        print(f"✅ Scoped {len(expanded)} task(s):")
+        for tid in result["tasks_scoped"]:
+            task = reader.read_task(tid)
+            subject = task.subject if task else f"Task #{tid}"
+            is_parent = tid in raw_ids
+            marker = "📌" if is_parent else "  └─"
+            print(f"   {marker} #{tid} {subject}")
+        if result["parent_expanded"]:
+            print(f"   (parent #{result['expanded_from']} expanded to {len(expanded) - len(raw_ids)} children)")
+        print(f"   Breadcrumb: {get_breadcrumb()}")
+    else:
+        print("❌ Failed to activate scope")
+        return 1
+    return 0
+
+
+def cmd_task_scope_show(args: argparse.Namespace) -> int:
+    """Display current scope with status."""
+    from .task.scope import get_active_scope
+
+    tasks = get_active_scope()
+    if not tasks:
+        print("No active scope.")
+        return 0
+
+    active = [t for t in tasks if t["status"] == "active"]
+    inactive = [t for t in tasks if t["status"] == "inactive"]
+
+    print(f"📋 Task Scope ({len(active)} active, {len(inactive)} inactive)")
+    for t in active:
+        print(f"   👀 #{t['id']} {t['subject']}")
+    for t in inactive:
+        print(f"   \033[9m👀\033[0m #{t['id']} {t['subject']}")
+    return 0
+
+
+def cmd_task_scope_clear(args: argparse.Namespace) -> int:
+    """Remove all tasks from scope."""
+    from .task.scope import clear_scope
+    from .utils.breadcrumbs import get_breadcrumb
+
+    result = clear_scope()
+
+    if result["success"]:
+        print("✅ Scope cleared:")
+        for tid in result["active_removed"]:
+            print(f"   ↩️  #{tid} (was active)")
+        for tid in result["inactive_removed"]:
+            print(f"   ↩️  #{tid} (was inactive)")
+        if not result["active_removed"] and not result["inactive_removed"]:
+            print("   (scope was already empty)")
+        print(f"   Breadcrumb: {get_breadcrumb()}")
+    else:
+        print("❌ Failed to clear scope")
+        return 1
+    return 0
+
+
+def cmd_task_scope_check(args: argparse.Namespace) -> int:
+    """Check active scope count (JSON output for Stop hook)."""
+    import json as json_mod
+    from .task.scope import get_scope_check
+
+    result = get_scope_check()
+    print(json_mod.dumps(result, indent=2))
+    return 0
+
+
 def _gh_issue_closeout(task_id: int, mtmd, args, breadcrumb: str) -> None:
     """Post close-out comment and close GitHub issue.
 
@@ -6116,6 +6222,22 @@ def _build_parser() -> argparse.ArgumentParser:
     task_unblocked_by_parser.add_argument("task_id", help="task ID that was blocked (e.g., #60)")
     task_unblocked_by_parser.add_argument("blocker_id", help="task ID to remove as blocker (e.g., #26)")
     task_unblocked_by_parser.set_defaults(func=cmd_task_unblocked_by)
+
+    # Task scope commands
+    scope_parser = task_sub.add_parser("scope", help="manage task scope for AUTO_MODE boundary enforcement")
+    scope_sub = scope_parser.add_subparsers(dest="scope_cmd")
+
+    scope_set_parser = scope_sub.add_parser("set", help="scope tasks (parent auto-expands to pending/in_progress children)")
+    scope_set_parser.add_argument("task_ids", nargs="+", help="task IDs to scope (e.g., #290 #291)")
+    scope_set_parser.set_defaults(func=cmd_task_scope_set)
+
+    scope_sub.add_parser("show", help="display current scope with status").set_defaults(func=cmd_task_scope_show)
+
+    scope_sub.add_parser("clear", help="remove all tasks from scope (destructive)").set_defaults(func=cmd_task_scope_clear)
+
+    scope_check_parser = scope_sub.add_parser("check", help="check active scope count (JSON, for Stop hook)")
+    scope_check_parser.add_argument("--json", dest="json_output", action="store_true", default=True)
+    scope_check_parser.set_defaults(func=cmd_task_scope_check)
 
     # Proxy commands
     proxy_parser = sub.add_parser("proxy", help="API proxy for CC call interception")
