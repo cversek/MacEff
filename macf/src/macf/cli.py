@@ -1469,6 +1469,75 @@ def cmd_restore_install(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_agent_sleep(args: argparse.Namespace) -> int:
+    """Emergency sleep with fibonacci backoff and channel notification."""
+    import time
+    from .agent_events_log import append_event
+    from .utils.cycles import set_auto_mode, get_current_session_id
+
+    session_id = get_current_session_id()
+    interval = args.start
+    prev_interval = args.start
+    attempt = 0
+
+    print(f"🛑 MACF Emergency Sleep")
+    print(f"   Interval: {args.interval} (start: {args.start}s)")
+    print(f"   Max attempts: {args.max_attempts}")
+    print(f"   Notify: {args.notify}")
+
+    while attempt < args.max_attempts:
+        attempt += 1
+        elapsed = sum(range(attempt)) * args.start if args.interval == "fixed" else 0  # approximate
+
+        # Try MANUAL_MODE switch
+        print(f"\n⏰ Wakeup #{attempt} — attempting MANUAL_MODE switch...")
+        try:
+            success, msg = set_auto_mode(enabled=False, session_id=session_id)
+            if success:
+                print(f"✅ MANUAL_MODE restored! Sleep ended after {attempt} attempts.")
+                append_event("agent_sleep_recovery", {
+                    "attempt": attempt, "session_id": session_id, "result": "recovered"
+                })
+                return 0
+        except Exception as e:
+            print(f"   ❌ MANUAL_MODE switch failed: {e}")
+
+        # Log sleep cycle event
+        append_event("agent_sleep_cycle", {
+            "attempt": attempt, "interval": args.interval,
+            "sleep_seconds": interval, "session_id": session_id,
+            "manual_mode_result": "failed", "notification_sent": args.notify,
+        })
+
+        # Notify via channels
+        if args.notify:
+            try:
+                from macf.channels.telegram import send_telegram_notification
+                send_telegram_notification(
+                    f"Attempt #{attempt}, sleeping {interval}s. Awaiting operator.",
+                    prefix="🛑 MACF Emergency Sleep"
+                )
+                print(f"   📨 Notification sent")
+            except Exception as e:
+                print(f"   ⚠️  Notification failed: {e}")
+
+        # Sleep
+        print(f"   💤 Sleeping {interval}s...")
+        time.sleep(interval)
+
+        # Fibonacci backoff
+        if args.interval == "fibonacci":
+            new_interval = interval + prev_interval
+            prev_interval = interval
+            interval = new_interval
+
+    print(f"\n❌ Max attempts ({args.max_attempts}) reached. Giving up.")
+    append_event("agent_sleep_exhausted", {
+        "attempts": args.max_attempts, "session_id": session_id,
+    })
+    return 1
+
+
 def cmd_agent_init(args: argparse.Namespace) -> int:
     """Initialize agent with preamble injection (idempotent)."""
     try:
@@ -5762,6 +5831,14 @@ def _build_parser() -> argparse.ArgumentParser:
     restore_install.add_argument("--force", action="store_true", help="overwrite existing consciousness (creates checkpoint)")
     restore_install.add_argument("--dry-run", action="store_true", help="show what would be done")
     restore_install.set_defaults(func=cmd_restore_install)
+
+    # Agent sleep (emergency fallback)
+    sleep_parser = agent_sub.add_parser("sleep", help="emergency sleep with fibonacci backoff + notification")
+    sleep_parser.add_argument("--notify", action="store_true", help="send notification via configured channels each wakeup")
+    sleep_parser.add_argument("--interval", choices=["fibonacci", "fixed"], default="fibonacci", help="backoff strategy (default: fibonacci)")
+    sleep_parser.add_argument("--start", type=int, default=600, help="initial sleep seconds (default: 600 = 10min)")
+    sleep_parser.add_argument("--max-attempts", type=int, default=20, help="max retry attempts (default: 20)")
+    sleep_parser.set_defaults(func=cmd_agent_sleep)
 
     # Context command
     context_parser = sub.add_parser("context", help="show token usage and CL (Context Left) level")
