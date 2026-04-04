@@ -246,18 +246,18 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
                     # CL1 = 1% remaining (99% used)
                     cl_level = round(percentage_remaining)
 
-                    # AUTO_MODE penalty: subtract 16 CL points to account for
-                    # autocompaction buffer (~45k reserve that CC holds back).
-                    # In MANUAL_MODE autocompaction is off so no penalty needed.
-                    # OLD METHOD (revert if needed): added 45k buffer to tokens_used
-                    #   autocompact_enabled = get_autocompact_setting()
-                    #   buffer = 45000 if autocompact_enabled else 0
-                    #   tokens_used_with_buffer = current_tokens + buffer
+                    # AUTO_MODE penalty: subtract CL points for autocompact buffer.
+                    # CC reserves ~33k tokens as autocompact buffer regardless of window size.
+                    # The CL penalty is the buffer as a percentage of the window.
+                    # On 200K: 33k/200k = 16.5% → CL penalty ~17
+                    # On 1M:   33k/1M   = 3.3%  → CL penalty ~3
                     try:
                         from .cycles import detect_auto_mode
                         auto_mode, _ = detect_auto_mode(session_id)
                         if auto_mode:
-                            cl_level = max(0, cl_level - 16)
+                            autocompact_buffer = 33000  # CC's fixed autocompact reserve
+                            buffer_pct = round((autocompact_buffer / max_tokens) * 100)
+                            cl_level = max(0, cl_level - buffer_pct)
                     except (ImportError, OSError, KeyError) as e:
                         print(f"⚠️ MACF: AUTO_MODE detection failed (using raw CL): {e}", file=sys.stderr)
 
