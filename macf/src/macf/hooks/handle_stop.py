@@ -156,6 +156,31 @@ Development Drive Stats:
         except Exception as e:
             print(f"MACF: Stop hook Telegram notification error: {e}", file=sys.stderr)
 
+        # Scope gate: block stop if active scoped tasks remain in AUTO_MODE
+        try:
+            from macf.utils.cycles import detect_auto_mode, get_current_session_id
+            session_id = get_current_session_id()
+            auto_mode, _ = detect_auto_mode(session_id)
+            if auto_mode:
+                from macf.task.scope import get_scope_check
+                scope = get_scope_check()
+                if scope["active_count"] > 0:
+                    task_list = "\n".join(
+                        f"  - #{t['id']}: {t['subject']}" for t in scope["active"]
+                    )
+                    return {
+                        "continue": False,
+                        "systemMessage": (
+                            f"\U0001f6d1 SCOPE GATE: {scope['active_count']} scoped task(s) remaining.\n\n"
+                            f"You cannot stop until all scoped tasks are complete.\n\n"
+                            f"Remaining:\n{task_list}\n\n"
+                            f"To continue: complete these tasks.\n"
+                            f"To de-escalate: `macf_tools mode set MANUAL_MODE` bypasses scope gate."
+                        )
+                    }
+        except Exception as e:
+            print(f"MACF: Scope gate check error: {e}", file=sys.stderr)
+
         # Return with systemMessage only (Stop hook doesn't support hookSpecificOutput)
         return {
             "continue": True,
