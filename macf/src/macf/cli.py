@@ -5039,7 +5039,7 @@ def cmd_task_scope_show(args: argparse.Namespace) -> int:
     for t in active:
         print(f"   👀 #{t['id']} {t['subject']}")
     for t in inactive:
-        print(f"   \033[9m👀\033[0m #{t['id']} {t['subject']}")
+        print(f"   ✅ #{t['id']} {t['subject']}")
     return 0
 
 
