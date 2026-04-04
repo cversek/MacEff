@@ -160,8 +160,6 @@ Development Drive Stats:
         try:
             from macf.task.scope import get_scope_check
             scope = get_scope_check()
-            # Debug: report scope gate state
-            print(f"MACF SCOPE GATE DEBUG: auto_mode={auto_mode}, active_scope={scope['active_count']}", file=sys.stderr)
             if scope["active_count"] > 0 and auto_mode:
                     task_list = "\n".join(
                         f"  - #{t['id']}: {t['subject']}" for t in scope["active"]
