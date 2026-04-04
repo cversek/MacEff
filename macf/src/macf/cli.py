@@ -2521,6 +2521,72 @@ def cmd_mode_set(args: argparse.Namespace) -> int:
         enabled = (mode == 'AUTO_MODE')
         session_id = get_current_session_id()
 
+        # MANUAL_MODE with active scope: two-step emergency friction
+        # Step 1: ALWAYS warn and reject on first attempt
+        # Step 2: Requires valid --justification (+ --explain for "other")
+        _VALID_JUSTIFICATIONS = ["security", "opsec", "blocked", "user_directive", "other"]
+        if not enabled:
+            try:
+                from .task.scope import get_scope_check
+                from .agent_events_log import append_event, query_events
+                scope = get_scope_check()
+                if scope["active_count"] > 0:
+                    justification = getattr(args, 'justification', None)
+                    explain = getattr(args, 'explain', None)
+
+                    # Always show warning
+                    print(f"🚨 SCOPE GATE: {scope['active_count']} active scoped task(s) remain!")
+                    print(f"   De-escalation to MANUAL_MODE is for EMERGENCIES ONLY.")
+                    print(f"   Scoped tasks:")
+                    for t in scope["active"]:
+                        print(f"     👀 #{t['id']}: {t['subject']}")
+
+                    # Check for prior warning event (step 1 must have fired)
+                    recent = list(query_events({"event_type": "deescalation_warning"}))
+                    has_prior_warning = len(recent) > 0
+
+                    if not has_prior_warning:
+                        # Step 1: First attempt — warn and log, always reject
+                        append_event("deescalation_warning", {
+                            "active_scope_count": scope["active_count"],
+                            "session_id": session_id,
+                        })
+                        print(f"\n   ⛔ First attempt REJECTED. You must run this command again with justification.")
+                        print(f"\n   Valid justifications: {', '.join(_VALID_JUSTIFICATIONS)}")
+                        print(f"   macf_tools mode set MANUAL_MODE --justification <reason>")
+                        print(f"   (use --justification other --explain \"detailed reason\" for unlisted reasons)")
+                        return 1
+
+                    # Step 2: Second+ attempt — validate justification
+                    if not justification:
+                        print(f"\n   ⛔ Missing --justification. Valid options: {', '.join(_VALID_JUSTIFICATIONS)}")
+                        print(f"   macf_tools mode set MANUAL_MODE --justification <reason>")
+                        return 1
+
+                    if justification not in _VALID_JUSTIFICATIONS:
+                        print(f"\n   ⛔ Invalid justification '{justification}'.")
+                        print(f"   Valid options: {', '.join(_VALID_JUSTIFICATIONS)}")
+                        return 1
+
+                    if justification == "other" and not explain:
+                        print(f"\n   ⛔ --justification other requires --explain \"detailed reason\"")
+                        return 1
+
+                    # Justification accepted — log event with full details
+                    reason = explain if justification == "other" else justification
+                    append_event("deescalation_executed", {
+                        "justification": justification,
+                        "explain": explain or "",
+                        "active_scope_count": scope["active_count"],
+                        "scoped_tasks": [t["id"] for t in scope["active"]],
+                        "session_id": session_id,
+                    })
+                    print(f"\n   ⚠️  Emergency de-escalation ACCEPTED: {justification}" +
+                          (f" — {explain}" if explain else ""))
+                    print(f"   Logged to events. Will be forwarded to channels on next Stop hook.")
+            except Exception:
+                pass  # Scope check failure must never block mode switch
+
         # AUTO_MODE requires auth token
         if enabled and not auth_token:
             print("Error: AUTO_MODE requires --auth-token")
@@ -5995,6 +6061,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
     mode_set = mode_sub.add_parser("set", help="set operating mode")
     mode_set.add_argument("mode", help="mode to set (AUTO_MODE or MANUAL_MODE)")
+    mode_set.add_argument("--justification", choices=["security", "opsec", "blocked", "user_directive", "other"],
+                          help="emergency justification for de-escalation when scope is active")
+    mode_set.add_argument("--explain", help="detailed reason (required when --justification other)")
     mode_set.add_argument("--auth-token", dest="auth_token",
                          help="auth token for AUTO_MODE activation")
     mode_set.set_defaults(func=cmd_mode_set)
