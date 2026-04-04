@@ -3115,12 +3115,12 @@ def cmd_task_list(args: argparse.Namespace) -> int:
             status_icon = "◻"
             line = f"{prefix}{status_icon} {_dim_task_ids(t.subject)}"
 
-        # Scope indicator (👀 for active, strikethrough 👀 for inactive)
+        # Scope indicator (👀 for active, ✅ for completed/inactive)
         if scope_state and t.id in scope_state:
             if scope_state[t.id] == "active":
                 line += " 👀"
             elif scope_state[t.id] == "inactive":
-                line += f" {ANSI_STRIKE}👀{ANSI_STRIKE_OFF}"
+                line += " ✅"
 
         # Add plan_ca_ref if present (key feature of enhanced display)
         if t.mtmd and t.mtmd.plan_ca_ref:
@@ -5283,6 +5283,16 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
             "plan_ca_ref": plan_ca_ref,
             "report": args.report,
         })
+
+        # Auto-complete scoped task if it's in the active scope
+        try:
+            from .task.scope import complete_scoped_task
+            scope_result = complete_scoped_task(str(task_id))
+            if scope_result.get("success"):
+                remaining = scope_result.get("remaining_active", "?")
+                print(f"   👀→✅ Scoped task completed ({remaining} remaining)")
+        except Exception:
+            pass  # Scope not active or task not scoped — silent
 
         print(f"✅ Task #{task_id} marked complete")
         print(f"   Breadcrumb: {breadcrumb}")
