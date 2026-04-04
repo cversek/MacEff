@@ -2471,34 +2471,68 @@ def cmd_mode_set(args: argparse.Namespace) -> int:
             from .utils.claude_settings import (
                 set_autocompact_enabled, set_permission_mode,
                 toggle_write_ask_for_auto_mode, ensure_mode_safety_permissions,
+                toggle_auto_mode_ask_permissions,
             )
 
             # Always ensure infrastructure permissions exist (idempotent)
-            if ensure_mode_safety_permissions():
-                print("✅ Mode safety permissions ensured (AUTO_MODE in ask, MANUAL_MODE in allow)")
+            safety = ensure_mode_safety_permissions()
+            if safety is not None:
+                if safety['deny_added']:
+                    print("✅ Deny list installed:")
+                    for entry in safety['deny_added']:
+                        print(f"   🚫 {entry}")
+                if safety['ask_added']:
+                    print("✅ Permanent ask entries installed:")
+                    for entry in safety['ask_added']:
+                        print(f"   ❓ {entry}")
+                if safety['allow_added']:
+                    print("✅ Permanent allow entries installed:")
+                    for entry in safety['allow_added']:
+                        print(f"   ✅ {entry}")
+                if not any(safety.values()):
+                    print("✅ Safety permissions already present")
             else:
                 print("⚠️  Could not ensure mode safety permissions")
 
             if enabled:
-                # AUTO_MODE: enable autocompact, bypass permissions, remove Write from ask
+                # AUTO_MODE
                 if set_autocompact_enabled(True):
-                    print("✅ autoCompactEnabled set to true in ~/.claude.json")
+                    print("✅ autoCompactEnabled set to true")
                 else:
-                    print("⚠️  Could not update autoCompactEnabled setting")
+                    print("⚠️  Could not update autoCompactEnabled")
                 if set_permission_mode("bypassPermissions"):
                     print("✅ permissions.defaultMode set to bypassPermissions")
                 else:
-                    print("⚠️  Could not update permissions.defaultMode setting")
+                    print("⚠️  Could not update permissions.defaultMode")
                 if toggle_write_ask_for_auto_mode(True):
-                    print("✅ Write removed from 'ask' list (bypassed in AUTO_MODE)")
+                    print("✅ Write removed from 'ask' list")
                 else:
-                    print("⚠️  Could not toggle Write permission for AUTO_MODE")
+                    print("⚠️  Could not toggle Write permission")
+                auto_ask = toggle_auto_mode_ask_permissions(True)
+                if auto_ask is not None:
+                    if auto_ask:
+                        print("✅ AUTO_MODE ask permissions installed:")
+                        for entry in auto_ask:
+                            print(f"   ❓ {entry}")
+                    else:
+                        print("✅ AUTO_MODE ask permissions already present")
+                else:
+                    print("⚠️  Could not install AUTO_MODE ask permissions")
+                print("⚠️  Restart session for permissions to take effect")
             else:
-                # MANUAL_MODE: restore defaults
+                # MANUAL_MODE
                 set_autocompact_enabled(False)
                 set_permission_mode("default")
                 toggle_write_ask_for_auto_mode(False)
-                print("✅ Restored default settings (autocompact disabled, default permissions, Write back in ask)")
+                removed = toggle_auto_mode_ask_permissions(False)
+                print("✅ Restored MANUAL_MODE defaults:")
+                print("   autocompact disabled")
+                print("   permissions.defaultMode = default")
+                print("   Write restored to ask list")
+                if removed:
+                    print(f"   AUTO_MODE ask entries removed:")
+                    for entry in removed:
+                        print(f"   ↩️  {entry}")
         else:
             print(f"❌ {message}")
             return 1
