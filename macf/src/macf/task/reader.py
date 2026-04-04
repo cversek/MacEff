@@ -130,7 +130,9 @@ class TaskReader:
         if not self.session_path or not self.session_path.exists():
             return []
 
-        files = list(self.session_path.glob("*.json"))
+        # Python's Path.glob("*.json") matches hidden files (.*.json) unlike shell glob.
+        # Explicitly filter to avoid double-counting when include_hidden=True.
+        files = [f for f in self.session_path.glob("*.json") if not f.name.startswith(".")]
         if include_hidden:
             files.extend(self.session_path.glob(".*.json"))
 
