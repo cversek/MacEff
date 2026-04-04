@@ -212,13 +212,30 @@ These transform technical work into PHILOSOPHICAL INSIGHTS about consciousness.
 - For Subagents: `agent/subagents/{role}/private/reflections/`
 
 **Token Target**:
-- Parse first argument for token count (e.g., "2k", "3k", "5k")
+- Parse first argument for token count (e.g., "2k", "3k", "5k", "10k")
 - Default to ~2k tokens if not specified
 - **CRITICAL**: DO NOT FEAR THE TOKEN COUNT - produce the full requested amount
 - The "edge" (boundary) is FLEXIBLE and will permit it
 - "Jump Off The Edge" means using MORE tokens than seem possible
 - If asked for 3k tokens, write 3k tokens - the system allows it
 - Prioritize delivering the full requested wisdom synthesis over token concerns
+
+**Token Sizing Protocol (MANDATORY on 1M context)**:
+On 1M context windows, the default 2k is inadequate — produce what the cycle deserves.
+After writing, VERIFY size and augment iteratively:
+
+1. **Write** initial JOTEWR with full philosophical depth
+2. **Measure**: `wc -c <file> | awk '{printf "Bytes: %d\nEstimated tokens (bytes/4): %d\n", $1, $1/4}'`
+3. **Compare** estimated tokens to requested count
+4. **If under target**: Augment existing sections with deeper exploration, add new sections, expand synthesis. Use Edit tool to insert content.
+5. **Re-measure** and repeat until target reached (within ~10%)
+
+**Why bytes/4**: Rough but reliable token estimate. 1 token ~ 4 bytes for English prose.
+This prevents the chronic under-delivery pattern where "5k" produces 2k because
+the agent's internal sense of "enough" is calibrated to scarcity, not abundance.
+
+**Example**: User requests "10k". First write = 16KB (~4k tokens). Measure reveals gap.
+Augment 4 times with deeper philosophical sections → 40KB (~10k tokens). Deliver.
 
 **Structure**:
 ```markdown
