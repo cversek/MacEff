@@ -178,11 +178,22 @@ Development Drive Stats:
                     # continue:false would STOP the agent (preventContinuation).
                     # continue:true+systemMessage is soft (agent can ignore).
                     # decision:block is the HARD mechanism — the completion driver.
+                    # Check if stop was triggered by an error
+                    input_data = json.loads(stdin_json) if stdin_json else {}
+                    stop_reason = input_data.get('stop_reason', '')
+                    error_context = ""
+                    if 'error' in stop_reason.lower():
+                        error_context = (
+                            "An error occurred but you MUST NOT stop — debug and fix it. "
+                            "Read the error, form a hypothesis, and try again. "
+                        )
+
                     return {
                         "continue": True,
                         "decision": "block",
                         "reason": (
                             f"SCOPE GATE: {scope['active_count']} scoped task(s) remaining. "
+                            f"{error_context}"
                             f"Complete these tasks: {task_list} "
                             f"Emergency escape: macf_tools mode set MANUAL_MODE --justification <reason>"
                         ),
