@@ -6552,11 +6552,52 @@ def _build_parser() -> argparse.ArgumentParser:
                                   help="auto-extract MACF vocabulary for conditioning (default: on)")
     voice_transcribe.add_argument("--no-conditioning", dest="conditioned", action="store_false",
                                   help="disable vocabulary conditioning (raw Whisper)")
+    voice_transcribe.add_argument("--correct", action="store_true", default=False,
+                                  help="apply fuzzy domain term correction")
     voice_transcribe.add_argument("--json", dest="json_output", action="store_true",
                                   help="output JSON with segments and metadata")
     voice_transcribe.set_defaults(func=cmd_voice_transcribe)
 
+    # voice service subcommands
+    voice_service = voice_sub.add_parser("service", help="voice service daemon management")
+    voice_svc_sub = voice_service.add_subparsers(dest="voice_svc_cmd")
+
+    voice_svc_start = voice_svc_sub.add_parser("start", help="start voice service daemon")
+    voice_svc_start.add_argument("--foreground", action="store_true", help="run in foreground (no daemonize)")
+    voice_svc_start.add_argument("--port", type=int, default=9002, help="TCP port (default: 9002)")
+    voice_svc_start.add_argument("--model", help="model name/path")
+    voice_svc_start.set_defaults(func=cmd_voice_service_start)
+
+    voice_svc_sub.add_parser("stop", help="stop voice service daemon").set_defaults(func=cmd_voice_service_stop)
+    voice_svc_sub.add_parser("status", help="show voice service status").set_defaults(func=cmd_voice_service_status)
+
     return p
+
+
+def cmd_voice_service_start(args) -> int:
+    from .voice.service import start_service
+    return start_service(port=args.port, model=args.model, foreground=args.foreground)
+
+
+def cmd_voice_service_stop(args) -> int:
+    from .voice.service import stop_service
+    return stop_service()
+
+
+def cmd_voice_service_status(args) -> int:
+    from .voice.service import get_service_status
+    status = get_service_status()
+    if status.get("running"):
+        print(f"✅ Voice service running")
+        print(f"   Engine: {status.get('engine', '?')}")
+        print(f"   Model: {status.get('model', '?')}")
+        print(f"   PID: {status.get('pid', '?')}")
+        print(f"   Uptime: {status.get('uptime_s', 0)}s")
+    else:
+        print("⏹️  Voice service not running")
+        if status.get("error"):
+            print(f"   {status['error']}")
+    return 0
 
 
 def cmd_voice_transcribe(args) -> int:
@@ -6579,6 +6620,32 @@ def cmd_voice_transcribe(args) -> int:
         except Exception as e:
             print(f"⚠️ MACF: vocabulary conditioning failed ({e}), proceeding unconditioned", file=sys.stderr)
 
+    # Try voice service first (warm model = fast)
+    try:
+        from .voice.service import is_service_running, send_request
+        if is_service_running():
+            print("[routing to voice service (warm)]", file=sys.stderr)
+            response = send_request({
+                "action": "transcribe",
+                "file": str(Path(audio_path).resolve()),
+                "language": args.language,
+                "conditioned": args.conditioned,
+                "correct": args.correct,
+            })
+            if "error" in response:
+                print(f"⚠️ Service error: {response['error']}, falling back to direct", file=sys.stderr)
+            else:
+                text = response.get("corrected_text", response.get("text", ""))
+                if args.json_output:
+                    print(json_mod.dumps(response, indent=2))
+                else:
+                    print(text)
+                    dur = response.get("duration_ms", 0)
+                    print(f"\n[service | {dur}ms]", file=sys.stderr)
+                return 0
+    except Exception:
+        pass  # Service not available, fall through to direct
+
     try:
         result = transcribe(
             audio_path=audio_path,
@@ -6594,10 +6661,29 @@ def cmd_voice_transcribe(args) -> int:
         print(f"❌ Transcription failed: {e}")
         return 1
 
+    # Apply fuzzy correction if requested
+    text = result.text
+    corrections = None
+    if args.correct:
+        try:
+            from .voice.correction import correct_transcript
+            corrected = correct_transcript(text)
+            text = corrected.corrected_text
+            corrections = corrected.corrections
+        except Exception as e:
+            print(f"⚠️ MACF: correction failed: {e}", file=sys.stderr)
+
     if args.json_output:
-        print(json_mod.dumps(result.to_dict(), indent=2))
+        output = result.to_dict()
+        if corrections is not None:
+            output["corrected_text"] = text
+            output["corrections"] = [
+                {"original": c.original, "corrected": c.corrected, "confidence": c.confidence}
+                for c in corrections
+            ]
+        print(json_mod.dumps(output, indent=2))
     else:
-        print(result.text)
+        print(text)
         print(f"\n[{result.engine}/{result.model} | {result.duration_audio:.1f}s audio | {result.duration_transcribe:.1f}s transcribe]",
               file=sys.stderr)
 
