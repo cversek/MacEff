@@ -192,6 +192,41 @@ Breadcrumb: {breadcrumb}"""
         # Format token section
         token_section = format_token_context_full(token_info)
 
+        # Voice message detection: if prompt contains channel voice metadata,
+        # inject a transcription directive for the agent
+        voice_transcript = ""
+        if prompt and 'attachment_kind="voice"' in prompt:
+            try:
+                import re
+                file_id_match = re.search(r'attachment_file_id="([^"]+)"', prompt)
+                if file_id_match:
+                    file_id = file_id_match.group(1)
+                    # Check if we have a downloaded file in the inbox
+                    import glob
+                    inbox = Path.home() / ".claude" / "channels" / "telegram" / "inbox"
+                    # Find the most recent .oga file (Telegram voice format)
+                    oga_files = sorted(inbox.glob("*.oga"), key=lambda f: f.stat().st_mtime, reverse=True)
+                    if oga_files:
+                        latest_voice = str(oga_files[0])
+                        # Try to transcribe directly
+                        from macf.voice.transcribe import transcribe
+                        result = transcribe(audio_path=latest_voice, language="en")
+                        voice_transcript = (
+                            f"\n🎤 VOICE TRANSCRIPTION (auto):\n"
+                            f"[{result.engine}/{result.model} | "
+                            f"{result.duration_audio:.1f}s audio | "
+                            f"{result.duration_transcribe:.1f}s transcribe]\n"
+                            f'"{result.text}"\n'
+                        )
+                    else:
+                        # No downloaded file yet — instruct agent to download and transcribe
+                        voice_transcript = (
+                            f"\n🎤 VOICE MESSAGE DETECTED: Use `mcp__plugin_telegram_telegram__download_attachment` "
+                            f"with file_id `{file_id}`, then `macf_tools voice transcribe <path>` to transcribe.\n"
+                        )
+            except Exception as e:
+                voice_transcript = f"\n⚠️ Voice auto-transcription failed: {e}\n"
+
         # Get boundary guidance (if CL ≤ 10)
         boundary_guidance = get_boundary_guidance(token_info['cl_level'], auto_mode)
 
@@ -210,6 +245,7 @@ Breadcrumb: {breadcrumb}"""
         sections = [
             temporal_section,
             token_section,
+            voice_transcript if voice_transcript else "",  # Voice auto-transcription
             boundary_guidance if boundary_guidance else "",
             memory_injection if memory_injection else "",  # EXPERIMENT: associative memories
             policy_injection if policy_injection else "",  # EXPERIMENT: policy recommendations
