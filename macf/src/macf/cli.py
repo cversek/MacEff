@@ -6548,6 +6548,10 @@ def _build_parser() -> argparse.ArgumentParser:
     voice_transcribe.add_argument("--language", default="en", help="language code (default: en)")
     voice_transcribe.add_argument("--prompt", dest="initial_prompt",
                                   help="Whisper initial_prompt for vocabulary conditioning")
+    voice_transcribe.add_argument("--conditioned", action="store_true", default=True,
+                                  help="auto-extract MACF vocabulary for conditioning (default: on)")
+    voice_transcribe.add_argument("--no-conditioning", dest="conditioned", action="store_false",
+                                  help="disable vocabulary conditioning (raw Whisper)")
     voice_transcribe.add_argument("--json", dest="json_output", action="store_true",
                                   help="output JSON with segments and metadata")
     voice_transcribe.set_defaults(func=cmd_voice_transcribe)
@@ -6565,13 +6569,23 @@ def cmd_voice_transcribe(args) -> int:
         print(f"❌ File not found: {audio_path}")
         return 1
 
+    # Build initial_prompt: manual --prompt wins, otherwise auto-condition
+    prompt = args.initial_prompt
+    if prompt is None and args.conditioned:
+        try:
+            from .voice.vocabulary import build_whisper_prompt
+            prompt = build_whisper_prompt()
+            print(f"[conditioned: {len(prompt)} chars]", file=sys.stderr)
+        except Exception as e:
+            print(f"⚠️ MACF: vocabulary conditioning failed ({e}), proceeding unconditioned", file=sys.stderr)
+
     try:
         result = transcribe(
             audio_path=audio_path,
             engine=args.engine,
             model=args.model,
             language=args.language,
-            initial_prompt=args.initial_prompt,
+            initial_prompt=prompt,
         )
     except RuntimeError as e:
         print(f"❌ {e}")
