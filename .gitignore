@@ -60,3 +60,8 @@ LEGACY_POLICIES_NO_VCS/
 
 # Local docker-compose overrides (environment-specific)
 docker-compose.override.yml
+
+# Voice training data and domain-specific correction patterns (local data, not code)
+macf/src/macf/voice/training_data/
+macf/src/macf/voice/fusion_patterns.json
+
