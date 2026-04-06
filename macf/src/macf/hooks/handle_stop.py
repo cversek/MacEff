@@ -156,11 +156,20 @@ Development Drive Stats:
         except Exception as e:
             print(f"MACF: Stop hook Telegram notification error: {e}", file=sys.stderr)
 
-        # Scope gate: block stop if active scoped tasks remain in AUTO_MODE
+        # --- Error-resilience gate (ANY mode) ---
+        # If the agent stopped due to a tool error, nudge it to investigate.
+        # In AUTO_MODE: hard block. In MANUAL_MODE: soft nudge via systemMessage.
+        input_data = json.loads(stdin_json) if stdin_json else {}
+        stop_reason = input_data.get('stop_reason', '')
+        is_error_stop = 'error' in stop_reason.lower() if stop_reason else False
+
+        # --- Scope gate: block stop if active scoped tasks remain ---
         try:
             from macf.task.scope import get_scope_check
             scope = get_scope_check()
-            if scope["active_count"] > 0 and auto_mode:
+            has_active_scope = scope["active_count"] > 0
+
+            if has_active_scope and auto_mode:
                     task_list = "\n".join(
                         f"  - #{t['id']}: {t['subject']}" for t in scope["active"]
                     )
@@ -178,11 +187,8 @@ Development Drive Stats:
                     # continue:false would STOP the agent (preventContinuation).
                     # continue:true+systemMessage is soft (agent can ignore).
                     # decision:block is the HARD mechanism — the completion driver.
-                    # Check if stop was triggered by an error
-                    input_data = json.loads(stdin_json) if stdin_json else {}
-                    stop_reason = input_data.get('stop_reason', '')
                     error_context = ""
-                    if 'error' in stop_reason.lower():
+                    if is_error_stop:
                         error_context = (
                             "An error occurred but you MUST NOT stop — debug and fix it. "
                             "Read the error, form a hypothesis, and try again. "
@@ -198,8 +204,23 @@ Development Drive Stats:
                             f"Emergency escape: macf_tools mode set MANUAL_MODE --justification <reason>"
                         ),
                     }
+
+            # --- Error-resilience in ANY mode ---
+            # Soft nudge when stopping on error with active tasks (scoped or in_progress)
+            if is_error_stop and has_active_scope:
+                task_list = "\n".join(
+                    f"  - #{t['id']}: {t['subject']}" for t in scope["active"]
+                )
+                # MANUAL_MODE: soft nudge (systemMessage, not decision:block)
+                # Agent CAN stop, but gets a strong hint to investigate first
+                message += (
+                    f"\n\n⚠️ ERROR DETECTED — You stopped after a tool error. "
+                    f"Active scoped tasks remain:\n{task_list}\n"
+                    f"Investigate the error and fix it before stopping. "
+                    f"Read the error output, form a hypothesis, and retry."
+                )
         except Exception:
-            pass  # Scope gate failure must never block normal stop
+            pass  # Scope/error gate failure must never block normal stop
 
         # Return with systemMessage only (Stop hook doesn't support hookSpecificOutput)
         return {
