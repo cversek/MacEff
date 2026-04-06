@@ -3274,12 +3274,11 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
         reader = TaskReader()
         all_tasks = reader.read_all_tasks()
 
-        # Load scope state for 👀 indicators
-        try:
-            from .task.scope import get_scope_state
-            scope_state = get_scope_state()
-        except Exception:
-            scope_state = {}
+        # Load scope state from MTMD scope_status field on tasks
+        scope_state = {}
+        for t in all_tasks:
+            if t.mtmd and getattr(t.mtmd, 'scope_status', None):
+                scope_state[t.id] = t.mtmd.scope_status
 
         # Archive filtering (default: hide archived)
         def is_archived(task):

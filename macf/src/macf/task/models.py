@@ -103,6 +103,9 @@ class MacfTaskMetaData:
     archived: bool = False
     archived_at: Optional[str] = None
 
+    # Optional - scope tracking (set by scope system, nullable)
+    scope_status: Optional[str] = None  # None | "active" | "inactive"
+
     # Optional - custom fields
     custom: Dict[str, Any] = field(default_factory=dict)
 
@@ -167,6 +170,7 @@ class MacfTaskMetaData:
             updates=updates,
             archived=data.get("archived", False),
             archived_at=data.get("archived_at"),
+            scope_status=data.get("scope_status"),
             custom=data.get("custom", {}),
         )
 
@@ -267,6 +271,8 @@ class MacfTaskMetaData:
             data["archived"] = self.archived
         if self.archived_at:
             data["archived_at"] = self.archived_at
+        if self.scope_status:
+            data["scope_status"] = self.scope_status
         if self.custom:
             data["custom"] = self.custom
 
