@@ -1,6 +1,6 @@
 ---
 name: maceff-auto-mode
-description: Guide AUTO_MODE activation, scope setup, and autonomous operation lifecycle. Invoke when user requests AUTO_MODE or says the safety phrase. Reads autonomy policy via PEP for current requirements.
+description: "IMMEDIATELY invoke when: user says AUTO_MODE, 'go autonomous', 'auto mode', 'switch to auto', the safety phrase, or any request for autonomous/independent operation. Also invoke post-compaction when mode is AUTO_MODE. Guides full lifecycle: authorization, activation, scope, wind-down, de-escalation."
 allowed-tools: Bash, Read, Grep
 ---
 
