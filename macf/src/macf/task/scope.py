@@ -52,9 +52,12 @@ def set_scope(task_ids: List[str], parent_expanded: bool = False,
 def complete_scoped_task(task_id: str, session_id: str = "") -> dict:
     """Mark a scoped task as inactive (completed while scoped).
 
+    Auto-clears scope when the last active task completes, so completed
+    tasks don't show stale indicators in the tree.
+
     Returns:
         Dict with 'task_id', 'transitioned_to' ('inactive'), 'remaining_active' (int),
-        'success' (bool).
+        'auto_cleared' (bool), 'success' (bool).
     """
     # Get current state to compute remaining
     scope = get_scope_state()
@@ -64,6 +67,7 @@ def complete_scoped_task(task_id: str, session_id: str = "") -> dict:
         "task_id": str(task_id),
         "transitioned_to": "inactive",
         "remaining_active": remaining,
+        "auto_cleared": False,
         "success": False,
     }
 
@@ -76,6 +80,12 @@ def complete_scoped_task(task_id: str, session_id: str = "") -> dict:
         },
     )
     result["success"] = success
+
+    # Auto-clear scope when last active task completes
+    if success and remaining == 0:
+        clear_result = clear_scope(session_id=session_id)
+        result["auto_cleared"] = clear_result.get("success", False)
+
     return result
 
 
