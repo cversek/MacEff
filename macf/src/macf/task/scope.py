@@ -4,26 +4,54 @@ Task scope management for AUTO_MODE boundary enforcement.
 Scope tracks which tasks are actively being worked on, enabling the Stop hook
 to block premature stopping when scoped tasks remain incomplete.
 
-State is persisted via the event system (agent_events_log.jsonl), following
-the same pattern as mode tracking (detect_auto_mode/set_auto_mode).
+Dual persistence:
+  - MTMD scope_status field on task files: drives display + loop mode detection
+  - Event log (agent_events_log.jsonl): permanent history + real-time signaling
 
 Scope lifecycle:
-  scope_activated → tasks are active
-  scope_task_completed → individual task becomes inactive
-  scope_cleared → all tasks removed from scope
+  scope_activated → tasks get scope_status="active" in MTMD
+  scope_task_completed → individual task gets scope_status="inactive"
+  scope_cleared → all scoped tasks get scope_status=None (removed)
+  auto-clear → when last active task completes, entire scope clears
 
 API follows the Full Disclosure Principle (cli_development.md §9):
   Functions return WHAT CHANGED, not just success/failure.
   The CLI caller prints each individual change.
 """
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 from ..agent_events_log import append_event, read_events
+
+
+def _update_task_scope_status(task_id: str, scope_status: Optional[str]) -> bool:
+    """Update a task's MTMD scope_status field.
+
+    Args:
+        task_id: Task ID to update
+        scope_status: "active", "inactive", or None (clear)
+
+    Returns:
+        True if successful
+    """
+    import copy
+    from .reader import TaskReader, update_task_file
+
+    reader = TaskReader()
+    task = reader.read_task(task_id)
+    if not task or not task.mtmd:
+        return False
+
+    new_mtmd = copy.deepcopy(task.mtmd)
+    new_mtmd.scope_status = scope_status
+    new_description = task.description_with_updated_mtmd(new_mtmd)
+    return update_task_file(task_id, {"description": new_description})
 
 
 def set_scope(task_ids: List[str], parent_expanded: bool = False,
               expanded_from: Optional[str] = None, session_id: str = "") -> dict:
     """Activate scope for a set of task IDs.
+
+    Updates MTMD scope_status to "active" on each task file.
 
     Returns:
         Dict with 'tasks_scoped' (list of IDs), 'parent_expanded' (bool),
@@ -36,6 +64,7 @@ def set_scope(task_ids: List[str], parent_expanded: bool = False,
         "success": False,
     }
 
+    # Event for history
     success = append_event(
         event="scope_activated",
         data={
@@ -45,6 +74,12 @@ def set_scope(task_ids: List[str], parent_expanded: bool = False,
             "session_id": session_id,
         },
     )
+
+    # Update MTMD on each task file (drives display + loop detection)
+    if success:
+        for tid in task_ids:
+            _update_task_scope_status(str(tid), "active")
+
     result["success"] = success
     return result
 
@@ -52,8 +87,8 @@ def set_scope(task_ids: List[str], parent_expanded: bool = False,
 def complete_scoped_task(task_id: str, session_id: str = "") -> dict:
     """Mark a scoped task as inactive (completed while scoped).
 
-    Auto-clears scope when the last active task completes, so completed
-    tasks don't show stale indicators in the tree.
+    Updates MTMD scope_status to "inactive". Auto-clears entire scope
+    when the last active task completes.
 
     Returns:
         Dict with 'task_id', 'transitioned_to' ('inactive'), 'remaining_active' (int),
@@ -71,6 +106,7 @@ def complete_scoped_task(task_id: str, session_id: str = "") -> dict:
         "success": False,
     }
 
+    # Event for history
     success = append_event(
         event="scope_task_completed",
         data={
@@ -81,16 +117,22 @@ def complete_scoped_task(task_id: str, session_id: str = "") -> dict:
     )
     result["success"] = success
 
-    # Auto-clear scope when last active task completes
-    if success and remaining == 0:
-        clear_result = clear_scope(session_id=session_id)
-        result["auto_cleared"] = clear_result.get("success", False)
+    if success:
+        # Update MTMD on this task
+        _update_task_scope_status(str(task_id), "inactive")
+
+        # Auto-clear scope when last active task completes
+        if remaining == 0:
+            clear_result = clear_scope(session_id=session_id)
+            result["auto_cleared"] = clear_result.get("success", False)
 
     return result
 
 
 def clear_scope(session_id: str = "") -> dict:
     """Remove all tasks from scope.
+
+    Sets MTMD scope_status to None on all scoped tasks.
 
     Returns:
         Dict with 'active_removed' (list of IDs), 'inactive_removed' (list of IDs),
@@ -106,6 +148,7 @@ def clear_scope(session_id: str = "") -> dict:
         "success": False,
     }
 
+    # Event for history
     success = append_event(
         event="scope_cleared",
         data={
@@ -114,6 +157,12 @@ def clear_scope(session_id: str = "") -> dict:
             "session_id": session_id,
         },
     )
+
+    # Clear MTMD scope_status on all scoped tasks
+    if success:
+        for tid in active + inactive:
+            _update_task_scope_status(str(tid), None)
+
     result["success"] = success
     return result
 
@@ -121,7 +170,7 @@ def clear_scope(session_id: str = "") -> dict:
 def get_scope_state() -> Dict[str, str]:
     """Reconstruct current scope state from event log.
 
-    Scans events in reverse chronological order:
+    Scans events in chronological order:
     - scope_cleared resets everything
     - scope_activated adds tasks as 'active'
     - scope_task_completed transitions task to 'inactive'
@@ -129,7 +178,6 @@ def get_scope_state() -> Dict[str, str]:
     Returns:
         Dict of {task_id: 'active' | 'inactive'}
     """
-    # Read all events and filter for scope-related ones
     scope_types = {"scope_activated", "scope_task_completed", "scope_cleared"}
     events = [e for e in read_events(limit=None, reverse=False)
               if e.get("event", "") in scope_types]
