@@ -3506,7 +3506,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
                 if scope_state[task.id] == "active":
                     text += " 👀"
                 elif scope_state[task.id] == "inactive":
-                    text += f" {ANSI_STRIKE}👀{ANSI_STRIKE_OFF}"
+                    text += " ✅"
 
             print(f"{prefix}{connector}{status_icon} {text}")
 
@@ -3543,7 +3543,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
             if scope_state[root.id] == "active":
                 root_text += " 👀"
             elif scope_state[root.id] == "inactive":
-                root_text += f" {ANSI_STRIKE}👀{ANSI_STRIKE_OFF}"
+                root_text += " ✅"
         print(f"{status_icon} {root_text}")
 
         # Print root task details (plan, notes) - extra indent beyond header
@@ -5017,6 +5017,19 @@ def cmd_task_scope_set(args: argparse.Namespace) -> int:
         if result["parent_expanded"]:
             print(f"   (parent #{result['expanded_from']} expanded to {len(expanded) - len(raw_ids)} children)")
         print(f"   Breadcrumb: {get_breadcrumb()}")
+
+        # Show full scope state after adding
+        from .task.scope import get_active_scope
+        all_scoped = get_active_scope()
+        if all_scoped:
+            active = [t for t in all_scoped if t["status"] == "active"]
+            inactive = [t for t in all_scoped if t["status"] == "inactive"]
+            if inactive:  # Only show full list if there are prior scoped tasks
+                print(f"\n📋 Full Scope ({len(active)} active, {len(inactive)} inactive):")
+                for t in active:
+                    print(f"   👀 #{t['id']} {t['subject']}")
+                for t in inactive:
+                    print(f"   ✅ #{t['id']} {t['subject']}")
     else:
         print("❌ Failed to activate scope")
         return 1
