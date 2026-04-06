@@ -425,7 +425,7 @@ Autonomous agents should leverage framework skills:
 
 ### Operational Skills
 - `maceff-delegation` - Read delegation policies before spawning subagents
-- `maceff-enter-auto-mode` - Guided onboarding to autonomous operation
+- `maceff-auto-mode` - Full AUTO_MODE lifecycle: authorization, activation, scope, wind-down, de-escalation
 - `maceff-agent-backup` - Backup creation guidance
 
 **Skill Awareness**: Know your capabilities. Use skills to operate effectively within authorized scope.
