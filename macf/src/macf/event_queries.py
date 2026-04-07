@@ -545,18 +545,18 @@ def get_auto_mode_from_events(session_id: str) -> Tuple[bool, str]:
         Tuple of (auto_mode: bool, source: str)
         Default: (False, "default")
     """
-    # Use first 8 chars of session_id for matching
-    session_prefix = session_id[:8] if session_id else ""
+    # NOTE: No session isolation for mode_change events.
+    # Mode is a user directive that must persist across session restarts.
+    # Unlike dev_drv events (per-session), mode_change is a global setting.
+    # The autonomous_operation policy specifies: mode persists across compaction
+    # (source=compact) and resets only on crash/restart (source=resume).
+    # SessionStart handles the reset logic — this function just finds the
+    # most recent mode_change regardless of which session wrote it.
 
     # Read most recent events first — find the latest mode_change
     for event in read_events(limit=200, reverse=True):
         if event.get("event") == "mode_change":
             data = event.get("data", {})
-            event_session = data.get("session_id", "")
-
-            # Session isolation
-            if session_prefix and event_session and not event_session.startswith(session_prefix):
-                continue
 
             mode = data.get("mode", "MANUAL_MODE")
             enabled = data.get("enabled", False)
