@@ -273,29 +273,48 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
 
             # PHASE 3: Fallback detection via JSONL transcript scanning
             # Fallback: JSONL transcript scanning for backward compatibility
-            claude_dir = Path.home() / ".claude" / "projects"
+            #
+            # GUARD: Check if compaction was already detected for this session.
+            # compact_boundary markers persist in the transcript after a real
+            # compaction. Without this guard, every subsequent SessionStart
+            # re-detects the stale marker and emits a new compaction_detected
+            # event with cycle+1, creating a runaway cascade.
+            # See: https://github.com/cversek/MacEff/issues/30
+            existing_compactions = get_compaction_count_from_events(session_id)
+            if existing_compactions.get('count', 0) > 0:
+                # Stale marker — compaction already handled for this session
+                log_hook_event({
+                    "hook_name": "session_start",
+                    "event_type": "PHASE3_SKIP_STALE_MARKER",
+                    "session_id": session_id,
+                    "existing_compaction_count": existing_compactions.get('count', 0),
+                    "reason": "compact_boundary already processed for this session"
+                })
+                compaction_detected = False
+            else:
+                claude_dir = Path.home() / ".claude" / "projects"
 
-            if claude_dir.exists():
-                all_jsonl_files = []
-                for project_dir in claude_dir.iterdir():
-                    if project_dir.is_dir():
-                        all_jsonl_files.extend(project_dir.glob("*.jsonl"))
+                if claude_dir.exists():
+                    all_jsonl_files = []
+                    for project_dir in claude_dir.iterdir():
+                        if project_dir.is_dir():
+                            all_jsonl_files.extend(project_dir.glob("*.jsonl"))
 
-                if all_jsonl_files:
-                    latest_file = max(all_jsonl_files, key=lambda p: p.stat().st_mtime)
-                    compaction_detected = detect_compaction(latest_file)
-                    detection_method = "compact_boundary"
+                    if all_jsonl_files:
+                        latest_file = max(all_jsonl_files, key=lambda p: p.stat().st_mtime)
+                        compaction_detected = detect_compaction(latest_file)
+                        detection_method = "compact_boundary"
 
-                    # Log detection result
-                    log_hook_event({
-                        "hook_name": "session_start",
-                        "event_type": "COMPACTION_CHECK",
-                        "session_id": session_id,
-                        "compaction_detected": compaction_detected,
-                        "detection_method": "compact_boundary",
-                        "transcript": str(latest_file),
-                        "source": source  # Log source even if not "compact"
-                    })
+                        # Log detection result
+                        log_hook_event({
+                            "hook_name": "session_start",
+                            "event_type": "COMPACTION_CHECK",
+                            "session_id": session_id,
+                            "compaction_detected": compaction_detected,
+                            "detection_method": "compact_boundary",
+                            "transcript": str(latest_file),
+                            "source": source  # Log source even if not "compact"
+                        })
 
         if compaction_detected:
             # Get current values from events BEFORE modifications
