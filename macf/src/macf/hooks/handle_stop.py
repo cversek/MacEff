@@ -173,15 +173,15 @@ Development Drive Stats:
                     task_list = "\n".join(
                         f"  - #{t['id']}: {t['subject']}" for t in scope["active"]
                     )
-                    # Notify Telegram that scope gate blocked the stop
+                    # Notify Telegram — unique emoji: 🛡️👀 (scope + watching)
                     try:
                         from macf.channels.telegram import send_telegram_notification
                         send_telegram_notification(
                             f"{scope['active_count']} scoped task(s) remaining",
-                            prefix="\U0001f6ab Scope gate blocked stop"
+                            prefix="\U0001f6e1\ufe0f\U0001f440 Scope gate"
                         )
-                    except Exception:
-                        pass  # Notification failure must not affect scope gate
+                    except Exception as e:
+                        print(f"⚠️ MACF: Scope gate Telegram error: {e}", file=sys.stderr)
                     # Use decision:"block" — this forces CC to continue the agent's turn
                     # (blocking errors re-enter the message loop, query.ts:1282).
                     # continue:false would STOP the agent (preventContinuation).
@@ -208,6 +208,15 @@ Development Drive Stats:
             # --- Error-resilience in ANY mode ---
             # Soft nudge when stopping on error with active tasks (scoped or in_progress)
             if is_error_stop and has_active_scope:
+                # Notify Telegram — unique emoji: 🔥⚠️ (error + warning)
+                try:
+                    from macf.channels.telegram import send_telegram_notification
+                    send_telegram_notification(
+                        f"Error stop with {scope['active_count']} active task(s)",
+                        prefix="\U0001f525\u26a0\ufe0f Error gate"
+                    )
+                except Exception as e:
+                    print(f"⚠️ MACF: Error gate Telegram error: {e}", file=sys.stderr)
                 task_list = "\n".join(
                     f"  - #{t['id']}: {t['subject']}" for t in scope["active"]
                 )
@@ -236,6 +245,15 @@ Development Drive Stats:
                     remaining_sec = timer_end - time.time()
                     if remaining_sec > 0:
                         remaining_min = int(remaining_sec / 60)
+                        # Notify Telegram — unique emoji: ⏱️🔄 (timer + continue)
+                        try:
+                            from macf.channels.telegram import send_telegram_notification
+                            send_telegram_notification(
+                                f"{remaining_min} min remaining",
+                                prefix="\u23f1\ufe0f\U0001f504 Timer gate"
+                            )
+                        except Exception as e:
+                            print(f"⚠️ MACF: Timer gate Telegram error: {e}", file=sys.stderr)
                         return {
                             "continue": True,
                             "decision": "block",
