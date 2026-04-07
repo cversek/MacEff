@@ -554,7 +554,10 @@ def get_auto_mode_from_events(session_id: str) -> Tuple[bool, str]:
     # most recent mode_change regardless of which session wrote it.
 
     # Read most recent events first — find the latest mode_change
-    for event in read_events(limit=200, reverse=True):
+    # NOTE: limit=None because mode_change events are rare (1 per session)
+    # and can be buried under thousands of tool_call/cli_command events.
+    # With limit=200, a busy session would push mode_change out of range.
+    for event in read_events(limit=None, reverse=True):
         if event.get("event") == "mode_change":
             data = event.get("data", {})
 
