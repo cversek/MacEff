@@ -244,7 +244,8 @@ Development Drive Stats:
                                 f"Scoped tasks are complete but your allotted time is NOT. "
                                 f"Use your reflexive-self-motivation skill: ULTRATHINK about what "
                                 f"was accomplished, identify the highest-value continuation work "
-                                f"within the same domain, scope it, and continue. "
+                                f"within the same domain, create tasks as CHILDREN of the parent "
+                                f"experiment/mission, scope them with --timer, and continue. "
                                 f"Do NOT stop — scope completion is a TRANSITION, not a stop signal. "
                                 f"Emergency escape: macf_tools mode set MANUAL_MODE --justification <reason>"
                             ),
