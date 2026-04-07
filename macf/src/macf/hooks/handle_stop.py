@@ -219,8 +219,41 @@ Development Drive Stats:
                     f"Investigate the error and fix it before stopping. "
                     f"Read the error output, form a hypothesis, and retry."
                 )
-        except Exception:
-            pass  # Scope/error gate failure must never block normal stop
+        except Exception as e:
+            print(f"⚠️ MACF: Scope gate error (non-blocking): {e}", file=sys.stderr)
+
+        # --- Timer gate: block stop if autonomous work timer is still active ---
+        # This fires when scope is EMPTY (all tasks done) but timer hasn't expired.
+        # It's the HARD enforcement of reflexive self-motivation: the agent MUST
+        # scope new work and continue, not stop because "work is done."
+        try:
+            import time
+            from macf.agent_events_log import read_events
+            # Find the most recent scope_timer_set event
+            for event in read_events(limit=None, reverse=True):
+                if event.get("event") == "scope_timer_set":
+                    timer_end = event.get("data", {}).get("timer_end_epoch", 0)
+                    remaining_sec = timer_end - time.time()
+                    if remaining_sec > 0:
+                        remaining_min = int(remaining_sec / 60)
+                        return {
+                            "continue": True,
+                            "decision": "block",
+                            "reason": (
+                                f"TIMER GATE: {remaining_min} min remaining on autonomous work timer. "
+                                f"Scoped tasks are complete but your allotted time is NOT. "
+                                f"Use your reflexive-self-motivation skill: ULTRATHINK about what "
+                                f"was accomplished, identify the highest-value continuation work "
+                                f"within the same domain, scope it, and continue. "
+                                f"Do NOT stop — scope completion is a TRANSITION, not a stop signal. "
+                                f"Emergency escape: macf_tools mode set MANUAL_MODE --justification <reason>"
+                            ),
+                        }
+                    break  # Timer expired — don't block
+                elif event.get("event") == "scope_cleared":
+                    break  # Scope was cleared after timer — don't search further
+        except Exception as e:
+            print(f"⚠️ MACF: Timer gate error (non-blocking): {e}", file=sys.stderr)
 
         # Return with systemMessage only (Stop hook doesn't support hookSpecificOutput)
         return {

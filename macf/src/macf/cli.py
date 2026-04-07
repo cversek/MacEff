@@ -5029,6 +5029,18 @@ def cmd_task_scope_set(args: argparse.Namespace) -> int:
                     print(f"   👀 #{t['id']} {t['subject']}")
                 for t in inactive:
                     print(f"   ✅ #{t['id']} {t['subject']}")
+        # Timer: emit scope_timer event if --timer provided
+        timer_minutes = getattr(args, 'timer', 0)
+        if timer_minutes > 0:
+            import time
+            from .agent_events_log import append_event
+            timer_end = time.time() + (timer_minutes * 60)
+            append_event("scope_timer_set", {
+                "timer_minutes": timer_minutes,
+                "timer_end_epoch": timer_end,
+                "session_id": get_breadcrumb().split("/")[0].replace("s_", ""),
+            })
+            print(f"   ⏱️  Timer: {timer_minutes} min (until {time.strftime('%H:%M', time.localtime(timer_end))})")
     else:
         print("❌ Failed to activate scope")
         return 1
@@ -6424,6 +6436,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     scope_set_parser = scope_sub.add_parser("set", help="scope tasks (parent auto-expands to pending/in_progress children)")
     scope_set_parser.add_argument("task_ids", nargs="+", help="task IDs to scope (e.g., #290 #291)")
+    scope_set_parser.add_argument("--timer", type=int, default=0, metavar="MINUTES",
+                                  help="set autonomous work timer (minutes). Stop hook blocks stopping until timer expires.")
     scope_set_parser.set_defaults(func=cmd_task_scope_set)
 
     scope_sub.add_parser("show", help="display current scope with status").set_defaults(func=cmd_task_scope_show)
