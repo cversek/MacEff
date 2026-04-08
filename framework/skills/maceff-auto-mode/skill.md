@@ -74,6 +74,32 @@ These timeless questions discover requirements regardless of policy reorganizati
 
 ---
 
+## Personal Autonomy Policy Discovery (PEP)
+
+After reading the framework policy, discover and read any **personal policies** that supplement autonomous operation. These encode agent-specific sprint discipline learned from experience:
+
+```bash
+# Discover personal autonomy/sprint policies
+find agent/policies/personal/ -name "*.md" -exec grep -li "autonomous\|sprint\|reflexive\|AUTO_MODE\|scope.*gate\|self-motivation" {} \;
+```
+
+**For each discovered personal policy**:
+```bash
+# Read it thoroughly — these contain battle-tested corrections
+cat agent/policies/personal/<discovered_file>.md
+```
+
+**Questions to extract from personal policies**:
+- What scope feeding discipline does the policy specify? (prevents scope gate stalls)
+- What periodic consolidation checkpoints are required? (prevents note-taking dropout)
+- What continuation loop pattern does the policy define? (front-loading, reflection cadence)
+- What time-awareness thresholds does the policy specify for wind-down?
+- What accountability requirements apply to self-scoped work?
+
+**Why this matters**: Framework policy defines the safety infrastructure (modes, permissions, stop conditions). Personal policies encode **practiced discipline** — patterns learned from actual autonomous sprints that prevent known failure modes like scope gate stalls and strategic note-taking dropout. Reading both before starting ensures a compliant AND productive sprint from the first minute.
+
+---
+
 ## Execution Flow
 
 After extracting policy answers:
