@@ -307,7 +307,24 @@ def _create_task_file(
     reader = TaskReader(session_uuid)
 
     if not reader.session_path:
-        raise RuntimeError("Could not determine session path")
+        # Bootstrap: tasks directory doesn't exist yet (first-use scenario).
+        # Try to get session UUID from env (set by MACF hooks) or project JSONL.
+        bootstrap_uuid = os.environ.get("MACF_SESSION_ID")
+        if not bootstrap_uuid:
+            # Try to find session UUID from project's JSONL transcript files
+            project_sessions = TaskReader._get_project_sessions()
+            if project_sessions:
+                bootstrap_uuid = sorted(project_sessions)[-1]  # Most recent alphabetically
+        if not bootstrap_uuid:
+            raise RuntimeError(
+                "Could not determine session path. No session UUID available.\n"
+                "This usually means no tasks have been created yet in this session.\n"
+                "Workaround: ensure MACF hooks are installed (macf_tools hooks install)\n"
+                "so MACF_SESSION_ID is set, or create the directory manually:\n"
+                "  mkdir -p ~/.claude/tasks/$(macf_tools session info --json | python3 -c \"import json,sys; print(json.load(sys.stdin).get('session_id',''))\")"
+            )
+        # Re-create reader with discovered UUID
+        reader = TaskReader(bootstrap_uuid)
 
     # Build task JSON structure before entering protection context
     # Generate activeForm from subject (present continuous form)
