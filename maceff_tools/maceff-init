@@ -245,14 +245,18 @@ if [[ ! -f "$OVERRIDE_FILE" ]]; then
 #
 # Docker Compose automatically merges this file with docker-compose.yml
 # Use this for environment-specific volumes, ports, or configuration
-
-services:
-  maceff-sandbox:
-    # Uncomment and customize as needed:
-    # volumes:
-    #   - "/host/path/to/data:/container/mount/point:ro"
-    # ports:
-    #   - "8080:8080"
+#
+# IMPORTANT: Replace <your-service-name> with the actual service name
+# from your docker-compose.yml (e.g., maceff-manny, aero-maceff)
+#
+# Uncomment and customize as needed:
+#
+# services:
+#   <your-service-name>:
+#     volumes:
+#       - "/host/path/to/data:/container/mount/point:ro"
+#     ports:
+#       - "8080:8080"
 EOF
     log "  ✓ Created docker-compose.override.yml template"
 else
