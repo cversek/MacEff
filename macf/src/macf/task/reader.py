@@ -103,12 +103,32 @@ class TaskReader:
         # Priority 2: Filter to sessions belonging to current project
         project_sessions = cls._get_project_sessions()
         if project_sessions:
-            # Only consider sessions that belong to this project
+            # Only consider sessions that belong to this project AND have task dirs
             project_scoped = [d for d in sessions if d.name in project_sessions]
             if project_scoped:
                 # Sort by modification time, most recent first
                 project_scoped.sort(key=lambda d: d.stat().st_mtime, reverse=True)
                 return project_scoped[0].name
+            else:
+                # Project sessions exist but none have task dirs yet (first use).
+                # Pick most recent project session by JSONL mtime so bootstrap/create
+                # can make the directory. Without this, falls through to Priority 3
+                # which picks a DIFFERENT agent's session (cross-agent leakage).
+                try:
+                    import re
+                    project_root = find_project_root()
+                    encoded = re.sub(r'[^a-zA-Z0-9]', '-', str(project_root))
+                    projects_dir = Path.home() / ".claude" / "projects" / encoded
+                    jsonl_files = [
+                        (f.stem, f.stat().st_mtime)
+                        for f in projects_dir.glob("*.jsonl")
+                        if f.stem in project_sessions
+                    ]
+                    if jsonl_files:
+                        jsonl_files.sort(key=lambda x: x[1], reverse=True)
+                        return jsonl_files[0][0]
+                except Exception:
+                    pass  # Fall through to Priority 3
 
         # Priority 3: Legacy fallback - most recent globally (cross-project leakage risk)
         sessions.sort(key=lambda d: d.stat().st_mtime, reverse=True)
