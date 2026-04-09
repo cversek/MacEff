@@ -1,6 +1,10 @@
 """Tests for macf_tools env command."""
 import json
 import subprocess
+from pathlib import Path
+
+# Derive repo root from test file location (works on any platform)
+REPO_ROOT = str(Path(__file__).resolve().parents[1])
 
 
 class TestEnvCommand:
@@ -12,7 +16,7 @@ class TestEnvCommand:
             ['python', '-m', 'macf.cli', 'env'],
             capture_output=True,
             text=True,
-            cwd='/Users/cversek/gitwork/cversek/MacEff'
+            cwd=REPO_ROOT
         )
         assert result.returncode == 0
 
@@ -22,7 +26,7 @@ class TestEnvCommand:
             ['python', '-m', 'macf.cli', 'env', '--json'],
             capture_output=True,
             text=True,
-            cwd='/Users/cversek/gitwork/cversek/MacEff'
+            cwd=REPO_ROOT
         )
         assert result.returncode == 0
         # Should parse without error
@@ -35,7 +39,7 @@ class TestEnvCommand:
             ['python', '-m', 'macf.cli', 'env', '--json'],
             capture_output=True,
             text=True,
-            cwd='/Users/cversek/gitwork/cversek/MacEff'
+            cwd=REPO_ROOT
         )
         data = json.loads(result.stdout)
 
@@ -50,7 +54,7 @@ class TestEnvCommand:
             ['python', '-m', 'macf.cli', 'env', '--json'],
             capture_output=True,
             text=True,
-            cwd='/Users/cversek/gitwork/cversek/MacEff'
+            cwd=REPO_ROOT
         )
         data = json.loads(result.stdout)
 
@@ -66,7 +70,7 @@ class TestEnvCommand:
             ['python', '-m', 'macf.cli', 'env'],
             capture_output=True,
             text=True,
-            cwd='/Users/cversek/gitwork/cversek/MacEff'
+            cwd=REPO_ROOT
         )
         output = result.stdout
 
