@@ -101,7 +101,7 @@ def launch_in_terminal(cmd_args: list, name: str = "",
         name: Optional display name (defaults to command basename)
         restart_delay: Seconds between restarts
         terminal: Terminal app to use: "auto", "terminal", "iterm2",
-            "gnome-terminal", "xterm", "konsole"
+            "gnome-terminal", "lxterminal", "foot", "xterm", "konsole", "x-terminal-emulator"
 
     Returns:
         Supervisor PID
@@ -161,7 +161,7 @@ def launch_in_terminal(cmd_args: list, name: str = "",
 
     elif system == "Linux":
         # Linux: try common terminal emulators
-        for term in ["gnome-terminal", "xterm", "konsole"]:
+        for term in ["gnome-terminal", "lxterminal", "foot", "xterm", "konsole", "x-terminal-emulator"]:
             if subprocess.run(["which", term], capture_output=True).returncode == 0:
                 if term == "gnome-terminal":
                     subprocess.Popen([term, "--", *supervisor_cmd])
