@@ -48,46 +48,55 @@ def get_agent_identity() -> str:
 
 def _get_gecos_name() -> Optional[str]:
     """
-    Extract display name from GECOS field (5th field in passwd).
+    Extract display name from GECOS field.
 
     Removes spaces from GECOS field to create display name.
     Example: "Manny MacEff" -> "MannyMacEff"
 
+    Platform-aware:
+    - Linux: `getent passwd $USER` (5th colon-delimited field)
+    - macOS: `id -F` (full name from Directory Services)
+
     Returns:
         str: Display name with spaces removed, or None if unavailable
     """
+    import sys
     try:
         username = os.environ.get('USER')
         if not username:
             return None
 
-        # Use getent to get passwd entry
-        result = subprocess.run(
-            ['getent', 'passwd', username],
-            capture_output=True,
-            text=True,
-            timeout=2
-        )
+        full_name = None
 
-        if result.returncode != 0:
+        if sys.platform == 'darwin':
+            # macOS: id -F returns full name from Directory Services
+            result = subprocess.run(
+                ['id', '-F'],
+                capture_output=True,
+                text=True,
+                timeout=2
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                full_name = result.stdout.strip()
+        else:
+            # Linux: getent passwd
+            result = subprocess.run(
+                ['getent', 'passwd', username],
+                capture_output=True,
+                text=True,
+                timeout=2
+            )
+            if result.returncode == 0:
+                fields = result.stdout.strip().split(':')
+                if len(fields) >= 5 and fields[4]:
+                    # GECOS: comma-separated, first field is full name
+                    full_name = fields[4].split(',')[0].strip()
+
+        if not full_name:
             return None
-
-        # Parse passwd line: username:x:uid:gid:gecos:home:shell
-        fields = result.stdout.strip().split(':')
-        if len(fields) < 5:
-            return None
-
-        gecos = fields[4]
-        if not gecos:
-            return None
-
-        # GECOS may have comma-separated fields (full name, room, work phone, etc.)
-        # Take first field (full name)
-        full_name = gecos.split(',')[0].strip()
 
         # Remove spaces
         display_name = full_name.replace(' ', '')
-
         return display_name if display_name else None
 
     except Exception:
@@ -96,12 +105,33 @@ def _get_gecos_name() -> Optional[str]:
 
 def _get_uuid_prefix() -> str:
     """
-    Read UUID from ~/.maceff_primary_agent.id and return first 6 chars.
+    Read UUID from agent identity file and return first 6 chars.
+
+    Resolution order:
+    1. {agent_home}/.maceff_primary_agent.id (per-project, via find_agent_home)
+    2. ~/.maceff_primary_agent.id (global fallback)
 
     Returns:
         str: First 6 characters of UUID, or 'unknown' if unavailable
     """
     try:
+        from macf.utils.paths import find_agent_home
+
+        # Priority 1: Per-project identity (agent home)
+        try:
+            agent_home = find_agent_home()
+            per_project = agent_home / '.maceff_primary_agent.id'
+            if per_project.exists():
+                uuid_full = per_project.read_text().strip()
+                if uuid_full:
+                    return uuid_full[:6]
+        except ImportError:
+            pass  # find_agent_home not available — fall through to global
+        except (OSError, IOError) as e:
+            import sys
+            print(f"Warning: could not read per-project agent ID: {e}", file=sys.stderr)
+
+        # Priority 2: Global fallback
         uuid_file = Path.home() / '.maceff_primary_agent.id'
         if not uuid_file.exists():
             return 'unknown'
@@ -110,8 +140,9 @@ def _get_uuid_prefix() -> str:
         if not uuid_full:
             return 'unknown'
 
-        # Return first 6 characters
         return uuid_full[:6]
 
-    except Exception:
+    except (OSError, IOError) as e:
+        import sys
+        print(f"Warning: could not read agent ID: {e}", file=sys.stderr)
         return 'unknown'
