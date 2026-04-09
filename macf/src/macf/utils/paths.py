@@ -3,11 +3,23 @@ Paths utilities.
 """
 
 import os
+import re
 import subprocess
 import sys
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
+
+
+def encode_cc_project_path(path: str) -> str:
+    """Encode a filesystem path the way Claude Code does for project directories.
+
+    CC stores project data at ~/.claude/projects/{encoded_path}/ where
+    all non-alphanumeric characters are replaced with hyphens.
+
+    Example: /Users/foo/My Project → -Users-foo-My-Project
+    """
+    return re.sub(r'[^a-zA-Z0-9]', '-', path)
 
 
 @lru_cache(maxsize=1)
