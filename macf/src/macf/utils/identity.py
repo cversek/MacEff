@@ -34,8 +34,10 @@ def get_agent_identity() -> str:
     # Get current user
     username = os.environ.get('USER', 'unknown')
 
-    # Get display name from GECOS
-    display_name = _get_gecos_name()
+    # Get display name: MACEFF_AGENT_NAME env var > GECOS > username
+    display_name = os.environ.get('MACEFF_AGENT_NAME')
+    if not display_name:
+        display_name = _get_gecos_name()
     if not display_name:
         display_name = username
 
