@@ -62,10 +62,11 @@ class TaskReader:
         """
         try:
             project_root = find_project_root()
-            # Encode path Claude Code style: / -> -
-            encoded_path = str(project_root).replace("/", "-")
-            if encoded_path.startswith("-"):
-                encoded_path = encoded_path  # Keep leading dash
+            # Encode path Claude Code style: all non-alphanumeric chars -> -
+            # CC uses this encoding for ~/.claude/projects/{encoded}/ directories
+            # Previous bug: only replaced "/" leaving spaces, underscores intact
+            import re
+            encoded_path = re.sub(r'[^a-zA-Z0-9]', '-', str(project_root))
 
             projects_dir = Path.home() / ".claude" / "projects" / encoded_path
             if not projects_dir.exists():
