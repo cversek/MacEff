@@ -62,11 +62,8 @@ class TaskReader:
         """
         try:
             project_root = find_project_root()
-            # Encode path Claude Code style: all non-alphanumeric chars -> -
-            # CC uses this encoding for ~/.claude/projects/{encoded}/ directories
-            # Previous bug: only replaced "/" leaving spaces, underscores intact
-            import re
-            encoded_path = re.sub(r'[^a-zA-Z0-9]', '-', str(project_root))
+            from macf.utils.paths import encode_cc_project_path
+            encoded_path = encode_cc_project_path(str(project_root))
 
             projects_dir = Path.home() / ".claude" / "projects" / encoded_path
             if not projects_dir.exists():
@@ -115,9 +112,9 @@ class TaskReader:
                 # can make the directory. Without this, falls through to Priority 3
                 # which picks a DIFFERENT agent's session (cross-agent leakage).
                 try:
-                    import re
+                    from macf.utils.paths import encode_cc_project_path
                     project_root = find_project_root()
-                    encoded = re.sub(r'[^a-zA-Z0-9]', '-', str(project_root))
+                    encoded = encode_cc_project_path(str(project_root))
                     projects_dir = Path.home() / ".claude" / "projects" / encoded
                     jsonl_files = [
                         (f.stem, f.stat().st_mtime)

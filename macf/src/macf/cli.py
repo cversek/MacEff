@@ -237,8 +237,8 @@ def cmd_env(args: argparse.Namespace) -> int:
     # Compute CC internal paths
     try:
         project_root = find_project_root()
-        # Encode project path (/ → -)
-        encoded_path = str(project_root).replace("/", "-")
+        from macf.utils.paths import encode_cc_project_path
+        encoded_path = encode_cc_project_path(str(project_root))
         cc_project_dir = Path.home() / ".claude" / "projects" / encoded_path
     except Exception:
         cc_project_dir = None
