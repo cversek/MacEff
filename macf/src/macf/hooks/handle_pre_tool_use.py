@@ -146,6 +146,10 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # Base temporal message with breadcrumb
         timestamp = get_minimal_timestamp()
         breadcrumb = get_breadcrumb()
+        # Enrich tool name for Skill invocations (show which skill)
+        display_tool = tool_name
+        if tool_name == "Skill" and "skill" in tool_input:
+            display_tool = f"Skill({tool_input['skill']})"
         message_parts = [f"🏗️ MACF | {timestamp} | {breadcrumb}"]
 
         # Surface any injection errors to user
@@ -304,7 +308,11 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                             }
                         }
 
-                message_parts.append("⚙️")
+                # Show enriched tool name for Skill invocations, generic gear for others
+                if display_tool != tool_name:
+                    message_parts.append(f"🎯 {display_tool}")
+                else:
+                    message_parts.append("⚙️")
 
         # Format message (compact single line)
         message = " ".join(message_parts)
