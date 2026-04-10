@@ -150,7 +150,10 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         display_tool = tool_name
         if tool_name == "Skill" and "skill" in tool_input:
             display_tool = f"Skill({tool_input['skill']})"
-        message_parts = [f"🏗️ MACF | {timestamp} | {breadcrumb}"]
+        # Mode indicator: 🤖 for AUTO_MODE, blank for MANUAL
+        auto_mode_active, _ = detect_auto_mode(session_id)
+        mode_indicator = " 🤖" if auto_mode_active else ""
+        message_parts = [f"🏗️ MACF{mode_indicator} | {timestamp} | {breadcrumb}"]
 
         # Surface any injection errors to user
         if injection_errors:
