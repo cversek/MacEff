@@ -11,6 +11,37 @@ from pathlib import Path
 from typing import Optional
 
 
+def detect_cc_binary() -> str:
+    """Detect the Claude Code binary path.
+
+    Resolution order:
+    1. MACF_CC_BINARY env var (explicit override, e.g., from launcher alias)
+    2. shutil.which('claude') resolved through symlinks
+    3. Falls back to "(not found)"
+
+    Returns human-readable string showing resolved path and source.
+    """
+    import shutil
+
+    # Priority 1: Explicit env var (set by launcher alias)
+    env_binary = os.environ.get('MACF_CC_BINARY')
+    if env_binary:
+        return env_binary
+
+    # Priority 2: Find on PATH and resolve symlinks
+    try:
+        cc_path = shutil.which('claude')
+        if cc_path:
+            resolved = str(Path(cc_path).resolve())
+            if resolved != cc_path:
+                return f"{resolved} (via {cc_path})"
+            return resolved
+    except (OSError, ValueError) as e:
+        print(f"Warning: CC binary detection failed: {e}", file=sys.stderr)
+
+    return "(not found on PATH)"
+
+
 def encode_cc_project_path(path: str) -> str:
     """Encode a filesystem path the way Claude Code does for project directories.
 
