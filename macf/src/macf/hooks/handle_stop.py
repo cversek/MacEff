@@ -143,18 +143,22 @@ Development Drive Stats:
 
 {format_macf_footer()}"""
 
-        # Notify Telegram if configured (non-blocking to main return)
+        # Notify Telegram unconditionally (non-blocking to main return)
         try:
+            from macf.channels.telegram import send_telegram_notification
             input_data = json.loads(stdin_json) if stdin_json else {}
+            stop_reason = input_data.get('stop_reason', '')
+            is_error = 'error' in stop_reason.lower() if stop_reason else False
+            symbol = "\u274c" if is_error else "\u23f9\ufe0f"
+            # Use last_assistant_message if available, otherwise DEV_DRV stats
             last_msg = input_data.get('last_assistant_message', '')
             if last_msg:
-                from macf.channels.telegram import send_telegram_notification
-                stop_reason = input_data.get('stop_reason', '')
-                is_error = 'error' in stop_reason.lower() if stop_reason else False
-                symbol = "\u274c" if is_error else "\u23f9\ufe0f"
-                send_telegram_notification(last_msg, prefix=f"{symbol} Agent stopped")
+                notify_text = last_msg
+            else:
+                notify_text = f"DEV_DRV #{stats['count']} complete ({duration_str})"
+            send_telegram_notification(notify_text, prefix=f"{symbol} Agent stopped")
         except Exception as e:
-            print(f"MACF: Stop hook Telegram notification error: {e}", file=sys.stderr)
+            print(f"⚠️ MACF: Stop hook Telegram notification error: {e}", file=sys.stderr)
 
         # --- Error-resilience gate (ANY mode) ---
         # If the agent stopped due to a tool error, nudge it to investigate.
