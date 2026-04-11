@@ -5905,6 +5905,106 @@ def _cmd_ar_kill(args):
     return 0
 
 
+def cmd_idea_create(args: argparse.Namespace) -> int:
+    """Create a new idea."""
+    from .ideas import create_idea
+    result = create_idea(
+        title=args.title,
+        category=args.category,
+        description=args.description,
+        sparked_by=args.sparked_by,
+        feasibility=getattr(args, "feasibility", "") or "",
+        reasoning=args.reasoning,
+        hypothesis=args.hypothesis,
+        context=args.context,
+    )
+    idea = result["idea"]
+    print(f"✅ Idea #{idea['id']:03d} created: {idea['title']}")
+    print(f"   Category: {idea['category']}")
+    print(f"   Status: {idea['status']}")
+    print(f"   File: {result['path']}")
+    return 0
+
+
+def cmd_idea_list(args: argparse.Namespace) -> int:
+    """List ideas."""
+    from .ideas import list_ideas
+    items = list_ideas(
+        status=getattr(args, "status", None),
+        category=getattr(args, "category", None),
+    )
+    if getattr(args, "json_output", False):
+        print(json.dumps([i["idea"] for i in items], indent=2))
+        return 0
+
+    if not items:
+        print("No ideas found.")
+        return 0
+
+    print(f"{'ID':>4}  {'Status':<10}  {'Category':<15}  Title")
+    print(f"{'─'*4}  {'─'*10}  {'─'*15}  {'─'*40}")
+    for item in items:
+        idea = item["idea"]
+        status_icon = {"captured": "💡", "exploring": "🔍", "promoted": "🚀", "archived": "📦"}.get(idea["status"], "?")
+        print(f"#{idea['id']:03d}  {status_icon} {idea['status']:<9} {idea['category']:<15}  {idea['title'][:50]}")
+    print(f"\n{len(items)} idea(s)")
+    return 0
+
+
+def cmd_idea_get(args: argparse.Namespace) -> int:
+    """Get idea details."""
+    from .ideas import get_idea
+    result = get_idea(args.id)
+    if not result:
+        print(f"Idea #{args.id} not found.")
+        return 1
+    print(json.dumps(result["idea"], indent=2))
+    return 0
+
+
+def cmd_idea_update(args: argparse.Namespace) -> int:
+    """Update idea status."""
+    from .ideas import update_idea
+    result = update_idea(
+        args.id,
+        status=getattr(args, "status", None),
+        promoted_to=getattr(args, "promoted_to", None),
+    )
+    if not result:
+        print(f"Idea #{args.id} not found.")
+        return 1
+    idea = result["idea"]
+    print(f"✅ Idea #{idea['id']:03d} updated: status={idea['status']}")
+    if idea.get("links", {}).get("promoted_to"):
+        print(f"   Promoted to: {idea['links']['promoted_to']}")
+    return 0
+
+
+def cmd_idea_archive(args: argparse.Namespace) -> int:
+    """Archive an idea."""
+    from .ideas import archive_idea
+    result = archive_idea(args.id, args.reason)
+    if not result:
+        print(f"Idea #{args.id} not found.")
+        return 1
+    print(f"📦 Idea #{args.id:03d} archived: {args.reason}")
+    return 0
+
+
+def cmd_idea_search(args: argparse.Namespace) -> int:
+    """Search ideas."""
+    from .ideas import search_ideas
+    items = search_ideas(args.query)
+    if not items:
+        print(f"No ideas matching '{args.query}'.")
+        return 0
+    for item in items:
+        idea = item["idea"]
+        print(f"#{idea['id']:03d} [{idea['status']}] {idea['title']}")
+    print(f"\n{len(items)} result(s)")
+    return 0
+
+
 def cmd_shell_setup(args: argparse.Namespace) -> int:
     """Print shell completion setup instructions."""
     try:
@@ -6709,6 +6809,48 @@ def _build_parser() -> argparse.ArgumentParser:
 
     voice_svc_sub.add_parser("stop", help="stop voice service daemon").set_defaults(func=cmd_voice_service_stop)
     voice_svc_sub.add_parser("status", help="show voice service status").set_defaults(func=cmd_voice_service_status)
+
+    # ── idea ─────────────────────────────────────────────────────────────
+    idea_parser = sub.add_parser("idea", help="ideas — prospective knowledge capture")
+    idea_sub = idea_parser.add_subparsers(dest="idea_cmd")
+
+    idea_create = idea_sub.add_parser("create", help="capture a new idea")
+    idea_create.add_argument("--title", "-t", required=True, help="short descriptive title")
+    idea_create.add_argument("--category", "-c", required=True,
+                             choices=["infrastructure", "consciousness", "tooling", "integration", "research", "methodology"],
+                             help="idea category")
+    idea_create.add_argument("--description", "-d", default="", help="what the idea is")
+    idea_create.add_argument("--sparked-by", dest="sparked_by", default="", help="what triggered this idea")
+    idea_create.add_argument("--feasibility", choices=["trivial", "moderate", "significant", "moonshot"], help="estimated effort")
+    idea_create.add_argument("--reasoning", default="", help="why this might be valuable")
+    idea_create.add_argument("--hypothesis", default="", help="testable prediction")
+    idea_create.add_argument("--context", default="", help="what was happening when idea emerged")
+    idea_create.set_defaults(func=cmd_idea_create)
+
+    idea_list = idea_sub.add_parser("list", help="list ideas")
+    idea_list.add_argument("--status", choices=["captured", "exploring", "promoted", "archived"], help="filter by status")
+    idea_list.add_argument("--category", help="filter by category")
+    idea_list.add_argument("--json", dest="json_output", action="store_true", help="output as JSON")
+    idea_list.set_defaults(func=cmd_idea_list)
+
+    idea_get = idea_sub.add_parser("get", help="get idea details")
+    idea_get.add_argument("id", type=int, help="idea ID")
+    idea_get.set_defaults(func=cmd_idea_get)
+
+    idea_update = idea_sub.add_parser("update", help="update idea status")
+    idea_update.add_argument("id", type=int, help="idea ID")
+    idea_update.add_argument("--status", choices=["captured", "exploring", "promoted", "archived"], help="new status")
+    idea_update.add_argument("--promoted-to", dest="promoted_to", help="what the idea became (path/ref)")
+    idea_update.set_defaults(func=cmd_idea_update)
+
+    idea_archive = idea_sub.add_parser("archive", help="archive an idea")
+    idea_archive.add_argument("id", type=int, help="idea ID")
+    idea_archive.add_argument("--reason", "-r", required=True, help="why this idea is being archived")
+    idea_archive.set_defaults(func=cmd_idea_archive)
+
+    idea_search = idea_sub.add_parser("search", help="search ideas by text")
+    idea_search.add_argument("query", help="search query")
+    idea_search.set_defaults(func=cmd_idea_search)
 
     # ── shell ────────────────────────────────────────────────────────────
     shell_parser = sub.add_parser("shell", help="shell integration (tab completion)")
