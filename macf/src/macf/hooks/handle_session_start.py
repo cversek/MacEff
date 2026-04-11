@@ -204,7 +204,8 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 if orphaned_todo_path:
                     try:
                         orphaned_todo_size = Path(orphaned_todo_path).stat().st_size
-                    except Exception:
+                    except (OSError, IOError) as e:
+                        print(f"⚠️ MACF: orphaned TODO stat failed: {e}", file=sys.stderr)
                         orphaned_todo_size = 0
 
                 # Get current cycle from events

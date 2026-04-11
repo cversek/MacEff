@@ -172,5 +172,6 @@ def detect_model(session_id: Optional[str] = None) -> str:
                     except (json.JSONDecodeError, UnicodeDecodeError):
                         continue
                 return model
-    except Exception:
+    except (OSError, IOError, ValueError) as e:
+        print(f"⚠️ MACF: model detection from transcript failed: {e}", file=sys.stderr)
         return "unknown"

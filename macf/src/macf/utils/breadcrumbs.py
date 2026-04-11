@@ -49,7 +49,8 @@ def get_current_dev_drv_prompt_uuid() -> Optional[str]:
                 break  # Found event but no valid UUID
 
         return None
-    except Exception:
+    except (OSError, IOError, ValueError) as e:
+        print(f"⚠️ MACF: prompt UUID extraction failed: {e}", file=sys.stderr)
         return None
 
 def format_breadcrumb(
@@ -183,7 +184,8 @@ def parse_breadcrumb(breadcrumb: str) -> Optional[Dict[str, Any]]:
 
         return result
 
-    except Exception:
+    except (OSError, IOError, ValueError, KeyError) as e:
+        print(f"⚠️ MACF: breadcrumb parse failed: {e}", file=sys.stderr)
         return None
 
 def _find_possible_agent_ids(session_id: str) -> list:
@@ -211,7 +213,8 @@ def _find_possible_agent_ids(session_id: str) -> list:
                 possible_ids.append(agent_dir.name)
 
         return possible_ids
-    except Exception:
+    except (OSError, IOError) as e:
+        print(f"⚠️ MACF: agent ID scan failed: {e}", file=sys.stderr)
         return []
 
 def extract_current_git_hash() -> Optional[str]:
@@ -280,6 +283,6 @@ def get_breadcrumb() -> str:
             completion_time=current_time,
             git_hash=git_hash
         )
-    except Exception:
-        # Safe fallback - never crash hooks
+    except Exception as e:
+        print(f"⚠️ MACF: breadcrumb generation failed: {e}", file=sys.stderr)
         return "s_unknown/c_1/p_none"

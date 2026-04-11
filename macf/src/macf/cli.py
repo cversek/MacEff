@@ -4,13 +4,13 @@ from pathlib import Path
 from datetime import datetime, timezone
 try:
     from zoneinfo import ZoneInfo
-except Exception:
+except ImportError:
     ZoneInfo = None
 
 try:
     from importlib.metadata import version
     _ver = version("macf")
-except Exception:
+except (ImportError, Exception):
     _ver = "0.0.0"
 
 from .config import ConsciousnessConfig
@@ -94,7 +94,8 @@ def _format_time_ago(file_path: Path) -> str:
         hours = int(delta.total_seconds() // 3600)
         minutes = int((delta.total_seconds() % 3600) // 60)
         return f"{hours}h {minutes}m ago"
-    except Exception:
+    except (OSError, IOError, OverflowError, ValueError) as e:
+        print(f"⚠️ MACF: file age calculation failed: {e}", file=sys.stderr)
         return "unknown"
 
 # -------- commands --------
@@ -215,7 +216,8 @@ def cmd_env(args: argparse.Namespace) -> int:
     # Get agent home path
     try:
         agent_home = find_agent_home()
-    except Exception:
+    except (OSError, IOError) as e:
+        print(f"⚠️ MACF: agent home detection failed: {e}", file=sys.stderr)
         agent_home = None
 
     # Count installed hooks (in .claude/hooks/)
@@ -229,7 +231,8 @@ def cmd_env(args: argparse.Namespace) -> int:
     def resolve_path(p):
         try:
             return str(p.resolve()) if p and p.exists() else str(p) if p else "(not set)"
-        except Exception:
+        except (OSError, IOError) as e:
+            print(f"⚠️ MACF: path resolution failed: {e}", file=sys.stderr)
             return str(p) if p else "(not set)"
 
     from macf.utils.paths import detect_cc_binary
@@ -244,26 +247,30 @@ def cmd_env(args: argparse.Namespace) -> int:
         from macf.utils.paths import encode_cc_project_path
         encoded_path = encode_cc_project_path(str(project_root))
         cc_project_dir = Path.home() / ".claude" / "projects" / encoded_path
-    except Exception:
+    except (OSError, IOError, ValueError) as e:
+        print(f"⚠️ MACF: CC project dir detection failed: {e}", file=sys.stderr)
         cc_project_dir = None
 
     # CC Tasks path (use TaskReader for session detection)
     try:
         reader = TaskReader()
         cc_tasks_dir = reader.session_path if reader.session_path else None
-    except Exception:
+    except (OSError, IOError, ValueError) as e:
+        print(f"⚠️ MACF: CC tasks dir detection failed: {e}", file=sys.stderr)
         cc_tasks_dir = None
 
     # Get framework paths
     try:
         macf_package = get_macf_package_path()
-    except Exception:
+    except (OSError, IOError) as e:
+        print(f"⚠️ MACF: macf package path detection failed: {e}", file=sys.stderr)
         macf_package = None
 
     try:
         maceff_root = find_maceff_root()
         framework_dir = maceff_root / "framework" if maceff_root else None
-    except Exception:
+    except (OSError, IOError) as e:
+        print(f"⚠️ MACF: maceff root detection failed: {e}", file=sys.stderr)
         framework_dir = None
 
     # Gather all data
@@ -592,7 +599,8 @@ def _check_hooks_in_settings(settings_path: Path) -> bool:
         with open(settings_path) as f:
             settings = json.load(f)
         return bool(settings.get("hooks"))
-    except Exception:
+    except (OSError, IOError, json.JSONDecodeError) as e:
+        print(f"⚠️ MACF: hooks settings check failed: {e}", file=sys.stderr)
         return False
 
 
@@ -1561,7 +1569,8 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
                     pa_home = agent_home
                 else:
                     pa_home = Path.cwd()
-            except Exception:
+            except (OSError, IOError) as e:
+                print(f"⚠️ MACF: agent home detection failed: {e}", file=sys.stderr)
                 pa_home = Path.cwd()
 
         claude_md_path = pa_home / "CLAUDE.md"
@@ -3575,7 +3584,8 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
                         mtimes.append(task_file.stat().st_mtime)
 
             return max(mtimes) if mtimes else 0.0
-        except Exception:
+        except (OSError, IOError) as e:
+            print(f"⚠️ MACF: task mtime scan failed: {e}", file=sys.stderr)
             return 0.0
 
     # Parse task ID (preserve string IDs like "000")
@@ -5128,7 +5138,8 @@ def _gh_issue_closeout(task_id: int, mtmd, args, breadcrumb: str) -> None:
     try:
         from .utils.identity import get_agent_identity
         agent_name = get_agent_identity()
-    except Exception:
+    except (ImportError, OSError) as e:
+        print(f"⚠️ MACF: agent identity resolution failed: {e}", file=sys.stderr)
         agent_name = "unknown"
 
     repo_slug = f"{gh_owner}/{gh_repo}"

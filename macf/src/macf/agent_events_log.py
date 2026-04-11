@@ -14,6 +14,7 @@ Schema: {timestamp, event, breadcrumb, data, hook_input}
 
 import fcntl
 import json
+import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional
@@ -62,8 +63,8 @@ def get_log_path() -> Path:
         maceff_dir = agent_home / ".maceff"
         maceff_dir.mkdir(mode=0o700, exist_ok=True)
         return maceff_dir / "agent_events_log.jsonl"
-    except Exception:
-        # Fallback to current directory
+    except (OSError, IOError) as e:
+        print(f"⚠️ MACF: event log path resolution failed: {e}", file=sys.stderr)
         return Path(".maceff/agent_events_log.jsonl")
 
 
@@ -151,7 +152,8 @@ def append_event(
 
         return True
 
-    except Exception:
+    except (OSError, IOError, ValueError) as e:
+        print(f"⚠️ MACF: event append failed: {e}", file=sys.stderr)
         return False
 
 
@@ -204,7 +206,8 @@ def read_events(
                 # Skip malformed lines
                 continue
 
-    except Exception:
+    except (OSError, IOError) as e:
+        print(f"⚠️ MACF: event log read failed: {e}", file=sys.stderr)
         return
 
 

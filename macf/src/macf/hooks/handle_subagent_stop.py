@@ -48,7 +48,8 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         try:
             hook_input = json.loads(stdin_json) if stdin_json else {}
             subagent_type = hook_input.get('subagent_type', 'unknown')
-        except Exception:
+        except json.JSONDecodeError as e:
+            print(f"⚠️ MACF: subagent_stop stdin parse failed: {e}", file=sys.stderr)
             hook_input = {}
             subagent_type = 'unknown'
 

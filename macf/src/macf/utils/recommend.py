@@ -372,7 +372,8 @@ def main():
 
     except json.JSONDecodeError:
         print(json.dumps({"continue": True}))
-    except Exception:
+    except Exception as e:
+        print(f"⚠️ MACF: recommend hook failed: {e}", file=sys.stderr)
         print(json.dumps({"continue": True}))
 
 

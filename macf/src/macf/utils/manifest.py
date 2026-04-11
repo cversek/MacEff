@@ -496,6 +496,7 @@ def format_manifest_awareness() -> str:
 
         return "\n".join(lines)
 
-    except Exception:
+    except Exception as e:
+        print(f"⚠️ MACF: manifest generation failed: {e}", file=sys.stderr)
         # Graceful fallback - still point to discovery
         return "📋 POLICY DISCOVERY\n\nRun `macf_tools policy list` to discover policies"

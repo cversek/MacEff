@@ -9,6 +9,7 @@ Mode-aware recovery that branches on AUTO_MODE:
 Event-first architecture - no mutable state dependencies.
 """
 
+import sys
 from pathlib import Path
 from typing import List, Optional
 
@@ -247,8 +248,8 @@ def read_recovery_policy(policy_path: Optional[str] = None) -> str:
             return """No custom recovery policy found.
 Read recent consciousness artifacts and await user instructions."""
 
-    except Exception:
-        # NEVER crash - return generic message
+    except Exception as e:
+        print(f"⚠️ MACF: recovery policy load failed: {e}", file=sys.stderr)
         return """No custom recovery policy found.
 Read recent consciousness artifacts and await user instructions."""
 

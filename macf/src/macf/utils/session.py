@@ -169,5 +169,6 @@ def detect_session_migration(current_session_id: str, agent_root: Optional[Path]
         # Migration if session IDs differ
         is_migration = (last_session_id != current_session_id)
         return (is_migration, last_session_id)
-    except Exception:
+    except (OSError, IOError, ValueError) as e:
+        print(f"⚠️ MACF: session migration detection failed: {e}", file=sys.stderr)
         return (False, "")

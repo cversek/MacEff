@@ -55,7 +55,8 @@ def log_hook_event(
             try:
                 config = ConsciousnessConfig()
                 agent_id = config.agent_id
-            except Exception:
+            except Exception as e:
+                print(f"⚠️ MACF: agent_id resolution failed: {e}", file=sys.stderr)
                 agent_id = 'unknown_agent'
 
         # Get hooks directory using unified path

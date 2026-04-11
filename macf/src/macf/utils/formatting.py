@@ -5,10 +5,12 @@ Formatting utilities.
 import subprocess
 from functools import lru_cache
 
+import sys
+
 try:
     from importlib.metadata import version
     __version__ = version("macf")
-except Exception:
+except (ImportError, Exception) as e:
     __version__ = "0.0.0-dev"  # Fallback for development
 
 from .environment import get_rich_environment_string

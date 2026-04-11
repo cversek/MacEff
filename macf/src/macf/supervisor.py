@@ -138,7 +138,8 @@ def launch_in_terminal(cmd_args: list, name: str = "",
                     capture_output=True, text=True, timeout=3
                 )
                 terminal = "iterm2" if "true" in result.stdout.lower() else "terminal"
-            except Exception:
+            except (OSError, subprocess.SubprocessError) as e:
+                print(f"⚠️ MACF: terminal detection failed: {e}", file=sys.stderr)
                 terminal = "terminal"
 
         if terminal == "iterm2":

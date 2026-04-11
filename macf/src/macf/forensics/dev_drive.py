@@ -183,7 +183,8 @@ def extract_dev_drive(
 
         return drive
 
-    except Exception:
+    except Exception as e:
+        print(f"⚠️ MACF: dev drive reconstruction failed: {e}", file=sys.stderr)
         return None
 
 
