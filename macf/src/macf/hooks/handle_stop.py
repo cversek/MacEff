@@ -292,6 +292,12 @@ Development Drive Stats:
             "error": str(e),
             "traceback": traceback.format_exc()
         })
+        # Notify Telegram about error (non-blocking)
+        try:
+            from macf.channels.telegram import send_telegram_notification
+            send_telegram_notification(str(e), prefix="\u274c Stop hook error")
+        except (ImportError, OSError, ConnectionError) as tg_e:
+            print(f"⚠️ MACF: Telegram error notification also failed: {tg_e}", file=sys.stderr)
         return {
             "continue": True,
             "systemMessage": f"🏗️ MACF | ❌ Stop hook error: {e}"
