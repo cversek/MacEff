@@ -5,6 +5,7 @@ Event-first architecture: All drive operations emit events to the append-only
 JSONL log. Event queries reconstruct state from these events.
 """
 
+import sys
 import time
 import uuid
 from typing import Any, Dict, List, Optional
@@ -110,8 +111,8 @@ def get_dev_drv_stats(session_id: str, agent_id: Optional[str] = None) -> dict:
             "avg_duration": avg_duration,
             "from_snapshot": stats.get("from_snapshot", False)
         }
-    except Exception:
-        # No fallback - return empty stats
+    except Exception as e:
+        print(f"⚠️ MACF: dev drive stats query failed: {e}", file=sys.stderr)
         return {
             "count": 0,
             "total_duration": 0.0,
@@ -197,8 +198,8 @@ def get_deleg_drv_stats(session_id: str, agent_id: Optional[str] = None) -> dict
             "avg_duration": avg_duration,
             "subagent_types": stats.get("subagent_types", [])
         }
-    except Exception:
-        # No fallback - return empty stats
+    except Exception as e:
+        print(f"⚠️ MACF: deleg drive stats query failed: {e}", file=sys.stderr)
         return {
             "count": 0,
             "total_duration": 0.0,
@@ -235,7 +236,8 @@ def record_delegation_start(
             "timestamp": time.time()
         })
         return True
-    except Exception:
+    except Exception as e:
+        print(f"⚠️ MACF: record_delegation_start failed: {e}", file=sys.stderr)
         return False
 
 def record_delegation_complete(
@@ -266,7 +268,8 @@ def record_delegation_complete(
             "timestamp": time.time()
         })
         return True
-    except Exception:
+    except Exception as e:
+        print(f"⚠️ MACF: record_delegation_complete failed: {e}", file=sys.stderr)
         return False
 
 def get_delegations_this_drive(
@@ -289,8 +292,8 @@ def get_delegations_this_drive(
         # EVENT-FIRST: Query event log (lazy import to avoid circular)
         from ..event_queries import get_delegations_this_drive_from_events
         return get_delegations_this_drive_from_events(session_id)
-    except Exception:
-        # No fallback - return empty list
+    except Exception as e:
+        print(f"⚠️ MACF: get_delegations_this_drive failed: {e}", file=sys.stderr)
         return []
 
 def clear_delegations_this_drive(

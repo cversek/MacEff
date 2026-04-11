@@ -5,6 +5,7 @@ Provides semantic and hybrid search capabilities for MacEff policies.
 Includes document search and CEP question search for section targeting.
 """
 
+import sys
 import time
 from pathlib import Path
 from typing import Optional
@@ -60,8 +61,8 @@ class PolicySearch:
         if self._questions_table is None:
             try:
                 self._questions_table = self.db.open_table("questions")
-            except Exception:
-                # Questions table doesn't exist - graceful degradation
+            except Exception as e:
+                print(f"⚠️ MACF: questions table unavailable: {e}", file=sys.stderr)
                 self._questions_table = False  # Sentinel for "tried and failed"
         return self._questions_table if self._questions_table is not False else None
 

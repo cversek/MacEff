@@ -72,7 +72,8 @@ class TaskReader:
 
             # Session UUIDs are JSONL filenames (without extension)
             return {f.stem for f in projects_dir.glob("*.jsonl")}
-        except Exception:
+        except (OSError, IOError) as e:
+            print(f"⚠️ MACF: session JSONL scan failed: {e}", file=sys.stderr)
             return set()
 
     @classmethod

@@ -34,7 +34,8 @@ def write_json_safely(path: Path, data: dict) -> bool:
         # Atomic rename
         temp_path.replace(path)
         return True
-    except Exception:
+    except (OSError, IOError, TypeError, ValueError) as e:
+        print(f"⚠️ MACF: JSON write failed for {path}: {e}", file=sys.stderr)
         # Clean up temp file if it exists
         temp_path = path.with_suffix('.tmp')
         if temp_path.exists():

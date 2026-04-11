@@ -7,6 +7,7 @@ display name (from GECOS) and UUID.
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -101,7 +102,8 @@ def _get_gecos_name() -> Optional[str]:
         display_name = full_name.replace(' ', '')
         return display_name if display_name else None
 
-    except Exception:
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        print(f"⚠️ MACF: agent display name detection failed: {e}", file=sys.stderr)
         return None
 
 
