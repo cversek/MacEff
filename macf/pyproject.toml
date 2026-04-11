@@ -27,6 +27,9 @@ test = [
 proxy = [
     "aiohttp>=3.9.0",  # For API proxy streaming
 ]
+completion = [
+    "argcomplete>=3.0.0",  # Shell tab completion for macf_tools CLI
+]
 recommend = [
     "sentence-transformers>=2.2.0",  # For semantic embeddings
     "lancedb>=0.26.0",               # For vector similarity and hybrid search
