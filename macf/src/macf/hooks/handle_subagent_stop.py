@@ -124,8 +124,8 @@ Delegation Drive Stats:
                 f"Agent: {subagent_type}\nDuration: {duration_str}\nTotal delegations: {stats['count']}\nCL: {token_info.get('cl_level', 'N/A')}",
                 prefix="\U0001f4dc DELEG_DRV Complete"
             )
-        except Exception:
-            pass
+        except (ImportError, OSError, ConnectionError) as e:
+            print(f"⚠️ MACF: DELEG_DRV telegram notification failed (non-blocking): {e}", file=sys.stderr)
 
         # Return with systemMessage (user display only - SubagentStop hook doesn't support hookSpecificOutput)
         return {

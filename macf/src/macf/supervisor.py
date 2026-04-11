@@ -64,8 +64,8 @@ def _notify_telegram(message: str, prefix: str = ""):
     try:
         from macf.channels.telegram import send_telegram_notification
         send_telegram_notification(message, prefix=prefix)
-    except Exception:
-        pass
+    except (ImportError, OSError, ConnectionError) as e:
+        print(f"⚠️ MACF: supervisor telegram notification failed: {e}", file=sys.stderr)
 
 
 def _is_alive(pid: int) -> bool:

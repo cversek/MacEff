@@ -58,8 +58,8 @@ def get_total_context() -> int:
                     "   Check with /context. If 1M, set: export MACF_CONTEXT_WINDOW=1000000",
                     file=sys.stderr,
                 )
-        except Exception:
-            pass
+        except (ImportError, OSError) as e:
+            print(f"⚠️ MACF: model detection failed during context window check: {e}", file=sys.stderr)
 
     return _DEFAULT_CONTEXT
 

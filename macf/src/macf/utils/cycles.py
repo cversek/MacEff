@@ -114,8 +114,8 @@ def set_auto_mode(
                     "auth_validated": auth_token is not None
                 }
             )
-        except Exception:
-            pass  # Don't fail on logging errors
+        except (OSError, IOError) as e:
+            print(f"⚠️ MACF: failed to log mode change event: {e}", file=sys.stderr)
 
         mode_str = "AUTO_MODE" if enabled else "MANUAL_MODE"
         return (True, f"Mode set to {mode_str}")

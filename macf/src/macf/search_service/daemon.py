@@ -164,8 +164,8 @@ class SearchService:
                 client_socket.sendall(
                     (json.dumps(error_response.to_dict()) + "\n").encode()
                 )
-            except Exception:
-                pass
+            except OSError as e:
+                print(f"⚠️ MACF: failed to send JSON decode error response to client: {e}", file=sys.stderr)
         except Exception as e:
             print(f"Error handling client: {e}", file=sys.stderr)
             try:
@@ -173,13 +173,13 @@ class SearchService:
                 client_socket.sendall(
                     (json.dumps(error_response.to_dict()) + "\n").encode()
                 )
-            except Exception:
-                pass
+            except OSError as send_err:
+                print(f"⚠️ MACF: failed to send error response to client: {send_err}", file=sys.stderr)
         finally:
             try:
                 client_socket.close()
-            except Exception:
-                pass
+            except OSError as e:
+                print(f"⚠️ MACF: failed to close client socket: {e}", file=sys.stderr)
 
     def _signal_handler(self, signum: int, frame) -> None:
         """Handle shutdown signals gracefully."""
@@ -281,8 +281,8 @@ class SearchService:
         if self.server_socket:
             try:
                 self.server_socket.close()
-            except Exception:
-                pass
+            except OSError as e:
+                print(f"⚠️ MACF: failed to close server socket on shutdown: {e}", file=sys.stderr)
 
         remove_pid_file()
         print("Search service stopped", file=sys.stderr)

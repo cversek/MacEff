@@ -260,8 +260,8 @@ Breadcrumb: {breadcrumb}"""
                 f"{token_section}",
                 prefix="\U0001f4ac DEV_DRV Started"
             )
-        except Exception:
-            pass
+        except (ImportError, OSError, ConnectionError) as e:
+            print(f"⚠️ MACF: DEV_DRV telegram notification failed (non-blocking): {e}", file=sys.stderr)
 
         # Pattern C: top-level systemMessage for user + hookSpecificOutput for agent
         return {

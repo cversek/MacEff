@@ -33,11 +33,12 @@ def _pick_tz():
         if name and ZoneInfo is not None:
             try:
                 return ZoneInfo(name)
-            except Exception:
-                pass
+            except (ValueError, KeyError) as e:
+                print(f"⚠️ MACF: invalid timezone '{name}' in {key}: {e}", file=sys.stderr)
     try:
         return datetime.now().astimezone().tzinfo or timezone.utc
-    except Exception:
+    except OSError as e:
+        print(f"⚠️ MACF: could not detect system timezone: {e}", file=sys.stderr)
         return timezone.utc
 
 def get_formatted_timestamp() -> Tuple[str, datetime]:

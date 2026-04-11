@@ -84,8 +84,8 @@ CL: {token_info.get('cl_level', 'N/A')}
                 f"Cycle: {cycle_number}\nCL: {token_info.get('cl_level', 'N/A')}\nTokens: {token_info.get('tokens_used', '?')} / {token_info.get('context_window', '?')}\nSource: {data.get('source', 'auto')}",
                 prefix="\U0001f6a8 COMPACTION IMMINENT"
             )
-        except Exception:
-            pass
+        except (ImportError, OSError, ConnectionError) as e:
+            print(f"⚠️ MACF: pre-compact telegram notification failed (non-blocking): {e}", file=sys.stderr)
 
         return {
             "continue": True,

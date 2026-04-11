@@ -62,8 +62,8 @@ def get_claude_code_version() -> str:
             match = re.search(r'"(\d+\.\d+\.\d+)\s*\(Claude Code\)"', content)
             if match:
                 return match.group(1)
-        except Exception:
-            pass
+        except OSError as e:
+            print(f"⚠️ MACF: failed to read claude script for version extraction: {e}", file=sys.stderr)
         return ""
 
     # Strategy 1: Linux — read /proc/PPID/cmdline
@@ -88,8 +88,8 @@ def get_claude_code_version() -> str:
                     )
                     if result.returncode == 0:
                         return _parse_version(result.stdout)
-        except Exception:
-            pass
+        except (OSError, subprocess.SubprocessError) as e:
+            print(f"⚠️ MACF: Linux /proc-based claude version detection failed: {e}", file=sys.stderr)
 
     # Strategy 2: Extract version from the claude binary file content
     # The claude binary is a self-contained node script with version embedded.
@@ -111,8 +111,8 @@ def get_claude_code_version() -> str:
         )
         if result.returncode == 0:
             return _parse_version(result.stdout)
-    except Exception:
-        pass
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"⚠️ MACF: direct claude --version failed: {e}", file=sys.stderr)
 
     return ""
 
@@ -172,8 +172,8 @@ def format_proprioception_awareness() -> str:
 ╚══════════════════════════════════════════════════════════════════╝
 
 {help_result.stdout.strip()}""")
-    except Exception:
-        pass
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"⚠️ MACF: macf_tools --help failed during proprioception: {e}", file=sys.stderr)
 
     # 2. Command tree
     try:
@@ -187,8 +187,8 @@ def format_proprioception_awareness() -> str:
 ╚══════════════════════════════════════════════════════════════════╝
 
 {tree_result.stdout.strip()}""")
-    except Exception:
-        pass
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"⚠️ MACF: macf_tools cmd-tree failed during proprioception: {e}", file=sys.stderr)
 
     # 3. Environment
     try:
@@ -202,7 +202,7 @@ def format_proprioception_awareness() -> str:
 ╚══════════════════════════════════════════════════════════════════╝
 
 {env_result.stdout.strip()}""")
-    except Exception:
-        pass
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"⚠️ MACF: macf_tools env failed during proprioception: {e}", file=sys.stderr)
 
     return "\n\n".join(sections)
