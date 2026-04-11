@@ -1,3 +1,4 @@
+# PYTHON_ARGCOMPLETE_OK
 # tools/src/maceff/cli.py
 import argparse, json, os, subprocess, sys, glob, platform, socket
 from pathlib import Path
@@ -5851,6 +5852,44 @@ def _cmd_ar_kill(args):
     return 0
 
 
+def cmd_shell_setup(args: argparse.Namespace) -> int:
+    """Print shell completion setup instructions."""
+    try:
+        import argcomplete
+        has_argcomplete = True
+    except ImportError:
+        has_argcomplete = False
+
+    if not has_argcomplete:
+        print("argcomplete is not installed. Install it first:\n")
+        print("  pip install 'macf[completion]'")
+        print("  # or: pip install argcomplete\n")
+        return 1
+
+    shell = os.environ.get("SHELL", "")
+    print("Shell tab completion for macf_tools\n")
+    print("  argcomplete is installed.\n")
+
+    if "zsh" in shell:
+        print("Add to your ~/.zshrc:\n")
+        print('  autoload -U bashcompinit && bashcompinit')
+        print('  eval "$(register-python-argcomplete macf_tools)"')
+        print("\nThen reload: source ~/.zshrc")
+    elif "bash" in shell:
+        print("Add to your ~/.bashrc:\n")
+        print('  eval "$(register-python-argcomplete macf_tools)"')
+        print("\nThen reload: source ~/.bashrc")
+    else:
+        print(f"Detected shell: {shell or '(unknown)'}")
+        print("\nFor bash/zsh, add to your rc file:\n")
+        print('  eval "$(register-python-argcomplete macf_tools)"')
+        print("\nFor fish:\n")
+        print('  register-python-argcomplete --shell fish macf_tools | source')
+
+    print(f"\nAfter setup, try: macf_tools ta<TAB> → task")
+    return 0
+
+
 # -------- parser --------
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -6613,6 +6652,11 @@ def _build_parser() -> argparse.ArgumentParser:
     voice_svc_sub.add_parser("stop", help="stop voice service daemon").set_defaults(func=cmd_voice_service_stop)
     voice_svc_sub.add_parser("status", help="show voice service status").set_defaults(func=cmd_voice_service_status)
 
+    # ── shell ────────────────────────────────────────────────────────────
+    shell_parser = sub.add_parser("shell", help="shell integration (tab completion)")
+    shell_sub = shell_parser.add_subparsers(dest="shell_cmd")
+    shell_sub.add_parser("setup", help="print tab completion setup instructions").set_defaults(func=cmd_shell_setup)
+
     return p
 
 
@@ -6733,6 +6777,14 @@ def cmd_voice_transcribe(args) -> int:
 
 def main(argv=None) -> None:
     parser = _build_parser()
+
+    # Enable tab completion if argcomplete is installed (optional dependency)
+    try:
+        import argcomplete
+        argcomplete.autocomplete(parser)
+    except ImportError:
+        pass  # argcomplete not installed — completions silently disabled
+
     args = parser.parse_args(argv)
     if getattr(args, "cmd", None):
         # Capture argv before try block to avoid scope issues in exception handler
