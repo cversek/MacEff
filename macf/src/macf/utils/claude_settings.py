@@ -346,6 +346,10 @@ def toggle_write_ask_for_auto_mode(enable_auto: bool, project_root: Optional[Pat
     For AUTO_MODE to work autonomously, Write must be removed from 'ask'
     so it falls through to defaultMode (bypassPermissions).
 
+    CC merges global (~/.claude/settings.json) and local (settings.local.json)
+    permissions. Write in EITHER ask list triggers prompts. Both must be cleaned
+    for AUTO_MODE to work correctly.
+
     Args:
         enable_auto: True = remove Write from ask (AUTO_MODE entry),
                      False = restore Write to ask (MANUAL_MODE return)
@@ -355,20 +359,42 @@ def toggle_write_ask_for_auto_mode(enable_auto: bool, project_root: Optional[Pat
         True if successfully updated, False on error
     """
     try:
+        # Update local settings.local.json
         settings, settings_path = _read_settings(project_root)
         permissions = settings.setdefault('permissions', {})
         ask_list = permissions.setdefault('ask', [])
 
         if enable_auto:
-            # Remove Write from ask so bypassPermissions covers it
             if 'Write' in ask_list:
                 ask_list.remove('Write')
         else:
-            # Restore Write to ask for MANUAL_MODE prompting
             if 'Write' not in ask_list:
                 ask_list.append('Write')
 
         _write_settings(settings, settings_path)
+
+        # Also update global ~/.claude/settings.json (CC merges both)
+        global_settings_path = Path.home() / ".claude" / "settings.json"
+        if global_settings_path.exists():
+            try:
+                with open(global_settings_path, 'r') as f:
+                    global_settings = json.load(f)
+                global_perms = global_settings.get('permissions', {})
+                global_ask = global_perms.get('ask', [])
+
+                if enable_auto and 'Write' in global_ask:
+                    global_ask.remove('Write')
+                    global_perms['ask'] = global_ask
+                    global_settings['permissions'] = global_perms
+                    _write_settings(global_settings, global_settings_path)
+                elif not enable_auto and 'Write' not in global_ask:
+                    global_ask.append('Write')
+                    global_perms['ask'] = global_ask
+                    global_settings['permissions'] = global_perms
+                    _write_settings(global_settings, global_settings_path)
+            except (OSError, json.JSONDecodeError) as e:
+                print(f"⚠️ MACF: Global settings update failed (non-blocking): {e}", file=sys.stderr)
+
         return True
     except (OSError, json.JSONDecodeError, TypeError, KeyError) as e:
         print(f"⚠️ MACF: Settings write failed (toggle_write_ask): {e}", file=sys.stderr)
