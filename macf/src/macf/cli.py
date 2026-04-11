@@ -1691,6 +1691,59 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_agent_set_github(args: argparse.Namespace) -> int:
+    """Set per-project GitHub identity via GH_TOKEN in settings.local.json."""
+    username = args.username
+
+    # Extract token from gh auth keyring
+    try:
+        result = subprocess.run(
+            ["gh", "auth", "token", "--user", username],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode != 0:
+            print(f"Error: could not get token for '{username}'")
+            print(f"  gh auth token --user {username}")
+            print(f"  stderr: {result.stderr.strip()}")
+            print(f"\nMake sure '{username}' is logged in: gh auth login --with-token")
+            return 1
+        token = result.stdout.strip()
+    except FileNotFoundError:
+        print("Error: 'gh' CLI not found. Install GitHub CLI first.")
+        return 1
+    except subprocess.TimeoutExpired:
+        print("Error: gh auth token timed out")
+        return 1
+
+    if not token:
+        print(f"Error: empty token returned for '{username}'")
+        return 1
+
+    # Write to settings.local.json
+    from .utils.claude_settings import _read_settings, _write_settings
+    try:
+        settings, settings_path = _read_settings()
+    except (OSError, ValueError) as e:
+        print(f"⚠️ MACF: could not read settings: {e}", file=sys.stderr)
+        settings = {}
+        from .utils.paths import find_project_root
+        settings_path = find_project_root() / ".claude" / "settings.local.json"
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+
+    env = settings.setdefault("env", {})
+    env["GH_TOKEN"] = token
+    _write_settings(settings, settings_path)
+
+    # Verify
+    masked = token[:4] + "..." + token[-4:] if len(token) > 8 else "****"
+    print(f"✅ GH_TOKEN set for '{username}' in {settings_path}")
+    print(f"   Token: {masked}")
+    print(f"\n   All CC tool processes (gh, git push) will use this identity.")
+    print(f"   To change: macf_tools agent set-github <other-username>")
+    print(f"   To remove: edit {settings_path} and delete env.GH_TOKEN")
+    return 0
+
+
 # TODO: Migrate policy read caching to event-first architecture
 # Legacy _get_policy_read_cache and _update_policy_read_cache deleted (used session_state.json)
 # Implementation needed:
@@ -6013,6 +6066,11 @@ def _build_parser() -> argparse.ArgumentParser:
     restore_install.add_argument("--force", action="store_true", help="overwrite existing consciousness (creates checkpoint)")
     restore_install.add_argument("--dry-run", action="store_true", help="show what would be done")
     restore_install.set_defaults(func=cmd_restore_install)
+
+    # Agent GitHub identity
+    gh_parser = agent_sub.add_parser("set-github", help="set per-project GitHub identity via GH_TOKEN")
+    gh_parser.add_argument("username", help="GitHub username (must be logged in via gh auth)")
+    gh_parser.set_defaults(func=cmd_agent_set_github)
 
     # Agent sleep (emergency fallback)
     sleep_parser = agent_sub.add_parser("sleep", help="emergency sleep with fibonacci backoff + notification")
