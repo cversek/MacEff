@@ -80,8 +80,8 @@ Breadcrumb: {breadcrumb}
                 f"Cycle: {cycle_number}\nReason: {data.get('reason', 'unknown')}\nTokens used: {token_info.get('tokens_used', '?')}\nCL: {token_info.get('cl_level', 'N/A')}",
                 prefix="\U0001f6d1 Session Ended"
             )
-        except Exception:
-            pass
+        except (ImportError, OSError, ConnectionError) as e:
+            print(f"⚠️ MACF: session-end telegram notification failed (non-blocking): {e}", file=sys.stderr)
 
         return {
             "continue": True,

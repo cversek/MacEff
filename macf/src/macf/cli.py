@@ -73,11 +73,12 @@ def _pick_tz():
         if name and ZoneInfo is not None:
             try:
                 return ZoneInfo(name)
-            except Exception:
-                pass
+            except (ValueError, KeyError) as e:
+                print(f"⚠️ MACF: invalid timezone '{name}' in {key}: {e}", file=sys.stderr)
     try:
         return datetime.now().astimezone().tzinfo or timezone.utc
-    except Exception:
+    except OSError as e:
+        print(f"⚠️ MACF: could not detect system timezone: {e}", file=sys.stderr)
         return timezone.utc
 
 def _now_iso(tz=None):
@@ -419,9 +420,8 @@ def cmd_time(_: argparse.Namespace) -> int:
                 hours = int(delta.total_seconds() // 3600)
                 minutes = int((delta.total_seconds() % 3600) // 60)
                 print(f"Last CCP: {latest_ccp.name} ({hours}h {minutes}m ago)")
-    except Exception:
-        # Graceful fallback if CCP lookup fails
-        pass
+    except OSError as e:
+        print(f"⚠️ MACF: CCP lookup failed: {e}", file=sys.stderr)
 
     return 0
 
@@ -1579,8 +1579,8 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
             maceff_root = find_maceff_root()
             if maceff_root:
                 template_locations.append(maceff_root / "framework" / "templates" / "PA_PREAMBLE.md")
-        except Exception:
-            pass
+        except (OSError, ImportError) as e:
+            print(f"⚠️ MACF: could not locate maceff root for PA_PREAMBLE template: {e}", file=sys.stderr)
 
         # 3. Development mode (relative to current directory - fallback with warning)
         cwd_fallback = Path.cwd() / "templates" / "PA_PREAMBLE.md"
@@ -2589,8 +2589,8 @@ def cmd_mode_set(args: argparse.Namespace) -> int:
                     print(f"\n   ⚠️  Emergency de-escalation ACCEPTED: {justification}" +
                           (f" — {explain}" if explain else ""))
                     print(f"   Logged to events. Will be forwarded to channels on next Stop hook.")
-            except Exception:
-                pass  # Scope check failure must never block mode switch
+            except (OSError, KeyError, AttributeError) as e:
+                print(f"⚠️ MACF: scope check failed during mode switch (non-blocking): {e}", file=sys.stderr)
 
         # AUTO_MODE requires auth token
         if enabled and not auth_token:
@@ -5320,8 +5320,8 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
             if scope_result.get("success"):
                 remaining = scope_result.get("remaining_active", "?")
                 print(f"   👀→✅ Scoped task completed ({remaining} remaining)")
-        except Exception:
-            pass  # Scope not active or task not scoped — silent
+        except (ImportError, OSError, KeyError) as e:
+            print(f"⚠️ MACF: scoped task completion check failed for #{task_id} (non-blocking): {e}", file=sys.stderr)
 
         print(f"✅ Task #{task_id} marked complete")
         print(f"   Breadcrumb: {breadcrumb}")
@@ -6674,8 +6674,8 @@ def cmd_voice_transcribe(args) -> int:
                     dur = response.get("duration_ms", 0)
                     print(f"\n[service | {dur}ms]", file=sys.stderr)
                 return 0
-    except Exception:
-        pass  # Service not available, fall through to direct
+    except (OSError, ConnectionError) as e:
+        print(f"⚠️ MACF: voice service unavailable, falling back to direct transcription: {e}", file=sys.stderr)
 
     try:
         result = transcribe(

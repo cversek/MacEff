@@ -138,8 +138,8 @@ def handle_request(request: dict) -> dict:
             try:
                 from .vocabulary import build_whisper_prompt
                 prompt = build_whisper_prompt()
-            except Exception:
-                pass
+            except ImportError as e:
+                print(f"⚠️ MACF: vocabulary module unavailable, proceeding without prompt: {e}", file=sys.stderr)
 
         # Transcribe (model is already warm in memory)
         try:
@@ -283,13 +283,13 @@ def start_service(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT,
         except Exception as e:
             try:
                 conn.sendall(json.dumps({"error": str(e)}).encode('utf-8') + b'\n')
-            except Exception:
-                pass
+            except OSError as send_err:
+                print(f"⚠️ MACF: failed to send error response to voice client: {send_err}", file=sys.stderr)
         finally:
             try:
                 conn.close()
-            except Exception:
-                pass
+            except OSError as e:
+                print(f"⚠️ MACF: failed to close voice client connection: {e}", file=sys.stderr)
 
     server.close()
     get_pid_file_path().unlink(missing_ok=True)

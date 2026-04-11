@@ -352,8 +352,8 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 prefix="\u2699\ufe0f",
                 parse_mode="HTML"
             )
-        except Exception:
-            pass
+        except (ImportError, OSError, ConnectionError) as e:
+            print(f"⚠️ MACF: pre-tool-use telegram notification failed (non-blocking): {e}", file=sys.stderr)
 
         # Pattern C: top-level systemMessage for user + hookSpecificOutput for agent
         user_message = f"{message} {token_context_minimal}"

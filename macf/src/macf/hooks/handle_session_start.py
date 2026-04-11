@@ -553,12 +553,13 @@ Session Context:
         # Notify Telegram (non-blocking)
         try:
             from macf.channels.telegram import send_telegram_notification
+            _cl = token_info.get("cl_level", "?")
             send_telegram_notification(
-                f"Cycle: {cycle}\nMode: {'AUTO' if auto_mode else 'MANUAL'}\nGap: {gap_display}\nCL: {cl_display}",
+                f"Compactions: {compaction_count}\nGap: {gap_display}\nCL: {_cl}",
                 prefix="\U0001f680 Session Started"
             )
-        except Exception:
-            pass
+        except (ImportError, OSError, ConnectionError) as e:
+            print(f"⚠️ MACF: session-start telegram notification failed: {e}", file=sys.stderr)
 
         # Pattern C: top-level systemMessage for user + hookSpecificOutput for agent
         return {

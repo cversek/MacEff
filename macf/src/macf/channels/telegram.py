@@ -68,8 +68,8 @@ def resolve_telegram_config() -> Optional[Tuple[str, str]]:
             chat_id = _read_chat_id(project_dir)
             if token and chat_id:
                 return (token, chat_id)
-    except Exception:
-        pass
+    except (OSError, ImportError) as e:
+        print(f"⚠️ MACF: telegram config discovery failed at project level: {e}", file=sys.stderr)
 
     # Tier 2: User-level fallback
     user_dir = Path.home() / '.claude' / 'channels' / 'telegram'

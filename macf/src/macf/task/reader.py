@@ -10,6 +10,7 @@ scanner while remaining fully accessible to MACF CLI commands.
 import json
 import os
 import stat
+import sys
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Union, Set
 
@@ -124,8 +125,9 @@ class TaskReader:
                     if jsonl_files:
                         jsonl_files.sort(key=lambda x: x[1], reverse=True)
                         return jsonl_files[0][0]
-                except Exception:
-                    pass  # Fall through to Priority 3
+                except OSError as e:
+                    print(f"⚠️ MACF: session JSONL scan failed for encoded path '{encoded}': {e}", file=sys.stderr)
+                    # Fall through to Priority 3
 
         # Priority 3: Legacy fallback - most recent globally (cross-project leakage risk)
         sessions.sort(key=lambda d: d.stat().st_mtime, reverse=True)
