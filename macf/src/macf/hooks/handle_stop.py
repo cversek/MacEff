@@ -25,6 +25,11 @@ from macf.utils import (
 )
 from macf.agent_events_log import append_event
 from macf.hooks.hook_logging import log_hook_event
+from macf.modes import (
+    detect_active_modes, get_current_work_mode,
+    sample_next_work_mode, format_recommendation,
+    should_self_manage_closeout,
+)
 
 
 def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
@@ -258,17 +263,27 @@ Development Drive Stats:
                             )
                         except Exception as e:
                             print(f"⚠️ MACF: Timer gate Telegram error: {e}", file=sys.stderr)
+                        # Markov recommender: suggest next work mode transition
+                        recommendation = ""
+                        try:
+                            active_modes = detect_active_modes(session_id, token_info)
+                            current_wm = get_current_work_mode(active_modes)
+                            op_modes = {m for m in active_modes if m in ("AUTO_MODE", "USER_IDLE", "QUIET_MODE", "LOW_CONTEXT")}
+                            selected, dist = sample_next_work_mode(current_wm, op_modes)
+                            recommendation = "\n" + format_recommendation(current_wm, selected, dist, "ctb")
+                        except (OSError, ValueError, ImportError) as e:
+                            print(f"⚠️ MACF: recommender failed: {e}", file=sys.stderr)
+
                         return {
                             "continue": True,
                             "decision": "block",
                             "reason": (
                                 f"TIMER GATE: {remaining_min} min remaining on autonomous work timer. "
                                 f"Scoped tasks are complete but your allotted time is NOT. "
-                                f"Use your reflexive-self-motivation skill: ULTRATHINK about what "
-                                f"was accomplished, identify the highest-value continuation work "
-                                f"within the same domain, create tasks as CHILDREN of the parent "
-                                f"experiment/mission, scope them with --timer, and continue. "
-                                f"Do NOT stop — scope completion is a TRANSITION, not a stop signal. "
+                                f"Scope completion is a TRANSITION, not a stop signal. "
+                                f"ULTRATHINK about the recommendation below, then invoke the suggested skill "
+                                f"(or override with justification in task notes).\n"
+                                f"{recommendation}\n"
                                 f"Emergency escape: macf_tools mode set MANUAL_MODE --justification <reason>"
                             ),
                         }
