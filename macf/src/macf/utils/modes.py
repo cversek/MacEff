@@ -102,7 +102,7 @@ def detect_active_modes(session_id: str, token_info: dict) -> Set[str]:
     # QUIET_MODE: explicit event OR auto with USER_IDLE
     try:
         quiet_explicit = _detect_quiet_mode_event(session_id)
-        quiet_on_idle = os.environ.get("MACF_QUIET_ON_IDLE", "true").lower() == "true"
+        quiet_on_idle = os.environ.get("MACF_QUIET_ON_IDLE", "false").lower() == "true"
         if quiet_explicit or (quiet_on_idle and "USER_IDLE" in modes):
             modes.add("QUIET_MODE")
     except (OSError, ValueError) as e:
