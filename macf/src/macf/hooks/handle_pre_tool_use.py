@@ -18,7 +18,7 @@ from macf.utils import (
     get_breadcrumb,
     detect_auto_mode
 )
-from macf.utils.modes import detect_active_modes, format_mode_indicators
+from macf.modes import detect_active_modes, format_mode_indicators
 from macf.agent_events_log import append_event
 from macf.event_queries import get_active_policy_injections_from_events
 from macf.hooks.hook_logging import log_hook_event
