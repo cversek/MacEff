@@ -271,99 +271,183 @@ Gate points are **decision moments** where the agent chooses what to do next. Th
 
 ### The Recommender
 
-At each gate point, a **state machine recommender** suggests which motivation skill to activate next. The recommender:
+At each gate point, a **Markov state machine recommender** suggests which work mode to transition to next. The current work mode is the Markov state; the transition matrix determines the probability distribution for the next state.
 
-1. Detects the current mode-set
-2. Looks up the **static probability distribution** for that mode-set
-3. Performs **Monte Carlo sampling** from the distribution (random pick)
-4. Sorts all skills by probability
-5. Presents **TOP-5** to the agent, marking the random pick
-6. Agent performs **ULTRATHINK deliberation** and selects
+The recommender:
+1. Reads the **current work mode** (the Markov state)
+2. Looks up the **transition row** for that state
+3. Applies **operational mode modifiers** (USER_IDLE, LOW_CONTEXT) then renormalizes
+4. Performs **Monte Carlo sampling** from the modified distribution
+5. Maps the selected work mode to its **motivation skill**
+6. Presents the recommendation to the agent via systemMessage
+7. Agent performs **ULTRATHINK deliberation** and invokes the skill (or overrides with justification)
+
+### Transitions Are Skill Invocations
+
+**A transition into a different work mode MUST invoke a motivation skill.** The Markov model selects the transition; the skill IS the transition action.
+
+**Skill naming convention**:
+```
+/{agent_prefix}-{adjective}-self-motivation
+
+/ctb-exploratory-self-motivation       → DISCOVER 🔍
+/ctb-generative-self-motivation        → BUILD 🔨
+/ctb-curative-self-motivation          → CURATE 📋
+/ctb-consolidative-self-motivation     → CONSOLIDATE ✍️
+
+Framework defaults (agents without custom skills):
+/maceff-exploratory-self-motivation
+/maceff-generative-self-motivation
+/maceff-curative-self-motivation
+/maceff-consolidative-self-motivation
+```
+
+**Resolution order**: Agent-specific (`/ctb-*`) overrides framework default (`/maceff-*`). Each agent can customize their skill's reflection questions, task creation patterns, and domain preferences.
+
+**Each skill's job**:
+1. Set the work mode (emit `work_mode_change` event)
+2. Perform mode-specific ULTRATHINK reflection (different questions per type)
+3. Create scoped tasks from the reflection
+4. Return control to the agent loop
+
+**Existing `/{agent}-reflexive-self-motivation`**: General-purpose fallback for MANUAL_MODE or when no Markov transition is active.
+
+### Agent Interaction Protocol
+
+**Recommendations are serious suggestions, not commands.** The agent:
+- **Takes recommendations seriously** — they encode the productive workflow rhythm
+- **Overrides when justified** — counter-choices MUST be justified in task notes
+- **Doesn't follow blindly** — contextual awareness may outweigh the stochastic suggestion
+
+This creates accountability without rigidity. The Markov model guides; the agent decides.
 
 ### Gate Point Flow
 
 ```
 Stop hook gate fires (scope or timer)
   ↓
-detect_active_modes() → {AUTO_MODE, USER_IDLE, DISCOVER}
+Current work mode: DISCOVER 🔍
   ↓
-Look up distribution for {AUTO_MODE, USER_IDLE}
+Look up transition row for DISCOVER:
+  → BUILD: 0.45, CURATE: 0.25, DISCOVER: 0.20, CONSOLIDATE: 0.10
   ↓
-Monte Carlo sample → random pick = "consolidative_synthesis"
+Apply operational mode modifiers (e.g., LOW_CONTEXT boosts CURATE/CONSOLIDATE)
   ↓
-Present TOP-5 sorted by probability:
-  1. reflexive_continuation     (0.35)
-  2. exploratory_discovery      (0.25)
-  3. consolidative_synthesis    (0.20) ← 🎲 random pick
-  4. generative_building        (0.15)
-  5. corrective_review          (0.05)
+Monte Carlo sample → selected: BUILD 🔨
   ↓
-Agent ULTRATHINK: "I've been discovering for 2 hours.
-  The random pick suggests consolidation. Given my accumulated
-  findings, synthesis IS the highest-value next step."
+systemMessage to agent:
+  "Recommended transition: DISCOVER → BUILD (p=0.45)
+   Invoke: /ctb-generative-self-motivation
+   Full distribution: BUILD 0.45 | CURATE 0.25 | DISCOVER 0.20 | CONSOLIDATE 0.10
+   Override requires justification in task notes."
   ↓
-Agent selects: consolidative_synthesis
+Agent ULTRATHINK: "I've accumulated findings for 90 minutes.
+  BUILD is the natural next step — I'll prototype the transcript monitor."
   ↓
-Skill activates → sets work mode CONSOLIDATE ✍️ → creates tasks
+Agent invokes: Skill(skill: "ctb-generative-self-motivation")
+  ↓
+Skill executes: sets BUILD 🔨, reflects on what to build, creates tasks
 ```
 
 ### The Monte Carlo "Spice"
 
-The random sampling adds **exploration diversity** to autonomous sprints. Without it, the agent would always follow the highest-probability skill (reflexive continuation), creating predictable loops. The random pick — which may NOT be the highest probability — introduces the possibility of discovering that a lower-ranked skill is actually the best fit for the current moment.
+The Markov transition matrix encodes the natural productivity cycle (DISCOVER → BUILD → CURATE → CONSOLIDATE → DISCOVER), but the stochastic element means the agent won't always follow the most probable path. Occasionally the sampler suggests an unexpected transition — and that unexpected suggestion may be exactly what breaks a semantic rut.
 
-This is opt-in. The agent always sees the full TOP-5 and can override the random pick via ULTRATHINK deliberation. The randomness flavors the sprint, it doesn't dictate it.
+**Epsilon exploration**: With probability ε (default 0.05), the recommender ignores the transition matrix entirely and picks uniformly at random. This is the "wild card" — 1 in 20 gate points produces a completely unexpected suggestion.
 
 ---
 
-## 8. Probability Distributions
+## 8. The Markov Transition Model
 
-### Static Distributions
+### Architecture: Simple Implementation, Flexible Foundation
 
-Each mode-set combination maps to a fixed probability distribution over motivation skills. Configured in `.maceff/mode_distributions.json`.
+The recommender uses a **Markov transition matrix** over work modes. The current work mode determines the probability distribution for the next work mode. This is intentionally simple — a 4×4 matrix — but the architecture supports:
 
-**Schema**:
+- **Per-agent tuning**: Different agents can curate different matrices that match their workflow
+- **Sprint-type profiles**: A "research sprint" matrix might bias toward DISCOVER, while a "shipping sprint" biases toward BUILD
+- **Evolving probabilities**: Values below are **initial examples**, expected to be tuned through experimentation
+- **Additional work modes**: New rows/columns added as the mode vocabulary grows
+
+### Transition Matrix (example values — subject to experimental tuning)
+
+P(next_work_mode | current_work_mode):
+
+```
+                 → DISCOVER  → BUILD  → CURATE  → CONSOLIDATE
+FROM DISCOVER      0.20       0.45     0.25       0.10
+FROM BUILD         0.25       0.15     0.45       0.15
+FROM CURATE        0.30       0.15     0.15       0.40
+FROM CONSOLIDATE   0.50       0.25     0.15       0.10
+```
+
+**The natural cycle** (following highest-probability transitions):
+```
+DISCOVER →(0.45)→ BUILD →(0.45)→ CURATE →(0.40)→ CONSOLIDATE →(0.50)→ DISCOVER
+```
+
+**Why this cycle works**: Discovery produces things to build. Building produces things to document. Curating produces things to synthesize. Synthesis generates new questions to explore.
+
+**Self-transitions** (diagonal): Momentum preservation — sometimes you're in flow and should continue.
+
+**Off-diagonal novelty**: Low-probability transitions that break ruts — e.g., DISCOVER → CONSOLIDATE (0.10) = "stop exploring, synthesize what you have."
+
+### Initial Distribution (cold start)
+
+When no current work mode is set (beginning of sprint):
+```
+DISCOVER: 0.40, BUILD: 0.25, CURATE: 0.20, CONSOLIDATE: 0.15
+```
+
+### Operational Mode Modifiers
+
+Modifiers multiply the base transition probabilities, then **renormalize** to sum to 1.0.
+
+| Modifier | DISCOVER | BUILD | CURATE | CONSOLIDATE | Rationale |
+|----------|----------|-------|--------|-------------|-----------|
+| USER_IDLE | 1.1 | 1.1 | 0.9 | 1.0 | Explore/build freely while user is away |
+| LOW_CONTEXT | 0.2 | 0.2 | 1.8 | 1.8 | Preserve wisdom, don't start new things |
+| QUIET_MODE | — | — | — | — | No modifier (affects notifications, not strategy) |
+
+Multiple modifiers multiply sequentially, renormalize once at the end.
+
+### Configuration Schema
+
+Stored in `.maceff/mode_transitions.json` (per-agent, extensible):
+
 ```json
 {
   "schema_version": "1.0",
-  "distributions": {
-    "AUTO_MODE,USER_IDLE": {
-      "reflexive_continuation": 0.35,
-      "exploratory_discovery": 0.25,
-      "consolidative_synthesis": 0.20,
-      "generative_building": 0.15,
-      "corrective_review": 0.05
-    },
-    "AUTO_MODE": {
-      "reflexive_continuation": 0.50,
-      "generative_building": 0.25,
-      "consolidative_synthesis": 0.15,
-      "exploratory_discovery": 0.10
-    }
+  "profile": "default",
+  "transitions": {
+    "DISCOVER":     {"DISCOVER": 0.20, "BUILD": 0.45, "CURATE": 0.25, "CONSOLIDATE": 0.10},
+    "BUILD":        {"DISCOVER": 0.25, "BUILD": 0.15, "CURATE": 0.45, "CONSOLIDATE": 0.15},
+    "CURATE":       {"DISCOVER": 0.30, "BUILD": 0.15, "CURATE": 0.15, "CONSOLIDATE": 0.40},
+    "CONSOLIDATE":  {"DISCOVER": 0.50, "BUILD": 0.25, "CURATE": 0.15, "CONSOLIDATE": 0.10}
   },
-  "default_distribution": {
-    "reflexive_continuation": 0.40,
-    "exploratory_discovery": 0.20,
-    "consolidative_synthesis": 0.20,
-    "generative_building": 0.15,
-    "corrective_review": 0.05
+  "initial": {"DISCOVER": 0.40, "BUILD": 0.25, "CURATE": 0.20, "CONSOLIDATE": 0.15},
+  "modifiers": {
+    "USER_IDLE":   {"DISCOVER": 1.1, "BUILD": 1.1, "CURATE": 0.9, "CONSOLIDATE": 1.0},
+    "LOW_CONTEXT": {"DISCOVER": 0.2, "BUILD": 0.2, "CURATE": 1.8, "CONSOLIDATE": 1.8}
+  },
+  "epsilon": 0.05,
+  "skill_map": {
+    "DISCOVER": "exploratory-self-motivation",
+    "BUILD": "generative-self-motivation",
+    "CURATE": "curative-self-motivation",
+    "CONSOLIDATE": "consolidative-self-motivation"
   }
 }
 ```
 
-**Lookup**: Mode-set keys are sorted, comma-joined operational mode names. Work modes are NOT included in the key (they're the OUTPUT, not the input).
+**Profile support**: The `profile` field enables agents to maintain multiple matrices:
+- `"default"` — general-purpose sprint
+- `"research"` — biased toward DISCOVER and CONSOLIDATE
+- `"shipping"` — biased toward BUILD and CURATE
+- `"closeout"` — biased toward CURATE and CONSOLIDATE
 
-**Fallback**: If no distribution matches the exact mode-set, use `default_distribution`.
+Agents select profiles at sprint start or let the recommender use the default.
 
-### Available Skills
-
-| Skill Name | Work Mode Set | Description |
-|------------|---------------|-------------|
-| `reflexive_continuation` | varies | Post-completion: "What naturally follows?" |
-| `exploratory_discovery` | DISCOVER 🔍 | Curiosity-driven: "What's interesting here?" |
-| `generative_building` | BUILD 🔨 | Creative: "What could I build from this?" |
-| `consolidative_synthesis` | CURATE 📋 or CONSOLIDATE ✍️ | Synthesis: "What needs organizing?" |
-| `corrective_review` | CURATE 📋 | Self-critique: "What's wrong with what I did?" |
-| `prospective_seeding` | CURATE 📋 | Future-oriented: "What seeds for next cycle?" |
+**Skill map**: Maps work modes to skill name suffixes. The recommender prepends the agent prefix (e.g., `ctb-`) or framework prefix (`maceff-`) to form the full skill name.
 
 ---
 
