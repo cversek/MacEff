@@ -35,9 +35,10 @@ OPERATIONAL_MODES = {
 # Work modes (agent-declared via skills)
 WORK_MODES = {
     "DISCOVER":     {"emoji": "🔍", "order": 10},
-    "BUILD":        {"emoji": "🔨", "order": 11},
-    "CURATE":       {"emoji": "📋", "order": 12},
-    "CONSOLIDATE":  {"emoji": "✍️", "order": 13},
+    "EXPERIMENT":   {"emoji": "🧪", "order": 11},
+    "BUILD":        {"emoji": "🔨", "order": 12},
+    "CURATE":       {"emoji": "📋", "order": 13},
+    "CONSOLIDATE":  {"emoji": "✍️", "order": 14},
 }
 
 ALL_MODES = {**OPERATIONAL_MODES, **WORK_MODES}
@@ -45,24 +46,28 @@ ALL_MODES = {**OPERATIONAL_MODES, **WORK_MODES}
 # Skill map: work mode → skill name suffix
 DEFAULT_SKILL_MAP = {
     "DISCOVER":     "exploratory-self-motivation",
+    "EXPERIMENT":   "experimental-self-motivation",
     "BUILD":        "generative-self-motivation",
     "CURATE":       "curative-self-motivation",
     "CONSOLIDATE":  "consolidative-self-motivation",
 }
 
-# Default Markov transition matrix (example values — tuned via experimentation)
+# Default 5x5 Markov transition matrix (example values — tuned via experimentation)
+# Natural cycle: DISCOVER → EXPERIMENT → BUILD → CURATE → CONSOLIDATE → DISCOVER
+# BUILD is gated behind EXPERIMENT (direct DISCOVER→BUILD is low probability)
 DEFAULT_TRANSITIONS = {
-    "DISCOVER":     {"DISCOVER": 0.20, "BUILD": 0.45, "CURATE": 0.25, "CONSOLIDATE": 0.10},
-    "BUILD":        {"DISCOVER": 0.25, "BUILD": 0.15, "CURATE": 0.45, "CONSOLIDATE": 0.15},
-    "CURATE":       {"DISCOVER": 0.30, "BUILD": 0.15, "CURATE": 0.15, "CONSOLIDATE": 0.40},
-    "CONSOLIDATE":  {"DISCOVER": 0.50, "BUILD": 0.25, "CURATE": 0.15, "CONSOLIDATE": 0.10},
+    "DISCOVER":     {"DISCOVER": 0.20, "EXPERIMENT": 0.40, "BUILD": 0.10, "CURATE": 0.25, "CONSOLIDATE": 0.05},
+    "EXPERIMENT":   {"DISCOVER": 0.15, "EXPERIMENT": 0.10, "BUILD": 0.40, "CURATE": 0.25, "CONSOLIDATE": 0.10},
+    "BUILD":        {"DISCOVER": 0.20, "EXPERIMENT": 0.20, "BUILD": 0.10, "CURATE": 0.40, "CONSOLIDATE": 0.10},
+    "CURATE":       {"DISCOVER": 0.30, "EXPERIMENT": 0.15, "BUILD": 0.10, "CURATE": 0.10, "CONSOLIDATE": 0.35},
+    "CONSOLIDATE":  {"DISCOVER": 0.45, "EXPERIMENT": 0.20, "BUILD": 0.15, "CURATE": 0.15, "CONSOLIDATE": 0.05},
 }
 
-DEFAULT_INITIAL = {"DISCOVER": 0.40, "BUILD": 0.25, "CURATE": 0.20, "CONSOLIDATE": 0.15}
+DEFAULT_INITIAL = {"DISCOVER": 0.40, "EXPERIMENT": 0.20, "BUILD": 0.10, "CURATE": 0.20, "CONSOLIDATE": 0.10}
 
 DEFAULT_MODIFIERS = {
-    "USER_IDLE":   {"DISCOVER": 1.1, "BUILD": 1.1, "CURATE": 0.9, "CONSOLIDATE": 1.0},
-    "LOW_CONTEXT": {"DISCOVER": 0.2, "BUILD": 0.2, "CURATE": 1.8, "CONSOLIDATE": 1.8},
+    "USER_IDLE":   {"DISCOVER": 1.1, "EXPERIMENT": 1.1, "BUILD": 0.8, "CURATE": 0.9, "CONSOLIDATE": 1.0},
+    "LOW_CONTEXT": {"DISCOVER": 0.2, "EXPERIMENT": 0.2, "BUILD": 0.1, "CURATE": 1.8, "CONSOLIDATE": 1.8},
 }
 
 DEFAULT_EPSILON = 0.05
