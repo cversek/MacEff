@@ -5868,6 +5868,23 @@ def cmd_transcripts_list(args: argparse.Namespace) -> int:
     return 0
 
 
+# -------- transcript-monitor handlers --------
+
+def _cmd_tm_start(args) -> int:
+    from .transcript_monitor.daemon import start_daemon
+    return start_daemon(
+        foreground=getattr(args, "foreground", False),
+        poll_interval=getattr(args, "interval", 1.0),
+    )
+
+def _cmd_tm_stop(args) -> int:
+    from .transcript_monitor.daemon import stop_daemon
+    return stop_daemon()
+
+def _cmd_tm_status(args) -> int:
+    from .transcript_monitor.daemon import daemon_status
+    return daemon_status()
+
 # -------- auto-restart handlers --------
 def _cmd_ar_launch(args):
     from .supervisor import launch_in_terminal
@@ -6774,6 +6791,18 @@ def _build_parser() -> argparse.ArgumentParser:
     ar_kill = ar_sub.add_parser("kill", help="kill supervisor and child (nuclear option)")
     ar_kill.add_argument("pid", type=int, help="supervisor PID")
     ar_kill.set_defaults(func=lambda args: _cmd_ar_kill(args))
+
+    # ── transcript-monitor ─────────────────────────────────────────────
+    tm_parser = sub.add_parser("transcript-monitor", help="JSONL transcript monitoring daemon")
+    tm_sub = tm_parser.add_subparsers(dest="tm_cmd")
+
+    tm_start = tm_sub.add_parser("start", help="start transcript monitor daemon")
+    tm_start.add_argument("-f", "--foreground", action="store_true", help="run in foreground (don't daemonize)")
+    tm_start.add_argument("--interval", type=float, default=1.0, help="poll interval in seconds (default: 1.0)")
+    tm_start.set_defaults(func=lambda args: _cmd_tm_start(args))
+
+    tm_sub.add_parser("stop", help="stop transcript monitor daemon").set_defaults(func=lambda args: _cmd_tm_stop(args))
+    tm_sub.add_parser("status", help="show transcript monitor status").set_defaults(func=lambda args: _cmd_tm_status(args))
 
     # ── voice ────────────────────────────────────────────────────────────
     voice_parser = sub.add_parser("voice", help="voice transcription (speech-to-text)")
