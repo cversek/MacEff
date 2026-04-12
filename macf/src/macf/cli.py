@@ -2543,6 +2543,88 @@ def cmd_policy_injections(args: argparse.Namespace) -> int:
 
 # -------- Mode Commands --------
 
+def cmd_mode_unset_work(args: argparse.Namespace) -> int:
+    """Clear the active work mode."""
+    append_event("work_mode_change", {"mode": None})
+    print("✅ Work mode cleared")
+    return 0
+
+
+def cmd_mode_show(args: argparse.Namespace) -> int:
+    """Show active mode set with emojis and trigger sources."""
+    from .modes import detect_active_modes, format_mode_indicators, OPERATIONAL_MODES, WORK_MODES
+    from .modes import should_self_manage_closeout, should_closeout_now, is_quiet
+
+    session_id = get_current_session_id()
+    token_info = get_token_info(session_id)
+    modes = detect_active_modes(session_id, token_info)
+
+    indicators = format_mode_indicators(modes)
+    print(f"🏗️ MACF{indicators}")
+    print()
+
+    print("Operational Modes:")
+    for name, info in sorted(OPERATIONAL_MODES.items(), key=lambda x: x[1]["order"]):
+        active = "✅" if name in modes else "—"
+        print(f"  {active} {info['emoji']} {name}")
+
+    print()
+    print("Work Modes:")
+    for name, info in sorted(WORK_MODES.items(), key=lambda x: x[1]["order"]):
+        active = "✅" if name in modes else "—"
+        print(f"  {active} {info['emoji']} {name}")
+
+    print()
+    print("Behavioral Triggers:")
+    print(f"  Closeout responsibility: {'AGENT' if should_self_manage_closeout(modes) else 'USER'}")
+    print(f"  Closeout urgency:        {'NOW' if should_closeout_now(modes) else 'normal'}")
+    print(f"  Notification suppression: {'YES' if is_quiet(modes) else 'no'}")
+    return 0
+
+
+def cmd_recommender_show(args: argparse.Namespace) -> int:
+    """Show current Markov distribution for active mode-set."""
+    from .modes import detect_active_modes, get_current_work_mode, get_transition_distribution, WORK_MODES
+
+    session_id = get_current_session_id()
+    token_info = get_token_info(session_id)
+    modes = detect_active_modes(session_id, token_info)
+    current_wm = get_current_work_mode(modes)
+    op_modes = {m for m in modes if m in ("AUTO_MODE", "USER_IDLE", "QUIET_MODE", "LOW_CONTEXT")}
+
+    dist = get_transition_distribution(current_wm, op_modes)
+    sorted_dist = sorted(dist.items(), key=lambda x: -x[1])
+
+    print(f"Current work mode: {current_wm or '(none)'}")
+    print(f"Active operational: {', '.join(sorted(op_modes)) or '(none)'}")
+    print()
+    print("Transition distribution:")
+    for mode, prob in sorted_dist:
+        emoji = WORK_MODES.get(mode, {}).get("emoji", "?")
+        bar = "█" * int(prob * 40)
+        print(f"  {emoji} {mode:<14} {prob:5.1%} {bar}")
+    return 0
+
+
+def cmd_recommender_sample(args: argparse.Namespace) -> int:
+    """Trigger a Monte Carlo sample and display recommendation."""
+    from .modes import (
+        detect_active_modes, get_current_work_mode,
+        sample_next_work_mode, format_recommendation,
+    )
+
+    session_id = get_current_session_id()
+    token_info = get_token_info(session_id)
+    modes = detect_active_modes(session_id, token_info)
+    current_wm = get_current_work_mode(modes)
+    op_modes = {m for m in modes if m in ("AUTO_MODE", "USER_IDLE", "QUIET_MODE", "LOW_CONTEXT")}
+
+    prefix = getattr(args, "prefix", "maceff")
+    selected, dist = sample_next_work_mode(current_wm, op_modes)
+    print(format_recommendation(current_wm, selected, dist, prefix))
+    return 0
+
+
 def cmd_mode_get(args: argparse.Namespace) -> int:
     """Get current operating mode."""
     from .utils.cycles import detect_auto_mode
@@ -6323,6 +6405,9 @@ def _build_parser() -> argparse.ArgumentParser:
                          help="output as JSON")
     mode_get.set_defaults(func=cmd_mode_get)
 
+    mode_sub.add_parser("show", help="show active mode set with emojis and triggers").set_defaults(func=cmd_mode_show)
+    mode_sub.add_parser("unset-work", help="clear the active work mode").set_defaults(func=cmd_mode_unset_work)
+
     mode_set = mode_sub.add_parser("set", help="set operating mode")
     mode_set.add_argument("mode", help="mode to set (AUTO_MODE or MANUAL_MODE)")
     mode_set.add_argument("--justification", choices=["security", "opsec", "blocked", "user_directive", "other"],
@@ -6331,6 +6416,14 @@ def _build_parser() -> argparse.ArgumentParser:
     mode_set.add_argument("--auth-token", dest="auth_token",
                          help="auth token for AUTO_MODE activation")
     mode_set.set_defaults(func=cmd_mode_set)
+
+    # Recommender commands
+    rec_parser = sub.add_parser("recommender", help="Markov work mode recommender")
+    rec_sub = rec_parser.add_subparsers(dest="rec_cmd")
+    rec_sub.add_parser("show", help="show transition distribution for current state").set_defaults(func=cmd_recommender_show)
+    rec_sample = rec_sub.add_parser("sample", help="Monte Carlo sample and display recommendation")
+    rec_sample.add_argument("--prefix", default="maceff", help="agent prefix for skill name (default: maceff)")
+    rec_sample.set_defaults(func=cmd_recommender_sample)
 
     # Events commands
     events_parser = sub.add_parser("events", help="agent events log management")
