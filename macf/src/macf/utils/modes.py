@@ -327,21 +327,34 @@ def format_recommendation(
 # ============================================================================
 
 def _get_last_user_activity_timestamp(session_id: str) -> Optional[float]:
-    """Get epoch timestamp of last user activity from event log."""
+    """Get epoch timestamp of last user activity from event log.
+
+    Checks two event sources (whichever is most recent wins):
+    1. user_activity_detected — emitted by Transcript Monitor daemon
+       (catches mid-turn messages, Telegram/channel messages)
+    2. dev_drv_started — emitted by UserPromptSubmit hook
+       (fallback when TM daemon is not running)
+    """
+    latest = None
     for event in read_events(limit=200, reverse=True):
         event_type = event.get("event", "")
-        if event_type == "dev_drv_started":
-            ts = event.get("timestamp")
-            if ts:
-                try:
-                    from datetime import datetime, timezone
-                    if isinstance(ts, str):
-                        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                        return dt.timestamp()
-                    elif isinstance(ts, (int, float)):
-                        return float(ts)
-                except (ValueError, TypeError):
-                    pass
+        if event_type not in ("user_activity_detected", "dev_drv_started"):
+            continue
+        ts = event.get("timestamp")
+        if ts:
+            try:
+                from datetime import datetime, timezone
+                if isinstance(ts, str):
+                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    epoch = dt.timestamp()
+                elif isinstance(ts, (int, float)):
+                    epoch = float(ts)
+                else:
+                    continue
+                # Return the first (most recent) match — events are reverse-sorted
+                return epoch
+            except (ValueError, TypeError):
+                pass
     return None
 
 
