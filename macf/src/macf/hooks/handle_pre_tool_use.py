@@ -18,6 +18,7 @@ from macf.utils import (
     get_breadcrumb,
     detect_auto_mode
 )
+from macf.utils.modes import detect_active_modes, format_mode_indicators
 from macf.agent_events_log import append_event
 from macf.event_queries import get_active_policy_injections_from_events
 from macf.hooks.hook_logging import log_hook_event
@@ -150,9 +151,15 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         display_tool = tool_name
         if tool_name == "Skill" and "skill" in tool_input:
             display_tool = f"Skill({tool_input['skill']})"
-        # Mode indicator: 🤖 for AUTO_MODE, blank for MANUAL
-        auto_mode_active, _ = detect_auto_mode(session_id)
-        mode_indicator = " 🤖" if auto_mode_active else ""
+        # Mode detection: full 8-mode system with emoji dashboard
+        try:
+            token_info = get_token_info(session_id)
+            active_modes = detect_active_modes(session_id, token_info)
+            mode_indicator = format_mode_indicators(active_modes)
+        except (OSError, ValueError) as e:
+            print(f"⚠️ MACF: mode detection failed, falling back: {e}", file=sys.stderr)
+            auto_mode_active, _ = detect_auto_mode(session_id)
+            mode_indicator = " 🤖" if auto_mode_active else ""
         message_parts = [f"🏗️ MACF{mode_indicator} | {timestamp} | {breadcrumb}"]
 
         # Surface any injection errors to user
