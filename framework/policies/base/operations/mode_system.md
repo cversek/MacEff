@@ -138,7 +138,7 @@ Four operational modes, independently triggered, simultaneously active:
 
 ### QUIET_MODE 🔕
 - **Trigger**: Explicit event OR auto-triggered alongside USER_IDLE (configurable)
-- **Auto-trigger**: When `MACF_QUIET_ON_IDLE=true` (default), activates with USER_IDLE
+- **Auto-trigger**: When `MACF_QUIET_ON_IDLE=true` (default: false), activates with USER_IDLE. Off by default — idle doesn't mean the user wants silence (they may be monitoring via Telegram).
 - **Suppresses**: Telegram `reply` for status updates, `AskUserQuestion` tool
 - **Allows**: Telegram `reply` for CRITICAL errors, tool execution, file writes, git commits
 - **Deactivation**: Automatic when USER_IDLE deactivates, or explicit mode clear
@@ -199,7 +199,7 @@ Returns set of all currently active mode names across both layers.
 |----------|---------|-------------|
 | `MACF_USER_IDLE_TIMEOUT_MINS` | 10 | Minutes of inactivity before USER_IDLE |
 | `MACF_LOW_CONTEXT_CL` | 5 | CL threshold for LOW_CONTEXT |
-| `MACF_QUIET_ON_IDLE` | true | Auto-activate QUIET_MODE with USER_IDLE |
+| `MACF_QUIET_ON_IDLE` | false | Auto-activate QUIET_MODE with USER_IDLE (off by default) |
 
 ---
 
