@@ -11,7 +11,7 @@
 
 Ideas are lightweight consciousness artifacts for capturing **prospective speculation** — thoughts, hypotheses, and design seeds that emerge during work but aren't ready for formal investigation. They provide structured, dedicated novelty capture that task notes and commit messages cannot offer.
 
-**Core Principle**: "Ideas are cheap; it is implementation that matters." (Craig Versek) — Attribution is courtesy, not ownership. The Ideas system tracks provenance for intellectual honesty and forensic archaeology, not for territorial claims.
+**Core Principle**: "Ideas are cheap; it is implementation that matters." — Attribution is courtesy, not ownership. The Ideas system tracks provenance for intellectual honesty and forensic archaeology, not for territorial claims.
 
 **Why not just task notes?** Task notes persist in task JSON files and are perfectly adequate for recording work context. But they are unstructured, buried in task metadata, and not designed for cross-referencing or lifecycle tracking. Ideas are **structured artifacts dedicated to novelty** — with provenance, graph connectivity via wiki-links, and a 4-stage lifecycle from seed to implementation.
 
@@ -280,9 +280,22 @@ When creating an experiment that was inspired by an idea:
 2. Update the idea: `macf_tools idea update N --status promoted --promoted-to "path/to/experiment"`
 3. The idea's `promoted_to` field creates a bidirectional link
 
-### Roadmaps Pull from Ideas
+### Roadmaps Pull from Ideas — Experimental Validation Gate
 
-Same pattern: reference idea in roadmap context, update idea status to `promoted`.
+Roadmap promotion SHOULD follow experimental validation. The preferred path is:
+
+```
+Idea (captured) → Experiment (validates hypothesis) → Roadmap (plans implementation)
+```
+
+**Before promoting an idea to a roadmap, ask**:
+1. Has this idea been tested via experiment? If yes, cite the experiment.
+2. If not experimentally validated, is the idea trivial enough that experimentation would be overhead? (Rare — most non-trivial ideas benefit from a smoke test.)
+3. In AUTO_MODE, prototypes live inside experiment CAs — don't commit unvalidated ideas directly to project repos.
+
+**The validation gate is advisory, not blocking**: Some ideas (e.g., policy changes, naming conventions) don't need experiments. But for architectural or infrastructure ideas, experimental validation prevents building the wrong thing.
+
+Reference idea in roadmap context, update idea status to `promoted`.
 
 ### INDEX Generator
 
