@@ -6092,66 +6092,25 @@ def cmd_idea_archive(args: argparse.Namespace) -> int:
 
 def cmd_idea_graph(args: argparse.Namespace) -> int:
     """Show knowledge graph from wiki-links and relations."""
-    from .ideas import list_ideas
-    from collections import defaultdict
-    import re as re_mod
+    from .ideas import build_idea_graph, format_graph_tree, format_graph_cluster
 
-    items = list_ideas()
-    ideas = {item["idea"]["id"]: item["idea"] for item in items}
-
-    if not ideas:
+    graph = build_idea_graph()
+    if not graph["ideas"]:
         print("No ideas found.")
         return 0
 
-    # Build edges from related_ideas + wiki-link co-occurrence
-    edges = defaultdict(set)
-    wiki_index = defaultdict(set)
-
-    for idea_id, idea in ideas.items():
-        links = idea.get("links", {})
-        for rid in (links.get("related_ideas") or []):
-            if isinstance(rid, int):
-                edges[idea_id].add(rid)
-                edges[rid].add(idea_id)
-        for wl in (links.get("wiki_links") or []):
-            m = re_mod.match(r'\[\[(.+?)\]\]', wl)
-            if m:
-                wiki_index[m.group(1)].add(idea_id)
-
-    # Wiki co-occurrence edges
-    for concept, ids in wiki_index.items():
-        ids_list = list(ids)
-        for i in range(len(ids_list)):
-            for j in range(i + 1, len(ids_list)):
-                edges[ids_list[i]].add(ids_list[j])
-                edges[ids_list[j]].add(ids_list[i])
-
-    total_edges = sum(len(v) for v in edges.values()) // 2
-    connected = len([i for i in ideas if edges.get(i)])
-    isolated = len(ideas) - connected
-    degree = {i: len(edges.get(i, set())) for i in ideas}
-    top5 = sorted(degree.items(), key=lambda x: -x[1])[:5]
-
     if getattr(args, "json_output", False):
+        top5 = sorted(graph["degree"].items(), key=lambda x: -x[1])[:5]
         print(json.dumps({
-            "ideas": len(ideas), "edges": total_edges,
-            "connected": connected, "isolated": isolated,
-            "wiki_concepts": len(wiki_index),
-            "top5": [{"id": i, "degree": d, "title": ideas[i].get("title", "")} for i, d in top5],
+            **graph["stats"],
+            "top5": [{"id": i, "degree": d, "title": graph["ideas"][i].get("title", "")} for i, d in top5],
         }, indent=2))
         return 0
 
-    print(f"📊 Ideas Knowledge Graph")
-    print(f"   Ideas: {len(ideas)} | Edges: {total_edges} | Connected: {connected} | Isolated: {isolated}")
-    print(f"   Wiki concepts: {len(wiki_index)}")
-    if top5:
-        print(f"\n🔗 Most Connected:")
-        for idea_id, deg in top5:
-            print(f"   #{idea_id:03d} (degree {deg}): {ideas[idea_id].get('title', '')[:50]}")
-    if wiki_index:
-        print(f"\n📝 Wiki Concepts:")
-        for concept, ids in sorted(wiki_index.items()):
-            print(f"   [[{concept}]] → {', '.join(f'#{i:03d}' for i in sorted(ids))}")
+    if getattr(args, "tree", False):
+        print(format_graph_tree(graph))
+    else:
+        print(format_graph_cluster(graph))
     return 0
 
 
@@ -7041,6 +7000,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     idea_graph = idea_sub.add_parser("graph", help="show knowledge graph from wiki-links and relations")
     idea_graph.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")
+    idea_graph.add_argument("--tree", action="store_true", help="tree view (most-connected as roots)")
     idea_graph.set_defaults(func=cmd_idea_graph)
 
     # ── shell ────────────────────────────────────────────────────────────

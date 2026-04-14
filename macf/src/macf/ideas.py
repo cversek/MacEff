@@ -247,3 +247,158 @@ def search_ideas(query: str) -> List[Dict[str, Any]]:
         if query_lower in searchable:
             results.append(item)
     return results
+
+
+# ============================================================================
+# Knowledge Graph
+# ============================================================================
+
+STATUS_ICON = {"captured": "💡", "exploring": "🔍", "promoted": "🚀", "archived": "📦"}
+
+
+def build_idea_graph() -> Dict[str, Any]:
+    """Build adjacency graph from ideas' related_ideas + wiki-link co-occurrence.
+
+    Returns dict with: ideas, edges, wiki_index, components, isolated, degree, stats.
+    """
+    import re as re_mod
+    from collections import defaultdict
+
+    items = list_ideas()
+    ideas = {item["idea"]["id"]: item["idea"] for item in items}
+    edges = defaultdict(set)
+    wiki_index = defaultdict(set)
+
+    for idea_id, idea in ideas.items():
+        links = idea.get("links", {})
+        for rid in (links.get("related_ideas") or []):
+            if isinstance(rid, int):
+                edges[idea_id].add(rid)
+                edges[rid].add(idea_id)
+        for wl in (links.get("wiki_links") or []):
+            m = re_mod.match(r'\[\[(.+?)\]\]', wl)
+            if m:
+                wiki_index[m.group(1)].add(idea_id)
+
+    for concept, ids in wiki_index.items():
+        ids_list = list(ids)
+        for i in range(len(ids_list)):
+            for j in range(i + 1, len(ids_list)):
+                edges[ids_list[i]].add(ids_list[j])
+                edges[ids_list[j]].add(ids_list[i])
+
+    degree = {i: len(edges.get(i, set())) for i in ideas}
+
+    # BFS connected components
+    visited = set()
+    components = []
+    for idea_id in sorted(ideas.keys()):
+        if idea_id in visited or not edges.get(idea_id):
+            continue
+        component = []
+        queue = [idea_id]
+        while queue:
+            node = queue.pop(0)
+            if node in visited or node not in ideas:
+                continue
+            visited.add(node)
+            component.append(node)
+            for neighbor in sorted(edges.get(node, set())):
+                if neighbor not in visited and neighbor in ideas:
+                    queue.append(neighbor)
+        components.append(sorted(component))
+
+    isolated = sorted(i for i in ideas if i not in visited)
+    total_edges = sum(len(v) for v in edges.values()) // 2
+
+    return {
+        "ideas": ideas,
+        "edges": dict(edges),
+        "wiki_index": dict(wiki_index),
+        "components": components,
+        "isolated": isolated,
+        "degree": degree,
+        "stats": {
+            "total_ideas": len(ideas),
+            "total_edges": total_edges,
+            "connected": len(ideas) - len(isolated),
+            "isolated_count": len(isolated),
+            "wiki_concepts": len(wiki_index),
+            "clusters": len(components),
+        },
+    }
+
+
+def format_idea_node(idea_id: int, ideas: dict, degree: dict) -> str:
+    """Format one idea as a display string."""
+    idea = ideas.get(idea_id, {})
+    icon = STATUS_ICON.get(idea.get("status", ""), "?")
+    title = idea.get("title", "")[:50]
+    cat = idea.get("category", "")
+    deg = degree.get(idea_id, 0)
+    return f"{icon} #{idea_id:03d} {title}  [{cat}] (deg {deg})"
+
+
+def format_graph_cluster(graph: Dict[str, Any]) -> str:
+    """Format graph as cluster view (connected components as groups)."""
+    ideas = graph["ideas"]
+    degree = graph["degree"]
+    wiki_index = graph["wiki_index"]
+    lines = [f"📊 Ideas Knowledge Graph ({graph['stats']['total_ideas']} ideas, {graph['stats']['total_edges']} edges)", ""]
+
+    for idx, component in enumerate(graph["components"]):
+        cluster_concepts = [c for c, ids in wiki_index.items() if len(ids & set(component)) >= 2]
+        concept_str = f"  via: {', '.join(f'[[{c}]]' for c in sorted(cluster_concepts))}" if cluster_concepts else ""
+        lines.append(f"🌐 Cluster {idx+1} ({len(component)} ideas){concept_str}")
+        for idea_id in component:
+            lines.append(f"   {format_idea_node(idea_id, ideas, degree)}")
+        lines.append("")
+
+    if graph["isolated"]:
+        lines.append(f"💡 Isolated ({len(graph['isolated'])} ideas — no connections)")
+        for idea_id in graph["isolated"]:
+            lines.append(f"   {format_idea_node(idea_id, ideas, degree)}")
+        lines.append("")
+
+    if wiki_index:
+        lines.append(f"📝 Wiki Concepts ({len(wiki_index)})")
+        for concept, ids in sorted(wiki_index.items()):
+            lines.append(f"   [[{concept}]] → {', '.join(f'#{i:03d}' for i in sorted(ids))}")
+
+    return "\n".join(lines)
+
+
+def format_graph_tree(graph: Dict[str, Any]) -> str:
+    """Format graph as tree view (most-connected as roots, neighbors as children)."""
+    ideas = graph["ideas"]
+    degree = graph["degree"]
+    wiki_index = graph["wiki_index"]
+    lines = [f"📊 Ideas Knowledge Graph ({graph['stats']['total_ideas']} ideas, {graph['stats']['total_edges']} edges)", ""]
+
+    for component in graph["components"]:
+        root = max(component, key=lambda i: degree.get(i, 0))
+        lines.append(f"🔗 {format_idea_node(root, ideas, degree)}")
+        children = [c for c in component if c != root]
+        for idx, child in enumerate(children):
+            is_last = (idx == len(children) - 1)
+            prefix = "└── " if is_last else "├── "
+            lines.append(f"   {prefix}{format_idea_node(child, ideas, degree)}")
+            shared = [c for c, ids in wiki_index.items() if root in ids and child in ids]
+            if shared:
+                sub_prefix = "       " if is_last else "   │   "
+                for concept in shared:
+                    lines.append(f"{sub_prefix}via [[{concept}]]")
+        lines.append("")
+
+    if graph["isolated"]:
+        lines.append(f"💡 Isolated ({len(graph['isolated'])} ideas — no connections)")
+        for idea_id in graph["isolated"]:
+            lines.append(f"   {format_idea_node(idea_id, ideas, degree)}")
+        lines.append("")
+
+    if wiki_index:
+        lines.append(f"📝 Wiki Concepts ({len(wiki_index)})")
+        for concept, ids in sorted(wiki_index.items()):
+            lines.append(f"   [[{concept}]] → {', '.join(f'#{i:03d}' for i in sorted(ids))}")
+
+    return "\n".join(lines)
