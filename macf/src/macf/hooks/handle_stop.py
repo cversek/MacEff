@@ -129,8 +129,17 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         token_section = format_token_context_full(token_info)
         boundary_guidance = get_boundary_guidance(token_info['cl_level'], auto_mode)
 
+        # Mode indicators for status line
+        mode_indicator = ""
+        try:
+            active_modes = detect_active_modes(session_id, token_info)
+            mode_indicator = format_mode_indicators(active_modes)
+        except Exception as e:
+            print(f"⚠️ MACF: mode detection failed in stop hook: {e}", file=sys.stderr)
+            mode_indicator = " 🤖" if auto_mode else ""
+
         # Format message with full timestamp and DEV_DRV summary
-        message = f"""🏗️ MACF | DEV_DRV Complete
+        message = f"""🏗️ MACF{mode_indicator} | DEV_DRV Complete
 Current Time: {temporal_ctx['timestamp_formatted']}
 Day: {temporal_ctx['day_of_week']}
 Time of Day: {temporal_ctx['time_of_day']}
