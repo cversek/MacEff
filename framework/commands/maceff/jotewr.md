@@ -270,6 +270,22 @@ Augment 4 times with deeper philosophical sections → 40KB (~10k tokens). Deliv
 
 ---
 
+## Ideas Harvested
+
+### Captured This Cycle
+[Count + titles of ideas captured during this cycle's work]
+
+### Promoted
+[Ideas that became experiments or roadmap phases — what they became]
+
+### Graph Structure
+[Clusters formed, connections discovered, gaps identified from macf_tools idea graph]
+
+### Promotion Recommendations
+[Which captured ideas are mature enough for experiments? What synergistic groups exist?]
+
+---
+
 ## Emotional Journey
 
 ### Chain
@@ -294,6 +310,26 @@ Augment 4 times with deeper philosophical sections → 40KB (~10k tokens). Deliv
 
 *[One-line essence of the reflection]*
 ```
+
+## Ideas Harvested (Pre-Writing Step)
+
+**Before writing the JOTEWR**, scan the ideas bank and graph:
+
+```bash
+macf_tools idea list
+macf_tools idea graph
+```
+
+**Extract for the "Ideas Harvested" section**:
+- How many ideas were captured this cycle?
+- Which ideas were promoted (and what did they become)?
+- What clusters formed in the graph? What connections emerged?
+- Which captured ideas are mature enough for experiment promotion?
+- What gaps does the graph reveal — isolated ideas that should be connected?
+
+**This is NOT optional** — ideas are perishable prospective knowledge. The JOTEWR is the cycle's knowledge web synthesis, and the ideas bank is part of that web.
+
+---
 
 ## Execution Instructions
 
