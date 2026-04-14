@@ -23,6 +23,7 @@ from macf.utils import (
     format_token_context_full,
     get_boundary_guidance,
     detect_auto_mode,
+    # Note: mode indicators imported separately below
     get_breadcrumb
 )
 from macf.hooks.hook_logging import log_hook_event
@@ -182,8 +183,17 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         token_info = get_token_info(session_id)
         auto_mode, _ = detect_auto_mode(session_id)
 
+        # Mode indicators for status line
+        try:
+            from macf.modes import detect_active_modes, format_mode_indicators
+            active_modes = detect_active_modes(session_id, token_info)
+            mode_indicator = format_mode_indicators(active_modes)
+        except (OSError, ValueError, ImportError) as e:
+            print(f"⚠️ MACF: mode detection failed in UPS hook: {e}", file=sys.stderr)
+            mode_indicator = " 🤖" if auto_mode else ""
+
         # Format temporal section with breadcrumb
-        temporal_section = f"""🏗️ MACF | DEV_DRV Started
+        temporal_section = f"""🏗️ MACF{mode_indicator} | DEV_DRV Started
 Current Time: {temporal_ctx['timestamp_formatted']}
 Day: {temporal_ctx['day_of_week']}
 Time of Day: {temporal_ctx['time_of_day']}
