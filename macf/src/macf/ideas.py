@@ -465,6 +465,91 @@ def format_graph_cluster(graph: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def format_graph_cluster_cross_ca(kg: Dict[str, Any]) -> str:
+    """Format cross-CA knowledge graph as cluster view."""
+    from collections import defaultdict
+
+    ideas = kg["ideas"]
+    ca_nodes = kg["ca_nodes"]
+    edges = kg["edges"]
+    wiki_index = kg["wiki_index"]
+    stats = kg["stats"]
+
+    # Compute degree for all nodes
+    degree = {}
+    for node_id in set(ideas.keys()) | set(ca_nodes.keys()):
+        degree[node_id] = len(edges.get(node_id, set()))
+
+    # BFS connected components across all node types
+    all_node_ids = set(ideas.keys()) | set(ca_nodes.keys())
+    visited = set()
+    components = []
+    for node_id in sorted(all_node_ids, key=str):
+        if node_id in visited or not edges.get(node_id):
+            continue
+        component = []
+        queue = [node_id]
+        while queue:
+            node = queue.pop(0)
+            if node in visited or node not in all_node_ids:
+                continue
+            visited.add(node)
+            component.append(node)
+            for neighbor in sorted(edges.get(node, set()), key=str):
+                if neighbor not in visited and neighbor in all_node_ids:
+                    queue.append(neighbor)
+        components.append(component)
+
+    isolated = sorted([n for n in all_node_ids if n not in visited], key=str)
+
+    lines = [f"📊 Cross-CA Knowledge Graph ({stats['total_nodes']} nodes, {stats['total_edges']} edges)", ""]
+
+    for idx, component in enumerate(components):
+        idea_ids = [n for n in component if isinstance(n, int)]
+        ca_ids = [n for n in component if isinstance(n, str)]
+        cluster_concepts = [c for c, ids in wiki_index.items() if len(ids & set(component)) >= 2]
+        concept_str = f"  via: {', '.join(f'[[{c}]]' for c in sorted(cluster_concepts))}" if cluster_concepts else ""
+        lines.append(f"🌐 Cluster {idx+1} ({len(component)} nodes: {len(idea_ids)} ideas + {len(ca_ids)} CAs){concept_str}")
+        for idea_id in sorted(idea_ids):
+            idea = ideas.get(idea_id, {})
+            icon = STATUS_ICON.get(idea.get("status", ""), "?")
+            title = idea.get("title", "")[:50]
+            deg = degree.get(idea_id, 0)
+            lines.append(f"   {icon} #{idea_id:03d} {title}  (deg {deg})")
+        for ca_id in sorted(ca_ids):
+            info = ca_nodes.get(ca_id, {})
+            ca_type = info.get("type", "")
+            icon = "📝" if ca_type == "learnings" else "🔭" if ca_type == "observations" else "📄"
+            title = info.get("title", "")[:50]
+            deg = degree.get(ca_id, 0)
+            lines.append(f"   {icon} {ca_id}  (deg {deg})")
+        lines.append("")
+
+    if isolated:
+        lines.append(f"💡 Isolated ({len(isolated)} nodes — no connections)")
+        for node_id in isolated:
+            if isinstance(node_id, int):
+                idea = ideas.get(node_id, {})
+                icon = STATUS_ICON.get(idea.get("status", ""), "?")
+                title = idea.get("title", "")[:50]
+                lines.append(f"   {icon} #{node_id:03d} {title}")
+            else:
+                info = ca_nodes.get(node_id, {})
+                ca_type = info.get("type", "")
+                icon = "📝" if ca_type == "learnings" else "🔭"
+                lines.append(f"   {icon} {node_id}")
+        lines.append("")
+
+    if wiki_index:
+        lines.append(f"📝 Wiki Concepts ({len(wiki_index)})")
+        for concept, ids in sorted(wiki_index.items()):
+            idea_parts = [f"#{i:03d}" for i in sorted(ids) if isinstance(i, int)]
+            ca_parts = [str(i) for i in sorted(ids) if isinstance(i, str)]
+            lines.append(f"   [[{concept}]] → {', '.join(idea_parts + ca_parts)}")
+
+    return "\n".join(lines)
+
+
 def format_graph_tree(graph: Dict[str, Any]) -> str:
     """Format graph as tree view (most-connected as roots, neighbors as children)."""
     ideas = graph["ideas"]
@@ -499,3 +584,17 @@ def format_graph_tree(graph: Dict[str, Any]) -> str:
             lines.append(f"   [[{concept}]] → {', '.join(f'#{i:03d}' for i in sorted(ids))}")
 
     return "\n".join(lines)
+
+
+def generate_graph_html(output_path: str, kg: Optional[Dict[str, Any]] = None) -> Path:
+    """Generate interactive HTML knowledge graph visualization.
+
+    Delegates to macf.viz.KnowledgeGraphViz for rendering.
+    Returns the output file path.
+    """
+    from .viz import KnowledgeGraphViz
+
+    if kg is None:
+        kg = build_knowledge_graph()
+    viz = KnowledgeGraphViz(kg)
+    return viz.render(output_path)
