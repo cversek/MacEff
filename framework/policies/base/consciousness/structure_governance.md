@@ -232,6 +232,16 @@ consciousness_artifacts:
 
 **See**: `scholarship.md` for enhanced citation format specification (CA type tags, breadcrumb coordinates, section references, markdown links)
 
+### Knowledge Web (RECOMMENDED)
+
+**Purpose**: Concept-mediated cross-CA discovery via `[[wiki-links]]`. Artifacts sharing `[[concept]]` references form graph edges without requiring explicit citations.
+
+**When Needed**:
+- Agents producing learnings, observations, and ideas that share conceptual themes
+- Deployments where concept-based discovery complements citation-based traversal
+
+**How**: Add a `## Wiki-Links` section to CAs with 2-5 `[[concept]]` references. See `scholarship.md` §3.4 for normalization rules, seed vocabulary, and graph tooling.
+
 ---
 
 ## 6 Discovery Patterns with Breadcrumbs
