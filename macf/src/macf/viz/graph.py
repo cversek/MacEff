@@ -86,9 +86,12 @@ class KnowledgeGraphViz:
         # Idea nodes
         for idea_id in sorted(ideas.keys()):
             idea = ideas[idea_id]
+            # Semantic slug: first 2-3 words of title, kebab-cased
+            title_words = idea.get("title", "").split()[:3]
+            slug = "-".join(w.lower().strip(".,;:!?()") for w in title_words if w)[:20]
             self._nodes.append({
                 "id": str(idea_id),
-                "label": f"#{idea_id:03d}",
+                "label": f"#{idea_id:03d} {slug}",
                 "title": idea.get("title", ""),
                 "type": "idea",
                 "status": idea.get("status", "captured"),
