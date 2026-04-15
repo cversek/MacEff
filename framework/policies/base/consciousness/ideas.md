@@ -228,6 +228,8 @@ Ideas form a knowledge graph through three link types:
 ### Wiki-Links (`[[concept_name]]`)
 Free-form references to concepts, files, or entities. Creates edges in the knowledge graph. Compatible with Obsidian and obra/knowledge-graph MCP.
 
+**Normalization and seed vocabulary**: See scholarship policy §3.4 Knowledge Web for wiki-link formatting rules and common concept vocabulary shared across all CA types.
+
 ### Related Ideas
 Integer IDs of other ideas that are conceptually related. Enables cluster discovery.
 

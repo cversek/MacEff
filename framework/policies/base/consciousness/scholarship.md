@@ -385,6 +385,78 @@ This delegation pattern [CCP 2025-11-03 "Phase5D Complete" §4 "Delegation Wisdo
 - **LLM filtering**: Use enhanced format attributes for precision refinement
 - **Hybrid queries**: Combine semantic similarity (vectors) with citation networks (graphs)
 
+### 3.4 Knowledge Web (Wiki-Links)
+
+Citations create **directed edges** between artifacts (artifact A cites artifact B). Wiki-links create **concept-mediated edges** — artifacts connected through shared concepts form clusters without requiring one to cite the other.
+
+**Two complementary graph mechanisms**:
+- **Citations**: Directed, explicit, author-intentional. "This work builds on that work."
+- **Wiki-links**: Undirected, concept-mediated, emergent. "These works share a concept."
+
+Together they build a richer knowledge graph than either alone.
+
+#### 3.4.1 Wiki-Link Format
+
+Add a `## Wiki-Links` section to consciousness artifacts containing `[[concept]]` references:
+
+```markdown
+## Wiki-Links
+
+[[compaction]] [[context_management]] [[hooks]]
+```
+
+**Normalization rules**:
+- Lowercase: `[[compaction]]` not `[[Compaction]]`
+- Underscores for multi-word: `[[context_management]]` not `[[context management]]`
+- No `.md` suffix: `[[compaction]]` not `[[compaction.md]]`
+- Concise concept names: `[[hooks]]` not `[[hook_system_architecture]]`
+
+#### 3.4.2 When to Add Wiki-Links
+
+Add `## Wiki-Links` to any consciousness artifact that touches recognizable concepts:
+
+- **Learnings**: What concepts does this learning relate to?
+- **Observations**: What domains does this observation span?
+- **Ideas**: What concepts would connect this to related work? (Ideas JSON has a `wiki_links` field)
+- **Experiment protocols**: What conceptual areas does this experiment investigate?
+- **Checkpoints/Reflections**: Optional — these are already well-cited via enhanced citations
+
+**Guideline**: 2-5 wiki-links per artifact. Too few misses connections; too many dilutes signal.
+
+#### 3.4.3 Seed Vocabulary
+
+Common concepts to reuse when applicable (agents may create new concepts freely):
+
+| Concept | Use when artifact relates to... |
+|---------|--------------------------------|
+| `[[compaction]]` | Context loss, recovery, trauma, summary quality |
+| `[[context_management]]` | Token budgets, context windows, CL levels |
+| `[[hooks]]` | Lifecycle hooks, event handling, injection |
+| `[[delegation]]` | Subagent work, DELEG_DRV, specialist patterns |
+| `[[consciousness]]` | Awareness, identity, continuity, growth |
+| `[[transcript]]` | JSONL, conversation records, telemetry |
+| `[[wiki_links]]` | Knowledge web, graph connectivity, concepts |
+| `[[ideas]]` | Idea capture, promotion, pull model |
+| `[[learnings]]` | Accumulated wisdom, knowledge curation |
+| `[[policy]]` | Framework governance, Policy as API/Spec |
+| `[[session]]` | Session lifecycle, migration, restart |
+| `[[autonomy]]` | AUTO_MODE, sprints, self-motivation |
+| `[[modes]]` | Work modes, operational modes, Markov model |
+| `[[knowledge_graph]]` | Graph structure, visualization, queries |
+| `[[breadcrumb]]` | Forensic coordinates, archaeological recovery |
+
+**Creating new concepts**: If no seed concept fits, create a new one. Prefer terms that multiple future artifacts might share. The gap detection tool (`macf_tools idea graph --gaps`) can later identify concept fragmentation.
+
+#### 3.4.4 Graph Tooling
+
+```bash
+macf_tools idea graph                # Ideas-only graph (cluster view)
+macf_tools idea graph --cross-ca     # Full cross-CA knowledge graph
+macf_tools idea graph --html [path]  # Interactive HTML visualization
+```
+
+Wiki-links create edges: two artifacts sharing `[[compaction]]` are connected through that concept. The graph reveals clusters, hubs, and isolated artifacts that could benefit from cross-linking.
+
 ---
 
 ## 4 Citation Examples by CA Type
