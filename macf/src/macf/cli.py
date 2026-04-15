@@ -6091,69 +6091,8 @@ def cmd_idea_archive(args: argparse.Namespace) -> int:
 
 
 def cmd_idea_graph(args: argparse.Namespace) -> int:
-    """Show knowledge graph from wiki-links and relations."""
-    from .ideas import build_idea_graph, build_knowledge_graph, format_graph_tree, format_graph_cluster
-
-    # Gap detection mode (always uses cross-CA graph)
-    if getattr(args, "gaps", False):
-        from .ideas import detect_graph_gaps, format_gap_report, build_knowledge_graph as _build_kg
-        kg = _build_kg()
-        gaps = detect_graph_gaps(kg)
-        if getattr(args, "json_output", False):
-            print(json.dumps(gaps, indent=2))
-        else:
-            print(format_gap_report(gaps))
-        return 0
-
-    # Query mode (always uses cross-CA graph)
-    query_term = getattr(args, "query", None)
-    if query_term is not None:
-        from .ideas import query_knowledge_graph, format_query_result
-        result = query_knowledge_graph(query_term)
-        if getattr(args, "json_output", False):
-            print(json.dumps(result, indent=2, default=str))
-        else:
-            print(format_query_result(result))
-        return 0
-
-    # HTML visualization (always uses cross-CA graph)
-    html_output = getattr(args, "html", None)
-    if html_output is not None:
-        from .ideas import generate_graph_html
-        if html_output == "":
-            # Default output path
-            html_output = "/tmp/macf_knowledge_graph.html"
-        path = generate_graph_html(html_output)
-        print(f"📊 Knowledge graph written to: {path}")
-        print(f"   Open in browser: file://{path}")
-        return 0
-
-    if getattr(args, "cross_ca", False):
-        kg = build_knowledge_graph()
-        stats = kg["stats"]
-        if getattr(args, "json_output", False):
-            print(json.dumps(stats, indent=2))
-            return 0
-        print(f"📊 Cross-CA Knowledge Graph ({stats['total_nodes']} nodes, {stats['total_edges']} edges)")
-        print(f"   Ideas: {stats['total_ideas']} | CAs: {stats['total_cas']} | Cross-CA edges: {stats['cross_ca_edges']}")
-        print(f"   Wiki concepts: {stats['wiki_concepts']}")
-        if kg["ca_nodes"]:
-            print(f"\n📄 CAs with wiki-links ({len(kg['ca_nodes'])}):")
-            for node_id, info in sorted(kg["ca_nodes"].items()):
-                ca_type = info["type"]
-                title = info["title"][:50]
-                icon = "📝" if ca_type == "learnings" else "🔭" if ca_type == "observations" else "📄"
-                neighbors = len(kg["edges"].get(node_id, set()))
-                print(f"   {icon} {node_id}  (deg {neighbors})")
-                print(f"      {title}")
-        if kg["wiki_index"]:
-            print(f"\n📝 Wiki Concepts ({len(kg['wiki_index'])}):")
-            for concept, ids in sorted(kg["wiki_index"].items()):
-                idea_ids = [i for i in sorted(ids) if isinstance(i, int)]
-                ca_ids = [i for i in sorted(ids) if isinstance(i, str)]
-                parts = [f"#{i:03d}" for i in idea_ids] + ca_ids
-                print(f"   [[{concept}]] → {', '.join(parts)}")
-        return 0
+    """Show ideas-only knowledge graph (wiki-links and relations between ideas)."""
+    from .ideas import build_idea_graph, format_graph_tree, format_graph_cluster
 
     graph = build_idea_graph()
     if not graph["ideas"]:
@@ -6172,6 +6111,58 @@ def cmd_idea_graph(args: argparse.Namespace) -> int:
         print(format_graph_tree(graph))
     else:
         print(format_graph_cluster(graph))
+    return 0
+
+
+def cmd_knowledge_graph(args: argparse.Namespace) -> int:
+    """Show cross-CA knowledge graph (ideas + learnings + observations)."""
+    from .ideas import (build_knowledge_graph, format_graph_cluster_cross_ca,
+                        format_graph_tree)
+
+    kg = build_knowledge_graph()
+    stats = kg["stats"]
+
+    if getattr(args, "json_output", False):
+        print(json.dumps(stats, indent=2))
+        return 0
+
+    print(format_graph_cluster_cross_ca(kg))
+    return 0
+
+
+def cmd_knowledge_query(args: argparse.Namespace) -> int:
+    """Query knowledge graph by concept, node ID, or keyword."""
+    from .ideas import query_knowledge_graph, format_query_result
+
+    result = query_knowledge_graph(args.term)
+    if getattr(args, "json_output", False):
+        print(json.dumps(result, indent=2, default=str))
+    else:
+        print(format_query_result(result))
+    return 0
+
+
+def cmd_knowledge_gaps(args: argparse.Namespace) -> int:
+    """Detect missing wiki-links in the knowledge graph."""
+    from .ideas import detect_graph_gaps, format_gap_report, build_knowledge_graph
+
+    kg = build_knowledge_graph()
+    gaps = detect_graph_gaps(kg)
+    if getattr(args, "json_output", False):
+        print(json.dumps(gaps, indent=2))
+    else:
+        print(format_gap_report(gaps))
+    return 0
+
+
+def cmd_knowledge_viz(args: argparse.Namespace) -> int:
+    """Generate interactive HTML knowledge graph visualization."""
+    from .ideas import generate_graph_html
+
+    output = getattr(args, "output", "") or "/tmp/macf_knowledge_graph.html"
+    path = generate_graph_html(output)
+    print(f"📊 Knowledge graph written to: {path}")
+    print(f"   Open in browser: file://{path}")
     return 0
 
 
@@ -7059,17 +7050,31 @@ def _build_parser() -> argparse.ArgumentParser:
     idea_search.add_argument("query", help="search query")
     idea_search.set_defaults(func=cmd_idea_search)
 
-    idea_graph = idea_sub.add_parser("graph", help="show knowledge graph from wiki-links and relations")
+    idea_graph = idea_sub.add_parser("graph", help="show ideas-only graph (use 'knowledge' for cross-CA)")
     idea_graph.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")
     idea_graph.add_argument("--tree", action="store_true", help="tree view (most-connected as roots)")
-    idea_graph.add_argument("--cross-ca", dest="cross_ca", action="store_true", help="include learnings + observations via wiki-links")
-    idea_graph.add_argument("--html", nargs="?", const="", default=None, metavar="OUTPUT",
-                            help="generate interactive HTML visualization (default: /tmp/macf_knowledge_graph.html)")
-    idea_graph.add_argument("--query", "-q", metavar="TERM",
-                            help="query subgraph by concept, node ID (#007), or keyword")
-    idea_graph.add_argument("--gaps", action="store_true",
-                            help="detect missing wiki-links (gap analysis report)")
     idea_graph.set_defaults(func=cmd_idea_graph)
+
+    # ── knowledge ────────────────────────────────────────────────────────
+    knowledge_parser = sub.add_parser("knowledge", help="cross-CA knowledge graph (ideas + learnings + observations)")
+    knowledge_sub = knowledge_parser.add_subparsers(dest="knowledge_cmd")
+
+    kg_graph = knowledge_sub.add_parser("graph", help="show cross-CA knowledge graph")
+    kg_graph.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")
+    kg_graph.set_defaults(func=cmd_knowledge_graph)
+
+    kg_query = knowledge_sub.add_parser("query", help="query subgraph by concept, node ID, or keyword")
+    kg_query.add_argument("term", help="concept name, node ID (#007), or keyword")
+    kg_query.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")
+    kg_query.set_defaults(func=cmd_knowledge_query)
+
+    kg_gaps = knowledge_sub.add_parser("gaps", help="detect missing wiki-links")
+    kg_gaps.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")
+    kg_gaps.set_defaults(func=cmd_knowledge_gaps)
+
+    kg_viz = knowledge_sub.add_parser("viz", help="generate interactive HTML visualization")
+    kg_viz.add_argument("output", nargs="?", default="", help="output path (default: /tmp/macf_knowledge_graph.html)")
+    kg_viz.set_defaults(func=cmd_knowledge_viz)
 
     # ── shell ────────────────────────────────────────────────────────────
     shell_parser = sub.add_parser("shell", help="shell integration (tab completion)")
