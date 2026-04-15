@@ -278,7 +278,9 @@ def build_idea_graph() -> Dict[str, Any]:
         for wl in (links.get("wiki_links") or []):
             m = re_mod.match(r'\[\[(.+?)\]\]', wl)
             if m:
-                wiki_index[m.group(1)].add(idea_id)
+                # Normalize: strip .md suffix for consistent matching
+                concept = re_mod.sub(r'\.md$', '', m.group(1))
+                wiki_index[concept].add(idea_id)
 
     for concept, ids in wiki_index.items():
         ids_list = list(ids)
@@ -325,6 +327,101 @@ def build_idea_graph() -> Dict[str, Any]:
             "isolated_count": len(isolated),
             "wiki_concepts": len(wiki_index),
             "clusters": len(components),
+        },
+    }
+
+
+def build_knowledge_graph(scan_dirs: Optional[List[Path]] = None) -> Dict[str, Any]:
+    """Build cross-CA knowledge graph: ideas + learnings + observations via wiki-links.
+
+    Scans ideas (JSON, related_ideas + wiki_links fields) and other CAs
+    (markdown, ## Wiki-Links sections) for [[concept]] references.
+    Nodes are CA identifiers, edges from shared wiki-link concepts.
+    """
+    import re as re_mod
+    from collections import defaultdict
+
+    # Start with ideas graph
+    graph = build_idea_graph()
+    wiki_index = defaultdict(set, {k: set(v) for k, v in graph["wiki_index"].items()})
+    ca_nodes = {}  # non-idea CA nodes: {node_id: {type, title, path}}
+
+    # Scan additional directories for markdown files with ## Wiki-Links
+    if scan_dirs is None:
+        try:
+            from .utils.paths import find_agent_home
+            agent_home = find_agent_home()
+            if agent_home:
+                scan_dirs = [
+                    agent_home / "agent" / "private" / "learnings",
+                    agent_home / "agent" / "public" / "observations",
+                ]
+        except (OSError, ImportError) as e:
+            print(f"⚠️ MACF: knowledge graph scan dirs failed: {e}", file=sys.stderr)
+            scan_dirs = []
+
+    for scan_dir in (scan_dirs or []):
+        if not scan_dir.exists():
+            continue
+        ca_type = scan_dir.name  # "learnings" or "observations"
+        for md_file in sorted(scan_dir.glob("*.md")):
+            if md_file.name == "INDEX.md":
+                continue
+            try:
+                content = md_file.read_text(errors='replace')
+            except OSError:
+                continue
+            # Find ## Wiki-Links section
+            wl_match = re_mod.search(r'## Wiki-Links\s*\n(.+?)(?:\n##|\Z)', content, re_mod.DOTALL)
+            if not wl_match:
+                continue
+            wl_section = wl_match.group(1)
+            concepts = re_mod.findall(r'\[\[(.+?)\]\]', wl_section)
+            if not concepts:
+                continue
+            # Create a node ID for this CA
+            node_id = f"{ca_type}:{md_file.stem}"
+            # Extract title from first heading
+            title_match = re_mod.search(r'^#\s+(.+)', content, re_mod.MULTILINE)
+            title = title_match.group(1)[:50] if title_match else md_file.stem[:50]
+            ca_nodes[node_id] = {"type": ca_type, "title": title, "path": str(md_file)}
+            for concept in concepts:
+                wiki_index[concept].add(node_id)
+
+    # Rebuild edges including cross-CA connections
+    edges = defaultdict(set)
+    # Preserve idea-to-idea edges from related_ideas
+    for k, v in graph["edges"].items():
+        edges[k] = set(v)
+    # Add wiki-link co-occurrence edges (including cross-CA)
+    for concept, node_ids in wiki_index.items():
+        ids_list = list(node_ids)
+        for i in range(len(ids_list)):
+            for j in range(i + 1, len(ids_list)):
+                edges[ids_list[i]].add(ids_list[j])
+                edges[ids_list[j]].add(ids_list[i])
+
+    # Stats
+    all_nodes = set(graph["ideas"].keys()) | set(ca_nodes.keys())
+    cross_ca_edges = 0
+    for node_id, neighbors in edges.items():
+        for neighbor in neighbors:
+            if (isinstance(node_id, str) and ":" in node_id) != (isinstance(neighbor, str) and ":" in str(neighbor)):
+                cross_ca_edges += 1
+    cross_ca_edges //= 2
+
+    return {
+        "ideas": graph["ideas"],
+        "ca_nodes": ca_nodes,
+        "edges": dict(edges),
+        "wiki_index": dict(wiki_index),
+        "stats": {
+            "total_ideas": len(graph["ideas"]),
+            "total_cas": len(ca_nodes),
+            "total_nodes": len(all_nodes),
+            "total_edges": sum(len(v) for v in edges.values()) // 2,
+            "cross_ca_edges": cross_ca_edges,
+            "wiki_concepts": len(wiki_index),
         },
     }
 

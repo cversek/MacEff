@@ -6092,7 +6092,34 @@ def cmd_idea_archive(args: argparse.Namespace) -> int:
 
 def cmd_idea_graph(args: argparse.Namespace) -> int:
     """Show knowledge graph from wiki-links and relations."""
-    from .ideas import build_idea_graph, format_graph_tree, format_graph_cluster
+    from .ideas import build_idea_graph, build_knowledge_graph, format_graph_tree, format_graph_cluster
+
+    if getattr(args, "cross_ca", False):
+        kg = build_knowledge_graph()
+        stats = kg["stats"]
+        if getattr(args, "json_output", False):
+            print(json.dumps(stats, indent=2))
+            return 0
+        print(f"📊 Cross-CA Knowledge Graph ({stats['total_nodes']} nodes, {stats['total_edges']} edges)")
+        print(f"   Ideas: {stats['total_ideas']} | CAs: {stats['total_cas']} | Cross-CA edges: {stats['cross_ca_edges']}")
+        print(f"   Wiki concepts: {stats['wiki_concepts']}")
+        if kg["ca_nodes"]:
+            print(f"\n📄 CAs with wiki-links ({len(kg['ca_nodes'])}):")
+            for node_id, info in sorted(kg["ca_nodes"].items()):
+                ca_type = info["type"]
+                title = info["title"][:50]
+                icon = "📝" if ca_type == "learnings" else "🔭" if ca_type == "observations" else "📄"
+                neighbors = len(kg["edges"].get(node_id, set()))
+                print(f"   {icon} {node_id}  (deg {neighbors})")
+                print(f"      {title}")
+        if kg["wiki_index"]:
+            print(f"\n📝 Wiki Concepts ({len(kg['wiki_index'])}):")
+            for concept, ids in sorted(kg["wiki_index"].items()):
+                idea_ids = [i for i in sorted(ids) if isinstance(i, int)]
+                ca_ids = [i for i in sorted(ids) if isinstance(i, str)]
+                parts = [f"#{i:03d}" for i in idea_ids] + ca_ids
+                print(f"   [[{concept}]] → {', '.join(parts)}")
+        return 0
 
     graph = build_idea_graph()
     if not graph["ideas"]:
@@ -7001,6 +7028,7 @@ def _build_parser() -> argparse.ArgumentParser:
     idea_graph = idea_sub.add_parser("graph", help="show knowledge graph from wiki-links and relations")
     idea_graph.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")
     idea_graph.add_argument("--tree", action="store_true", help="tree view (most-connected as roots)")
+    idea_graph.add_argument("--cross-ca", dest="cross_ca", action="store_true", help="include learnings + observations via wiki-links")
     idea_graph.set_defaults(func=cmd_idea_graph)
 
     # ── shell ────────────────────────────────────────────────────────────
