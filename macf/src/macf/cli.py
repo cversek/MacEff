@@ -6094,6 +6094,17 @@ def cmd_idea_graph(args: argparse.Namespace) -> int:
     """Show knowledge graph from wiki-links and relations."""
     from .ideas import build_idea_graph, build_knowledge_graph, format_graph_tree, format_graph_cluster
 
+    # Gap detection mode (always uses cross-CA graph)
+    if getattr(args, "gaps", False):
+        from .ideas import detect_graph_gaps, format_gap_report, build_knowledge_graph as _build_kg
+        kg = _build_kg()
+        gaps = detect_graph_gaps(kg)
+        if getattr(args, "json_output", False):
+            print(json.dumps(gaps, indent=2))
+        else:
+            print(format_gap_report(gaps))
+        return 0
+
     # Query mode (always uses cross-CA graph)
     query_term = getattr(args, "query", None)
     if query_term is not None:
@@ -7056,6 +7067,8 @@ def _build_parser() -> argparse.ArgumentParser:
                             help="generate interactive HTML visualization (default: /tmp/macf_knowledge_graph.html)")
     idea_graph.add_argument("--query", "-q", metavar="TERM",
                             help="query subgraph by concept, node ID (#007), or keyword")
+    idea_graph.add_argument("--gaps", action="store_true",
+                            help="detect missing wiki-links (gap analysis report)")
     idea_graph.set_defaults(func=cmd_idea_graph)
 
     # ── shell ────────────────────────────────────────────────────────────
