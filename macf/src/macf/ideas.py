@@ -598,3 +598,164 @@ def generate_graph_html(output_path: str, kg: Optional[Dict[str, Any]] = None) -
         kg = build_knowledge_graph()
     viz = KnowledgeGraphViz(kg)
     return viz.render(output_path)
+
+
+def query_knowledge_graph(term: str, kg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Query the knowledge graph for a concept, node ID, or keyword.
+
+    Resolution order:
+    1. Exact wiki concept match (e.g., "compaction")
+    2. Node ID match (e.g., "#007" or "learnings:microcompact...")
+    3. Keyword search across titles and concept names
+
+    Returns subgraph: matched nodes + direct neighbors + shared wiki concepts.
+    """
+    if kg is None:
+        kg = build_knowledge_graph()
+
+    ideas = kg["ideas"]
+    ca_nodes = kg.get("ca_nodes", {})
+    edges = kg["edges"]
+    wiki_index = kg.get("wiki_index", {})
+
+    matched_nodes: set = set()
+    match_type = ""
+
+    # 1. Exact wiki concept match
+    normalized_term = re.sub(r'\.md$', '', term.lower().strip())
+    # Strip [[ ]] if user included them
+    normalized_term = re.sub(r'^\[\[|\]\]$', '', normalized_term)
+
+    if normalized_term in wiki_index:
+        matched_nodes = set(wiki_index[normalized_term])
+        match_type = f"concept: [[{normalized_term}]]"
+    else:
+        # 2. Node ID match
+        # Try idea ID: "#007" or "7"
+        id_match = re.match(r'#?(\d+)$', term.strip())
+        if id_match:
+            idea_id = int(id_match.group(1))
+            if idea_id in ideas:
+                matched_nodes = {idea_id}
+                match_type = f"idea: #{idea_id:03d}"
+        # Try CA node ID: "learnings:something"
+        if not matched_nodes and ":" in term:
+            for ca_id in ca_nodes:
+                if term.strip() in ca_id:
+                    matched_nodes.add(ca_id)
+                    match_type = f"ca: {ca_id}"
+
+        # 3. Keyword fallback
+        if not matched_nodes:
+            term_lower = term.lower()
+            # Search in idea titles
+            for idea_id, idea in ideas.items():
+                if term_lower in idea.get("title", "").lower():
+                    matched_nodes.add(idea_id)
+            # Search in CA titles
+            for ca_id, info in ca_nodes.items():
+                if term_lower in info.get("title", "").lower() or term_lower in ca_id.lower():
+                    matched_nodes.add(ca_id)
+            # Search in wiki concepts
+            for concept in wiki_index:
+                if term_lower in concept:
+                    matched_nodes |= wiki_index[concept]
+            if matched_nodes:
+                match_type = f"keyword: \"{term}\""
+
+    if not matched_nodes:
+        return {"match_type": "none", "term": term, "nodes": [], "neighbors": [],
+                "concepts": [], "edges": 0}
+
+    # Expand to neighbors
+    neighbor_nodes: set = set()
+    for node_id in matched_nodes:
+        for neighbor in edges.get(node_id, set()):
+            if neighbor not in matched_nodes:
+                neighbor_nodes.add(neighbor)
+
+    # Find shared wiki concepts for the subgraph
+    all_subgraph = matched_nodes | neighbor_nodes
+    relevant_concepts = []
+    for concept, members in wiki_index.items():
+        overlap = members & all_subgraph
+        if len(overlap) >= 2:
+            relevant_concepts.append((concept, len(overlap)))
+    relevant_concepts.sort(key=lambda x: -x[1])
+
+    # Build result nodes
+    def _node_info(node_id):
+        if isinstance(node_id, int) and node_id in ideas:
+            idea = ideas[node_id]
+            return {
+                "id": str(node_id), "label": f"#{node_id:03d}",
+                "title": idea.get("title", ""), "type": "idea",
+                "status": idea.get("status", ""), "category": idea.get("category", ""),
+                "degree": len(edges.get(node_id, set())),
+            }
+        elif node_id in ca_nodes:
+            info = ca_nodes[node_id]
+            return {
+                "id": str(node_id), "label": str(node_id).split(":")[-1][:25],
+                "title": info.get("title", ""), "type": info.get("type", "ca"),
+                "status": "", "category": info.get("type", ""),
+                "degree": len(edges.get(node_id, set())),
+            }
+        return None
+
+    result_nodes = [n for n in (_node_info(nid) for nid in sorted(matched_nodes, key=str)) if n]
+    result_neighbors = [n for n in (_node_info(nid) for nid in sorted(neighbor_nodes, key=str)) if n]
+
+    # Count edges within subgraph
+    subgraph_edges = 0
+    for node_id in all_subgraph:
+        for neighbor in edges.get(node_id, set()):
+            if neighbor in all_subgraph:
+                subgraph_edges += 1
+    subgraph_edges //= 2
+
+    return {
+        "match_type": match_type,
+        "term": term,
+        "nodes": result_nodes,
+        "neighbors": result_neighbors,
+        "concepts": [{"concept": c, "members": n} for c, n in relevant_concepts],
+        "edges": subgraph_edges,
+    }
+
+
+def format_query_result(result: Dict[str, Any]) -> str:
+    """Format query_knowledge_graph result for terminal output."""
+    if result["match_type"] == "none":
+        return f"No matches for \"{result['term']}\" in knowledge graph."
+
+    lines = [
+        f"🔍 Query: {result['match_type']}",
+        f"   {len(result['nodes'])} matched, {len(result['neighbors'])} neighbors, "
+        f"{result['edges']} edges in subgraph",
+        "",
+    ]
+
+    if result["nodes"]:
+        lines.append("📌 Matched:")
+        for n in result["nodes"]:
+            icon = STATUS_ICON.get(n.get("status", ""), "📄") if n["type"] == "idea" else (
+                "📝" if n["type"] == "learnings" else "🔭" if n["type"] == "observations" else "📄")
+            cat = f"  [{n['category']}]" if n.get("category") else ""
+            lines.append(f"   {icon} {n['label']} {n['title'][:50]}{cat} (deg {n['degree']})")
+
+    if result["neighbors"]:
+        lines.append("")
+        lines.append("🔗 Neighbors:")
+        for n in result["neighbors"]:
+            icon = STATUS_ICON.get(n.get("status", ""), "📄") if n["type"] == "idea" else (
+                "📝" if n["type"] == "learnings" else "🔭" if n["type"] == "observations" else "📄")
+            lines.append(f"   {icon} {n['label']} {n['title'][:50]} (deg {n['degree']})")
+
+    if result["concepts"]:
+        lines.append("")
+        lines.append("📝 Shared concepts:")
+        for c in result["concepts"]:
+            lines.append(f"   [[{c['concept']}]] ({c['members']} nodes)")
+
+    return "\n".join(lines)
