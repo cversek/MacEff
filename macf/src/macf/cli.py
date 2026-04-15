@@ -6094,6 +6094,17 @@ def cmd_idea_graph(args: argparse.Namespace) -> int:
     """Show knowledge graph from wiki-links and relations."""
     from .ideas import build_idea_graph, build_knowledge_graph, format_graph_tree, format_graph_cluster
 
+    # Query mode (always uses cross-CA graph)
+    query_term = getattr(args, "query", None)
+    if query_term is not None:
+        from .ideas import query_knowledge_graph, format_query_result
+        result = query_knowledge_graph(query_term)
+        if getattr(args, "json_output", False):
+            print(json.dumps(result, indent=2, default=str))
+        else:
+            print(format_query_result(result))
+        return 0
+
     # HTML visualization (always uses cross-CA graph)
     html_output = getattr(args, "html", None)
     if html_output is not None:
@@ -7043,6 +7054,8 @@ def _build_parser() -> argparse.ArgumentParser:
     idea_graph.add_argument("--cross-ca", dest="cross_ca", action="store_true", help="include learnings + observations via wiki-links")
     idea_graph.add_argument("--html", nargs="?", const="", default=None, metavar="OUTPUT",
                             help="generate interactive HTML visualization (default: /tmp/macf_knowledge_graph.html)")
+    idea_graph.add_argument("--query", "-q", metavar="TERM",
+                            help="query subgraph by concept, node ID (#007), or keyword")
     idea_graph.set_defaults(func=cmd_idea_graph)
 
     # ── shell ────────────────────────────────────────────────────────────
