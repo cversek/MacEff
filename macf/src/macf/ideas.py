@@ -543,8 +543,10 @@ def format_graph_cluster_cross_ca(kg: Dict[str, Any]) -> str:
     if wiki_index:
         lines.append(f"📝 Wiki Concepts ({len(wiki_index)})")
         for concept, ids in sorted(wiki_index.items()):
-            idea_parts = [f"#{i:03d}" for i in sorted(ids) if isinstance(i, int)]
-            ca_parts = [str(i) for i in sorted(ids) if isinstance(i, str)]
+            int_ids = sorted(i for i in ids if isinstance(i, int))
+            str_ids = sorted(i for i in ids if isinstance(i, str))
+            idea_parts = [f"#{i:03d}" for i in int_ids]
+            ca_parts = list(str_ids)
             lines.append(f"   [[{concept}]] → {', '.join(idea_parts + ca_parts)}")
 
     return "\n".join(lines)
