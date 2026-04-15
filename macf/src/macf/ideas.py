@@ -759,3 +759,146 @@ def format_query_result(result: Dict[str, Any]) -> str:
             lines.append(f"   [[{c['concept']}]] ({c['members']} nodes)")
 
     return "\n".join(lines)
+
+
+# Stop words excluded from keyword extraction
+_STOP_WORDS = frozenset(
+    "a an the and or but in on at to for of is it by as with from that this "
+    "be are was were has have had do does did not no via use using used "
+    "when how what why where which can could should would may might".split()
+)
+
+
+def detect_graph_gaps(kg: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """Detect missing wiki-links by comparing node title keywords with wiki concepts.
+
+    For each node with degree < 3, extract title keywords and check overlap
+    with existing wiki concepts. Returns gap suggestions sorted by confidence.
+    """
+    if kg is None:
+        kg = build_knowledge_graph()
+
+    ideas = kg["ideas"]
+    ca_nodes = kg.get("ca_nodes", {})
+    edges = kg["edges"]
+    wiki_index = kg.get("wiki_index", {})
+
+    # Build set of all wiki concepts
+    all_concepts = set(wiki_index.keys())
+    if not all_concepts:
+        return []
+
+    # Build concept→cluster mapping (which cluster does each concept connect to?)
+    # BFS connected components
+    all_node_ids = set(ideas.keys()) | set(ca_nodes.keys())
+    visited: set = set()
+    node_to_cluster: Dict[Any, int] = {}
+    cluster_labels: Dict[int, str] = {}
+    cluster_idx = 0
+    for node_id in sorted(all_node_ids, key=str):
+        if node_id in visited or not edges.get(node_id):
+            continue
+        component: list = []
+        queue = [node_id]
+        while queue:
+            node = queue.pop(0)
+            if node in visited or node not in all_node_ids:
+                continue
+            visited.add(node)
+            component.append(node)
+            node_to_cluster[node] = cluster_idx
+            for neighbor in sorted(edges.get(node, set()), key=str):
+                if neighbor not in visited and neighbor in all_node_ids:
+                    queue.append(neighbor)
+        # Label cluster by its most common concepts
+        cluster_concepts = [c for c, ids in wiki_index.items()
+                           if len(ids & set(component)) >= 2]
+        cluster_labels[cluster_idx] = ", ".join(sorted(cluster_concepts)[:3]) or f"cluster-{cluster_idx}"
+        cluster_idx += 1
+
+    gaps = []
+
+    def _extract_keywords(text: str) -> set:
+        words = set(re.findall(r'[a-z_]+', text.lower().replace("-", "_")))
+        return words - _STOP_WORDS
+
+    def _check_node(node_id, title: str, node_type: str, node_degree: int):
+        if node_degree >= 3:
+            return  # Well-connected nodes don't need gap analysis
+        title_keywords = _extract_keywords(title)
+        if not title_keywords:
+            return
+
+        # Find wiki concepts whose name overlaps with title keywords
+        for concept in all_concepts:
+            concept_keywords = set(concept.split("_"))
+            overlap = title_keywords & concept_keywords
+            if not overlap:
+                continue
+            # Check node isn't already connected to this concept's members
+            concept_members = wiki_index[concept]
+            if node_id in concept_members:
+                continue  # Already linked
+            # Confidence: overlap size / concept keyword count
+            confidence = len(overlap) / max(len(concept_keywords), 1)
+            if confidence < 0.5:
+                continue
+            # Find which cluster this concept belongs to
+            target_cluster = None
+            for member in concept_members:
+                if member in node_to_cluster:
+                    target_cluster = cluster_labels.get(node_to_cluster[member])
+                    break
+
+            gaps.append({
+                "node_id": str(node_id),
+                "node_type": node_type,
+                "title": title[:60],
+                "degree": node_degree,
+                "suggested_concept": concept,
+                "overlap_keywords": sorted(overlap),
+                "confidence": round(confidence, 2),
+                "target_cluster": target_cluster or "isolated",
+            })
+
+    # Check ideas
+    for idea_id, idea in ideas.items():
+        deg = len(edges.get(idea_id, set()))
+        _check_node(idea_id, idea.get("title", ""), "idea", deg)
+
+    # Check CA nodes
+    for ca_id, info in ca_nodes.items():
+        deg = len(edges.get(ca_id, set()))
+        _check_node(ca_id, info.get("title", ""), info.get("type", "ca"), deg)
+
+    # Sort by confidence descending
+    gaps.sort(key=lambda g: (-g["confidence"], g["node_id"]))
+    return gaps
+
+
+def format_gap_report(gaps: List[Dict[str, Any]]) -> str:
+    """Format gap detection results as terminal table."""
+    if not gaps:
+        return "No gaps detected — all nodes are well-connected or no keyword overlap found."
+
+    lines = [
+        f"🔍 Gap Detection: {len(gaps)} suggestions",
+        "",
+        f"{'Node':<30} {'Suggested Concept':<22} {'Conf':>5}  {'Cluster'}",
+        f"{'─'*30} {'─'*22} {'─'*5}  {'─'*25}",
+    ]
+
+    for g in gaps:
+        node_label = g["node_id"]
+        if g["node_type"] == "idea":
+            node_label = f"#{int(g['node_id']):03d} {g['title'][:24]}"
+        else:
+            node_label = g["node_id"][:30]
+        concept = f"[[{g['suggested_concept']}]]"
+        conf = f"{g['confidence']:.0%}"
+        cluster = g["target_cluster"][:25]
+        lines.append(f"{node_label:<30} {concept:<22} {conf:>5}  {cluster}")
+
+    lines.append("")
+    lines.append(f"💡 Add suggested [[concepts]] to Wiki-Links sections to strengthen the knowledge web.")
+    return "\n".join(lines)
