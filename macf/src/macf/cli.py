@@ -6094,6 +6094,18 @@ def cmd_idea_graph(args: argparse.Namespace) -> int:
     """Show knowledge graph from wiki-links and relations."""
     from .ideas import build_idea_graph, build_knowledge_graph, format_graph_tree, format_graph_cluster
 
+    # HTML visualization (always uses cross-CA graph)
+    html_output = getattr(args, "html", None)
+    if html_output is not None:
+        from .ideas import generate_graph_html
+        if html_output == "":
+            # Default output path
+            html_output = "/tmp/macf_knowledge_graph.html"
+        path = generate_graph_html(html_output)
+        print(f"📊 Knowledge graph written to: {path}")
+        print(f"   Open in browser: file://{path}")
+        return 0
+
     if getattr(args, "cross_ca", False):
         kg = build_knowledge_graph()
         stats = kg["stats"]
@@ -7029,6 +7041,8 @@ def _build_parser() -> argparse.ArgumentParser:
     idea_graph.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")
     idea_graph.add_argument("--tree", action="store_true", help="tree view (most-connected as roots)")
     idea_graph.add_argument("--cross-ca", dest="cross_ca", action="store_true", help="include learnings + observations via wiki-links")
+    idea_graph.add_argument("--html", nargs="?", const="", default=None, metavar="OUTPUT",
+                            help="generate interactive HTML visualization (default: /tmp/macf_knowledge_graph.html)")
     idea_graph.set_defaults(func=cmd_idea_graph)
 
     # ── shell ────────────────────────────────────────────────────────────
