@@ -352,6 +352,20 @@ macf_tools idea graph
 
 ---
 
+## Markdown Style Guidelines (for HTML Presentation)
+
+JOTEWRs are rendered as styled HTML via `macf_tools markdown present`. Follow these guidelines for clean presentation:
+
+- **Don't bold entire list items** — bold only key terms, not whole sentences. `- **#042** — description` not `- **#042 — description**`
+- **Use H2 for major sections, H3 for subsections** — H1 is the document title only
+- **Keep code blocks short** — long inline code in prose wraps poorly; use fenced blocks for multi-line
+- **Prefer em-dashes (`—`) over bold** for emphasis in prose — bold in body text looks oversized
+- **Tables render well** — use them for structured data instead of bullet lists when appropriate
+- **Emoji in headings is fine** — the dark theme renders them crisply
+- **One blank line between sections** — excessive whitespace creates awkward gaps in HTML
+
+---
+
 ## Post-Creation Scholarship Annotation
 
 After JOTEWR saved and user approves content:
