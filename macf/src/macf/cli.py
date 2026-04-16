@@ -2579,6 +2579,19 @@ def cmd_mode_show(args: argparse.Namespace) -> int:
     print(f"  Closeout responsibility: {'AGENT' if should_self_manage_closeout(modes) else 'USER'}")
     print(f"  Closeout urgency:        {'NOW' if should_closeout_now(modes) else 'normal'}")
     print(f"  Notification suppression: {'YES' if is_quiet(modes) else 'no'}")
+
+    # Idle detection status
+    print()
+    print("Idle Detection:")
+    try:
+        from .transcript_monitor.daemon import is_running as tm_is_running
+        tm_running = tm_is_running()
+        print(f"  Transcript Monitor: {'✅ running' if tm_running else '⏹️  stopped'}")
+        print(f"  USER_IDLE detection: {'✅ active (via TM)' if tm_running else '⚠️  disabled (TM not running)'}")
+    except (ImportError, OSError) as e:
+        print(f"  Transcript Monitor: ❌ unavailable ({e})")
+        print(f"  USER_IDLE detection: ⚠️  disabled")
+
     return 0
 
 
