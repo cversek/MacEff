@@ -5183,6 +5183,14 @@ def cmd_task_scope_set(args: argparse.Namespace) -> int:
         # Timer: emit scope_timer event if --timer provided
         timer_minutes = getattr(args, 'timer', 0)
         if timer_minutes > 0:
+            # Guard: block setting new timer when one is already active
+            from .task.scope import get_active_timer
+            existing_timer = get_active_timer()
+            if existing_timer.get("active"):
+                print(f"⏱️  Timer already active ({existing_timer['remaining_min']} min remaining). "
+                      f"Cannot set new timer without user authorization.")
+                return 1
+
             import time
             from .agent_events_log import append_event
             timer_end = time.time() + (timer_minutes * 60)
@@ -5355,6 +5363,17 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
     except ValueError:
         print(f"❌ Invalid task ID: {args.task_id}")
         return 1
+
+    # Timer guard: block completion of timer-scoped tasks before timer expires
+    try:
+        from .task.scope import is_task_timer_blocked
+        timer_check = is_task_timer_blocked(task_id)
+        if timer_check["blocked"]:
+            print(f"⏱️  {timer_check['reason']}")
+            return 1
+    except (ImportError, OSError) as e:
+        import sys as _sys
+        print(f"⚠️ MACF: Timer check failed (non-blocking): {e}", file=_sys.stderr)
 
     # Check report is provided
     if not args.report:

@@ -191,20 +191,21 @@ Development Drive Stats:
                     task_list = "\n".join(
                         f"  - #{t['id']}: {t['subject']}" for t in scope["active"]
                     )
+
+                    # Check if a timer is active — changes the gate message
+                    timer_info = scope.get("timer", {})
+                    timer_active = timer_info.get("active", False)
+                    timer_remaining = timer_info.get("remaining_min", 0)
+
                     # Notify Telegram — unique emoji: 🛡️👀 (scope + watching)
                     try:
                         from macf.channels.telegram import send_telegram_notification
-                        send_telegram_notification(
-                            f"{scope['active_count']} scoped task(s) remaining",
-                            prefix="\U0001f6e1\ufe0f\U0001f440 Scope gate"
-                        )
+                        gate_msg = (f"{scope['active_count']} scoped task(s), {timer_remaining}m remaining"
+                                    if timer_active else f"{scope['active_count']} scoped task(s) remaining")
+                        send_telegram_notification(gate_msg, prefix="\U0001f6e1\ufe0f\U0001f440 Scope gate")
                     except Exception as e:
                         print(f"⚠️ MACF: Scope gate Telegram error: {e}", file=sys.stderr)
-                    # Use decision:"block" — this forces CC to continue the agent's turn
-                    # (blocking errors re-enter the message loop, query.ts:1282).
-                    # continue:false would STOP the agent (preventContinuation).
-                    # continue:true+systemMessage is soft (agent can ignore).
-                    # decision:block is the HARD mechanism — the completion driver.
+
                     error_context = ""
                     if is_error_stop:
                         error_context = (
@@ -212,6 +213,35 @@ Development Drive Stats:
                             "Read the error, form a hypothesis, and try again. "
                         )
 
+                    # Timer-active scope gate: engage Markov recommender for work continuation
+                    if timer_active:
+                        recommendation = ""
+                        try:
+                            active_modes = detect_active_modes(session_id, token_info)
+                            current_wm = get_current_work_mode(active_modes)
+                            op_modes = {m for m in active_modes if m in ("AUTO_MODE", "USER_IDLE", "QUIET_MODE", "LOW_CONTEXT")}
+                            selected, dist = sample_next_work_mode(current_wm, op_modes)
+                            recommendation = "\n" + format_recommendation(current_wm, selected, dist, "ctb")
+                        except (OSError, ValueError, ImportError) as e:
+                            print(f"⚠️ MACF: recommender failed: {e}", file=sys.stderr)
+
+                        return {
+                            "continue": True,
+                            "decision": "block",
+                            "reason": (
+                                f"SCOPE GATE (timer active): {timer_remaining} min remaining. "
+                                f"{error_context}"
+                                f"Scoped task: {task_list}\n"
+                                f"Timer-scoped tasks cannot be completed before timer expires. "
+                                f"Document progress in task notes with MODE_NAME: prefix. "
+                                f"ULTRATHINK about the recommendation below, then invoke the suggested skill "
+                                f"(or override with justification in task notes).\n"
+                                f"{recommendation}\n"
+                                f"Emergency escape: macf_tools mode set MANUAL_MODE --justification <reason>"
+                            ),
+                        }
+
+                    # Non-timer scope gate: standard "complete these tasks" message
                     return {
                         "continue": True,
                         "decision": "block",

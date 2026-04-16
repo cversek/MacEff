@@ -223,19 +223,73 @@ def get_active_scope() -> List[Dict]:
     return result
 
 
+def get_active_timer() -> dict:
+    """Check for an active (unexpired) scope timer.
+
+    Returns:
+        Dict with 'active' (bool), 'remaining_sec' (float), 'remaining_min' (int),
+        'timer_end_epoch' (float), or {'active': False} if no timer.
+    """
+    import time
+    for event in read_events(limit=None, reverse=True):
+        if event.get("event") == "scope_timer_set":
+            timer_end = event.get("data", {}).get("timer_end_epoch", 0)
+            remaining = timer_end - time.time()
+            if remaining > 0:
+                return {
+                    "active": True,
+                    "remaining_sec": remaining,
+                    "remaining_min": int(remaining / 60),
+                    "timer_end_epoch": timer_end,
+                }
+            return {"active": False}
+        elif event.get("event") == "scope_cleared":
+            return {"active": False}
+    return {"active": False}
+
+
+def is_task_timer_blocked(task_id: str) -> dict:
+    """Check if a task is blocked from completion by an active timer.
+
+    A scoped task cannot be completed while a scope timer is active.
+
+    Returns:
+        Dict with 'blocked' (bool), 'remaining_min' (int), 'reason' (str).
+    """
+    scope = get_scope_state()
+    if str(task_id) not in scope:
+        return {"blocked": False, "remaining_min": 0, "reason": ""}
+
+    timer = get_active_timer()
+    if not timer.get("active"):
+        return {"blocked": False, "remaining_min": 0, "reason": ""}
+
+    return {
+        "blocked": True,
+        "remaining_min": timer["remaining_min"],
+        "reason": (
+            f"Cannot complete timer-scoped task — {timer['remaining_min']} min remaining. "
+            f"Document progress in task notes. Timer gate lifts at expiry."
+        ),
+    }
+
+
 def get_scope_check() -> dict:
     """Structured scope check for Stop hook and JSON output.
 
     Returns:
-        Dict with 'active' (list), 'inactive' (list), 'active_count', 'inactive_count', 'total'.
+        Dict with 'active' (list), 'inactive' (list), 'active_count', 'inactive_count',
+        'total', 'timer' (active timer info).
     """
     tasks = get_active_scope()
     active = [t for t in tasks if t["status"] == "active"]
     inactive = [t for t in tasks if t["status"] == "inactive"]
+    timer = get_active_timer()
     return {
         "active": active,
         "inactive": inactive,
         "active_count": len(active),
         "inactive_count": len(inactive),
         "total": len(tasks),
+        "timer": timer,
     }
