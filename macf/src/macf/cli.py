@@ -7119,12 +7119,39 @@ def _build_parser() -> argparse.ArgumentParser:
     kg_viz.add_argument("output", nargs="?", default="", help="output path (default: /tmp/macf_knowledge_graph.html)")
     kg_viz.set_defaults(func=cmd_knowledge_viz)
 
+    # ── markdown ─────────────────────────────────────────────────────────
+    markdown_parser = sub.add_parser("markdown", help="markdown rendering and presentation")
+    markdown_sub = markdown_parser.add_subparsers(dest="markdown_cmd")
+
+    md_present = markdown_sub.add_parser("present", help="render markdown as styled HTML and open in browser")
+    md_present.add_argument("filepath", help="path to markdown file")
+    md_present.add_argument("--output", "-o", metavar="PATH", default=None,
+                            help="output HTML path (default: /tmp/macf_md_*.html)")
+    md_present.set_defaults(func=cmd_markdown_present)
+
     # ── shell ────────────────────────────────────────────────────────────
     shell_parser = sub.add_parser("shell", help="shell integration (tab completion)")
     shell_sub = shell_parser.add_subparsers(dest="shell_cmd")
     shell_sub.add_parser("setup", help="print tab completion setup instructions").set_defaults(func=cmd_shell_setup)
 
     return p
+
+
+def cmd_markdown_present(args: argparse.Namespace) -> int:
+    """Render markdown as styled HTML and open in browser."""
+    from .viz.markdown import MarkdownPresenter
+
+    try:
+        presenter = MarkdownPresenter(source=args.filepath)
+        output = getattr(args, "output", None)
+        presenter.present(output_path=output)
+        return 0
+    except FileNotFoundError as e:
+        print(f"❌ {e}")
+        return 1
+    except (OSError, ValueError) as e:
+        print(f"❌ Markdown presentation failed: {e}")
+        return 1
 
 
 def cmd_voice_service_start(args) -> int:

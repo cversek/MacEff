@@ -24,6 +24,9 @@ test = [
     "pydantic>=2.0.0",  # For agent/project spec validation tests
     "lancedb>=0.26.0",  # For hybrid search / recommend tests
 ]
+viz = [
+    "markdown>=3.0",  # Markdown-to-HTML for CA presentation
+]
 proxy = [
     "aiohttp>=3.9.0",  # For API proxy streaming
 ]
