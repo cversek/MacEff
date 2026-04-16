@@ -2804,6 +2804,17 @@ def cmd_mode_set(args: argparse.Namespace) -> int:
                         print("✅ AUTO_MODE ask permissions already present")
                 else:
                     print("⚠️  Could not install AUTO_MODE ask permissions")
+                # Auto-start Transcript Monitor for idle detection
+                try:
+                    from .transcript_monitor.daemon import is_running as tm_is_running, start_daemon as tm_start
+                    if tm_is_running():
+                        print("✅ Transcript Monitor already running")
+                    else:
+                        tm_start()
+                        print("✅ Transcript Monitor started for idle detection")
+                except (ImportError, OSError) as e:
+                    print(f"⚠️  Transcript Monitor auto-start failed (non-blocking): {e}", file=sys.stderr)
+
                 print("⚠️  Restart session for permissions to take effect")
             else:
                 # MANUAL_MODE
