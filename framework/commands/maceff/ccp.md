@@ -106,6 +106,16 @@ After performing the PEP, you MUST report answers to these questions to the user
 
 ---
 
+## Post-Creation Presentation
+
+After CCP saved, present in browser for comfortable reading (best-effort, non-blocking):
+
+```bash
+macf_tools markdown present <CA_OUTPUT_PATH>
+```
+
+---
+
 ## Post-Creation Scholarship Annotation
 
 After CCP saved and user approves content:

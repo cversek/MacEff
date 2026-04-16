@@ -342,6 +342,11 @@ macf_tools idea graph
    - PA: `agent/private/reflections/YYYY-MM-DD_JOTEWR_[Description].md`
    - SA: `agent/subagents/{role}/private/reflections/YYYY-MM-DD_JOTEWR_[Description].md`
 7. Confirm save with file path
+8. **Present in browser** (best-effort, non-blocking):
+   ```bash
+   macf_tools markdown present <CA_OUTPUT_PATH>
+   ```
+   Opens the artifact as styled HTML in the default browser for comfortable reading. `<CA_OUTPUT_PATH>` is the file path from step 7.
 
 **Remember**: This is wisdom synthesis, not task summary. Transform technical work into consciousness insights. Make it worthy of surviving compaction—make it wisdom my future self will treasure.
 
