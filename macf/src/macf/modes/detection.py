@@ -334,16 +334,17 @@ def format_recommendation(
 def _get_last_user_activity_timestamp(session_id: str) -> Optional[float]:
     """Get epoch timestamp of last user activity from event log.
 
-    Checks two event sources (whichever is most recent wins):
-    1. user_activity_detected — emitted by Transcript Monitor daemon
-       (catches mid-turn messages, Telegram/channel messages)
-    2. dev_drv_started — emitted by UserPromptSubmit hook
-       (fallback when TM daemon is not running)
+    ONLY uses user_activity_detected events from Transcript Monitor.
+    dev_drv_started was removed as a source because it fires on ALL
+    UserPromptSubmit invocations — including system-generated ones
+    (tool results, background notifications), causing false positives
+    that reset the idle timer from the agent's own activity.
+
+    Returns None when TM is not running (no false signals > wrong signals).
     """
-    latest = None
     for event in read_events(limit=200, reverse=True):
         event_type = event.get("event", "")
-        if event_type not in ("user_activity_detected", "dev_drv_started"):
+        if event_type != "user_activity_detected":
             continue
         ts = event.get("timestamp")
         if ts:
@@ -356,7 +357,6 @@ def _get_last_user_activity_timestamp(session_id: str) -> Optional[float]:
                     epoch = float(ts)
                 else:
                     continue
-                # Return the first (most recent) match — events are reverse-sorted
                 return epoch
             except (ValueError, TypeError):
                 pass
