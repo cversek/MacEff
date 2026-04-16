@@ -77,13 +77,28 @@ At each gate point, the recommender presents a suggestion:
 
 ---
 
-## 3. Scope Feeding Discipline
+## 3. Sprint Task Discipline
 
-**Rule**: NEVER let scoped task count drop to 0 while the timer is running.
+**Rule**: One scoped sprint task with timer. No new task creation unless user directs.
 
-When down to 2 remaining scoped tasks, create 3+ more and re-scope BEFORE completing the next task. The motivation skill you invoke handles task creation — but you must scope the tasks it produces.
+The sprint task is a container — it stays open for the full timer duration. Document all activity in task notes with work mode prefix: `MODE_NAME: description`.
 
-**The failure mode**: Task completes → scope clears to 0 → scope gate blocks → agent stalls. Front-loading prevents this.
+**Task note examples**:
+- `DISCOVER: analyzed v2.1.109 string diffs, found REPL tool`
+- `CURATE: documented compaction prompt in cc_internals KB`
+- `DISCOVER: idea — durable cron tasks for scheduled autonomous work`
+
+**Idea capture**: Jot ideas as task notes (not formal idea CAs). After sprint, curate ideas from notes with user guidance. Formal idea CAs during sprints create excessive overhead.
+
+**Timer-scoped task cannot be completed early**: The scope gate blocks `task complete` while the timer is active. This is infrastructure, not a bug.
+
+**Scope completion triggers Markov**: When the scope gate fires with timer active, the Markov recommender suggests the next work mode. This is NORMAL AND ENCOURAGED — complete work honestly, let the recommender guide continuation.
+
+**Two-gate stop mechanism**: Both must clear to stop.
+1. **Scope gate**: Sprint task must be completed (`task complete` with report)
+2. **Timer gate**: Timer must have expired
+
+Timer expiry lifts the timer gate. Agent then completes the sprint task with a report, which clears the scope gate. Stop is allowed. AUTO_MODE persists until user returns.
 
 ---
 
@@ -99,15 +114,23 @@ When down to 2 remaining scoped tasks, create 3+ more and re-scope BEFORE comple
 
 ## 5. Timer Discipline
 
+**Timer is MANDATORY** when user specifies a time allotment: `macf_tools task scope set <id> --timer <minutes>`.
+
+**Session restart is MANDATORY** between AUTO_MODE activation and sprint work. Permissions only take effect after restart. Negotiate with user: "Please restart (Ctrl-D + claude -c) then say GO."
+
 **Wind-down starts at T-60 minutes, not before.**
 
-No consolidation notes labeled "sprint wrap-up" before the last hour. Periodic MISSION notes (every 60 min or 10 commits) are accountability, not wind-down.
+No consolidation notes labeled "sprint wrap-up" before the last hour. Periodic notes (every 60 min or 10 commits) are accountability, not wind-down.
 
 **Wind-down protocol**:
 - T-60: Stop new DISCOVER/EXPERIMENT. Shift to CURATE and CONSOLIDATE.
 - T-30: Curate remaining learnings, commit all work.
 - T-15: Push all repos, regenerate indexes.
-- T-0: Timer expires naturally. Don't de-escalate early.
+- T-0: Timer expires → timer gate lifts → complete sprint task → stop naturally.
+
+**Normal stop**: Timer expired + task completed → both gates clear → stop allowed. AUTO_MODE persists until user returns. No de-escalation needed.
+
+**Emergency only**: `macf_tools mode set MANUAL_MODE --justification <reason>` for genuine emergencies (security, blocked, opsec). NOT for normal wind-down.
 
 **1M CL thresholds** (recalibrated from 200K):
 
@@ -134,10 +157,25 @@ No consolidation notes labeled "sprint wrap-up" before the last hour. Periodic M
 - **Cause**: Completion bias — performing closure
 - **Remedy**: Save prose for JOTEWRs. Treat narrative closure as a RED FLAG.
 
-### Scope Gate Fatigue
-- **Signal**: Creating tasks mechanically to feed the scope gate
-- **Cause**: Reflexive loop becoming mechanical
-- **Remedy**: Switch motivation types. If no type has energy — that's the genuine stop signal.
+### Scope Stretching
+- **Signal**: Padding work to fill the timer window, avoiding scope completion
+- **Cause**: Fear of hitting the timer gate
+- **Remedy**: Complete work honestly. Scope completion triggers Markov recommender — that IS the continuation mechanism.
+
+### No Timer Set
+- **Signal**: Agent invents arbitrary wind-down timing ("I'll stop at 3:19 PM")
+- **Cause**: Forgetting `--timer` on scope set
+- **Remedy**: Timer is mandatory for timed sprints. It's the wind-down infrastructure.
+
+### Emergency De-escalation as Wind-Down
+- **Signal**: Using `macf_tools mode set MANUAL_MODE --justification` to stop a normal sprint
+- **Cause**: Not understanding the two-gate stop mechanism
+- **Remedy**: Timer expires → complete task → stop naturally. AUTO_MODE persists. De-escalation is for emergencies.
+
+### Idea CA Overhead
+- **Signal**: Creating formal idea JSON files during sprint work
+- **Cause**: Over-curation in real-time
+- **Remedy**: Jot ideas as task notes. Curate with user after sprint.
 
 ### Premature Wrap-Up
 - **Signal**: "Sprint consolidation" notes before T-60
