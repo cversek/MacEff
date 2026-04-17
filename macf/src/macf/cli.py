@@ -5402,13 +5402,31 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
         print(f"❌ Invalid task ID: {args.task_id}")
         return 1
 
-    # Timer guard: block completion of timer-scoped tasks before timer expires
+    # Timer guard: block completion but fire Markov recommender at this gate point
     try:
         from .task.scope import is_task_timer_blocked
         timer_check = is_task_timer_blocked(task_id)
         if timer_check["blocked"]:
-            print(f"⏱️  {timer_check['reason']}")
-            return 1
+            remaining = timer_check["remaining_min"]
+            print(f"⏱️  Timer gate: {remaining} min remaining — task completion deferred until timer expires.")
+            print(f"   Scope work complete. Markov recommender suggests next work mode:\n")
+            # Fire the Markov recommender
+            try:
+                from .modes import (
+                    detect_active_modes, get_current_work_mode,
+                    sample_next_work_mode, format_recommendation,
+                )
+                session_id = get_current_session_id()
+                token_info = get_token_info(session_id)
+                modes = detect_active_modes(session_id, token_info)
+                current_wm = get_current_work_mode(modes)
+                op_modes = {m for m in modes if m in ("AUTO_MODE", "USER_IDLE", "QUIET_MODE", "LOW_CONTEXT")}
+                selected, dist = sample_next_work_mode(current_wm, op_modes)
+                print(format_recommendation(current_wm, selected, dist, "maceff"))
+            except Exception as e:
+                import sys as _sys
+                print(f"⚠️ Markov recommender failed: {e}", file=_sys.stderr)
+            return 0  # Not an error — gate point, not failure
     except (ImportError, OSError) as e:
         import sys as _sys
         print(f"⚠️ MACF: Timer check failed (non-blocking): {e}", file=_sys.stderr)
