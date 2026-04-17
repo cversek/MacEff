@@ -2543,6 +2543,20 @@ def cmd_policy_injections(args: argparse.Namespace) -> int:
 
 # -------- Mode Commands --------
 
+def cmd_mode_set_work(args: argparse.Namespace) -> int:
+    """Set the active work mode."""
+    from .modes import WORK_MODES
+    mode = args.work_mode.upper()
+    if mode not in WORK_MODES:
+        valid = ", ".join(sorted(WORK_MODES.keys()))
+        print(f"❌ Unknown work mode: {mode}. Valid modes: {valid}")
+        return 1
+    info = WORK_MODES[mode]
+    append_event("work_mode_change", {"mode": mode})
+    print(f"✅ Work mode set: {info['emoji']} {mode}")
+    return 0
+
+
 def cmd_mode_unset_work(args: argparse.Namespace) -> int:
     """Clear the active work mode."""
     append_event("work_mode_change", {"mode": None})
@@ -6525,6 +6539,10 @@ def _build_parser() -> argparse.ArgumentParser:
     mode_get.set_defaults(func=cmd_mode_get)
 
     mode_sub.add_parser("show", help="show active mode set with emojis and triggers").set_defaults(func=cmd_mode_show)
+    mode_set_work = mode_sub.add_parser("set-work", help="set the active work mode")
+    mode_set_work.add_argument("work_mode", help="work mode (DISCOVER, EXPERIMENT, BUILD, CURATE, CONSOLIDATE)")
+    mode_set_work.set_defaults(func=cmd_mode_set_work)
+
     mode_sub.add_parser("unset-work", help="clear the active work mode").set_defaults(func=cmd_mode_unset_work)
 
     mode_set = mode_sub.add_parser("set", help="set operating mode")
