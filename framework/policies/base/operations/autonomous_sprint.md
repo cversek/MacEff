@@ -79,26 +79,47 @@ At each gate point, the recommender presents a suggestion:
 
 ## 3. Sprint Task Discipline
 
-**Rule**: One scoped sprint task with timer. No new task creation unless user directs.
+### Timed vs Untimed Sprints
 
-The sprint task is a container — it stays open for the full timer duration. Document all activity in task notes with work mode prefix: `MODE_NAME: description`.
+**Timed sprint** — user specifies a time period ("work for 2 hours"):
+- Exploratory, experimental, self-motivated
+- Markov recommender guides mode transitions
+- Timer enforces wind-down discipline
+- Use `--timer` flag
+
+**Untimed sprint** — user specifies a workload ("finish this MISSION"):
+- Defined deliverables, scope completion discipline
+- Stop when all scoped work is done (scope clears naturally)
+- NO timer — only set `--timer` when the user explicitly gives a time period
+
+**CRITICAL**: Never invent a timer for workload-defined sprints.
+
+### Task Note Discipline
+
+Document all activity in task notes with work mode prefix: `MODE_NAME: description`. This is required for BOTH sprint types, but especially important during timed sprint continuation periods.
 
 **Task note examples**:
 - `DISCOVER: analyzed v2.1.109 string diffs, found REPL tool`
 - `CURATE: documented compaction prompt in cc_internals KB`
 - `DISCOVER: idea — durable cron tasks for scheduled autonomous work`
 
-**Idea capture**: Jot ideas as task notes (not formal idea CAs). After sprint, curate ideas from notes with user guidance. Formal idea CAs during sprints create excessive overhead.
+**Idea capture**: Jot ideas as task notes (not formal idea CAs). Use the `💡` prefix: `DISCOVER: 💡 REPL registerTool for dynamic tools`. After sprint, curate `💡` notes into formal idea CAs with user guidance.
 
-**Timer-scoped task cannot be completed early**: The scope gate blocks `task complete` while the timer is active. This is infrastructure, not a bug.
+### Completion and Gate Mechanics
 
-**Scope completion triggers Markov**: When the scope gate fires with timer active, the Markov recommender suggests the next work mode. This is NORMAL AND ENCOURAGED — complete work honestly, let the recommender guide continuation.
+**Non-last task completions proceed freely**: When multiple tasks are scoped, complete each the moment its work finishes. No gate, no Markov. This clears scope incrementally.
+
+**Only the LAST scoped task is timer-gated**: When you attempt to complete the last remaining scoped task while the timer is active, the timer gate blocks completion and fires the Markov recommender. This suggests a new work mode and self-motivation skill for continuation.
+
+**When your current mode runs out of steam**: Attempt to complete the last scoped task. The Markov recommender fires, suggesting fresh direction. Invoke the recommended self-motivation skill to re-energize. Don't power through exhausted curiosity — let the recommender redirect you.
 
 **Two-gate stop mechanism**: Both must clear to stop.
-1. **Scope gate**: Sprint task must be completed (`task complete` with report)
-2. **Timer gate**: Timer must have expired
+1. **Scope gate**: All scoped tasks must be completed (`task complete` with report)
+2. **Timer gate**: Timer must have expired (only blocks the last task)
 
-Timer expiry lifts the timer gate. Agent then completes the sprint task with a report, which clears the scope gate. Stop is allowed. AUTO_MODE persists until user returns.
+Timer expiry lifts the timer gate. Agent then completes the last task with a report, which clears the scope gate. Stop is allowed. AUTO_MODE persists until user returns.
+
+**NEVER use `scope clear`** to exit a sprint. It triggers a permissions prompt (halts sprint when user is away) and destroys tracking without completion reports.
 
 ---
 

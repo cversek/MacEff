@@ -58,33 +58,75 @@ Extract requirements by answering:
 
 ## Step 4: Set Up Sprint Infrastructure
 
-1. **Scope the sprint task with timer** (MANDATORY for timed sprints):
-   ```bash
-   macf_tools task scope set <task_id> --timer <minutes>
-   ```
-   The timer is the wind-down mechanism. Without it, wind-down becomes arbitrary.
+### Timed vs Untimed Sprints
 
-2. **Verify TM is running** (should be auto-started from Step 1):
-   ```bash
-   macf_tools transcript-monitor status
-   ```
+**Timed sprint** — user specifies a time period ("work for 2 hours", "45 min sprint"):
+- Exploratory, experimental, self-motivated
+- Markov recommender guides mode transitions at gate points
+- Timer enforces wind-down discipline
+- Work may shift domains as curiosity guides
 
-3. **Document sprint start** in task notes:
-   ```bash
-   macf_tools task note <id> "Sprint launched at <time>. Timer: <N> min. Goal: <description>."
-   ```
+**Untimed sprint** — user specifies a workload ("finish MISSION #983", "complete these phases"):
+- Defined deliverables, scope completion discipline
+- Stop when all scoped work is done (scope gate clears naturally)
+- Less self-motivation needed — work is predefined
+- NO timer — only set `--timer` when the user explicitly gives a time
+
+**CRITICAL**: Only use `--timer` when the user specifies a time period. NEVER invent a timer for workload-defined sprints.
+
+### Scope Setup
+
+```bash
+# Timed sprint (user said "work for 2 hours"):
+macf_tools task scope set <task_id> --timer 120
+
+# Untimed sprint (user said "finish this MISSION"):
+macf_tools task scope set <task_id>
+```
+
+**Verify TM is running** (should be auto-started from Step 1):
+```bash
+macf_tools transcript-monitor status
+```
+
+**Document sprint start** in task notes:
+```bash
+macf_tools task note <id> "Sprint launched at <time>. Goal: <description>."
+```
 
 ---
 
 ## Step 5: Begin Work
 
-Work within the scoped task. The two-gate stop mechanism governs the sprint lifecycle:
+### Untimed Sprint (Workload-Defined)
+
+Work through scoped tasks systematically. Complete each task the moment its work finishes:
+
+```bash
+macf_tools task complete <id> --report "..."
+```
+
+Completed tasks auto-clear from scope. When all scoped tasks are completed, the scope gate clears and stop is allowed. AUTO_MODE persists until user returns.
+
+**The natural flow**: Work → complete task immediately → next task → complete → ... → all scope cleared → stop allowed.
+
+### Timed Sprint (Time-Bounded)
+
+The two-gate stop mechanism governs the lifecycle:
 
 **Scope gate + Timer gate**: Both must clear before stopping.
 
-- **Timer active, scope active**: Scope gate blocks with Markov recommender. Follow the recommendation to continue productive work.
+- **Timer active, last task remaining**: Timer gate blocks completion and fires Markov recommender for continuation guidance.
 - **Timer expired, scope active**: Complete the task with a report to clear scope gate.
 - **Both cleared**: Stop is allowed. AUTO_MODE persists until user returns.
+
+**Non-last task completions proceed freely** — no Markov, no gate. The Markov recommender ONLY fires when attempting to complete the last scoped task while the timer is active.
+
+**Detailed task notes throughout**: During the timed continuation period, document your activity with work mode prefix at each turn: `DISCOVER: explored X`, `CURATE: documented Y`. This creates the forensic trail of the sprint.
+
+**When your current mode runs out of steam**: Attempt to complete the last scoped task. The timer gate fires the Markov recommender, suggesting a new work mode and self-motivation skill. Invoke the suggested skill to find fresh direction. This is the DESIGNED transition mechanism — don't power through exhausted curiosity, let the recommender redirect you.
+
+### Common Discipline (Both Modes)
 
 **Task note discipline** (REQUIRED):
 - Prefix all notes with work mode: `DISCOVER: analyzed v2.1.109 strings`
@@ -93,22 +135,18 @@ Work within the scoped task. The two-gate stop mechanism governs the sprint life
 
 **NO new task creation** in AUTO_MODE unless the user directs it. Activity goes in task notes on the scoped task.
 
-**Complete tasks immediately as work finishes** — call `macf_tools task complete <id> --report "..."` the moment each task's work is done, not in a batch at the end. The timer gate may show "deferred" but the completion intent is registered. Completed tasks auto-clear from scope. When all scoped tasks are completed, the scope gate clears.
-
-**Trust the deferral**: When the timer gate says "task completion deferred until timer expires", this is the designed behavior — the Markov recommender fires to suggest productive continuation work. Follow the recommendation. Do NOT use `scope clear` to bypass the gate.
-
-**The natural flow**: Work → complete task immediately → Markov fires → follow recommendation → work on next thing → repeat until timer expires or all scope cleared.
+**NEVER use `scope clear`** to exit a sprint. It triggers a permissions prompt (halts sprint when user is away) and destroys tracking without completion reports. Always complete tasks individually.
 
 ---
 
 ## Anti-Patterns
 
-- **No timer set**: Inventing arbitrary wind-down timing instead of using `--timer`
+- **Inventing a timer for workload sprints**: User said "finish this MISSION" (defined workload) but agent set `--timer 180`. Only use `--timer` when the user explicitly specifies a time period. Workload sprints end when scope clears naturally.
 - **Emergency de-escalation as wind-down**: Using `macf_tools mode set MANUAL_MODE` to stop — that's for emergencies only
 - **Scope stretching**: Padding work to avoid hitting the timer gate — complete honestly, let Markov guide the next activity
 - **Idea CA creation during sprint**: Creating formal idea JSON files — use task notes instead, curate with user later
-- **Using `scope clear` to bypass timer**: `scope clear` triggers a permissions prompt (halts sprint in AUTO_MODE when user is away) and destroys tracking without completion reports. ALWAYS use `task complete` per-task instead — completions are deferred by the timer gate but properly registered
-- **Batching completions**: Waiting until all work is done to complete tasks in bulk. Complete each task the moment its work finishes — this clears scope incrementally and feeds the Markov recommender at each gate point
+- **Using `scope clear` to bypass**: `scope clear` triggers a permissions prompt (halts sprint when user is away) and destroys tracking without completion reports. ALWAYS use `task complete` per-task.
+- **Batching completions**: Waiting until all work is done to complete tasks in bulk. Complete each task the moment its work finishes.
 
 ---
 
