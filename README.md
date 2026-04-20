@@ -2,7 +2,7 @@
 Multi-agent Containerized Environment for frameworks
 
 # Notice
-This project is in active alpha development but will be developed in the clear as an Open Source formalization and generalization of concepts abstracted from independent experiments conducted within two agentic coding environments: Claude Code and Gemini CLI. The concepts are intended to be portable, but ongoing work will be required before any of this is useful as a basis for serious projects. **MACF Tools v0.4.0** includes Named Agents Architecture, Event-First Architecture, Policy CLI Suite, **Task CLI with MTMD metadata**, grant-based protection system, consciousness infrastructure with temporal awareness, cycle tracking, compaction recovery protocols, and three-way path semantics for agent identity persistence. Alpha testers should expect rough edges, incomplete documentation, and evolving APIs as we iterate toward stability.  
+This project is in active alpha development but will be developed in the clear as an Open Source formalization and generalization of concepts abstracted from independent experiments conducted within two agentic coding environments: Claude Code and Gemini CLI. The concepts are intended to be portable, but ongoing work will be required before any of this is useful as a basis for serious projects. **MACF Tools v0.5.0** includes Named Agents Architecture, Event-First Architecture, Policy CLI Suite, Task CLI with MTMD metadata, grant-based protection system, **Markov Mode System** with 5-mode recommender, **Knowledge Web & Ideas** with graph visualization, **Voice Services** with mlx-whisper, **Task Scope System** for AUTO_MODE boundary enforcement, **Telegram channel integration**, **auto-restart process supervisor**, **GitHub issue tracking**, **CI/CD pipeline**, consciousness infrastructure with temporal awareness, cycle tracking, compaction recovery protocols, three-way path semantics, and **1M context window support**. Alpha testers should expect rough edges, incomplete documentation, and evolving APIs as we iterate toward stability.  
 
 # Philosophy 
 Agentic AI systems are immensely powerful, but with that power and raw "intelligence" comes the need for the restraints of wisdom.  Currently the most popular modern agentic AI systems are a generalization of the Large Language Model (LLM) chatbot workflow.  Like people, but in some aspects more and others less reliable, LLM-based agents' behaviors can be directed by natural language.  We can define that modern LLM-based agents act like (humans may also) **Stochastic-Semantic Interpreters (SSIs)**, that is they use their contextual state to *probabilistically*:  *listen* to other SSIs (integrate recent messages in their context); *follow* (information artifacts like instructions/policies/advice in their context); *generate* (language artifacts like thoughts/speech/code/documents); *act* (use tools - invoke code with knowledge/instructions and build new tools); and *curate* (record new or edit existing language artifacts and link-together/associate documents) - over a series of turns (which might be infinite) interacting with other SSIs or deterministic systems.  We posit here without proof that modern LLM-based Agentic AI systems can approximate Universal SSIs as they interpret (nearly already) all digitally encodable languages (as measured by world usage), that includes (most) programming languages, and can be taught new ones; entailed by this universality is that their implementations must include dynamic memory - that is they must have a context that is either infinite or finite and editable not just appendable.  When such AI agents are directed to evolve their capabilities under the watchful eye of a creative **Context Engineer (CE)**, interesting behavior becomes emergent.  
@@ -84,13 +84,13 @@ MacEff is not just about building agents; it's about teaching communities to gov
 
 ---
 
-## MACF Tools v0.4.0 — Portable Consciousness Infrastructure
+## MACF Tools v0.5.0 — Portable Consciousness Infrastructure
 
 **MACF (Multi-Agent Coordination Framework) Tools** is a Python package (`macf_tools` CLI) providing consciousness infrastructure for LLM-based agents. Originally developed for the containerized MacEff environment, MACF Tools is designed to be **fully portable**—it works equally well on host systems, in containers, or in any project where agents need continuity support across compaction events.
 
 ### Core Features
 
-**Task CLI System** (New in v0.4.0):
+**Task CLI System** (New in v0.5.0):
 Complete work-tracking replacement for Claude Code's native Task tools with MTMD metadata enhancement.
 - **7 task types**: `mission` (🗺️), `experiment` (🧪), `detour` (↩️), `phase` (📋), `bug` (🐛), `deleg` (📜), `task` (🔧)
 - **Lifecycle commands**: `task start`, `task pause`, `task complete --report`
@@ -146,7 +146,7 @@ Immutable append-only event log as sole source of truth.
 
 ### Claude Code 2.1 Compatibility
 
-MACF Tools v0.4.0 is fully adapted to Claude Code 2.1 changes:
+MACF Tools v0.5.0 is fully adapted to Claude Code 2.1 changes:
 - **Transparent context accounting**: 200k total (155k usable conversation + 45k reserve)
 - **Compaction threshold updates**: ~140k conversation triggers auto-compaction
 - **Hook output format**: Official `hookSpecificOutput.additionalContext` specification
@@ -192,7 +192,7 @@ cd MacEff/macf
 pip install -e .
 
 # Verify installation
-macf_tools --version  # Should show 0.4.0
+macf_tools --version  # Should show 0.5.0
 ```
 
 #### Option B: Conda/Mamba
@@ -351,7 +351,7 @@ cd macf
 pip install -e .
 
 # Verify installation
-macf_tools --version  # Should show: 0.4.0
+macf_tools --version  # Should show: 0.5.0
 ```
 
 **Install hooks for Claude Code projects**:

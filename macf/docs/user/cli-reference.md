@@ -1706,6 +1706,7 @@ macf_tools policy list --layer mandatory
 
 ## Version History
 
+- **0.5.0** - Markov Mode System, Knowledge Web & Ideas, Voice Services, Task Scope, Visualization, Telegram, Supervisor, GitHub Integration, CI/CD, 1M context support
 - **0.4.1** - CLI proprioception (`cmd-tree`), task tree enhancements (`--succinct`, `--verbose`, `--loop`, status-colored timestamps)
 - **0.4.0** - Task System with MTMD, grant-based protection, archive/restore
 - **0.3.0** - Initial release with full CLI suite
