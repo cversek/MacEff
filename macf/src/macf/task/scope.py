@@ -251,7 +251,9 @@ def get_active_timer() -> dict:
 def is_task_timer_blocked(task_id: str) -> dict:
     """Check if a task is blocked from completion by an active timer.
 
-    A scoped task cannot be completed while a scope timer is active.
+    Only the LAST active scoped task is blocked by the timer. Earlier tasks
+    can be completed freely — this clears scope incrementally and feeds the
+    Markov recommender at each gate point via the Stop hook.
 
     Returns:
         Dict with 'blocked' (bool), 'remaining_min' (int), 'reason' (str).
@@ -264,11 +266,19 @@ def is_task_timer_blocked(task_id: str) -> dict:
     if not timer.get("active"):
         return {"blocked": False, "remaining_min": 0, "reason": ""}
 
+    # Count active scoped tasks (not yet completed)
+    check = get_scope_check()
+    active_count = check["active_count"]
+
+    # Only block the LAST active scoped task — allow earlier completions
+    if active_count > 1:
+        return {"blocked": False, "remaining_min": 0, "reason": ""}
+
     return {
         "blocked": True,
         "remaining_min": timer["remaining_min"],
         "reason": (
-            f"Cannot complete timer-scoped task — {timer['remaining_min']} min remaining. "
+            f"Last scoped task — timer gate active with {timer['remaining_min']} min remaining. "
             f"Document progress in task notes. Timer gate lifts at expiry."
         ),
     }
