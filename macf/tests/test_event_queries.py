@@ -480,11 +480,17 @@ def test_auto_mode_priority_ordering(test_session_id):
     assert source == "event"
 
 
-def test_auto_mode_session_isolation(populated_auto_mode_events, different_session_id):
-    """Test auto_mode only uses events from specified session."""
+def test_auto_mode_no_session_isolation(populated_auto_mode_events, different_session_id):
+    """Test mode_change events are global — not session-isolated.
+
+    Mode is a user directive that persists across session restarts.
+    The most recent mode_change wins regardless of which session wrote it.
+    This is by design: autonomous_operation policy specifies mode persists
+    across compaction and resets only on crash/restart via SessionStart.
+    """
     from macf.event_queries import get_auto_mode_from_events
 
-    # Add mode_change for different session (should be ignored)
+    # Add mode_change for different session — this IS the most recent event
     append_event("mode_change", {
         "mode": "MANUAL_MODE",
         "enabled": False,
@@ -492,10 +498,10 @@ def test_auto_mode_session_isolation(populated_auto_mode_events, different_sessi
         "auth_validated": False
     })
 
-    # Query original session — should still see AUTO_MODE
+    # Query original session — should see MANUAL_MODE (most recent global event)
     auto_mode, source = get_auto_mode_from_events(populated_auto_mode_events)
 
-    assert auto_mode is True
+    assert auto_mode is False
     assert source == "event"
 
 
