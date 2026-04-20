@@ -861,3 +861,58 @@ class TestTaskLifecycleEvents:
         assert 'task_management' in injected_names
         assert 'roadmaps_following' in injected_names
         assert all(e['data']['task_id'] == str(tid) for e in injections)
+
+
+class TestTaskListCommand:
+    """Regression tests for `macf_tools task list` display pipeline.
+
+    Introduced after gh-48: cmd_task_list.format_task referenced a
+    scope_state variable that was never built in cmd_task_list's scope,
+    causing NameError on every invocation that reached the display path.
+    """
+
+    def _write_task(self, session_dir, task_id, status='pending', scope_status=None):
+        mtmd_lines = [
+            'task_type: MISSION',
+            'creation_breadcrumb: s_test/c_1/g_abc/p_def/t_123',
+            'created_cycle: 1',
+            'created_by: PA',
+            "parent_id: '000'",
+        ]
+        if scope_status:
+            mtmd_lines.append(f'scope_status: {scope_status}')
+        mtmd = '\n'.join(mtmd_lines) + '\n'
+        desc = f'Regression test task\n\n<macf_task_metadata version="1.0">\n{mtmd}</macf_task_metadata>'
+        (session_dir / f'{task_id}.json').write_text(json.dumps({
+            'id': str(task_id), 'subject': f'Test task {task_id}',
+            'description': desc, 'status': status,
+        }))
+        return task_id
+
+    def test_task_list_does_not_crash_with_one_task(self, isolated_task_env):
+        """gh-48: task list must not raise NameError on any task."""
+        self._write_task(isolated_task_env['session_dir'], 100)
+        result = subprocess.run(
+            ['macf_tools', 'task', 'list'],
+            capture_output=True, text=True, env=isolated_task_env['env'])
+        assert result.returncode == 0, f'stderr: {result.stderr}'
+        assert 'NameError' not in result.stderr
+        assert 'Test task 100' in result.stdout
+
+    def test_task_list_shows_scope_indicator_for_active_scope(self, isolated_task_env):
+        """Positive test: active scope shows 👀 indicator (the feature gh-48's bug gated)."""
+        self._write_task(isolated_task_env['session_dir'], 101, scope_status='active')
+        result = subprocess.run(
+            ['macf_tools', 'task', 'list'],
+            capture_output=True, text=True, env=isolated_task_env['env'])
+        assert result.returncode == 0, f'stderr: {result.stderr}'
+        assert '👀' in result.stdout
+
+    def test_task_list_shows_scope_indicator_for_inactive_scope(self, isolated_task_env):
+        """Inactive scope shows ✅ indicator."""
+        self._write_task(isolated_task_env['session_dir'], 102, scope_status='inactive')
+        result = subprocess.run(
+            ['macf_tools', 'task', 'list'],
+            capture_output=True, text=True, env=isolated_task_env['env'])
+        assert result.returncode == 0, f'stderr: {result.stderr}'
+        assert '✅' in result.stdout
