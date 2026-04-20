@@ -35,11 +35,32 @@ import { homedir } from 'os'
 import { join, extname, sep } from 'path'
 
 const LOG_FILE = join(homedir(), '.claude', 'channels', 'telegram', 'server.log')
+// Prevent unbounded growth (issue #46: hit 191GB in 3 weeks on SiloMacEff's Pi).
+// Default 10MB per file, 2 rotated backups kept (30MB max on disk).
+const MAX_LOG_SIZE = (() => {
+  const n = parseInt(process.env.TELEGRAM_LOG_MAX_SIZE ?? '', 10)
+  return Number.isFinite(n) && n > 0 ? n : 10 * 1024 * 1024
+})()
+
+function rotateLogIfNeeded() {
+  try {
+    const sz = statSync(LOG_FILE).size
+    if (sz < MAX_LOG_SIZE) return
+    const bak1 = `${LOG_FILE}.1`
+    const bak2 = `${LOG_FILE}.2`
+    try { renameSync(bak1, bak2) } catch {} // .1 may not exist on first rotate
+    try { renameSync(LOG_FILE, bak1) } catch {} // race: another writer may have rotated
+  } catch {} // LOG_FILE may not exist yet — nothing to rotate
+}
+
 function log(msg: string) {
   const ts = new Date().toISOString()
   const line = `[${ts}] ${msg}\n`
   process.stderr.write(line)
-  try { appendFileSync(LOG_FILE, line) } catch {}
+  try {
+    rotateLogIfNeeded()
+    appendFileSync(LOG_FILE, line)
+  } catch {} // last-resort: never let logging crash the server
 }
 
 const STATE_DIR = process.env.TELEGRAM_STATE_DIR ?? join(homedir(), '.claude', 'channels', 'telegram')
