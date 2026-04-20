@@ -5,6 +5,213 @@ All notable changes to MACF Tools (Multi-Agent Coordination Framework) will be d
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-04-20
+
+### Summary
+
+Major release introducing the **Markov Mode System** with 5-mode recommender and autonomous sprint lifecycle, **Knowledge Web & Ideas** with cross-CA wiki-links and graph visualization, **Voice Services** with mlx-whisper transcription and domain correction, **Task Scope System** for AUTO_MODE boundary enforcement, **Markdown & Graph Visualization**, **Telegram channel integration**, **auto-restart process supervisor**, **GitHub issue tracking**, **CI/CD pipeline**, and **1M context window support**. 205 commits since v0.4.0.
+
+### Added
+
+**Markov Mode System** (`macf_tools mode`, `macf_tools recommender`):
+- Core mode detection with 8-mode operational model (AUTO_MODE, USER_IDLE, QUIET_MODE, LOW_CONTEXT) + 5 work modes (DISCOVER, EXPERIMENT, BUILD, CURATE, CONSOLIDATE)
+- Markov transition model with Monte Carlo sampling for work mode recommendations at gate points
+- PreToolUse emoji dashboard showing active modes (`🤖😴🔕🪫 🔍🧪🔨📋✍️`)
+- Transcript Monitor daemon for JSONL event detection (idle detection, content-replacement, rewind)
+- 4 motivation skills for self-directed mode transitions
+- Autonomous sprint policy with timer discipline and two-gate stop mechanism
+- `mode show|set-work|unset-work|list` CLI commands
+- `recommender show|sample` CLI commands
+- AUTO_MODE indicator (🤖) in PreToolUse status line
+- Auto-start Transcript Monitor on AUTO_MODE activation
+
+**Knowledge Web & Ideas** (`macf_tools idea`, `macf_tools knowledge`):
+- Ideas CA system with policy, JSON schema, and CLI (`idea create|list|get|update|promote|archive`)
+- Cross-CA knowledge graph with wiki-links across learnings, observations, and experiments
+- Rich terminal graph visualization (cluster + tree views)
+- HTML force-directed knowledge graph visualization with OO renderer (d3.js)
+- Graph query mode with concept/node/keyword resolution
+- Gap detection report for missing wiki-links
+- 3 pull-model skills (ideas-to-experiment, ideas-to-roadmap, ideas-curate) + validation gate
+- Knowledge web curate + orient skills for graph maintenance
+- Ideas Harvested section in JOTEWR skill
+- Promoted knowledge graph to dedicated `knowledge` CLI namespace
+
+**Voice Services** (`macf_tools voice`):
+- mlx-whisper based speech-to-text (`macf_tools voice transcribe`)
+- Domain vocabulary conditioning via Whisper `initial_prompt`
+- Zero-dependency fuzzy correction for domain-specific terms
+- VoiceService daemon with `--correct` flag and service auto-routing
+- Auto-transcribe voice messages in UserPromptSubmit hook
+- Fusion patterns for AST, regex, DevOpsEng vocabularies
+
+**Task Scope System** (`macf_tools task scope`):
+- `task scope set|show|clear` CLI for AUTO_MODE boundary enforcement
+- Scope indicators (👀) in task tree display
+- Scope gate in Stop hook — blocks stop when scoped tasks remain
+- MTMD-based `scope_status` for display and loop detection
+- Timer enforcement (`--timer` flag) — blocks early completion, fires Markov recommender at gate
+- Auto-complete scoped tasks on `task complete`
+- Two-step de-escalation friction with justification requirement
+
+**Visualization** (`macf_tools markdown`, `macf_tools knowledge visualize`):
+- Markdown presenter with dark homebrew theme (black bg, amber headings, green code)
+- Auto-present step for JOTEWR and CCP commands
+- HTML knowledge graph visualization with cluster/tree terminal views
+
+**Telegram Channel Integration**:
+- Stop hook forwards last message to Telegram
+- Unique emoji per gate type for Stop notifications (🏁✅🛑❌)
+- File preview on permission requests
+- Extended to SubagentStop and SessionEnd hooks
+- Rich PreToolUse notifications
+- Paginated long messages instead of truncating
+- Declarative channels config in agents.yaml
+- Forked official Telegram plugin with voice-friendly permissions
+- Inline feedback with permission verdicts
+
+**Auto-Restart Process Supervisor** (`macf_tools supervisor`):
+- Multi-process management with auto-restart on exit
+- Interactive shell support + iTerm2 terminal detection
+- Pause on crash + persistent crash log
+- Cross-platform shell selection (macOS + Linux)
+- Resolve shell aliases via `shell=True` + user SHELL
+- UX improvements: 5s default, countdown trail, Ctrl-C stops
+- Auto-clean stale entries, default list shows running only
+
+**GitHub Integration**:
+- GH_ISSUE task type with auto-fetch from GitHub (`task create gh_issue <url>`)
+- GH_ISSUE completion gate and GitHub closeout integration
+- PR-based GH_ISSUE fix workflow (§2.3.1 in task_management policy)
+- Pre-commit hook to reject silent `except Exception: pass` anti-patterns
+- Identity blindness + OPSEC pre-commit hook template
+- `agent set-github` for per-project GitHub identity isolation
+
+**Shell & CLI Improvements**:
+- Shell tab completion via argcomplete
+- CC binary path in env command
+- `cmd-tree` command for recursive CLI help tree
+- Proprioception augmentations in SessionStart hook
+- Transcript search capability
+- Task tree enhancements (hide archived by default, block direct description edits)
+- `framework install` works outside MacEff repo with correct path resolution
+
+**CI/CD Pipeline**:
+- GitHub Actions test workflow for PRs and pushes
+- `make test` target for local pytest execution
+- Env-dependent test isolation (env_cli, token_info, session_start)
+- Heavy-dependency test exclusion (sentence-transformers/torch)
+- pydantic and lancedb in test extras
+
+**Streaming API Proxy** (`macf_tools proxy`):
+- Streaming API proxy for CC API call interception
+- Request + response capture with SSE reassembly
+- Thinking block capture in SSE stream
+- Message rewriter for stale policy injection replacement
+- Task-bound policy injection with auto-clear lifecycle
+- Stateless injection reporting with byte/token sizes
+- Generic capture — full API objects instead of cherry-picking
+- Graceful client disconnect handling
+
+**Additional Features**:
+- 1M context window support with recalibrated CL thresholds
+- CLUAC→CL terminology rename across codebase
+- Emergency sleep command with fibonacci backoff
+- Error-resilience gate in Stop hook for any mode
+- Scope gate tells agent to debug errors, not stop
+- JOTEWR skill bytes/4 token sizing protocol for 1M context
+- CEP Nav Guide awareness propagation via hook output
+- Task lifecycle events (task_started, task_completed, task_paused) with auto-injection
+- Policy injection on task start based on manifest mapping
+- Per-project agent ID + macOS platform fallback
+- `--blocked-by` flag for `task create phase`
+- PascalCase subagent names + framework-provided subagent workspace creation
+- Box-drawing skill with table generator
+
+**Documentation**:
+- FRICTION_POINTS.md with scholarly citations
+- cmd-tree command documentation
+- Proprioception injection, task tree options, transcript search docs
+- Markdown style guidelines for HTML presentation
+
+**Policies**:
+- `autonomous_sprint` — timer discipline, task notes, two-gate stop mechanism
+- `mode_system` v2.0/v2.1 — 3-layer architecture with Markov transition model
+- `empiricism` — philosophy of evidence-based development
+- `debugging_and_validation` — hypothesis-first debugging, evidence presentation
+- `scholarship` §3.4 — Knowledge Web wiki-link guidance
+- `cli_development` §9 — Full Disclosure Principle
+- `context_management` — recalibrated CL thresholds for 1M context
+- `task_management` §12 — Task Scope System guidance
+- `task_management` §2.3.1 — PR-based GH_ISSUE fix workflow
+- `task_management` §5.4 — note-taking discipline during task execution
+- `autonomous_operation` — EXP #017 learnings + scope/sleep specs
+- `delegation` §3.5 — foreground vs background execution guidance
+
+### Changed
+
+- Mode detection wired into PreToolUse, Stop, and UserPromptSubmit hooks
+- Consolidated duplicate AUTO_MODE skills into single `maceff-auto-mode` skill
+- Renamed `archived_todos` to `archived_tasks` across 6 files
+- Replaced silent `except Exception: pass` patterns with visible error logging (2 batches)
+- Deduplicated SSE parsing in response capture
+- QUIET_ON_IDLE default changed to `false` — idle ≠ wants silence
+- `task_management` policy promoted to v1.1 with GH_ISSUE lifecycle
+- Permission hardening with full disclosure output on mode switch
+- Dot-prefix completed task files to hide from CC scanner
+- Renamed CLUAC→CL across Python code and tests
+- start.py starts sshd early before slow optional services
+- `maceff-init` merges parent framework/subagents/ into overlay
+
+### Removed
+
+- Session isolation from mode_change event query (mode is global by design)
+- Vestigial confidence field from AUTO_MODE detection
+- Dangerous `zsh -ic` version detection (replaced with file content extraction)
+
+### Fixed
+
+- **#11**: Multi-strategy CC version detection for hook footer
+- **#12**: Create task_archives/ at init time for ACL-compatible archiving
+- **#19**: Hide archived tasks in task tree by default
+- **#21**: Block direct description edits via task edit
+- **#22**: cmd-tree distinguishes required mutually exclusive groups
+- **#32**: Stale compact_boundary marker cascade guard
+- **#37**: Extract encode_cc_project_path() for DRY path encoding
+- **#195**: AUTO_MODE query reads mode_change events, removes vestigial confidence
+- AUTO_MODE tunneling through compaction + CL autocompact buffer penalty
+- Idle detection false positives from dev_drv_started events
+- Scope gate shadowing from local import in Stop hook
+- Scope gate directive logic (continue:true + directive, not continue:false)
+- Task complete timer gate fires Markov recommender instead of error
+- Session resolution from project JSONL when no task dir exists
+- Encoding of non-alphanumeric chars in project path matching
+- Case-sensitivity for skill.md → SKILL.md on Linux
+- Hardcoded macOS path in tests replaced with dynamic REPO_ROOT
+- Supervisor: shell aliases, crash handling, Ctrl-C detection, stale entry cleanup
+- Telegram: paginated messages, stop notification prefixes, exception handling
+- Voice: fusion patterns, fuzzy matcher disabled for single-word
+- Plugins: verdict word punctuation stripping for voice dictation
+- Proxy: port-in-use detection, template string filtering, client disconnect handling
+- Policy injection: derive active policies from task state, not injection events
+- Per-project agent ID + macOS platform fallback for MACEFF_AGENT_NAME
+- MACF_CC_VERSION env var for accurate version detection on Mac
+- Graceful fallback when task restore hits read-only CC tasks dir
+- Task bootstrap: create session dir on first task create
+- Scope indicators: green check for inactive, auto-clear on last completion
+- Hidden file deduplication in list_task_files glob
+
+### Tests
+
+- 475 tests passing (up from 399 in v0.4.0, +19%)
+- Scope lifecycle + stop hook regression tests (11 new)
+- GH_ISSUE completion gate and closeout function tests
+- Updated for silenced PostToolUse + compressed PreToolUse + CL format
+- Fixed auto_mode session isolation test to match global mode design
+- Removed stale xfail markers from passing TodoWrite tests
+
+---
+
 ## [0.4.0] - 2026-01-29
 
 ### Summary
