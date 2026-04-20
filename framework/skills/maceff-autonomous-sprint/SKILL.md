@@ -93,7 +93,11 @@ Work within the scoped task. The two-gate stop mechanism governs the sprint life
 
 **NO new task creation** in AUTO_MODE unless the user directs it. Activity goes in task notes on the scoped task.
 
-**Scope completion before timer is ENCOURAGED**: When the scope gate fires with timer still active, the Markov recommender suggests the next work mode. This is the designed transition mechanism — follow it to continue related productive work.
+**Complete tasks immediately as work finishes** — call `macf_tools task complete <id> --report "..."` the moment each task's work is done, not in a batch at the end. The timer gate may show "deferred" but the completion intent is registered. Completed tasks auto-clear from scope. When all scoped tasks are completed, the scope gate clears.
+
+**Trust the deferral**: When the timer gate says "task completion deferred until timer expires", this is the designed behavior — the Markov recommender fires to suggest productive continuation work. Follow the recommendation. Do NOT use `scope clear` to bypass the gate.
+
+**The natural flow**: Work → complete task immediately → Markov fires → follow recommendation → work on next thing → repeat until timer expires or all scope cleared.
 
 ---
 
@@ -103,6 +107,8 @@ Work within the scoped task. The two-gate stop mechanism governs the sprint life
 - **Emergency de-escalation as wind-down**: Using `macf_tools mode set MANUAL_MODE` to stop — that's for emergencies only
 - **Scope stretching**: Padding work to avoid hitting the timer gate — complete honestly, let Markov guide the next activity
 - **Idea CA creation during sprint**: Creating formal idea JSON files — use task notes instead, curate with user later
+- **Using `scope clear` to bypass timer**: `scope clear` triggers a permissions prompt (halts sprint in AUTO_MODE when user is away) and destroys tracking without completion reports. ALWAYS use `task complete` per-task instead — completions are deferred by the timer gate but properly registered
+- **Batching completions**: Waiting until all work is done to complete tasks in bulk. Complete each task the moment its work finishes — this clears scope incrementally and feeds the Markov recommender at each gate point
 
 ---
 
