@@ -5408,8 +5408,8 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
         timer_check = is_task_timer_blocked(task_id)
         if timer_check["blocked"]:
             remaining = timer_check["remaining_min"]
-            print(f"⏱️  Timer gate: {remaining} min remaining — task completion deferred until timer expires.")
-            print(f"   Scope work complete. Markov recommender suggests next work mode:\n")
+            print(f"⏱️  Timer gate: {remaining} min remaining — this is the last scoped task, completion deferred until timer expires.")
+            print(f"   Follow the Markov recommender for productive continuation work:\n")
             # Fire the Markov recommender
             try:
                 from .modes import (

@@ -231,9 +231,9 @@ Development Drive Stats:
                             "reason": (
                                 f"SCOPE GATE (timer active): {timer_remaining} min remaining. "
                                 f"{error_context}"
-                                f"Scoped task: {task_list}\n"
-                                f"Timer-scoped tasks cannot be completed before timer expires. "
-                                f"Document progress in task notes with MODE_NAME: prefix. "
+                                f"Scoped tasks: {task_list}\n"
+                                f"Complete finished tasks with `macf_tools task complete <id> --report '...'` to clear them from scope. "
+                                f"Only the last scoped task is timer-gated. "
                                 f"ULTRATHINK about the recommendation below, then invoke the suggested skill "
                                 f"(or override with justification in task notes).\n"
                                 f"{recommendation}\n"
