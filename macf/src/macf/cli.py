@@ -3279,6 +3279,13 @@ def cmd_task_list(args: argparse.Namespace) -> int:
     def get_children(parent_id):
         return sorted([t for t in tasks if t.parent_id == parent_id], key=lambda t: str(t.id).zfill(10))
 
+    # Load scope state from MTMD scope_status field on tasks (same source as cmd_task_tree).
+    # Without this, format_task's scope indicator block raises NameError (gh-48).
+    scope_state = {}
+    for t in tasks:
+        if t.mtmd and getattr(t.mtmd, 'scope_status', None):
+            scope_state[t.id] = t.mtmd.scope_status
+
     def format_task(t: MacfTask, indent: int = 0) -> str:
         prefix = "  " * indent
         # CC-style markers with colors:
