@@ -24,10 +24,20 @@ Complete command reference for `macf_tools` CLI.
 - [Task Commands](#task-commands-v040)
   - [Task Creation Commands](#task-creation-commands)
   - [Task Lifecycle Commands](#task-lifecycle-commands)
+  - [Task Scope Commands](#task-scope-commands)
   - [Task Metadata Commands](#task-metadata-commands)
   - [Task Archive Commands](#task-archive-commands)
   - [Task Protection Commands](#task-protection-commands)
   - [Task Completion](#task-completion)
+- [Mode System](#mode-system-v050)
+- [Markov Recommender](#markov-recommender)
+- [Ideas System](#ideas-system-v050)
+- [Knowledge Graph](#knowledge-graph-v050)
+- [Voice Services](#voice-services-v050)
+- [Markdown Visualization](#markdown-visualization-v050)
+- [Auto-Restart Supervisor](#auto-restart-supervisor-v050)
+- [Transcript Monitor](#transcript-monitor-v050)
+- [Shell Integration](#shell-integration-v050)
 
 ## Global Options
 
@@ -1626,6 +1636,399 @@ macf_tools task complete #81 -r "Research complete. Difficulties: sparse docs. F
 ```
 
 **Related:** See `task_management.md` §6 for complete completion protocol.
+
+### Task Scope Commands
+
+Scope management for AUTO_MODE boundary enforcement. Scoped tasks create a gate in the Stop hook that prevents the agent from stopping until scope is cleared.
+
+#### task scope set
+
+Set task scope with optional timer for sprint lifecycle.
+
+```bash
+macf_tools task scope set <task_id> [--timer MINUTES]
+```
+
+**Arguments:**
+- `task_id` - Task to scope (parent auto-expands to pending/in_progress children)
+- `--timer MINUTES` - Optional timer for wind-down enforcement
+
+**Example:**
+```bash
+macf_tools task scope set 983 --timer 120
+```
+
+#### task scope show
+
+Display current scope with task statuses.
+
+```bash
+macf_tools task scope show
+```
+
+#### task scope clear
+
+Remove all tasks from scope.
+
+```bash
+macf_tools task scope clear
+```
+
+#### task scope check
+
+Check active scope count (JSON output, used by Stop hook).
+
+```bash
+macf_tools task scope check
+```
+
+**Related:** See `task_management.md` §12 for Task Scope System guidance.
+
+---
+
+## Mode System (v0.5.0+)
+
+Operating mode management for MANUAL_MODE/AUTO_MODE switching and work mode tracking.
+
+### mode show
+
+Display active mode set with emoji indicators and behavioral triggers.
+
+```bash
+macf_tools mode show
+```
+
+**Output includes:**
+- Operational modes: AUTO_MODE, USER_IDLE, QUIET_MODE, LOW_CONTEXT
+- Work modes: DISCOVER, EXPERIMENT, BUILD, CURATE, CONSOLIDATE
+- Behavioral triggers: closeout responsibility, urgency, notification suppression
+- Idle detection status (Transcript Monitor)
+
+### mode get
+
+Get current operating mode (JSON output).
+
+```bash
+macf_tools mode get [--json]
+```
+
+### mode set
+
+Set operating mode (requires auth token for AUTO_MODE).
+
+```bash
+macf_tools mode set <MODE> [--auth-token TOKEN]
+```
+
+**Modes:** `AUTO_MODE`, `MANUAL_MODE`
+
+### mode set-work
+
+Activate a work mode for the current session.
+
+```bash
+macf_tools mode set-work <WORK_MODE>
+```
+
+**Work Modes:** `DISCOVER`, `EXPERIMENT`, `BUILD`, `CURATE`, `CONSOLIDATE`
+
+### mode unset-work
+
+Clear the active work mode.
+
+```bash
+macf_tools mode unset-work
+```
+
+**Related:** See `mode_system.md` policy for mode lifecycle and Markov transitions.
+
+---
+
+## Markov Recommender
+
+Monte Carlo work mode recommender based on Markov transition model.
+
+### recommender show
+
+Show transition probability distribution for current state.
+
+```bash
+macf_tools recommender show
+```
+
+### recommender sample
+
+Monte Carlo sample and display a work mode recommendation.
+
+```bash
+macf_tools recommender sample
+```
+
+**Output:**
+```
+🎲 Markov recommender: BUILD → CURATE 📋 (p=25%)
+   Distribution: 📋 CURATE 25% | 🔍 DISCOVER 22% | ...
+```
+
+**Related:** See `autonomous_sprint.md` policy for recommender interaction protocol.
+
+---
+
+## Ideas System (v0.5.0+)
+
+Prospective knowledge capture — ideas for future work, experiments, or features.
+
+### idea create
+
+Capture a new idea.
+
+```bash
+macf_tools idea create "Title" --body "Description" [--tags TAG1 TAG2] [--source SOURCE]
+```
+
+**Options:**
+- `--body` - Idea description
+- `--tags` - Tags for categorization
+- `--source` - Source context (e.g., "sprint #981", "JOTEWR reflection")
+
+### idea list
+
+List ideas with optional filtering.
+
+```bash
+macf_tools idea list [--status STATUS] [--tag TAG]
+```
+
+**Status values:** `captured`, `promoted`, `archived`
+
+### idea get
+
+Get full idea details.
+
+```bash
+macf_tools idea get <idea_id>
+```
+
+### idea update
+
+Update idea status or metadata.
+
+```bash
+macf_tools idea update <idea_id> --status STATUS
+```
+
+### idea archive
+
+Archive an idea.
+
+```bash
+macf_tools idea archive <idea_id>
+```
+
+### idea search
+
+Search ideas by text.
+
+```bash
+macf_tools idea search "query text"
+```
+
+### idea graph
+
+Show ideas-only graph (use `knowledge` for cross-CA graph).
+
+```bash
+macf_tools idea graph [--format tree|cluster]
+```
+
+---
+
+## Knowledge Graph (v0.5.0+)
+
+Cross-CA knowledge graph built from wiki-links across learnings, observations, experiments, and ideas.
+
+### knowledge graph
+
+Show cross-CA knowledge graph in terminal.
+
+```bash
+macf_tools knowledge graph [--format tree|cluster]
+```
+
+### knowledge query
+
+Query subgraph by concept, node ID, or keyword.
+
+```bash
+macf_tools knowledge query "concept or keyword"
+```
+
+### knowledge gaps
+
+Detect missing wiki-links and suggest connections.
+
+```bash
+macf_tools knowledge gaps [--min-score SCORE]
+```
+
+### knowledge viz
+
+Generate interactive HTML visualization (d3.js force-directed graph).
+
+```bash
+macf_tools knowledge viz [--output PATH]
+```
+
+---
+
+## Voice Services (v0.5.0+)
+
+Speech-to-text transcription using mlx-whisper with domain vocabulary correction.
+
+### voice transcribe
+
+Transcribe audio file to text.
+
+```bash
+macf_tools voice transcribe <audio_file> [--correct] [--model MODEL]
+```
+
+**Options:**
+- `--correct` - Apply domain vocabulary fuzzy correction
+- `--model` - Whisper model name (default: mlx-community/whisper-large-v3-turbo)
+
+### voice service
+
+Voice service daemon management.
+
+```bash
+macf_tools voice service {start|stop|status}
+```
+
+---
+
+## Markdown Visualization (v0.5.0+)
+
+Render markdown files as styled HTML and open in browser.
+
+### markdown present
+
+Render a markdown file with dark homebrew theme and open in default browser.
+
+```bash
+macf_tools markdown present <filepath> [--output PATH]
+```
+
+**Options:**
+- `--output` - Custom output path (default: `/tmp/macf_markdown_{hash}.html`)
+
+**Theme:** Black background, amber headings, green code blocks, monospace fonts.
+
+---
+
+## Auto-Restart Supervisor (v0.5.0+)
+
+Process supervisor with automatic restart on exit, crash logging, and multi-process management.
+
+### auto-restart launch
+
+Launch a supervised process in a new terminal window.
+
+```bash
+macf_tools auto-restart launch "<command>" [--delay SECONDS]
+```
+
+**Options:**
+- `--delay` - Restart delay in seconds (default: 5)
+
+### auto-restart list
+
+List managed processes.
+
+```bash
+macf_tools auto-restart list [--all]
+```
+
+**Options:**
+- `--all` - Show all processes including stopped (default: running only)
+
+### auto-restart restart
+
+Trigger restart for a supervised process.
+
+```bash
+macf_tools auto-restart restart <name>
+```
+
+### auto-restart disable
+
+Disable auto-restart for a supervised process.
+
+```bash
+macf_tools auto-restart disable <name>
+```
+
+### auto-restart status
+
+Show detailed status of a supervised process.
+
+```bash
+macf_tools auto-restart status <name>
+```
+
+### auto-restart kill
+
+Kill supervisor and child process (nuclear option).
+
+```bash
+macf_tools auto-restart kill <name>
+```
+
+---
+
+## Transcript Monitor (v0.5.0+)
+
+JSONL transcript monitoring daemon for idle detection and event processing.
+
+### transcript-monitor start
+
+Start the transcript monitor daemon.
+
+```bash
+macf_tools transcript-monitor start [--daemon]
+```
+
+### transcript-monitor stop
+
+Stop the transcript monitor daemon.
+
+```bash
+macf_tools transcript-monitor stop
+```
+
+### transcript-monitor status
+
+Show transcript monitor status.
+
+```bash
+macf_tools transcript-monitor status
+```
+
+---
+
+## Shell Integration (v0.5.0+)
+
+Shell tab completion and integration features.
+
+### shell setup
+
+Print tab completion setup instructions for your shell.
+
+```bash
+macf_tools shell setup
+```
+
+**Supported shells:** bash, zsh, fish (via argcomplete)
 
 ---
 
