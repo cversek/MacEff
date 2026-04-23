@@ -221,7 +221,7 @@ Development Drive Stats:
                             current_wm = get_current_work_mode(active_modes)
                             op_modes = {m for m in active_modes if m in ("AUTO_MODE", "USER_IDLE", "QUIET_MODE", "LOW_CONTEXT")}
                             selected, dist = sample_next_work_mode(current_wm, op_modes)
-                            recommendation = "\n" + format_recommendation(current_wm, selected, dist, "ctb")
+                            recommendation = "\n" + format_recommendation(current_wm, selected, dist, "maceff")
                         except (OSError, ValueError, ImportError) as e:
                             print(f"⚠️ MACF: recommender failed: {e}", file=sys.stderr)
 
@@ -309,7 +309,7 @@ Development Drive Stats:
                             current_wm = get_current_work_mode(active_modes)
                             op_modes = {m for m in active_modes if m in ("AUTO_MODE", "USER_IDLE", "QUIET_MODE", "LOW_CONTEXT")}
                             selected, dist = sample_next_work_mode(current_wm, op_modes)
-                            recommendation = "\n" + format_recommendation(current_wm, selected, dist, "ctb")
+                            recommendation = "\n" + format_recommendation(current_wm, selected, dist, "maceff")
                         except (OSError, ValueError, ImportError) as e:
                             print(f"⚠️ MACF: recommender failed: {e}", file=sys.stderr)
 
