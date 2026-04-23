@@ -111,6 +111,8 @@ After extracting policy answers:
    macf_tools mode set AUTO_MODE --auth-token "$(python3 -c "import json; print(json.load(open('.maceff/settings.json'))['auto_mode_auth_token'])")"
    ```
 
+   If this is denied by Claude Code's permission layer as "self-authorizing", see the `autonomous_operation` policy section "Name Collision With Claude Code's 'auto mode'" — the fix is an allowlist entry that `macf_tools framework install` ships automatically; if missing, user toggles permissions-bypass mode and agent retries.
+
 3. **Review CLI output**: Every permission toggle is individually reported. Confirm deny list, ask list, and safety permissions installed.
 
 4. **Remind about restart**: Session restart is required for CC to load updated permissions.
