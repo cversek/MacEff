@@ -605,6 +605,20 @@ def _check_hooks_in_settings(settings_path: Path) -> bool:
         return False
 
 
+def _count_hook_events_in_settings(settings_path: Path) -> int:
+    """Count distinct hook events bound in a settings file. Returns 0 on any failure."""
+    try:
+        if not settings_path.exists():
+            return 0
+        with open(settings_path) as f:
+            settings = json.load(f)
+        hooks = settings.get("hooks") or {}
+        return len(hooks) if isinstance(hooks, dict) else 0
+    except (OSError, IOError, json.JSONDecodeError) as e:
+        print(f"⚠️ MACF: hooks count check failed: {e}", file=sys.stderr)
+        return 0
+
+
 def _clear_hooks_from_settings(settings_path: Path) -> bool:
     """Remove hooks section from a settings file to prevent duplicate execution."""
     try:
@@ -777,15 +791,33 @@ def cmd_framework_install(args: argparse.Namespace) -> int:
         installed_count = {"hooks": 0, "commands": 0, "skills": 0}
 
         # Install hooks (unless skip_hooks or already done via hooks_only)
+        # The framework install hands cmd_hook_install a local mode choice, which
+        # writes the settings file at <CWD>/.claude/settings.local.json. We verify
+        # the post-install state below rather than trusting the return code alone
+        # — the migration path clears global hooks BEFORE writing local, so a
+        # silent write failure would leave the agent with no hooks anywhere.
+        in_container = Path("/.dockerenv").exists()
+        if in_container:
+            expected_settings = Path.home() / ".claude" / "settings.json"
+        else:
+            expected_settings = Path.cwd() / ".claude" / "settings.local.json"
+
         if not skip_hooks:
             print("\n📦 Installing hooks...")
-            # Reuse existing hook install logic
             hooks_args = argparse.Namespace(local_install=True, global_install=False)
             hook_result = cmd_hook_install(hooks_args)
-            if hook_result == 0:
-                installed_count["hooks"] = 10
-            else:
-                print("   Warning: Hook installation had issues")
+            if hook_result != 0:
+                print(f"\n❌ Hook installation failed (exit {hook_result}). Aborting framework install.")
+                print(f"   Expected settings file: {expected_settings}")
+                return 1
+            actual_hook_count = _count_hook_events_in_settings(expected_settings)
+            if actual_hook_count != 10:
+                print(f"\n❌ Hook installation reported success but settings file has {actual_hook_count}/10 hook events bound.")
+                print(f"   Expected settings file: {expected_settings}")
+                print(f"   This can happen after a global→local migration if the local write silently dropped the hooks block.")
+                print(f"   Recovery: re-run with `macf_tools framework install --hooks-only` from the same directory.")
+                return 1
+            installed_count["hooks"] = actual_hook_count
 
         if hooks_only:
             print(f"\n✅ Hooks-only installation complete")
