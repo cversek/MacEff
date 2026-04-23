@@ -33,6 +33,7 @@ from ..agent_events_log import append_event
 DEFAULT_POLL_INTERVAL = 1.0  # 1 second — negligible CPU, responsive detection
 CHUNK_SIZE = 65536  # 64KB read chunks
 PID_FILE_NAME = "macf_transcript_monitor.pid"
+LOG_FILE_NAME = "macf_transcript_monitor.log"
 
 
 # ============================================================================
@@ -160,6 +161,42 @@ def get_pid_file_path() -> Path:
     """Get path for PID file in runtime directory."""
     runtime_dir = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
     return Path(runtime_dir) / PID_FILE_NAME
+
+
+def get_log_file_path() -> Path:
+    """Get path for daemon stderr log file in runtime directory."""
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
+    return Path(runtime_dir) / LOG_FILE_NAME
+
+
+def _detach_standard_streams() -> None:
+    """Fully detach the child's standard streams from the parent's environment.
+
+    Redirects stdin/stdout to /dev/null and stderr to a log file. This is the
+    textbook daemon-detach: without redirecting fd 2, the child inherits
+    whatever stderr the parent had — and if the parent's stderr was part of a
+    shell pipeline (e.g. `macf_tools mode set-work X 2>&1 | tail -50`), the
+    pipe's read-end stays held open by the daemon's fd 2 and the downstream
+    `tail` hangs until the daemon exits (issue #54).
+
+    dup2 implicitly closes the target fd first, so the parent pipe's
+    write-end is released even though Python still has an fd 2.
+    """
+    devnull = os.open(os.devnull, os.O_RDWR)
+    os.dup2(devnull, 0)  # stdin
+    os.dup2(devnull, 1)  # stdout
+    try:
+        log_fd = os.open(
+            str(get_log_file_path()),
+            os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+            0o644,
+        )
+        os.dup2(log_fd, 2)  # stderr → daemon log file
+        os.close(log_fd)
+    except OSError:
+        # Fall back to /dev/null rather than keeping the inherited stderr open.
+        os.dup2(devnull, 2)
+    os.close(devnull)
 
 
 def write_pid_file(pid: int) -> None:
@@ -416,12 +453,10 @@ def start_daemon(foreground: bool = False, poll_interval: float = DEFAULT_POLL_I
     # Child: become daemon
     os.setsid()
 
-    # Redirect stdio to /dev/null (daemon has no terminal)
-    devnull = os.open(os.devnull, os.O_RDWR)
-    os.dup2(devnull, 0)
-    os.dup2(devnull, 1)
-    # Keep stderr for logging (goes to /tmp/macf/ via hook logging)
-    os.close(devnull)
+    # Fully detach standard streams — including stderr — so a parent bash
+    # pipeline (e.g. `... 2>&1 | tail -50`) doesn't stay held open via the
+    # daemon's inherited fd 2 (issue #54).
+    _detach_standard_streams()
 
     monitor = TranscriptMonitor(jsonl_path, poll_interval=poll_interval)
 
