@@ -11,6 +11,7 @@ Policy spec: framework/policies/base/operations/mode_system.md v2.1
 import json
 import os
 import random
+import re
 import sys
 import time
 from pathlib import Path
@@ -131,6 +132,40 @@ def detect_active_modes(session_id: str, token_info: dict) -> Set[str]:
         print(f"⚠️ MACF: work mode detection failed: {e}", file=sys.stderr)
 
     return modes
+
+
+# Matches `macf_tools mode set-work <MODE>` in a shell command, allowing for
+# chaining, subshells, and leading path prefixes. The MODE token uses A-Z/_
+# so typos don't accidentally widen the match to arbitrary identifiers.
+_SET_WORK_RE = re.compile(r'\bmacf_tools\s+mode\s+set-work\s+([A-Z_]+)\b')
+_UNSET_WORK_RE = re.compile(r'\bmacf_tools\s+mode\s+unset-work\b')
+
+
+def anticipate_mode_change(tool_name: str, tool_input: dict, current_modes: Set[str]) -> Set[str]:
+    """Reflect a pending mode change in the dashboard BEFORE the tool runs.
+
+    PreToolUse fires before the Bash tool executes, so a just-invoked
+    `mode set-work X` hasn't emitted its event yet. Without this, the
+    dashboard shows the old mode for one more tool call. This is a
+    heuristic over tool_input — it catches the common direct invocation
+    but can miss commands built dynamically (eval-style) or output from
+    subprocesses. Failing to match just leaves behavior unchanged (the
+    next tool call will pick up the real event-log state).
+
+    Invalid mode tokens are ignored so typos can't widen the set.
+    """
+    if tool_name != "Bash":
+        return current_modes
+    cmd = tool_input.get("command") or ""
+    work_mode_names = set(WORK_MODES)
+    m = _SET_WORK_RE.search(cmd)
+    if m:
+        new_mode = m.group(1)
+        if new_mode in work_mode_names:
+            return (current_modes - work_mode_names) | {new_mode}
+    if _UNSET_WORK_RE.search(cmd):
+        return current_modes - work_mode_names
+    return current_modes
 
 
 # ============================================================================
