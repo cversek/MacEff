@@ -126,3 +126,29 @@ class TestStopHookScopeGate:
         from macf.hooks.handle_stop import run
         result = run('{"stop_reason":"end_turn"}')
         assert result["continue"] is True
+
+
+class TestRecommenderPrefix:
+    """Regression guard for issue #56 — recommender must not leak /ctb-* into framework hook output."""
+
+    def test_format_recommendation_emits_maceff_prefix(self):
+        """format_recommendation with agent_prefix='maceff' must produce /maceff-* skill names."""
+        from macf.modes.detection import format_recommendation
+        output = format_recommendation(
+            current_work_mode="DISCOVER",
+            selected_mode="EXPERIMENT",
+            distribution={"DISCOVER": 0.1, "EXPERIMENT": 0.5, "BUILD": 0.2, "CURATE": 0.1, "CONSOLIDATE": 0.1},
+            agent_prefix="maceff",
+        )
+        assert "/maceff-experimental-self-motivation" in output
+        assert "/ctb-" not in output
+
+    def test_handle_stop_does_not_hardcode_ctb_prefix(self):
+        """Source-level regression: handle_stop.py must not pass "ctb" to format_recommendation."""
+        from pathlib import Path
+        import macf.hooks.handle_stop as hs
+        source = Path(hs.__file__).read_text()
+        # Any literal "ctb" token as the 4th positional arg to format_recommendation would match
+        assert 'format_recommendation(' in source  # sanity: function is still called
+        assert ', "ctb")' not in source, "hardcoded /ctb-* prefix leaked back into the stop hook"
+        assert ", 'ctb')" not in source, "hardcoded /ctb-* prefix leaked back into the stop hook"
