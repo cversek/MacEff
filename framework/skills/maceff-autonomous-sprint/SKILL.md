@@ -76,13 +76,17 @@ Extract requirements by answering:
 
 ### Scope Setup
 
+Scope **every individual task** you intend to work on during the sprint — all the tasks that together make up the logical collection of work implied by the user's request. `task scope set` accepts multiple IDs. Give the scope gate the complete picture so it doesn't clear early while real work remains unfinished. Non-last completions proceed freely (no gate), so scoping many tasks does not slow the sprint down.
+
 ```bash
 # Timed sprint (user said "work for 2 hours"):
-macf_tools task scope set <task_id> --timer 120
+macf_tools task scope set <task_id_1> <task_id_2> <task_id_3> ... --timer 120
 
 # Untimed sprint (user said "finish this MISSION"):
-macf_tools task scope set <task_id>
+macf_tools task scope set <task_id_1> <task_id_2> <task_id_3> ...
 ```
+
+If mid-sprint you realize a task you'll actually work on isn't scoped, re-invoke `scope set` with the full list — the command replaces the scope, so include everything you want tracked.
 
 **Verify TM is running** (should be auto-started from Step 1):
 ```bash

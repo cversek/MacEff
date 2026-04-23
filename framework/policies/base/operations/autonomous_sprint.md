@@ -27,9 +27,11 @@ Scope completion is a **transition point**, not a stop signal. When the Markov r
 - How does ULTRATHINK deliberation work?
 - When is overriding justified?
 
-**3 Scope Feeding Discipline**
-- How do I keep the scope gate fed?
-- What is the front-loading pattern?
+**3 Sprint Task Discipline**
+- What's the difference between timed and untimed sprints?
+- Should I scope just the sprint container, or every task I'll work on?
+- How do I document activity during a sprint?
+- How do completion and the scope/timer gates interact?
 
 **4 Domain Rotation**
 - When should I switch domains?
@@ -94,6 +96,23 @@ At each gate point, the recommender presents a suggestion:
 
 **CRITICAL**: Never invent a timer for workload-defined sprints.
 
+### Scope the Full Workload
+
+**Scope every individual task you intend to work on during the sprint** — all the tasks that together make up the logical collection of work implied by the user's request. `macf_tools task scope set` accepts multiple IDs; give the scope gate the complete picture of what you're committing to.
+
+**Why this matters**:
+- Scope gate only protects the work it knows about. If tasks aren't scoped, the gate clears early and Stop fires while real work is still unfinished.
+- `scope show` and the Stop-hook dashboard become accurate pictures of remaining sprint work.
+- Non-last completions proceed freely (no gate) — scoping many tasks does not slow the sprint down.
+
+**Canonical pattern**:
+
+```bash
+macf_tools task scope set <task_id_1> <task_id_2> <task_id_3> ... --timer <minutes>
+```
+
+If you realize mid-sprint that a task you'll actually work on isn't scoped, re-invoke `scope set` with the full list — the command replaces the scope, so include everything you want tracked.
+
 ### Task Note Discipline
 
 Document all activity in task notes with work mode prefix: `MODE_NAME: description`. This is required for BOTH sprint types, but especially important during timed sprint continuation periods.
@@ -135,7 +154,7 @@ Timer expiry lifts the timer gate. Agent then completes the last task with a rep
 
 ## 5. Timer Discipline
 
-**Timer is MANDATORY** when user specifies a time allotment: `macf_tools task scope set <id> --timer <minutes>`.
+**Timer is MANDATORY** when user specifies a time allotment: `macf_tools task scope set <task_id_1> [<task_id_2> ...] --timer <minutes>`. Scope every individual task you intend to work on (see §3 "Scope the Full Workload").
 
 **Session restart is MANDATORY** between AUTO_MODE activation and sprint work. Permissions only take effect after restart. Negotiate with user: "Please restart (Ctrl-D + claude -c) then say GO."
 
