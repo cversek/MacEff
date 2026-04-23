@@ -18,7 +18,7 @@ from macf.utils import (
     get_breadcrumb,
     detect_auto_mode
 )
-from macf.modes import detect_active_modes, format_mode_indicators
+from macf.modes import detect_active_modes, anticipate_mode_change, format_mode_indicators
 from macf.agent_events_log import append_event
 from macf.event_queries import get_active_policy_injections_from_events
 from macf.hooks.hook_logging import log_hook_event
@@ -155,6 +155,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         try:
             token_info = get_token_info(session_id)
             active_modes = detect_active_modes(session_id, token_info)
+            active_modes = anticipate_mode_change(tool_name, tool_input, active_modes)
             mode_indicator = format_mode_indicators(active_modes)
         except (OSError, ValueError) as e:
             print(f"⚠️ MACF: mode detection failed, falling back: {e}", file=sys.stderr)

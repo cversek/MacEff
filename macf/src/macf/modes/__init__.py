@@ -10,6 +10,7 @@ Policy spec: framework/policies/base/operations/mode_system.md
 """
 from .detection import (
     detect_active_modes,
+    anticipate_mode_change,
     format_mode_indicators,
     should_self_manage_closeout,
     should_closeout_now,
