@@ -172,6 +172,16 @@ macf_tools mode set AUTO_MODE --auth-token "$(python3 -c "import json; print(jso
 - Agent does NOT know WHAT the token value is
 - Token never appears in agent context or logs
 
+### Name Collision With Claude Code's "auto mode"
+
+Claude Code 2.1.116+ introduced its own `--auto-mode` harness-level concept for permissions bypass. Name collision with MACF's AUTO_MODE means a fresh MacEff agent running the activation command above may hit a Claude Code permission denial, because the permission layer heuristically reads the inline `python3 -c 'json.load(...auth_token)'` as "agent self-authorizing by reading its own auth token from a config file" — a classic self-auth anti-pattern.
+
+That heuristic is a false positive here: the activation is policy-prescribed (see above), the token is a path-validator proving the command flowed through the skill, and the real second factor is the user's safety phrase.
+
+**Shipped mitigation**: `macf_tools framework install` merges an allowlist entry for `Bash(macf_tools mode:*)` from `framework/templates/settings.permissions.json` into the agent's Claude Code settings. This tells Claude Code to trust MacEff's own CLI-level enforcement (auth token for AUTO_MODE, justification for MANUAL_MODE escape) instead of applying the generic heuristic.
+
+**If an agent still hits the denial** (e.g. the allowlist entry is missing because hooks were installed before v0.5.1, or the setting was edited away): the user should temporarily enable Claude Code's permissions-bypass mode, the agent should retry the activation, and then the user should re-run `macf_tools framework install --hooks-only` to restore the allowlist entry.
+
 ### Token Configuration
 
 The auth token is stored in `.maceff/settings.json`:

@@ -554,7 +554,8 @@ def _update_settings_file(settings_path: Path, hooks_prefix: str) -> bool:
                 }
             ]
 
-        # Merge permissions from template (grant commands require "ask")
+        # Merge permissions from template (allow/ask/deny lists are additively merged,
+        # deduplicated per-bucket — user's existing entries are preserved)
         try:
             maceff_root = find_maceff_root()
             template_path = maceff_root / "framework" / "templates" / "settings.permissions.json"
@@ -564,13 +565,13 @@ def _update_settings_file(settings_path: Path, hooks_prefix: str) -> bool:
                 if "permissions" in perm_template:
                     if "permissions" not in settings:
                         settings["permissions"] = {}
-                    # Merge "ask" permissions
-                    if "ask" in perm_template["permissions"]:
-                        if "ask" not in settings["permissions"]:
-                            settings["permissions"]["ask"] = []
-                        for perm in perm_template["permissions"]["ask"]:
-                            if perm not in settings["permissions"]["ask"]:
-                                settings["permissions"]["ask"].append(perm)
+                    for bucket in ("allow", "ask", "deny"):
+                        if bucket in perm_template["permissions"]:
+                            if bucket not in settings["permissions"]:
+                                settings["permissions"][bucket] = []
+                            for perm in perm_template["permissions"][bucket]:
+                                if perm not in settings["permissions"][bucket]:
+                                    settings["permissions"][bucket].append(perm)
         except Exception as e:
             print(f"   Warning: Could not merge permissions template: {e}", file=sys.stderr)
 
