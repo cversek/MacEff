@@ -4,7 +4,7 @@
 **Type**: Development Infrastructure
 **Scope**: All agents (PA and SA)
 **Status**: ACTIVE (successor to todo_hygiene.md)
-**Version**: 1.1
+**Version**: 1.2
 
 ---
 
@@ -46,6 +46,19 @@ Task management policy governs the use of Claude Code native Task* tools (TaskCr
 - What metadata is auto-fetched from GitHub?
 - What subject format does GH_ISSUE use?
 - What custom fields are stored in MTMD?
+
+**2.6 🏃‍♂️ SPRINT Type**
+- When do I create a SPRINT task?
+- What is the SPRINT custom schema?
+- How does the SPRINT lifecycle work?
+- How is scope defined for a SPRINT?
+- What CLI command creates a SPRINT task?
+
+**2.7 ⏲️ PLAY_TIME Type**
+- When do I create a PLAY_TIME task?
+- What is the PLAY_TIME custom schema?
+- How does the timer and chain work?
+- What CLI command creates a PLAY_TIME task?
 
 **2.3.1 GH_ISSUE Fix Workflow (PR-Based)**
 - What is the PR-based fix workflow?
@@ -206,6 +219,8 @@ custom: {}                             # Type-specific extension fields
 | Task Type | Custom Fields | Purpose |
 |-----------|--------------|---------|
 | GH_ISSUE | `github_url`, `github_owner`, `github_repo`, `github_number`, `github_labels`, `github_state` | External system linkage |
+| SPRINT | `goal`, `scoped_task_ids`, `scoped_progress`, `ideas_captured`, `learnings_curated`, `initial_work_mode`, `closure_invoked` | Workload-defined autonomous session tracking |
+| PLAY_TIME | `goal`, `timer_minutes`, `timer_started_at`, `timer_expires_at`, `timer_cleared_at`, `predetermined_chain`, `chain_position`, `chain_exhausted`, `initial_work_mode`, `current_work_mode`, `mode_transitions`, `markov_gates`, `ideas_captured`, `learnings_curated`, `wind_down_started_at`, `closure_invoked` | Time-bounded autonomous play tracking |
 | (future) | Type-specific fields as needed | Extensibility without schema changes |
 
 `custom` fields are populated automatically by `task create` commands (e.g., `task create gh_issue` fetches from GitHub API). Manual population via `task metadata add` is also supported.
@@ -238,6 +253,8 @@ updates:
 | 📦 | ARCHIVE | - | Archived/completed hierarchy |
 | 🔧 | TASK | - | General work item (task file IS the CA) |
 | 🐛 | BUG | ⚠️ XOR | Defect - requires EITHER plan OR plan_ca_ref |
+| 🏃‍♂️ | SPRINT | ⚠️ XOR | Workload-defined autonomous session (sprint_log.md OR plan_ca_ref) |
+| ⏲️ | PLAY_TIME | ✅ play_log.md | Time-bounded autonomous play with mode chain |
 
 **Lightweight Phase Annotation**: For phases WITHOUT detailed subplan CAs, use `-` prefix:
 ```
@@ -294,8 +311,8 @@ These are stored in the MTMD `custom` dict, preserving the external system's sta
 **Subject Format**:
 ```
 🐙 GH/{owner}/{repo}#{number} [{label}]: {title}
-🐙 GH/cversek/MacEff#3 [bug]: task create puts folders in wrong directory
-🐙 GH/cversek/MacEff#2: framework install fails outside MacEff repo
+🐙 GH/acme/widgets#3 [bug]: task create puts folders in wrong directory
+🐙 GH/acme/widgets#2: framework install fails outside repo root
 ```
 
 Labels appear in brackets if present. Multiple labels use the first one. No labels omits the brackets entirely.
@@ -443,6 +460,117 @@ With MTMD:
 2. `/maceff:task:start` - If MISSION has no children, offers to expand from roadmap
 
 **Why Mandatory**: Task hierarchy provides observability. Without phase tasks, user cannot track progress through MISSION phases in task UI.
+
+### 2.6 🏃‍♂️ SPRINT Type
+
+SPRINT tasks represent **workload-defined autonomous work sessions**. The completion boundary is scope (all predefined tasks done), not wall clock. Mode is locked at SPRINT for the duration.
+
+**When to create a SPRINT**:
+- User assigns a finite set of tasks: "run the pipeline on these 7 versions"
+- Agent commits to a known plan before starting autonomous work
+- No timer is appropriate — work ends when scope is complete
+
+**CA**: `sprint_log.md` in `agent/public/sprints/YYYY-MM-DD_<title>/`. MISSION-tied SPRINTs may use `plan_ca_ref` pointing at the parent roadmap instead (XOR, like BUG).
+
+**Custom schema**:
+```yaml
+custom:
+  goal: "Run full pipeline on all 7 new versions"
+  scoped_task_ids: [1001, 1002, 1003]
+  scoped_progress:
+    completed: 2
+    total: 3
+  ideas_captured: 0          # 💡-prefix note count
+  learnings_curated: 0       # learning files created during sprint window
+  initial_work_mode: SPRINT  # always SPRINT for this type
+  closure_invoked: false
+```
+
+**Lifecycle**:
+- Mode locks at SPRINT when task starts
+- Stop hook emits scope-nag while scoped tasks remain
+- No timer gate — scope gate is the only gate
+- Mode clears when SPRINT task completes
+
+**CLI**:
+```bash
+macf_tools task create sprint "Goal description" \
+    --scoped TASK_ID1 TASK_ID2 TASK_ID3 \
+    [--parent TASK_ID] \
+    [--no-auto-start]
+
+# OR create new child tasks:
+macf_tools task create sprint "Goal description" \
+    --children "Title one" "Title two" \
+    [--parent TASK_ID]
+```
+
+`--timer` is rejected with a hard error directing to `task create play_time`.
+
+See `autonomous_sprint.md` for full behavioral policy.
+
+### 2.7 ⏲️ PLAY_TIME Type
+
+PLAY_TIME tasks represent **time-bounded autonomous play sessions**. The agent declares an initial work-mode chain, advances through it, then follows the Markov recommender after chain exhaustion.
+
+**When to create a PLAY_TIME**:
+- User specifies a time allotment: "explore this for 60 minutes"
+- Mode rotation is expected (DISCOVER → EXPERIMENT → BUILD)
+- No predefined task list — exploration drives the scope
+
+**CA**: `play_log.md` in `agent/public/play_time/YYYY-MM-DD_<title>/`. Holds goal, chain declaration, mode-transition log, gate decisions, ideas, and final synthesis.
+
+**Custom schema**:
+```yaml
+custom:
+  goal: "Explore CC internals for new feature signals"
+  timer_minutes: 60
+  timer_started_at: 1777168893
+  timer_expires_at: 1777172493
+  timer_cleared_at: null
+
+  predetermined_chain: [DISCOVER, EXPERIMENT, CURATE]
+  chain_position: 1              # currently at chain[1] = EXPERIMENT
+  chain_exhausted: false
+
+  initial_work_mode: DISCOVER    # = predetermined_chain[0]
+  current_work_mode: EXPERIMENT
+  mode_transitions:
+    - at: 1777169500
+      breadcrumb: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
+      from: DISCOVER
+      to: EXPERIMENT
+      trigger: chain_advance
+  markov_gates: []
+
+  ideas_captured: 3
+  learnings_curated: 0
+  wind_down_started_at: null
+  closure_invoked: false
+```
+
+**Lifecycle**:
+- `--timer` mandatory at creation (hard-fail if absent)
+- Agent starts in `predetermined_chain[0]` mode
+- Chain advances at scope gate while timer active; Markov takes over after `chain_exhausted: true`
+- Wind-down begins at T-60; timer gate lifts at T-0
+- Both timer gate and scope gate must clear to stop
+
+**CLI**:
+```bash
+macf_tools task create play_time "Goal description" \
+    --timer 60 \
+    [--chain DISCOVER EXPERIMENT CURATE] \
+    [--scoped TASK_ID1 ...] \
+    [--children "title1" ...] \
+    [--parent TASK_ID] \
+    [--no-auto-start]
+```
+
+`--timer` missing → hard-fail directing to `task create sprint`.
+`--chain` entries validated against work mode enum.
+
+See `play_time.md` for full behavioral policy.
 
 ---
 
@@ -757,7 +885,7 @@ agent/public/task_archives/
 │   └── v0.4.0/
 │       ├── archive.md
 │       └── task_files/
-└── ClaudeTheBuilder/
+└── AnotherRepo/
     └── v1.0.0/
         ├── archive.md
         └── task_files/
@@ -769,7 +897,7 @@ Tasks spanning multiple repos document all repos in MTMD:
 ```yaml
 repo: MacEff              # Primary repo
 related_repos:
-  - ClaudeTheBuilder
+  - AnotherRepo
 ```
 
 ### 7.3 Cascade Behavior

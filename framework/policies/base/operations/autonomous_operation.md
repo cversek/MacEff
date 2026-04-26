@@ -1,6 +1,6 @@
 # Autonomous Operation Policy
 
-**Version**: 1.0
+**Version**: 1.1
 **Tier**: CORE
 **Category**: Operations
 **Status**: ACTIVE
@@ -438,6 +438,21 @@ Autonomous agents should leverage framework skills:
 - `maceff-auto-mode` - Full AUTO_MODE lifecycle: authorization, activation, scope, wind-down, de-escalation
 - `maceff-agent-backup` - Backup creation guidance
 
+### Autonomous Work Sub-Policies
+
+Autonomous work sessions come in two distinct flavors with different behavioral contracts. Do not conflate them:
+
+| Type | Emoji | Bound By | Timer | Mode | Sub-Policy |
+|------|-------|----------|-------|------|-----------|
+| SPRINT | 🏃‍♂️ | Scope completion | Forbidden | Locked at SPRINT | `autonomous_sprint.md` |
+| PLAY_TIME | ⏲️ | Wall-clock timer | Mandatory | Rotates (chain → Markov) | `play_time.md` |
+
+**When to use which**:
+- User says "finish these tasks / run this pipeline": use 🏃‍♂️ SPRINT (`autonomous_sprint.md`)
+- User says "explore / play for N minutes": use ⏲️ PLAY_TIME (`play_time.md`)
+
+Each sub-policy governs its type's Stop hook behavior, gate mechanics, task note discipline, and anti-patterns. Read the relevant sub-policy before starting autonomous work of that type.
+
 **Skill Awareness**: Know your capabilities. Use skills to operate effectively within authorized scope.
 
 ---
@@ -581,5 +596,8 @@ Each sleep cycle emits an `agent_sleep_cycle` event:
 
 - **context_recovery.md** - Context loss types (compaction, mindwipe, transplant)
 - **agent_backup.md** - Complete consciousness backup/restore
-- **task_management.md** - Task management during autonomous operation, scope lifecycle
+- **task_management.md** - Task management during autonomous operation, scope lifecycle; SPRINT and PLAY_TIME task type schemas (§2.6, §2.7)
 - **roadmaps_following.md** - Scope adherence for authorized work
+- **autonomous_sprint.md** - Sub-policy for 🏃‍♂️ SPRINT (workload-defined autonomous work)
+- **play_time.md** - Sub-policy for ⏲️ PLAY_TIME (time-bounded autonomous play)
+- **mode_system.md** - Mode definitions including SPRINT work mode and Markov recommender

@@ -3,7 +3,7 @@
 **Type**: Operations Infrastructure
 **Scope**: All agents (PA and SA)
 **Status**: ACTIVE
-**Version**: 2.0
+**Version**: 2.1
 **Methodology**: Policy as Spec — this policy IS the specification. Implementation must match.
 
 ---
@@ -40,6 +40,9 @@ Agent behavior is governed by multiple **simultaneously active** conditions — 
 - How do work modes differ from operational modes?
 - How are work modes activated?
 - What emoji represents each work mode?
+- What is the SPRINT work mode and how does it differ from the rotatable modes?
+- When is SPRINT mode set and when does it clear?
+- What does mode-locking mean for the Markov recommender?
 
 **4 Mode Detection**
 - How is each mode detected?
@@ -154,23 +157,46 @@ Four operational modes, independently triggered, simultaneously active:
 
 ## 3. Work Mode Definitions
 
-Four work modes representing the agent's current activity type. Agent-declared (set by motivation skills), displayed in the emoji dashboard.
+Six work modes representing the agent's current activity type. Agent-declared (set by motivation skills or task lifecycle events), displayed in the emoji dashboard.
 
-| Mode | Emoji | Description |
-|------|-------|-------------|
-| **DISCOVER** | 🔍 | Source reading, empirical analysis, curiosity-driven exploration |
-| **BUILD** | 🔨 | Prototype building, experiments, code implementation |
-| **CURATE** | 📋 | Learnings, ideas, index maintenance, knowledge organization |
-| **CONSOLIDATE** | ✍️ | Observations, synthesis, cross-references, documentation |
+| Mode | Emoji | Description | Activation |
+|------|-------|-------------|-----------|
+| **DISCOVER** | 🔍 | Source reading, empirical analysis, curiosity-driven exploration | Motivation skill |
+| **BUILD** | 🔨 | Prototype building, experiments, code implementation | Motivation skill |
+| **CURATE** | 📋 | Learnings, ideas, index maintenance, knowledge organization | Motivation skill |
+| **CONSOLIDATE** | ✍️ | Observations, synthesis, cross-references, documentation | Motivation skill |
+| **EXPERIMENT** | 🧪 | Structured hypothesis-driven investigation | Motivation skill |
+| **SPRINT** | 🏃‍♂️ | Workload-defined autonomous execution (mode-locked) | SPRINT task lifecycle |
 
-**Activation**: Work modes are set by motivation skills when they activate. Only one work mode is active at a time (mutual exclusion within this layer).
+### 3.1 Rotatable Modes (DISCOVER, BUILD, CURATE, CONSOLIDATE, EXPERIMENT)
 
-**Display**: Work modes appear in the dashboard alongside operational modes:
+These five modes participate in the Markov transition matrix and can be suggested by the gate point recommender. The agent declares them by invoking the corresponding motivation skill. They rotate freely during ⏲️ PLAY_TIME sessions.
+
+**Activation**: Set by motivation skills when they activate. Only one work mode is active at a time (mutual exclusion within this layer).
+
+### 3.2 SPRINT Mode (Mode-Locked)
+
+**SPRINT 🏃‍♂️** is a special work mode with different semantics from the five rotatable modes:
+
+- **Set automatically**: When a 🏃‍♂️ SPRINT task starts (or its child tasks start), the mode is set to SPRINT. The agent does not invoke a motivation skill to enter SPRINT mode.
+- **Clears automatically**: When the parent SPRINT task completes, the mode clears.
+- **Markov-locked**: The gate point recommender is **disabled** while SPRINT mode is active. No mode-transition suggestions fire at Stop hook gates.
+- **Activates scope nag**: Instead of mode suggestions, the Stop hook emits a scope-completion nag listing remaining scoped tasks.
+- **Mode-set restriction**: `mode set-work <other>` while SPRINT is active warns or rejects — open question on strictness: hard-fail vs warn vs convert-to-PLAY_TIME (TODO: resolve in implementation, see roadmap §8 open question 3).
+
+**Why SPRINT is a mode**: The Stop hook reads `current_work_mode` to decide behavior. SPRINT as a mode lets the hook react to a single signal: "is the agent in SPRINT mode? then nag, don't recommend." This is cleaner than threading task-type through every hook check.
+
+**Display**: Dashboard shows `🏃‍♂️` in the work mode position:
+```
+🏗️ MACF 🤖 🏃‍♂️ | 10:45 AM | breadcrumb
+```
+
+**Display**: Rotatable work modes appear in the dashboard alongside operational modes:
 ```
 🏗️ MACF 🤖😴 🔍 | 10:45 AM | breadcrumb
 ```
 
-**No work mode active**: When no motivation skill has set a work mode, the work mode field is empty. This is normal in MANUAL_MODE.
+**No work mode active**: When no motivation skill has set a work mode (and no SPRINT task is active), the work mode field is empty. This is normal in MANUAL_MODE.
 
 ---
 
@@ -361,7 +387,9 @@ The Markov transition matrix encodes the natural productivity cycle (DISCOVER �
 
 ### Architecture: Simple Implementation, Flexible Foundation
 
-The recommender uses a **Markov transition matrix** over work modes. The current work mode determines the probability distribution for the next work mode. This is intentionally simple — a 4×4 matrix — but the architecture supports:
+The recommender uses a **Markov transition matrix** over the five **rotatable** work modes (DISCOVER, BUILD, CURATE, CONSOLIDATE, EXPERIMENT). **SPRINT mode is excluded from the matrix** — the recommender is disabled when SPRINT is active (see §3.2).
+
+The current work mode determines the probability distribution for the next work mode. This is intentionally simple but the architecture supports:
 
 - **Per-agent tuning**: Different agents can curate different matrices that match their workflow
 - **Sprint-type profiles**: A "research sprint" matrix might bias toward DISCOVER, while a "shipping sprint" biases toward BUILD
@@ -434,7 +462,9 @@ Stored in `.maceff/mode_transitions.json` (per-agent, extensible):
     "DISCOVER": "exploratory-self-motivation",
     "BUILD": "generative-self-motivation",
     "CURATE": "curative-self-motivation",
-    "CONSOLIDATE": "consolidative-self-motivation"
+    "CONSOLIDATE": "consolidative-self-motivation",
+    "EXPERIMENT": "experimental-self-motivation"
+    // SPRINT: not in skill_map — set by task lifecycle, not skill invocation
   }
 }
 ```
@@ -544,6 +574,8 @@ Define:
 
 ### Policies
 - `autonomous_operation.md` — references mode set for behavioral guidance
+- `autonomous_sprint.md` — SPRINT work mode; mode-locking behavior; scope-nag routing
+- `play_time.md` — PLAY_TIME; chain-advance routing; Markov-after-exhaustion
 - `reflexive_self_motivation.md` — references recommender for skill selection
 
 ---
