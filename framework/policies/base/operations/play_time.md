@@ -6,6 +6,8 @@
 **Status**: ACTIVE
 **Related**: `autonomous_operation.md` (mode lifecycle), `mode_system.md` (mode system, Markov recommender), `autonomous_sprint.md` (sibling — workload-defined autonomous work)
 
+**See also**: `maceff-play-time` skill (invocation wrapper for PLAY_TIME) | `autonomous_sprint.md` (sibling type for workload-defined work) | `maceff-sprint` skill (invocation wrapper for SPRINT)
+
 ---
 
 ## Purpose

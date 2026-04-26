@@ -113,8 +113,19 @@ These are wrapped in visual boundary boxes:
 - Records DEV_DRV completion
 - Updates session end timestamps
 - Persists final session state
+- Enforces autonomous work gates when a SPRINT or PLAY_TIME scope is active
 
-**Key output:** State persistence to disk.
+**Autonomous work dispatch (SPRINT / PLAY_TIME):**
+
+When a task scope is active, the Stop hook inspects the active task type before allowing the stop:
+
+- **🏃‍♂️ SPRINT in scope:** If any scoped tasks remain incomplete, the hook emits a nag listing the open tasks and returns `continue: false` (blocking the stop). The Markov recommender is NOT invoked — no mode-change suggestions fire during a SPRINT.
+- **⏲️ PLAY_TIME — chain not exhausted:** If the timer is still active and the current chain mode's scope has cleared, the hook suggests advancing to the next chain position (e.g., "Advance chain: `DISCOVER → EXPERIMENT`"). Agent invokes the corresponding motivation skill.
+- **⏲️ PLAY_TIME — chain exhausted:** Gate points invoke the Markov recommender as documented in `mode_system.md`. Agent ULTRATHINK-deliberates on the recommendation, then invokes the suggested skill.
+- **⏲️ PLAY_TIME — timer expired + scope clear:** Both gates cleared. Stop is allowed. AUTO_MODE persists until user returns.
+- **No active scope:** Existing Markov gate point behavior (see `mode_system.md`).
+
+**Key output:** State persistence to disk; gate enforcement output when scope is active.
 
 ### 6. subagent_stop
 
