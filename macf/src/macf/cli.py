@@ -5670,6 +5670,49 @@ def _gh_issue_closeout(task_id: int, mtmd, args, breadcrumb: str) -> None:
         print("   ⚠️  gh CLI timed out — skipping issue close")
 
 
+def _find_sprint_log(plan_ca_ref: str):
+    """Return Path to sprint_log.md given plan_ca_ref directory, or None."""
+    from pathlib import Path
+    p = Path(plan_ca_ref)
+    # plan_ca_ref may be a file (roadmap.md) or a directory
+    folder = p if p.is_dir() else p.parent
+    candidate = folder / "sprint_log.md"
+    return candidate if candidate.exists() else None
+
+
+def _find_play_log(plan_ca_ref: str):
+    """Return Path to play_log.md given plan_ca_ref directory, or None."""
+    from pathlib import Path
+    p = Path(plan_ca_ref)
+    folder = p if p.is_dir() else p.parent
+    candidate = folder / "play_log.md"
+    return candidate if candidate.exists() else None
+
+
+def _write_final_synthesis(log_path, aggregate: str, open_children) -> None:
+    """Append aggregate stats under ## Final Synthesis in log_path.
+
+    Creates the section if absent; never overwrites content above it.
+    """
+    from pathlib import Path
+    text = Path(log_path).read_text(encoding="utf-8")
+    section_header = "## Final Synthesis"
+    if section_header in text:
+        # Insert after the header line, before any existing content in the section
+        idx = text.index(section_header) + len(section_header)
+        insertion = f"\n\n{aggregate}"
+        if open_children:
+            child_ids = ", ".join(f"#{c.id}" for c in open_children)
+            insertion += f"\n\nNote: completed with open child tasks: {child_ids}"
+        new_text = text[:idx] + insertion + text[idx:]
+    else:
+        new_text = text.rstrip("\n") + f"\n\n{section_header}\n\n{aggregate}\n"
+        if open_children:
+            child_ids = ", ".join(f"#{c.id}" for c in open_children)
+            new_text += f"\nNote: completed with open child tasks: {child_ids}\n"
+    Path(log_path).write_text(new_text, encoding="utf-8")
+
+
 def cmd_task_complete(args: argparse.Namespace) -> int:
     """Mark task complete with mandatory report, breadcrumb, and status change."""
     from .task import TaskReader, update_task_file
@@ -5755,6 +5798,111 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
             print()
             print(f"Missing: {', '.join(missing)}")
             return 1
+
+    # Type-specific completion logic: SPRINT
+    if task_type == "SPRINT":
+        # 1. Child-task open-guard
+        try:
+            from .task import TaskReader as _TR
+            _all_tasks = _TR().read_all_tasks()
+            _open_children = [
+                t for t in _all_tasks
+                if str(getattr(t, 'parent_id', None)) == str(task_id)
+                and getattr(t, 'status', None) not in ("completed", "archived")
+            ]
+            if _open_children and not getattr(args, 'force', False):
+                _ids = ", ".join(f"#{t.id}" for t in _open_children)
+                print(f"❌ SPRINT has {len(_open_children)} open child tasks: {_ids}. Complete them first or use --force to override.")
+                return 1
+            elif _open_children:
+                import sys as _sys
+                _ids = ", ".join(f"#{t.id}" for t in _open_children)
+                print(f"⚠️  Forcing completion with {len(_open_children)} open child tasks: {_ids}", file=_sys.stderr)
+        except (ImportError, OSError) as e:
+            import sys as _sys
+            print(f"⚠️ MACF: child-task check failed (non-blocking): {e}", file=_sys.stderr)
+
+        # 2. Auto-aggregate completion report from custom fields
+        _custom = getattr(task.mtmd, 'custom', {}) if task.mtmd else {}
+        _goal = _custom.get("goal", "")
+        _sp = _custom.get("scoped_progress", {})
+        _completed_n = _sp.get("completed", 0) if isinstance(_sp, dict) else 0
+        _total_n = _sp.get("total", 0) if isinstance(_sp, dict) else 0
+        _ideas = _custom.get("ideas_captured", 0)
+        _learnings = _custom.get("learnings_curated", 0)
+        _aggregate = (
+            f'Goal: "{_goal}". Completed {_completed_n}/{_total_n} children. '
+            f'{_ideas} ideas captured. {_learnings} learnings curated.'
+        )
+        if args.report:
+            args.report = args.report + " | " + _aggregate
+        else:
+            args.report = _aggregate
+
+        # 3. Auto-populate sprint_log.md Final Synthesis section
+        _plan_ref = getattr(task.mtmd, 'plan_ca_ref', None) if task.mtmd else None
+        if _plan_ref:
+            try:
+                _log_path = _find_sprint_log(_plan_ref)
+                if _log_path:
+                    _write_final_synthesis(_log_path, _aggregate, _open_children if '_open_children' in dir() else [])
+            except (OSError, ValueError) as e:
+                import sys as _sys
+                print(f"⚠️ MACF: sprint_log update failed (non-blocking): {e}", file=_sys.stderr)
+
+        # 4. Prompt about ideas in task notes
+        _updates = getattr(task.mtmd, 'updates', []) if task.mtmd else []
+        _idea_notes = [u for u in _updates if '💡 ' in getattr(u, 'description', '')]
+        if _idea_notes:
+            print(f"💡 {len(_idea_notes)} ideas in task notes — promote them to formal idea CAs after sprint with macf_tools idea create.")
+
+    # Type-specific completion logic: PLAY_TIME
+    elif task_type == "PLAY_TIME":
+        import time as _time
+        _custom = getattr(task.mtmd, 'custom', {}) if task.mtmd else {}
+
+        # 1. Timer expiry check (warn, don't block)
+        _expires_at = _custom.get("timer_expires_at")
+        if _expires_at is not None and not getattr(args, 'force', False):
+            _remaining_sec = int(_expires_at) - int(_time.time())
+            if _remaining_sec > 0:
+                _remaining_min = round(_remaining_sec / 60, 1)
+                print(f"⚠️  PLAY_TIME timer hasn't expired ({_remaining_min} min remaining). Completing anyway. Use --force to suppress this warning.")
+
+        # 2. Auto-aggregate
+        _goal = _custom.get("goal", "")
+        _timer_min = _custom.get("timer_minutes", 0)
+        _mode_trans = _custom.get("mode_transitions", [])
+        _markov = _custom.get("markov_gates", [])
+        _ideas = _custom.get("ideas_captured", 0)
+        _learnings = _custom.get("learnings_curated", 0)
+        _modes_used = len(_mode_trans) + 1
+        _aggregate = (
+            f'Goal: "{_goal}". Timer: {_timer_min}min. '
+            f'Modes used: {_modes_used}. Markov gates: {len(_markov)}. '
+            f'{_ideas} ideas, {_learnings} learnings.'
+        )
+        if args.report:
+            args.report = args.report + " | " + _aggregate
+        else:
+            args.report = _aggregate
+
+        # 3. Auto-populate play_log.md Final Synthesis section
+        _plan_ref = getattr(task.mtmd, 'plan_ca_ref', None) if task.mtmd else None
+        if _plan_ref:
+            try:
+                _log_path = _find_play_log(_plan_ref)
+                if _log_path:
+                    _write_final_synthesis(_log_path, _aggregate, [])
+            except (OSError, ValueError) as e:
+                import sys as _sys
+                print(f"⚠️ MACF: play_log update failed (non-blocking): {e}", file=_sys.stderr)
+
+        # 4. Prompt about ideas in task notes
+        _updates = getattr(task.mtmd, 'updates', []) if task.mtmd else []
+        _idea_notes = [u for u in _updates if '💡 ' in getattr(u, 'description', '')]
+        if _idea_notes:
+            print(f"💡 {len(_idea_notes)} ideas in task notes — promote them to formal idea CAs after sprint with macf_tools idea create.")
 
     # Generate breadcrumb
     breadcrumb = get_breadcrumb()
@@ -7260,6 +7408,8 @@ def _build_parser() -> argparse.ArgumentParser:
                                       help="commit hash(es) that fix the issue (repeatable, required for GH_ISSUE)")
     task_complete_parser.add_argument("--verified",
                                       help="verification method description (required for GH_ISSUE)")
+    task_complete_parser.add_argument("--force", action="store_true", default=False,
+                                      help="force completion despite open child tasks (SPRINT) or unexpired timer (PLAY_TIME)")
     task_complete_parser.set_defaults(func=cmd_task_complete)
 
     # task block - add blocking relationship
