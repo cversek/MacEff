@@ -1316,10 +1316,11 @@ def _run_scope_set(task_ids: List[int], timer_minutes: int = 0) -> bool:
         existing_timer = get_active_timer()
         if not existing_timer.get("active"):
             timer_end = time.time() + timer_minutes * 60
+            from ..utils.session import get_current_session_id as _get_sid
             append_event("scope_timer_set", {
                 "timer_minutes": timer_minutes,
                 "timer_end_epoch": timer_end,
-                "session_id": get_breadcrumb().split("/")[0].replace("s_", ""),
+                "session_id": _get_sid(),
             })
     return True
 

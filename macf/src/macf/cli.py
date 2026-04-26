@@ -5518,7 +5518,7 @@ def cmd_task_scope_set(args: argparse.Namespace) -> int:
             append_event("scope_timer_set", {
                 "timer_minutes": timer_minutes,
                 "timer_end_epoch": timer_end,
-                "session_id": get_breadcrumb().split("/")[0].replace("s_", ""),
+                "session_id": get_current_session_id(),
             })
             print(f"   ⏱️  Timer: {timer_minutes} min (until {time.strftime('%H:%M', time.localtime(timer_end))})")
     else:
