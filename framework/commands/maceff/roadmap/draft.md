@@ -24,6 +24,7 @@ Create a MacEff-compliant roadmap following the complete preliminary workflow wi
 4. Write plan content directly to the roadmap CA (user approves via Write permission + inline feedback)
 5. Use `mcp__plugin_telegram_telegram__reply` for questions instead of AskUserQuestion
 6. Do NOT use ExitPlanMode — the Write approval IS the execution gate
+7. 🚨 **MANDATORY: Send the completed roadmap as a Telegram attachment for review.** After writing the roadmap CA and committing/pushing, immediately reply via `mcp__plugin_telegram_telegram__reply` with the roadmap path passed in `files: ["/abs/path/to/roadmap.md"]`. The remote user cannot navigate the repo from Telegram — the attachment IS their review surface. A summary message ALONE is not sufficient; the attachment is required so the user can read the full plan in the same channel they invoked it from. Without this step, the channel-mode draft is incomplete.
 
 ---
 
