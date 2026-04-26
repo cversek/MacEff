@@ -2577,17 +2577,115 @@ def cmd_policy_injections(args: argparse.Namespace) -> int:
 # -------- Mode Commands --------
 
 def cmd_mode_set_work(args: argparse.Namespace) -> int:
-    """Set the active work mode."""
+    """Set the active work mode.
+
+    SPRINT/PLAY_TIME aware:
+    - If a SPRINT task is in scope, applies the SPRINT mode lock (warn-and-noop
+      when transitioning to a different mode).
+    - If a PLAY_TIME task is in scope, records the transition in its MTMD
+      ``custom.mode_transitions`` log and updates ``current_work_mode`` /
+      ``chain_position`` / ``chain_exhausted`` as appropriate.
+    """
     from .modes import WORK_MODES
+    from .modes.detection import apply_sprint_mode_lock, get_current_work_mode, detect_active_modes
+
     mode = args.work_mode.upper()
     if mode not in WORK_MODES:
         valid = ", ".join(sorted(WORK_MODES.keys()))
         print(f"❌ Unknown work mode: {mode}. Valid modes: {valid}")
         return 1
+
+    # Detect previous mode for transition logging
+    session_id = get_current_session_id()
+    token_info = get_token_info(session_id)
+    try:
+        active_modes = detect_active_modes(session_id, token_info)
+        prev_mode = get_current_work_mode(active_modes)
+    except (OSError, ValueError):
+        prev_mode = None
+
+    # SPRINT mode lock: warn-and-noop if currently in SPRINT and trying to switch
+    try:
+        effective = apply_sprint_mode_lock(requested_mode=mode, current_work_mode=prev_mode)
+    except (ImportError, AttributeError) as e:
+        print(f"⚠️ MACF: SPRINT mode-lock check failed: {e}", file=sys.stderr)
+        effective = mode
+    if effective != mode:
+        # Lock fired — helper already printed the warning. Stay in current mode.
+        return 0
+
     info = WORK_MODES[mode]
     append_event("work_mode_change", {"mode": mode})
     print(f"✅ Work mode set: {info['emoji']} {mode}")
+
+    # PLAY_TIME transition recording
+    try:
+        from .task.sprint_gate import get_sprint_play_time_in_scope, advance_play_time_chain
+        from .task.custom_models import PlayTimeCustom
+        from .task.reader import TaskReader, update_task_file
+        import time, copy
+
+        autowork = get_sprint_play_time_in_scope()
+        pt_task = autowork.get("play_time_task")
+        if pt_task and pt_task.mtmd and pt_task.mtmd.custom:
+            trigger = getattr(args, "trigger", None) or "manual"
+            try:
+                breadcrumb = _generate_breadcrumb()
+            except (OSError, RuntimeError) as e:
+                print(f"⚠️ MACF: breadcrumb generation failed: {e}", file=sys.stderr)
+                breadcrumb = None
+
+            try:
+                pt = PlayTimeCustom.from_dict(pt_task.mtmd.custom)
+                chain = pt.predetermined_chain
+                # Did the new mode match the next step in the chain?
+                next_idx = pt.chain_position + 1
+                if not pt.chain_exhausted and next_idx < len(chain) and chain[next_idx] == mode:
+                    if trigger == "manual":
+                        trigger = "chain_advance"
+                    advance_play_time_chain(pt_task)
+
+                # Now re-read and append transition entry
+                reader = TaskReader()
+                stored = reader.read_task(pt_task.id)
+                if stored and stored.mtmd:
+                    new_custom = dict(stored.mtmd.custom or {})
+                    transitions = list(new_custom.get("mode_transitions", []))
+                    transitions.append({
+                        "at": int(time.time()),
+                        "breadcrumb": breadcrumb,
+                        "from": prev_mode,
+                        "to": mode,
+                        "trigger": trigger,
+                    })
+                    new_custom["mode_transitions"] = transitions
+                    new_custom["current_work_mode"] = mode
+                    new_mtmd = copy.deepcopy(stored.mtmd)
+                    new_mtmd.custom = new_custom
+                    update_task_file(str(pt_task.id), {
+                        "description": stored.description_with_updated_mtmd(new_mtmd),
+                    })
+            except Exception as e:
+                print(f"⚠️ MACF: PLAY_TIME mode_transitions update failed: {e}", file=sys.stderr)
+    except (ImportError, OSError, ValueError):
+        pass
+
     return 0
+
+
+def _generate_breadcrumb() -> str:
+    """Best-effort breadcrumb for transition logging."""
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["macf_tools", "breadcrumb"],
+            capture_output=True, text=True, timeout=2,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"⚠️ MACF: breadcrumb subprocess failed: {e}", file=sys.stderr)
+    return ""
 
 
 def cmd_mode_unset_work(args: argparse.Namespace) -> int:
@@ -5106,7 +5204,12 @@ def cmd_task_pause(args: argparse.Namespace) -> int:
 
 
 def cmd_task_note(args: argparse.Namespace) -> int:
-    """Add a note to a task's updates list (type='note')."""
+    """Add a note to a task's updates list (type='note').
+
+    With --idea, formats the note as ``<MODE>: 💡 <text>`` (current work mode
+    prefix + lightbulb glyph) and increments ``custom.ideas_captured`` on the
+    nearest active scoped SPRINT or PLAY_TIME task.
+    """
     from .task import TaskReader, update_task_file
     from .utils.breadcrumbs import get_breadcrumb
     from .task.models import MacfTaskUpdate
@@ -5130,11 +5233,27 @@ def cmd_task_note(args: argparse.Namespace) -> int:
         return 1
 
     breadcrumb = get_breadcrumb()
+    is_idea = bool(getattr(args, "idea", False))
+
+    # Format message: --idea prefixes with current work mode + 💡
+    if is_idea:
+        try:
+            from .modes.detection import get_current_work_mode, detect_active_modes
+            session_id = get_current_session_id()
+            token_info = get_token_info(session_id)
+            current_wm = get_current_work_mode(detect_active_modes(session_id, token_info))
+        except (OSError, ValueError, ImportError) as e:
+            print(f"⚠️ MACF: work mode detection failed: {e}", file=sys.stderr)
+            current_wm = None
+        prefix = f"{current_wm}: " if current_wm else ""
+        message = f"{prefix}💡 {args.message}"
+    else:
+        message = args.message
 
     new_mtmd = copy.deepcopy(task.mtmd)
     new_mtmd.updates.append(MacfTaskUpdate(
         breadcrumb=breadcrumb,
-        description=args.message,
+        description=message,
         agent="PA",
         type="note",
     ))
@@ -5142,8 +5261,30 @@ def cmd_task_note(args: argparse.Namespace) -> int:
     update_task_file(task_id, {"description": new_description})
 
     print(f"📝 Note added to task #{task_id}")
-    print(f"   {args.message}")
+    print(f"   {message}")
     print(f"   Breadcrumb: {breadcrumb}")
+
+    # --idea: increment ideas_captured on active scoped SPRINT or PLAY_TIME
+    if is_idea:
+        try:
+            from .task.sprint_gate import get_sprint_play_time_in_scope
+            autowork = get_sprint_play_time_in_scope()
+            target = autowork.get("sprint_task") or autowork.get("play_time_task")
+            if target and target.mtmd and target.mtmd.custom is not None:
+                target_reader = TaskReader()
+                stored = target_reader.read_task(target.id)
+                if stored and stored.mtmd:
+                    new_custom = dict(stored.mtmd.custom or {})
+                    new_custom["ideas_captured"] = int(new_custom.get("ideas_captured", 0)) + 1
+                    new_target_mtmd = copy.deepcopy(stored.mtmd)
+                    new_target_mtmd.custom = new_custom
+                    update_task_file(str(target.id), {
+                        "description": stored.description_with_updated_mtmd(new_target_mtmd),
+                    })
+                    print(f"   💡 ideas_captured++ on #{target.id} (now {new_custom['ideas_captured']})")
+        except (ImportError, OSError, ValueError) as e:
+            print(f"⚠️  ideas_captured increment failed: {e}", file=sys.stderr)
+
     return 0
 
 
@@ -6699,7 +6840,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
     mode_sub.add_parser("show", help="show active mode set with emojis and triggers").set_defaults(func=cmd_mode_show)
     mode_set_work = mode_sub.add_parser("set-work", help="set the active work mode")
-    mode_set_work.add_argument("work_mode", help="work mode (DISCOVER, EXPERIMENT, BUILD, CURATE, CONSOLIDATE)")
+    mode_set_work.add_argument("work_mode", help="work mode (DISCOVER, EXPERIMENT, BUILD, CURATE, CONSOLIDATE, SPRINT)")
+    mode_set_work.add_argument(
+        "--trigger",
+        choices=["manual", "chain_advance", "markov_accept", "markov_override"],
+        default="manual",
+        help="provenance tag recorded in PLAY_TIME mode_transitions (default: manual)",
+    )
     mode_set_work.set_defaults(func=cmd_mode_set_work)
 
     mode_sub.add_parser("unset-work", help="clear the active work mode").set_defaults(func=cmd_mode_unset_work)
@@ -7097,6 +7244,11 @@ def _build_parser() -> argparse.ArgumentParser:
     task_note_parser = task_sub.add_parser("note", help="add a note to task (appends to updates with type='note')")
     task_note_parser.add_argument("task_id", help="task ID (e.g., #67 or 67)")
     task_note_parser.add_argument("message", help="note text")
+    task_note_parser.add_argument(
+        "--idea",
+        action="store_true",
+        help="format as 'MODE: 💡 <text>' and increment ideas_captured on active scoped SPRINT/PLAY_TIME",
+    )
     task_note_parser.set_defaults(func=cmd_task_note)
 
     # task complete

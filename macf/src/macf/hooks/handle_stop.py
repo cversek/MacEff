@@ -192,6 +192,49 @@ Development Drive Stats:
                         f"  - #{t['id']}: {t['subject']}" for t in scope["active"]
                     )
 
+                    # --- SPRINT / PLAY_TIME dispatch (Phase 4 of MISSION 1010) ---
+                    # Detect autonomous-work task types in scope and route to
+                    # type-specific gate behavior before the generic Markov path.
+                    try:
+                        from macf.task.sprint_gate import (
+                            get_sprint_play_time_in_scope,
+                            emit_scope_nag,
+                            emit_chain_advance_suggestion,
+                            should_fire_markov_for_play_time,
+                            parse_play_time_custom,
+                        )
+                        autowork = get_sprint_play_time_in_scope()
+
+                        # SPRINT: emit scope-completion nag, no Markov, no mode rotation
+                        if autowork["sprint_task"] and autowork["open_children"]:
+                            return {
+                                "continue": True,
+                                "decision": "block",
+                                "reason": emit_scope_nag(
+                                    autowork["sprint_task"],
+                                    autowork["open_children"],
+                                ),
+                            }
+
+                        # PLAY_TIME with chain not yet exhausted: suggest chain advance
+                        if autowork["play_time_task"]:
+                            pt_custom = parse_play_time_custom(autowork["play_time_task"])
+                            if pt_custom and not pt_custom.chain_exhausted and (
+                                pt_custom.chain_position + 1 < len(pt_custom.predetermined_chain)
+                            ):
+                                return {
+                                    "continue": True,
+                                    "decision": "block",
+                                    "reason": emit_chain_advance_suggestion(
+                                        autowork["play_time_task"],
+                                        pt_custom.chain_position,
+                                        pt_custom.predetermined_chain,
+                                    ),
+                                }
+                            # Chain exhausted (or last step): fall through to Markov path below
+                    except (ImportError, OSError, ValueError) as e:
+                        print(f"⚠️ MACF: sprint_gate dispatch failed: {e}", file=sys.stderr)
+
                     # Check if a timer is active — changes the gate message
                     timer_info = scope.get("timer", {})
                     timer_active = timer_info.get("active", False)
