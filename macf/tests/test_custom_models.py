@@ -45,7 +45,7 @@ def _minimal_play_time(**overrides) -> dict:
     expires = overrides.pop("timer_expires_at", started + minutes * 60)
     chain = overrides.pop("predetermined_chain", ["DISCOVER"])
     position = overrides.pop("chain_position", 0)
-    exhausted = overrides.pop("chain_exhausted", position >= len(chain))
+    exhausted = overrides.pop("chain_exhausted", position >= max(0, len(chain) - 1))
     initial = overrides.pop("initial_work_mode", chain[0])
     current = overrides.pop("current_work_mode", chain[0])
 
@@ -271,14 +271,19 @@ class TestPlayTimeCustom:
     # Test 10: chain_exhausted must be consistent with chain_position
     # -----------------------------------------------------------------------
     def test_chain_exhausted_consistency_reject_wrong_true(self):
-        """chain_exhausted=True when position < len(chain) must be rejected."""
+        """chain_exhausted=True when position < len(chain) - 1 must be rejected.
+
+        Updated semantics (Phase 8): exhausted iff position >= len(chain) - 1
+        (currently at last entry). For chain of length 3, position 0 is two
+        steps from the last entry, so exhausted=True is invalid.
+        """
         with pytest.raises(ValidationError) as exc_info:
             PlayTimeCustom.from_dict(_minimal_play_time(
-                predetermined_chain=["DISCOVER", "EXPERIMENT"],
-                chain_position=1,   # not exhausted (1 < 2)
+                predetermined_chain=["DISCOVER", "EXPERIMENT", "BUILD"],
+                chain_position=0,   # not exhausted (0 < len-1 = 2)
                 chain_exhausted=True,  # inconsistent
                 initial_work_mode="DISCOVER",
-                current_work_mode="EXPERIMENT",
+                current_work_mode="DISCOVER",
             ))
         assert "chain_exhausted" in str(exc_info.value) or "inconsistent" in str(exc_info.value)
 

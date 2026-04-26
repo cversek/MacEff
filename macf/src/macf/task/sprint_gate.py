@@ -222,12 +222,20 @@ def advance_play_time_chain(task: Any) -> Tuple[bool, Optional[str]]:
         pt = PlayTimeCustom.from_dict(custom)
         chain = pt.predetermined_chain
         new_pos = pt.chain_position + 1
-        exhausted = new_pos >= len(chain)
+        # "Exhausted" semantics: agent is currently at the last chain entry,
+        # so no more useful advances are possible. Triggers the moment we
+        # ENTER the last mode rather than when we'd try to advance past it
+        # (which never happens — there's no chain[N] to advance to). Fix
+        # for Phase 8 friction finding #4.
+        exhausted = new_pos >= len(chain) - 1
 
         new_custom = pt.model_dump()
         new_custom["chain_position"] = new_pos
         new_custom["chain_exhausted"] = exhausted
-        if not exhausted:
+        # current_work_mode mirrors the chain unless we've gone past the end
+        # (which only happens if a caller advances beyond the final entry —
+        # leave the last mode as current in that case)
+        if new_pos < len(chain):
             new_custom["current_work_mode"] = chain[new_pos]
 
         reader = TaskReader()

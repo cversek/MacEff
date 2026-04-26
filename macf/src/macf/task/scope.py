@@ -243,7 +243,9 @@ def get_active_timer() -> dict:
                     "timer_end_epoch": timer_end,
                 }
             return {"active": False}
-        elif event.get("event") == "scope_cleared":
+        elif event.get("event") in ("scope_cleared", "scope_timer_cleared"):
+            # scope_cleared: full scope reset (also kills timer)
+            # scope_timer_cleared: targeted timer-only clear (scope set retained)
             return {"active": False}
     return {"active": False}
 

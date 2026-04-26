@@ -1710,7 +1710,9 @@ def create_play_time(
         timer_cleared_at=None,
         predetermined_chain=effective_chain,
         chain_position=0,
-        chain_exhausted=False,
+        # Phase 8 friction fix: exhausted iff currently at last entry.
+        # For chain of length 1, position 0 IS the last entry → True.
+        chain_exhausted=(0 >= max(0, len(effective_chain) - 1)),
         initial_work_mode=effective_chain[0],
         current_work_mode=effective_chain[0],
         mode_transitions=[],
