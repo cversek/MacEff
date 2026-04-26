@@ -16,6 +16,8 @@ from .detection import (
     should_closeout_now,
     is_quiet,
     get_current_work_mode,
+    is_markov_eligible,
+    apply_sprint_mode_lock,
     get_transition_distribution,
     sample_next_work_mode,
     get_skill_name_for_mode,
