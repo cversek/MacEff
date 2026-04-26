@@ -2674,18 +2674,19 @@ def cmd_mode_set_work(args: argparse.Namespace) -> int:
 
 
 def _generate_breadcrumb() -> str:
-    """Best-effort breadcrumb for transition logging."""
+    """Best-effort breadcrumb for transition logging.
+
+    Uses the in-process breadcrumb helper instead of shelling out via
+    subprocess — the previous subprocess approach hit a 2s timeout because
+    the spawned process pays the full Python interpreter + module-import
+    cost. In-process is essentially free.
+    """
     try:
-        import subprocess
-        result = subprocess.run(
-            ["macf_tools", "breadcrumb"],
-            capture_output=True, text=True, timeout=2,
-        )
-        if result.returncode == 0:
-            return result.stdout.strip()
-    except (OSError, subprocess.SubprocessError) as e:
-        print(f"⚠️ MACF: breadcrumb subprocess failed: {e}", file=sys.stderr)
-    return ""
+        from .utils.breadcrumbs import get_breadcrumb
+        return get_breadcrumb() or ""
+    except (ImportError, OSError, RuntimeError) as e:
+        print(f"⚠️ MACF: in-process breadcrumb failed: {e}", file=sys.stderr)
+        return ""
 
 
 def cmd_mode_unset_work(args: argparse.Namespace) -> int:
@@ -5856,6 +5857,21 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
         if _idea_notes:
             print(f"💡 {len(_idea_notes)} ideas in task notes — promote them to formal idea CAs after sprint with macf_tools idea create.")
 
+        # 5. Auto-clear SPRINT work mode if it's currently active
+        # The SPRINT mode locks Markov; once the SPRINT task ends we want
+        # mode rotation back. Emit a work_mode_change clearing event.
+        try:
+            from .modes.detection import detect_active_modes, get_current_work_mode
+            session_id = get_current_session_id()
+            token_info = get_token_info(session_id)
+            current_wm = get_current_work_mode(detect_active_modes(session_id, token_info))
+            if current_wm == "SPRINT":
+                append_event("work_mode_change", {"mode": None})
+                print("🧹 SPRINT work mode cleared (Markov re-enabled)")
+        except (OSError, ValueError, ImportError) as e:
+            import sys as _sys
+            print(f"⚠️ MACF: SPRINT mode auto-clear failed (non-blocking): {e}", file=_sys.stderr)
+
     # Type-specific completion logic: PLAY_TIME
     elif task_type == "PLAY_TIME":
         import time as _time
@@ -5903,6 +5919,16 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
         _idea_notes = [u for u in _updates if '💡 ' in getattr(u, 'description', '')]
         if _idea_notes:
             print(f"💡 {len(_idea_notes)} ideas in task notes — promote them to formal idea CAs after sprint with macf_tools idea create.")
+
+        # 5. Clear the scope timer so subsequent Stop hook fires don't gate
+        # on a now-completed PLAY_TIME's expiration window. Targeted event:
+        # only timer state is cleared; scope set itself stays intact.
+        try:
+            append_event("scope_timer_cleared", {"task_id": str(task_id), "reason": "play_time_completed"})
+            print("⏹️  PLAY_TIME timer cleared")
+        except (OSError, ValueError) as e:
+            import sys as _sys
+            print(f"⚠️ MACF: scope_timer_cleared event emit failed (non-blocking): {e}", file=_sys.stderr)
 
     # Generate breadcrumb
     breadcrumb = get_breadcrumb()

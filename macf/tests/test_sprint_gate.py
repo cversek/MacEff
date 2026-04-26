@@ -126,6 +126,9 @@ class TestShouldFireMarkov:
 class TestParsePlayTimeCustom:
 
     def test_round_trip_valid_dict(self):
+        # Chain of length 1 → position 0 is already at the last entry, so
+        # chain_exhausted must be True (Phase 8 semantics: exhausted means
+        # "currently at last chain entry, no more advances possible").
         custom = {
             "goal": "test",
             "timer_minutes": 30,
@@ -133,7 +136,7 @@ class TestParsePlayTimeCustom:
             "timer_expires_at": 1000 + 30 * 60,
             "predetermined_chain": ["DISCOVER"],
             "chain_position": 0,
-            "chain_exhausted": False,
+            "chain_exhausted": True,
             "initial_work_mode": "DISCOVER",
             "current_work_mode": "DISCOVER",
         }

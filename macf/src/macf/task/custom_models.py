@@ -309,14 +309,24 @@ class PlayTimeCustom(BaseModel):
 
     @model_validator(mode="after")
     def validate_chain_exhausted_consistency(self) -> "PlayTimeCustom":
-        """chain_exhausted must equal (chain_position >= len(predetermined_chain)).
+        """chain_exhausted must equal (chain_position >= len(predetermined_chain) - 1).
+
+        Updated semantics (Phase 8 friction fix): "exhausted" means the agent
+        is currently at the LAST chain entry (no more advances are possible),
+        not "advanced past the end" (which never happens — there's no
+        chain[N] to advance to). With the old `>=` (no -1), chain_exhausted
+        could never reach True via advance_play_time_chain, leaving Markov
+        gating perpetually disabled.
+
+        For chain of length 1: position=0 already satisfies the condition
+        (already at the last entry).
 
         Design choice: REJECT inconsistent values rather than silently coercing.
         This makes stale/corrupt MTMD visible at deserialization time instead of
         silently propagating wrong state through hook logic.
         """
         n = len(self.predetermined_chain)
-        expected_exhausted = self.chain_position >= n
+        expected_exhausted = self.chain_position >= max(0, n - 1)
         if self.chain_exhausted != expected_exhausted:
             raise ValueError(
                 f"chain_exhausted={self.chain_exhausted} is inconsistent: "
