@@ -4637,6 +4637,107 @@ def cmd_task_create_task(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_task_create_sprint(args: argparse.Namespace) -> int:
+    """Create SPRINT task (workload-defined autonomous work, no timer)."""
+    from .task.create import create_sprint
+
+    # Hard-fail if --timer was passed (sprint rejects timers)
+    if getattr(args, "timer", None) is not None and args.timer > 0:
+        print(
+            "Error: SPRINT does not accept --timer. "
+            "For time-bounded autonomous work, use 'task create play_time'."
+        )
+        return 1
+
+    parent_id = int(args.parent.lstrip("#")) if args.parent and args.parent.lstrip("#").isdigit() else 0
+
+    scoped = getattr(args, "scoped", None)
+    children = getattr(args, "children", None)
+
+    try:
+        result = create_sprint(
+            title=args.title,
+            goal=getattr(args, "goal", None),
+            scoped_task_ids=[int(x.lstrip("#")) for x in scoped] if scoped else None,
+            children_titles=list(children) if children else None,
+            parent_id=parent_id,
+            repo=getattr(args, "repo", None),
+            no_auto_start=getattr(args, "no_auto_start", False),
+        )
+
+        if getattr(args, "json", False):
+            print(json.dumps(result, indent=2))
+        else:
+            print(f"✅ Created SPRINT task #{result['task_id']}")
+            print(f"📄 Sprint log: {result['ca_path']}")
+            print(f"📌 Scope ({len(result['scope'])} tasks): {result['scope']}")
+            if result["auto_start_completed"]:
+                print(f"🏃‍♂️ Auto-started in SPRINT mode")
+            elif not getattr(args, "no_auto_start", False):
+                print(f"⚠️  Auto-start incomplete: {result.get('auto_start_error')}")
+            else:
+                print("ℹ️  --no-auto-start: task created but not started")
+        return 0
+    except ValueError as e:
+        print(f"❌ {e}")
+        return 1
+    except Exception as e:
+        print(f"❌ Failed to create SPRINT: {e}")
+        return 1
+
+
+def cmd_task_create_play_time(args: argparse.Namespace) -> int:
+    """Create PLAY_TIME task (time-bounded autonomous exploration)."""
+    from .task.create import create_play_time
+
+    timer = getattr(args, "timer", None)
+    if timer is None or timer <= 0:
+        print(
+            "Error: PLAY_TIME requires --timer with positive minutes. "
+            "For workload-defined autonomous work, use 'task create sprint'."
+        )
+        return 1
+
+    parent_id = int(args.parent.lstrip("#")) if args.parent and args.parent.lstrip("#").isdigit() else 0
+
+    scoped = getattr(args, "scoped", None)
+    children = getattr(args, "children", None)
+    chain = getattr(args, "chain", None)
+
+    try:
+        result = create_play_time(
+            title=args.title,
+            goal=getattr(args, "goal", None),
+            timer_minutes=timer,
+            chain=[m.upper() for m in chain] if chain else None,
+            children_titles=list(children) if children else None,
+            scoped_task_ids=[int(x.lstrip("#")) for x in scoped] if scoped else None,
+            parent_id=parent_id,
+            repo=getattr(args, "repo", None),
+            no_auto_start=getattr(args, "no_auto_start", False),
+        )
+
+        if getattr(args, "json", False):
+            print(json.dumps(result, indent=2))
+        else:
+            print(f"✅ Created PLAY_TIME task #{result['task_id']}")
+            print(f"📄 Play log: {result['ca_path']}")
+            print(f"📌 Scope ({len(result['scope'])} tasks): {result['scope']}")
+            if result["auto_start_completed"]:
+                print(f"⏲️  Auto-started in {result['initial_mode']} mode (timer: {timer} min)")
+            elif not getattr(args, "no_auto_start", False):
+                print(f"⚠️  Auto-start incomplete: {result.get('auto_start_error')}")
+            else:
+                print("ℹ️  --no-auto-start: task created but not started")
+        return 0
+    except ValueError as e:
+        print(f"❌ {e}")
+        return 1
+    except Exception as e:
+        print(f"❌ Failed to create PLAY_TIME: {e}")
+        return 1
+
+
 def cmd_task_archive(args: argparse.Namespace) -> int:
     """Archive a task (and children by default) to disk."""
     from .task.archive import archive_task
@@ -6846,6 +6947,91 @@ def _build_parser() -> argparse.ArgumentParser:
     task_create_task_parser.add_argument("--json", dest="json", action="store_true",
                                           help="output as JSON")
     task_create_task_parser.set_defaults(func=cmd_task_create_task)
+
+    # task create sprint
+    task_create_sprint_parser = task_create_sub.add_parser(
+        "sprint",
+        help="create SPRINT task (workload-defined autonomous work, no timer)",
+        description=(
+            "Create a 🏃‍♂️ SPRINT task for workload-defined autonomous work.\n\n"
+            "SPRINT runs until all scoped tasks are complete (no timer).\n"
+            "Work mode is locked at SPRINT; Markov recommender is silenced.\n\n"
+            "Examples:\n"
+            "  macf_tools task create sprint \"Build pipeline\" --scoped 42 43 44\n"
+            "  macf_tools task create sprint \"Research phase\" --children \"Read docs\" \"Write notes\"\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    task_create_sprint_parser.add_argument("title", help="sprint title / goal description")
+    task_create_sprint_parser.add_argument("--goal", help="explicit goal (defaults to title if omitted)")
+    # Mutually exclusive: --scoped XOR --children (one required)
+    sprint_scope_group = task_create_sprint_parser.add_mutually_exclusive_group(required=True)
+    sprint_scope_group.add_argument(
+        "--scoped", nargs="+", metavar="TASK_ID",
+        help="existing task IDs to scope (e.g., 42 43 44 or #42 #43)",
+    )
+    sprint_scope_group.add_argument(
+        "--children", nargs="+", metavar="TITLE",
+        help='new child task titles to create and scope (e.g., "Write tests" "Update docs")',
+    )
+    task_create_sprint_parser.add_argument(
+        "--timer", type=int, metavar="MINUTES", default=0,
+        help=argparse.SUPPRESS,  # hidden: present only to give a clear hard-fail message
+    )
+    task_create_sprint_parser.add_argument("--parent", default="000", help="parent task ID (default: 000)")
+    task_create_sprint_parser.add_argument("--repo", help="repository name (e.g., MacEff)")
+    task_create_sprint_parser.add_argument(
+        "--no-auto-start", dest="no_auto_start", action="store_true",
+        help="create task only; skip start/scope/mode auto-start chain",
+    )
+    task_create_sprint_parser.add_argument("--json", dest="json", action="store_true", help="output as JSON")
+    task_create_sprint_parser.set_defaults(func=cmd_task_create_sprint)
+
+    # task create play_time
+    task_create_play_time_parser = task_create_sub.add_parser(
+        "play_time",
+        help="create PLAY_TIME task (time-bounded autonomous exploration, timer required)",
+        description=(
+            "Create a ⏲️ PLAY_TIME task for time-bounded autonomous exploration.\n\n"
+            "--timer is required. Work modes cycle through the --chain;\n"
+            "Markov recommender engages after chain exhaustion.\n\n"
+            "Examples:\n"
+            "  macf_tools task create play_time \"Explore new ideas\" --timer 60\n"
+            "  macf_tools task create play_time \"Deep dive\" --timer 45 --chain DISCOVER EXPERIMENT BUILD\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    task_create_play_time_parser.add_argument("title", help="play time title / goal description")
+    task_create_play_time_parser.add_argument("--goal", help="explicit goal (defaults to title if omitted)")
+    task_create_play_time_parser.add_argument(
+        "--timer", type=int, required=True, metavar="MINUTES",
+        help="session duration in minutes (required; must be > 0)",
+    )
+    task_create_play_time_parser.add_argument(
+        "--chain", nargs="+", metavar="MODE", default=None,
+        help=(
+            "initial work-mode chain (default: DISCOVER). "
+            "Valid modes: DISCOVER EXPERIMENT BUILD CURATE CONSOLIDATE. "
+            "SPRINT is not allowed in chain."
+        ),
+    )
+    play_time_scope_group = task_create_play_time_parser.add_mutually_exclusive_group()
+    play_time_scope_group.add_argument(
+        "--children", nargs="+", metavar="TITLE",
+        help='new child task titles to create and scope',
+    )
+    play_time_scope_group.add_argument(
+        "--scoped", nargs="+", metavar="TASK_ID",
+        help="existing task IDs to also scope (e.g., 42 43)",
+    )
+    task_create_play_time_parser.add_argument("--parent", default="000", help="parent task ID (default: 000)")
+    task_create_play_time_parser.add_argument("--repo", help="repository name (e.g., MacEff)")
+    task_create_play_time_parser.add_argument(
+        "--no-auto-start", dest="no_auto_start", action="store_true",
+        help="create task only; skip start/scope/mode auto-start chain",
+    )
+    task_create_play_time_parser.add_argument("--json", dest="json", action="store_true", help="output as JSON")
+    task_create_play_time_parser.set_defaults(func=cmd_task_create_play_time)
 
     # task archive
     task_archive_parser = task_sub.add_parser("archive", help="archive task to disk")
