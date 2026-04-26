@@ -1,19 +1,22 @@
 """
 Task creation module with MTMD generation and smart defaults.
 
-Provides functions to create MISSION, EXPERIMENT, DETOUR, PHASE, and BUG tasks
-with automatic metadata population and skeleton CA file generation.
+Provides functions to create MISSION, EXPERIMENT, DETOUR, PHASE, BUG, SPRINT,
+and PLAY_TIME tasks with automatic metadata population and skeleton CA file
+generation.
 """
 
 import json
 import os
 import re
 import stat
+import sys
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Generator
+from typing import Any, Dict, List, Optional, Generator
 
 from .models import MacfTaskMetaData
 from .reader import TaskReader
@@ -1095,3 +1098,706 @@ def create_task(
 
 # Backwards compatibility alias (deprecated)
 create_adhoc = create_task
+
+
+# ---------------------------------------------------------------------------
+# CA skeleton templates
+# ---------------------------------------------------------------------------
+
+def _sprint_log_skeleton(title: str, goal: str, breadcrumb: str) -> str:
+    """Sprint log CA skeleton — placeholders for the agent to fill in."""
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    return f"""# SPRINT LOG: {title}
+
+**Date**: {date_str}
+**Breadcrumb**: {breadcrumb}
+**Status**: IN_PROGRESS
+
+---
+
+## Goal
+
+{goal}
+
+---
+
+## Scoped Tasks
+
+<!-- List is populated automatically by `task create sprint` and updated by Stop hook nags. -->
+
+| # | Title | Status |
+|---|-------|--------|
+| — | (populated at launch) | — |
+
+---
+
+## Session Notes
+
+<!-- Add notes as you work. Use `macf_tools task note <id> "..."` to append. -->
+
+---
+
+## Ideas Captured
+
+<!-- 💡-prefix notes from `task note --idea "..."` accumulate here. -->
+
+---
+
+## Learnings Curated
+
+<!-- Links to learning files created during this sprint. -->
+
+---
+
+## Final Synthesis
+
+<!-- Populated by `task complete` or manually at sprint close. -->
+
+### What Was Accomplished
+
+{{Fill in}}
+
+### Key Decisions
+
+{{Fill in}}
+
+### Remaining Work / Follow-ups
+
+{{Fill in}}
+"""
+
+
+def _play_log_skeleton(title: str, goal: str, chain: List[str],
+                       timer_minutes: int, breadcrumb: str) -> str:
+    """Play time log CA skeleton — placeholders for the agent to fill in."""
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    chain_str = " → ".join(chain)
+    return f"""# PLAY LOG: {title}
+
+**Date**: {date_str}
+**Breadcrumb**: {breadcrumb}
+**Status**: IN_PROGRESS
+
+---
+
+## Goal
+
+{goal}
+
+---
+
+## Session Parameters
+
+- **Timer**: {timer_minutes} min
+- **Predetermined chain**: {chain_str}
+- **Markov recommender**: engages after chain exhaustion
+
+---
+
+## Mode Transitions
+
+<!-- Populated as the agent moves through modes. -->
+
+| Epoch | From | To | Trigger |
+|-------|------|----|---------|
+| — | — | — | launch |
+
+---
+
+## Markov Gate Decisions
+
+<!-- Populated when gate points fire after chain exhaustion. -->
+
+| Epoch | Suggested | Decision | Override |
+|-------|-----------|----------|---------|
+
+---
+
+## Session Notes
+
+<!-- Running notes during exploration. -->
+
+---
+
+## Ideas Captured
+
+<!-- 💡 ideas noted during this session. -->
+
+---
+
+## Learnings Curated
+
+<!-- Links to learning files created during this play time. -->
+
+---
+
+## Final Synthesis
+
+<!-- Populated by `task complete` or manually at close. -->
+
+### What Was Explored
+
+{{Fill in}}
+
+### Notable Discoveries
+
+{{Fill in}}
+
+### Ideas to Pursue
+
+{{Fill in}}
+"""
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers for auto-start chain
+# ---------------------------------------------------------------------------
+
+def _run_task_start(task_id: int, session_uuid: Optional[str] = None) -> bool:
+    """Start a task programmatically (mirrors cmd_task_start logic).
+
+    Returns True on success, False on failure.
+    """
+    from .reader import TaskReader, update_task_file
+    from ..utils.breadcrumbs import get_breadcrumb
+    from ..agent_events_log import append_event
+
+    reader = TaskReader(session_uuid)
+    task = reader.read_task(task_id)
+    if not task:
+        print(f"⚠️ MACF: task #{task_id} not found during auto-start", file=sys.stderr)
+        return False
+
+    if task.status == "in_progress":
+        return True  # Already started, nothing to do
+
+    breadcrumb = get_breadcrumb()
+
+    if task.mtmd:
+        from .models import MacfTaskUpdate
+        import copy
+        new_mtmd = copy.deepcopy(task.mtmd)
+        new_mtmd.started_breadcrumb = breadcrumb
+        new_mtmd.updates.append(
+            MacfTaskUpdate(breadcrumb=breadcrumb, description="Task started (auto-start)", agent="PA")
+        )
+        new_description = task.description_with_updated_mtmd(new_mtmd)
+        update_task_file(task_id, {"status": "in_progress", "description": new_description})
+    else:
+        update_task_file(task_id, {"status": "in_progress"})
+
+    task_type = getattr(task.mtmd, "task_type", None) if task.mtmd else None
+    plan_ca_ref = getattr(task.mtmd, "plan_ca_ref", None) if task.mtmd else None
+    append_event("task_started", {
+        "task_id": str(task_id),
+        "task_type": task_type,
+        "breadcrumb": breadcrumb,
+        "plan_ca_ref": plan_ca_ref,
+    })
+    return True
+
+
+def _run_scope_set(task_ids: List[int], timer_minutes: int = 0) -> bool:
+    """Activate scope for the given task IDs programmatically.
+
+    Returns True on success, False on failure.
+    """
+    from .scope import set_scope
+    from ..agent_events_log import append_event
+    from ..utils.breadcrumbs import get_breadcrumb
+
+    str_ids = [str(tid) for tid in task_ids]
+    result = set_scope(str_ids)
+    if not result.get("success"):
+        return False
+
+    if timer_minutes > 0:
+        from .scope import get_active_timer
+        existing_timer = get_active_timer()
+        if not existing_timer.get("active"):
+            timer_end = time.time() + timer_minutes * 60
+            append_event("scope_timer_set", {
+                "timer_minutes": timer_minutes,
+                "timer_end_epoch": timer_end,
+                "session_id": get_breadcrumb().split("/")[0].replace("s_", ""),
+            })
+    return True
+
+
+def _run_mode_set_work(mode: str) -> bool:
+    """Set work mode programmatically.
+
+    Returns True on success, False on failure.
+    """
+    from ..modes.detection import WORK_MODES
+    from ..agent_events_log import append_event
+
+    if mode not in WORK_MODES:
+        print(f"⚠️ MACF: unknown work mode '{mode}'", file=sys.stderr)
+        return False
+    append_event("work_mode_change", {"mode": mode})
+    return True
+
+
+def _run_task_note(task_id: int, message: str) -> bool:
+    """Append a note to a task programmatically.
+
+    Returns True on success, False on failure.
+    """
+    from .reader import TaskReader, update_task_file
+    from ..utils.breadcrumbs import get_breadcrumb
+    from .models import MacfTaskUpdate
+    import copy
+
+    reader = TaskReader()
+    task = reader.read_task(task_id)
+    if not task:
+        print(f"⚠️ MACF: task #{task_id} not found during note append", file=sys.stderr)
+        return False
+
+    breadcrumb = get_breadcrumb()
+    if task.mtmd:
+        new_mtmd = copy.deepcopy(task.mtmd)
+        new_mtmd.updates.append(
+            MacfTaskUpdate(breadcrumb=breadcrumb, description=message, agent="PA")
+        )
+        new_description = task.description_with_updated_mtmd(new_mtmd)
+        update_task_file(task_id, {"description": new_description})
+    return True
+
+
+def _verify_tm_running() -> bool:
+    """Check if transcript monitor is running (non-fatal if not)."""
+    try:
+        from ..transcript_monitor.daemon import is_running as tm_is_running
+        return tm_is_running()
+    except (ImportError, OSError):
+        return False
+
+
+# ---------------------------------------------------------------------------
+# create_sprint
+# ---------------------------------------------------------------------------
+
+def create_sprint(
+    title: str,
+    *,
+    goal: Optional[str] = None,
+    scoped_task_ids: Optional[List[int]] = None,
+    children_titles: Optional[List[str]] = None,
+    parent_id: int = 0,
+    repo: Optional[str] = None,
+    no_auto_start: bool = False,
+    session_uuid: Optional[str] = None,
+    agent_root: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Create a SPRINT task (workload-defined autonomous work, no timer).
+
+    Exactly one of scoped_task_ids or children_titles must be provided.
+
+    Behavior:
+    1. Validates inputs (mutually exclusive scoped/children, goal non-empty,
+       all scoped_task_ids refer to existing non-completed tasks).
+    2. Creates SPRINT task JSON + MTMD with SprintCustom fields.
+    3. Creates CA skeleton at agent/public/sprints/YYYY-MM-DD_<slug>/sprint_log.md.
+    4. If children_titles given: creates child TASK items and collects their IDs.
+    5. If not no_auto_start: starts the task, scopes it (+ children), sets
+       work mode to SPRINT, adds launch note, checks TM.
+
+    Returns a dict with task_id, task_path, ca_path, scope, initial_mode,
+    auto_start_completed, and auto_start_error (if any).
+
+    Policy: autonomous_sprint.md, task_management.md §2.6
+    """
+    from .custom_models import SprintCustom
+    from ..utils.breadcrumbs import get_breadcrumb, parse_breadcrumb
+
+    # ------------------------------------------------------------------
+    # 1. Validate inputs
+    # ------------------------------------------------------------------
+    if bool(scoped_task_ids) == bool(children_titles):
+        raise ValueError(
+            "create_sprint requires exactly one of scoped_task_ids or children_titles. "
+            "Provide existing task IDs via scoped_task_ids OR new task titles via "
+            "children_titles, not both (and not neither)."
+        )
+
+    effective_goal = (goal or title).strip()
+    if not effective_goal:
+        raise ValueError("goal must not be empty")
+
+    # Validate existing scoped tasks exist and are non-completed
+    if scoped_task_ids:
+        reader = TaskReader(session_uuid)
+        for tid in scoped_task_ids:
+            if tid <= 0:
+                raise ValueError(f"scoped_task_ids must all be positive ints; got {tid}")
+            task = reader.read_task(tid)
+            if task is None:
+                raise ValueError(
+                    f"scoped_task_id {tid} does not refer to an existing task"
+                )
+            if task.status == "completed":
+                raise ValueError(
+                    f"scoped_task_id {tid} is already completed and cannot be scoped"
+                )
+
+    # ------------------------------------------------------------------
+    # 2. Setup
+    # ------------------------------------------------------------------
+    if agent_root is None:
+        agent_root = find_agent_home()
+
+    breadcrumb = get_breadcrumb()
+    parsed = parse_breadcrumb(breadcrumb)
+    cycle = parsed["cycle"] if parsed else 1
+
+    task_id = _get_next_task_id(session_uuid)
+
+    # ------------------------------------------------------------------
+    # 3. CA skeleton
+    # ------------------------------------------------------------------
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    slug = _sanitize_title(title)
+    folder_name = f"{date_str}_{slug}"
+    sprints_dir = agent_root / "agent" / "public" / "sprints"
+    sprints_dir.mkdir(parents=True, exist_ok=True)
+    sprint_folder = sprints_dir / folder_name
+    sprint_folder.mkdir(exist_ok=True)
+
+    sprint_log = sprint_folder / "sprint_log.md"
+    sprint_log.write_text(_sprint_log_skeleton(title, effective_goal, breadcrumb))
+    ca_path_relative = str(sprint_log.relative_to(agent_root))
+
+    # ------------------------------------------------------------------
+    # 4. Create child tasks (if children_titles given)
+    # ------------------------------------------------------------------
+    child_ids: List[int] = []
+    if children_titles:
+        for child_title in children_titles:
+            child_result = create_task(
+                title=child_title,
+                parent_id=str(task_id),
+                plan=f"Child task under SPRINT: {title}",
+            )
+            child_ids.append(child_result.task_id)
+        scoped_task_ids = child_ids
+
+    # ------------------------------------------------------------------
+    # 5. Build SprintCustom and MTMD
+    # ------------------------------------------------------------------
+    custom_data = SprintCustom(
+        goal=effective_goal,
+        scoped_task_ids=list(scoped_task_ids or []),
+        scoped_progress={"completed": 0, "total": len(scoped_task_ids or [])},
+        ideas_captured=0,
+        learnings_curated=0,
+        initial_work_mode="SPRINT",
+        closure_invoked=False,
+    ).to_dict()
+
+    # Parent ID: 0 means sentinel
+    effective_parent_id = str(parent_id) if parent_id else SENTINEL_TASK_ID
+
+    mtmd = MacfTaskMetaData(
+        version="1.0",
+        creation_breadcrumb=breadcrumb,
+        created_cycle=cycle,
+        created_by="PA",
+        task_type="SPRINT",
+        title=title,
+        parent_id=effective_parent_id,
+        plan_ca_ref=ca_path_relative,
+        repo=repo,
+        custom=custom_data,
+    )
+
+    description = f"→ {ca_path_relative}\n\n{_generate_mtmd_block(mtmd)}"
+    subject = (
+        f"{ANSI_DIM}#{str(task_id).rjust(3)[:-len(str(task_id))]}{task_id}{ANSI_DIM_OFF} "
+        f"🏃‍♂️ SPRINT: {title}"
+    )
+    # Simpler subject using compose_subject pattern
+    subject = f"{ANSI_DIM}{('  #' + str(task_id)).rjust(4)}{ANSI_DIM_OFF} 🏃‍♂️ SPRINT: {title}"
+
+    task_file = _create_task_file(task_id, subject, description, session_uuid=session_uuid)
+
+    # ------------------------------------------------------------------
+    # 6. Auto-start chain
+    # ------------------------------------------------------------------
+    all_scope_ids = [task_id] + list(scoped_task_ids or []) + child_ids
+    # Deduplicate while preserving order
+    seen: set = set()
+    scope_ids: List[int] = []
+    for sid in all_scope_ids:
+        if sid not in seen:
+            seen.add(sid)
+            scope_ids.append(sid)
+
+    auto_start_completed = False
+    auto_start_error: Optional[str] = None
+
+    if not no_auto_start:
+        try:
+            if not _run_task_start(task_id, session_uuid=session_uuid):
+                raise RuntimeError(f"task start #{task_id} failed")
+            if not _run_scope_set(scope_ids, timer_minutes=0):
+                raise RuntimeError("scope set failed")
+            if not _run_mode_set_work("SPRINT"):
+                raise RuntimeError("mode set-work SPRINT failed")
+            scope_count = len(scope_ids) - 1  # exclude sprint itself
+            launch_note = (
+                f"SPRINT: Launched. Goal: {effective_goal}. "
+                f"Scope: {scope_count} task(s)."
+            )
+            _run_task_note(task_id, launch_note)
+            # Non-fatal: just warn if TM not running
+            if not _verify_tm_running():
+                print(
+                    "⚠️ MACF: Transcript Monitor not running. "
+                    "USER_IDLE detection will be unavailable. "
+                    "Start with: macf_tools transcript-monitor start",
+                    file=sys.stderr,
+                )
+            auto_start_completed = True
+        except Exception as exc:
+            auto_start_error = str(exc)
+            print(
+                f"⚠️ MACF: SPRINT auto-start failed mid-sequence: {exc}. "
+                f"Task #{task_id} was created. Manual steps required: "
+                f"task start, scope set, mode set-work SPRINT.",
+                file=sys.stderr,
+            )
+
+    return {
+        "task_id": task_id,
+        "task_path": str(task_file),
+        "ca_path": ca_path_relative,
+        "scope": scope_ids,
+        "initial_mode": "SPRINT",
+        "auto_start_completed": auto_start_completed,
+        "auto_start_error": auto_start_error,
+    }
+
+
+# ---------------------------------------------------------------------------
+# create_play_time
+# ---------------------------------------------------------------------------
+
+def create_play_time(
+    title: str,
+    *,
+    goal: Optional[str] = None,
+    timer_minutes: int,
+    chain: Optional[List[str]] = None,
+    children_titles: Optional[List[str]] = None,
+    scoped_task_ids: Optional[List[int]] = None,
+    parent_id: int = 0,
+    repo: Optional[str] = None,
+    no_auto_start: bool = False,
+    session_uuid: Optional[str] = None,
+    agent_root: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Create a PLAY_TIME task (time-bounded autonomous exploration).
+
+    Behavior:
+    1. Validates timer_minutes > 0, chain modes valid (none may be SPRINT),
+       goal non-empty.
+    2. Creates PLAY_TIME task JSON + MTMD with PlayTimeCustom fields.
+    3. Creates CA skeleton at agent/public/play_time/YYYY-MM-DD_<slug>/play_log.md.
+    4. If children_titles given: creates child tasks and adds their IDs to scope.
+    5. If not no_auto_start: starts task, scopes with --timer, sets work mode to
+       chain[0], adds launch note, checks TM.
+
+    Returns a dict with task_id, task_path, ca_path, scope, initial_mode,
+    auto_start_completed, and auto_start_error (if any).
+
+    Policy: play_time.md, task_management.md §2.7
+    """
+    from .custom_models import PlayTimeCustom
+    from ..utils.breadcrumbs import get_breadcrumb, parse_breadcrumb
+
+    # ------------------------------------------------------------------
+    # 1. Validate inputs
+    # ------------------------------------------------------------------
+    if timer_minutes <= 0:
+        raise ValueError(
+            f"PLAY_TIME requires --timer with positive minutes (got {timer_minutes}). "
+            "For workload-defined autonomous work, use 'task create sprint'."
+        )
+
+    effective_chain = list(chain) if chain else ["DISCOVER"]
+
+    # Let PlayTimeCustom validate chain modes (SPRINT rejection, unknown modes).
+    # We validate early so the user gets a clear error before any files are created.
+    from ..modes.detection import WORK_MODES
+    rotatable = set(WORK_MODES.keys()) - {"SPRINT"}
+    for mode in effective_chain:
+        if mode == "SPRINT":
+            raise ValueError(
+                "SPRINT may not appear in --chain; "
+                "SPRINT mode is reserved for the SPRINT task type. "
+                "For workload-defined autonomous work, use 'task create sprint'."
+            )
+        if mode not in WORK_MODES:
+            valid = sorted(rotatable)
+            raise ValueError(
+                f"'{mode}' is not a valid work mode in --chain. "
+                f"Valid rotatable modes: {valid}"
+            )
+
+    effective_goal = (goal or title).strip()
+    if not effective_goal:
+        raise ValueError("goal must not be empty")
+
+    # ------------------------------------------------------------------
+    # 2. Setup
+    # ------------------------------------------------------------------
+    if agent_root is None:
+        agent_root = find_agent_home()
+
+    breadcrumb = get_breadcrumb()
+    parsed = parse_breadcrumb(breadcrumb)
+    cycle = parsed["cycle"] if parsed else 1
+
+    task_id = _get_next_task_id(session_uuid)
+
+    # ------------------------------------------------------------------
+    # 3. CA skeleton
+    # ------------------------------------------------------------------
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    slug = _sanitize_title(title)
+    folder_name = f"{date_str}_{slug}"
+    play_time_dir = agent_root / "agent" / "public" / "play_time"
+    play_time_dir.mkdir(parents=True, exist_ok=True)
+    play_folder = play_time_dir / folder_name
+    play_folder.mkdir(exist_ok=True)
+
+    play_log = play_folder / "play_log.md"
+    play_log.write_text(
+        _play_log_skeleton(title, effective_goal, effective_chain, timer_minutes, breadcrumb)
+    )
+    ca_path_relative = str(play_log.relative_to(agent_root))
+
+    # ------------------------------------------------------------------
+    # 4. Create child tasks (if children_titles given)
+    # ------------------------------------------------------------------
+    child_ids: List[int] = []
+    if children_titles:
+        for child_title in children_titles:
+            child_result = create_task(
+                title=child_title,
+                parent_id=str(task_id),
+                plan=f"Child task under PLAY_TIME: {title}",
+            )
+            child_ids.append(child_result.task_id)
+        if scoped_task_ids:
+            scoped_task_ids = list(scoped_task_ids) + child_ids
+        else:
+            scoped_task_ids = child_ids
+
+    # ------------------------------------------------------------------
+    # 5. Build PlayTimeCustom and MTMD
+    # ------------------------------------------------------------------
+    started_at = int(time.time())
+    expires_at = started_at + timer_minutes * 60
+
+    custom_data = PlayTimeCustom(
+        goal=effective_goal,
+        timer_minutes=timer_minutes,
+        timer_started_at=started_at,
+        timer_expires_at=expires_at,
+        timer_cleared_at=None,
+        predetermined_chain=effective_chain,
+        chain_position=0,
+        chain_exhausted=False,
+        initial_work_mode=effective_chain[0],
+        current_work_mode=effective_chain[0],
+        mode_transitions=[],
+        markov_gates=[],
+        ideas_captured=0,
+        learnings_curated=0,
+        wind_down_started_at=None,
+        closure_invoked=False,
+    ).to_dict()
+
+    effective_parent_id = str(parent_id) if parent_id else SENTINEL_TASK_ID
+
+    mtmd = MacfTaskMetaData(
+        version="1.0",
+        creation_breadcrumb=breadcrumb,
+        created_cycle=cycle,
+        created_by="PA",
+        task_type="PLAY_TIME",
+        title=title,
+        parent_id=effective_parent_id,
+        plan_ca_ref=ca_path_relative,
+        repo=repo,
+        custom=custom_data,
+    )
+
+    description = f"→ {ca_path_relative}\n\n{_generate_mtmd_block(mtmd)}"
+    subject = f"{ANSI_DIM}{('  #' + str(task_id)).rjust(4)}{ANSI_DIM_OFF} ⏲️ PLAY_TIME: {title}"
+
+    task_file = _create_task_file(task_id, subject, description, session_uuid=session_uuid)
+
+    # ------------------------------------------------------------------
+    # 6. Auto-start chain
+    # ------------------------------------------------------------------
+    all_scope_ids = [task_id] + list(scoped_task_ids or [])
+    seen2: set = set()
+    scope_ids: List[int] = []
+    for sid in all_scope_ids:
+        if sid not in seen2:
+            seen2.add(sid)
+            scope_ids.append(sid)
+
+    auto_start_completed = False
+    auto_start_error: Optional[str] = None
+    initial_mode = effective_chain[0]
+
+    if not no_auto_start:
+        try:
+            if not _run_task_start(task_id, session_uuid=session_uuid):
+                raise RuntimeError(f"task start #{task_id} failed")
+            if not _run_scope_set(scope_ids, timer_minutes=timer_minutes):
+                raise RuntimeError("scope set with timer failed")
+            if not _run_mode_set_work(initial_mode):
+                raise RuntimeError(f"mode set-work {initial_mode} failed")
+            chain_str = " → ".join(effective_chain)
+            import datetime as _dt
+            expire_time = _dt.datetime.fromtimestamp(expires_at).strftime("%H:%M")
+            launch_note = (
+                f"{initial_mode}: PLAY_TIME launched. "
+                f"Goal: {effective_goal}. "
+                f"Timer: {timer_minutes} min until {expire_time}. "
+                f"Chain: [{chain_str}]."
+            )
+            _run_task_note(task_id, launch_note)
+            if not _verify_tm_running():
+                print(
+                    "⚠️ MACF: Transcript Monitor not running. "
+                    "USER_IDLE detection will be unavailable. "
+                    "Start with: macf_tools transcript-monitor start",
+                    file=sys.stderr,
+                )
+            auto_start_completed = True
+        except Exception as exc:
+            auto_start_error = str(exc)
+            print(
+                f"⚠️ MACF: PLAY_TIME auto-start failed mid-sequence: {exc}. "
+                f"Task #{task_id} was created. Manual steps required: "
+                f"task start, scope set --timer {timer_minutes}, "
+                f"mode set-work {initial_mode}.",
+                file=sys.stderr,
+            )
+
+    return {
+        "task_id": task_id,
+        "task_path": str(task_file),
+        "ca_path": ca_path_relative,
+        "scope": scope_ids,
+        "initial_mode": initial_mode,
+        "auto_start_completed": auto_start_completed,
+        "auto_start_error": auto_start_error,
+    }
