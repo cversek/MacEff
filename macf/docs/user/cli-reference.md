@@ -1267,6 +1267,83 @@ macf_tools task create task "Update README badges"
 
 ---
 
+#### task create sprint
+
+Create a 🏃‍♂️ SPRINT task for workload-defined autonomous work. Use when the agent is executing a predefined or curated set of tasks. Completion is determined by scope, not wall clock. The Markov recommender is disabled for the duration.
+
+**Syntax:**
+```bash
+macf_tools task create sprint <title> \
+    (--scoped TASK_ID [TASK_ID ...] | --children TITLE [TITLE ...]) \
+    [--parent TASK_ID] [--no-auto-start] [--json]
+```
+
+**Arguments:**
+- `title` - Sprint goal description
+
+**Options:**
+- `--scoped TASK_ID [...]` - Scope existing tasks into this sprint (mutually exclusive with `--children`)
+- `--children TITLE [...]` - Create new child tasks and scope them (mutually exclusive with `--scoped`)
+- `--parent TASK_ID` - Attach sprint under a parent MISSION or DETOUR
+- `--no-auto-start` - Create without immediately starting (useful when negotiating session restart)
+- `--json` - Output as JSON
+
+**Note:** `--timer` is explicitly rejected. If passed, the CLI hard-fails with: `Error: SPRINT does not accept --timer. For time-bounded autonomous work, use 'task create play_time'.`
+
+**Examples:**
+```bash
+# Scope existing tasks
+macf_tools task create sprint "Complete Phase 6 deliverables" \
+    --scoped 1016 1017 --parent 1010
+
+# Create new child tasks under the sprint
+macf_tools task create sprint "Extract and annotate CC modules" \
+    --children "Run pipeline on v2.1.109" "Annotate top 50 modules" "Update index"
+```
+
+**Related:** See `autonomous_sprint.md` policy and `maceff-sprint` skill for full behavioral specification.
+
+---
+
+#### task create play_time
+
+Create a ⏲️ PLAY_TIME task for time-bounded autonomous exploration. Use when the agent is given a time allotment for open-ended work. The agent follows a predetermined work-mode chain, then continues under Markov recommender guidance after chain exhaustion.
+
+**Syntax:**
+```bash
+macf_tools task create play_time <title> \
+    --timer MINUTES \
+    [--chain MODE [MODE ...]] \
+    [--parent TASK_ID] [--no-auto-start] [--json]
+```
+
+**Arguments:**
+- `title` - Play time goal description
+
+**Options:**
+- `--timer MINUTES` - Wall-clock budget in minutes (**required**; CLI hard-fails if missing)
+- `--chain MODE [...]` - Ordered sequence of work modes to progress through (default: `DISCOVER`). Valid modes: `DISCOVER`, `EXPERIMENT`, `BUILD`, `CURATE`, `CONSOLIDATE`. `SPRINT` is not valid in a chain.
+- `--parent TASK_ID` - Attach under a parent task
+- `--no-auto-start` - Create without immediately starting
+- `--json` - Output as JSON
+
+**Note:** If `--timer` is missing, the CLI hard-fails with: `Error: PLAY_TIME requires --timer. For workload-defined autonomous work, use 'task create sprint'.`
+
+**Examples:**
+```bash
+# 60-minute exploration session
+macf_tools task create play_time "Explore CC internals for signals" \
+    --timer 60 --chain DISCOVER EXPERIMENT CURATE
+
+# 90-minute build session with full chain
+macf_tools task create play_time "Prototype knowledge web indexer" \
+    --timer 90 --chain DISCOVER EXPERIMENT BUILD CURATE
+```
+
+**Related:** See `play_time.md` policy and `maceff-play-time` skill for full behavioral specification including chain advancement, Markov-after-exhaustion, and wind-down sequence.
+
+---
+
 ### Task Lifecycle Commands
 
 #### task list
@@ -1770,7 +1847,7 @@ macf_tools recommender sample
    Distribution: 📋 CURATE 25% | 🔍 DISCOVER 22% | ...
 ```
 
-**Related:** See `autonomous_sprint.md` policy for recommender interaction protocol.
+**Related:** See `autonomous_sprint.md` and `play_time.md` policies for recommender interaction protocol. The recommender is disabled during 🏃‍♂️ SPRINT and active after chain exhaustion during ⏲️ PLAY_TIME.
 
 ---
 
