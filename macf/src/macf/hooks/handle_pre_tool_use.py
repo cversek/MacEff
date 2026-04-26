@@ -77,6 +77,14 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         Dict with tool awareness message
     """
     try:
+        # Reset scope-gate failsafe counter on any tool invocation (agent doing
+        # useful work re-engages the gate). BUG #1022.
+        try:
+            from macf.task.scope_gate_failsafe import reset as _reset_failsafe
+            _reset_failsafe()
+        except (ImportError, OSError) as _e:
+            print(f"⚠️ MACF: scope_gate_failsafe reset failed (non-blocking): {_e}", file=sys.stderr)
+
         # Parse hook input
         data = json.loads(stdin_json) if stdin_json else {}
 

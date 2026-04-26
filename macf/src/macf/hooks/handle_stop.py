@@ -184,10 +184,25 @@ Development Drive Stats:
         # --- Scope gate: block stop if active scoped tasks remain ---
         try:
             from macf.task.scope import get_scope_check
+            from macf.task.scope_gate_failsafe import decrement_and_check
             scope = get_scope_check()
             has_active_scope = scope["active_count"] > 0
 
             if has_active_scope and auto_mode:
+                # FAILSAFE (BUG #1022): if the agent keeps stopping with active
+                # scope and no useful work between stops, decrement an idle
+                # counter. At 0 we let the stop succeed so the agent escapes
+                # the deadlock loop. PreToolUse activity resets the counter,
+                # so a working agent keeps the gate active.
+                _idle_remaining, _fail_open = decrement_and_check()
+                if _fail_open:
+                    print(
+                        f"⚠️ MACF: scope gate failsafe — {scope['active_count']} scoped task(s) still active "
+                        f"but no useful work in last 5 stops. Allowing stop to break deadlock. "
+                        f"(BUG #1022 failsafe — invoke any tool to re-engage gate.)",
+                        file=sys.stderr,
+                    )
+                    return {"continue": True}
                     task_list = "\n".join(
                         f"  - #{t['id']}: {t['subject']}" for t in scope["active"]
                     )
