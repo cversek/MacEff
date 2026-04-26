@@ -469,14 +469,23 @@ def get_current_session_id_from_events() -> str:
     Returns:
         Current session ID string, or empty string if no events with session_id
     """
+    # Length guard: legitimate session IDs are full UUIDs (~36 chars). Some
+    # historical writers stored breadcrumb-truncated 8-char prefixes (e.g.
+    # 'd4abc33b' from `s_d4abc33b/...`) into event data, which then poisoned
+    # downstream consumers — JSONL path resolution failed, get_token_info
+    # defaulted to tokens_used=0, dashboard rendered CL100 perpetually. Reject
+    # short values so the get_current_session_id() caller falls through to
+    # mtime-based detection (which reads the full UUID from JSONL filename).
+    MIN_VALID_LEN = 16
+
     for event in read_events(reverse=True):
         # Check data.session_id first (most events store it there)
         session_id = event.get("data", {}).get("session_id", "")
-        if session_id:
+        if session_id and len(session_id) >= MIN_VALID_LEN:
             return session_id
         # Also check top-level session_id (some events may use this)
         session_id = event.get("session_id", "")
-        if session_id:
+        if session_id and len(session_id) >= MIN_VALID_LEN:
             return session_id
     return ""
 
