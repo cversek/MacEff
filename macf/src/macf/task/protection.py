@@ -53,7 +53,8 @@ TYPES_REQUIRING_PLAN_CA: Set[str] = {
 # All valid task types
 VALID_TASK_TYPES: Set[str] = {
     "MISSION", "EXPERIMENT", "DETOUR", "PHASE", "TASK", "BUG",
-    "DELEG_PLAN", "SUBPLAN", "ARCHIVE", "GH_ISSUE"
+    "DELEG_PLAN", "SUBPLAN", "ARCHIVE", "GH_ISSUE",
+    "SPRINT", "PLAY_TIME",
 }
 
 # Emoji to type mapping (fallback when MTMD task_type not set)

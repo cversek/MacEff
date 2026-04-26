@@ -40,6 +40,12 @@ WORK_MODES = {
     "BUILD":        {"emoji": "🔨", "order": 12},
     "CURATE":       {"emoji": "📋", "order": 13},
     "CONSOLIDATE":  {"emoji": "✍️", "order": 14},
+    # SPRINT is a locked mode — set imperatively when a SPRINT task starts.
+    # It does NOT participate in Markov transitions (neither as source nor
+    # target). The Markov recommender is silenced while SPRINT is active.
+    # Order 15 keeps it after the natural cycle so dashboard ordering is
+    # predictable: 🔍🧪🔨📋✍️ precede 🏃‍♂️.
+    "SPRINT":       {"emoji": "🏃‍♂️", "order": 15},
 }
 
 ALL_MODES = {**OPERATIONAL_MODES, **WORK_MODES}
@@ -51,11 +57,23 @@ DEFAULT_SKILL_MAP = {
     "BUILD":        "generative-self-motivation",
     "CURATE":       "curative-self-motivation",
     "CONSOLIDATE":  "consolidative-self-motivation",
+    # SPRINT is set imperatively (not via Markov), so the recommender will
+    # never dispatch to this skill through the normal gate-point flow.
+    # The entry exists for dispatch-table completeness — callers that iterate
+    # ALL_MODES won't hit a KeyError for SPRINT.
+    "SPRINT":       "sprint-self-motivation",
 }
 
 # Default 5x5 Markov transition matrix (example values — tuned via experimentation)
 # Natural cycle: DISCOVER → EXPERIMENT → BUILD → CURATE → CONSOLIDATE → DISCOVER
 # BUILD is gated behind EXPERIMENT (direct DISCOVER→BUILD is low probability)
+#
+# SPRINT is intentionally absent from both rows and columns.
+# - No row: SPRINT is a locked mode; the agent does not transition away from it
+#   via Markov. The SPRINT task completing is the only exit.
+# - No column: no Markov path leads INTO SPRINT; it is set imperatively when a
+#   SPRINT task starts. Callers must gate Markov sampling on
+#   current_work_mode != "SPRINT" (see is_markov_eligible() below).
 DEFAULT_TRANSITIONS = {
     "DISCOVER":     {"DISCOVER": 0.20, "EXPERIMENT": 0.40, "BUILD": 0.10, "CURATE": 0.25, "CONSOLIDATE": 0.05},
     "EXPERIMENT":   {"DISCOVER": 0.15, "EXPERIMENT": 0.10, "BUILD": 0.40, "CURATE": 0.25, "CONSOLIDATE": 0.10},
@@ -226,6 +244,49 @@ def get_current_work_mode(modes: Set[str]) -> Optional[str]:
         if mode in WORK_MODES:
             return mode
     return None
+
+
+def is_markov_eligible(current_work_mode: Optional[str]) -> bool:
+    """Return True when the Markov recommender may fire.
+
+    SPRINT mode locks the recommender — no mode-change suggestions while an
+    agent is executing a SPRINT task. All other work modes (including None,
+    meaning no declared mode) allow Markov to fire normally.
+    """
+    return current_work_mode != "SPRINT"
+
+
+def apply_sprint_mode_lock(
+    requested_mode: str,
+    current_work_mode: Optional[str],
+) -> Optional[str]:
+    """Apply SPRINT mode-lock logic when ``mode set-work`` is called.
+
+    Design choice (roadmap §8 open Q3): warn-and-noop (conservative default).
+    Hard-failing was considered but rejected because it would surface as an
+    error during normal Stop hook processing where noop is the correct behaviour.
+    Conversion to PLAY_TIME was rejected because that would require creating a
+    new task, which is beyond the scope of a simple mode-set call.
+
+    Args:
+        requested_mode: The mode the caller is trying to switch to.
+        current_work_mode: The mode currently active (may be None).
+
+    Returns:
+        The mode that *should* be set after applying the lock:
+        - ``requested_mode`` if no lock applies
+        - ``current_work_mode`` (unchanged) if lock fires (warn-and-noop)
+        - ``None`` if both are None (no-op, nothing to lock)
+    """
+    if current_work_mode == "SPRINT" and requested_mode != "SPRINT":
+        print(
+            f"⚠️ MACF: mode set-work '{requested_mode}' rejected — "
+            f"SPRINT mode is locked. Complete or cancel the active SPRINT task "
+            f"before switching work modes.",
+            file=sys.stderr,
+        )
+        return current_work_mode  # noop: stay in SPRINT
+    return requested_mode
 
 
 # ============================================================================
