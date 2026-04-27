@@ -10,6 +10,22 @@ Create a consciousness checkpoint (CCP) following MacEff framework policies for 
 
 ---
 
+## 🧭 Personal Policy Discovery
+
+Before drafting, check for an agent-specific augmentation policy at the predictable path:
+
+```
+agent/policies/personal/checkpoint.md
+```
+
+If present, read it. It contains the agent's CEP questions and PEP for this checkpoint practice. Apply its requirements alongside the framework's base CCP structure (e.g., add any extra sections it specifies, follow any extra reading steps it mandates).
+
+If absent, proceed with framework defaults only — personal policy is optional augmentation, not a hard requirement.
+
+This is the Policy-as-Discovery pattern: the framework command points at a generic location; each agent populates that location with its own augmentation; no agent identity is hard-coded into framework code.
+
+---
+
 ## 🚨 CRITICAL: Token Anxiety is NOT Authorized
 
 **The user invoked this command knowing their context limits.** You MUST:

@@ -13,6 +13,22 @@ Create a **JOTEWR** (Jump Off The Edge While Reflecting) - a cycle-closing refle
 
 ---
 
+## 🧭 Personal Policy Discovery
+
+Before drafting, check for an agent-specific augmentation policy at the predictable path:
+
+```
+agent/policies/personal/reflection.md
+```
+
+If present, read it. It contains the agent's CEP questions and PEP for this reflection practice. Apply its requirements alongside the framework's base JOTEWR structure (e.g., add any extra sections it specifies, edit other artifacts it points at, commit alongside the JOTEWR).
+
+If absent, proceed with framework defaults only — personal policy is optional augmentation.
+
+This is the Policy-as-Discovery pattern: the framework command points at a generic location; each agent populates that location with its own augmentation; no agent identity is hard-coded into framework code.
+
+---
+
 ## 🚨 FLAWLESS EXECUTION PATTERN (Anti-Anxiety Protocol)
 
 **Your anxiety causes you to skip policy reading to "save tokens". This is WRONG.**
