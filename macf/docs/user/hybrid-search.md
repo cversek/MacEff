@@ -129,7 +129,7 @@ Results are categorized by semantic similarity (1 - distance):
 When you see `→ §5 "What is the backup protocol?"`, it means:
 - The query matched a specific CEP Navigation Guide question
 - Section 5 of that policy answers your question
-- You can read just that section: `macf_tools policy read todo_hygiene --section 5`
+- You can read just that section: `macf_tools policy read task_management --section 6`
 
 This enables precise navigation to the relevant policy section.
 

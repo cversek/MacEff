@@ -144,7 +144,7 @@ When you complete work, return a message containing:
 
 **Example summary**:
 ```
-Created todo_hygiene policy v1.5.
+Created task_management policy v1.5.
 
 Changes:
 - Added FTI stack discipline section (85 lines)
@@ -159,7 +159,7 @@ Validation:
 ✅ Clear location specifications
 
 Files created:
-- {FRAMEWORK_ROOT}/policies/base/development/todo_hygiene.md
+- {FRAMEWORK_ROOT}/policies/base/development/task_management.md
 
 Status: Complete. Policy ready for framework integration.
 ```

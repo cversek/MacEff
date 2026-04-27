@@ -31,7 +31,7 @@ This shows all policies organized by category (consciousness/, development/, ope
 The **Contextual Entry Point (CEP)** pattern provides cognitive framing before content:
 
 ```bash
-macf_tools policy navigate todo_hygiene
+macf_tools policy navigate task_management
 ```
 
 This shows:
@@ -46,19 +46,19 @@ This shows:
 Read a specific section based on navigation guide:
 
 ```bash
-macf_tools policy read todo_hygiene --section 5
+macf_tools policy read task_management --section 6
 ```
 
 Read full policy (cached by breadcrumb - won't re-read same cycle):
 
 ```bash
-macf_tools policy read todo_hygiene
+macf_tools policy read task_management
 ```
 
 Force re-read if needed:
 
 ```bash
-macf_tools policy read todo_hygiene --force
+macf_tools policy read task_management --force
 ```
 
 ### 1.4 Search for Relevant Policies
@@ -84,7 +84,7 @@ This contains 15 questions across 5 sections:
 - Policy Awareness (3 questions)
 - Consciousness Artifacts (3 questions)
 - Delegation Patterns (3 questions)
-- TODO Hygiene (3 questions)
+- Task Management (3 questions)
 - Framework Operations (3 questions)
 
 ### 2.2 Research Answers
@@ -96,15 +96,15 @@ For each question:
 
 **Example research flow**:
 ```
-Q: "What is the breadcrumb format?"
+Q: "How do I mark tasks complete?"
 
-1. macf_tools policy search breadcrumb
-   → todo_hygiene.md matches
+1. macf_tools policy search complete
+   → task_management.md matches
 
-2. macf_tools policy navigate todo_hygiene
-   → Section 0: Breadcrumb Format
+2. macf_tools policy navigate task_management
+   → Section 6: Completion Protocol
 
-3. macf_tools policy read todo_hygiene --section 0
+3. macf_tools policy read task_management --section 6
    → Extract answer with citation
 ```
 

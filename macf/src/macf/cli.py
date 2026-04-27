@@ -1793,7 +1793,7 @@ def cmd_policy_navigate(args: argparse.Namespace) -> int:
 
     try:
         policy_name = args.policy_name
-        # Parse optional parent from path-like input (e.g., "development/todo_hygiene")
+        # Parse optional parent from path-like input (e.g., "development/task_management")
         parents = None
         if '/' in policy_name:
             parts = policy_name.split('/')
@@ -6942,12 +6942,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # policy navigate
     navigate_parser = policy_sub.add_parser("navigate", help="show CEP navigation guide (up to boundary)")
-    navigate_parser.add_argument("policy_name", help="policy name (e.g., todo_hygiene, development/todo_hygiene)")
+    navigate_parser.add_argument("policy_name", help="policy name (e.g., task_management, development/task_management)")
     navigate_parser.set_defaults(func=cmd_policy_navigate)
 
     # policy read
     read_parser = policy_sub.add_parser("read", help="read policy with line numbers and caching")
-    read_parser.add_argument("policy_name", help="policy name (e.g., todo_hygiene, development/todo_hygiene)")
+    read_parser.add_argument("policy_name", help="policy name (e.g., task_management, development/task_management)")
     read_parser.add_argument("--lines", help="line range START:END (e.g., 50:100)")
     read_parser.add_argument("--section", help="section number to read (e.g., 5, 5.1) - includes subsections")
     read_parser.add_argument("--force", action="store_true", help="bypass cache for full read")

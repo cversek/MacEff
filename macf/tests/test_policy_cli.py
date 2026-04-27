@@ -115,16 +115,16 @@ class TestPolicySearchCommand:
         assert 'consciousness' in result.stdout.lower()
         assert 'checkpoints' in result.stdout.lower()
 
-    def test_search_finds_operations_policies(self):
-        """Test search covers operations_policies category."""
+    def test_search_finds_development_policies(self):
+        """Test search covers development_policies category."""
         result = subprocess.run(
             ['macf_tools', 'policy', 'search', 'todo'],
             capture_output=True, text=True
         )
 
         assert result.returncode == 0
-        assert 'operations' in result.stdout.lower()
-        assert 'todo_hygiene' in result.stdout.lower()
+        assert 'development' in result.stdout.lower()
+        assert 'task_management' in result.stdout.lower()
 
     def test_search_returns_section_matches(self):
         """Test search returns section-level matches from discovery_index."""
@@ -232,58 +232,60 @@ class TestPolicyReadSectionCommand:
     """Test macf_tools policy read --section hierarchical parsing."""
 
     def test_section_includes_subsections(self):
-        """Test --section 10 includes 10.1 and 10.2 subsections."""
+        """Test --section 11 includes 11.1 and 11.2 subsections."""
         result = subprocess.run(
-            ['macf_tools', 'policy', 'read', 'todo_hygiene', '--section', '10'],
+            ['macf_tools', 'policy', 'read', 'task_management', '--section', '11'],
             capture_output=True, text=True
         )
 
         assert result.returncode == 0
-        # Should include parent section 10
-        assert '10.' in result.stdout
-        # Should include subsection 10.1
-        assert '10.1' in result.stdout
-        # Should include subsection 10.2
-        assert '10.2' in result.stdout
-        # Should NOT include section 11
-        assert '### 11.' not in result.stdout
+        # Should include parent section 11
+        assert '11.' in result.stdout
+        # Should include subsection 11.1
+        assert '11.1' in result.stdout
+        # Should include subsection 11.2
+        assert '11.2' in result.stdout
+        # Should NOT include section 12
+        assert '## 12 ' not in result.stdout
 
     def test_subsection_excludes_siblings(self):
-        """Test --section 10.1 excludes 10.2 sibling."""
+        """Test --section 11.1 excludes 11.2 sibling."""
         result = subprocess.run(
-            ['macf_tools', 'policy', 'read', 'todo_hygiene', '--section', '10.1'],
+            ['macf_tools', 'policy', 'read', 'task_management', '--section', '11.1'],
             capture_output=True, text=True
         )
 
         assert result.returncode == 0
-        # Should include subsection 10.1
-        assert '10.1' in result.stdout
-        # Should NOT include sibling 10.2
-        assert '#### 10.2' not in result.stdout
+        # Should include subsection 11.1
+        assert '11.1' in result.stdout
+        # Should NOT include sibling 11.2
+        assert '### 11.2' not in result.stdout
 
     def test_section_1_not_matches_10(self):
-        """Test --section 1 does NOT match section 10 (edge case)."""
+        """Test --section 1 does NOT match section 10 or 11 (edge case)."""
         result = subprocess.run(
-            ['macf_tools', 'policy', 'read', 'todo_hygiene', '--section', '1'],
+            ['macf_tools', 'policy', 'read', 'task_management', '--section', '1'],
             capture_output=True, text=True
         )
 
         assert result.returncode == 0
-        # Check that section 10 content is NOT in output
-        # Section 10 has specific text "TODO Backup Protocol"
-        assert 'TODO Backup Protocol' not in result.stdout
+        # Check that section 10/11 content is NOT in output
+        # Section 10 has specific text "Anti-Patterns"
+        # Section 11 has specific text "Migration from TodoWrite"
+        assert 'Anti-Patterns' not in result.stdout
+        assert 'Migration from TodoWrite' not in result.stdout
 
     def test_section_ignores_code_block_comments(self):
         """Test --section ignores # comments inside code blocks."""
-        # Section 10 has bash code blocks with # comments
+        # Section 9 (CLI Commands) has bash code blocks with # comments
         # These should not break section parsing
         result = subprocess.run(
-            ['macf_tools', 'policy', 'read', 'todo_hygiene', '--section', '10'],
+            ['macf_tools', 'policy', 'read', 'task_management', '--section', '9'],
             capture_output=True, text=True
         )
 
         assert result.returncode == 0
-        # Should capture content all the way through 10.2
+        # Should capture content all the way through 9.2 and beyond
         # (bug before fix: code block # comments caused early termination)
-        assert '10.2' in result.stdout
-        assert 'Manual Backup' in result.stdout or 'LEGACY' in result.stdout
+        assert '9.2' in result.stdout
+        assert 'Task Details' in result.stdout
