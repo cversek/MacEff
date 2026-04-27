@@ -81,24 +81,24 @@ Name three specialist agents available for delegation and their primary capabili
 
 ---
 
-## Section 4: TODO Hygiene (3 questions)
+## Section 4: Task Management (3 questions)
 
-**Reference**: `todo_hygiene.md`
+**Reference**: `task_management.md`
 
-### Q4.1: Archive-Then-Collapse
-What is the "archive-then-collapse" pattern and why is it mandatory?
+### Q4.1: Archive Protocol
+What is the archive protocol for completed tasks, and how does cascade behavior work across multi-repo task trees?
 
-**Expected concepts**: NEVER collapse TODO subtrees without archiving first, archive to disk preserves context, collapsed items lose detail, archive filename format with breadcrumb
+**Expected concepts**: `task archive` command writes completed tasks to disk artifact, cascade archives child tasks, multi-repo archive structure preserves cross-repo references, archive is irreversible, breadcrumb annotation in archive entry
 
-### Q4.2: Document Reference Integration
-What do the symbols (roadmap emoji), (clipboard emoji), and (scroll emoji) mean in TODO lists?
+### Q4.2: Hierarchy and CA References
+What is the `[^#N]` parent-child notation, and what mandatory reading discipline applies to embedded CA references in MTMD?
 
-**Expected concepts**: ROADMAP (mission/campaign level), Nested ROADMAP (phase/tactical level), DELEG_PLAN (active delegation), mandatory reading discipline for embedded references
+**Expected concepts**: `[^#N]` indicates parent task ID in subject line, MTMD `parent_id` is the authoritative field, `plan_ca_ref` requires the agent to READ the referenced CA before starting work, hook enforcement of CA reads, type-specific completion gates
 
 ### Q4.3: Completion Protocol
-What must happen before marking a TODO item as "completed"?
+What must happen before running `task complete` on a task, and what is required in the completion report?
 
-**Expected concepts**: Verification of actual completion (not partial), breadcrumb annotation, no "completed" if blocked or errors remain, update status immediately (don't batch)
+**Expected concepts**: Verification of actual completion (not partial), `--commit HASH` for code changes, `--verified "method"` describing how completion was confirmed, GH_ISSUE closeout posts comment + closes issue, type-specific gates (SPRINT/PLAY_TIME aggregate stats)
 
 ---
 

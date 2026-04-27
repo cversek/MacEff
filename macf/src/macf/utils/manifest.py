@@ -78,20 +78,20 @@ def find_policy_file(
 
     Args:
         policy_name: Policy filename (with or without .md extension)
-                    e.g., 'todo_hygiene', 'todo_hygiene.md'
+                    e.g., 'task_management', 'task_management.md'
         parents: Optional list of parent directory names to match
-                e.g., ['development'] to find development/todo_hygiene.md
+                e.g., ['development'] to find development/task_management.md
         maceff_root: Optional MacEff installation root (auto-detected if None)
 
     Returns:
         Path to policy file, or None if not found
 
     Examples:
-        find_policy_file('todo_hygiene')
-            → .../framework/policies/base/development/todo_hygiene.md
+        find_policy_file('task_management')
+            → .../framework/policies/base/development/task_management.md
 
-        find_policy_file('todo_hygiene', parents=['development'])
-            → .../framework/policies/base/development/todo_hygiene.md
+        find_policy_file('task_management', parents=['development'])
+            → .../framework/policies/base/development/task_management.md
 
         find_policy_file('checkpoints', parents=['consciousness'])
             → .../framework/policies/base/consciousness/checkpoints.md

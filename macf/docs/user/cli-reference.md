@@ -594,7 +594,7 @@ macf_tools policy navigate POLICY_NAME
 
 **Example:**
 ```bash
-macf_tools policy navigate todo_hygiene
+macf_tools policy navigate task_management
 ```
 
 **Related:** `policy read`, `policy list`
@@ -623,13 +623,13 @@ macf_tools policy read POLICY_NAME [--section N[.M[.P]]] [--from-nav-boundary]
 **Examples:**
 ```bash
 # Read full policy
-macf_tools policy read todo_hygiene
+macf_tools policy read task_management
 
-# Read section 10 and all subsections (10.1, 10.2, etc.)
-macf_tools policy read todo_hygiene --section 10
+# Read section 11 and all subsections (11.1, 11.2, etc.)
+macf_tools policy read task_management --section 11
 
-# Read only subsection 10.1 and its children
-macf_tools policy read todo_hygiene --section 10.1
+# Read only subsection 11.1 and its children
+macf_tools policy read task_management --section 11.1
 
 # Read policy content after navigation guide
 macf_tools policy read delegation_guidelines --from-nav-boundary

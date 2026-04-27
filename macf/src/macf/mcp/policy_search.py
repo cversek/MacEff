@@ -129,7 +129,7 @@ def tool_context(policy_name: str) -> dict:
     """Get CEP navigation context for a policy.
 
     Args:
-        policy_name: Name of the policy (e.g., 'todo_hygiene')
+        policy_name: Name of the policy (e.g., 'task_management')
 
     Returns:
         Policy metadata and CEP navigation guide for cognitive framing.
@@ -323,7 +323,7 @@ MCP_TOOLS = {
         "parameters": {
             "type": "object",
             "properties": {
-                "policy_name": {"type": "string", "description": "Policy name (e.g., 'todo_hygiene')"},
+                "policy_name": {"type": "string", "description": "Policy name (e.g., 'task_management')"},
             },
             "required": ["policy_name"],
         },

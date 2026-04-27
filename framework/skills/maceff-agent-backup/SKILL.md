@@ -14,7 +14,7 @@ allowed-tools: Read, Bash, Grep
 - When restoring consciousness on virgin system
 - When user asks about backup/restore procedures
 
-**NOT for TODO Backups**: TODO backups are tactical (per-transition, single artifact). This skill is for strategic AGENT backups (complete consciousness). See todo_hygiene.md for TODO backup protocol.
+**Scope**: This skill covers strategic AGENT backups — complete consciousness across systems, transplants, framework upgrades, and virgin-system bootstrap. Tactical task-state persistence is handled automatically by the task system (`~/.claude/tasks/*.json`); see `task_management.md` for task lifecycle and archive protocol.
 
 ## Policy Engagement Protocol
 
@@ -87,7 +87,7 @@ macf_tools agent restore verify <archive>
 ```bash
 # Prerequisites (from policy)
 npm install -g @anthropic-ai/claude-code
-git clone https://github.com/cversek/MacEff.git
+git clone <MACEFF_REPO_URL>
 (cd MacEff/macf && pip install -e .)
 
 # Restore with transplant
@@ -109,8 +109,8 @@ macf_tools agent restore install <archive> --target <dir> --force
 
 **Policy as API**: Questions reference WHAT to extract, not WHERE in policy. As agent_backup.md evolves (sections reorganize, content updates), timeless questions continue extracting correct guidance.
 
-**Agent Backup vs TODO Backup**:
-- **TODO Backup**: Tactical, per-transition, single artifact (todo_hygiene.md)
+**Agent Backup vs Task Persistence**:
+- **Task Persistence**: Automatic, per-task JSON files on disk (`~/.claude/tasks/*.json`); see `task_management.md`
 - **Agent Backup**: Strategic, catastrophic recovery, complete consciousness (agent_backup.md)
 
 ## Version History

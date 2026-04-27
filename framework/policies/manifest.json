@@ -25,10 +25,10 @@
         "likely_policies": ["policy_awareness"]
       },
       {
-        "pattern": "todo_management",
-        "consciousness": "Managing TODO lists, backups, or restoration",
-        "search_terms": ["todo", "backup", "restore", "hygiene", "collapse"],
-        "likely_policies": ["todo_hygiene"]
+        "pattern": "task_management",
+        "consciousness": "Managing tasks, parent-child hierarchy, completion, or archival",
+        "search_terms": ["task", "parent", "complete", "archive", "hierarchy", "todo"],
+        "likely_policies": ["task_management"]
       },
       {
         "pattern": "amnesia_awareness",
@@ -461,14 +461,6 @@
         "description": "Operating modes (MANUAL/AUTO), authorization, mode-specific recovery",
         "CEP_triggers": ["What is AUTO_MODE?", "How to authorize autonomy?", "Mode persistence?", "Manual vs auto recovery?"],
         "keywords": ["auto", "manual", "mode", "autonomous", "authorization", "recovery", "permission"]
-      },
-      {
-        "name": "todo_hygiene",
-        "short_name": "TODO_HYG",
-        "path": "base/operations/todo_hygiene.md",
-        "description": "TODO list management, backup, and restoration protocols",
-        "CEP_triggers": ["How to manage TODOs?", "TODO backup protocol?", "Archive-then-collapse?", "TODO restoration?", "Breadcrumb format?"],
-        "keywords": ["todo", "hygiene", "backup", "restore", "archive", "collapse", "breadcrumb"]
       }
     ]
   },
@@ -635,13 +627,14 @@
     "multi_phase": ["base/consciousness/roadmaps_drafting"],
     "strategic_plan": ["base/consciousness/roadmaps_drafting"],
     "phases": ["base/consciousness/roadmaps_drafting", "base/consciousness/roadmaps_following"],
-    "archive": ["base/consciousness/roadmaps_drafting#archive-then-collapse", "todo_hygiene#archive-then-collapse"],
-    "clobbering": ["base/consciousness/roadmaps_drafting#no-clobbering", "todo_hygiene#never-clobber"],
-    "todo_integration": ["base/consciousness/roadmaps_drafting#todo-integration", "todo_hygiene"],
+    "archive": ["base/consciousness/roadmaps_drafting#archive-then-collapse", "base/development/task_management#archive-protocol"],
+    "clobbering": ["base/consciousness/roadmaps_drafting#no-clobbering"],
+    "todo_integration": ["base/consciousness/roadmaps_drafting#todo-integration", "base/development/task_management"],
     "observability": ["base/consciousness/roadmaps_drafting#observability"],
-    "todo": ["base/operations/todo_hygiene"],
-    "backup": ["todo_hygiene#backup-protocol", "agent_backup"],
-    "restore": ["todo_hygiene#session-file-migration", "agent_backup", "context_recovery"],
+    "todo": ["base/development/task_management"],
+    "task": ["base/development/task_management"],
+    "backup": ["base/operations/agent_backup"],
+    "restore": ["base/operations/agent_backup", "base/operations/context_recovery"],
     "docker": ["tech/docker/container_operations"],
     "container": ["tech/docker/container_operations"],
     "deploy": ["tech/docker/container_operations"],
