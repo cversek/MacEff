@@ -116,7 +116,7 @@ After reporting policy-extracted answers:
 🚨 **CRITICAL - Protocol vs Plan File**:
 - Claude Code's native plan files are **NOT compliant** consciousness artifacts
 - Plan file content is for drafting only - transfer to compliant protocol CA
-- This command creates the PROTOCOL only - execution via `/maceff:todos:start` separately
+- This command creates the PROTOCOL only - execution via `/maceff:task:start <task_id>` separately
 
 ---
 
