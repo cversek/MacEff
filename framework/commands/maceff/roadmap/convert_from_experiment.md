@@ -98,7 +98,7 @@ After reporting policy-extracted answers:
 5. **Establish Cross-References** - Follow bidirectional citation requirements from policy
 6. **Report Completion** - Present roadmap and await user authorization
 
-🚨 **CRITICAL**: Conversion creates roadmap only. DO NOT begin implementation. User must review roadmap and explicitly authorize via `/maceff:todos:start [MISSION]`.
+🚨 **CRITICAL**: Conversion creates roadmap only. DO NOT begin implementation. User must review roadmap and explicitly authorize via `/maceff:task:start <mission_id>`.
 
 ---
 

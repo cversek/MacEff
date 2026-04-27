@@ -8,9 +8,9 @@ Commands follow the pattern: `/namespace:category:action`
 
 **Example:**
 ```
-/maceff:todos:start      # Start work on a TODO item
-/maceff:roadmap:draft    # Draft a new roadmap
-/maceff:ccp              # Create consciousness checkpoint
+/maceff:task:start <task_id>  # Start work on a tracked task
+/maceff:roadmap:draft         # Draft a new roadmap
+/maceff:ccp                   # Create consciousness checkpoint
 ```
 
 ## Available Namespaces
@@ -22,11 +22,14 @@ Commands follow the pattern: `/namespace:category:action`
 
 ## Command Categories
 
-### maceff:todos:*
-TODO management commands:
-- `/maceff:todos:start` - Start work on a TODO item
-- `/maceff:todos:archive` - Archive completed work
-- `/maceff:todos:backup` - Backup TODO state
+### maceff:task:*
+Task management commands:
+- `/maceff:task:start <task_id>` - Start work on a tracked task
+- `/maceff:task:archive` - Archive completed task
+- `/maceff:task:create_mission` - Create a MISSION task
+- `/maceff:task:create_experiment` - Create an EXPERIMENT task
+- `/maceff:task:create_phase` - Create a PHASE task
+- `/maceff:task:create_detour` - Create a DETOUR task
 
 ### maceff:roadmap:*
 Roadmap commands:
@@ -48,10 +51,13 @@ Commands map to nested directories:
 ├── maceff/
 │   ├── ccp.md
 │   ├── jotewr.md
-│   ├── todos/
+│   ├── task/
 │   │   ├── start.md
 │   │   ├── archive.md
-│   │   └── backup.md
+│   │   ├── create_mission.md
+│   │   ├── create_experiment.md
+│   │   ├── create_phase.md
+│   │   └── create_detour.md
 │   └── roadmap/
 │       └── draft.md
 └── ctb/
@@ -70,10 +76,12 @@ Or use Claude Code's `/` autocomplete to explore available namespaces.
 
 ## Migration from Flat Commands
 
-| Old (v0.3.1) | New (v0.3.2) |
-|--------------|--------------|
-| `/maceff_todos_start` | `/maceff:todos:start` |
+| Old (v0.3.1) | Current |
+|--------------|---------|
+| `/maceff_todos_start` | `/maceff:task:start <task_id>` |
 | `/maceff_roadmap_draft` | `/maceff:roadmap:draft` |
 | `/maceff_ccp` | `/maceff:ccp` |
+
+**Note**: The `:todos:` namespace from v0.3.2 was renamed to `:task:` when the underlying TodoWrite-based workflow was supplanted by the persistent task system (see `framework/policies/sets/base/development/task_management.md`). If you used `/maceff:todos:start` in older sessions, switch to `/maceff:task:start <task_id>`.
 
 The colon separator provides clearer hierarchy and enables namespace-based organization.
