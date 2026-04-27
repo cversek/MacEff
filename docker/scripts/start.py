@@ -56,7 +56,7 @@ def run_command(cmd: List[str], check: bool = True, capture: bool = False) -> Op
             subprocess.run(cmd, check=check)
             return None
     except subprocess.CalledProcessError as e:
-        log(f"Command failed: {' '.join(cmd)}")
+        log(f"Command failed: {' '.join(cmd)} (exit {e.returncode})")
         if check:
             raise
         return None
@@ -504,9 +504,16 @@ def create_subagent_workspace(username: str, sa_name: str, sa_spec: SubagentSpec
     home = Path(f'/home/{username}')
     sa_root = home / 'agent' / 'subagents' / sa_name
 
-    # Create subagent root (read-only parent)
+    # Create subagent root (read-only parent: r-xr-xr-x root:root)
+    # Mode is 555 so PA (and SA dispatched under PA's UID) can traverse
+    # via "other" permission bits, but no one can mkdir new top-level
+    # CA types — only root can write at the structure level.
     sa_root.mkdir(mode=0o555, exist_ok=True)
     run_command(['chown', 'root:root', str(sa_root)])
+    # Idempotent enforcement: mkdir(mode=) is ignored when exist_ok=True
+    # matches a pre-existing dir, and persistent volumes carry forward
+    # whatever mode the original create used. Always chmod to authoritative mode.
+    run_command(['chmod', '555', str(sa_root)])
 
     # Always overwrite SUBAGENT_DEF.md from framework/deployment definition
     sa_def = sa_root / 'SUBAGENT_DEF.md'
@@ -518,6 +525,7 @@ def create_subagent_workspace(username: str, sa_name: str, sa_spec: SubagentSpec
         sa_def.touch(mode=0o644)
         log(f"WARNING: No framework definition found for '{sa_name}', created empty SUBAGENT_DEF.md")
     run_command(['chown', 'root:root', str(sa_def)])
+    run_command(['chmod', '644', str(sa_def)])  # Idempotent: enforce world-readable
 
     # Create private and public directories
     private = sa_root / 'private'
