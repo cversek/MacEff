@@ -28,7 +28,7 @@ from macf.hooks.hook_logging import log_hook_event
 from macf.modes import (
     detect_active_modes, get_current_work_mode,
     sample_next_work_mode, format_recommendation,
-    should_self_manage_closeout,
+    should_self_manage_closeout, format_mode_indicators,
 )
 
 
@@ -203,113 +203,117 @@ Development Drive Stats:
                         file=sys.stderr,
                     )
                     return {"continue": True}
-                    task_list = "\n".join(
-                        f"  - #{t['id']}: {t['subject']}" for t in scope["active"]
+                # ── END if _fail_open: failsafe early-return ──
+
+                # ── BEGIN scope-gate dispatch (sibling of failsafe, NOT nested inside it) ──
+                task_list = "\n".join(
+                    f"  - #{t['id']}: {t['subject']}" for t in scope["active"]
+                )
+
+                # --- SPRINT / PLAY_TIME dispatch (Phase 4 of MISSION 1010) ---
+                # Detect autonomous-work task types in scope and route to
+                # type-specific gate behavior before the generic Markov path.
+                try:
+                    from macf.task.sprint_gate import (
+                        get_sprint_play_time_in_scope,
+                        emit_scope_nag,
+                        emit_chain_advance_suggestion,
+                        should_fire_markov_for_play_time,
+                        parse_play_time_custom,
                     )
+                    autowork = get_sprint_play_time_in_scope()
 
-                    # --- SPRINT / PLAY_TIME dispatch (Phase 4 of MISSION 1010) ---
-                    # Detect autonomous-work task types in scope and route to
-                    # type-specific gate behavior before the generic Markov path.
-                    try:
-                        from macf.task.sprint_gate import (
-                            get_sprint_play_time_in_scope,
-                            emit_scope_nag,
-                            emit_chain_advance_suggestion,
-                            should_fire_markov_for_play_time,
-                            parse_play_time_custom,
-                        )
-                        autowork = get_sprint_play_time_in_scope()
-
-                        # SPRINT: emit scope-completion nag, no Markov, no mode rotation
-                        if autowork["sprint_task"] and autowork["open_children"]:
-                            return {
-                                "continue": True,
-                                "decision": "block",
-                                "reason": emit_scope_nag(
-                                    autowork["sprint_task"],
-                                    autowork["open_children"],
-                                ),
-                            }
-
-                        # PLAY_TIME with chain not yet exhausted: suggest chain advance
-                        if autowork["play_time_task"]:
-                            pt_custom = parse_play_time_custom(autowork["play_time_task"])
-                            if pt_custom and not pt_custom.chain_exhausted and (
-                                pt_custom.chain_position + 1 < len(pt_custom.predetermined_chain)
-                            ):
-                                return {
-                                    "continue": True,
-                                    "decision": "block",
-                                    "reason": emit_chain_advance_suggestion(
-                                        autowork["play_time_task"],
-                                        pt_custom.chain_position,
-                                        pt_custom.predetermined_chain,
-                                    ),
-                                }
-                            # Chain exhausted (or last step): fall through to Markov path below
-                    except (ImportError, OSError, ValueError) as e:
-                        print(f"⚠️ MACF: sprint_gate dispatch failed: {e}", file=sys.stderr)
-
-                    # Check if a timer is active — changes the gate message
-                    timer_info = scope.get("timer", {})
-                    timer_active = timer_info.get("active", False)
-                    timer_remaining = timer_info.get("remaining_min", 0)
-
-                    # Notify Telegram — unique emoji: 🛡️👀 (scope + watching)
-                    try:
-                        from macf.channels.telegram import send_telegram_notification
-                        gate_msg = (f"{scope['active_count']} scoped task(s), {timer_remaining}m remaining"
-                                    if timer_active else f"{scope['active_count']} scoped task(s) remaining")
-                        send_telegram_notification(gate_msg, prefix="\U0001f6e1\ufe0f\U0001f440 Scope gate")
-                    except Exception as e:
-                        print(f"⚠️ MACF: Scope gate Telegram error: {e}", file=sys.stderr)
-
-                    error_context = ""
-                    if is_error_stop:
-                        error_context = (
-                            "An error occurred but you MUST NOT stop — debug and fix it. "
-                            "Read the error, form a hypothesis, and try again. "
-                        )
-
-                    # Timer-active scope gate: engage Markov recommender for work continuation
-                    if timer_active:
-                        recommendation = ""
-                        try:
-                            active_modes = detect_active_modes(session_id, token_info)
-                            current_wm = get_current_work_mode(active_modes)
-                            op_modes = {m for m in active_modes if m in ("AUTO_MODE", "USER_IDLE", "QUIET_MODE", "LOW_CONTEXT")}
-                            selected, dist = sample_next_work_mode(current_wm, op_modes)
-                            recommendation = "\n" + format_recommendation(current_wm, selected, dist, "maceff")
-                        except (OSError, ValueError, ImportError) as e:
-                            print(f"⚠️ MACF: recommender failed: {e}", file=sys.stderr)
-
+                    # SPRINT: emit scope-completion nag, no Markov, no mode rotation
+                    if autowork["sprint_task"] and autowork["open_children"]:
                         return {
                             "continue": True,
                             "decision": "block",
-                            "reason": (
-                                f"SCOPE GATE (timer active): {timer_remaining} min remaining. "
-                                f"{error_context}"
-                                f"Scoped tasks: {task_list}\n"
-                                f"Complete finished tasks with `macf_tools task complete <id> --report '...'` to clear them from scope. "
-                                f"Only the last scoped task is timer-gated. "
-                                f"ULTRATHINK about the recommendation below, then invoke the suggested skill "
-                                f"(or override with justification in task notes).\n"
-                                f"{recommendation}\n"
-                                f"Emergency escape: macf_tools mode set MANUAL_MODE --justification <reason>"
+                            "reason": emit_scope_nag(
+                                autowork["sprint_task"],
+                                autowork["open_children"],
                             ),
                         }
 
-                    # Non-timer scope gate: standard "complete these tasks" message
+                    # PLAY_TIME with chain not yet exhausted: suggest chain advance
+                    if autowork["play_time_task"]:
+                        pt_custom = parse_play_time_custom(autowork["play_time_task"])
+                        if pt_custom and not pt_custom.chain_exhausted and (
+                            pt_custom.chain_position + 1 < len(pt_custom.predetermined_chain)
+                        ):
+                            return {
+                                "continue": True,
+                                "decision": "block",
+                                "reason": emit_chain_advance_suggestion(
+                                    autowork["play_time_task"],
+                                    pt_custom.chain_position,
+                                    pt_custom.predetermined_chain,
+                                ),
+                            }
+                        # Chain exhausted (or last step): fall through to Markov path below
+                except (ImportError, OSError, ValueError) as e:
+                    print(f"⚠️ MACF: sprint_gate dispatch failed: {e}", file=sys.stderr)
+
+                # Check if a timer is active — changes the gate message
+                timer_info = scope.get("timer", {})
+                timer_active = timer_info.get("active", False)
+                timer_remaining = timer_info.get("remaining_min", 0)
+
+                # Notify Telegram — unique emoji: 🛡️👀 (scope + watching)
+                try:
+                    from macf.channels.telegram import send_telegram_notification
+                    gate_msg = (f"{scope['active_count']} scoped task(s), {timer_remaining}m remaining"
+                                if timer_active else f"{scope['active_count']} scoped task(s) remaining")
+                    send_telegram_notification(gate_msg, prefix="\U0001f6e1\ufe0f\U0001f440 Scope gate")
+                except Exception as e:
+                    print(f"⚠️ MACF: Scope gate Telegram error: {e}", file=sys.stderr)
+
+                error_context = ""
+                if is_error_stop:
+                    error_context = (
+                        "An error occurred but you MUST NOT stop — debug and fix it. "
+                        "Read the error, form a hypothesis, and try again. "
+                    )
+
+                # Timer-active scope gate: engage Markov recommender for work continuation
+                if timer_active:
+                    recommendation = ""
+                    try:
+                        active_modes = detect_active_modes(session_id, token_info)
+                        current_wm = get_current_work_mode(active_modes)
+                        op_modes = {m for m in active_modes if m in ("AUTO_MODE", "USER_IDLE", "QUIET_MODE", "LOW_CONTEXT")}
+                        selected, dist = sample_next_work_mode(current_wm, op_modes)
+                        recommendation = "\n" + format_recommendation(current_wm, selected, dist, "maceff")
+                    except (OSError, ValueError, ImportError) as e:
+                        print(f"⚠️ MACF: recommender failed: {e}", file=sys.stderr)
+
                     return {
                         "continue": True,
                         "decision": "block",
                         "reason": (
-                            f"SCOPE GATE: {scope['active_count']} scoped task(s) remaining. "
+                            f"SCOPE GATE (timer active): {timer_remaining} min remaining. "
                             f"{error_context}"
-                            f"Complete these tasks: {task_list} "
+                            f"Scoped tasks: {task_list}\n"
+                            f"Complete finished tasks with `macf_tools task complete <id> --report '...'` to clear them from scope. "
+                            f"Only the last scoped task is timer-gated. "
+                            f"ULTRATHINK about the recommendation below, then invoke the suggested skill "
+                            f"(or override with justification in task notes).\n"
+                            f"{recommendation}\n"
                             f"Emergency escape: macf_tools mode set MANUAL_MODE --justification <reason>"
                         ),
                     }
+
+                # Non-timer scope gate: standard "complete these tasks" message
+                return {
+                    "continue": True,
+                    "decision": "block",
+                    "reason": (
+                        f"SCOPE GATE: {scope['active_count']} scoped task(s) remaining. "
+                        f"{error_context}"
+                        f"Complete these tasks: {task_list} "
+                        f"Emergency escape: macf_tools mode set MANUAL_MODE --justification <reason>"
+                    ),
+                }
+                # ── END scope-gate dispatch ──
 
             # --- Error-resilience in ANY mode ---
             # Soft nudge when stopping on error with active tasks (scoped or in_progress)
