@@ -218,6 +218,21 @@ class DefaultsConfig(BaseModel):
         description="Default Claude Code settings for all agents"
     )
 
+    container_env: Dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Container-wide environment variables. Written to /etc/environment "
+            "(PAM/SSH coverage), /etc/profile.d/maceff-deployment-env.sh "
+            "(login bash), and sourced by /etc/profile.d/maceff-bash-env.sh "
+            "(non-login bash via BASH_ENV) at container start. Replaces the "
+            "old pattern of declaring deployment env via Dockerfile ENV + "
+            "manual /etc/environment writes — keep these declarative here "
+            "instead. Per-agent overrides intentionally not supported in v1: "
+            "container env is process-wide; per-user env belongs in "
+            "~/.bash_init.sh which already exists."
+        )
+    )
+
 
 class AgentsConfig(BaseModel):
     """

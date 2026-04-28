@@ -15,6 +15,7 @@ import sys
 import os
 import json
 import hashlib
+import shlex
 import shutil
 import subprocess
 import pwd
@@ -1114,22 +1115,46 @@ def start_search_service_daemon(agents_config: AgentsConfig) -> None:
         log(f"Search service start failed (non-fatal): {e}")
 
 
-def propagate_container_env() -> None:
-    """Propagate container environment to SSH sessions.
+def propagate_container_env(agents_config: Optional[AgentsConfig] = None) -> None:
+    """Propagate container environment to all session types.
 
     Writes to /etc/environment (PAM reads this for SSH sessions):
     - MACEFF_TZ: Timezone from docker-compose.yml (if set)
     - MACEFF_ROOT_DIR: Framework root (constant /opt/maceff)
-    - BASH_ENV: Points to ~/.bash_init.sh (tilde expands per-user)
+    - BASH_ENV: Points to /etc/profile.d/maceff-bash-env.sh
+    - Plus all keys declared in agents_config.defaults.container_env
+      (deployment-wide env, formerly required Dockerfile ENV + triple-write)
 
-    The BASH_ENV entry enables non-interactive shells (Claude Code Bash tool)
-    to source PA-specific initialization from ~/.bash_init.sh.
+    Also writes:
+    - /etc/profile.d/maceff-deployment-env.sh (login-shell exports)
+    - /etc/profile.d/maceff-bash-env.sh (BASH_ENV target — sources both
+      ~/.bash_init.sh AND the deployment-env file so non-login bash
+      `bash -c "..."` invocations also see the deployment env)
+
+    Per-agent overrides intentionally not supported: container env is
+    process-wide; per-user env belongs in ~/.bash_init.sh.
+
+    Args:
+        agents_config: AgentsConfig with optional defaults.container_env.
+            When None or defaults absent, behaves identically to the
+            pre-v0.5.x version — only the framework's own static keys
+            (MACEFF_TZ / MACEFF_ROOT_DIR / BASH_ENV) get written.
     """
+    # Pull deployment env from agents.yaml defaults block
+    deployment_env: Dict[str, str] = {}
+    if agents_config is not None and agents_config.defaults is not None:
+        deployment_env = dict(agents_config.defaults.container_env or {})
+
     env_file = Path('/etc/environment')
     lines = env_file.read_text().splitlines() if env_file.exists() else []
 
-    # Filter out entries we'll replace
-    filter_prefixes = ('MACEFF_TZ=', 'MACEFF_ROOT_DIR=', 'BASH_ENV=')
+    # Filter out entries we'll rewrite — both the framework's static keys
+    # and any deployment-declared keys (so agents.yaml edits propagate
+    # correctly across container restarts).
+    filter_prefixes = (
+        'MACEFF_TZ=', 'MACEFF_ROOT_DIR=', 'BASH_ENV=',
+        *(f'{k}=' for k in deployment_env),
+    )
     lines = [line for line in lines if not any(line.startswith(p) for p in filter_prefixes)]
 
     # Add container-wide environment variables
@@ -1140,12 +1165,44 @@ def propagate_container_env() -> None:
     # Framework root - constant for all PAs
     lines.append('MACEFF_ROOT_DIR=/opt/maceff')
 
-    # BASH_ENV: Create a profile.d wrapper that sources user's bash_init.sh
-    # Direct tilde in /etc/environment doesn't expand, so we use a wrapper
+    # Deployment-declared env vars from agents.yaml.defaults.container_env
+    for key in sorted(deployment_env):
+        # Quote values containing spaces/special chars; bare otherwise (PAM-safe)
+        value = deployment_env[key]
+        lines.append(f'{key}={value}' if all(c.isalnum() or c in '_-/.:' for c in value)
+                     else f'{key}="{value}"')
+
+    # Write the per-shell deployment-env script (login bash via /etc/profile.d/*)
+    deployment_env_script = Path('/etc/profile.d/maceff-deployment-env.sh')
+    if deployment_env:
+        script_lines = [
+            '#!/bin/bash',
+            '# MacEff deployment env (declared in agents.yaml.defaults.container_env)',
+            '# Sourced by login bash from /etc/profile.d/* and by non-login bash via',
+            '# the BASH_ENV → /etc/profile.d/maceff-bash-env.sh chain.',
+        ]
+        for key in sorted(deployment_env):
+            value = deployment_env[key]
+            # Use shell-safe quoting for export
+            script_lines.append(f'export {key}={shlex.quote(value)}')
+        deployment_env_script.write_text('\n'.join(script_lines) + '\n')
+        deployment_env_script.chmod(0o755)
+    elif deployment_env_script.exists():
+        # No deployment env declared — clean up stale script from a prior run
+        deployment_env_script.unlink()
+
+    # BASH_ENV wrapper — sources both per-user .bash_init.sh AND the
+    # deployment-env script so `bash -c "..."` (non-login, non-interactive)
+    # invocations see deployment env. Without sourcing deployment-env here,
+    # CC's Bash tool subprocesses would only see vars in container Config.Env
+    # (which agents.yaml-driven vars aren't in by design).
     bash_env_wrapper = Path('/etc/profile.d/maceff-bash-env.sh')
     bash_env_wrapper.write_text('''#!/bin/bash
-# MacEff BASH_ENV wrapper - sources per-user bash_init.sh
+# MacEff BASH_ENV wrapper - sources deployment env + per-user bash_init.sh
 # This script is pointed to by BASH_ENV in /etc/environment
+if [ -f "/etc/profile.d/maceff-deployment-env.sh" ]; then
+    . "/etc/profile.d/maceff-deployment-env.sh"
+fi
 if [ -f "$HOME/.bash_init.sh" ]; then
     . "$HOME/.bash_init.sh"
 fi
@@ -1154,7 +1211,8 @@ fi
     lines.append('BASH_ENV=/etc/profile.d/maceff-bash-env.sh')
 
     env_file.write_text('\n'.join(lines) + '\n')
-    log("Container env propagated: MACEFF_TZ, MACEFF_ROOT_DIR, BASH_ENV")
+    extra_keys = ", ".join(sorted(deployment_env)) if deployment_env else "none"
+    log(f"Container env propagated: MACEFF_TZ, MACEFF_ROOT_DIR, BASH_ENV; deployment env: {extra_keys}")
 
     # Write to /etc/profile.d for interactive shells (timezone only)
     if maceff_tz:
@@ -1304,8 +1362,10 @@ def main() -> int:
         setup_policies()
         setup_policy_editors()
 
-        # Propagate environment
-        propagate_container_env()
+        # Propagate environment (passes agents_config so deployment env from
+        # agents.yaml.defaults.container_env is fanned out to /etc/environment +
+        # /etc/profile.d/maceff-deployment-env.sh + sourced by BASH_ENV wrapper)
+        propagate_container_env(agents_config)
 
         # Start sshd EARLY so SSH access is available during slow init steps
         log("Starting sshd (background)...")
