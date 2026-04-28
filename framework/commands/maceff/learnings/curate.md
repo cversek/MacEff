@@ -10,6 +10,35 @@ Curate learnings from session discoveries into the agent's semantic knowledge we
 
 ---
 
+## 🚨 CHANNEL-INITIATED ATTACHMENT REQUIREMENT
+
+**If this command was triggered by a message from a `<channel source=...>` tag** (e.g., Telegram), the **completion contract requires sending each curated learning file back through the channel as an attachment** — a summary message alone is not sufficient.
+
+**Why**: Remote channel users cannot navigate the agent's filesystem. The agent's repo + filesystem are invisible from a channel client; the only review surface is what arrives in the channel itself. Without attachments, the user has to ask "where are the files?" — which is the smell that made this requirement explicit.
+
+**Workflow** (channel-initiated, attachment-supporting channel):
+
+1. Curate the learnings as usual (follow the rest of this skill).
+2. Commit + push the new learning files (per existing git discipline).
+3. **Send a summary reply** via the channel's reply tool — what was curated, which patterns, brief titles.
+4. **Send the actual learning files as attachments** via the channel's reply tool with `files: [...]` containing absolute paths to each new learning. For example, on Telegram:
+   ```
+   mcp__plugin_telegram_telegram__reply(
+       chat_id=<from inbound>,
+       text="Attaching the N learning files now.",
+       files=["/abs/path/2026-XX-XX_HHMMSS_first_learning.md", ...]
+   )
+   ```
+5. The summary message + attachments together constitute the completion deliverable.
+
+**Channels without attachment support**: degrade gracefully — send the summary message only and note in it that the files live at `<repo>/agent/private/learnings/<filenames>` for terminal-side review. Don't pretend an attachment-less channel is the same as a terminal invocation.
+
+**Terminal invocation**: this requirement does not apply — the user is at the filesystem and can read the files directly. A terminal status report is sufficient.
+
+**Discovery rule**: if the invoking message includes a `<channel source="X">` tag, look up X's reply tool's schema. If `files: [...]` is in the parameters, attach. If not, fall back to summary-only.
+
+---
+
 ## Policy Engagement Protocol
 
 ```bash
