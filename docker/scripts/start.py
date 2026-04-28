@@ -14,6 +14,7 @@ Design principles:
 import sys
 import os
 import json
+import hashlib
 import shutil
 import subprocess
 import pwd
@@ -38,6 +39,11 @@ AGENTS_CONFIG = Path('/etc/maceff/agents.yaml')
 PROJECTS_CONFIG = Path('/etc/maceff/projects.yaml')
 FRAMEWORK_ROOT = Path('/opt/maceff/framework')
 SHARED_WORKSPACE = Path('/shared_workspace')
+
+# install_macf_tools() — explicit deps installed alongside the editable macf package.
+# Lifted from inline strings into a module-level constant so it participates in the
+# fingerprint that gates re-installation (see _compute_install_fingerprint).
+INSTALL_EXTRA_DEPS = ["lancedb", "sentence-transformers"]
 
 
 def log(msg: str) -> None:
@@ -896,35 +902,105 @@ def initialize_agents(agents_config: AgentsConfig) -> None:
             log(f"Hook installation failed for {username}: {result.stderr.decode()}")
 
 
+def _compute_install_fingerprint(macf_tools_src: Path) -> str:
+    """Compute a stable fingerprint for the macf install state.
+
+    Hashes Python interpreter version + macf pyproject.toml + the
+    INSTALL_EXTRA_DEPS constant. Drift in any of these invalidates the
+    sentinel and triggers a reinstall on next container start.
+
+    Returns:
+        Hex sha256 digest.
+    """
+    h = hashlib.sha256()
+    try:
+        h.update(subprocess.check_output(['python3', '--version']))
+    except Exception as e:
+        log(f"Warning: python3 --version probe failed during fingerprint: {e}")
+        h.update(b'unknown-python')
+    pyproject = macf_tools_src / 'pyproject.toml'
+    if pyproject.exists():
+        h.update(pyproject.read_bytes())
+    h.update(','.join(INSTALL_EXTRA_DEPS).encode())
+    return h.hexdigest()
+
+
 def install_macf_tools() -> None:
-    """Install MACF tools in shared venv."""
+    """Install MACF tools in shared venv (idempotent via fingerprint sentinel).
+
+    On first run, or when the fingerprint changes (Python upgrade, pyproject
+    edit, INSTALL_EXTRA_DEPS edit), runs the full uv-pip-install sequence —
+    typically 2-3 minutes due to torch + nvidia-cuda + transformers wheels.
+
+    On subsequent runs with matching fingerprint, returns in milliseconds.
+
+    The sentinel file is written into /opt/maceff-venv after a successful
+    install. Deployments are encouraged (but not required) to mount that
+    path as a persistent named volume so the install survives container
+    destroy/recreate cycles.
+
+    Override: set MACF_FORCE_REINSTALL=1 to bypass the sentinel and force
+    a fresh install regardless of fingerprint state.
+    """
     macf_tools_src = Path('/opt/macf_tools')
 
     if not macf_tools_src.exists():
         log("MACF tools source not found, skipping installation")
         return
 
-    log("Installing MACF into /opt/maceff-venv...")
     venv_path = Path('/opt/maceff-venv')
 
-    # Create venv if needed
+    # Create venv if needed (preserves existing guard)
     if not (venv_path / 'bin' / 'python').exists():
         run_command(['python3', '-m', 'venv', str(venv_path)])
         run_command([str(venv_path / 'bin' / 'python'), '-m', 'pip', '-q', 'install', '--upgrade', 'pip'])
 
-    # Install with uv
+    # Sentinel-based skip: if fingerprint matches the last successful install,
+    # the venv is already current and we can return without reinstalling the
+    # ~1GB+ of torch/nvidia/transformers wheels. The MACF_FORCE_REINSTALL=1
+    # env override bypasses this skip for emergency invalidation.
+    sentinel = venv_path / '.macf_install_fingerprint'
+    fp = _compute_install_fingerprint(macf_tools_src)
+    force_reinstall = os.getenv('MACF_FORCE_REINSTALL') == '1'
+    if (not force_reinstall
+            and sentinel.exists()
+            and f'fingerprint={fp}' in sentinel.read_text()):
+        log("MACF venv up-to-date (fingerprint match), skipping install")
+        # Still ensure the global CLI symlink exists (cheap; idempotent)
+        macf_cli = Path('/usr/local/bin/macf_tools')
+        if not macf_cli.exists():
+            macf_cli.symlink_to(venv_path / 'bin' / 'macf_tools')
+        return
+
+    if force_reinstall:
+        log("MACF_FORCE_REINSTALL=1 — bypassing sentinel, full reinstall")
+    log("Installing MACF into /opt/maceff-venv (fingerprint changed or first run; expect 2-3 min)...")
+
+    # Install with uv (editable — links against the bind-mounted /opt/macf_tools)
     run_command(['uv', 'pip', 'install', '--python', str(venv_path / 'bin' / 'python'), '-e', str(macf_tools_src)], check=False)
 
-    # Install search service dependencies (lancedb, sentence-transformers)
-    # These enable the warm-cache search service for 89x faster policy recommendations
+    # Install search service dependencies (INSTALL_EXTRA_DEPS).
+    # These enable the warm-cache search service for 89x faster policy recommendations.
     log("Installing search service dependencies...")
     run_command(['uv', 'pip', 'install', '--python', str(venv_path / 'bin' / 'python'),
-                 'lancedb', 'sentence-transformers'], check=False)
+                 *INSTALL_EXTRA_DEPS], check=False)
 
     # Create global CLI symlink
     macf_cli = Path('/usr/local/bin/macf_tools')
     if not macf_cli.exists():
         macf_cli.symlink_to(venv_path / 'bin' / 'macf_tools')
+
+    # Write sentinel — multi-line for human debuggability. If a future install
+    # is interrupted before reaching this point, the missing/incomplete sentinel
+    # naturally triggers a fresh reinstall on the next container start.
+    sentinel_content = (
+        f"fingerprint={fp}\n"
+        f"python={sys.version.split()[0]}\n"
+        f"installed_at={datetime.utcnow().isoformat()}Z\n"
+        f"extra_deps={','.join(INSTALL_EXTRA_DEPS)}\n"
+    )
+    sentinel.write_text(sentinel_content)
+    log(f"MACF install complete; sentinel written to {sentinel}")
 
 
 def setup_shared_workspace_permissions() -> None:
