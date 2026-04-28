@@ -1,0 +1,50 @@
+#!/bin/bash
+# Restart the Telegram MCP bot (kills running bun server.ts; CC auto-respawns).
+#
+# Use when MCP shows "plugin:telegram:telegram disconnected" mid-session and
+# the user shouldn't have to leave the couch to /mcp reconnect.
+#
+# Why this works: when CC marks the MCP server "disconnected" but the bun
+# process is still alive, CC won't auto-respawn (it thinks the server is up
+# from a process-tracking perspective even if the JSON-RPC transport is
+# severed). Killing the bun process triggers CC's respawn pathway, which
+# loads server.ts fresh and re-establishes the MCP transport.
+#
+# The next Telegram tool call after this script runs may need a brief retry
+# while the new bot completes its handshake.
+
+set -e
+
+VERBOSE="${VERBOSE:-0}"
+
+log() {
+  if [ "$VERBOSE" = "1" ]; then
+    echo "[restart-telegram-bot] $*" >&2
+  fi
+}
+
+# Find any running bun-server.ts processes (the Telegram MCP bot)
+PIDS=$(pgrep -f "bun server.ts" || true)
+
+if [ -z "$PIDS" ]; then
+  log "no bun server.ts processes alive — nothing to kill, CC may already be in respawn"
+  echo "no-op (no bot processes)"
+  exit 0
+fi
+
+log "killing bun server.ts processes: $PIDS"
+echo "$PIDS" | xargs -n1 kill -TERM
+
+# Wait briefly for graceful shutdown (server.ts has a 2s shutdown timer)
+sleep 3
+
+# Verify they're gone (force-kill any stragglers)
+STRAGGLERS=$(pgrep -f "bun server.ts" || true)
+if [ -n "$STRAGGLERS" ]; then
+  log "force-killing stragglers: $STRAGGLERS"
+  echo "$STRAGGLERS" | xargs -n1 kill -KILL
+fi
+
+echo "killed pids: $(echo $PIDS | tr '\n' ' ')"
+echo "CC will respawn the bot on next MCP interaction (or already has)."
+exit 0
