@@ -469,6 +469,42 @@ def create_agent_tree(username: str, agent_spec: AgentSpec, defaults_config: Opt
     run_command(['chown', f'{username}:{username}', str(subagents)])
     run_command(['chmod', '500', str(subagents)])
 
+    # Initialize ~/.maceff/ with per-PA settings (AUTO_MODE auth + initial state).
+    #
+    # macf_tools mode set AUTO_MODE requires --auth-token, validated against the
+    # `auto_mode_auth_token` value in <agent_home>/.maceff/settings.json. Without
+    # this file, the activation flow can't complete (the CLI gates --auth-token
+    # presence regardless of whether token validation itself would skip).
+    #
+    # Token is generated PER-CONTAINER at first boot, never baked into the image
+    # (would defeat the auth purpose). Subsequent restarts preserve the existing
+    # token because the home volume persists and the if-not-exists guard skips
+    # regeneration.
+    maceff_dir = home / '.maceff'
+    maceff_dir.mkdir(mode=0o700, exist_ok=True)
+    run_command(['chown', f'{username}:{username}', str(maceff_dir)])
+    run_command(['chmod', '700', str(maceff_dir)])
+
+    settings_file = maceff_dir / 'settings.json'
+    if not settings_file.exists():
+        token = secrets.token_urlsafe(32)
+        settings_file.write_text(json.dumps({
+            "auto_mode_auth_token": token,
+        }, indent=2) + '\n')
+        log(f"Generated auto_mode_auth_token for {username}")
+    run_command(['chown', f'{username}:{username}', str(settings_file)])
+    run_command(['chmod', '600', str(settings_file)])
+
+    state_file = maceff_dir / 'agent_state.json'
+    if not state_file.exists():
+        state_file.write_text(json.dumps({
+            "auto_mode": False,
+            "auto_mode_authorized_at": None,
+        }, indent=2) + '\n')
+        log(f"Initialized agent_state.json for {username}")
+    run_command(['chown', f'{username}:{username}', str(state_file)])
+    run_command(['chmod', '600', str(state_file)])
+
 
 def create_personal_policies(username: str) -> None:
     """Create personal policies directory with templates (highest precedence layer)."""
