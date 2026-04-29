@@ -1,0 +1,151 @@
+#!/bin/bash
+# Self-healing supervisor for the Telegram MCP bot (Phase 1 of MISSION #1043).
+#
+# Strategy: pre-emptive restart at fixed intervals shorter than the 5-min
+# JSON-RPC ping kill window discovered in EXP #1035 / GH issue #54544.
+# By killing+respawning the bot every PERIOD_S seconds (default 240 = 4min),
+# the 5-min ping never gets a chance to fire and disconnect the bot mid-call.
+#
+# Usage:
+#   telegram-bot-supervisor                    # run forever in foreground
+#   telegram-bot-supervisor --once             # do one restart cycle and exit
+#   telegram-bot-supervisor --daemon &         # background (writes pidfile)
+#   telegram-bot-supervisor --status           # check whether supervisor is running
+#   telegram-bot-supervisor --stop             # stop running supervisor (via pidfile)
+#
+# Configuration (env vars):
+#   TELEGRAM_SUPERVISOR_PERIOD_S=240          # interval between restarts (must be <300)
+#   TELEGRAM_SUPERVISOR_GRACE_S=10            # min uptime before considering restart (avoids double-restart)
+#   TELEGRAM_SUPERVISOR_PIDFILE=/tmp/telegram-bot-supervisor.pid
+#   VERBOSE=1                                  # log to stderr
+#
+# Activation (user opt-in — supervisor is NOT auto-deployed):
+#   1. Run manually:
+#      VERBOSE=1 telegram-bot-supervisor --daemon &
+#   2. Or via launchd (user creates plist; sample template at
+#      docs/com.maceff.telegram-bot-supervisor.plist.sample)
+#   3. Or via cron:
+#      */4 * * * * /path/to/telegram-bot-supervisor --once
+#
+# Why opt-in: pre-emptive restarts cause brief MCP unavailability windows;
+# users actively in Telegram conversations may notice the seconds of
+# disconnect during respawn. Power users who chronically hit the 5-min kill
+# benefit; casual users may prefer manual restart.
+#
+# Telemetry: each restart appends to ~/.claude/channels/telegram/restart-events.jsonl
+# with caller="supervisor", enabling forensic analysis of disconnect patterns.
+
+set -e
+
+PERIOD_S="${TELEGRAM_SUPERVISOR_PERIOD_S:-240}"
+GRACE_S="${TELEGRAM_SUPERVISOR_GRACE_S:-10}"
+PIDFILE="${TELEGRAM_SUPERVISOR_PIDFILE:-/tmp/telegram-bot-supervisor.pid}"
+VERBOSE="${VERBOSE:-0}"
+
+# Resolve restart-telegram-bot from same directory as this script
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+RESTART_BIN="${SCRIPT_DIR}/restart-telegram-bot"
+
+if [ ! -x "$RESTART_BIN" ]; then
+  echo "telegram-bot-supervisor: restart-telegram-bot not found or not executable: $RESTART_BIN" >&2
+  exit 1
+fi
+
+if [ "$PERIOD_S" -ge 300 ]; then
+  echo "telegram-bot-supervisor: PERIOD_S must be <300 (the 5-min kill window). Got: $PERIOD_S" >&2
+  exit 1
+fi
+
+log() {
+  if [ "$VERBOSE" = "1" ]; then
+    echo "[telegram-bot-supervisor:$$] $(date -u +%H:%M:%S) $*" >&2
+  fi
+}
+
+do_restart_cycle() {
+  # Check current bot uptime; skip if too fresh (avoids double-restart with manual caller)
+  local pid uptime
+  pid=$(pgrep -f "bun server.ts" 2>/dev/null | head -1 || true)
+  if [ -n "$pid" ]; then
+    # Use the same uptime estimator pattern as restart-telegram-bot
+    uptime=$(ps -p "$pid" -o etime= 2>/dev/null | tr -d ' ' || echo "")
+    log "current bot pid=$pid etime=$uptime"
+    # Hard gate: if uptime appears <GRACE_S, skip — likely just-restarted
+    local secs
+    secs=$(python3 -c "
+e = '$uptime'
+if not e: print(999); exit()
+days = 0
+if '-' in e:
+    d, e = e.split('-', 1)
+    days = int(d)
+parts = list(map(int, e.split(':')))
+while len(parts) < 3:
+    parts.insert(0, 0)
+print(days*86400 + parts[0]*3600 + parts[1]*60 + parts[2])
+" 2>/dev/null || echo "999")
+    if [ "$secs" -lt "$GRACE_S" ]; then
+      log "bot uptime ${secs}s < grace ${GRACE_S}s — skipping restart"
+      return 0
+    fi
+  fi
+
+  log "triggering restart-telegram-bot (caller=supervisor)"
+  TELEGRAM_RESTART_CALLER=supervisor "$RESTART_BIN" 2>&1 | while read -r line; do
+    log "restart-telegram-bot: $line"
+  done || log "restart-telegram-bot exited non-zero (continuing)"
+}
+
+run_loop() {
+  log "supervisor starting: period=${PERIOD_S}s grace=${GRACE_S}s"
+  while true; do
+    do_restart_cycle
+    sleep "$PERIOD_S"
+  done
+}
+
+case "${1:-loop}" in
+  loop)
+    run_loop
+    ;;
+  --once|once)
+    do_restart_cycle
+    ;;
+  --daemon|daemon)
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+      echo "supervisor already running (pid=$(cat "$PIDFILE"))" >&2
+      exit 1
+    fi
+    nohup "$0" loop >/dev/null 2>&1 &
+    echo $! > "$PIDFILE"
+    echo "supervisor started: pid=$(cat "$PIDFILE") pidfile=$PIDFILE period=${PERIOD_S}s"
+    ;;
+  --status|status)
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+      echo "supervisor running: pid=$(cat "$PIDFILE")"
+      exit 0
+    else
+      echo "supervisor not running"
+      exit 1
+    fi
+    ;;
+  --stop|stop)
+    if [ ! -f "$PIDFILE" ]; then
+      echo "no pidfile at $PIDFILE — supervisor not running?"
+      exit 1
+    fi
+    pid=$(cat "$PIDFILE")
+    if kill -0 "$pid" 2>/dev/null; then
+      kill "$pid"
+      rm -f "$PIDFILE"
+      echo "supervisor stopped (pid=$pid)"
+    else
+      echo "stale pidfile (process $pid not alive); cleaning up"
+      rm -f "$PIDFILE"
+    fi
+    ;;
+  *)
+    echo "usage: telegram-bot-supervisor [loop|--once|--daemon|--status|--stop]" >&2
+    exit 1
+    ;;
+esac
