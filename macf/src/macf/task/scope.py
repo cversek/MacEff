@@ -8,11 +8,21 @@ Dual persistence:
   - MTMD scope_status field on task files: drives display + loop mode detection
   - Event log (agent_events_log.jsonl): permanent history + real-time signaling
 
-Scope lifecycle:
+Scope lifecycle (3-state model — extended from 2-state Cycle 514):
   scope_activated → tasks get scope_status="active" in MTMD
   scope_task_completed → individual task gets scope_status="inactive"
   scope_cleared → all scoped tasks get scope_status=None (removed)
+  scope_paused → task transitions "active" → "paused" with justification (BUG #1067)
+  scope_unpaused → task transitions "paused" → "active"
+  scope_added → incrementally add tasks as "active" (no replace; BUG #1067)
+  scope_removed → incrementally remove specific tasks from scope (BUG #1067)
   auto-clear → when last active task completes, entire scope clears
+
+Gate semantics: gate blocks Stop when active_count > 0. Paused tasks remain
+in scope (visible in `scope show` with ⏸️ marker, audited via task notes) but
+do NOT count toward the gate. This allows the agent to satisfy the gate by
+explicitly pausing genuinely-cycle-spanning items with justification, instead
+of either force-completing or idle-looping.
 
 API follows the Full Disclosure Principle (cli_development.md §9):
   Functions return WHAT CHANGED, not just success/failure.
@@ -170,15 +180,22 @@ def clear_scope(session_id: str = "") -> dict:
 def get_scope_state() -> Dict[str, str]:
     """Reconstruct current scope state from event log.
 
-    Scans events in chronological order:
+    Scans events in chronological order. 3-state model (BUG #1067):
+
     - scope_cleared resets everything
-    - scope_activated adds tasks as 'active'
+    - scope_activated / scope_added adds tasks as 'active'
     - scope_task_completed transitions task to 'inactive'
+    - scope_paused transitions task to 'paused'
+    - scope_unpaused transitions paused task back to 'active'
+    - scope_removed drops tasks entirely
 
     Returns:
-        Dict of {task_id: 'active' | 'inactive'}
+        Dict of {task_id: 'active' | 'paused' | 'inactive'}
     """
-    scope_types = {"scope_activated", "scope_task_completed", "scope_cleared"}
+    scope_types = {
+        "scope_activated", "scope_task_completed", "scope_cleared",
+        "scope_paused", "scope_unpaused", "scope_added", "scope_removed",
+    }
     events = [e for e in read_events(limit=None, reverse=False)
               if e.get("event", "") in scope_types]
 
@@ -191,21 +208,227 @@ def get_scope_state() -> Dict[str, str]:
         if event_type == "scope_cleared":
             state.clear()
         elif event_type == "scope_activated":
+            # Replace semantics: scope_activated also resets prior set
+            # (current behavior — set_scope is replace-style via scope set CLI)
+            # We do NOT clear here because scope set's clear is separate; the
+            # CLI orchestrates clear+activate. So scope_activated is purely additive.
             for tid in data.get("task_ids", []):
                 state[str(tid)] = "active"
+        elif event_type == "scope_added":
+            for tid in data.get("task_ids", []):
+                # Only add if not already present (don't reset paused→active)
+                if str(tid) not in state:
+                    state[str(tid)] = "active"
+        elif event_type == "scope_removed":
+            for tid in data.get("task_ids", []):
+                state.pop(str(tid), None)
         elif event_type == "scope_task_completed":
             tid = str(data.get("task_id", ""))
             if tid in state:
                 state[tid] = "inactive"
+        elif event_type == "scope_paused":
+            for tid in data.get("task_ids", []):
+                if str(tid) in state and state[str(tid)] == "active":
+                    state[str(tid)] = "paused"
+        elif event_type == "scope_unpaused":
+            for tid in data.get("task_ids", []):
+                if str(tid) in state and state[str(tid)] == "paused":
+                    state[str(tid)] = "active"
 
     return state
+
+
+def pause_scoped_tasks(task_ids: List[str], justification: str, session_id: str = "") -> dict:
+    """Pause one or more active scoped tasks with mandatory justification.
+
+    Paused tasks remain in scope (visible in `scope show` with ⏸️ marker)
+    but do NOT count toward the Stop hook gate. This is the structural
+    'I'm not idle-looping; this task is paused for reason X' exit path.
+
+    Args:
+        task_ids: list of task IDs to pause
+        justification: REQUIRED — recorded in event log AND in task note
+        session_id: current session
+
+    Returns:
+        Dict with 'paused_ids' (list, those that transitioned), 'skipped_ids'
+        (list with reasons), 'success' (bool).
+    """
+    result = {"paused_ids": [], "skipped_ids": [], "success": False}
+
+    if not justification or not justification.strip():
+        result["skipped_ids"] = [{"id": tid, "reason": "missing_justification"} for tid in task_ids]
+        return result
+
+    scope = get_scope_state()
+    pausable: List[str] = []
+    for tid in task_ids:
+        sid = str(tid)
+        if sid not in scope:
+            result["skipped_ids"].append({"id": sid, "reason": "not_in_scope"})
+            continue
+        if scope[sid] == "paused":
+            result["skipped_ids"].append({"id": sid, "reason": "already_paused"})
+            continue
+        if scope[sid] == "inactive":
+            result["skipped_ids"].append({"id": sid, "reason": "already_completed"})
+            continue
+        pausable.append(sid)
+
+    if not pausable:
+        return result
+
+    success = append_event(
+        event="scope_paused",
+        data={
+            "task_ids": pausable,
+            "justification": justification,
+            "session_id": session_id,
+        },
+    )
+
+    if success:
+        from .reader import add_task_note
+        for tid in pausable:
+            _update_task_scope_status(tid, "paused")
+            # Also append a task note for human audit (best-effort)
+            add_task_note(tid, f"⏸️ SCOPE PAUSED: {justification}")
+        result["paused_ids"] = pausable
+
+    result["success"] = success
+    return result
+
+
+def unpause_scoped_tasks(task_ids: List[str], session_id: str = "") -> dict:
+    """Unpause one or more paused scoped tasks (restore to active).
+
+    Args:
+        task_ids: list of task IDs to unpause
+        session_id: current session
+
+    Returns:
+        Dict with 'unpaused_ids', 'skipped_ids', 'success'.
+    """
+    result = {"unpaused_ids": [], "skipped_ids": [], "success": False}
+    scope = get_scope_state()
+    unpausable: List[str] = []
+    for tid in task_ids:
+        sid = str(tid)
+        if sid not in scope:
+            result["skipped_ids"].append({"id": sid, "reason": "not_in_scope"})
+            continue
+        if scope[sid] != "paused":
+            result["skipped_ids"].append({"id": sid, "reason": f"not_paused (current: {scope[sid]})"})
+            continue
+        unpausable.append(sid)
+
+    if not unpausable:
+        return result
+
+    success = append_event(
+        event="scope_unpaused",
+        data={"task_ids": unpausable, "session_id": session_id},
+    )
+
+    if success:
+        from .reader import add_task_note
+        for tid in unpausable:
+            _update_task_scope_status(tid, "active")
+            add_task_note(tid, f"▶️ SCOPE UNPAUSED — task restored to active scope")
+        result["unpaused_ids"] = unpausable
+
+    result["success"] = success
+    return result
+
+
+def add_to_scope(task_ids: List[str], session_id: str = "") -> dict:
+    """Incrementally add tasks to scope as active (no replace).
+
+    Distinct from `set_scope` which replaces the entire scope. `add_to_scope`
+    appends without affecting existing scoped tasks. Useful when a new BUG
+    surfaces mid-sprint and should be tracked.
+
+    Args:
+        task_ids: list of task IDs to add
+        session_id: current session
+
+    Returns:
+        Dict with 'added_ids', 'skipped_ids' (already in scope), 'success'.
+    """
+    result = {"added_ids": [], "skipped_ids": [], "success": False}
+    scope = get_scope_state()
+    addable: List[str] = []
+    for tid in task_ids:
+        sid = str(tid)
+        if sid in scope:
+            result["skipped_ids"].append({"id": sid, "reason": f"already_in_scope ({scope[sid]})"})
+            continue
+        addable.append(sid)
+
+    if not addable:
+        return result
+
+    success = append_event(
+        event="scope_added",
+        data={"task_ids": addable, "session_id": session_id},
+    )
+
+    if success:
+        for tid in addable:
+            _update_task_scope_status(tid, "active")
+        result["added_ids"] = addable
+
+    result["success"] = success
+    return result
+
+
+def remove_from_scope(task_ids: List[str], session_id: str = "") -> dict:
+    """Incrementally remove tasks from scope (no completion).
+
+    Distinct from `complete_scoped_task` (which marks 'inactive') and
+    `pause_scoped_tasks` (which marks 'paused' with justification).
+    `remove_from_scope` drops the tasks entirely — they leave scope without
+    status transition. Useful for correcting accidental scope additions.
+
+    Args:
+        task_ids: list of task IDs to remove
+        session_id: current session
+
+    Returns:
+        Dict with 'removed_ids', 'skipped_ids' (not in scope), 'success'.
+    """
+    result = {"removed_ids": [], "skipped_ids": [], "success": False}
+    scope = get_scope_state()
+    removable: List[str] = []
+    for tid in task_ids:
+        sid = str(tid)
+        if sid not in scope:
+            result["skipped_ids"].append({"id": sid, "reason": "not_in_scope"})
+            continue
+        removable.append(sid)
+
+    if not removable:
+        return result
+
+    success = append_event(
+        event="scope_removed",
+        data={"task_ids": removable, "session_id": session_id},
+    )
+
+    if success:
+        for tid in removable:
+            _update_task_scope_status(tid, None)
+        result["removed_ids"] = removable
+
+    result["success"] = success
+    return result
 
 
 def get_active_scope() -> List[Dict]:
     """Get all scoped tasks with their subjects and status.
 
     Returns:
-        List of dicts: {'id', 'status' ('active'/'inactive'), 'subject'}
+        List of dicts: {'id', 'status' ('active'/'paused'/'inactive'), 'subject'}
     """
     from .reader import TaskReader
 
@@ -290,17 +513,24 @@ def get_scope_check() -> dict:
     """Structured scope check for Stop hook and JSON output.
 
     Returns:
-        Dict with 'active' (list), 'inactive' (list), 'active_count', 'inactive_count',
-        'total', 'timer' (active timer info).
+        Dict with 'active' (list), 'paused' (list), 'inactive' (list),
+        'active_count', 'paused_count', 'inactive_count', 'total',
+        'timer' (active timer info).
+
+    Gate semantics: only 'active_count' blocks the Stop gate. Paused tasks
+    remain in scope (audit trail) but are explicitly excluded from gate.
     """
     tasks = get_active_scope()
     active = [t for t in tasks if t["status"] == "active"]
+    paused = [t for t in tasks if t["status"] == "paused"]
     inactive = [t for t in tasks if t["status"] == "inactive"]
     timer = get_active_timer()
     return {
         "active": active,
+        "paused": paused,
         "inactive": inactive,
         "active_count": len(active),
+        "paused_count": len(paused),
         "inactive_count": len(inactive),
         "total": len(tasks),
         "timer": timer,

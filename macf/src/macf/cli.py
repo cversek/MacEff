@@ -5537,14 +5537,141 @@ def cmd_task_scope_show(args: argparse.Namespace) -> int:
         return 0
 
     active = [t for t in tasks if t["status"] == "active"]
+    paused = [t for t in tasks if t["status"] == "paused"]
     inactive = [t for t in tasks if t["status"] == "inactive"]
 
-    print(f"📋 Task Scope ({len(active)} active, {len(inactive)} inactive)")
+    summary_parts = [f"{len(active)} active"]
+    if paused:
+        summary_parts.append(f"{len(paused)} paused")
+    summary_parts.append(f"{len(inactive)} inactive")
+    print(f"📋 Task Scope ({', '.join(summary_parts)})")
     for t in active:
         print(f"   👀 #{t['id']} {t['subject']}")
+    for t in paused:
+        print(f"   ⏸️  #{t['id']} {t['subject']}")
     for t in inactive:
         print(f"   ✅ #{t['id']} {t['subject']}")
     return 0
+
+
+def cmd_task_scope_pause(args: argparse.Namespace) -> int:
+    """Pause one or more active scoped tasks (BUG #1067).
+
+    Paused tasks remain in scope (visible in `scope show` with ⏸️) but are
+    EXCLUDED from the Stop gate. Justification is REQUIRED and recorded as
+    a task note for human audit.
+    """
+    from .task.scope import pause_scoped_tasks
+    from .utils.breadcrumbs import get_breadcrumb
+
+    if not args.justification or not args.justification.strip():
+        print("❌ --justification REASON is REQUIRED to pause scoped tasks.")
+        print("   Pause is a structural exit (carry-through with audit trail), not a convenience.")
+        print("   Examples of acceptable justifications:")
+        print("     'Pinned MISSION — cycle-spanning by design; carry through compaction'")
+        print("     'Deferred to user — needs network/disk decision (model pulls)'")
+        print("     'Multi-cycle implementation work — design draft delivered, awaits user sign-off'")
+        return 1
+
+    raw_ids = [tid.lstrip('#') for tid in args.task_ids]
+    result = pause_scoped_tasks(
+        raw_ids,
+        justification=args.justification.strip(),
+        session_id=get_current_session_id(),
+    )
+
+    if result["paused_ids"]:
+        print(f"⏸️  Paused {len(result['paused_ids'])} task(s):")
+        for tid in result["paused_ids"]:
+            print(f"   ⏸️  #{tid}")
+        print(f"   Justification: {args.justification.strip()}")
+        print(f"   Breadcrumb: {get_breadcrumb()}")
+    if result["skipped_ids"]:
+        print(f"⚠️  Skipped {len(result['skipped_ids'])} task(s):")
+        for entry in result["skipped_ids"]:
+            print(f"   - #{entry['id']}: {entry['reason']}")
+    if not result["paused_ids"] and not result["skipped_ids"]:
+        print("❌ No tasks pausable (none in scope?)")
+        return 1
+    return 0 if result["success"] else 1
+
+
+def cmd_task_scope_unpause(args: argparse.Namespace) -> int:
+    """Unpause paused scoped tasks (BUG #1067)."""
+    from .task.scope import unpause_scoped_tasks
+    from .utils.breadcrumbs import get_breadcrumb
+
+    raw_ids = [tid.lstrip('#') for tid in args.task_ids]
+    result = unpause_scoped_tasks(raw_ids, session_id=get_current_session_id())
+
+    if result["unpaused_ids"]:
+        print(f"▶️  Unpaused {len(result['unpaused_ids'])} task(s):")
+        for tid in result["unpaused_ids"]:
+            print(f"   👀 #{tid}")
+        print(f"   Breadcrumb: {get_breadcrumb()}")
+    if result["skipped_ids"]:
+        print(f"⚠️  Skipped {len(result['skipped_ids'])} task(s):")
+        for entry in result["skipped_ids"]:
+            print(f"   - #{entry['id']}: {entry['reason']}")
+    if not result["unpaused_ids"] and not result["skipped_ids"]:
+        print("❌ No tasks unpausable (none paused in scope?)")
+        return 1
+    return 0 if result["success"] else 1
+
+
+def cmd_task_scope_add(args: argparse.Namespace) -> int:
+    """Incrementally add tasks to scope as active (BUG #1067).
+
+    Distinct from `scope set` which replaces the entire scope. `scope add`
+    appends without affecting existing scoped tasks.
+    """
+    from .task.scope import add_to_scope
+    from .utils.breadcrumbs import get_breadcrumb
+
+    raw_ids = [tid.lstrip('#') for tid in args.task_ids]
+    result = add_to_scope(raw_ids, session_id=get_current_session_id())
+
+    if result["added_ids"]:
+        print(f"➕ Added {len(result['added_ids'])} task(s) to scope:")
+        for tid in result["added_ids"]:
+            print(f"   👀 #{tid}")
+        print(f"   Breadcrumb: {get_breadcrumb()}")
+    if result["skipped_ids"]:
+        print(f"⚠️  Skipped {len(result['skipped_ids'])} task(s):")
+        for entry in result["skipped_ids"]:
+            print(f"   - #{entry['id']}: {entry['reason']}")
+    if not result["added_ids"] and not result["skipped_ids"]:
+        print("❌ No tasks to add")
+        return 1
+    return 0 if result["success"] else 1
+
+
+def cmd_task_scope_remove(args: argparse.Namespace) -> int:
+    """Incrementally remove tasks from scope (BUG #1067).
+
+    Distinct from `complete_scoped_task` (marks 'inactive') and
+    `pause_scoped_tasks` (marks 'paused' with justification).
+    `scope remove` drops tasks entirely without status transition.
+    """
+    from .task.scope import remove_from_scope
+    from .utils.breadcrumbs import get_breadcrumb
+
+    raw_ids = [tid.lstrip('#') for tid in args.task_ids]
+    result = remove_from_scope(raw_ids, session_id=get_current_session_id())
+
+    if result["removed_ids"]:
+        print(f"➖ Removed {len(result['removed_ids'])} task(s) from scope:")
+        for tid in result["removed_ids"]:
+            print(f"   ↩️  #{tid}")
+        print(f"   Breadcrumb: {get_breadcrumb()}")
+    if result["skipped_ids"]:
+        print(f"⚠️  Skipped {len(result['skipped_ids'])} task(s):")
+        for entry in result["skipped_ids"]:
+            print(f"   - #{entry['id']}: {entry['reason']}")
+    if not result["removed_ids"] and not result["skipped_ids"]:
+        print("❌ No tasks removable")
+        return 1
+    return 0 if result["success"] else 1
 
 
 def cmd_task_scope_clear(args: argparse.Namespace) -> int:
@@ -7520,6 +7647,24 @@ def _build_parser() -> argparse.ArgumentParser:
     # Task scope commands
     scope_parser = task_sub.add_parser("scope", help="manage task scope for AUTO_MODE boundary enforcement")
     scope_sub = scope_parser.add_subparsers(dest="scope_cmd")
+
+    scope_pause_parser = scope_sub.add_parser("pause", help="pause active scoped tasks with mandatory justification (BUG #1067)")
+    scope_pause_parser.add_argument("task_ids", nargs="+", help="task IDs to pause (e.g., #1043 #1044)")
+    scope_pause_parser.add_argument("--justification", "-j", required=True,
+                                    help="REQUIRED — structural reason recorded in task note + event log")
+    scope_pause_parser.set_defaults(func=cmd_task_scope_pause)
+
+    scope_unpause_parser = scope_sub.add_parser("unpause", help="restore paused scoped tasks to active (BUG #1067)")
+    scope_unpause_parser.add_argument("task_ids", nargs="+", help="task IDs to unpause (e.g., #1043 #1044)")
+    scope_unpause_parser.set_defaults(func=cmd_task_scope_unpause)
+
+    scope_add_parser = scope_sub.add_parser("add", help="incrementally add tasks to scope (no replace; BUG #1067)")
+    scope_add_parser.add_argument("task_ids", nargs="+", help="task IDs to add (e.g., #1067)")
+    scope_add_parser.set_defaults(func=cmd_task_scope_add)
+
+    scope_remove_parser = scope_sub.add_parser("remove", help="incrementally remove tasks from scope (BUG #1067)")
+    scope_remove_parser.add_argument("task_ids", nargs="+", help="task IDs to remove (e.g., #1067)")
+    scope_remove_parser.set_defaults(func=cmd_task_scope_remove)
 
     scope_set_parser = scope_sub.add_parser("set", help="scope tasks (parent auto-expands to pending/in_progress children)")
     scope_set_parser.add_argument("task_ids", nargs="+", help="task IDs to scope (e.g., #290 #291)")

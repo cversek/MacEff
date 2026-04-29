@@ -184,26 +184,79 @@ Development Drive Stats:
         # --- Scope gate: block stop if active scoped tasks remain ---
         try:
             from macf.task.scope import get_scope_check
-            from macf.task.scope_gate_failsafe import decrement_and_check
+            from macf.task.scope_gate_failsafe import decrement_and_check, COUNT_INIT
             scope = get_scope_check()
             has_active_scope = scope["active_count"] > 0
+            paused_count = scope.get("paused_count", 0)
 
             if has_active_scope and auto_mode:
-                # FAILSAFE (BUG #1022): if the agent keeps stopping with active
-                # scope and no useful work between stops, decrement an idle
-                # counter. At 0 we let the stop succeed so the agent escapes
-                # the deadlock loop. PreToolUse activity resets the counter,
-                # so a working agent keeps the gate active.
+                # FAILSAFE (BUG #1022 + #1067): if the agent keeps stopping
+                # with active scope and no useful work between stops, decrement
+                # an idle counter. At 0 we let the stop succeed so the agent
+                # escapes the deadlock loop. PreToolUse activity resets the
+                # counter, so a working agent keeps the gate active.
+                #
+                # BUG #1067: countdown is now SURFACED to agent (not silent).
+                # Each gate firing with counter < COUNT_INIT shows the count
+                # in the reason text (visible to agent) AND warns about the
+                # Idle-Loop Shrinking anti-pattern when counter ≤ 2.
                 _idle_remaining, _fail_open = decrement_and_check()
                 if _fail_open:
-                    print(
-                        f"⚠️ MACF: scope gate failsafe — {scope['active_count']} scoped task(s) still active "
-                        f"but no useful work in last 5 stops. Allowing stop to break deadlock. "
-                        f"(BUG #1022 failsafe — invoke any tool to re-engage gate.)",
-                        file=sys.stderr,
+                    # NOISY fail-open: stderr (existing) + systemMessage so
+                    # agent SEES it (BUG #1067).
+                    fail_open_msg = (
+                        f"⚠️ MACF SCOPE GATE FAILSAFE — {scope['active_count']} scoped "
+                        f"task(s) still active but no useful work in last {COUNT_INIT} "
+                        f"stops. Allowing stop to break deadlock.\n\n"
+                        f"This is the Idle-Loop Shrinking anti-pattern "
+                        f"(autonomous_sprint.md §5). The agent failed to either "
+                        f"(a) find substantive work, (b) pause genuinely-blocked "
+                        f"items with --justification, OR (c) de-escalate to "
+                        f"MANUAL_MODE. The failsafe rescued the deadlock.\n\n"
+                        f"Recovery: invoke any tool to reset counter, OR pause "
+                        f"blocked items via `macf_tools task scope pause <ids> "
+                        f"--justification <reason>` (BUG #1067 — paused items "
+                        f"don't count toward gate)."
                     )
-                    return {"continue": True}
+                    print(fail_open_msg, file=sys.stderr)
+                    return {"continue": True, "systemMessage": fail_open_msg}
                 # ── END if _fail_open: failsafe early-return ──
+
+                # ── Build countdown warning suffix for gate reason text ──
+                # Only when counter has decremented (the agent is approaching
+                # idle-loop territory). At full count (COUNT_INIT), suffix is empty.
+                _countdown_suffix = ""
+                if _idle_remaining < COUNT_INIT:
+                    if _idle_remaining <= 2:
+                        # Critical: actively warn about Idle-Loop Shrinking
+                        _countdown_suffix = (
+                            f"\n\n🚨 IDLE-LOOP SHRINKING WARNING 🚨\n"
+                            f"   Idle-stop counter: {_idle_remaining} of {COUNT_INIT} remaining.\n"
+                            f"   You have produced {COUNT_INIT - _idle_remaining} consecutive "
+                            f"responses without tool calls while scope is open. This is the "
+                            f"Idle-Loop Shrinking anti-pattern (autonomous_sprint.md §5).\n"
+                            f"   In {_idle_remaining} more idle stops, the failsafe will "
+                            f"fail-open and let the stop succeed — leaving scoped work in an "
+                            f"undocumented incomplete state.\n"
+                            f"   Resolve NOW by ONE of:\n"
+                            f"   (a) Find substantive work (substrate maintenance always "
+                            f"available: design drafts, telemetry, learning curation)\n"
+                            f"   (b) Pause genuinely-blocked items: `macf_tools task scope "
+                            f"pause <ids> --justification <reason>` — paused items satisfy "
+                            f"the gate without forcing completion\n"
+                            f"   (c) De-escalate: `macf_tools mode set MANUAL_MODE "
+                            f"--justification <reason>` (emergency only)\n"
+                            f"   Single-token / acknowledgment-only responses are a "
+                            f"discipline failure, NOT a graceful exit."
+                        )
+                    else:
+                        # Soft countdown: just the count
+                        _countdown_suffix = (
+                            f"\n\n⚠️ Idle-stop counter: {_idle_remaining} of {COUNT_INIT} "
+                            f"remaining (failsafe will trigger at 0). Invoke any tool to "
+                            f"reset, OR pause blocked items, OR de-escalate."
+                        )
+                # ── END countdown surfacing ──
 
                 # ── BEGIN scope-gate dispatch (sibling of failsafe, NOT nested inside it) ──
                 task_list = "\n".join(
@@ -225,13 +278,21 @@ Development Drive Stats:
 
                     # SPRINT: emit scope-completion nag, no Markov, no mode rotation
                     if autowork["sprint_task"] and autowork["open_children"]:
+                        _nag_text = emit_scope_nag(
+                            autowork["sprint_task"],
+                            autowork["open_children"],
+                        )
+                        # Append paused summary (BUG #1067)
+                        if paused_count > 0:
+                            _nag_text += (
+                                f"\n\n⏸️  Paused (excluded from gate): {paused_count} task(s)"
+                            )
+                        # Append idle countdown warning (BUG #1067)
+                        _nag_text += _countdown_suffix
                         return {
                             "continue": True,
                             "decision": "block",
-                            "reason": emit_scope_nag(
-                                autowork["sprint_task"],
-                                autowork["open_children"],
-                            ),
+                            "reason": _nag_text,
                         }
 
                     # PLAY_TIME with chain not yet exhausted: suggest chain advance
@@ -286,6 +347,7 @@ Development Drive Stats:
                     except (OSError, ValueError, ImportError) as e:
                         print(f"⚠️ MACF: recommender failed: {e}", file=sys.stderr)
 
+                    _paused_summary = f"\n⏸️  Paused (excluded from gate): {paused_count} task(s)" if paused_count > 0 else ""
                     return {
                         "continue": True,
                         "decision": "block",
@@ -299,10 +361,12 @@ Development Drive Stats:
                             f"(or override with justification in task notes).\n"
                             f"{recommendation}\n"
                             f"Emergency escape: macf_tools mode set MANUAL_MODE --justification <reason>"
+                            f"{_paused_summary}{_countdown_suffix}"
                         ),
                     }
 
                 # Non-timer scope gate: standard "complete these tasks" message
+                _paused_summary = f"\n⏸️  Paused (excluded from gate): {paused_count} task(s)" if paused_count > 0 else ""
                 return {
                     "continue": True,
                     "decision": "block",
@@ -311,6 +375,7 @@ Development Drive Stats:
                         f"{error_context}"
                         f"Complete these tasks: {task_list} "
                         f"Emergency escape: macf_tools mode set MANUAL_MODE --justification <reason>"
+                        f"{_paused_summary}{_countdown_suffix}"
                     ),
                 }
                 # ── END scope-gate dispatch ──

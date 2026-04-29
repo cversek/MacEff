@@ -358,3 +358,62 @@ def update_task_file(task_id: str, updates: Dict[str, Any], session_uuid: Option
         return True
     except (json.JSONDecodeError, IOError):
         return False
+
+
+def add_task_note(
+    task_id: str,
+    message: str,
+    agent: str = "PA",
+    note_type: str = "note",
+    breadcrumb: Optional[str] = None,
+    session_uuid: Optional[str] = None,
+) -> bool:
+    """Append a MacfTaskUpdate to a task's MTMD updates list (full read-modify-write).
+
+    Generic helper consolidating the 12+ call-sites that previously inlined the
+    same pattern: read task → deepcopy mtmd → append update → write task file
+    (refactored for DRY in BUG #1067, Cycle 514).
+
+    Args:
+        task_id: Task ID (e.g., "67" or "#67")
+        message: Text body of the update
+        agent: Agent name to attribute (default "PA"; use "SA" for subagents)
+        note_type: Update type — "note" (default), "status_change", "completion", etc.
+        breadcrumb: Forensic breadcrumb (auto-fetched if None)
+        session_uuid: Optional session override (auto-detect if None)
+
+    Returns:
+        True on successful read+modify+write; False on any error (best-effort).
+
+    Notes:
+        - Task ID strips leading '#' if present
+        - If MTMD is missing, returns False (note cannot be appended without MTMD)
+        - Errors are caught and converted to False return; callers may log if needed
+    """
+    import copy
+    try:
+        from .models import MacfTaskUpdate
+        from ..utils.breadcrumbs import get_breadcrumb
+
+        tid = str(task_id).lstrip("#")
+
+        reader = TaskReader(session_uuid)
+        task = reader.read_task(tid)
+        if not task or not task.mtmd:
+            return False
+
+        bc = breadcrumb or get_breadcrumb()
+
+        new_mtmd = copy.deepcopy(task.mtmd)
+        new_mtmd.updates.append(MacfTaskUpdate(
+            breadcrumb=bc,
+            description=message,
+            agent=agent,
+            type=note_type,
+        ))
+        new_description = task.description_with_updated_mtmd(new_mtmd)
+        return update_task_file(tid, {"description": new_description}, session_uuid=session_uuid)
+    except (ImportError, OSError, AttributeError, ValueError, KeyError) as e:
+        import sys as _sys
+        print(f"⚠️ MACF: add_task_note failed for #{task_id}: {e}", file=_sys.stderr)
+        return False
