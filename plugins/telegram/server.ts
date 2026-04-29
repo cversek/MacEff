@@ -661,6 +661,22 @@ process.stdin.on('end', shutdown)
 process.stdin.on('close', shutdown)
 process.on('SIGTERM', shutdown)
 process.on('SIGINT', shutdown)
+process.on('SIGHUP', shutdown)
+
+// Orphan watchdog: stdin events above don't reliably fire when the parent
+// chain (`bun run` wrapper → shell → us) is severed by a crash. Poll for
+// a dead stdin pipe and self-terminate.
+//
+// Phase 0 fork-base refresh (Cycle 514): added from v0.0.6 upstream lifecycle
+// hardening, with PR #1424 fix #3 already baked in — the `process.ppid !==
+// bootPpid` clause is INTENTIONALLY OMITTED. That clause produced false
+// positives on macOS when shells reparent normally during job control,
+// causing premature shutdown. We rely solely on stdin pipe state for
+// orphan detection.
+setInterval(() => {
+  const orphaned = process.stdin.destroyed || process.stdin.readableEnded
+  if (orphaned) shutdown()
+}, 5000).unref()
 
 // Commands are DM-only. Responding in groups would: (1) leak pairing codes via
 // /status to other group members, (2) confirm bot presence in non-allowlisted
