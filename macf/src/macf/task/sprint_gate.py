@@ -42,6 +42,9 @@ def get_sprint_play_time_in_scope() -> Dict[str, Any]:
 
         sprint_task = None
         play_time_task = None
+        # BUG #1067: only ACTIVE tasks count as open_children. Paused tasks
+        # are explicitly excluded — they remain in scope (audit trail) but
+        # do not block gate satisfaction.
         all_active = scope.get("active", [])
 
         for entry in all_active:
@@ -55,7 +58,9 @@ def get_sprint_play_time_in_scope() -> Dict[str, Any]:
             elif tt == "PLAY_TIME" and play_time_task is None:
                 play_time_task = task
 
-        # Open children = active tasks that are NOT the SPRINT parent itself
+        # Open children = ACTIVE tasks (not paused, not inactive) that are NOT
+        # the SPRINT parent itself. Per BUG #1067, paused-with-justification
+        # is the structural carry-through exit.
         open_children = []
         if sprint_task is not None:
             sprint_id = str(sprint_task.id)
@@ -65,6 +70,7 @@ def get_sprint_play_time_in_scope() -> Dict[str, Any]:
             "sprint_task": sprint_task,
             "play_time_task": play_time_task,
             "open_children": open_children,
+            "paused_count": scope.get("paused_count", 0),
         }
     except (ImportError, OSError, ValueError) as e:
         import sys
