@@ -5802,8 +5802,15 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
 
     # Type-specific completion logic: SPRINT
     if task_type == "SPRINT":
-        # 1. Child-task open-guard
+        # 1. Scope-gate check (parallel to Stop hook scope gate)
+        #    Per autonomous_sprint.md §3.3.2: --force with incomplete scope requires --justification
+        _justification = getattr(args, 'justification', None)
         try:
+            from .task.sprint_gate import get_sprint_play_time_in_scope, emit_scope_nag
+            _scope_info = get_sprint_play_time_in_scope()
+            _open_scoped = _scope_info.get("open_children", [])
+
+            # Also include direct-child tasks not yet in scope (legacy semantics)
             from .task import TaskReader as _TR
             _all_tasks = _TR().read_all_tasks()
             _open_children = [
@@ -5811,17 +5818,61 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
                 if str(getattr(t, 'parent_id', None)) == str(task_id)
                 and getattr(t, 'status', None) not in ("completed", "archived")
             ]
-            if _open_children and not getattr(args, 'force', False):
-                _ids = ", ".join(f"#{t.id}" for t in _open_children)
-                print(f"❌ SPRINT has {len(_open_children)} open child tasks: {_ids}. Complete them first or use --force to override.")
-                return 1
-            elif _open_children:
-                import sys as _sys
-                _ids = ", ".join(f"#{t.id}" for t in _open_children)
-                print(f"⚠️  Forcing completion with {len(_open_children)} open child tasks: {_ids}", file=_sys.stderr)
+            _open_child_ids_in_scope = {str(c["id"]) for c in _open_scoped}
+            _open_children_extra = [
+                t for t in _open_children
+                if str(t.id) not in _open_child_ids_in_scope
+            ]
+
+            _has_incomplete_scope = bool(_open_scoped) or bool(_open_children_extra)
+
+            if _has_incomplete_scope:
+                if not getattr(args, 'force', False):
+                    # No --force: hard-fail with scope-gate message
+                    if _open_scoped:
+                        _nag = emit_scope_nag(task, _open_scoped)
+                        print(f"❌ SPRINT scope gate:")
+                        print(_nag)
+                    if _open_children_extra:
+                        _ids = ", ".join(f"#{t.id}" for t in _open_children_extra)
+                        print(f"❌ SPRINT has {len(_open_children_extra)} open child task(s) not in scope: {_ids}")
+                    print("\n   Complete remaining tasks first, OR use --force --justification REASON.")
+                    print("   Carry-through-compaction is the proper end-of-cycle exit (see autonomous_sprint.md §3.3.3).")
+                    return 1
+                elif not _justification:
+                    # --force WITHOUT --justification: parallel gate per §3.3.2 — hard-fail
+                    print(f"❌ Force-complete bypass requires --justification REASON")
+                    if _open_scoped:
+                        _nag = emit_scope_nag(task, _open_scoped)
+                        print(_nag)
+                    if _open_children_extra:
+                        _ids = ", ".join(f"#{t.id}" for t in _open_children_extra)
+                        print(f"   + {len(_open_children_extra)} open child task(s) not in scope: {_ids}")
+                    print("\n   Per autonomous_sprint.md §3.3.2:")
+                    print("     macf_tools task complete <id> --force --justification \"<structural reason>\"")
+                    print("   Acceptable: pinned MISSIONs intentionally cycle-spanning; carryover from prior sprint.")
+                    print("   NOT acceptable: 'cycle is closing' / 'AUTO_MODE so I have authority' / 'main work done'.")
+                    print("   Carry-through-compaction is the proper end-of-cycle exit (see §3.3.3).")
+                    return 1
+                else:
+                    # --force WITH --justification: log warning, prepend justification, proceed
+                    import sys as _sys
+                    _all_open = list(_open_scoped) + [
+                        {"id": t.id, "subject": t.subject} for t in _open_children_extra
+                    ]
+                    _ids = ", ".join(f"#{c['id']}" for c in _all_open)
+                    print(f"⚠️  Force-completing SPRINT with {len(_all_open)} open scoped/child task(s): {_ids}",
+                          file=_sys.stderr)
+                    print(f"⚠️  Justification: {_justification}", file=_sys.stderr)
+                    # Prepend justification marker to report (will be visible in completion_report)
+                    _just_marker = f"[FORCE-COMPLETE JUSTIFICATION: {_justification}]"
+                    if args.report:
+                        args.report = f"{_just_marker} | {args.report}"
+                    else:
+                        args.report = _just_marker
         except (ImportError, OSError) as e:
             import sys as _sys
-            print(f"⚠️ MACF: child-task check failed (non-blocking): {e}", file=_sys.stderr)
+            print(f"⚠️ MACF: scope-gate check failed (non-blocking): {e}", file=_sys.stderr)
 
         # 2. Auto-aggregate completion report from custom fields
         _custom = getattr(task.mtmd, 'custom', {}) if task.mtmd else {}
@@ -7436,6 +7487,10 @@ def _build_parser() -> argparse.ArgumentParser:
                                       help="verification method description (required for GH_ISSUE)")
     task_complete_parser.add_argument("--force", action="store_true", default=False,
                                       help="force completion despite open child tasks (SPRINT) or unexpired timer (PLAY_TIME)")
+    task_complete_parser.add_argument("--justification",
+                                      help="REQUIRED when --force is used on a SPRINT with incomplete scoped tasks. "
+                                           "Recorded in completion_report and audited. "
+                                           "See autonomous_sprint.md §3.3.2 for acceptable vs unacceptable justifications.")
     task_complete_parser.set_defaults(func=cmd_task_complete)
 
     # task block - add blocking relationship

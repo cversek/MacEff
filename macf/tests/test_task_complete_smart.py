@@ -82,13 +82,14 @@ def _make_fake_child(child_id, parent_id, status="in_progress"):
     return t
 
 
-def _make_args(task_id, report=None, force=False, commit=None, verified=None):
+def _make_args(task_id, report=None, force=False, commit=None, verified=None, justification=None):
     return argparse.Namespace(
         task_id=str(task_id),
         report=report,
         force=force,
         commit=commit or [],
         verified=verified,
+        justification=justification,
     )
 
 
@@ -181,18 +182,23 @@ class TestSprintOpenChildrenBlocked:
 
         assert rc == 1
         out = capsys.readouterr().out
-        assert "❌ SPRINT has 1 open child tasks" in out
+        # New scope-gate message format (post bug #1051):
+        # "❌ SPRINT has N open child task(s) not in scope: #N"
+        assert "open child task" in out
         assert "#20" in out
         assert "--force" in out
+        # And points the user at carry-through-compaction
+        assert "Carry-through-compaction" in out or "carry-through-compaction" in out.lower()
 
 
 # ---------------------------------------------------------------------------
-# TC03: SPRINT open children + --force → completes
+# TC03a: SPRINT open children + --force WITHOUT --justification → blocked (new gate)
 # ---------------------------------------------------------------------------
 
-class TestSprintOpenChildrenForce:
+class TestSprintForceRequiresJustification:
 
-    def test_completes_with_open_children_when_forced(self, tmp_path, capsys):
+    def test_force_without_justification_blocked(self, tmp_path, capsys):
+        """Bug #1051: --force on SPRINT with incomplete scope must require --justification."""
         sprint = _make_fake_task(60, task_type="SPRINT", custom={
             "goal": "G2",
             "scoped_progress": {"completed": 0, "total": 1},
@@ -201,13 +207,47 @@ class TestSprintOpenChildrenForce:
         })
         children = [_make_fake_child(30, parent_id=60, status="pending")]
         reader = _make_reader(sprint, children, tmp_path)
-        args = _make_args(60, report="forced", force=True)
+        args = _make_args(60, report="forced", force=True, justification=None)
 
         rc = run_complete(args, reader)
 
-        assert rc == 0
+        assert rc == 1, "Force-complete without --justification must hard-fail (parallel scope-gate)"
+        out = capsys.readouterr().out
+        assert "Force-complete bypass requires --justification" in out
+        assert "§3.3.2" in out
+        assert "Acceptable" in out
+        assert "NOT acceptable" in out
+
+
+# ---------------------------------------------------------------------------
+# TC03b: SPRINT open children + --force + --justification → completes, marker prepended
+# ---------------------------------------------------------------------------
+
+class TestSprintForceWithJustificationCompletes:
+
+    def test_completes_with_justification_and_records_marker(self, tmp_path, capsys):
+        """Bug #1051: --force + --justification succeeds and prepends marker to report."""
+        sprint = _make_fake_task(60, task_type="SPRINT", custom={
+            "goal": "G2",
+            "scoped_progress": {"completed": 0, "total": 1},
+            "ideas_captured": 0,
+            "learnings_curated": 0,
+        })
+        children = [_make_fake_child(30, parent_id=60, status="pending")]
+        reader = _make_reader(sprint, children, tmp_path)
+        args = _make_args(
+            60, report="forced", force=True,
+            justification="pinned MISSIONs intentionally cycle-spanning"
+        )
+
+        rc = run_complete(args, reader)
+
+        assert rc == 0, "Force-complete WITH --justification must succeed"
         out = capsys.readouterr().out
         assert "✅ Task #60 marked complete" in out
+        # Justification marker prepended to report (visible in completion message)
+        assert "FORCE-COMPLETE JUSTIFICATION" in args.report
+        assert "pinned MISSIONs" in args.report
 
 
 # ---------------------------------------------------------------------------
