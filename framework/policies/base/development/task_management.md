@@ -1223,33 +1223,85 @@ Task scope defines the boundary of authorized work in AUTO_MODE. Scoped tasks ar
 
 ### MTMD Field
 
-Optional field `scope_status`: `active` | `inactive` | `null`
-- Set by `macf_tools task scope set`
+Optional field `scope_status`: `active` | `paused` | `inactive` | `null` (3-state model — extended Cycle 514, BUG #1067)
+
+- Set by `macf_tools task scope set` or `task scope add`
+- Transitions to `paused` via `task scope pause` (with mandatory --justification)
 - Transitions to `inactive` when task is completed while scoped
-- Cleared by `macf_tools task scope clear`
+- Cleared by `macf_tools task scope clear` (sets all to None) or `task scope remove` (drops specific tasks)
 
 ### Lifecycle
 
 ```
 scope set → task is "active" (👀 in tree)
-task complete → task becomes "inactive" (~~👀~~ in tree)
-scope clear → task removed from scope (no indicator)
+scope pause → task transitions to "paused" (⏸️ in tree, with task-note audit)
+scope unpause → paused task restored to "active"
+scope add → incrementally add new tasks as "active"
+scope remove → drop tasks from scope entirely (no completion)
+task complete → task becomes "inactive" (✅ in tree)
+scope clear → all tasks removed from scope (no indicator)
 ```
+
+### Gate Semantics (CRITICAL)
+
+The Stop gate counts only `active` tasks. **Paused tasks remain in scope** (visible in `scope show` with ⏸️ marker, audited via task notes) but do NOT block the gate. This enables structural carry-through for genuine external blockers without force-completing OR idle-looping.
+
+| Status | Counts toward gate? | Visible in scope show? | Notes |
+|--------|---------------------|------------------------|-------|
+| `active` 👀 | YES (blocks Stop) | YES | Default scoped state |
+| `paused` ⏸️ | NO (excluded) | YES (with ⏸️) | Justification required, recorded in task note |
+| `inactive` ✅ | NO (already completed) | YES (with ✅) | Set by task complete |
+| `null` (not in scope) | NO | NO | Default; scope cleared/removed |
 
 ### Interaction with Stop Hook
 
-In AUTO_MODE, the Stop hook queries `macf_tools task scope check`. If active scoped tasks remain, the hook returns `continue: false` - blocking the stop. The agent must complete all scoped tasks. De-escalation to MANUAL_MODE bypasses the scope gate but is reserved for EMERGENCY situations only (security concerns, OPSEC risks, genuine blockers) - not for convenience or task avoidance.
+In AUTO_MODE, the Stop hook queries `macf_tools task scope check`. If `active_count > 0`, the hook returns `decision: "block"` — blocking the stop. The agent must EITHER:
 
-See `autonomous_operation.md` §8 for full scope system documentation.
+1. Complete all active scoped tasks, OR
+2. Pause genuinely-blocked items via `scope pause <ids> --justification <reason>` (only true external blockers — see `autonomous_sprint.md` §3.3.5), OR
+3. De-escalate to MANUAL_MODE via `mode set MANUAL_MODE --justification <reason>` (EMERGENCY ONLY — security/OPSEC/genuine blocker)
+
+**Scope_gate_failsafe** (BUG #1022 + #1067): a 5-step idle counter prevents infinite gate-firing loops. After 5 consecutive Stop firings with no PreToolUse activity between, the gate fails open and lets the stop succeed. The countdown is now NOISY (BUG #1067) — visible in the gate's reason text, with explicit Idle-Loop Shrinking warnings at counter ≤ 2. Failsafe trigger means the agent failed to find substantive work, pause genuine blockers, or de-escalate properly.
+
+See `autonomous_sprint.md` §3.3.5 (pause), §3.3.6 (countdown visibility), §3.3.7 (substrate maintenance), §5 (Idle-Loop Shrinking anti-pattern).
 
 ### CLI Commands
 
 ```bash
-macf_tools task scope set <task_ids...>   # Scope tasks (parent expands to children)
-macf_tools task scope show                 # Display scope with status
-macf_tools task scope clear                # Remove all (Always Ask)
-macf_tools task scope check                # JSON output for Stop hook
+# Scope management
+macf_tools task scope set <task_ids...>           # Replace scope (parent auto-expands to children)
+macf_tools task scope add <task_ids...>           # Incrementally add (no replace) — BUG #1067
+macf_tools task scope remove <task_ids...>        # Incrementally drop tasks — BUG #1067
+macf_tools task scope clear                       # Remove ALL (destructive, Always Ask)
+
+# Pause / unpause (BUG #1067)
+macf_tools task scope pause <task_ids...> --justification "<reason>"  # Pause active tasks (excluded from gate)
+macf_tools task scope unpause <task_ids...>                            # Restore to active
+
+# Inspection
+macf_tools task scope show                        # Display scope with status (active/paused/inactive)
+macf_tools task scope check                       # JSON output for Stop hook
 ```
+
+### Pause Discipline
+
+`scope pause` is a SCALPEL for genuine external blockers, NOT an escape for autonomous-friendly work that the agent doesn't feel like doing. See `autonomous_sprint.md` §3.3.5 for full pause-justification taxonomy.
+
+**Acceptable pause justifications**: resources the agent CANNOT reach (lxterminal access, hardware-specific debugging), waiting on external party with no agent recourse (Anthropic PR review, vendor response).
+
+**NOT acceptable pause justifications**: cycle-spanning by design (gate blocking IS the carry-through design), no autonomous work right now (pivot to substrate maintenance), large sprint scope (by design), I want to clear the gate to stop (Idle-Loop Shrinking pattern), architectural sign-off needed (pre-scoped means pre-authorized — see autonomy contract below).
+
+### Autonomy Contract by Task Type (when scoped)
+
+| Type | Autonomy expectation | Pause appropriateness |
+|------|---------------------|-----------------------|
+| 🧪 EXPERIMENT | Protocol designed upfront for AUTO_MODE | **Almost never** — protocol IS the directive |
+| 🏃‍♂️ SPRINT | Scoped task set IS the workload commitment | Only true external blockers |
+| ⏲️ PLAY_TIME | Time-bounded autonomous play; chain IS the structure | **Never appeal mid-chain** |
+| 🗺️ MISSION (scoped) | Phase children execute autonomously per roadmap | Only when phase requires unreachable resources |
+| 🐛 BUG (scoped) | Bug fix work is autonomous-friendly | Only when reproduction requires unavailable resources |
+
+**Pre-scoped means pre-authorized**: when the user scopes specific task IDs (or scopes a parent that auto-expands to phase children), those tasks are pre-authorized for autonomous execution. The agent does NOT need to re-defer for sign-off on individual phases. See `autonomous_sprint.md` §3.3.5.
 
 ---
 
