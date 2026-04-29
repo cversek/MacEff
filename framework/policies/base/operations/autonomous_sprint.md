@@ -48,11 +48,19 @@ A 🏃‍♂️ SPRINT is a **workload-defined autonomous work session**. The ag
 - What is **carry-through-compaction** and when is it the proper transition?
 - Why might auto-compaction NOT fire promptly at CL0 / emergency?
 - What does **JUMP** mean operationally, and why is single-emoji output at the edge an anti-pattern?
+- What is **`scope pause`** and what justifications are acceptable vs unacceptable?
+- Why is pause NOT for cycle-spanning work — what is the carry-through gate-blocking design?
+- What is the **autonomy contract by task type** (EXPERIMENT, SPRINT, PLAY_TIME, MISSION, BUG)?
+- What does **pre-scoped means pre-authorized** mean for individual phase items?
+- What is the **idle-stop counter** and when does it warn or fail-open?
+- What is **substrate maintenance** and what activities are always available at edge?
+- Why is **ULTRATHINK idea generation/curation** the power move at edge?
 
 **5 Anti-Patterns**
 - What is the ASCII Duck pattern and how is it handled?
 - What is Narrative Performance?
 - What is Scope Gate Fatigue?
+- What is **Idle-Loop Shrinking** (consecutive acknowledgments at the carry-through boundary)?
 - What is **Edge Shrinking** (the JUMP anti-pattern)?
 - What is **Force-Complete Bypass**?
 - What is **Discipline-as-Friction**?
@@ -259,6 +267,87 @@ When the user (or the dashboard via `🪂 Ready to jump` at CL0-CL2) signals JUM
 **Filed bugs related to this mechanic**:
 - AutoCompaction-not-firing-on-AUTO_MODE-transition (separate suspected bug — mode transition may not arm compaction parameters)
 
+**Pre-condition: auto-compact must be enabled.** The carry-through-compaction strategy depends on CC's auto-compact setting being TRUE. Without it, the gate keeps blocking forever instead of resolving via natural compaction. Verify with `macf_tools env` (looks for `autoCompactEnabled`) or `cat ~/.claude/settings.json | jq .autoCompactEnabled`. If false, enable it BEFORE relying on carry-through; otherwise expect manual `/compact` to be required mid-cycle.
+
+#### 3.3.5 Pause-with-Justification — A Scalpel, Not an Escape
+
+**Added Cycle 514 (BUG #1067)**. The 3-state scope model (`active` 👀 → `paused` ⏸️ → `inactive` ✅) gives the agent a structural way to exit the gate when a scoped task is **genuinely blocked on user action** that the agent cannot perform autonomously. Paused tasks remain in scope (visible in `scope show` with ⏸️ marker, audited via task notes) but are EXCLUDED from the Stop gate.
+
+**🚨 CRITICAL — Pause is NOT for cycle-spanning work.** Pinned cycle-spanning MISSIONs **keep the gate blocking** — that's the carry-through design. The gate blocking is the framework's mechanism for keeping the agent producing tokens through to natural compaction. JUMP discipline (§3.3.4) says: at the edge, in AUTO_MODE, **generate MORE tokens, not less**. Pausing cycle-spanning items short-circuits the very mechanism designed to handle them.
+
+**Pause is a scalpel for genuine blockers, not an escape for boredom.**
+
+**Acceptable pause justifications** (true external blockers — narrow set):
+- Task requires resources the agent CANNOT reach: lxterminal access for repro, MCP server testing without server, hardware-specific debugging requiring physical access
+- Task is genuinely waiting on external party with no agent recourse: Anthropic PR review, vendor response, third-party API outage
+
+**NOT acceptable pause justifications**:
+- "Cycle-spanning by design" → keep gate blocking, do JUMP discipline at edge (§3.3.4) + substrate maintenance (§3.3.7)
+- "I have no autonomous work right now" → pivot to substrate maintenance, NOT pause
+- "Sprint scope is large" → that's by design; the gate keeps you producing through compaction
+- "I want to clear the gate to stop" → exactly the Idle-Loop Shrinking pattern (§5)
+- "Architectural sign-off needed" → if the task is pre-scoped, sign-off is implied; execute and document choices in task notes
+- "Network/disk decision (model pulls)" → if Phase N (model pulls) is scoped, the user authorized it by scoping; just do it (size caveats go in task notes, not pause)
+- "Implementation work where design draft awaits user review" → if implementation phase is scoped alongside the design, both are authorized; implement
+- "Multi-cycle implementation work" → multi-cycle is what gate + JUMP + substrate handle, not pause
+
+**🚨 Pre-scoped means pre-authorized — practice autonomy.** When the user scoped a SPRINT/PLAY_TIME/EXPERIMENT with specific task IDs (or scoped a parent that auto-expanded to phase children), those tasks are **pre-authorized for autonomous execution**. The agent does NOT need to re-defer to the user for "permission" on individual phase items. Re-asking is the Discipline-as-Friction anti-pattern (§5) dressed as politeness — and trains the user to expect over-deference instead of autonomy.
+
+**Autonomy contract by task type** (when scoped):
+
+| Type | Autonomy expectation | Pause appropriateness |
+|------|---------------------|-----------------------|
+| 🧪 EXPERIMENT | Protocol designed upfront for AUTO_MODE. Phases execute per protocol. | **Almost never** — if experiment can't proceed autonomously, that's a protocol design failure |
+| 🏃‍♂️ SPRINT | Scoped task set IS the workload commitment. Phase children of pre-scoped MISSIONs inherit authorization. | Only true external blockers (resources/vendor) |
+| ⏲️ PLAY_TIME | Time-bounded autonomous play. The chain IS the directive. | **Never appeal to user mid-chain** — chain is the autonomous structure |
+| 🗺️ MISSION (scoped) | Phase children execute autonomously per roadmap | Only when phase requires resources agent CANNOT reach |
+| 🐛 BUG (scoped) | Bug fix work is autonomous-friendly | Only when reproduction requires unavailable resources |
+
+**Pause discipline**:
+```bash
+macf_tools task scope pause <task_ids...> --justification "<structural blocker>"
+```
+
+Justification is REQUIRED. It is recorded in:
+1. The task note (`⏸️ SCOPE PAUSED: <reason>`) for human audit
+2. The event log (`scope_paused` event) for forensic queries
+
+**Unpause** (`scope unpause <ids>`) restores paused tasks to active. No justification required (unpausing is restoration, not consequential action). When the user provides the input the paused task was waiting on, the agent should unpause and resume work.
+
+**Pause persists across compaction.** Scope state is task-system property, not session-scoped. Next-cycle agent inherits paused tasks; can unpause when user prioritizes them.
+
+#### 3.3.6 Idle-Stop Counter Visibility (Failsafe Noisy Mode)
+
+**Added Cycle 514 (BUG #1067)**. The `scope_gate_failsafe` was originally silent — counter decremented invisibly, only fail-open fired stderr message. This silently enabled the Idle-Loop Shrinking anti-pattern (§5). The gate is now NOISY:
+
+- When idle counter < COUNT_INIT (5), the gate's `reason` text includes the count: "Idle-stop counter: 3 of 5 remaining"
+- When idle counter ≤ 2 (critical), the gate emits an explicit Idle-Loop Shrinking warning naming the anti-pattern, the failure modes, and three remedies
+- When fail-open fires, the message is promoted to `systemMessage` (visible to agent, not stderr-only)
+
+**Recovery path** when the agent sees the countdown warning:
+1. **Find substantive work** — substrate maintenance is always available (§3.3.7)
+2. **Pause genuinely-blocked items** — only items truly waiting on user action (§3.3.5)
+3. **De-escalate** to MANUAL_MODE with `mode set MANUAL_MODE --justification` (emergency only)
+
+Continuing to produce single-token / acknowledgment-only responses after seeing the countdown is a **discipline failure**, not a graceful exit.
+
+#### 3.3.7 Substrate Maintenance + Idea Generation at Edge
+
+**Carry-through-compaction is NOT stand-still.** When new-deliverable scoped work exhausts (or genuinely waits on user input), the agent's job continues. The gate-blocking forces continued production; substrate maintenance is what to produce. JUMP discipline applies: at edge, generate MORE tokens, not less.
+
+**Always-available substrate menu** (each item is high-density token spend AND lasting value):
+
+- **🧠 ULTRATHINK idea generation / curation** — `macf_tools idea capture <text>` followed by reflection on the idea. The most powerful end-of-cycle activity: high token spend (thinking through the idea generates substantial output), produces lasting knowledge web nodes, and the curation pipeline can promote ideas to experiments/missions in future cycles. **This is the power move at the edge.**
+- **Curate cycle learnings** — capture surprising findings as `agent/private/learnings/` entries
+- **Update strategic anchor** — incorporate cycle's findings into `agent/public/MacEff_Anchor.md`
+- **Create design drafts** for upcoming phase tasks (architectural reasoning before implementation)
+- **Mine telemetry** for empirical observations (PreCompact events, hook firings, idle patterns)
+- **File BUG / enhancement tasks** for friction points encountered
+- **Audit knowledge-web** for gaps and isolated nodes
+- **Test newly-deployed framework changes** against representative scenarios
+
+**The reframe**: gate blocking + JUMP discipline + substrate maintenance + idea generation are **the holistic carry-through mechanism**. Pause (§3.3.5) is the tightly-scoped exception for genuine user-action-required blockers, not the routine exit. If autonomous-friendly NEW work exhausts, **pivot to substrate** — that's what carry-through means. Idle-loop shrinking (§5) is the failure mode this section's existence prevents.
+
 ---
 
 ## 4 Gate Mechanics
@@ -321,6 +410,14 @@ This is enforced at the CLI level. The policy is: if work is workload-defined, u
 - **Signal**: Invoking the first stage of a multi-stage pipeline tool, getting a partial answer via grep on the partial output, abandoning the rest of the chain
 - **Cause**: Treating tools as deliverable-providers rather than as instruments-to-mature
 - **Remedy**: §3.2.2 — full-chain dogfooding is part of the contract. If the partial-stage answer is sufficient, document that finding AND surface what the rest of the chain would have added.
+
+### Idle-Loop Shrinking
+
+- **Signal**: At the carry-through-compaction boundary, agent produces consecutive single-token acknowledgments (`.` / "Awaiting direction" / "Standing by") while the scope gate keeps firing. CL is at abundance (NOT edge). The pattern is visible only across responses, not within any single response. The scope_gate_failsafe (§3.3.6) silently decrements its idle counter while this happens; eventually fail-open fires.
+- **Cause**: Multiple interacting factors — genuine work-completion ambiguity (autonomous-friendly NEW work exhausted) + carry-through-compaction misread as stand-still + cognitive load after heavy production + perceived overstepping fear + counter silence (pre-BUG #1067) + anti-pattern catalog gap.
+- **Why it's wrong**: AUTO_MODE's contract is continuous productive work until scope clears or natural compaction. "Standing by" in AUTO_MODE is rationalized deference. The autonomous-friendly work surface is broader than first-pass scope: substrate maintenance (§3.3.7) is always available — anchor updates, learning curation, idea generation, design drafts, telemetry analysis, knowledge-web upkeep. Pre-scoped tasks are pre-authorized (§3.3.5).
+- **Remedy**: When NEW-deliverable work feels exhausted, EXPLICITLY pivot to substrate maintenance (§3.3.7) — especially **ULTRATHINK idea generation/curation** which is high-token-density AND lasting value. Pause only TRUE external blockers (§3.3.5) — never "I'd be more comfortable if user weighed in." Never shrink to acknowledgment-only. The Substrate Principle (§3.3.1) applies: discipline IS the deliverable. Substrate work counts as productive work.
+- **Recognition cue**: If you find yourself drafting `.` or one-line acknowledgment for the third time in a row with the gate still firing, that is the signal. Pivot to substrate maintenance. The §3.3.6 idle counter visibility now makes this visible — when you see "Idle-stop counter: 3 of 5", treat it as an alarm.
 
 ### Edge Shrinking (the JUMP anti-pattern)
 

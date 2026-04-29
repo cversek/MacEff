@@ -82,11 +82,26 @@ Extract requirements by answering:
 
 **Edge / JUMP / Compaction-Trigger questions** (added after a c_513 Edge-Shrinking discipline failure — required reading):
 
-- What is the **Edge Shrinking** anti-pattern? When the dashboard shows `🪂 Ready to jump` at CL0-CL2, what is the *wrong* response? What is the *right* response?
-- What does **JUMP** mean operationally? Why is single-emoji or one-line output at the edge an anti-pattern parallel to force-completing the sprint?
-- What survives compaction — character count or wisdom-density? Why does generative output at the edge serve the next cycle better than minimal output?
-- Why might auto-compaction NOT fire promptly at CL0 / emergency-level? What does this imply about the agent's obligation when the user (or dashboard) signals JUMP?
-- What is the relationship between §3.3.4 (compaction-trigger mechanics) and §3.3.2 (force-complete-justification)? What discipline is shared between them?
+- What is the **Edge Shrinking** anti-pattern? When the dashboard signals an imminent compaction edge, what response does the policy mark as wrong vs right?
+- What does **JUMP** mean operationally? How does the policy frame single-emoji output at the edge?
+- What does the policy say survives compaction — character count or wisdom-density?
+- What does the policy say about auto-compaction firing reliability at low context budget?
+- How does the policy relate compaction-trigger mechanics to force-complete-justification discipline?
+
+**Scope Pause / Autonomy / Idle-Loop questions** (added after a c_514 Idle-Loop Shrinking discipline failure — BUG #1067 — required reading):
+
+- What does the policy define as **`scope pause`**? What pause justifications does the policy mark as acceptable vs unacceptable?
+- How does the policy treat cycle-spanning work — pause or gate-blocking? Why?
+- What pre-conditions does the policy specify for carry-through-compaction to work?
+- What does the policy say about scoping as authorization? When the user scopes a task, what does that imply about the agent's autonomy for executing it?
+- How does the policy specify the autonomy contract for different scoped task types? What pause appropriateness does it document for each?
+- What does the policy mean by **substrate maintenance** during carry-through? What activities does it list as always available?
+- How does the policy frame **ULTRATHINK idea generation/curation** at edge?
+- What is the **Idle-Loop Shrinking** anti-pattern? What does the policy say the idle-stop counter visibility provides?
+- What remedies does the policy specify when the idle-stop counter shows a low count? When is each appropriate?
+- How does the policy distinguish pausing a task, completing a task, and de-escalating mode? What structural meaning does each carry?
+- What scoped task types does the policy mark as almost never pause-appropriate? Why?
+- What does the policy say about the agent's default response when autonomous-friendly new-deliverable work feels exhausted?
 
 ---
 
