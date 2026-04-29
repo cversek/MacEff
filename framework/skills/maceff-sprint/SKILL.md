@@ -68,6 +68,18 @@ Extract requirements by answering:
 - What does the Stop hook emit when scoped tasks remain?
 - What are the named anti-patterns and their remedies?
 
+**Substrate / Gate / Discipline questions** (added after a c_513 force-complete-bypass discipline failure — required reading):
+
+- What is the **Substrate Principle**? Why is sprint discipline framed as substrate, not friction?
+- When does `task complete --force` require **`--justification`**? What justifications are acceptable vs unacceptable?
+- What is the **carry-through-compaction** pattern? When pinned MISSIONs are in scope, what is the proper end-of-cycle transition — and why is force-complete the wrong exit?
+- What note-taking triggers does the policy mark **MANDATORY** (not optional summary)? When the user asks "where are the task notes?" — what does that signal?
+- What **dogfooding obligation** does the policy specify when invoking pipeline-style tools? What does shortcutting after stage 1 violate?
+- What activation procedures must complete before sprint work begins? What does **formal skill activation** accomplish that policy reading alone cannot?
+- What is the **Force-Complete Bypass** anti-pattern? Its relationship to **Discipline-as-Friction**?
+- What is **Tool-Use Shortcutting**? When you invoke the first stage of a multi-stage pipeline tool, are you obligated to run the rest of the chain?
+- What is **Activation Skipping**? Knowledge vs state — what's the distinction the anti-pattern names?
+
 ---
 
 ## Step 4: Create the Sprint Task
