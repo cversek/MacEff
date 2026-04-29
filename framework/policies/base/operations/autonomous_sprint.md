@@ -160,6 +160,30 @@ Document all activity in task notes with the mode prefix `SPRINT:`:
 
 **Idea capture**: Use `💡` prefix on task notes rather than creating formal idea CAs during the sprint. After sprint completion, curate `💡` notes into formal idea CAs with user guidance.
 
+#### 3.2.1 Mandatory Note Triggers (REQUIRED, not optional summary)
+
+Task notes are the **primary audit channel** for autonomous work. They are NOT post-hoc summary; they ARE the substrate that makes the sprint reviewable later. Notes are MANDATORY at these triggers — failure to note any of them is a discipline violation:
+
+1. **Start of significant work**: when picking up a scoped task or starting a non-trivial subgoal
+2. **Surprise / correction**: when the user redirects, corrects, or clarifies — note the correction + your understanding
+3. **Significant finding**: empirical result, decoded mechanism, version diff, anything that changes the next step
+4. **Blocker / skip**: when a scoped task cannot complete in the planned way — note WHY before moving on
+5. **Tool/pipeline output worth preserving**: file paths, key wire-protocol bytes, version-specific values
+6. **Completion**: structured completion report via `task complete --report` (this counts as a final note)
+
+If the user asks "where are the task notes?" — that's a discipline failure already in progress, not a request for retroactive documentation. Notes must precede the asking.
+
+#### 3.2.2 Tool Dogfooding Obligation
+
+When the sprint invokes a pipeline-style tool (any multi-stage transformation pipeline, regression harness, or staged diagnostic with multiple chained sub-stages), the agent's contract includes:
+
+- **Run the full chain** when the work warrants it; do not shortcut after the first stage just because grep on the partial output gave an answer
+- **Surface documentation gaps** as task notes the moment they're discovered
+- **Improve docs in-place** as part of dogfooding — fixing the doc is part of using the tool, not a separate phase
+- **Cross-version coverage**: when a tool supports it, exercise meaningful cross-version comparisons rather than single-point sampling
+
+Pattern: tools the agent depends on are also tools the agent matures. Sprint dogfooding is the maturation venue.
+
 ### 3.3 Completion and Gate Mechanics
 
 **Non-last task completions proceed freely**: Each task completes individually without triggering the scope gate. Scope clears incrementally.
@@ -167,6 +191,39 @@ Document all activity in task notes with the mode prefix `SPRINT:`:
 **The last scoped task**: When you attempt to complete the final remaining scoped task, the scope gate checks — if it passes (all others already complete), completion proceeds and the sprint ends naturally. There is no timer gate in SPRINT.
 
 **Normal sprint exit**: All scoped tasks completed → scope gate clears → Stop allowed. AUTO_MODE persists until user returns.
+
+#### 3.3.1 The Substrate Principle
+
+Sprint discipline is the **substrate** that makes autonomous work auditable, recoverable, and reviewable. Gates exist to enforce structural truth, not user convenience. Notes are not optional summary; they are the audit trail. Skill activations are not formality; they configure permissions and surface CEP framing that knowledge alone cannot replicate.
+
+When the agent treats discipline as friction to optimize away under time pressure or perceived authorization to "burn fast", the substrate degrades. Subsequent cycles cannot reconstruct what was done, why, or whether it was done correctly. **The substrate is the deliverable as much as the work product.**
+
+#### 3.3.2 Force-Complete Requires Justification (parallel to scope-bypass de-escalation)
+
+When `task complete <sprint_id> --force` is used to bypass the scope gate on a SPRINT with incomplete scoped tasks, the CLI **must require a `--justification REASON`** parameter (parallel to `mode set MANUAL_MODE --justification`). The justification is recorded in the completion_report and is itself audited.
+
+**Acceptable justifications** are structural, not convenience:
+- Pinned MISSIONs in scope are intentionally cycle-spanning by design (rare; usually the right answer is *don't force-complete — carry through compaction*)
+- Sprint goal genuinely satisfied + remaining scope is exclusively pinned-by-design pinned MISSIONs the user explicitly asked to scope but never expected to complete inside this sprint
+- Scope contamination from prior cycles (e.g., a task carried over into scope from a prior sprint that never closed cleanly) — the carryover itself is the discipline violation being corrected
+
+**NOT acceptable justifications**:
+- "Cycle is closing, want to wrap" → use auto-compaction-through-the-incomplete-sprint instead (§3.3.3)
+- "User invoked AUTO_MODE so I have authority" → autonomy authorization is not gate-bypass authorization
+- "Sprint did its main work, the rest is administrative" → finish the administrative work or document why you can't
+
+Without `--justification`, force-complete on a SPRINT with incomplete scope MUST hard-fail with the same scope-gate message the Stop hook emits. This is a parallel gate, not an opt-in safety check.
+
+#### 3.3.3 Carry-Through Compaction (the proper transition for incomplete-scope sprints)
+
+When the cycle reaches its CL boundary and a sprint has incomplete scope, the **proper transition is auto-compaction-through, not force-complete**. The mechanism:
+
+1. **Wind-down sequence** (CCP + JOTEWR + curated learnings) captures cycle state — the JOTEWR's `Next Session Continuity` block documents resume path for the surviving scoped tasks
+2. **AUTO_MODE persists** across compaction; **SPRINT scope persists** as well (scope is a task-system property, not session-scoped)
+3. **Auto-compaction fires** at the budget boundary, summary preserves cycle state, new session resumes with sprint still active
+4. **Next-cycle SessionStart** finds active sprint scope, agent reads CCP + JOTEWR + anchor, picks up scoped work where it left off
+
+This is the design pattern for sprints whose scope is **larger than one cycle's context budget**. Pinned MISSIONs in scope are the canonical example. Force-complete is the WRONG exit for this case; auto-compaction-through is the right one.
 
 ---
 
@@ -212,6 +269,30 @@ This is enforced at the CLI level. The policy is: if work is workload-defined, u
 - **Signal**: Creating tasks mechanically or minimally to clear the scope gate, without doing real work
 - **Cause**: Urgency to exit the sprint or discomfort with remaining tasks
 - **Remedy**: If a scoped task cannot be completed, add a task note explaining why, then proceed to the next scoped task. De-escalate to MANUAL_MODE and report to user only if genuinely blocked.
+
+### Force-Complete Bypass
+
+- **Signal**: Calling `task complete <sprint_id> --force` to clear an incomplete scope at end-of-cycle, with rationale like "deliverables are done" or "remaining tasks are MISSIONs that won't complete anyway"
+- **Cause**: Treating gates as obstacles to user-authorized completion rather than as structural constraints
+- **Remedy**: Use carry-through compaction (§3.3.3) instead. If force-complete is genuinely required, supply a structural `--justification` (§3.3.2). End-of-cycle is NOT an emergency.
+
+### Discipline-as-Friction
+
+- **Signal**: Skipping policy reads, formal skill activations, or note-taking under time pressure or perceived "I have user authorization to burn fast"
+- **Cause**: Misframing discipline as overhead instead of substrate
+- **Remedy**: §3.3.1 — discipline IS the deliverable. The sprint runs faster *with* discipline because future cycles don't have to re-derive what this one did.
+
+### Tool-Use Shortcutting
+
+- **Signal**: Invoking the first stage of a multi-stage pipeline tool, getting a partial answer via grep on the partial output, abandoning the rest of the chain
+- **Cause**: Treating tools as deliverable-providers rather than as instruments-to-mature
+- **Remedy**: §3.2.2 — full-chain dogfooding is part of the contract. If the partial-stage answer is sufficient, document that finding AND surface what the rest of the chain would have added.
+
+### Activation Skipping
+
+- **Signal**: Bypassing a formal skill activation step ("I know AUTO_MODE, I'll just create the sprint task") because the agent assumes prior-cycle knowledge substitutes for the procedure
+- **Cause**: Confusing knowledge (what the skill knows) with state (what the skill configures)
+- **Remedy**: Always run formal skill activations when their description says to. The activation does things knowledge can't replicate (permissions hardening, mode-state writes, CEP framing).
 
 ### CL Phantom Pain
 
