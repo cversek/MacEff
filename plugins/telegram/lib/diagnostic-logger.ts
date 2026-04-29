@@ -61,6 +61,35 @@ export interface DiagnosticLogger {
   (ev: string, data?: Record<string, unknown>): void
 }
 
+/**
+ * Extensibility hook (Phase 4 of MISSION #1043). Receives every event emitted
+ * by the logger, regardless of the env-var enabled state. Use cases:
+ *
+ *   - Metric collectors (count events, measure durations)
+ *   - Alert triggers (page on shutdown.entry, ring on watchdog.check orphaned=true)
+ *   - External log forwarders (ship JSONL to remote sink)
+ *   - Custom diagnostic plugins (correlate events across processes)
+ *
+ * Hooks fire even when MACF_TG_DEBUG is unset — they are independent of the
+ * stderr/file output channel. This means alert-triggers can fire reliably in
+ * production without requiring debug mode to be on, while file/stderr output
+ * remains opt-in for forensic-volume control.
+ *
+ * Hooks must NOT throw — exceptions are caught and silently swallowed to
+ * prevent diagnostic instrumentation from breaking the bot.
+ */
+export interface EventHook {
+  /** Receives the full event payload {ts, ev, pid, ppid, uptime_s, data}. */
+  (event: {
+    ts: string
+    ev: string
+    pid: number
+    ppid: number
+    uptime_s: number
+    data: Record<string, unknown>
+  }): void
+}
+
 export interface LoggerOptions {
   /** Override env var; default reads MACF_TG_DEBUG */
   enabled?: boolean
@@ -68,55 +97,127 @@ export interface LoggerOptions {
   dir?: string
   /** Custom prefix for stderr lines; default '[macf-dbg]' */
   stderrPrefix?: string
+  /**
+   * Initial set of event hooks. Additional hooks can be registered post-creation
+   * via registerEventHook(); see Phase 4 documentation in module header.
+   */
+  hooks?: EventHook[]
+}
+
+// Module-level event hook registry (Phase 4 of MISSION #1043).
+// Hooks fire on every log() call regardless of MACF_TG_DEBUG state. This
+// enables alert-triggers and metric collection in production without forcing
+// debug-volume file/stderr output. Hooks are called in registration order.
+const _eventHooks: EventHook[] = []
+
+/**
+ * Register an event hook. Returns an unregister function.
+ *
+ * The hook receives the full event payload {ts, ev, pid, ppid, uptime_s, data}
+ * for every log() call after registration. Hooks fire even when MACF_TG_DEBUG
+ * is not set — they are independent of stderr/file output.
+ *
+ * Hooks must NOT throw. Exceptions inside a hook are caught and silently
+ * swallowed; the offending hook is not removed (it gets another chance on
+ * the next event). Diagnostic instrumentation never crashes the bot.
+ *
+ * Usage:
+ *   const unregister = registerEventHook(event => {
+ *     if (event.ev === 'shutdown.entry') alertOps('bot shutting down')
+ *   })
+ *   // ... later, to remove:
+ *   unregister()
+ */
+export function registerEventHook(hook: EventHook): () => void {
+  _eventHooks.push(hook)
+  return () => {
+    const idx = _eventHooks.indexOf(hook)
+    if (idx >= 0) _eventHooks.splice(idx, 1)
+  }
+}
+
+/** Clear all registered event hooks. Primarily for test cleanup. */
+export function clearEventHooks(): void {
+  _eventHooks.length = 0
+}
+
+/** Snapshot of currently registered hooks (count). Useful for diagnostics. */
+export function getRegisteredHookCount(): number {
+  return _eventHooks.length
 }
 
 /**
  * Create a diagnostic logger configured from env vars (or override opts).
  *
- * Returns a function. When debug is disabled, the function is a no-op —
- * callers can call it freely without paying any cost.
+ * Returns a function. When debug is disabled, the file/stderr output is
+ * suppressed but registered event hooks STILL FIRE (Phase 4 — hooks are
+ * independent of MACF_TG_DEBUG). This enables alert-triggers in production
+ * with debug output off.
+ *
+ * If both MACF_TG_DEBUG is unset AND no hooks are registered, the logger
+ * is fully no-op (zero overhead).
  */
 export function createDiagnosticLogger(opts: LoggerOptions = {}): DiagnosticLogger {
   // Resolve enabled: explicit opt > env. Truthy = '1' or any non-'0' non-empty value.
   const envEnabled = process.env.MACF_TG_DEBUG
-  const enabled =
+  const fileStderrEnabled =
     typeof opts.enabled === 'boolean'
       ? opts.enabled
       : envEnabled !== undefined && envEnabled !== '' && envEnabled !== '0'
 
-  if (!enabled) {
-    return () => {} // no-op when disabled
+  // Register initial hooks if provided
+  if (opts.hooks) {
+    for (const hook of opts.hooks) _eventHooks.push(hook)
   }
 
   const dir = opts.dir ?? process.env.MACF_TG_DEBUG_DIR ?? '/tmp/maceff/telegram-debug'
   const prefix = opts.stderrPrefix ?? '[macf-dbg]'
 
-  // Resolve file path once (per-process)
+  // Resolve file path once (per-process), only when file output is active
   let logFile: string | null = null
-  try {
-    mkdirSync(dir, { recursive: true, mode: 0o755 })
-    const ts = new Date().toISOString().replace(/[:.]/g, '-').replace('Z', '')
-    logFile = join(dir, `log_${ts}_pid${process.pid}.jsonl`)
-  } catch {
-    // dir creation failed — stderr-only mode
-    logFile = null
+  if (fileStderrEnabled) {
+    try {
+      mkdirSync(dir, { recursive: true, mode: 0o755 })
+      const ts = new Date().toISOString().replace(/[:.]/g, '-').replace('Z', '')
+      logFile = join(dir, `log_${ts}_pid${process.pid}.jsonl`)
+    } catch {
+      // dir creation failed — stderr-only mode
+      logFile = null
+    }
   }
 
   return function log(ev: string, data: Record<string, unknown> = {}): void {
-    try {
-      const line =
-        JSON.stringify({
-          ts: new Date().toISOString(),
-          ev,
-          pid: process.pid,
-          ppid: process.ppid,
-          uptime_s: Math.round(process.uptime()),
-          data,
-        }) + '\n'
-      process.stderr.write(`${prefix} ${line}`)
-      if (logFile) writeFileSync(logFile, line, { flag: 'a' })
-    } catch {
-      // last-resort: never let logging crash the bot
+    // Build event payload once; share with file/stderr output and hooks
+    const event = {
+      ts: new Date().toISOString(),
+      ev,
+      pid: process.pid,
+      ppid: process.ppid,
+      uptime_s: Math.round(process.uptime()),
+      data,
+    }
+
+    // File / stderr output (gated by MACF_TG_DEBUG)
+    if (fileStderrEnabled) {
+      try {
+        const line = JSON.stringify(event) + '\n'
+        process.stderr.write(`${prefix} ${line}`)
+        if (logFile) writeFileSync(logFile, line, { flag: 'a' })
+      } catch {
+        // last-resort: never let logging crash the bot
+      }
+    }
+
+    // Event hooks — fire INDEPENDENTLY of MACF_TG_DEBUG state. Each hook
+    // wrapped in try/catch so misbehaving hooks can't break the bot.
+    if (_eventHooks.length > 0) {
+      for (const hook of _eventHooks) {
+        try {
+          hook(event)
+        } catch {
+          // Silently swallow — hook exceptions must not affect bot
+        }
+      }
     }
   }
 }
