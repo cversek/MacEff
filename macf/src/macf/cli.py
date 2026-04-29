@@ -5251,15 +5251,13 @@ def cmd_task_note(args: argparse.Namespace) -> int:
     else:
         message = args.message
 
-    new_mtmd = copy.deepcopy(task.mtmd)
-    new_mtmd.updates.append(MacfTaskUpdate(
-        breadcrumb=breadcrumb,
-        description=message,
-        agent="PA",
-        type="note",
-    ))
-    new_description = task.description_with_updated_mtmd(new_mtmd)
-    update_task_file(task_id, {"description": new_description})
+    # DRY refactor (BUG #1067 follow-up): use add_task_note helper instead of
+    # inlining the read-modify-write MacfTaskUpdate pattern. Helper handles
+    # deepcopy + append + write_task_file. Returns False on any failure.
+    from .task.reader import add_task_note
+    if not add_task_note(str(task_id), message, agent="PA", note_type="note", breadcrumb=breadcrumb):
+        print(f"❌ Failed to add note to task #{task_id}")
+        return 1
 
     print(f"📝 Note added to task #{task_id}")
     print(f"   {message}")
