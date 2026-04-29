@@ -12,10 +12,24 @@
 #
 # The next Telegram tool call after this script runs may need a brief retry
 # while the new bot completes its handshake.
+#
+# TELEMETRY (Phase 1, MISSION #1043): each invocation appends a JSON line to
+# ~/.claude/channels/telegram/restart-events.jsonl. Fields:
+#   ts            ISO 8601 timestamp
+#   caller        env var TELEGRAM_RESTART_CALLER (e.g. "manual", "supervisor",
+#                 "heartbeat") — defaults to "manual"
+#   pids_killed   list of PIDs killed (or empty)
+#   stragglers    list of PIDs force-killed after grace
+#   exit_status   "killed" | "no-op" | "error"
+#   bot_uptime_s  approximate bot uptime before restart (best-effort, may be 0)
+#   notes         free-form context
 
 set -e
 
 VERBOSE="${VERBOSE:-0}"
+TELEMETRY_DIR="${HOME}/.claude/channels/telegram"
+TELEMETRY_FILE="${TELEMETRY_DIR}/restart-events.jsonl"
+CALLER="${TELEGRAM_RESTART_CALLER:-manual}"
 
 log() {
   if [ "$VERBOSE" = "1" ]; then
@@ -23,16 +37,60 @@ log() {
   fi
 }
 
+# Append a JSON line to telemetry file. Args: pids stragglers status uptime notes
+emit_telemetry() {
+  local pids="$1" stragglers="$2" status="$3" uptime="$4" notes="$5"
+  local ts
+  ts=$(python3 -c 'import datetime; print(datetime.datetime.now(datetime.timezone.utc).isoformat())' 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
+  mkdir -p "$TELEMETRY_DIR" 2>/dev/null || true
+  printf '{"ts":"%s","caller":"%s","pids_killed":%s,"stragglers":%s,"exit_status":"%s","bot_uptime_s":%s,"notes":"%s"}\n' \
+    "$ts" "$CALLER" "$pids" "$stragglers" "$status" "$uptime" "$notes" \
+    >> "$TELEMETRY_FILE" 2>/dev/null || true
+}
+
+# Best-effort uptime estimate: ps etime in seconds for the first matching pid
+estimate_uptime_seconds() {
+  local pid="$1"
+  if [ -z "$pid" ]; then
+    echo "0"; return
+  fi
+  # macOS ps etime format like "M-DD:HH:MM:SS" or "MM:SS" — convert to seconds
+  local etime
+  etime=$(ps -p "$pid" -o etime= 2>/dev/null | tr -d ' ')
+  if [ -z "$etime" ]; then
+    echo "0"; return
+  fi
+  python3 -c "
+import sys
+e = '$etime'
+# Normalize: 'D-HH:MM:SS' or 'HH:MM:SS' or 'MM:SS'
+days = 0
+if '-' in e:
+    days_s, e = e.split('-', 1)
+    days = int(days_s)
+parts = list(map(int, e.split(':')))
+while len(parts) < 3:
+    parts.insert(0, 0)
+h, m, s = parts
+print(days*86400 + h*3600 + m*60 + s)
+" 2>/dev/null || echo "0"
+}
+
 # Find any running bun-server.ts processes (the Telegram MCP bot)
 PIDS=$(pgrep -f "bun server.ts" || true)
 
 if [ -z "$PIDS" ]; then
   log "no bun server.ts processes alive — nothing to kill, CC may already be in respawn"
+  emit_telemetry "[]" "[]" "no-op" "0" "no bot processes alive"
   echo "no-op (no bot processes)"
   exit 0
 fi
 
-log "killing bun server.ts processes: $PIDS"
+# Estimate uptime from first pid (best-effort)
+FIRST_PID=$(echo "$PIDS" | head -1)
+UPTIME_S=$(estimate_uptime_seconds "$FIRST_PID")
+
+log "killing bun server.ts processes: $PIDS (uptime ~${UPTIME_S}s)"
 echo "$PIDS" | xargs -n1 kill -TERM
 
 # Wait briefly for graceful shutdown (server.ts has a 2s shutdown timer)
@@ -45,6 +103,14 @@ if [ -n "$STRAGGLERS" ]; then
   echo "$STRAGGLERS" | xargs -n1 kill -KILL
 fi
 
+# Format pids/stragglers as JSON arrays for telemetry
+PIDS_JSON=$(echo "$PIDS" | python3 -c 'import sys, json; print(json.dumps([int(p) for p in sys.stdin.read().split() if p.strip().isdigit()]))' 2>/dev/null || echo "[]")
+STRAG_JSON=$(echo "$STRAGGLERS" | python3 -c 'import sys, json; print(json.dumps([int(p) for p in sys.stdin.read().split() if p.strip().isdigit()]))' 2>/dev/null || echo "[]")
+
+emit_telemetry "$PIDS_JSON" "$STRAG_JSON" "killed" "$UPTIME_S" "graceful shutdown attempted, $([ -n "$STRAGGLERS" ] && echo "stragglers force-killed" || echo "all exited cleanly")"
+
 echo "killed pids: $(echo $PIDS | tr '\n' ' ')"
+echo "uptime before restart: ${UPTIME_S}s"
+echo "telemetry: $TELEMETRY_FILE"
 echo "CC will respawn the bot on next MCP interaction (or already has)."
 exit 0
