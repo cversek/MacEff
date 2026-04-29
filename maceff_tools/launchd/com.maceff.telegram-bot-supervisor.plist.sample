@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+    Telegram bot supervisor launchd agent (Phase 1 follow-up of MISSION #1043).
+
+    INSTALL:
+      1. Copy + customize this file to ~/Library/LaunchAgents/com.maceff.telegram-bot-supervisor.plist
+      2. Replace USERNAME with your actual user (or use $HOME-relative paths via Program/EnvironmentVariables)
+      3. Adjust supervisor period via TELEGRAM_SUPERVISOR_PERIOD_S below (default 240 = 4min)
+      4. Load: launchctl load ~/Library/LaunchAgents/com.maceff.telegram-bot-supervisor.plist
+      5. Start: launchctl start com.maceff.telegram-bot-supervisor (or auto-starts on next login)
+      6. Stop: launchctl unload ~/Library/LaunchAgents/com.maceff.telegram-bot-supervisor.plist
+
+    UNINSTALL:
+      launchctl unload ~/Library/LaunchAgents/com.maceff.telegram-bot-supervisor.plist
+      rm ~/Library/LaunchAgents/com.maceff.telegram-bot-supervisor.plist
+
+    LOG VIEWING:
+      tail -f /tmp/telegram-bot-supervisor.stdout.log
+      tail -f /tmp/telegram-bot-supervisor.stderr.log
+
+    Activation is OPT-IN per Phase 1 design — pre-emptive bot restarts cause
+    brief MCP unavailability windows. Power users hitting the 5-min ping kill
+    chronically benefit; casual users may prefer manual restart-telegram-bot.
+
+    See: agent/public/dev_scripts/llmctl/README.md (companion setup)
+         maceff_tools/restart-telegram-bot (manual restart script)
+         maceff_tools/telegram-bot-supervisor (supervisor — what this loads)
+    -->
+
+    <key>Label</key>
+    <string>com.maceff.telegram-bot-supervisor</string>
+
+    <!-- Path to telegram-bot-supervisor. Replace USERNAME with your user OR
+         change to /Users/USERNAME/gitwork/cversek/MacEff/maceff_tools/telegram-bot-supervisor -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/USERNAME/gitwork/cversek/MacEff/maceff_tools/telegram-bot-supervisor</string>
+        <string>loop</string>
+    </array>
+
+    <!-- Run at load + auto-relaunch on crash (with throttling) -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Throttle relaunches: at least 60s between restart attempts -->
+    <key>ThrottleInterval</key>
+    <integer>60</integer>
+
+    <!-- Working directory -->
+    <key>WorkingDirectory</key>
+    <string>/Users/USERNAME</string>
+
+    <!-- Environment configuration -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- Pre-emptive restart period in seconds (must be <300 to beat 5-min ping kill) -->
+        <key>TELEGRAM_SUPERVISOR_PERIOD_S</key>
+        <string>240</string>
+        <!-- Grace period: skip restart if bot uptime < N seconds (avoids races with manual caller) -->
+        <key>TELEGRAM_SUPERVISOR_GRACE_S</key>
+        <string>10</string>
+        <!-- Pidfile location -->
+        <key>TELEGRAM_SUPERVISOR_PIDFILE</key>
+        <string>/tmp/telegram-bot-supervisor.pid</string>
+        <!-- Set VERBOSE=1 to log activity; remove or set to 0 for silent operation -->
+        <key>VERBOSE</key>
+        <string>0</string>
+        <!-- Standard PATH so the script can find ollama, pgrep, etc. -->
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <!-- Output logs -->
+    <key>StandardOutPath</key>
+    <string>/tmp/telegram-bot-supervisor.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/telegram-bot-supervisor.stderr.log</string>
+
+    <!-- Process limits — supervisor itself is lightweight -->
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfProcesses</key>
+        <integer>50</integer>
+    </dict>
+
+    <!--
+    Future enhancement (deferred — see #054 idea + Phase 1 #1054 follow-up notes):
+    Self-deactivation by reading restart-events.jsonl for normalized disconnect
+    rate. Would auto-unload this plist when chronic-disconnect period ends.
+    Until that ships, the user manually unloads when no longer needed.
+    -->
+</dict>
+</plist>
