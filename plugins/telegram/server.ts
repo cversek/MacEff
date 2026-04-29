@@ -33,6 +33,12 @@ import { randomBytes } from 'crypto'
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync, renameSync, realpathSync, chmodSync, appendFileSync } from 'fs'
 import { homedir } from 'os'
 import { join, extname, sep } from 'path'
+import { createDiagnosticLogger, installLifecycleListeners } from './lib/diagnostic-logger.ts'
+
+// Diagnostic logger (Phase 2 + Phase 3 integration). No-op by default.
+// Activate: MACF_TG_DEBUG=1 (see lib/diagnostic-logger.ts for config).
+const dlog = createDiagnosticLogger()
+installLifecycleListeners(dlog)
 
 const LOG_FILE = join(homedir(), '.claude', 'channels', 'telegram', 'server.log')
 // Prevent unbounded growth (issue #46: hit 191GB in 3 weeks on SiloMacEff's Pi).
@@ -649,13 +655,26 @@ await mcp.connect(new StdioServerTransport())
 // the next session with 409 Conflict.
 let shuttingDown = false
 function shutdown(): void {
-  if (shuttingDown) return
+  if (shuttingDown) {
+    dlog('shutdown.reentry_skipped', {})
+    return
+  }
   shuttingDown = true
+  dlog('shutdown.entry', {
+    stdin_destroyed: process.stdin.destroyed,
+    stdin_readableEnded: process.stdin.readableEnded,
+  })
   process.stderr.write('telegram channel: shutting down\n')
   // bot.stop() signals the poll loop to end; the current getUpdates request
   // may take up to its long-poll timeout to return. Force-exit after 2s.
-  setTimeout(() => process.exit(0), 2000)
-  void Promise.resolve(bot.stop()).finally(() => process.exit(0))
+  setTimeout(() => {
+    dlog('shutdown.race_winner', { winner: 'timeout_2s' })
+    process.exit(0)
+  }, 2000)
+  void Promise.resolve(bot.stop()).finally(() => {
+    dlog('shutdown.race_winner', { winner: 'bot.stop' })
+    process.exit(0)
+  })
 }
 process.stdin.on('end', shutdown)
 process.stdin.on('close', shutdown)
@@ -674,7 +693,10 @@ process.on('SIGHUP', shutdown)
 // causing premature shutdown. We rely solely on stdin pipe state for
 // orphan detection.
 setInterval(() => {
-  const orphaned = process.stdin.destroyed || process.stdin.readableEnded
+  const destroyed = process.stdin.destroyed
+  const readableEnded = process.stdin.readableEnded
+  const orphaned = destroyed || readableEnded
+  dlog('watchdog.check', { destroyed, readableEnded, orphaned })
   if (orphaned) shutdown()
 }, 5000).unref()
 
