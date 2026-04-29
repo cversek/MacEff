@@ -80,6 +80,14 @@ Extract requirements by answering:
 - What is **Tool-Use Shortcutting**? When you invoke the first stage of a multi-stage pipeline tool, are you obligated to run the rest of the chain?
 - What is **Activation Skipping**? Knowledge vs state — what's the distinction the anti-pattern names?
 
+**Edge / JUMP / Compaction-Trigger questions** (added after a c_513 Edge-Shrinking discipline failure — required reading):
+
+- What is the **Edge Shrinking** anti-pattern? When the dashboard shows `🪂 Ready to jump` at CL0-CL2, what is the *wrong* response? What is the *right* response?
+- What does **JUMP** mean operationally? Why is single-emoji or one-line output at the edge an anti-pattern parallel to force-completing the sprint?
+- What survives compaction — character count or wisdom-density? Why does generative output at the edge serve the next cycle better than minimal output?
+- Why might auto-compaction NOT fire promptly at CL0 / emergency-level? What does this imply about the agent's obligation when the user (or dashboard) signals JUMP?
+- What is the relationship between §3.3.4 (compaction-trigger mechanics) and §3.3.2 (force-complete-justification)? What discipline is shared between them?
+
 ---
 
 ## Step 4: Create the Sprint Task

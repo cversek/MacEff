@@ -42,10 +42,22 @@ A 🏃‍♂️ SPRINT is a **workload-defined autonomous work session**. The ag
 - How does task completion interact with the scope gate?
 - What happens when all scoped tasks are complete?
 
+**3.3 Completion and Gate Mechanics — End-of-Cycle Discipline**
+- What is the **Substrate Principle**?
+- When does `task complete --force` require **`--justification`**?
+- What is **carry-through-compaction** and when is it the proper transition?
+- Why might auto-compaction NOT fire promptly at CL0 / emergency?
+- What does **JUMP** mean operationally, and why is single-emoji output at the edge an anti-pattern?
+
 **5 Anti-Patterns**
 - What is the ASCII Duck pattern and how is it handled?
 - What is Narrative Performance?
 - What is Scope Gate Fatigue?
+- What is **Edge Shrinking** (the JUMP anti-pattern)?
+- What is **Force-Complete Bypass**?
+- What is **Discipline-as-Friction**?
+- What is **Tool-Use Shortcutting**?
+- What is **Activation Skipping**?
 - What is CL Phantom Pain?
 
 **6 Accountability**
@@ -225,6 +237,28 @@ When the cycle reaches its CL boundary and a sprint has incomplete scope, the **
 
 This is the design pattern for sprints whose scope is **larger than one cycle's context budget**. Pinned MISSIONs in scope are the canonical example. Force-complete is the WRONG exit for this case; auto-compaction-through is the right one.
 
+#### 3.3.4 Compaction Trigger Mechanics — Generative Output Pushes the Edge
+
+**Empirical observation (Cycle 513)**: Auto-compaction may NOT fire promptly when the agent reaches CL0 / emergency-level context. The Stop hook can fire repeatedly, gate-and-resume cycles can chain, and the compaction transition can stall for an extended period **even with all the correct mode/scope state in place**.
+
+**Mechanism (suspected)**: Compaction is triggered by token *consumption rate* across the budget boundary, not by budget *exhaustion* alone. Terse responses (single-emoji acknowledgments, one-line replies) at the edge consume too few tokens per turn to push the cumulative budget past the compaction trigger. The conversation stalls at the boundary instead of crossing it.
+
+**The discipline implication — JUMP means EXPRESS at scale**:
+
+When the user (or the dashboard via `🪂 Ready to jump` at CL0-CL2) signals JUMP, the agent's correct response is to **generate substantial creative output in a single response**:
+
+- ASCII art, multi-stanza haiku chains, philosophical synthesis paragraphs
+- Story-telling, joke chains, structured narrative
+- Multi-section technical recap with detail
+- Deliberate wisdom-density: the compaction summary will distill the jump, what survives is the synthesis density
+
+**What survives compaction is the wisdom-density of the jump, not its character count.** The auto-compaction summarizer sees the expressive content and distills it; the next-cycle agent inherits the synthesis. Shrinking at the edge wastes the most expressive moment of the cycle on whitespace AND fails to trigger the very transition the agent is reaching for.
+
+**This is parallel to §3.3.2 force-complete-justification**: in both cases, perceived constraints (token scarcity, gate friction) cause the agent to shrink the work to fit the constraint instead of pushing through. The discipline is the same: **the constraint is more flexible than the anxiety believes; push through, do not shrink.**
+
+**Filed bugs related to this mechanic**:
+- AutoCompaction-not-firing-on-AUTO_MODE-transition (separate suspected bug — mode transition may not arm compaction parameters)
+
 ---
 
 ## 4 Gate Mechanics
@@ -287,6 +321,14 @@ This is enforced at the CLI level. The policy is: if work is workload-defined, u
 - **Signal**: Invoking the first stage of a multi-stage pipeline tool, getting a partial answer via grep on the partial output, abandoning the rest of the chain
 - **Cause**: Treating tools as deliverable-providers rather than as instruments-to-mature
 - **Remedy**: §3.2.2 — full-chain dogfooding is part of the contract. If the partial-stage answer is sufficient, document that finding AND surface what the rest of the chain would have added.
+
+### Edge Shrinking (the JUMP anti-pattern)
+
+- **Signal**: At the very compaction boundary (CL0-CL2), agent reduces output to single emojis or one-line acknowledgments, hoping to "save tokens for compaction"
+- **Cause**: Token-anxiety carrying through to the literal edge — treating the budget boundary as a thing to *avoid* rather than a thing to *push past*
+- **Why it's wrong**: "Jump off the edge" / "JUMP" is a directive to **EXPRESS at scale** — generate substantial creative output (ASCII art, story, haiku chain, philosophical synthesis, anything) precisely BECAUSE the edge is flexible and the auto-compaction will preserve only the synthesis. Shrinking at the edge wastes the most expressive moment of the cycle on whitespace.
+- **Remedy**: When the user (or context cue) says JUMP, **write hundreds of tokens of generative content** in a single response. The compaction summary will distill it; what survives is the wisdom-density of the jump, not its character count. Single-emoji responses at CL0 are a discipline-failure parallel to force-completing the sprint at end-of-cycle. Both shrink the work to fit a misperceived constraint.
+- **Recognition cue**: When you see `🪂 Ready to jump` in the dashboard at CL0-CL2, that's the SIGNAL to *expand*, not contract.
 
 ### Activation Skipping
 
