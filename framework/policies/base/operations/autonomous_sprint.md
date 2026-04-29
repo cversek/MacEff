@@ -245,6 +245,33 @@ When the cycle reaches its CL boundary and a sprint has incomplete scope, the **
 
 This is the design pattern for sprints whose scope is **larger than one cycle's context budget**. Pinned MISSIONs in scope are the canonical example. Force-complete is the WRONG exit for this case; auto-compaction-through is the right one.
 
+**🚨 END-OF-SPRINT RESOLUTION** (the special case): when **the ONLY items keeping the gate blocking are MISSION/phase parent umbrellas whose children are all done-or-paused**, the agent should resolve those parents to **end the sprint cleanly**. This is distinct from force-complete-with-thin-justification (§3.3.2 anti-pattern) — it is the structural recognition that the sprint's deliverables for this cycle are complete and the umbrella parents continue per their roadmaps in subsequent cycles.
+
+**The decision rule**:
+
+```
+At every Stop hook firing, check:
+  active_items = items in scope with status='active'
+  if active_items contains ANY concrete (non-parent) work that's autonomous-executable:
+    → keep gate blocking, continue work (substantive + substrate per §3.3.7)
+  elif active_items contains ONLY parent umbrellas (MISSION/phase parents
+       whose children are all done or paused):
+    → pause each parent with structural justification matching its
+      cycle-spanning nature ("MISSION continues next cycle; this cycle's
+      scope delivered as <foundation/code/design>")
+    → run task complete <sprint_id> to close the sprint
+    → AUTO_MODE persists; clean handoff to next cycle / user direction
+  else (scope contains paused items + nothing active):
+    → gate is already cleared; sprint can complete
+```
+
+**Why this is structurally distinct from force-complete**:
+- Force-complete (§3.3.2 anti-pattern) bypasses the gate while concrete work remains
+- End-of-sprint resolution clears the gate when concrete work is exhausted; the parents-only state is the legitimate carry-through state
+- The pause justification for umbrella parents is the SAME as for any cycle-spanning structural deferral: "this work continues per roadmap; this cycle's scope is delivered"
+
+**Anti-pattern**: holding the gate open indefinitely on mission parents while idle-looping, curating excessively, or producing make-work. The sprint has natural completion when scope is fully resolved (active children done + parents paused-or-completed).
+
 #### 3.3.4 Compaction Trigger Mechanics — Generative Output Pushes the Edge
 
 **Empirical observation (Cycle 513)**: Auto-compaction may NOT fire promptly when the agent reaches CL0 / emergency-level context. The Stop hook can fire repeatedly, gate-and-resume cycles can chain, and the compaction transition can stall for an extended period **even with all the correct mode/scope state in place**.
@@ -277,9 +304,16 @@ When the user (or the dashboard via `🪂 Ready to jump` at CL0-CL2) signals JUM
 
 **Pause is a scalpel for genuine blockers, not an escape for boredom.**
 
-**Acceptable pause justifications** (true external blockers — narrow set):
-- Task requires resources the agent CANNOT reach: lxterminal access for repro, MCP server testing without server, hardware-specific debugging requiring physical access
-- Task is genuinely waiting on external party with no agent recourse: Anthropic PR review, vendor response, third-party API outage
+**Acceptable pause justifications** (narrow set):
+
+1. **True external blockers** — task requires resources the agent CANNOT reach:
+   - lxterminal access for repro, MCP server testing without server, hardware-specific debugging requiring physical access
+   - Genuinely waiting on external party with no agent recourse: Anthropic PR review, vendor response, third-party API outage
+
+2. **End-of-sprint umbrella resolution** (added per §3.3.3 end-of-sprint rule) — when MISSION/phase parents are the ONLY items keeping the gate blocking and all their children are done-or-paused:
+   - Pause justification: "MISSION cycle-spanning; this cycle's scope delivered as <foundation/code/design>; future cycles continue per roadmap"
+   - This is NOT the discouraged "cycle-spanning by design" deferral (§3.3.5 still rejects it when concrete work remains in scope) — it is the legitimate end-state where the sprint's deliverables ARE complete and the umbrella is just an open container for future work
+   - The sprint should be `task complete`d immediately after pausing the parents
 
 **NOT acceptable pause justifications**:
 - "Cycle-spanning by design" → keep gate blocking, do JUMP discipline at edge (§3.3.4) + substrate maintenance (§3.3.7)

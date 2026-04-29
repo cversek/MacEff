@@ -102,6 +102,9 @@ Extract requirements by answering:
 - How does the policy distinguish pausing a task, completing a task, and de-escalating mode? What structural meaning does each carry?
 - What scoped task types does the policy mark as almost never pause-appropriate? Why?
 - What does the policy say about the agent's default response when autonomous-friendly new-deliverable work feels exhausted?
+- What does the policy say to do when the ONLY items keeping the gate blocking are MISSION or phase parent umbrellas whose children are all done-or-paused? When does ending the sprint cleanly become the right move vs continuing to hold the gate?
+- How does the policy distinguish 'cycle-spanning is unacceptable as pause justification' (when concrete work remains) from 'cycle-spanning is acceptable as pause justification' (when only umbrella parents remain)?
+- What completes the sprint cleanly after umbrella parents are paused at end-of-sprint?
 
 ---
 
