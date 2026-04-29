@@ -474,7 +474,47 @@ def _detect_quiet_mode_event(session_id: str) -> bool:
 
 
 def _get_current_work_mode() -> Optional[str]:
-    """Get the current work mode from the most recent work_mode_change event."""
+    """Get the current work mode.
+
+    Resolution order (BUG #1068 fix — Cycle 514):
+    1. SPRINT lifetime invariant: if any active scoped task has task_type='SPRINT'
+       and status='in_progress', force-return 'SPRINT'. This enforces
+       autonomous_sprint.md's mode-lock for the LIFETIME of the sprint, not just
+       its creation moment. Survives session migration, compaction recovery,
+       and event-window truncation.
+    2. PLAY_TIME lifetime invariant: same logic for PLAY_TIME tasks.
+    3. Fall back to most recent work_mode_change event (existing behavior).
+
+    The lifetime invariant fix addresses the silent emoji-disappearance bug:
+    SPRINT was set imperatively at task START, but the work_mode_change event
+    could be evicted from the 50-event window over a long sprint, dropping the
+    🏃‍♂️ from the dashboard while the sprint was still active with scoped work.
+    """
+    # Lifetime invariant: SPRINT/PLAY_TIME tasks in active scope force their work mode.
+    # This prevents the emoji-disappearance bug where the imperative
+    # work_mode_change event from sprint creation aged out of the 50-event window.
+    try:
+        from ..task.scope import get_scope_check
+        from ..task.reader import TaskReader
+        scope = get_scope_check()
+        active_entries = scope.get("active", [])
+        if active_entries:
+            reader = TaskReader()
+            for entry in active_entries:
+                tid = entry.get("id")
+                task = reader.read_task(tid)
+                if not task or not task.mtmd:
+                    continue
+                tt = getattr(task.mtmd, "task_type", None)
+                if tt == "SPRINT" and task.status == "in_progress":
+                    return "SPRINT"
+                if tt == "PLAY_TIME" and task.status == "in_progress":
+                    return "PLAY_TIME"
+    except (ImportError, OSError, AttributeError, ValueError) as e:
+        # Non-fatal: fall through to event-log lookup
+        print(f"⚠️ MACF: SPRINT/PLAY_TIME scope check in _get_current_work_mode failed (non-blocking): {e}", file=sys.stderr)
+
+    # Fall back: most recent work_mode_change event (existing behavior)
     for event in read_events(limit=50, reverse=True):
         if event.get("event") == "work_mode_change":
             return event.get("data", {}).get("mode")
