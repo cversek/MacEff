@@ -152,3 +152,124 @@ class TestRecommenderPrefix:
         assert 'format_recommendation(' in source  # sanity: function is still called
         assert ', "ctb")' not in source, "hardcoded /ctb-* prefix leaked back into the stop hook"
         assert ", 'ctb')" not in source, "hardcoded /ctb-* prefix leaked back into the stop hook"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BUG #1067 — scope pause/unpause/add/remove primitives (Cycle 514)
+# 3-state model (active/paused/inactive); paused tasks excluded from gate
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestScopePausePrimitives:
+    """Test pause/unpause behavior + 3-state scope model."""
+
+    def test_pause_active_task(self, isolated_events):
+        from macf.task.scope import set_scope, pause_scoped_tasks, get_scope_state
+        set_scope(["100", "101"])
+        result = pause_scoped_tasks(["100"], justification="external blocker — needs lxterm access")
+        assert result["success"]
+        assert result["paused_ids"] == ["100"]
+        state = get_scope_state()
+        assert state["100"] == "paused"
+        assert state["101"] == "active"  # unaffected
+
+    def test_pause_requires_justification(self, isolated_events):
+        from macf.task.scope import set_scope, pause_scoped_tasks
+        set_scope(["100"])
+        # Empty justification should fail
+        result = pause_scoped_tasks(["100"], justification="")
+        assert not result["success"]
+        assert result["paused_ids"] == []
+        # Whitespace-only also fails
+        result = pause_scoped_tasks(["100"], justification="   ")
+        assert not result["success"]
+
+    def test_pause_skips_non_active_tasks(self, isolated_events):
+        from macf.task.scope import set_scope, pause_scoped_tasks, get_scope_state
+        set_scope(["100"])
+        # Pause once OK
+        pause_scoped_tasks(["100"], justification="reason A")
+        # Pause again is skipped (already paused)
+        result = pause_scoped_tasks(["100"], justification="reason B")
+        assert result["paused_ids"] == []
+        assert any(s["reason"] == "already_paused" for s in result["skipped_ids"])
+
+    def test_pause_skips_unscoped_tasks(self, isolated_events):
+        from macf.task.scope import pause_scoped_tasks
+        result = pause_scoped_tasks(["999"], justification="reason")
+        assert result["paused_ids"] == []
+        assert any(s["reason"] == "not_in_scope" for s in result["skipped_ids"])
+
+    def test_unpause_restores_active(self, isolated_events):
+        from macf.task.scope import set_scope, pause_scoped_tasks, unpause_scoped_tasks, get_scope_state
+        set_scope(["100"])
+        pause_scoped_tasks(["100"], justification="reason")
+        result = unpause_scoped_tasks(["100"])
+        assert result["success"]
+        assert result["unpaused_ids"] == ["100"]
+        assert get_scope_state()["100"] == "active"
+
+    def test_unpause_skips_active_tasks(self, isolated_events):
+        from macf.task.scope import set_scope, unpause_scoped_tasks
+        set_scope(["100"])
+        # Trying to unpause an already-active task is a no-op
+        result = unpause_scoped_tasks(["100"])
+        assert result["unpaused_ids"] == []
+        assert any("not_paused" in s["reason"] for s in result["skipped_ids"])
+
+    def test_paused_excluded_from_active_count(self, isolated_events):
+        """The key invariant: paused_count separate from active_count, gate uses active_count."""
+        from macf.task.scope import set_scope, pause_scoped_tasks, get_scope_check
+        set_scope(["100", "101", "102"])
+        pause_scoped_tasks(["100"], justification="external blocker")
+        check = get_scope_check()
+        assert check["active_count"] == 2  # 101, 102
+        assert check["paused_count"] == 1  # 100
+        assert check["inactive_count"] == 0
+        assert check["total"] == 3
+
+
+class TestScopeAddRemovePrimitives:
+    """Test scope add/remove (incremental edits, no replace)."""
+
+    def test_add_to_empty_scope(self, isolated_events):
+        from macf.task.scope import add_to_scope, get_scope_state
+        result = add_to_scope(["100", "101"])
+        assert result["success"]
+        assert sorted(result["added_ids"]) == ["100", "101"]
+        state = get_scope_state()
+        assert state["100"] == "active"
+        assert state["101"] == "active"
+
+    def test_add_appends_no_replace(self, isolated_events):
+        """add_to_scope is incremental — does NOT replace existing scope."""
+        from macf.task.scope import set_scope, add_to_scope, get_scope_state
+        set_scope(["100"])
+        add_to_scope(["101"])
+        state = get_scope_state()
+        # Both should be present
+        assert state["100"] == "active"
+        assert state["101"] == "active"
+
+    def test_add_skips_already_in_scope(self, isolated_events):
+        from macf.task.scope import set_scope, add_to_scope
+        set_scope(["100"])
+        result = add_to_scope(["100", "101"])
+        assert result["added_ids"] == ["101"]  # 100 already in scope, skipped
+        assert any(s["id"] == "100" for s in result["skipped_ids"])
+
+    def test_remove_drops_task(self, isolated_events):
+        from macf.task.scope import set_scope, remove_from_scope, get_scope_state
+        set_scope(["100", "101"])
+        result = remove_from_scope(["100"])
+        assert result["success"]
+        assert result["removed_ids"] == ["100"]
+        state = get_scope_state()
+        assert "100" not in state  # gone entirely
+        assert state["101"] == "active"  # unaffected
+
+    def test_remove_skips_unscoped(self, isolated_events):
+        from macf.task.scope import remove_from_scope
+        result = remove_from_scope(["999"])
+        assert result["removed_ids"] == []
+        assert any(s["reason"] == "not_in_scope" for s in result["skipped_ids"])
