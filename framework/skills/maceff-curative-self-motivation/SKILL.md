@@ -32,7 +32,7 @@ Read the sections that answer: "What are work modes?" and "What format does the 
 ## Set Work Mode
 
 ```bash
-macf_tools events append work_mode_change '{"mode": "CURATE"}'
+macf_tools mode set-work CURATE
 ```
 
 ---

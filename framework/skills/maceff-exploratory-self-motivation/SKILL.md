@@ -30,7 +30,7 @@ Read the sections that answer: "What are work modes?" and "How does the Markov t
 ## Set Work Mode
 
 ```bash
-macf_tools events append work_mode_change '{"mode": "DISCOVER"}'
+macf_tools mode set-work DISCOVER
 ```
 
 ---
@@ -42,7 +42,7 @@ Before creating tasks, pause and think deeply:
 1. **What domains haven't I explored?** Are there source files, directories, or systems I haven't read?
 2. **What questions remain unanswered?** What gaps exist in my knowledge base?
 3. **What's pulling my curiosity?** What did I notice during prior work that I filed away for later?
-4. **What would Craig find most valuable to know?** What discoveries would advance the MISSION?
+4. **What would the user find most valuable to know?** What discoveries would advance the MISSION?
 5. **Am I rotating domains or going deeper?** If current domain is exhausted, which NEW domain has the highest expected surprise density?
 
 ---

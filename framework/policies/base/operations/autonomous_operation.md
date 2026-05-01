@@ -25,6 +25,9 @@ Applies to all Primary Agents (PA) and Subagents (SA) capable of extended autono
 - How do modes differ in permission behavior?
 - How do modes differ in context management?
 - What is the default mode?
+- How does the policy specify mode selection at gate points when both Markov recommendation and user request are present?
+- What does the policy say about user-concrete-request precedence over chain-advance / Markov suggestions, regardless of autonomy state?
+- How does the policy specify confirmation authority for advisory operations in AUTO_MODE? When does user-skill-invocation confer pre-authorization?
 
 **2 Mode Persistence Across Sessions**
 - When is mode preserved vs reset?
@@ -81,6 +84,48 @@ MacEff agents operate in one of two modes:
 - **Recovery protocol**: Read artifacts, resume authorized work autonomously
 - **Hook behavior**: Warn but do not block violations
 - **User involvement**: Low - autonomous execution with accountability
+
+### Mode Selection at Gate Points (User-Request Precedence)
+
+When a Stop hook fires (e.g., chain advance in PLAY_TIME, Markov recommender at gate point), the framework offers a suggested next work mode. The agent must choose:
+
+**Selection hierarchy** (highest priority first):
+1. **User concrete request** — if the user has made a recent concrete request that has a clear work-mode mapping (e.g., "use the github triage skill" → BUILD; "curate learnings" → CURATE), that mapping wins. This applies **regardless of autonomy state** (AUTO_MODE or MANUAL_MODE).
+2. **Markov / chain-advance recommendation** — when the user is IDLE (no recent concrete request), the framework's recommendation is the correct default.
+3. **Continuation of current mode** — when neither a recent user request nor a fresh recommendation applies, continue the current work mode if work remains.
+
+**The principle**: chain advance and Markov recommendations are FALLBACK signals for when the agent has no clearer direction. They are NOT hard transitions that override explicit user direction. Honoring a chain advance while the user has an active concrete request is the **Activation-Skipping-Inverse** anti-pattern — the agent activates a NEW mode framework while the user's CURRENT request goes unaddressed.
+
+**Override discipline**: when the agent overrides a recommended mode based on user-request precedence, the override MUST be noted in task notes: `<MODE>: Recommender suggested {recommended} (p=X%). Override: chose {chosen} because {user-request-mapping}.`
+
+### Confirmation Authority for Advisory Operations in AUTO_MODE
+
+Some skills have hard constraints like "Do NOT apply X without user confirmation" — these protect against accidental destructive operations. In AUTO_MODE, the user's authorization model is different:
+
+**Confirmation authority hierarchy in AUTO_MODE**:
+1. **Explicit user invocation of the skill** confers confirmation authority for the skill's advisory operations. The user invoking `/skill-name <args>` IS the confirmation; further confirmation gates create the Discipline-as-Friction anti-pattern.
+2. **User-deferred decisions** (where the user has explicitly said "ask me before X" or set up a confirmation gate via prior instruction) override this.
+3. **Genuinely destructive operations** (deletion of data, force-pushes to shared branches, mass-mutation of external state) ALWAYS require explicit confirmation regardless of mode.
+
+**Skills in AUTO_MODE** should extract from this policy via timeless question:
+> "What does the autonomous_operation policy specify about confirmation authority for advisory operations in AUTO_MODE? When does user-skill-invocation confer pre-authorization?"
+
+Skills should NOT embed hard-constraint "ask user to confirm" instructions for advisory operations. Instead, they should reference the confirmation-authority hierarchy here. This way:
+- AUTO_MODE invocation = pre-authorized for advisory work
+- MANUAL_MODE invocation = traditional confirmation flow still active
+- Explicit user-deferred decisions are honored in either mode
+- Truly destructive operations are gated regardless of mode
+
+**Examples of advisory operations** (AUTO_MODE invocation = confirmation):
+- Applying labels to GitHub issues (reversible, informational)
+- Creating tracked tasks for triaged items (additive, no data loss)
+- Submitting comments on PRs / issues (reversible, transparent)
+
+**Examples of operations that ALWAYS require confirmation**:
+- `git push --force` to shared branches
+- File deletion (especially `rm -rf`)
+- Closing tasks that aren't user-authorized for closure
+- Modifying user system state (shell rc, settings.local.json) without explicit ask
 
 ---
 
