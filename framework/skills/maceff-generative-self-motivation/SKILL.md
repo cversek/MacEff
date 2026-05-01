@@ -30,7 +30,7 @@ Read the sections that answer: "What are work modes?" and "How does BUILD relate
 ## Set Work Mode
 
 ```bash
-macf_tools events append work_mode_change '{"mode": "BUILD"}'
+macf_tools mode set-work BUILD
 ```
 
 ---
