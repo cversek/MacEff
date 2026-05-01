@@ -6,7 +6,7 @@ task type. These are opt-in validators — the MTMD `custom` field remains a
 plain dict for all other task types.
 
 Supported task types:
-- SprintCustom   — 🏃‍♂️ SPRINT: workload-defined autonomous work (no timer)
+- SprintCustom   — 🏃 SPRINT: workload-defined autonomous work (no timer)
 - PlayTimeCustom — ⏲️ PLAY_TIME: time-bounded autonomous play
 
 Policy spec:
@@ -31,7 +31,7 @@ def _valid_work_mode_names() -> set[str]:
 
 
 # ---------------------------------------------------------------------------
-# SprintCustom — 🏃‍♂️ SPRINT task type
+# SprintCustom — 🏃 SPRINT task type
 # ---------------------------------------------------------------------------
 
 class SprintCustom(BaseModel):

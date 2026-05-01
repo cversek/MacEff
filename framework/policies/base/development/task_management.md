@@ -47,7 +47,7 @@ Task management policy governs the use of Claude Code native Task* tools (TaskCr
 - What subject format does GH_ISSUE use?
 - What custom fields are stored in MTMD?
 
-**2.6 🏃‍♂️ SPRINT Type**
+**2.6 🏃 SPRINT Type**
 - When do I create a SPRINT task?
 - What is the SPRINT custom schema?
 - How does the SPRINT lifecycle work?
@@ -253,7 +253,7 @@ updates:
 | 📦 | ARCHIVE | - | Archived/completed hierarchy |
 | 🔧 | TASK | - | General work item (task file IS the CA) |
 | 🐛 | BUG | ⚠️ XOR | Defect - requires EITHER plan OR plan_ca_ref |
-| 🏃‍♂️ | SPRINT | ⚠️ XOR | Workload-defined autonomous session (sprint_log.md OR plan_ca_ref) |
+| 🏃 | SPRINT | ⚠️ XOR | Workload-defined autonomous session (sprint_log.md OR plan_ca_ref) |
 | ⏲️ | PLAY_TIME | ✅ play_log.md | Time-bounded autonomous play with mode chain |
 
 **Lightweight Phase Annotation**: For phases WITHOUT detailed subplan CAs, use `-` prefix:
@@ -461,7 +461,7 @@ With MTMD:
 
 **Why Mandatory**: Task hierarchy provides observability. Without phase tasks, user cannot track progress through MISSION phases in task UI.
 
-### 2.6 🏃‍♂️ SPRINT Type
+### 2.6 🏃 SPRINT Type
 
 SPRINT tasks represent **workload-defined autonomous work sessions**. The completion boundary is scope (all predefined tasks done), not wall clock. Mode is locked at SPRINT for the duration.
 
@@ -1296,7 +1296,7 @@ macf_tools task scope check                       # JSON output for Stop hook
 | Type | Autonomy expectation | Pause appropriateness |
 |------|---------------------|-----------------------|
 | 🧪 EXPERIMENT | Protocol designed upfront for AUTO_MODE | **Almost never** — protocol IS the directive |
-| 🏃‍♂️ SPRINT | Scoped task set IS the workload commitment | Only true external blockers |
+| 🏃 SPRINT | Scoped task set IS the workload commitment | Only true external blockers |
 | ⏲️ PLAY_TIME | Time-bounded autonomous play; chain IS the structure | **Never appeal mid-chain** |
 | 🗺️ MISSION (scoped) | Phase children execute autonomously per roadmap | Only when phase requires unreachable resources |
 | 🐛 BUG (scoped) | Bug fix work is autonomous-friendly | Only when reproduction requires unavailable resources |

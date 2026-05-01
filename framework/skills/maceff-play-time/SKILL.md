@@ -26,8 +26,8 @@ Launch a ⏲️ PLAY_TIME — time-bounded autonomous exploration with a predete
 | "Explore X for N hours" / time allotment | ⏲️ PLAY_TIME |
 | "Work for N hours" / open-ended | ⏲️ PLAY_TIME |
 | Mode rotation desired | ⏲️ PLAY_TIME |
-| "Finish these N tasks" / defined workload | 🏃‍♂️ SPRINT |
-| Stay focused on completing a known plan | 🏃‍♂️ SPRINT |
+| "Finish these N tasks" / defined workload | 🏃 SPRINT |
+| Stay focused on completing a known plan | 🏃 SPRINT |
 
 PLAY_TIME follows a predetermined chain, then continues under Markov recommender guidance. If the work is workload-defined and mode rotation is counterproductive, use `maceff-sprint`.
 
