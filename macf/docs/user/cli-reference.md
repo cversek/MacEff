@@ -1269,7 +1269,7 @@ macf_tools task create task "Update README badges"
 
 #### task create sprint
 
-Create a 🏃‍♂️ SPRINT task for workload-defined autonomous work. Use when the agent is executing a predefined or curated set of tasks. Completion is determined by scope, not wall clock. The Markov recommender is disabled for the duration.
+Create a 🏃 SPRINT task for workload-defined autonomous work. Use when the agent is executing a predefined or curated set of tasks. Completion is determined by scope, not wall clock. The Markov recommender is disabled for the duration.
 
 **Syntax:**
 ```bash
@@ -1847,7 +1847,7 @@ macf_tools recommender sample
    Distribution: 📋 CURATE 25% | 🔍 DISCOVER 22% | ...
 ```
 
-**Related:** See `autonomous_sprint.md` and `play_time.md` policies for recommender interaction protocol. The recommender is disabled during 🏃‍♂️ SPRINT and active after chain exhaustion during ⏲️ PLAY_TIME.
+**Related:** See `autonomous_sprint.md` and `play_time.md` policies for recommender interaction protocol. The recommender is disabled during 🏃 SPRINT and active after chain exhaustion during ⏲️ PLAY_TIME.
 
 ---
 

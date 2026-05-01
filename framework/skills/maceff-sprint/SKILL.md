@@ -4,7 +4,7 @@ description: "USE when launching workload-defined autonomous work. Wraps `task c
 allowed-tools: Bash, Read, Grep, Glob
 ---
 
-Launch a 🏃‍♂️ SPRINT — workload-defined autonomous work scoped to a predefined task set.
+Launch a 🏃 SPRINT — workload-defined autonomous work scoped to a predefined task set.
 
 ---
 
@@ -22,11 +22,11 @@ Launch a 🏃‍♂️ SPRINT — workload-defined autonomous work scoped to a p
 
 | Signal | Use |
 |--------|-----|
-| "Finish these N tasks" / defined workload | 🏃‍♂️ SPRINT |
+| "Finish these N tasks" / defined workload | 🏃 SPRINT |
 | "Work for N hours" / time allotment | ⏲️ PLAY_TIME |
 | "Explore X for an hour" / open-ended | ⏲️ PLAY_TIME |
 | Mode rotation desired | ⏲️ PLAY_TIME |
-| Stay focused on completing a known plan | 🏃‍♂️ SPRINT |
+| Stay focused on completing a known plan | 🏃 SPRINT |
 
 SPRINT locks the work mode at SPRINT and disables the Markov recommender. If mode rotation or Markov guidance is needed, use `maceff-play-time`.
 
@@ -151,7 +151,7 @@ macf_tools task note <sprint_id> "SPRINT: Launched at <time>. Goal: <description
 
 ## Step 6: Execute — Work Through Scoped Tasks
 
-**Mode is locked at SPRINT 🏃‍♂️.** The dashboard shows `🏗️ MACF 🤖 🏃‍♂️ | …` for the duration. The Markov recommender is disabled — no mode-change suggestions fire.
+**Mode is locked at SPRINT 🏃.** The dashboard shows `🏗️ MACF 🤖 🏃 | …` for the duration. The Markov recommender is disabled — no mode-change suggestions fire.
 
 Work through scoped tasks systematically. Complete each task the moment its work finishes:
 

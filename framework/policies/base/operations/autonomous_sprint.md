@@ -12,7 +12,7 @@
 
 ## Purpose
 
-A 🏃‍♂️ SPRINT is a **workload-defined autonomous work session**. The agent executes a predefined or curated set of scoped tasks without a timer. Completion is determined by scope, not wall clock. The Markov recommender is **disabled** (mode-locked at SPRINT). The Stop hook nags about uncompleted scoped work rather than suggesting mode transitions.
+A 🏃 SPRINT is a **workload-defined autonomous work session**. The agent executes a predefined or curated set of scoped tasks without a timer. Completion is determined by scope, not wall clock. The Markov recommender is **disabled** (mode-locked at SPRINT). The Stop hook nags about uncompleted scoped work rather than suggesting mode transitions.
 
 **Core Insight**: SPRINT executes a known plan. If exploration or time-bounded play is needed instead, use ⏲️ PLAY_TIME (see `play_time.md`).
 
@@ -97,7 +97,7 @@ A SPRINT task applies when:
 
 ### 1.2 Relationship to PLAY_TIME
 
-| Aspect | 🏃‍♂️ SPRINT | ⏲️ PLAY_TIME |
+| Aspect | 🏃 SPRINT | ⏲️ PLAY_TIME |
 |--------|-----------|-------------|
 | Bounded by | Scope completion | Wall-clock timer |
 | Timer | Forbidden | Mandatory |
@@ -113,11 +113,11 @@ See `play_time.md` for PLAY_TIME semantics.
 
 ### 2.1 Mode-Locking
 
-When a SPRINT task starts, the work mode is set to **SPRINT 🏃‍♂️** (see `mode_system.md`). This mode-lock means:
+When a SPRINT task starts, the work mode is set to **SPRINT 🏃** (see `mode_system.md`). This mode-lock means:
 
 - The **Markov recommender is disabled** — no mode-change suggestions fire at gate points
 - The Stop hook **does not** suggest self-motivation skills or mode transitions
-- The dashboard shows `🏗️ MACF 🤖 🏃‍♂️ | …` for the duration of the sprint
+- The dashboard shows `🏗️ MACF 🤖 🏃 | …` for the duration of the sprint
 - `mode set-work <other>` while SPRINT is active warns or rejects (see `mode_system.md` for strictness policy)
 
 **Why mode-locking**: SPRINT executes a known plan. Markov noise (mode-transition suggestions) is counterproductive when the agent's task set is already defined. The agent stays focused on completing scoped work, not deciding what to do next.
@@ -332,7 +332,7 @@ When the user (or the dashboard via `🪂 Ready to jump` at CL0-CL2) signals JUM
 | Type | Autonomy expectation | Pause appropriateness |
 |------|---------------------|-----------------------|
 | 🧪 EXPERIMENT | Protocol designed upfront for AUTO_MODE. Phases execute per protocol. | **Almost never** — if experiment can't proceed autonomously, that's a protocol design failure |
-| 🏃‍♂️ SPRINT | Scoped task set IS the workload commitment. Phase children of pre-scoped MISSIONs inherit authorization. | Only true external blockers (resources/vendor) |
+| 🏃 SPRINT | Scoped task set IS the workload commitment. Phase children of pre-scoped MISSIONs inherit authorization. | Only true external blockers (resources/vendor) |
 | ⏲️ PLAY_TIME | Time-bounded autonomous play. The chain IS the directive. | **Never appeal to user mid-chain** — chain is the autonomous structure |
 | 🗺️ MISSION (scoped) | Phase children execute autonomously per roadmap | Only when phase requires resources agent CANNOT reach |
 | 🐛 BUG (scoped) | Bug fix work is autonomous-friendly | Only when reproduction requires unavailable resources |

@@ -1516,10 +1516,10 @@ def create_sprint(
     description = f"→ {ca_path_relative}\n\n{_generate_mtmd_block(mtmd)}"
     subject = (
         f"{ANSI_DIM}#{str(task_id).rjust(3)[:-len(str(task_id))]}{task_id}{ANSI_DIM_OFF} "
-        f"🏃‍♂️ SPRINT: {title}"
+        f"🏃 SPRINT: {title}"
     )
     # Simpler subject using compose_subject pattern
-    subject = f"{ANSI_DIM}{('  #' + str(task_id)).rjust(4)}{ANSI_DIM_OFF} 🏃‍♂️ SPRINT: {title}"
+    subject = f"{ANSI_DIM}{('  #' + str(task_id)).rjust(4)}{ANSI_DIM_OFF} 🏃 SPRINT: {title}"
 
     task_file = _create_task_file(task_id, subject, description, session_uuid=session_uuid)
 

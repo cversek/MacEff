@@ -4771,7 +4771,7 @@ def cmd_task_create_sprint(args: argparse.Namespace) -> int:
             print(f"📄 Sprint log: {result['ca_path']}")
             print(f"📌 Scope ({len(result['scope'])} tasks): {result['scope']}")
             if result["auto_start_completed"]:
-                print(f"🏃‍♂️ Auto-started in SPRINT mode")
+                print(f"🏃 Auto-started in SPRINT mode")
             elif not getattr(args, "no_auto_start", False):
                 print(f"⚠️  Auto-start incomplete: {result.get('auto_start_error')}")
             else:
@@ -7450,7 +7450,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "sprint",
         help="create SPRINT task (workload-defined autonomous work, no timer)",
         description=(
-            "Create a 🏃‍♂️ SPRINT task for workload-defined autonomous work.\n\n"
+            "Create a 🏃 SPRINT task for workload-defined autonomous work.\n\n"
             "SPRINT runs until all scoped tasks are complete (no timer).\n"
             "Work mode is locked at SPRINT; Markov recommender is silenced.\n\n"
             "Examples:\n"

@@ -14,7 +14,7 @@
 
 A ⏲️ PLAY_TIME is a **time-bounded autonomous play session**. The agent works within a wall-clock budget, following a **predetermined work-mode chain** until it exhausts, then continues under **Markov recommender** guidance until the timer expires. Mode rotation is the defining characteristic: PLAY_TIME explores within a time budget rather than executing a known task list.
 
-**Core Insight**: PLAY_TIME is what happens when the user says "go explore for an hour." If the work is workload-defined with a predefined task list instead, use 🏃‍♂️ SPRINT (see `autonomous_sprint.md`).
+**Core Insight**: PLAY_TIME is what happens when the user says "go explore for an hour." If the work is workload-defined with a predefined task list instead, use 🏃 SPRINT (see `autonomous_sprint.md`).
 
 ---
 
@@ -77,15 +77,15 @@ A PLAY_TIME session applies when:
 - Work is **exploratory** rather than executing a known task list
 
 **Do NOT use PLAY_TIME when**:
-- The work is workload-defined with a predefined task list → use 🏃‍♂️ SPRINT
-- Mode rotation is undesirable and the agent should stay focused on one type of work → use 🏃‍♂️ SPRINT
-- No timer is appropriate (scope completion is the natural bound) → use 🏃‍♂️ SPRINT
+- The work is workload-defined with a predefined task list → use 🏃 SPRINT
+- Mode rotation is undesirable and the agent should stay focused on one type of work → use 🏃 SPRINT
+- No timer is appropriate (scope completion is the natural bound) → use 🏃 SPRINT
 
 **Decision heuristic**: If the user says "explore CC internals for 60 minutes" or "play with this idea for an hour", that is a PLAY_TIME. If the user says "finish these 7 pipeline tasks", that is a SPRINT.
 
 ### 1.2 Relationship to SPRINT
 
-| Aspect | ⏲️ PLAY_TIME | 🏃‍♂️ SPRINT |
+| Aspect | ⏲️ PLAY_TIME | 🏃 SPRINT |
 |--------|-------------|-----------|
 | Bounded by | Wall-clock timer | Scope completion |
 | Timer | Mandatory | Forbidden |
@@ -286,7 +286,7 @@ Timer expiry lifts the timer gate. Agent then completes the last task with a com
 
 - **Signal**: Using PLAY_TIME (with `--timer`) when the work is actually a predefined task list
 - **Cause**: Conflating time-bounded exploration with workload-defined execution
-- **Remedy**: If work is workload-defined (finish these N tasks), use 🏃‍♂️ SPRINT. The timer gate is counterproductive for workload-defined work — it blocks scope completion arbitrarily.
+- **Remedy**: If work is workload-defined (finish these N tasks), use 🏃 SPRINT. The timer gate is counterproductive for workload-defined work — it blocks scope completion arbitrarily.
 
 ---
 
@@ -343,5 +343,5 @@ Report:
 
 - `autonomous_operation.md` — parent policy (AUTO_MODE lifecycle, authorization, de-escalation)
 - `mode_system.md` — work mode definitions, Markov transition matrix, gate point mechanics
-- `autonomous_sprint.md` — sibling policy for workload-defined autonomous work (🏃‍♂️ SPRINT)
+- `autonomous_sprint.md` — sibling policy for workload-defined autonomous work (🏃 SPRINT)
 - `task_management.md` — PLAY_TIME task type schema, scope lifecycle
