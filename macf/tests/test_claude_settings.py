@@ -123,6 +123,38 @@ class TestSetAutocompactEnabled:
         result = set_autocompact_enabled(True)
         assert result is False
 
+    def test_writes_to_both_legacy_and_primary_paths(self, tmp_path, monkeypatch):
+        """Writes to BOTH ~/.claude.json (legacy) and ~/.claude/settings.json (current CC)."""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        monkeypatch.setattr(Path, 'home', lambda: fake_home)
+
+        result = set_autocompact_enabled(True)
+        assert result is True
+
+        legacy = fake_home / ".claude.json"
+        primary = fake_home / ".claude" / "settings.json"
+        assert legacy.exists()
+        assert primary.exists()
+        assert json.loads(legacy.read_text())['autoCompactEnabled'] is True
+        assert json.loads(primary.read_text())['autoCompactEnabled'] is True
+
+    def test_warns_when_settings_local_overrides(self, tmp_path, monkeypatch, capsys):
+        """Prints stderr warning when ~/.claude/settings.local.json has opposing value."""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        (fake_home / ".claude").mkdir()
+        local = fake_home / ".claude" / "settings.local.json"
+        local.write_text(json.dumps({"autoCompactEnabled": False}))
+        monkeypatch.setattr(Path, 'home', lambda: fake_home)
+
+        result = set_autocompact_enabled(True)
+        assert result is True  # writes succeeded; warning is informational
+
+        err = capsys.readouterr().err
+        assert "settings.local.json" in err
+        assert "OVERRIDES" in err
+
 
 class TestSetPermissionMode:
     """Tests for set_permission_mode() function."""
