@@ -188,8 +188,10 @@ SessionStart hook checks source field to determine preservation vs reset.
 Both conditions must be present:
 
 1. **User Prompt Authorization**: User's message must contain:
-   - Safety phrase: `YOLO BOZO!`
+   - Safety phrase: `YOLO BOZO!` (canonical form; see "Safety Phrase Tolerance" below)
    - Mode keyword: `AUTO_MODE` (all caps)
+
+   **Safety Phrase Tolerance**: The canonical form documented in this policy is `YOLO BOZO!` with a space between the words. However, agents MUST also accept `YOLO_BOZO!` with an underscore — users naturally type the underscore form for visual consistency with the adjacent `AUTO_MODE` keyword (and the policy author themselves has typed it that way). Agent-side matching should normalize whitespace and underscores so both forms authorize. The exclamation point is required in either form. Other variants (different casing, missing punctuation, partial words) do NOT authorize and should trigger the "request without hinting" flow described below.
 
 2. **CLI Token Validation**: Command must include valid `--auth-token`
 

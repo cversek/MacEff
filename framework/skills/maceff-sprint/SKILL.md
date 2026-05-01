@@ -32,6 +32,18 @@ SPRINT locks the work mode at SPRINT and disables the Markov recommender. If mod
 
 ---
 
+## Prerequisite — User Authorization in the Same Message
+
+Step 1 chains `maceff-auto-mode`, which requires AUTO_MODE authorization keywords in the user's message: the safety phrase plus the literal `AUTO_MODE` keyword. If the `/maceff-sprint` invocation does not include these, the auth gate fires immediately and the sprint stalls until the user re-issues the command with the keywords appended.
+
+**Example invocation that proceeds straight through Step 1**:
+
+> /maceff-sprint <goal description>; YOLO BOZO! AUTO_MODE
+
+If AUTO_MODE is already active in the session (e.g., post-compaction recovery, or a sprint resumed after restart), Step 1 is a no-op verification rather than a fresh authorization — keywords are not required again.
+
+---
+
 ## Step 1: Activate AUTO_MODE
 
 Invoke the auto-mode skill for authorization, permissions, and mode switch:
