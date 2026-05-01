@@ -5450,14 +5450,18 @@ def cmd_task_scope_set(args: argparse.Namespace) -> int:
     reader = TaskReader()
     raw_ids = [tid.lstrip('#') for tid in args.task_ids]
 
-    # Expand parent tasks to their pending/in_progress children
+    # Expand parent tasks to their pending/in_progress children.
+    # Dedup at both the outer (raw_ids) and inner (children) levels so callers
+    # who pass a parent ID alongside its already-known children don't see
+    # duplicate entries or inflated counts in the success output.
     expanded = []
     for tid in raw_ids:
         task = reader.read_task(tid)
         if not task:
             print(f"⚠️  Task #{tid} not found, skipping")
             continue
-        expanded.append(tid)
+        if tid not in expanded:
+            expanded.append(tid)
         # Check for children
         all_tasks = reader.read_all_tasks()
         children = [t for t in all_tasks if t.mtmd and str(getattr(t.mtmd, "parent_id", "")) == tid]
