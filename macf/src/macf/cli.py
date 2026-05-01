@@ -822,6 +822,7 @@ def cmd_framework_install(args: argparse.Namespace) -> int:
 
         if hooks_only:
             print(f"\n✅ Hooks-only installation complete")
+            print(f"ℹ️  Commands and skills NOT installed; rerun without `--hooks-only` (or use `--skip-hooks` if hooks are already in place) to install those.")
             return 0
 
         # Install commands (symlink maceff*/ namespace directories)
