@@ -14,7 +14,10 @@ from macf.utils.claude_settings import (
     get_autocompact_setting,
     set_autocompact_enabled,
     set_permission_mode,
-    _read_autocompact_from_file
+    _read_autocompact_from_file,
+    _bash_pattern_command,
+    _find_shadowing_allow_entries,
+    toggle_auto_mode_ask_permissions,
 )
 
 
@@ -258,3 +261,138 @@ class TestReadAutocompactFromFile:
 
         result = _read_autocompact_from_file(settings_path)
         assert result is None
+
+
+class TestBashPatternCommand:
+    """Tests for _bash_pattern_command() — strips Bash() and trailing :*."""
+
+    def test_extracts_command_from_bash_pattern(self):
+        assert _bash_pattern_command("Bash(gh issue:*)") == "gh issue"
+        assert _bash_pattern_command("Bash(gh issue create:*)") == "gh issue create"
+
+    def test_no_trailing_wildcard(self):
+        # Some patterns may not have :* — return as-is after Bash() stripping
+        assert _bash_pattern_command("Bash(git push)") == "git push"
+
+    def test_non_bash_pattern_returns_none(self):
+        assert _bash_pattern_command("Read(src/*)") is None
+        assert _bash_pattern_command("invalid") is None
+        assert _bash_pattern_command("") is None
+
+
+class TestFindShadowingAllowEntries:
+    """Tests for _find_shadowing_allow_entries() — closes GH issue #67."""
+
+    def test_broader_allow_shadows_narrower_ask(self):
+        ask = "Bash(gh issue create:*)"
+        allow = ["Bash(gh issue:*)", "Bash(ls:*)"]
+        shadows = _find_shadowing_allow_entries(ask, allow)
+        assert shadows == ["Bash(gh issue:*)"]
+
+    def test_unrelated_allow_does_not_shadow(self):
+        ask = "Bash(gh issue create:*)"
+        allow = ["Bash(ls:*)", "Bash(cat:*)", "Bash(git status:*)"]
+        shadows = _find_shadowing_allow_entries(ask, allow)
+        assert shadows == []
+
+    def test_narrower_allow_does_not_shadow(self):
+        # Allow is narrower than ask → not a shadow
+        ask = "Bash(gh issue:*)"
+        allow = ["Bash(gh issue create:*)"]
+        shadows = _find_shadowing_allow_entries(ask, allow)
+        assert shadows == []
+
+    def test_exact_match_not_treated_as_shadow(self):
+        # Identical entry → not a shadow (handled by add/remove logic, not relocation)
+        ask = "Bash(gh issue create:*)"
+        allow = ["Bash(gh issue create:*)"]
+        shadows = _find_shadowing_allow_entries(ask, allow)
+        assert shadows == []
+
+    def test_multiple_shadows(self):
+        ask = "Bash(gh issue create:*)"
+        allow = ["Bash(gh:*)", "Bash(gh issue:*)", "Bash(ls:*)"]
+        shadows = _find_shadowing_allow_entries(ask, allow)
+        assert "Bash(gh:*)" in shadows
+        assert "Bash(gh issue:*)" in shadows
+        assert "Bash(ls:*)" not in shadows
+
+    def test_word_boundary_required(self):
+        # "Bash(gh i:*)" should NOT shadow "Bash(gh issue create:*)" — "i" is a
+        # different command from "issue", not a prefix on a space boundary.
+        ask = "Bash(gh issue create:*)"
+        allow = ["Bash(gh i:*)"]
+        shadows = _find_shadowing_allow_entries(ask, allow)
+        assert shadows == []
+
+
+class TestToggleAutoModeAskPermissionsShadowFix:
+    """Tests for toggle_auto_mode_ask_permissions() with shadow detection."""
+
+    def test_relocates_shadowing_allow_on_enable(self, tmp_path):
+        """Pre-existing broad allow that shadows an AUTO_MODE ask gets relocated."""
+        settings_dir = tmp_path / ".claude"
+        settings_dir.mkdir()
+        settings_path = settings_dir / "settings.local.json"
+        # Brownfield env: a broad allow that shadows several AUTO_MODE asks
+        settings_path.write_text(json.dumps({
+            "permissions": {"allow": ["Bash(gh issue:*)"], "ask": [], "deny": []}
+        }))
+
+        result = toggle_auto_mode_ask_permissions(True, project_root=tmp_path)
+        assert result is not None
+        assert any(
+            ask_entry == "Bash(gh issue create:*)"
+            for ask_entry, _ in result['shadows_relocated']
+        )
+
+        # The shadow should be GONE from allow and stashed for restoration
+        on_disk = json.loads(settings_path.read_text())
+        assert "Bash(gh issue:*)" not in on_disk["permissions"]["allow"]
+        assert "_macf_shadowed_allow" in on_disk
+        # The stash should record the relocation keyed by an ask entry
+        stash_entries = [
+            shadowed
+            for stash_list in on_disk["_macf_shadowed_allow"].values()
+            for shadowed in stash_list
+        ]
+        assert "Bash(gh issue:*)" in stash_entries
+
+    def test_round_trip_restoration_on_disable(self, tmp_path):
+        """Shadowed allow entries are restored when toggling back to MANUAL_MODE."""
+        settings_dir = tmp_path / ".claude"
+        settings_dir.mkdir()
+        settings_path = settings_dir / "settings.local.json"
+        settings_path.write_text(json.dumps({
+            "permissions": {"allow": ["Bash(gh issue:*)"], "ask": [], "deny": []}
+        }))
+
+        toggle_auto_mode_ask_permissions(True, project_root=tmp_path)
+        # Now disable
+        result = toggle_auto_mode_ask_permissions(False, project_root=tmp_path)
+        assert result is not None
+        assert "Bash(gh issue:*)" in result['shadows_restored']
+
+        on_disk = json.loads(settings_path.read_text())
+        # Restored to allow list
+        assert "Bash(gh issue:*)" in on_disk["permissions"]["allow"]
+        # Stash drained, key removed
+        assert "_macf_shadowed_allow" not in on_disk
+
+    def test_no_shadow_means_no_relocation(self, tmp_path):
+        """When no shadows exist, behavior matches the pre-fix path."""
+        settings_dir = tmp_path / ".claude"
+        settings_dir.mkdir()
+        settings_path = settings_dir / "settings.local.json"
+        settings_path.write_text(json.dumps({
+            "permissions": {"allow": ["Bash(ls:*)"], "ask": [], "deny": []}
+        }))
+
+        result = toggle_auto_mode_ask_permissions(True, project_root=tmp_path)
+        assert result is not None
+        assert result['shadows_relocated'] == []
+        # All AUTO_MODE asks added
+        on_disk = json.loads(settings_path.read_text())
+        assert "Bash(gh issue create:*)" in on_disk["permissions"]["ask"]
+        # ls was NOT shadowing anything → still in allow
+        assert "Bash(ls:*)" in on_disk["permissions"]["allow"]
