@@ -190,14 +190,54 @@ def anticipate_mode_change(tool_name: str, tool_input: dict, current_modes: Set[
 # Emoji Dashboard
 # ============================================================================
 
-def format_mode_indicators(modes: Set[str]) -> str:
+def get_active_task_type_marker() -> str:
+    """Return ⏲️ if a PLAY_TIME task is in active scope and in_progress, else "".
+
+    The PLAY_TIME marker composes with the chain-phase work-mode emoji in the
+    dashboard's work-mode slot (e.g. " ⏲️🔍" for DISCOVER, " ⏲️🧪" for
+    EXPERIMENT, etc.). SPRINT does NOT get a marker — its 🏃 already
+    occupies the work-mode slot via WORK_MODES.
+
+    Closes the visibility leg of GH issue #69-companion bug for PLAY_TIME
+    chain phases (this codebase: BUG #1072): without the marker, an active
+    PLAY_TIME's chain mode looked indistinguishable from an ad-hoc work mode
+    (e.g. a free DISCOVER outside any task), erasing the timer-bound nature
+    of the activity from the user's view.
+    """
+    try:
+        from ..task.scope import get_scope_check
+        from ..task.reader import TaskReader
+        scope = get_scope_check()
+        for entry in scope.get("active", []):
+            tid = entry.get("id")
+            task = TaskReader().read_task(tid)
+            if task and task.mtmd:
+                tt = getattr(task.mtmd, "task_type", None)
+                if tt == "PLAY_TIME" and task.status == "in_progress":
+                    return "⏲️"  # ⏲️
+    except (ImportError, OSError, AttributeError, ValueError) as e:
+        # Non-fatal: marker absent if scope check fails
+        print(f"⚠️ MACF: task-type marker check failed (non-blocking): {e}", file=sys.stderr)
+    return ""
+
+
+def format_mode_indicators(modes: Set[str], task_type_marker: str = "") -> str:
     """
     Format active modes as emoji string for the status line.
 
-    Operational modes first (🤖😴🔕🪫), space, then work mode (🔍🔨📋✍️).
-    Returns empty string if no modes active.
+    Operational modes first (🤖😴🔕🪫), space, then optional task-type marker
+    (⏲️ for active PLAY_TIME) composed with the work mode emoji
+    (🔍🧪🔨📋✍️🏃).
+
+    Examples:
+      Free DISCOVER:           " 🤖 🔍"
+      SPRINT:                  " 🤖 🏃"
+      PLAY_TIME / DISCOVER:    " 🤖 ⏲️🔍"
+      PLAY_TIME / no chain:    " 🤖 ⏲️"
+
+    Returns empty string if no modes active and no marker.
     """
-    if not modes:
+    if not modes and not task_type_marker:
         return ""
 
     op_emojis = []
@@ -213,8 +253,11 @@ def format_mode_indicators(modes: Set[str]) -> str:
     parts = []
     if op_emojis:
         parts.append("".join(op_emojis))
-    if work_emoji:
-        parts.append(work_emoji)
+    if work_emoji or task_type_marker:
+        # Compose marker + work emoji in the work-mode slot. If only marker is
+        # present (PLAY_TIME with no chain set yet), it stands alone. If only
+        # work emoji is present (free work mode, no PLAY_TIME), it stands alone.
+        parts.append(f"{task_type_marker}{work_emoji}")
 
     return " " + " ".join(parts) if parts else ""
 
@@ -509,7 +552,22 @@ def _get_current_work_mode() -> Optional[str]:
                 if tt == "SPRINT" and task.status == "in_progress":
                     return "SPRINT"
                 if tt == "PLAY_TIME" and task.status == "in_progress":
-                    return "PLAY_TIME"
+                    # Resolve the active chain phase's work mode rather than
+                    # returning the task-type string. PLAY_TIME has chain
+                    # phases (DISCOVER/EXPERIMENT/BUILD/CURATE/CONSOLIDATE)
+                    # that need to surface in the dashboard work-mode slot
+                    # so the agent and user see the actual current activity.
+                    custom = getattr(task.mtmd, "custom", None) or {}
+                    chain = custom.get("predetermined_chain") or []
+                    pos = custom.get("chain_position", 0)
+                    if isinstance(pos, int) and 0 <= pos < len(chain):
+                        chain_mode = chain[pos]
+                        if chain_mode in WORK_MODES:
+                            return chain_mode
+                    # Chain unavailable / position invalid → fall through
+                    # to the event-log lookup below so set-work events still
+                    # render the work mode.
+                    break
     except (ImportError, OSError, AttributeError, ValueError) as e:
         # Non-fatal: fall through to event-log lookup
         print(f"⚠️ MACF: SPRINT/PLAY_TIME scope check in _get_current_work_mode failed (non-blocking): {e}", file=sys.stderr)
