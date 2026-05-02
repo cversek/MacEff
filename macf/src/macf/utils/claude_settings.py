@@ -305,33 +305,138 @@ def ensure_mode_safety_permissions(project_root: Optional[Path] = None) -> dict:
         return None
 
 
-def toggle_auto_mode_ask_permissions(enable_auto: bool, project_root: Optional[Path] = None) -> list:
+def _bash_pattern_command(entry: str) -> Optional[str]:
+    """Extract the command portion from a 'Bash(<cmd>:*)' permission entry.
+
+    Returns the command (e.g. 'gh issue create') or None if the entry is not
+    a Bash() permission pattern. Used by shadow detection to compare allow
+    and ask patterns regardless of trailing-wildcard form.
+    """
+    if not entry.startswith("Bash(") or not entry.endswith(")"):
+        return None
+    inner = entry[5:-1]
+    # Strip trailing ":*" (the conventional CC wildcard)
+    if inner.endswith(":*"):
+        inner = inner[:-2]
+    return inner.strip()
+
+
+def _find_shadowing_allow_entries(ask_entry: str, allow_list: list) -> list:
+    """Return allow entries broader than (i.e., shadowing) the given ask entry.
+
+    A shadow is an allow pattern whose stripped command is a prefix of the
+    ask's stripped command, on a space boundary (or exactly equal). Example:
+    ``Bash(gh issue:*)`` shadows ``Bash(gh issue create:*)`` because every
+    invocation matched by the ask is also matched by the allow.
+
+    Identical entries (allow == ask) are NOT returned — they're handled by
+    the caller's add/remove logic, not by relocation.
+
+    Returns a list (possibly empty) of allow entries that shadow the ask.
+    Non-Bash() entries in allow_list are ignored.
+    """
+    ask_cmd = _bash_pattern_command(ask_entry)
+    if ask_cmd is None:
+        return []
+    shadows = []
+    for allow in allow_list:
+        if allow == ask_entry:
+            continue  # exact-match handled elsewhere; not a shadow
+        allow_cmd = _bash_pattern_command(allow)
+        if allow_cmd is None:
+            continue
+        # Allow is a shadow when its command is a prefix of the ask's command
+        # on a space boundary, or when the two commands are identical (which
+        # we already filtered with the exact-pattern equality above; this
+        # second check covers ``Bash(gh release:*)`` vs ``Bash(gh release:*)``
+        # where stripped-cmd equality but possibly differing wildcard form).
+        if ask_cmd == allow_cmd or ask_cmd.startswith(allow_cmd + " "):
+            shadows.append(allow)
+    return shadows
+
+
+def toggle_auto_mode_ask_permissions(enable_auto: bool, project_root: Optional[Path] = None) -> dict:
     """
     Toggle AUTO_MODE-specific ask permissions.
 
     Returns:
-        List of entries added (enable) or removed (disable), or None on error.
+        Dict with keys:
+          - 'changed': list of ask entries added (enable) or removed (disable)
+          - 'shadows_relocated': list of (ask_entry, [shadowing_allow_entries])
+            tuples for shadows moved out of allow during enable; empty during
+            disable
+          - 'shadows_restored': list of allow entries restored on disable
+        Returns None on error.
+
+    Design (closes GH issue #67):
+        On enable, for every ask entry being installed, scan the allow list
+        for broader patterns that would shadow it (e.g. ``Bash(gh issue:*)``
+        shadowing ``Bash(gh issue create:*)``). Remove the shadowing entries
+        from allow and stash them under settings['_macf_shadowed_allow']
+        keyed by the ask entry that displaced them. Print a stderr warning
+        for transparency.
+
+        On disable (return to MANUAL_MODE), restore the previously-stashed
+        allow entries so the user's pre-AUTO_MODE permission state is
+        recovered cleanly.
     """
     try:
         settings, settings_path = _read_settings(project_root)
         permissions = settings.setdefault('permissions', {})
         ask_list = permissions.setdefault('ask', [])
+        allow_list = permissions.setdefault('allow', [])
+        shadowed_store = settings.setdefault('_macf_shadowed_allow', {})
 
         changed = []
+        shadows_relocated = []
+        shadows_restored = []
+
         if enable_auto:
             for entry in _AUTO_MODE_ASK:
                 if entry not in ask_list:
                     ask_list.append(entry)
                     changed.append(entry)
+                # Relocate shadowing allow entries even if the ask was already
+                # present (covers brownfield envs where the ask was added in a
+                # prior session but allow shadows pre-existed).
+                shadows = _find_shadowing_allow_entries(entry, allow_list)
+                if shadows:
+                    stash = shadowed_store.setdefault(entry, [])
+                    for s in shadows:
+                        if s in allow_list:
+                            allow_list.remove(s)
+                        if s not in stash:
+                            stash.append(s)
+                    shadows_relocated.append((entry, shadows))
+                    print(
+                        f"⚠️ MACF: AUTO_MODE ask '{entry}' would have been shadowed by "
+                        f"broader allow entries — relocated to safekeeping for "
+                        f"restoration on MANUAL_MODE return: {shadows}",
+                        file=sys.stderr,
+                    )
         else:
             for entry in _AUTO_MODE_ASK:
                 if entry in ask_list:
                     ask_list.remove(entry)
                     changed.append(entry)
+                # Restore any allow entries we stashed on AUTO_MODE entry
+                stash = shadowed_store.pop(entry, [])
+                for s in stash:
+                    if s not in allow_list:
+                        allow_list.append(s)
+                        shadows_restored.append(s)
 
-        if changed:
+            # If the stash is now empty, drop the key for tidiness
+            if not shadowed_store:
+                settings.pop('_macf_shadowed_allow', None)
+
+        if changed or shadows_relocated or shadows_restored:
             _write_settings(settings, settings_path)
-        return changed
+        return {
+            'changed': changed,
+            'shadows_relocated': shadows_relocated,
+            'shadows_restored': shadows_restored,
+        }
     except (OSError, json.JSONDecodeError, TypeError, KeyError) as e:
         print(f"⚠️ MACF: Settings write failed (toggle_auto_ask): {e}", file=sys.stderr)
         return None
