@@ -5736,12 +5736,53 @@ def cmd_task_scope_check(args: argparse.Namespace) -> int:
     return 0
 
 
+def _commit_landed_in_merged_pr(repo_slug: str, commits: list) -> bool:
+    """Return True if any of `commits` is in a merged PR on the default branch.
+
+    Used by the GH_ISSUE close-out path to decide whether to close the upstream
+    issue or just post a status comment (closes GH issue #79). When the fix
+    is still on a feature branch awaiting PR review/merge, the upstream issue
+    should remain OPEN so the GitHub issue tracker reflects the actual fix-in-flight
+    status; only after PR merge does closure become semantically correct.
+
+    Conservative on API failure: returns False so the close path is skipped
+    (the issue stays open) — better to under-close than to incorrectly close
+    an issue whose fix hasn't landed.
+    """
+    if not commits:
+        return False
+    import subprocess as _subprocess
+    for sha in commits:
+        try:
+            result = _subprocess.run(
+                ["gh", "pr", "list",
+                 "--repo", repo_slug,
+                 "--search", sha,
+                 "--state", "merged",
+                 "--limit", "1",
+                 "--json", "number"],
+                capture_output=True, text=True, timeout=15
+            )
+            if result.returncode == 0 and result.stdout.strip() not in ("", "[]"):
+                return True
+        except (FileNotFoundError, _subprocess.TimeoutExpired):
+            continue
+    return False
+
+
 def _gh_issue_closeout(task_id: int, mtmd, args, breadcrumb: str) -> None:
     """Post close-out comment and close GitHub issue.
 
     The --report is the agent's conscious, professional contribution — passed
     through as the comment body. Automation adds structured metadata (commits,
     verification) and a calling card footer for agent traceability.
+
+    Closure semantics (GH issue #79): the upstream issue is closed ONLY if at
+    least one of the supplied --commit hashes is verifiably in a merged PR on
+    the repo's default branch. Otherwise the comment is posted (so reviewers
+    see the close-out report and the linked commits) but the issue stays
+    OPEN — closure waits for the PR to merge, where GitHub's natural
+    "closes #N" auto-close path takes over.
 
     Failures are warnings, not errors — the task is already marked complete.
     """
@@ -5805,6 +5846,19 @@ def _gh_issue_closeout(task_id: int, mtmd, args, breadcrumb: str) -> None:
         print("   ⚠️  gh CLI not found — skipping GitHub comment")
     except _subprocess.TimeoutExpired:
         print("   ⚠️  gh CLI timed out — skipping GitHub comment")
+
+    # Status-aware closure (GH issue #79): close the upstream issue only when
+    # the fix has actually landed (at least one --commit hash is in a merged
+    # PR). Otherwise leave it open and let the natural PR-merge auto-close
+    # path take over once the user reviews+merges the PR.
+    fix_landed = _commit_landed_in_merged_pr(repo_slug, list(args.commit or []))
+    if not fix_landed:
+        print(
+            f"   ⏳ Issue {repo_slug}#{gh_issue_number} left OPEN — "
+            f"no merged PR found for the supplied commit(s). "
+            f"GitHub will auto-close on PR merge if the PR body links the issue."
+        )
+        return
 
     # Close issue
     try:
