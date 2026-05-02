@@ -822,6 +822,7 @@ def cmd_framework_install(args: argparse.Namespace) -> int:
 
         if hooks_only:
             print(f"\n✅ Hooks-only installation complete")
+            print(f"ℹ️  Commands and skills NOT installed; rerun without `--hooks-only` (or use `--skip-hooks` if hooks are already in place) to install those.")
             return 0
 
         # Install commands (symlink maceff*/ namespace directories)
@@ -4771,7 +4772,7 @@ def cmd_task_create_sprint(args: argparse.Namespace) -> int:
             print(f"📄 Sprint log: {result['ca_path']}")
             print(f"📌 Scope ({len(result['scope'])} tasks): {result['scope']}")
             if result["auto_start_completed"]:
-                print(f"🏃‍♂️ Auto-started in SPRINT mode")
+                print(f"🏃 Auto-started in SPRINT mode")
             elif not getattr(args, "no_auto_start", False):
                 print(f"⚠️  Auto-start incomplete: {result.get('auto_start_error')}")
             else:
@@ -5450,14 +5451,18 @@ def cmd_task_scope_set(args: argparse.Namespace) -> int:
     reader = TaskReader()
     raw_ids = [tid.lstrip('#') for tid in args.task_ids]
 
-    # Expand parent tasks to their pending/in_progress children
+    # Expand parent tasks to their pending/in_progress children.
+    # Dedup at both the outer (raw_ids) and inner (children) levels so callers
+    # who pass a parent ID alongside its already-known children don't see
+    # duplicate entries or inflated counts in the success output.
     expanded = []
     for tid in raw_ids:
         task = reader.read_task(tid)
         if not task:
             print(f"⚠️  Task #{tid} not found, skipping")
             continue
-        expanded.append(tid)
+        if tid not in expanded:
+            expanded.append(tid)
         # Check for children
         all_tasks = reader.read_all_tasks()
         children = [t for t in all_tasks if t.mtmd and str(getattr(t.mtmd, "parent_id", "")) == tid]
@@ -7450,7 +7455,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "sprint",
         help="create SPRINT task (workload-defined autonomous work, no timer)",
         description=(
-            "Create a 🏃‍♂️ SPRINT task for workload-defined autonomous work.\n\n"
+            "Create a 🏃 SPRINT task for workload-defined autonomous work.\n\n"
             "SPRINT runs until all scoped tasks are complete (no timer).\n"
             "Work mode is locked at SPRINT; Markov recommender is silenced.\n\n"
             "Examples:\n"

@@ -24,8 +24,30 @@ OPSEC_PATTERNS=(
 
 VIOLATIONS=0
 
+# The safety phrase pattern is the documented public auth phrase — it MUST
+# appear in the framework's policy and skill docs that explain authorization.
+# Other OPSEC patterns in the array above should never appear anywhere in the
+# public MacEff repo. So the safety phrase gets a path-aware exemption while
+# other patterns are checked against the full diff.
+SAFETY_PHRASE_ALLOWED_PATHS=(
+    "framework/policies/base/operations/autonomous_operation.md"
+    "framework/skills/maceff-auto-mode/SKILL.md"
+    "framework/skills/maceff-sprint/SKILL.md"
+    "framework/skills/maceff-play-time/SKILL.md"
+    "macf/scripts/pre-commit-hook.sh"
+)
+
 for pattern in "${OPSEC_PATTERNS[@]}"; do
-    matches=$(git diff --cached --diff-filter=ACMR -U0 | grep -E "^\+" | grep -v "^+++" | grep -iE "$pattern" 2>/dev/null)
+    if [ "$pattern" = "YOLO.BOZO" ]; then
+        # Build a pathspec excluding the allowed framework paths
+        EXCLUDE_ARGS=()
+        for path in "${SAFETY_PHRASE_ALLOWED_PATHS[@]}"; do
+            EXCLUDE_ARGS+=(":(exclude)$path")
+        done
+        matches=$(git diff --cached --diff-filter=ACMR -U0 -- . "${EXCLUDE_ARGS[@]}" | grep -E "^\+" | grep -v "^+++" | grep -iE "$pattern" 2>/dev/null)
+    else
+        matches=$(git diff --cached --diff-filter=ACMR -U0 | grep -E "^\+" | grep -v "^+++" | grep -iE "$pattern" 2>/dev/null)
+    fi
     if [ -n "$matches" ]; then
         echo -e "${RED}OPSEC VIOLATION:${NC} Pattern '$pattern' found in staged changes:"
         echo "$matches" | head -5

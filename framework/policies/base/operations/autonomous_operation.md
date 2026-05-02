@@ -188,8 +188,10 @@ SessionStart hook checks source field to determine preservation vs reset.
 Both conditions must be present:
 
 1. **User Prompt Authorization**: User's message must contain:
-   - Safety phrase: `YOLO BOZO!`
+   - Safety phrase: `YOLO BOZO!` (canonical form; see "Safety Phrase Tolerance" below)
    - Mode keyword: `AUTO_MODE` (all caps)
+
+   **Safety Phrase Tolerance**: The canonical form documented in this policy is `YOLO BOZO!` with a space between the words. However, agents MUST also accept `YOLO_BOZO!` with an underscore — users naturally type the underscore form for visual consistency with the adjacent `AUTO_MODE` keyword (and the policy author themselves has typed it that way). Agent-side matching should normalize whitespace and underscores so both forms authorize. The exclamation point is required in either form. Other variants (different casing, missing punctuation, partial words) do NOT authorize and should trigger the "request without hinting" flow described below.
 
 2. **CLI Token Validation**: Command must include valid `--auth-token`
 
@@ -489,11 +491,11 @@ Autonomous work sessions come in two distinct flavors with different behavioral 
 
 | Type | Emoji | Bound By | Timer | Mode | Sub-Policy |
 |------|-------|----------|-------|------|-----------|
-| SPRINT | 🏃‍♂️ | Scope completion | Forbidden | Locked at SPRINT | `autonomous_sprint.md` |
+| SPRINT | 🏃 | Scope completion | Forbidden | Locked at SPRINT | `autonomous_sprint.md` |
 | PLAY_TIME | ⏲️ | Wall-clock timer | Mandatory | Rotates (chain → Markov) | `play_time.md` |
 
 **When to use which**:
-- User says "finish these tasks / run this pipeline": use 🏃‍♂️ SPRINT (`autonomous_sprint.md`)
+- User says "finish these tasks / run this pipeline": use 🏃 SPRINT (`autonomous_sprint.md`)
 - User says "explore / play for N minutes": use ⏲️ PLAY_TIME (`play_time.md`)
 
 Each sub-policy governs its type's Stop hook behavior, gate mechanics, task note discipline, and anti-patterns. Read the relevant sub-policy before starting autonomous work of that type.
@@ -643,6 +645,6 @@ Each sleep cycle emits an `agent_sleep_cycle` event:
 - **agent_backup.md** - Complete consciousness backup/restore
 - **task_management.md** - Task management during autonomous operation, scope lifecycle; SPRINT and PLAY_TIME task type schemas (§2.6, §2.7)
 - **roadmaps_following.md** - Scope adherence for authorized work
-- **autonomous_sprint.md** - Sub-policy for 🏃‍♂️ SPRINT (workload-defined autonomous work)
+- **autonomous_sprint.md** - Sub-policy for 🏃 SPRINT (workload-defined autonomous work)
 - **play_time.md** - Sub-policy for ⏲️ PLAY_TIME (time-bounded autonomous play)
 - **mode_system.md** - Mode definitions including SPRINT work mode and Markov recommender

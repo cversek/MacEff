@@ -40,7 +40,7 @@ class TestEmitScopeNag:
             {"id": 102, "subject": "Phase B"},
         ]
         msg = emit_scope_nag(sprint, children)
-        assert "🏃‍♂️ SPRINT in progress" in msg
+        assert "🏃 SPRINT in progress" in msg
         assert "Build pipeline" in msg
         assert "2 scoped task(s) remaining" in msg
         assert "#101: Phase A" in msg
@@ -51,7 +51,7 @@ class TestEmitScopeNag:
         sprint = _make_task(100, {})
         msg = emit_scope_nag(sprint, [{"id": 101, "subject": "X"}])
         # No goal → no quoted section after the header
-        assert "🏃‍♂️ SPRINT in progress" in msg
+        assert "🏃 SPRINT in progress" in msg
         assert ': "' not in msg.splitlines()[0]
 
     def test_emergency_escape_present(self):
