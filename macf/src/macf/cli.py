@@ -6852,7 +6852,7 @@ def cmd_idea_graph(args: argparse.Namespace) -> int:
 
 
 def cmd_knowledge_graph(args: argparse.Namespace) -> int:
-    """Show cross-CA knowledge graph (ideas + learnings + observations)."""
+    """Show cross-CA knowledge graph (ideas + learnings + checkpoints + reflections + observations + experiments + reports)."""
     from .ideas import (build_knowledge_graph, format_graph_cluster_cross_ca,
                         format_graph_tree)
 
@@ -7917,7 +7917,7 @@ def _build_parser() -> argparse.ArgumentParser:
     idea_graph.set_defaults(func=cmd_idea_graph)
 
     # ── knowledge ────────────────────────────────────────────────────────
-    knowledge_parser = sub.add_parser("knowledge", help="cross-CA knowledge graph (ideas + learnings + observations)")
+    knowledge_parser = sub.add_parser("knowledge", help="cross-CA knowledge graph (ideas + learnings + checkpoints + reflections + observations + experiments + reports)")
     knowledge_sub = knowledge_parser.add_subparsers(dest="knowledge_cmd")
 
     kg_graph = knowledge_sub.add_parser("graph", help="show cross-CA knowledge graph")

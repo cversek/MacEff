@@ -346,7 +346,9 @@ def build_knowledge_graph(scan_dirs: Optional[List[Path]] = None) -> Dict[str, A
     wiki_index = defaultdict(set, {k: set(v) for k, v in graph["wiki_index"].items()})
     ca_nodes = {}  # non-idea CA nodes: {node_id: {type, title, path}}
 
-    # Scan additional directories for markdown files with ## Wiki-Links
+    # Scan additional CA directories for wiki-links. Extends beyond
+    # learnings/observations to cover the full Consciousness Artifact corpus
+    # (closes GH issue #73).
     if scan_dirs is None:
         try:
             from .utils.paths import find_agent_home
@@ -354,7 +356,11 @@ def build_knowledge_graph(scan_dirs: Optional[List[Path]] = None) -> Dict[str, A
             if agent_home:
                 scan_dirs = [
                     agent_home / "agent" / "private" / "learnings",
+                    agent_home / "agent" / "private" / "checkpoints",
+                    agent_home / "agent" / "private" / "reflections",
                     agent_home / "agent" / "public" / "observations",
+                    agent_home / "agent" / "public" / "experiments",
+                    agent_home / "agent" / "public" / "reports",
                 ]
         except (OSError, ImportError) as e:
             print(f"⚠️ MACF: knowledge graph scan dirs failed: {e}", file=sys.stderr)
@@ -363,24 +369,36 @@ def build_knowledge_graph(scan_dirs: Optional[List[Path]] = None) -> Dict[str, A
     for scan_dir in (scan_dirs or []):
         if not scan_dir.exists():
             continue
-        ca_type = scan_dir.name  # "learnings" or "observations"
-        for md_file in sorted(scan_dir.glob("*.md")):
+        ca_type = scan_dir.name  # "learnings", "checkpoints", "reflections", etc.
+        # Recursive walk so experiments/<dated>/ subfolders are picked up.
+        for md_file in sorted(scan_dir.rglob("*.md")):
             if md_file.name == "INDEX.md":
                 continue
             try:
                 content = md_file.read_text(errors='replace')
             except OSError:
                 continue
-            # Find ## Wiki-Links section
+            # Two-tier wiki-link extraction: prefer the explicit ## Wiki-Links
+            # section (canonical convention in learnings). Fall back to any
+            # [[concept]] occurrences elsewhere in the document so CAs that
+            # don't follow the explicit-section convention (most CCPs,
+            # JOTEWRs, experiment artifacts) still produce edges.
+            concepts = []
             wl_match = re_mod.search(r'## Wiki-Links\s*\n(.+?)(?:\n##|\Z)', content, re_mod.DOTALL)
-            if not wl_match:
-                continue
-            wl_section = wl_match.group(1)
-            concepts = re_mod.findall(r'\[\[(.+?)\]\]', wl_section)
+            if wl_match:
+                concepts = re_mod.findall(r'\[\[(.+?)\]\]', wl_match.group(1))
+            if not concepts:
+                # Fallback: scan whole document for [[...]] references
+                concepts = re_mod.findall(r'\[\[(.+?)\]\]', content)
             if not concepts:
                 continue
-            # Create a node ID for this CA
-            node_id = f"{ca_type}:{md_file.stem}"
+            # Create a node ID for this CA. For nested CAs (experiments),
+            # include the immediate parent folder for disambiguation.
+            if md_file.parent != scan_dir:
+                stem_part = f"{md_file.parent.name}/{md_file.stem}"
+            else:
+                stem_part = md_file.stem
+            node_id = f"{ca_type}:{stem_part}"
             # Extract title from first heading
             title_match = re_mod.search(r'^#\s+(.+)', content, re_mod.MULTILINE)
             title = title_match.group(1)[:50] if title_match else md_file.stem[:50]
