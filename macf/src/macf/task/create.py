@@ -1368,11 +1368,37 @@ def _run_task_note(task_id: int, message: str) -> bool:
 
 
 def _verify_tm_running() -> bool:
-    """Check if transcript monitor is running (non-fatal if not)."""
+    """Check if transcript monitor is running, auto-starting it if not.
+
+    Auto-start mirrors the same pattern used at AUTO_MODE entry
+    (cli.py mode_set path). Without auto-start the user has to run
+    `macf_tools transcript-monitor start` manually after every fresh
+    session — alarm-fatigue noise the warning was producing repeatedly
+    from `task create play_time` / `task create sprint`.
+
+    Returns True if TM is running (whether already-running or
+    just-started); False on import/OS errors or if start_daemon fails.
+    """
     try:
-        from ..transcript_monitor.daemon import is_running as tm_is_running
-        return tm_is_running()
+        from ..transcript_monitor.daemon import is_running as tm_is_running, start_daemon as tm_start
     except (ImportError, OSError):
+        return False
+    try:
+        if tm_is_running():
+            return True
+        # Auto-start: matches cli.py:3008-3013 pattern at AUTO_MODE entry
+        try:
+            tm_start()
+        except (OSError, RuntimeError) as e:
+            print(
+                f"⚠️ MACF: Transcript Monitor auto-start failed (non-blocking): {e}",
+                file=sys.stderr,
+            )
+            return False
+        # Re-check; daemon spawn may take a moment to settle
+        return tm_is_running()
+    except OSError as e:
+        print(f"⚠️ MACF: Transcript Monitor status check failed: {e}", file=sys.stderr)
         return False
 
 
