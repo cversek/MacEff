@@ -29,6 +29,7 @@ from macf.modes import (
     detect_active_modes, get_current_work_mode,
     sample_next_work_mode, format_recommendation,
     should_self_manage_closeout, format_mode_indicators,
+    should_suppress_markov, format_low_context_directive,
 )
 
 
@@ -341,9 +342,17 @@ Development Drive Stats:
                     try:
                         active_modes = detect_active_modes(session_id, token_info)
                         current_wm = get_current_work_mode(active_modes)
-                        op_modes = {m for m in active_modes if m in ("AUTO_MODE", "USER_IDLE", "QUIET_MODE", "LOW_CONTEXT")}
-                        selected, dist = sample_next_work_mode(current_wm, op_modes)
-                        recommendation = "\n" + format_recommendation(current_wm, selected, dist, "maceff")
+                        # BUG #1081: when LOW_CONTEXT is active, suppress Markov
+                        # entirely and emit the mandatory wind-down directive
+                        # instead. Markov sampling at low context produces
+                        # out-of-phase mode-change suggestions that compete
+                        # with closeout discipline.
+                        if should_suppress_markov(active_modes, current_wm) and "LOW_CONTEXT" in active_modes:
+                            recommendation = "\n" + format_low_context_directive()
+                        else:
+                            op_modes = {m for m in active_modes if m in ("AUTO_MODE", "USER_IDLE", "QUIET_MODE", "LOW_CONTEXT")}
+                            selected, dist = sample_next_work_mode(current_wm, op_modes)
+                            recommendation = "\n" + format_recommendation(current_wm, selected, dist, "maceff")
                     except (OSError, ValueError, ImportError) as e:
                         print(f"⚠️ MACF: recommender failed: {e}", file=sys.stderr)
 
@@ -430,13 +439,18 @@ Development Drive Stats:
                         except Exception as e:
                             print(f"⚠️ MACF: Timer gate Telegram error: {e}", file=sys.stderr)
                         # Markov recommender: suggest next work mode transition
+                        # (suppressed in LOW_CONTEXT — BUG #1081 — replaced
+                        # with mandatory wind-down directive).
                         recommendation = ""
                         try:
                             active_modes = detect_active_modes(session_id, token_info)
                             current_wm = get_current_work_mode(active_modes)
-                            op_modes = {m for m in active_modes if m in ("AUTO_MODE", "USER_IDLE", "QUIET_MODE", "LOW_CONTEXT")}
-                            selected, dist = sample_next_work_mode(current_wm, op_modes)
-                            recommendation = "\n" + format_recommendation(current_wm, selected, dist, "maceff")
+                            if should_suppress_markov(active_modes, current_wm) and "LOW_CONTEXT" in active_modes:
+                                recommendation = "\n" + format_low_context_directive()
+                            else:
+                                op_modes = {m for m in active_modes if m in ("AUTO_MODE", "USER_IDLE", "QUIET_MODE", "LOW_CONTEXT")}
+                                selected, dist = sample_next_work_mode(current_wm, op_modes)
+                                recommendation = "\n" + format_recommendation(current_wm, selected, dist, "maceff")
                         except (OSError, ValueError, ImportError) as e:
                             print(f"⚠️ MACF: recommender failed: {e}", file=sys.stderr)
 
