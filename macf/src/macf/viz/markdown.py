@@ -32,7 +32,13 @@ TEMPLATE_DIR = Path(__file__).parent / "templates"
 
 
 def _convert_md_to_html(md_text: str) -> str:
-    """Convert markdown to HTML, with graceful fallback."""
+    """Convert markdown to HTML, with graceful fallback.
+
+    If the optional `markdown` library is not installed, falls back to
+    wrapping escaped raw text in <pre>. A clear warning is printed to
+    stderr so the user can discover the missing dependency instead of
+    seeing a confusing raw-text render.
+    """
     try:
         import markdown
         return markdown.markdown(
@@ -43,6 +49,12 @@ def _convert_md_to_html(md_text: str) -> str:
             },
         )
     except ImportError:
+        print(
+            "⚠️ MACF: `markdown` library not installed — output will be "
+            "RAW TEXT in a <pre> block, not rendered HTML.\n"
+            "   Install with: pip install markdown    (or `pip install -e .[viz]` for the full viz extras)",
+            file=sys.stderr,
+        )
         # Fallback: escape HTML and wrap in <pre>
         escaped = (md_text
                    .replace("&", "&amp;")
