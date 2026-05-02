@@ -299,6 +299,44 @@ def is_markov_eligible(current_work_mode: Optional[str]) -> bool:
     return current_work_mode != "SPRINT"
 
 
+def should_suppress_markov(modes: Set[str], current_work_mode: Optional[str]) -> bool:
+    """Return True when the Markov recommender should be suppressed entirely.
+
+    Two suppression triggers:
+    - SPRINT mode (existing — see is_markov_eligible)
+    - LOW_CONTEXT mode (new — closes BUG #1081): when the dashboard signals
+      🪫 LOW_CONTEXT, the agent must enter mandatory wind-down (CCP → JOTEWR
+      → final commits → let auto-compaction fire). Markov sampling at this
+      point produces out-of-phase mode-change suggestions (DISCOVER /
+      EXPERIMENT / BUILD) that compete with closeout discipline. The
+      recommender is replaced with a directive banner instead.
+    """
+    if current_work_mode == "SPRINT":
+        return True
+    if "LOW_CONTEXT" in modes:
+        return True
+    return False
+
+
+def format_low_context_directive() -> str:
+    """Mandatory wind-down banner — replaces Markov when LOW_CONTEXT active.
+
+    The banner re-states the wind-down protocol (CCP → JOTEWR → commits →
+    compaction) so that the gate-firing message at low context is a
+    closeout directive, not an open-ended mode suggestion. Closes BUG
+    #1081.
+    """
+    return (
+        "🪫 LOW_CONTEXT — mandatory wind-down active. Markov suppressed.\n"
+        "Required sequence:\n"
+        "  1. CCP draft (strategic state preservation — minimum critical artifact)\n"
+        "  2. JOTEWR (cycle wisdom synthesis — if budget permits)\n"
+        "  3. Final commits + push\n"
+        "  4. Let auto-compaction fire naturally\n"
+        "Letting the timer expire is NOT wind-down — produce the CCP."
+    )
+
+
 def apply_sprint_mode_lock(
     requested_mode: str,
     current_work_mode: Optional[str],
