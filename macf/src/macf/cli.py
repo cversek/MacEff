@@ -99,6 +99,37 @@ def _format_time_ago(file_path: Path) -> str:
         print(f"⚠️ MACF: file age calculation failed: {e}", file=sys.stderr)
         return "unknown"
 
+def _parse_task_id_arg(arg: str):
+    """Parse a task ID CLI argument into the form TaskReader.read_task expects.
+
+    Accepts: ``N``, ``#N``, ``000``, ``#000``, ``00X`` and other leading-zero
+    forms (used by the sentinel ``000`` and reserved hierarchy slots like
+    ``00X``). Returns ``int`` for plain digit IDs, ``str`` for leading-zero
+    IDs and non-numeric forms.
+
+    Raises ``ValueError`` for empty input after stripping the optional ``#``
+    prefix; callers should catch and emit their own user-facing error.
+
+    This unifies the parsing rule across all ``cmd_task_*`` handlers. Prior
+    to this helper, ``cmd_task_get`` had a leading-zero special branch while
+    most other handlers did a bare ``int()`` conversion that silently turned
+    ``000`` into ``0`` and then failed lookup against the string-keyed
+    sentinel — see GH issue #68.
+    """
+    cleaned = arg.lstrip('#')
+    if not cleaned:
+        raise ValueError("empty task ID")
+    # Preserve string identity for leading-zero forms (the "000" sentinel,
+    # reserved hierarchy slots like "00X", etc.)
+    if cleaned.startswith('0') and len(cleaned) > 1:
+        return cleaned
+    try:
+        return int(cleaned)
+    except ValueError:
+        # Non-numeric IDs (legacy) — pass through as-is.
+        return cleaned
+
+
 # -------- commands --------
 def cmd_tree(args: argparse.Namespace, root_parser: argparse.ArgumentParser = None) -> int:
     """Print command tree by introspecting argparse parser structure.
@@ -3482,15 +3513,11 @@ def cmd_task_get(args: argparse.Namespace) -> int:
     from .task import TaskReader
 
     # Parse task ID (handle #N or N format, support string IDs like "000")
-    task_id_str = args.task_id.lstrip('#')
-    # Keep as string if it has leading zeros (like "000"), otherwise try int
-    if task_id_str.startswith('0') and len(task_id_str) > 1:
-        task_id = task_id_str  # Preserve leading zeros (e.g., "000")
-    else:
-        try:
-            task_id = int(task_id_str)
-        except ValueError:
-            task_id = task_id_str  # Use string directly for non-numeric IDs
+    try:
+        task_id = _parse_task_id_arg(args.task_id)
+    except ValueError:
+        print(f"❌ Invalid task ID: {args.task_id}")
+        return 1
 
     reader = TaskReader()
     task = reader.read_task(task_id)
@@ -3903,12 +3930,14 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
             return 0.0
 
     # Parse task ID (preserve string IDs like "000")
-    task_id_str = args.task_id.lstrip('#')
-    # Keep as string if it has leading zeros, otherwise normalize
-    if task_id_str.startswith('0') and len(task_id_str) > 1:
-        root_id = task_id_str  # Preserve leading zeros (e.g., "000")
-    else:
-        root_id = task_id_str  # Keep as string for consistent comparison
+    # Both branches set root_id to task_id_str — leading-zero forms (like "000")
+    # need string identity preserved; ordinary numeric IDs are also kept as strings
+    # for consistent comparison downstream. Helper handles this uniformly.
+    try:
+        root_id = str(_parse_task_id_arg(args.task_id))
+    except ValueError:
+        print(f"❌ Invalid task ID: {args.task_id}")
+        return 1
 
     # Loop mode - monitor for changes
     if args.loop:
@@ -4037,9 +4066,8 @@ def cmd_task_edit(args: argparse.Namespace) -> int:
     from .utils.breadcrumbs import get_breadcrumb
 
     # Parse task ID
-    task_id_str = args.task_id.lstrip('#')
     try:
-        task_id = int(task_id_str)
+        task_id = _parse_task_id_arg(args.task_id)
     except ValueError:
         print(f"❌ Invalid task ID: {args.task_id}")
         return 1
@@ -4120,9 +4148,8 @@ def cmd_task_metadata_get(args: argparse.Namespace) -> int:
     from .task import TaskReader
 
     # Parse task ID
-    task_id_str = args.task_id.lstrip('#')
     try:
-        task_id = int(task_id_str)
+        task_id = _parse_task_id_arg(args.task_id)
     except ValueError:
         print(f"❌ Invalid task ID: {args.task_id}")
         return 1
@@ -4187,9 +4214,8 @@ def cmd_task_metadata_set(args: argparse.Namespace) -> int:
     from .utils.breadcrumbs import get_breadcrumb
 
     # Parse task ID
-    task_id_str = args.task_id.lstrip('#')
     try:
-        task_id = int(task_id_str)
+        task_id = _parse_task_id_arg(args.task_id)
     except ValueError:
         print(f"❌ Invalid task ID: {args.task_id}")
         return 1
@@ -4295,9 +4321,8 @@ def cmd_task_metadata_add(args: argparse.Namespace) -> int:
     from .utils.breadcrumbs import get_breadcrumb
 
     # Parse task ID
-    task_id_str = args.task_id.lstrip('#')
     try:
-        task_id = int(task_id_str)
+        task_id = _parse_task_id_arg(args.task_id)
     except ValueError:
         print(f"❌ Invalid task ID: {args.task_id}")
         return 1
@@ -4843,9 +4868,8 @@ def cmd_task_archive(args: argparse.Namespace) -> int:
     from .task.archive import archive_task
 
     # Parse task ID
-    task_id_str = args.task_id.lstrip('#')
     try:
-        task_id = int(task_id_str)
+        task_id = _parse_task_id_arg(args.task_id)
     except ValueError:
         print(f"❌ Invalid task ID: {args.task_id}")
         return 1
@@ -5008,9 +5032,8 @@ def cmd_task_grant_update(args: argparse.Namespace) -> int:
     from .task.protection import create_grant
 
     # Parse task ID
-    task_id_str = args.task_id.lstrip('#')
     try:
-        task_id = int(task_id_str)
+        task_id = _parse_task_id_arg(args.task_id)
     except ValueError:
         print(f"❌ Invalid task ID: {args.task_id}")
         return 1
@@ -5066,9 +5089,8 @@ def cmd_task_start(args: argparse.Namespace) -> int:
     from .utils.breadcrumbs import get_breadcrumb
     import json
 
-    task_id_str = args.task_id.lstrip('#')
     try:
-        task_id = int(task_id_str)
+        task_id = _parse_task_id_arg(args.task_id)
     except ValueError:
         print(f"❌ Invalid task ID: {args.task_id}")
         return 1
@@ -5143,9 +5165,8 @@ def cmd_task_pause(args: argparse.Namespace) -> int:
     from .agent_events_log import append_event
     import json
 
-    task_id_str = args.task_id.lstrip('#')
     try:
-        task_id = int(task_id_str)
+        task_id = _parse_task_id_arg(args.task_id)
     except ValueError:
         print(f"❌ Invalid task ID: {args.task_id}")
         return 1
@@ -5217,9 +5238,8 @@ def cmd_task_note(args: argparse.Namespace) -> int:
     from .task.models import MacfTaskUpdate
     import copy
 
-    task_id_str = args.task_id.lstrip('#')
     try:
-        task_id = int(task_id_str)
+        task_id = _parse_task_id_arg(args.task_id)
     except ValueError:
         print(f"❌ Invalid task ID: {args.task_id}")
         return 1
@@ -5293,11 +5313,9 @@ def cmd_task_block(args: argparse.Namespace) -> int:
     from .task import TaskReader, update_task_file
     from .utils.breadcrumbs import get_breadcrumb
 
-    task_id_str = args.task_id.lstrip('#')
-    target_id_str = args.target_id.lstrip('#')
     try:
-        task_id = int(task_id_str)
-        target_id = int(target_id_str)
+        task_id = _parse_task_id_arg(args.task_id)
+        target_id = _parse_task_id_arg(args.target_id)
     except ValueError:
         print(f"❌ Invalid task ID(s): {args.task_id} or {args.target_id}")
         return 1
@@ -5334,11 +5352,9 @@ def cmd_task_unblock(args: argparse.Namespace) -> int:
     from .task import TaskReader, update_task_file
     from .utils.breadcrumbs import get_breadcrumb
 
-    task_id_str = args.task_id.lstrip('#')
-    target_id_str = args.target_id.lstrip('#')
     try:
-        task_id = int(task_id_str)
-        target_id = int(target_id_str)
+        task_id = _parse_task_id_arg(args.task_id)
+        target_id = _parse_task_id_arg(args.target_id)
     except ValueError:
         print(f"❌ Invalid task ID(s): {args.task_id} or {args.target_id}")
         return 1
@@ -5369,11 +5385,9 @@ def cmd_task_blocked_by(args: argparse.Namespace) -> int:
     from .task import TaskReader, update_task_file
     from .utils.breadcrumbs import get_breadcrumb
 
-    task_id_str = args.task_id.lstrip('#')
-    blocker_id_str = args.blocker_id.lstrip('#')
     try:
-        task_id = int(task_id_str)
-        blocker_id = int(blocker_id_str)
+        task_id = _parse_task_id_arg(args.task_id)
+        blocker_id = _parse_task_id_arg(args.blocker_id)
     except ValueError:
         print(f"❌ Invalid task ID(s): {args.task_id} or {args.blocker_id}")
         return 1
@@ -5410,11 +5424,9 @@ def cmd_task_unblocked_by(args: argparse.Namespace) -> int:
     from .task import TaskReader, update_task_file
     from .utils.breadcrumbs import get_breadcrumb
 
-    task_id_str = args.task_id.lstrip('#')
-    blocker_id_str = args.blocker_id.lstrip('#')
     try:
-        task_id = int(task_id_str)
-        blocker_id = int(blocker_id_str)
+        task_id = _parse_task_id_arg(args.task_id)
+        blocker_id = _parse_task_id_arg(args.blocker_id)
     except ValueError:
         print(f"❌ Invalid task ID(s): {args.task_id} or {args.blocker_id}")
         return 1
@@ -5851,9 +5863,8 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
     import json
 
     # Parse task ID
-    task_id_str = args.task_id.lstrip('#')
     try:
-        task_id = int(task_id_str)
+        task_id = _parse_task_id_arg(args.task_id)
     except ValueError:
         print(f"❌ Invalid task ID: {args.task_id}")
         return 1
@@ -6205,9 +6216,8 @@ def cmd_task_metadata_validate(args: argparse.Namespace) -> int:
     from .task import TaskReader
 
     # Parse task ID
-    task_id_str = args.task_id.lstrip('#')
     try:
-        task_id = int(task_id_str)
+        task_id = _parse_task_id_arg(args.task_id)
     except ValueError:
         print(f"❌ Invalid task ID: {args.task_id}")
         return 1

@@ -302,6 +302,33 @@ class TestCreateSprint:
         assert 202 in result["scope"]
 
     # -----------------------------------------------------------------------
+    # T03b: --children with 3 titles (regression for GH issue #69 — first
+    # title was being silently dropped, producing 2 children instead of 3).
+    # -----------------------------------------------------------------------
+    def test_T03b_children_three_titles_no_drop(self, mock_task_infra, fake_agent_root):
+        """All N children_titles must produce N child tasks (no drop)."""
+        result = create_sprint(
+            "Three-child sprint",
+            children_titles=[
+                "Reticulum upstream issue (file at markqvist/Reticulum)",
+                "MacEff Alpha-Test Bug Consolidation (Cycle 6)",
+                "GrapheneOS Cycle 6 Install Learnings Curation",
+            ],
+            no_auto_start=True,
+            agent_root=fake_agent_root,
+        )
+
+        # Sprint task is 200; children get 201, 202, 203
+        assert result["task_id"] == 200
+        assert len(result["scope"]) == 4, (
+            f"Expected sprint + 3 children = 4 in scope, got {len(result['scope'])}: "
+            f"{result['scope']}"
+        )
+        assert 201 in result["scope"]
+        assert 202 in result["scope"]
+        assert 203 in result["scope"]
+
+    # -----------------------------------------------------------------------
     # T04: --scoped AND --children both given → ValueError
     # -----------------------------------------------------------------------
     def test_T04_scoped_and_children_mutually_exclusive(self, mock_task_infra, fake_agent_root):

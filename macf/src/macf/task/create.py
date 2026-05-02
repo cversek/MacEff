@@ -1455,6 +1455,18 @@ def create_sprint(
 
     task_id = _get_next_task_id(session_uuid)
 
+    # Reserve the sprint's task ID by pre-writing a stub task file BEFORE
+    # creating any children. Without this, child create_task() calls would
+    # call _get_next_task_id() while the sprint file is still un-written,
+    # collide on the same ID, and the eventual sprint file write would
+    # silently overwrite the first child. See GH issue #69.
+    _create_task_file(
+        task_id,
+        subject=f"🏃 SPRINT (provisional): {title}",
+        description="(reserving task ID; will be finalized after children created)",
+        session_uuid=session_uuid,
+    )
+
     # ------------------------------------------------------------------
     # 3. CA skeleton
     # ------------------------------------------------------------------
@@ -1662,6 +1674,15 @@ def create_play_time(
     cycle = parsed["cycle"] if parsed else 1
 
     task_id = _get_next_task_id(session_uuid)
+
+    # Reserve the play_time's task ID by pre-writing a stub task file BEFORE
+    # creating any children — same race fix as create_sprint (GH issue #69).
+    _create_task_file(
+        task_id,
+        subject=f"⏲️ PLAY_TIME (provisional): {title}",
+        description="(reserving task ID; will be finalized after children created)",
+        session_uuid=session_uuid,
+    )
 
     # ------------------------------------------------------------------
     # 3. CA skeleton
