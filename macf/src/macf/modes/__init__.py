@@ -12,6 +12,7 @@ from .detection import (
     detect_active_modes,
     anticipate_mode_change,
     format_mode_indicators,
+    get_active_task_type_marker,
     should_self_manage_closeout,
     should_closeout_now,
     is_quiet,
