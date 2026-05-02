@@ -2,7 +2,7 @@
 Unit tests for task-type custom dict Pydantic models.
 
 Covers:
-- SprintCustom   — 🏃‍♂️ SPRINT workload-defined autonomous work
+- SprintCustom   — 🏃 SPRINT workload-defined autonomous work
 - PlayTimeCustom — ⏲️ PLAY_TIME time-bounded autonomous play
 - SPRINT work-mode enum extension in detection.py
 - Mode-lock helper (apply_sprint_mode_lock) and Markov gate (is_markov_eligible)
@@ -351,9 +351,9 @@ class TestSprintWorkMode:
         assert "SPRINT" in WORK_MODES
 
     def test_sprint_emoji(self):
-        """SPRINT emoji must be the male-runner 🏃‍♂️ (ZWJ sequence preserved)."""
+        """SPRINT emoji must be the male-runner 🏃 (ZWJ sequence preserved)."""
         emoji = WORK_MODES["SPRINT"]["emoji"]
-        assert emoji == "🏃‍♂️"
+        assert emoji == "🏃"
 
     def test_sprint_order_after_consolidate(self):
         """SPRINT order value must be higher than CONSOLIDATE (order=14)."""

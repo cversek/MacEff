@@ -44,8 +44,8 @@ WORK_MODES = {
     # It does NOT participate in Markov transitions (neither as source nor
     # target). The Markov recommender is silenced while SPRINT is active.
     # Order 15 keeps it after the natural cycle so dashboard ordering is
-    # predictable: 🔍🧪🔨📋✍️ precede 🏃‍♂️.
-    "SPRINT":       {"emoji": "🏃‍♂️", "order": 15},
+    # predictable: 🔍🧪🔨📋✍️ precede 🏃.
+    "SPRINT":       {"emoji": "🏃", "order": 15},
 }
 
 ALL_MODES = {**OPERATIONAL_MODES, **WORK_MODES}
@@ -488,7 +488,7 @@ def _get_current_work_mode() -> Optional[str]:
     The lifetime invariant fix addresses the silent emoji-disappearance bug:
     SPRINT was set imperatively at task START, but the work_mode_change event
     could be evicted from the 50-event window over a long sprint, dropping the
-    🏃‍♂️ from the dashboard while the sprint was still active with scoped work.
+    🏃 from the dashboard while the sprint was still active with scoped work.
     """
     # Lifetime invariant: SPRINT/PLAY_TIME tasks in active scope force their work mode.
     # This prevents the emoji-disappearance bug where the imperative

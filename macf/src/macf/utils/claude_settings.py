@@ -95,44 +95,80 @@ def _read_autocompact_from_file(settings_path: Path) -> Optional[bool]:
 
 def set_autocompact_enabled(enabled: bool) -> bool:
     """
-    Set Claude Code autocompact setting in ~/.claude.json.
+    Set Claude Code autocompact setting.
 
-    This modifies the global Claude Code UI settings file to enable or
-    disable automatic compaction. Required for AUTO_MODE operation.
+    Required for AUTO_MODE operation (carry-through-compaction relies on
+    auto-compaction firing at the budget boundary).
+
+    Modern CC (2.1.116+) reads ``autoCompactEnabled`` from
+    ``~/.claude/settings.json``. Legacy CC versions used ``~/.claude.json``.
+    This function writes to BOTH for forward+backward compatibility, then
+    verifies against the higher-precedence ``~/.claude/settings.local.json``
+    (which would override either of the writes if it has its own value).
 
     Args:
         enabled: True to enable autocompact, False to disable
 
     Returns:
-        True if successfully updated, False on error
+        True if successfully updated to BOTH files, False on any write error.
 
     Note:
-        Modifies ~/.claude.json (Claude Code UI settings).
-        Changes take effect on next Claude Code session.
+        Changes take effect on next Claude Code session. If
+        ``~/.claude/settings.local.json`` has its own ``autoCompactEnabled``
+        with the OPPOSITE value, a warning is printed to stderr and the
+        return is still True (the writes succeeded; the override is the
+        user's higher-precedence choice that this function cannot revoke).
     """
     try:
-        settings_path = Path.home() / ".claude.json"
-
-        # Read existing settings or create new
-        if settings_path.exists():
-            with open(settings_path, 'r') as f:
-                settings = json.load(f)
-        else:
-            settings = {}
-
-        # Update autocompact setting (use camelCase to match CC convention)
-        settings['autoCompactEnabled'] = enabled
-
-        # Write atomically via temp file
-        temp_path = settings_path.with_suffix('.tmp')
-        with open(temp_path, 'w') as f:
-            json.dump(settings, f, indent=2)
-        temp_path.replace(settings_path)
-
-        return True
-    except (OSError, json.JSONDecodeError, TypeError) as e:
-        print(f"⚠️ MACF: Settings write failed (autocompact): {e}", file=sys.stderr)
+        home = Path.home()
+    except OSError as e:
+        print(f"⚠️ MACF: Could not resolve home directory: {e}", file=sys.stderr)
         return False
+
+    legacy_path = home / ".claude.json"
+    primary_path = home / ".claude" / "settings.json"
+    local_path = home / ".claude" / "settings.local.json"
+
+    def _update(path: Path) -> bool:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if path.exists():
+                with open(path, 'r') as f:
+                    settings = json.load(f)
+            else:
+                settings = {}
+            settings['autoCompactEnabled'] = enabled
+            temp_path = path.with_suffix(path.suffix + '.tmp')
+            with open(temp_path, 'w') as f:
+                json.dump(settings, f, indent=2)
+            temp_path.replace(path)
+            return True
+        except (OSError, json.JSONDecodeError, TypeError) as e:
+            print(f"⚠️ MACF: Settings write failed for {path}: {e}", file=sys.stderr)
+            return False
+
+    primary_ok = _update(primary_path)
+    legacy_ok = _update(legacy_path)
+
+    # Verification: warn if settings.local.json has an opposing value
+    if local_path.exists():
+        try:
+            with open(local_path, 'r') as f:
+                local_settings = json.load(f)
+            local_value = local_settings.get('autoCompactEnabled')
+            if local_value is not None and local_value != enabled:
+                print(
+                    f"⚠️ MACF: ~/.claude/settings.local.json has "
+                    f"autoCompactEnabled={local_value} which OVERRIDES the write "
+                    f"to settings.json (autoCompactEnabled={enabled}). "
+                    f"Edit settings.local.json directly or via /config to change "
+                    f"the effective value.",
+                    file=sys.stderr,
+                )
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"⚠️ MACF: Could not verify settings.local.json: {e}", file=sys.stderr)
+
+    return primary_ok and legacy_ok
 
 
 def set_permission_mode(mode: str, project_root: Optional[Path] = None) -> bool:

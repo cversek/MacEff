@@ -104,7 +104,7 @@ cat agent/policies/personal/<discovered_file>.md
 
 After extracting policy answers:
 
-1. **Verify authorization**: Check user's message contains BOTH the safety phrase AND AUTO_MODE keyword. If missing, request without hinting.
+1. **Verify authorization**: Check user's message contains BOTH the safety phrase AND AUTO_MODE keyword. If missing, request without hinting. Per the `autonomous_operation` policy "Safety Phrase Tolerance" note, accept either canonical `YOLO BOZO!` (space) or `YOLO_BOZO!` (underscore) — agents should normalize whitespace and underscores when matching. The exclamation point is required either way.
 
 2. **Execute mode switch**:
    ```bash

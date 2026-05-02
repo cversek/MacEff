@@ -97,7 +97,7 @@ def emit_scope_nag(sprint_task: Any, open_children: list) -> str:
     if sprint_task and sprint_task.mtmd and sprint_task.mtmd.custom:
         goal = sprint_task.mtmd.custom.get("goal", "")
 
-    header = f"🏃‍♂️ SPRINT in progress"
+    header = f"🏃 SPRINT in progress"
     if goal:
         header += f': "{goal}"'
 

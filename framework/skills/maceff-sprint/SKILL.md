@@ -4,7 +4,7 @@ description: "USE when launching workload-defined autonomous work. Wraps `task c
 allowed-tools: Bash, Read, Grep, Glob
 ---
 
-Launch a 🏃‍♂️ SPRINT — workload-defined autonomous work scoped to a predefined task set.
+Launch a 🏃 SPRINT — workload-defined autonomous work scoped to a predefined task set.
 
 ---
 
@@ -22,13 +22,25 @@ Launch a 🏃‍♂️ SPRINT — workload-defined autonomous work scoped to a p
 
 | Signal | Use |
 |--------|-----|
-| "Finish these N tasks" / defined workload | 🏃‍♂️ SPRINT |
+| "Finish these N tasks" / defined workload | 🏃 SPRINT |
 | "Work for N hours" / time allotment | ⏲️ PLAY_TIME |
 | "Explore X for an hour" / open-ended | ⏲️ PLAY_TIME |
 | Mode rotation desired | ⏲️ PLAY_TIME |
-| Stay focused on completing a known plan | 🏃‍♂️ SPRINT |
+| Stay focused on completing a known plan | 🏃 SPRINT |
 
 SPRINT locks the work mode at SPRINT and disables the Markov recommender. If mode rotation or Markov guidance is needed, use `maceff-play-time`.
+
+---
+
+## Prerequisite — User Authorization in the Same Message
+
+Step 1 chains `maceff-auto-mode`, which requires AUTO_MODE authorization keywords in the user's message: the safety phrase plus the literal `AUTO_MODE` keyword. If the `/maceff-sprint` invocation does not include these, the auth gate fires immediately and the sprint stalls until the user re-issues the command with the keywords appended.
+
+**Example invocation that proceeds straight through Step 1**:
+
+> /maceff-sprint <goal description>; YOLO BOZO! AUTO_MODE
+
+If AUTO_MODE is already active in the session (e.g., post-compaction recovery, or a sprint resumed after restart), Step 1 is a no-op verification rather than a fresh authorization — keywords are not required again.
 
 ---
 
@@ -151,7 +163,7 @@ macf_tools task note <sprint_id> "SPRINT: Launched at <time>. Goal: <description
 
 ## Step 6: Execute — Work Through Scoped Tasks
 
-**Mode is locked at SPRINT 🏃‍♂️.** The dashboard shows `🏗️ MACF 🤖 🏃‍♂️ | …` for the duration. The Markov recommender is disabled — no mode-change suggestions fire.
+**Mode is locked at SPRINT 🏃.** The dashboard shows `🏗️ MACF 🤖 🏃 | …` for the duration. The Markov recommender is disabled — no mode-change suggestions fire.
 
 Work through scoped tasks systematically. Complete each task the moment its work finishes:
 

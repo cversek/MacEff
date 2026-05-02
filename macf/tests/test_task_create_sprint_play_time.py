@@ -4,7 +4,7 @@ Unit + integration tests for Phase 3: create_sprint() and create_play_time().
 Tests per spec (roadmap §5.3):
 
 create_sprint:
-  T01 round-trip: title → SPRINT task with correct task_type, SprintCustom, 🏃‍♂️ subject
+  T01 round-trip: title → SPRINT task with correct task_type, SprintCustom, 🏃 subject
   T02 --scoped happy path: existing tasks in scope, SprintCustom.scoped_task_ids populated
   T03 --children happy path: child tasks created and collected into scope
   T04 --scoped AND --children both given → ValueError
@@ -215,7 +215,7 @@ def _make_existing_task(tmp_path, task_id: int, status: str = "pending") -> Path
 class TestCreateSprint:
 
     # -----------------------------------------------------------------------
-    # T01: Round-trip — task_type=SPRINT, SprintCustom valid, 🏃‍♂️ subject
+    # T01: Round-trip — task_type=SPRINT, SprintCustom valid, 🏃 subject
     # -----------------------------------------------------------------------
     def test_T01_round_trip(self, mock_task_infra, fake_agent_root):
         mocks = mock_task_infra
@@ -235,7 +235,7 @@ class TestCreateSprint:
         # Read written task file and check MTMD content
         task_file = Path(result["task_path"])
         data = json.loads(task_file.read_text())
-        assert "🏃‍♂️ SPRINT:" in data["subject"]
+        assert "🏃 SPRINT:" in data["subject"]
         assert "SPRINT" in data["description"]
         assert "task_type: SPRINT" in data["description"]
 

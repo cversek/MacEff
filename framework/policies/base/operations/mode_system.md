@@ -166,7 +166,7 @@ Six work modes representing the agent's current activity type. Agent-declared (s
 | **CURATE** | 📋 | Learnings, ideas, index maintenance, knowledge organization | Motivation skill |
 | **CONSOLIDATE** | ✍️ | Observations, synthesis, cross-references, documentation | Motivation skill |
 | **EXPERIMENT** | 🧪 | Structured hypothesis-driven investigation | Motivation skill |
-| **SPRINT** | 🏃‍♂️ | Workload-defined autonomous execution (mode-locked) | SPRINT task lifecycle |
+| **SPRINT** | 🏃 | Workload-defined autonomous execution (mode-locked) | SPRINT task lifecycle |
 
 ### 3.1 Rotatable Modes (DISCOVER, BUILD, CURATE, CONSOLIDATE, EXPERIMENT)
 
@@ -176,9 +176,9 @@ These five modes participate in the Markov transition matrix and can be suggeste
 
 ### 3.2 SPRINT Mode (Mode-Locked)
 
-**SPRINT 🏃‍♂️** is a special work mode with different semantics from the five rotatable modes:
+**SPRINT 🏃** is a special work mode with different semantics from the five rotatable modes:
 
-- **Set automatically**: When a 🏃‍♂️ SPRINT task starts (or its child tasks start), the mode is set to SPRINT. The agent does not invoke a motivation skill to enter SPRINT mode.
+- **Set automatically**: When a 🏃 SPRINT task starts (or its child tasks start), the mode is set to SPRINT. The agent does not invoke a motivation skill to enter SPRINT mode.
 - **Clears automatically**: When the parent SPRINT task completes, the mode clears.
 - **Markov-locked**: The gate point recommender is **disabled** while SPRINT mode is active. No mode-transition suggestions fire at Stop hook gates.
 - **Activates scope nag**: Instead of mode suggestions, the Stop hook emits a scope-completion nag listing remaining scoped tasks.
@@ -186,9 +186,9 @@ These five modes participate in the Markov transition matrix and can be suggeste
 
 **Why SPRINT is a mode**: The Stop hook reads `current_work_mode` to decide behavior. SPRINT as a mode lets the hook react to a single signal: "is the agent in SPRINT mode? then nag, don't recommend." This is cleaner than threading task-type through every hook check.
 
-**Display**: Dashboard shows `🏃‍♂️` in the work mode position:
+**Display**: Dashboard shows `🏃` in the work mode position:
 ```
-🏗️ MACF 🤖 🏃‍♂️ | 10:45 AM | breadcrumb
+🏗️ MACF 🤖 🏃 | 10:45 AM | breadcrumb
 ```
 
 **Display**: Rotatable work modes appear in the dashboard alongside operational modes:
