@@ -266,8 +266,16 @@ def run_loop(cmd_args: list, name: str = "", restart_delay: int = 5):
             if not user_shell:
                 # Cross-platform default: zsh on macOS, bash on Linux
                 user_shell = "/bin/zsh" if platform.system() == "Darwin" else "/bin/bash"
+            # start_new_session=True puts each child in its own session/process
+            # group via setsid(2). Without this, lxterminal (and similar PTY-based
+            # terminals) leak partially-torn-down file descriptors into the
+            # supervisor's environment after the first child exits — subsequent
+            # respawns then fail with "initialize_job_control: no job control in
+            # background: Bad file descriptor" and the supervisor enters an
+            # infinite crash loop. Closes GH issue #27.
             child = subprocess.Popen(
-                [user_shell, "-ic", cmd_string]
+                [user_shell, "-ic", cmd_string],
+                start_new_session=True,
             )
             _update_registry(pid, child_pid=child.pid, status="running")
 
@@ -512,8 +520,11 @@ if __name__ == "__main__":
             run_loop(cmd, name=args.name, restart_delay=args.delay)
 
     except Exception as e:
+        # Top-level supervisor crash handler — bare Exception is intentional:
+        # this is the last line of defense before the lxterminal window closes.
+        # Specific exception types would let unexpected escapes vanish silently.
         error_msg = traceback.format_exc()
-        print(f"\n[auto-restart] CRASH:\n{error_msg}", file=sys.stderr)
+        print(f"\n[auto-restart] CRASH ({type(e).__name__}: {e}):\n{error_msg}", file=sys.stderr)
         # Log to file (persists after window closes)
         REGISTRY_DIR.mkdir(parents=True, exist_ok=True)
         with open(LOG_FILE, "a") as f:
