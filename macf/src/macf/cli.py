@@ -2955,12 +2955,20 @@ def cmd_mode_set(args: argparse.Namespace) -> int:
                     print("⚠️  Could not toggle Write permission")
                 auto_ask = toggle_auto_mode_ask_permissions(True)
                 if auto_ask is not None:
-                    if auto_ask:
+                    changed = auto_ask.get('changed', [])
+                    shadows_relocated = auto_ask.get('shadows_relocated', [])
+                    if changed:
                         print("✅ AUTO_MODE ask permissions installed:")
-                        for entry in auto_ask:
+                        for entry in changed:
                             print(f"   ❓ {entry}")
                     else:
                         print("✅ AUTO_MODE ask permissions already present")
+                    if shadows_relocated:
+                        print("⚠️  Shadowing allow entries relocated for safekeeping (will be restored on MANUAL_MODE return):")
+                        for ask_entry, shadows in shadows_relocated:
+                            print(f"   {ask_entry}")
+                            for shadow in shadows:
+                                print(f"     ↦ relocated: {shadow}")
                 else:
                     print("⚠️  Could not install AUTO_MODE ask permissions")
                 # Auto-start Transcript Monitor for idle detection
@@ -2986,9 +2994,16 @@ def cmd_mode_set(args: argparse.Namespace) -> int:
                 print("   permissions.defaultMode = default")
                 print("   Write restored to ask list")
                 if removed:
-                    print(f"   AUTO_MODE ask entries removed:")
-                    for entry in removed:
-                        print(f"   ↩️  {entry}")
+                    changed = removed.get('changed', [])
+                    shadows_restored = removed.get('shadows_restored', [])
+                    if changed:
+                        print(f"   AUTO_MODE ask entries removed:")
+                        for entry in changed:
+                            print(f"   ↩️  {entry}")
+                    if shadows_restored:
+                        print(f"   Allow entries restored from safekeeping:")
+                        for entry in shadows_restored:
+                            print(f"   ↪️  {entry}")
         else:
             print(f"❌ {message}")
             return 1
