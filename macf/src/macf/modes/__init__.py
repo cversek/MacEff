@@ -18,6 +18,8 @@ from .detection import (
     is_quiet,
     get_current_work_mode,
     is_markov_eligible,
+    should_suppress_markov,
+    format_low_context_directive,
     apply_sprint_mode_lock,
     get_transition_distribution,
     sample_next_work_mode,
