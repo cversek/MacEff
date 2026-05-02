@@ -3115,6 +3115,80 @@ def cmd_events_history(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_events_analyze(args: argparse.Namespace) -> int:
+    """Analyze a structured-event JSONL log (BUG #1069 generalization).
+
+    Wraps :class:`macf.eventlog.EventLogAnalyzer` so any JSONL log following
+    the {ts, request_id, phase, ...} shape is analyzable from the CLI without
+    a per-domain script. Domain customization (started phase, success field,
+    elapsed field) flows through `--started-phase` / `--success-field` /
+    `--elapsed-field` flags.
+    """
+    from .eventlog import EventLogAnalyzer, parse_since
+    import json as _json
+
+    if not args.path.exists():
+        print(f"❌ Log file not found: {args.path}")
+        return 1
+
+    analyzer = EventLogAnalyzer(
+        args.path,
+        started_phase=args.started_phase,
+        success_field=args.success_field,
+        elapsed_field=args.elapsed_field,
+        correlation_field=args.correlation_field,
+    )
+
+    if args.tail and args.tail > 0:
+        rows = analyzer.tail(args.tail)
+        if args.json_output:
+            print(_json.dumps(rows, indent=2))
+        else:
+            print(f"Last {len(rows)} requests from {args.path}:")
+            for r in rows:
+                ok_emoji = "✅" if r.get("success") is True else (
+                    "⏳" if r.get("success") is None else "❌"
+                )
+                ms = r.get("elapsed_ms")
+                ms_str = f"{ms}ms" if ms is not None else "?ms"
+                rid = r.get(args.correlation_field, "?")
+                err = r.get("error", "") or ""
+                print(
+                    f"  {ok_emoji} {str(rid):<14} {r.get('terminal_phase', 'unknown'):<20} "
+                    f"{ms_str:<8} {err}"
+                )
+        return 0
+
+    since = parse_since(args.since) if args.since else None
+    summary = analyzer.summarize(since=since, group_by=args.by)
+
+    if args.json_output:
+        print(_json.dumps(summary, indent=2))
+        return 0
+
+    print(f"Event log analysis: {args.path}")
+    if since:
+        print(f"Window: since {args.since}")
+    print(f"  Total started:     {summary['total_started']}")
+    print(f"  Completed:         {summary['completed_count']}")
+    print(f"  Success count:     {summary['success_count']}")
+    sr = summary["success_rate"]
+    print(f"  Success rate:      {(f'{sr*100:.1f}%') if sr is not None else 'n/a'}")
+    print(f"  Phase counts:      {summary['phase_counts']}")
+    if summary["elapsed_ms_p50"] is not None:
+        print(
+            f"  Elapsed (ms):      "
+            f"min={summary['elapsed_ms_min']} "
+            f"p50={summary['elapsed_ms_p50']} "
+            f"p90={summary['elapsed_ms_p90']} "
+            f"p99={summary['elapsed_ms_p99']} "
+            f"max={summary['elapsed_ms_max']}"
+        )
+    if "groups" in summary:
+        print(f"  Groups (--by {summary['group_by_field']}): {summary['groups']}")
+    return 0
+
+
 def cmd_events_query(args: argparse.Namespace) -> int:
     """Query events with filters."""
     from .agent_events_log import query_events
@@ -7350,6 +7424,55 @@ def _build_parser() -> argparse.ArgumentParser:
     gaps_parser.add_argument("--threshold", type=float, default=3600,
                             help="gap threshold in seconds (default: 3600)")
     gaps_parser.set_defaults(func=cmd_events_gaps)
+
+    # events analyze (BUG #1069 — generic structured-event JSONL analyzer)
+    analyze_parser = events_sub.add_parser(
+        "analyze",
+        help="analyze a structured-event JSONL log (Hermes delegations, Telegram restart-events, etc.)",
+    )
+    analyze_parser.add_argument("path", type=Path, help="path to the JSONL log file")
+    analyze_parser.add_argument(
+        "--since",
+        help="filter to events in last N{s,m,h,d} (e.g. 1h, 7d)",
+    )
+    analyze_parser.add_argument(
+        "--by",
+        metavar="FIELD",
+        help="group started events by this field (e.g. trigger, caller)",
+    )
+    analyze_parser.add_argument(
+        "--tail",
+        type=int,
+        default=0,
+        help="show last N completed requests instead of summary",
+    )
+    analyze_parser.add_argument(
+        "--json",
+        dest="json_output",
+        action="store_true",
+        help="machine-readable JSON output",
+    )
+    analyze_parser.add_argument(
+        "--started-phase",
+        default="started",
+        help="phase value marking the start of a request (default: started)",
+    )
+    analyze_parser.add_argument(
+        "--success-field",
+        default="success",
+        help="bool field on terminal events (default: success)",
+    )
+    analyze_parser.add_argument(
+        "--elapsed-field",
+        default="elapsed_ms",
+        help="integer field on completed events for elapsed time (default: elapsed_ms)",
+    )
+    analyze_parser.add_argument(
+        "--correlation-field",
+        default="request_id",
+        help="field used to correlate started + terminal events (default: request_id)",
+    )
+    analyze_parser.set_defaults(func=cmd_events_analyze)
 
     # Task commands (MACF Task CLI)
     task_parser = sub.add_parser("task", help="task management with MTMD support")
