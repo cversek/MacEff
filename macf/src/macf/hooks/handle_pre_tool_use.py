@@ -5,6 +5,7 @@ handle_pre_tool_use - PreToolUse hook runner.
 DELEG_DRV start tracking + tool operation awareness.
 """
 import json
+import re
 import sys
 import traceback
 from typing import Dict, Any
@@ -31,31 +32,28 @@ def _is_bare_cd_command(command: str) -> bool:
     Bare cd is dangerous because it breaks relative hook paths.
     Allow cd in subshells: (cd dir && cmd) or $(cd dir && cmd)
 
+    Detection scans EVERY command-fragment (split on \\n, ;, &&, ||) for
+    a leading `cd ` — multi-line bash scripts and ;-separated chains can
+    place a bare cd anywhere, not just first.
+
     Args:
         command: Bash command string
 
     Returns:
         True if bare cd detected, False if safe
     """
-    # Strip whitespace
     cmd = command.strip()
 
-    # Check if command starts with 'cd ' (bare cd)
-    if cmd.startswith("cd "):
-        # Check if it's in a subshell (starts with parenthesis)
-        if not cmd.startswith("("):
-            return True  # Bare cd detected
+    # Split on any command-boundary separator: \n, ;, &&, ||
+    # Each fragment is potentially its own command; check each for a leading
+    # `cd `. Subshell-prefixed fragments (those starting with `(`) are safe
+    # because subshell-cd doesn't change the parent shell's CWD.
+    fragments = re.split(r"\n|;|&&|\|\|", cmd)
+    for frag in fragments:
+        f = frag.strip()
+        if f.startswith("cd ") and not f.startswith("("):
+            return True
 
-    # Check for cd with && (chained commands without subshell)
-    # e.g., "cd /path && ls" is still bare cd that changes working dir
-    if " && " in cmd:
-        # Check if cd appears before && without being in subshell
-        parts = cmd.split(" && ")
-        first_part = parts[0].strip()
-        if first_part.startswith("cd ") and not first_part.startswith("("):
-            return True  # Bare cd in chain
-
-    # Safe: no bare cd detected
     return False
 
 
