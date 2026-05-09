@@ -182,6 +182,44 @@ Development Drive Stats:
         stop_reason = input_data.get('stop_reason', '')
         is_error_stop = 'error' in stop_reason.lower() if stop_reason else False
 
+        # --- Recoverable-error auto-recovery gate (ANY mode) ---
+        # If the most recent tool result is a known-recoverable error pattern
+        # AND we're not already in a recovery loop (stop_hook_active=False),
+        # block the stop with a pattern-specific directive. The agent retries
+        # with the obvious fix instead of stopping with an apology.
+        # See macf/hooks/recoverable_errors.py for the pattern registry.
+        transcript_path = input_data.get('transcript_path')
+        stop_hook_active = input_data.get('stop_hook_active', False)
+        if transcript_path and not stop_hook_active:
+            try:
+                from macf.hooks.recoverable_errors import scan_last_tool_error
+                recovery = scan_last_tool_error(transcript_path)
+                if recovery is not None:
+                    pattern_name, directive = recovery
+                    try:
+                        append_event(
+                            event="recoverable_error_blocked",
+                            data={
+                                "session_id": session_id,
+                                "pattern": pattern_name,
+                            },
+                            hook_input=input_data,
+                        )
+                    except (OSError, IOError) as _e:
+                        print(f"⚠️ MACF: recoverable_error_blocked event log failed: {_e}", file=sys.stderr)
+                    return {
+                        "continue": True,
+                        "decision": "block",
+                        "reason": (
+                            f"🔧 RECOVERABLE ERROR — {pattern_name}\n\n"
+                            f"{directive}\n\n"
+                            f"Apply the recovery and retry the original tool call. "
+                            f"Do not apologize and stop — the fix is mechanical."
+                        ),
+                    }
+            except (ImportError, OSError, ValueError) as _e:
+                print(f"⚠️ MACF: recoverable-error gate error: {_e}", file=sys.stderr)
+
         # --- Scope gate: block stop if active scoped tasks remain ---
         try:
             from macf.task.scope import get_scope_check
