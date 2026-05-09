@@ -157,6 +157,85 @@ def test_exception_handling(mock_dependencies):
     assert "error" in result["systemMessage"].lower()
 
 
+def test_recoverable_error_gate_blocks_stop(mock_dependencies, tmp_path):
+    """When the last tool result is a recoverable error, the Stop hook
+    returns decision:'block' with a recovery directive instead of
+    letting the agent stop with an apology."""
+    import json as _json
+    from macf.hooks.handle_stop import run
+
+    # Write a minimal transcript with a recoverable error as the last
+    # tool result.
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(_json.dumps({
+        "type": "user",
+        "message": {
+            "role": "user",
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": "toolu_test",
+                "content": "<tool_use_error>File has not been read yet. Read it first before writing to it.</tool_use_error>",
+                "is_error": True,
+            }],
+        },
+    }) + "\n")
+
+    stdin = _json.dumps({
+        "transcript_path": str(transcript),
+        "stop_hook_active": False,
+    })
+    result = run(stdin)
+
+    assert result.get("decision") == "block", \
+        f"Expected decision:'block' on recoverable error, got: {result}"
+    assert "RECOVERABLE ERROR" in result.get("reason", "")
+    assert "file_not_read" in result.get("reason", "")
+
+
+def test_recoverable_error_gate_skipped_when_stop_hook_active(mock_dependencies, tmp_path):
+    """Circuit-breaker: if Claude Code is re-invoking the Stop hook
+    after a previous block (stop_hook_active=True), don't re-fire the
+    gate even when the same error is still the most recent. Lets the
+    stop succeed so the agent escapes a same-error loop."""
+    import json as _json
+    from unittest.mock import patch
+    from macf.hooks.handle_stop import run
+
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(_json.dumps({
+        "type": "user",
+        "message": {
+            "role": "user",
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": "toolu_test",
+                "content": "<tool_use_error>File has not been read yet. Read it first before writing to it.</tool_use_error>",
+                "is_error": True,
+            }],
+        },
+    }) + "\n")
+
+    stdin = _json.dumps({
+        "transcript_path": str(transcript),
+        "stop_hook_active": True,  # circuit-breaker active
+    })
+    # Mock through enough of the post-gate flow that we don't hit the
+    # scope/timer gate plumbing in this minimal test.
+    with patch('macf.hooks.handle_stop.get_temporal_context') as m_temporal, \
+         patch('macf.hooks.handle_stop.get_rich_environment_string', return_value=''), \
+         patch('macf.hooks.handle_stop.get_breadcrumb', return_value='s/c/g/p/t'), \
+         patch('macf.hooks.handle_stop.get_token_info', return_value={'cl_level': 50, 'tokens_used': 1000, 'tokens_remaining': 100000}), \
+         patch('macf.hooks.handle_stop.detect_auto_mode', return_value=(False, 'default', 0.0)), \
+         patch('macf.hooks.handle_stop.format_token_context_full', return_value=''), \
+         patch('macf.hooks.handle_stop.get_boundary_guidance', return_value=''), \
+         patch('macf.hooks.handle_stop.format_macf_footer', return_value=''):
+        m_temporal.return_value = {'timestamp_formatted': 'now', 'day_of_week': 'Sat', 'time_of_day': 'Evening'}
+        result = run(stdin)
+
+    assert result.get("decision") != "block", \
+        f"Expected gate to be skipped under stop_hook_active=True, got: {result}"
+
+
 def test_saves_session_end_time_to_project_state(mock_dependencies):
     """Test Stop hook saves end time to project state for cross-session tracking."""
     from macf.hooks.handle_stop import run
