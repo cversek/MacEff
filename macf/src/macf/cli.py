@@ -731,7 +731,15 @@ def cmd_hook_install(args: argparse.Namespace) -> int:
                 print(f"   Clearing hooks from local settings...")
                 _clear_hooks_from_settings(local_settings)
 
-        # Set paths based on mode and environment
+        # Set paths based on mode and environment.
+        #
+        # Hook commands MUST resolve to absolute paths in settings (cversek/MacEff#89).
+        # A bare `cd` in the agent's persistent Bash shell shifts CWD; if the
+        # hook command is relative (e.g. "python .claude/hooks/X.py"), every
+        # subsequent PreToolUse lookup resolves against the shifted CWD,
+        # fails with ENOENT, and blocks ALL tool calls including the
+        # de-escalation paths needed to recover. Only an external session
+        # restart unblocks the agent. Absolute paths sidestep this entirely.
         if mode == 'global':
             hooks_dir = Path.home() / ".claude" / "hooks"
             settings_file = Path.home() / ".claude" / "settings.json"
@@ -739,12 +747,17 @@ def cmd_hook_install(args: argparse.Namespace) -> int:
                 # Container: absolute venv Python + absolute hook paths (FP#27)
                 hooks_prefix = f"/opt/maceff-venv/bin/python {Path.home()}/.claude/hooks"
             else:
-                hooks_prefix = "python ~/.claude/hooks"
+                # Host global: write the absolute home path. ~ expansion is
+                # shell-dependent and CC's hook exec model isn't documented to
+                # guarantee it; absolute removes the assumption.
+                hooks_prefix = f"python {Path.home()}/.claude/hooks"
         else:
-            # Local mode (host only - container always uses global)
+            # Local mode (host only - container always uses global).
+            # Resolve to canonical absolute path so symlinked project trees,
+            # relative invocations, and CWD-shifts all hit the same hooks dir.
             hooks_dir = Path.cwd() / ".claude" / "hooks"
             settings_file = Path.cwd() / ".claude" / "settings.local.json"
-            hooks_prefix = "python .claude/hooks"
+            hooks_prefix = f"python {hooks_dir.resolve()}"
 
         # Create hooks directory
         hooks_dir.mkdir(parents=True, exist_ok=True)
