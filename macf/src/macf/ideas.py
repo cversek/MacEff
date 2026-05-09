@@ -276,11 +276,21 @@ def build_idea_graph() -> Dict[str, Any]:
                 edges[idea_id].add(rid)
                 edges[rid].add(idea_id)
         for wl in (links.get("wiki_links") or []):
-            m = re_mod.match(r'\[\[(.+?)\]\]', wl)
-            if m:
-                # Normalize: strip .md suffix for consistent matching
-                concept = re_mod.sub(r'\.md$', '', m.group(1))
-                wiki_index[concept].add(idea_id)
+            # Accept both bracketed (`[[concept]]`) and bare (`concept`) forms
+            # in the JSON array. Bracketed form lets ideas use the same syntax
+            # as markdown CAs ([[concept]] in body); bare form is the more
+            # natural JSON-array shape and the one the cross-CA index expects
+            # (concept keys in wiki_index are stored sans brackets). Without
+            # this, ideas with bare-concept arrays never enter wiki_index and
+            # the idea↔learning bridge breaks at the seam — closes GH #87.
+            if not isinstance(wl, str) or not wl.strip():
+                continue
+            raw = wl.strip()
+            m = re_mod.match(r'^\[\[(.+?)\]\]$', raw)
+            concept = m.group(1) if m else raw
+            # Normalize: strip .md suffix for consistent matching
+            concept = re_mod.sub(r'\.md$', '', concept)
+            wiki_index[concept].add(idea_id)
 
     for concept, ids in wiki_index.items():
         ids_list = list(ids)
