@@ -17,6 +17,7 @@ from macf.utils import (
     get_formatted_timestamp
 )
 from macf.config import ConsciousnessConfig
+from macf.observability import Warning, emit_warning
 
 
 def log_hook_event(
@@ -56,7 +57,7 @@ def log_hook_event(
                 config = ConsciousnessConfig()
                 agent_id = config.agent_id
             except Exception as e:
-                print(f"⚠️ MACF: agent_id resolution failed: {e}", file=sys.stderr)
+                emit_warning(Warning(source="hook_logging", kind="agent_id_resolution_failed", detail=f"agent_id resolution failed: {e}"))
                 agent_id = 'unknown_agent'
 
         # Get hooks directory using unified path
@@ -130,7 +131,7 @@ def setup_hook_logger(hook_name: str, session_id: str) -> logging.Logger:
             file_handler.setFormatter(file_formatter)
             logger.addHandler(file_handler)
     except Exception as e:
-        print(f"⚠️ MACF: Hook file handler setup failed: {e}", file=sys.stderr)
+        emit_warning(Warning(source="hook_logging", kind="log_handler_setup_failed", detail=f"Hook file handler setup failed: {e}"))
         try:
             from macf.agent_events_log import append_event
             append_event("error", {
@@ -140,6 +141,6 @@ def setup_hook_logger(hook_name: str, session_id: str) -> logging.Logger:
                 "fallback": "console_only_logging"
             })
         except Exception as log_e:
-            print(f"⚠️ MACF: Event logging also failed: {log_e}", file=sys.stderr)
+            emit_warning(Warning(source="hook_logging", kind="event_log_write_failed", detail=f"Event logging also failed: {log_e}"))
 
     return logger

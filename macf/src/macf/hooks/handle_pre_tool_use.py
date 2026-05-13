@@ -23,6 +23,7 @@ from macf.modes import detect_active_modes, anticipate_mode_change, format_mode_
 from macf.agent_events_log import append_event
 from macf.event_queries import get_active_policy_injections_from_events
 from macf.hooks.hook_logging import log_hook_event
+from macf.observability import Warning, emit_warning
 
 
 def _is_bare_cd_command(command: str) -> bool:
@@ -81,7 +82,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             from macf.task.scope_gate_failsafe import reset as _reset_failsafe
             _reset_failsafe()
         except (ImportError, OSError) as _e:
-            print(f"⚠️ MACF: scope_gate_failsafe reset failed (non-blocking): {_e}", file=sys.stderr)
+            emit_warning(Warning(source="pre_tool_use", kind="scope_gate_failed", detail=f"scope_gate_failsafe reset failed (non-blocking): {_e}"))
 
         # Parse hook input
         data = json.loads(stdin_json) if stdin_json else {}
@@ -165,7 +166,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             task_type_marker = get_active_task_type_marker()
             mode_indicator = format_mode_indicators(active_modes, task_type_marker)
         except (OSError, ValueError) as e:
-            print(f"⚠️ MACF: mode detection failed, falling back: {e}", file=sys.stderr)
+            emit_warning(Warning(source="pre_tool_use", kind="mode_detection_failed", detail=f"mode detection failed, falling back: {e}"))
             auto_mode_active, _ = detect_auto_mode(session_id)
             mode_indicator = " 🤖" if auto_mode_active else ""
         message_parts = [f"🏗️ MACF{mode_indicator} | {timestamp} | {breadcrumb}"]
@@ -368,7 +369,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 parse_mode="HTML"
             )
         except (ImportError, OSError, ConnectionError) as e:
-            print(f"⚠️ MACF: pre-tool-use telegram notification failed (non-blocking): {e}", file=sys.stderr)
+            emit_warning(Warning(source="pre_tool_use", kind="telegram_send_failed", detail=f"pre-tool-use telegram notification failed (non-blocking): {e}"))
 
         # Pattern C: top-level systemMessage for user + hookSpecificOutput for agent
         user_message = f"{message} {token_context_minimal}"

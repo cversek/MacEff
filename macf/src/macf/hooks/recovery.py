@@ -21,6 +21,7 @@ from macf.utils import (
     format_manifest_awareness,
     format_proprioception_awareness
 )
+from macf.observability import Warning, emit_warning
 
 
 def format_consciousness_recovery_message(
@@ -249,7 +250,7 @@ def read_recovery_policy(policy_path: Optional[str] = None) -> str:
 Read recent consciousness artifacts and await user instructions."""
 
     except Exception as e:
-        print(f"⚠️ MACF: recovery policy load failed: {e}", file=sys.stderr)
+        emit_warning(Warning(source="recovery", kind="policy_load_failed", detail=f"recovery policy load failed: {e}"))
         return """No custom recovery policy found.
 Read recent consciousness artifacts and await user instructions."""
 

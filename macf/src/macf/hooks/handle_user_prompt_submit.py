@@ -27,6 +27,7 @@ from macf.utils import (
     get_breadcrumb
 )
 from macf.hooks.hook_logging import log_hook_event
+from macf.observability import Warning, emit_warning
 
 # EXPERIMENT: Memory injection script path (Cycle 337)
 MEMORY_RECALL_SCRIPT = Path(__file__).parent.parent.parent / "agent/public/experiments/2026-01-15_140000_001_Claude-Mem_Associative_Injection/artifacts/memory-recall.py"
@@ -89,10 +90,10 @@ def get_policy_injection(prompt: str) -> str:
         # Empty result means service unavailable - fall through with warning
     except ImportError as e:
         # Client module not available - log and fall through
-        print(f"⚠️ MACF: search_service.client not available: {e}", file=sys.stderr)
+        emit_warning(Warning(source="user_prompt_submit", kind="search_service_unavailable", detail=f"search_service.client not available: {e}"))
     except Exception as e:
         # Unexpected error - log with traceback
-        print(f"⚠️ MACF: search_service.client error: {e}", file=sys.stderr)
+        emit_warning(Warning(source="user_prompt_submit", kind="search_service_unavailable", detail=f"search_service.client error: {e}"))
         log_hook_event({
             "hook_name": "user_prompt_submit",
             "event_type": "WARNING",
@@ -105,7 +106,7 @@ def get_policy_injection(prompt: str) -> str:
 
     # Slow path fallback: Direct import (4s on first call)
     # Log that we're using fallback so user knows service isn't running
-    print("⚠️ MACF: Search service unavailable, using slow fallback (4s)", file=sys.stderr)
+    emit_warning(Warning(source="user_prompt_submit", kind="search_service_unavailable", detail="Search service unavailable, using slow fallback (4s)"))
     log_hook_event({
         "hook_name": "user_prompt_submit",
         "event_type": "WARNING",
@@ -189,7 +190,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             active_modes = detect_active_modes(session_id, token_info)
             mode_indicator = format_mode_indicators(active_modes)
         except (OSError, ValueError, ImportError) as e:
-            print(f"⚠️ MACF: mode detection failed in UPS hook: {e}", file=sys.stderr)
+            emit_warning(Warning(source="user_prompt_submit", kind="mode_detection_failed", detail=f"mode detection failed in UPS hook: {e}"))
             mode_indicator = " 🤖" if auto_mode else ""
 
         # Format temporal section with breadcrumb
@@ -271,7 +272,7 @@ Breadcrumb: {breadcrumb}"""
                 prefix="\U0001f4ac DEV_DRV Started"
             )
         except (ImportError, OSError, ConnectionError) as e:
-            print(f"⚠️ MACF: DEV_DRV telegram notification failed (non-blocking): {e}", file=sys.stderr)
+            emit_warning(Warning(source="user_prompt_submit", kind="telegram_send_failed", detail=f"DEV_DRV telegram notification failed (non-blocking): {e}"))
 
         # Pattern C: top-level systemMessage for user + hookSpecificOutput for agent
         return {
