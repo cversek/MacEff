@@ -163,38 +163,57 @@ def complete_deleg_drv(
     session_id: str,
     agent_id: Optional[str] = None,
     subagent_type: Optional[str] = None,
-) -> tuple[bool, float, str]:
+) -> tuple[bool, float, str, str]:
     """
     Mark Delegation Drive completion and update stats.
 
-    Looks up the active drive's correlation_id from the most recent
-    deleg_drv_started event and propagates it into the emitted
-    deleg_drv_ended event so consumers (terminal, Telegram, forensic
-    queries) can pair the Started/Ended boundary.
+    Looks up the active drive's correlation_id AND subagent_type from
+    the most recent deleg_drv_started event so the Ended event carries
+    matching metadata even when the caller's own subagent_type fetch
+    came up empty (e.g. SubagentStop hook input that doesn't include
+    the subagent_type field).
+
+    Args:
+        session_id: Session identifier.
+        agent_id: Unused, kept for API compatibility.
+        subagent_type: Optional override. When provided AND not empty/
+            "unknown", takes precedence over the started event's value.
+            Otherwise the started event's subagent_type is used.
 
     Returns:
-        Tuple of (success: bool, duration_seconds: float,
-        correlation_id: str). ``correlation_id`` may be empty if the
-        original Start event didn't carry one (legacy callers).
+        Tuple of (success, duration_seconds, correlation_id,
+        resolved_subagent_type). ``correlation_id`` may be empty if
+        the original Start event didn't carry one. ``resolved_subagent_type``
+        is the value emitted into the ended event — callers should use
+        this for downstream display (it's the source of truth).
     """
-    # EVENT-FIRST: Query events for active drive start time + correlation_id
+    # EVENT-FIRST: Query events for active drive start time + metadata
     from ..event_queries import get_active_deleg_drv_start
-    started_at, correlation_id = get_active_deleg_drv_start(session_id)
+    started_at, correlation_id, started_subagent_type = get_active_deleg_drv_start(session_id)
 
     if started_at == 0.0:
-        return (False, 0.0, "")  # No active drive
+        return (False, 0.0, "", "")  # No active drive
 
     duration = time.time() - started_at
 
-    # Emit deleg_drv_ended event with the SAME correlation_id as the start
+    # Resolve subagent_type: caller override (if informative) wins,
+    # otherwise fall back to the started event's value, otherwise "unknown".
+    if subagent_type and subagent_type != "unknown":
+        resolved_subagent_type = subagent_type
+    elif started_subagent_type:
+        resolved_subagent_type = started_subagent_type
+    else:
+        resolved_subagent_type = "unknown"
+
+    # Emit deleg_drv_ended event with the matched correlation_id + subagent_type
     _emit_event("deleg_drv_ended", {
         "session_id": session_id,
-        "subagent_type": subagent_type or "unknown",
+        "subagent_type": resolved_subagent_type,
         "duration": duration,
         "correlation_id": correlation_id,
     })
 
-    return (True, duration, correlation_id)
+    return (True, duration, correlation_id, resolved_subagent_type)
 
 def get_deleg_drv_stats(session_id: str, agent_id: Optional[str] = None) -> dict:
     """

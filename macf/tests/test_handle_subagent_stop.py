@@ -12,7 +12,7 @@ def mock_dependencies():
          patch('macf.hooks.handle_subagent_stop.get_temporal_context') as mock_temporal:
 
         mock_session.return_value = "test-session-123"
-        mock_complete.return_value = (True, 65, "abc123")  # (success, duration, correlation_id)
+        mock_complete.return_value = (True, 65, "abc123", "Explore")  # (success, duration, correlation_id, subagent_type)
         mock_stats.return_value = {
             'count': 3,
             'total_duration': 180
@@ -35,7 +35,7 @@ def test_deleg_drv_completion_tracking(mock_dependencies):
     """Test DELEG_DRV completion tracking in production mode."""
     from macf.hooks.handle_subagent_stop import run
 
-    mock_dependencies['complete'].return_value = (True, 65, "abc123")
+    mock_dependencies['complete'].return_value = (True, 65, "abc123", "Explore")
 
     result = run("")
 
@@ -85,7 +85,7 @@ def test_duration_formatting(mock_dependencies):
     """Test duration is formatted correctly."""
     from macf.hooks.handle_subagent_stop import run
 
-    mock_dependencies['complete'].return_value = (True, 65, "abc123")
+    mock_dependencies['complete'].return_value = (True, 65, "abc123", "Explore")
     mock_dependencies['stats'].return_value = {
         'count': 1,
         'total_duration': 65

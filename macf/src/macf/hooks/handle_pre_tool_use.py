@@ -258,8 +258,11 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 f"📋 TaskGet #{task_id_str} | 💡 CLI shows MTMD: macf_tools task get #{task_id_str}"
             )
 
-        # Enhanced context based on tool type
-        elif tool_name == "Task":
+        # Enhanced context based on tool type. "Task" is the canonical
+        # CC tool name for subagent delegation in some versions; "Agent"
+        # is the name in current Claude Code. Both shapes the same
+        # tool_input fields (subagent_type, description, prompt).
+        elif tool_name in ("Task", "Agent"):
             # DELEG_DRV start tracking
             subagent_type = tool_input.get("subagent_type", "unknown")
             description = tool_input.get("description", "")
