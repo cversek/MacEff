@@ -11,11 +11,14 @@ Current contents:
 - ``warnings`` — :class:`Warning` dataclass + :func:`emit_warning` for
   structured, dual-channel (user + agent) diagnostic emission with
   per-process deduplication.
+- ``messages`` — :class:`HookMessage` dataclass + :func:`emit_message`
+  for non-warning content (status, mode markers, completion summaries)
+  with CLI-terminal ↔ Telegram parity for remote observers. Carries
+  optional ``originating_agent`` attribution for messages produced
+  under a SubAgent's session.
 
 Planned siblings (separate modules within this namespace):
 
-- ``messages`` — non-warning content (status, mode markers, completion
-  summaries) with CLI-terminal ↔ Telegram parity for remote observers.
 - ``tool_metadata`` — concise per-tool metadata formatters used by
   PreToolUse hook output (tool name + target/argument summary).
 
@@ -24,6 +27,13 @@ in ``macf.channels.*``, and CLI commands in ``macf.cli``.
 """
 from __future__ import annotations
 
+from .messages import HookMessage, emit_message
 from .warnings import Warning, emit_warning, reset_dedup_registry
 
-__all__ = ["Warning", "emit_warning", "reset_dedup_registry"]
+__all__ = [
+    "HookMessage",
+    "Warning",
+    "emit_message",
+    "emit_warning",
+    "reset_dedup_registry",
+]
