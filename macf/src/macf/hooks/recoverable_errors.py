@@ -20,6 +20,8 @@ import re
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from ..utils.streaming import iter_lines_reverse
+
 # --- Pattern registry ------------------------------------------------------
 #
 # Each entry: (name, compiled-regex, directive-template)
@@ -180,15 +182,16 @@ def scan_last_tool_error(transcript_path: str) -> Optional[Tuple[str, str]]:
     if not p.exists() or not p.is_file():
         return None
 
+    # JSONL transcripts can be >1 GB at high context use. Stream lines
+    # from EOF instead of materializing the file (which OOM-killed the
+    # Stop hook — closes GH cversek/MacEff#94). For the typical case we
+    # find the answer in the last 1–3 lines, so this is also cheap.
     try:
-        # JSONL transcripts can be large; read in full but iterate reversed.
-        # For the typical agent-stop case we'll find the answer in the last
-        # 1–3 lines so this is cheap in practice.
-        lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+        line_iter = iter_lines_reverse(p)
     except (OSError, IOError):
         return None
 
-    for line in reversed(lines):
+    for line in line_iter:
         if '"tool_result"' not in line:
             # Quick reject — not a tool result line. Avoids JSON parse cost.
             continue
