@@ -12,7 +12,7 @@ def mock_dependencies():
          patch('macf.hooks.handle_subagent_stop.get_temporal_context') as mock_temporal:
 
         mock_session.return_value = "test-session-123"
-        mock_complete.return_value = (True, 65)  # (success, duration) tuple
+        mock_complete.return_value = (True, 65, "abc123")  # (success, duration, correlation_id)
         mock_stats.return_value = {
             'count': 3,
             'total_duration': 180
@@ -35,7 +35,7 @@ def test_deleg_drv_completion_tracking(mock_dependencies):
     """Test DELEG_DRV completion tracking in production mode."""
     from macf.hooks.handle_subagent_stop import run
 
-    mock_dependencies['complete'].return_value = (True, 65)
+    mock_dependencies['complete'].return_value = (True, 65, "abc123")
 
     result = run("")
 
@@ -58,11 +58,15 @@ def test_delegation_stats_display(mock_dependencies):
     assert "systemMessage" in result
     message = result["systemMessage"]
 
-    # Verify count
-    assert "Total Delegations: 3" in message or "3" in message
+    # "Total Delegations: N" line was dropped (meaningless aggregate);
+    # the per-call duration tag carries the meaningful signal.
+    assert "Total Delegations:" not in message
 
     # Verify duration (180s = 3m)
     assert "3m" in message
+
+    # Correlation tag should appear if mock provided one
+    assert "abc123" in message
 
 
 def test_temporal_context_included(mock_dependencies):
@@ -81,7 +85,7 @@ def test_duration_formatting(mock_dependencies):
     """Test duration is formatted correctly."""
     from macf.hooks.handle_subagent_stop import run
 
-    mock_dependencies['complete'].return_value = (True, 65)
+    mock_dependencies['complete'].return_value = (True, 65, "abc123")
     mock_dependencies['stats'].return_value = {
         'count': 1,
         'total_duration': 65

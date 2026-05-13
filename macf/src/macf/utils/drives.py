@@ -122,7 +122,12 @@ def get_dev_drv_stats(session_id: str, agent_id: Optional[str] = None) -> dict:
             "from_snapshot": False
         }
 
-def start_deleg_drv(session_id: str, agent_id: Optional[str] = None, subagent_type: Optional[str] = None) -> bool:
+def start_deleg_drv(
+    session_id: str,
+    agent_id: Optional[str] = None,
+    subagent_type: Optional[str] = None,
+    correlation_id: str = "",
+) -> bool:
     """
     Mark Delegation Drive start.
 
@@ -133,6 +138,11 @@ def start_deleg_drv(session_id: str, agent_id: Optional[str] = None, subagent_ty
         session_id: Session identifier
         agent_id: Agent identifier (unused, kept for API compatibility)
         subagent_type: Type of subagent being delegated to (for event tracking)
+        correlation_id: Short opaque identifier (typically 6 chars from
+            the Task tool's tool_use_id) that allows a remote observer
+            to pair this Started event with its later Ended event.
+            Empty string disables correlation (legacy single-flight
+            matching by "most recent active start" still works).
 
     Returns:
         True if successful, False otherwise
@@ -143,35 +153,48 @@ def start_deleg_drv(session_id: str, agent_id: Optional[str] = None, subagent_ty
     _emit_event("deleg_drv_started", {
         "session_id": session_id,
         "subagent_type": subagent_type or "unknown",
-        "timestamp": started_at
+        "timestamp": started_at,
+        "correlation_id": correlation_id,
     })
 
     return True
 
-def complete_deleg_drv(session_id: str, agent_id: Optional[str] = None, subagent_type: Optional[str] = None) -> tuple[bool, float]:
+def complete_deleg_drv(
+    session_id: str,
+    agent_id: Optional[str] = None,
+    subagent_type: Optional[str] = None,
+) -> tuple[bool, float, str]:
     """
     Mark Delegation Drive completion and update stats.
 
+    Looks up the active drive's correlation_id from the most recent
+    deleg_drv_started event and propagates it into the emitted
+    deleg_drv_ended event so consumers (terminal, Telegram, forensic
+    queries) can pair the Started/Ended boundary.
+
     Returns:
-        Tuple of (success: bool, duration_seconds: float)
+        Tuple of (success: bool, duration_seconds: float,
+        correlation_id: str). ``correlation_id`` may be empty if the
+        original Start event didn't carry one (legacy callers).
     """
-    # EVENT-FIRST: Query events for active drive start time
+    # EVENT-FIRST: Query events for active drive start time + correlation_id
     from ..event_queries import get_active_deleg_drv_start
-    started_at = get_active_deleg_drv_start(session_id)
+    started_at, correlation_id = get_active_deleg_drv_start(session_id)
 
     if started_at == 0.0:
-        return (False, 0.0)  # No active drive
+        return (False, 0.0, "")  # No active drive
 
     duration = time.time() - started_at
 
-    # Emit deleg_drv_ended event
+    # Emit deleg_drv_ended event with the SAME correlation_id as the start
     _emit_event("deleg_drv_ended", {
         "session_id": session_id,
         "subagent_type": subagent_type or "unknown",
-        "duration": duration
+        "duration": duration,
+        "correlation_id": correlation_id,
     })
 
-    return (True, duration)
+    return (True, duration, correlation_id)
 
 def get_deleg_drv_stats(session_id: str, agent_id: Optional[str] = None) -> dict:
     """
