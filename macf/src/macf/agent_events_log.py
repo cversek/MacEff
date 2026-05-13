@@ -24,6 +24,7 @@ from .utils import (
     get_breadcrumb,
     parse_breadcrumb,
 )
+from .utils.streaming import iter_lines_forward, iter_lines_reverse
 
 
 # Global log path override for testing
@@ -164,6 +165,15 @@ def read_events(
     """
     Read events from log (generator for memory efficiency).
 
+    Both directions stream — the reverse path uses ``iter_lines_reverse``
+    (seek-from-end, fixed-chunk) and the forward path uses
+    ``iter_lines_forward`` (line-by-line). Neither materializes the full
+    file, so memory is O(chunk_size + max_line_size) regardless of log size.
+
+    Callers that only need the most recent N events SHOULD pass an explicit
+    ``limit`` so the generator stops early. ``limit=None`` still works but
+    will scan the whole file if no early break.
+
     Args:
         limit: Maximum events to yield (None = all)
         reverse: If True, read from end (most recent first)
@@ -181,15 +191,13 @@ def read_events(
         if not log_path.exists():
             return
 
-        with open(log_path, 'r') as f:
-            lines = f.readlines()
-
-        # Reverse if requested
         if reverse:
-            lines = reversed(lines)
+            line_iter = iter_lines_reverse(log_path)
+        else:
+            line_iter = iter_lines_forward(log_path)
 
         count = 0
-        for line in lines:
+        for line in line_iter:
             line = line.strip()
             if not line:
                 continue
