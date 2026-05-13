@@ -19,6 +19,8 @@ from macf.channels.telegram import (
     NotifyResult,
     _build_network_warning,
     _classify_network_exception,
+    _UrlopenWallTimeout,
+    _urlopen_with_walltime,
     send_telegram_notification,
 )
 from macf.observability import Warning, emit_warning, reset_dedup_registry
@@ -226,3 +228,109 @@ def test_warning_from_send_flows_through_emit_warning(
     assert "ssl_handshake_failed" in msg
     assert "TLS handshake" in msg
     assert "trust store" in msg  # remediation
+
+
+# --- Wall-clock timeout backstop ------------------------------------------
+
+def test_walltime_helper_returns_urlopen_result_on_fast_path(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Fast-path: urlopen returns quickly, helper returns its value."""
+    sentinel = object()
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **kw: sentinel)
+
+    assert _urlopen_with_walltime("http://x", data=b"", wall_timeout=2) is sentinel
+
+
+def test_walltime_helper_raises_when_urlopen_hangs(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """If urlopen blocks past wall_timeout, helper raises _UrlopenWallTimeout."""
+    import time as _time
+
+    def _hang(*a, **kw):
+        _time.sleep(5)  # well past wall_timeout
+
+    monkeypatch.setattr(urllib.request, "urlopen", _hang)
+
+    with pytest.raises(_UrlopenWallTimeout):
+        _urlopen_with_walltime(
+            "http://x", data=b"", timeout=10, wall_timeout=0.3
+        )
+
+
+def test_walltime_helper_propagates_urlopen_exceptions(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """If urlopen raises before wall_timeout, helper re-raises that exception."""
+
+    def _raise(*a, **kw):
+        raise ssl.SSLError("certificate verify failed")
+
+    monkeypatch.setattr(urllib.request, "urlopen", _raise)
+
+    with pytest.raises(ssl.SSLError):
+        _urlopen_with_walltime("http://x", data=b"", wall_timeout=2)
+
+
+def test_walltime_helper_thread_is_daemon(monkeypatch: pytest.MonkeyPatch):
+    """The runner thread must be daemon=True so an abandoned hang doesn't
+    keep the interpreter alive after main exits."""
+    import threading
+
+    captured = []
+
+    real_thread = threading.Thread
+
+    def _capture_thread(*a, **kw):
+        t = real_thread(*a, **kw)
+        captured.append(t)
+        return t
+
+    monkeypatch.setattr(threading, "Thread", _capture_thread)
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **kw: None)
+
+    _urlopen_with_walltime("http://x", data=b"", wall_timeout=1)
+
+    assert len(captured) == 1
+    assert captured[0].daemon is True
+
+
+def test_classify_walltime_is_wall_timeout_kind():
+    """_UrlopenWallTimeout maps to ``wall_timeout`` kind, distinct from
+    plain ``request_timeout``."""
+    kind, cause, _ = _classify_network_exception(
+        _UrlopenWallTimeout("blocked")
+    )
+    assert kind == "wall_timeout"
+    assert "wall-clock backstop" in cause
+
+
+def test_send_returns_walltime_warning_when_urlopen_hangs(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """End-to-end: urlopen hangs → send_telegram_notification returns
+    NotifyResult with a wall_timeout Warning instead of itself hanging."""
+    import time as _time
+
+    _fake_config(monkeypatch)
+
+    def _hang(*a, **kw):
+        _time.sleep(5)
+
+    monkeypatch.setattr(urllib.request, "urlopen", _hang)
+    # Shrink wall_timeout via monkeypatch on the helper. We can't change
+    # the literal in send_telegram_notification's call site without code
+    # change, so we replace the helper itself with a fast-failing version.
+    from macf.channels import telegram as tg
+
+    def _fast_walltime(*a, **kw):
+        raise _UrlopenWallTimeout("simulated wall timeout (test)")
+
+    monkeypatch.setattr(tg, "_urlopen_with_walltime", _fast_walltime)
+
+    result = send_telegram_notification("probe")
+
+    assert result.success is False
+    assert result.warning is not None
+    assert result.warning.kind == "wall_timeout"
