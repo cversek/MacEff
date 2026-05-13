@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple
 
-from ..observability import Warning
+from ..observability import Warning, emit_warning
 
 
 # Network exception family that maps to recoverable / user-actionable
@@ -117,7 +117,7 @@ def resolve_telegram_config() -> Optional[Tuple[str, str]]:
             if token and chat_id:
                 return (token, chat_id)
     except (OSError, ImportError) as e:
-        print(f"⚠️ MACF: telegram config discovery failed at project level: {e}", file=sys.stderr)
+        emit_warning(Warning(source="telegram", kind="config_discovery_failed", detail=f"telegram config discovery failed at project level: {e}"))
 
     # Tier 2: User-level fallback
     user_dir = Path.home() / '.claude' / 'channels' / 'telegram'
@@ -348,6 +348,12 @@ def send_telegram_document(content: str, filename: str,
     try:
         urllib.request.urlopen(req, timeout=10)
         return True
-    except Exception as e:
-        print(f"MACF: Telegram document send failed: {e}", file=sys.stderr)
+    except NETWORK_EXCEPTIONS as e:
+        emit_warning(Warning(
+            source="telegram",
+            kind="document_send_failed",
+            detail=f"Telegram document send failed: {e}",
+            likely_cause=_classify_network_exception(e)[1],
+            user_remediation=_classify_network_exception(e)[2],
+        ))
         return False

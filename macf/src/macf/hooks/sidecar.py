@@ -17,6 +17,7 @@ from macf.utils import (
 )
 from .hook_logging import log_hook_event
 from macf.config import ConsciousnessConfig
+from macf.observability import Warning, emit_warning
 
 
 class OutputCapture:
@@ -120,7 +121,7 @@ def update_sidecar(
         write_json_safely(sidecar_path, new_state)
 
     except Exception as e:
-        print(f"⚠️ MACF: Sidecar update error: {e}", file=sys.stderr)
+        emit_warning(Warning(source="sidecar", kind="sidecar_write_failed", detail=f"Sidecar update error: {e}"))
         try:
             from macf.agent_events_log import append_event
             append_event("error", {
@@ -131,7 +132,7 @@ def update_sidecar(
                 "fallback": "sidecar_not_updated"
             })
         except Exception as log_e:
-            print(f"⚠️ MACF: Event logging also failed: {log_e}", file=sys.stderr)
+            emit_warning(Warning(source="sidecar", kind="event_log_write_failed", detail=f"Event logging also failed: {log_e}"))
 
 
 def read_sidecar(
@@ -160,7 +161,7 @@ def read_sidecar(
         return read_json(sidecar_path)
 
     except Exception as e:
-        print(f"⚠️ MACF: Sidecar read failed ({hook_name}): {e}", file=sys.stderr)
+        emit_warning(Warning(source="sidecar", kind="sidecar_read_failed", detail=f"Sidecar read failed ({hook_name}): {e}"))
         try:
             from macf.agent_events_log import append_event
             append_event("error", {
@@ -171,5 +172,5 @@ def read_sidecar(
                 "fallback": "empty_dict"
             })
         except Exception as log_e:
-            print(f"⚠️ MACF: Event logging also failed: {log_e}", file=sys.stderr)
+            emit_warning(Warning(source="sidecar", kind="event_log_write_failed", detail=f"Event logging also failed: {log_e}"))
         return {}
