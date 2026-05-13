@@ -19,6 +19,7 @@ from macf.utils import (
 from macf.agent_events_log import append_event
 from macf.event_queries import get_cycle_number_from_events
 from macf.hooks.hook_logging import log_hook_event
+from macf.observability import Warning, emit_warning
 
 
 def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
@@ -85,7 +86,7 @@ CL: {token_info.get('cl_level', 'N/A')}
                 prefix="\U0001f6a8 COMPACTION IMMINENT"
             )
         except (ImportError, OSError, ConnectionError) as e:
-            print(f"⚠️ MACF: pre-compact telegram notification failed (non-blocking): {e}", file=sys.stderr)
+            emit_warning(Warning(source="pre_compact", kind="telegram_send_failed", detail=f"pre-compact telegram notification failed (non-blocking): {e}"))
 
         return {
             "continue": True,

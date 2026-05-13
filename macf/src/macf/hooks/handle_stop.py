@@ -25,6 +25,7 @@ from macf.utils import (
 )
 from macf.agent_events_log import append_event
 from macf.hooks.hook_logging import log_hook_event
+from macf.observability import Warning, emit_warning
 from macf.modes import (
     detect_active_modes, get_current_work_mode,
     sample_next_work_mode, format_recommendation,
@@ -64,7 +65,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             stats = get_dev_drv_stats_from_events(session_id)
             prompt_uuid = stats.get("current_prompt_uuid")
         except Exception as e:
-            print(f"⚠️ MACF: DEV_DRV stats query failed: {e}", file=sys.stderr)
+            emit_warning(Warning(source="stop", kind="dev_drv_stats_failed", detail=f"DEV_DRV stats query failed: {e}"))
             try:
                 append_event("error", {
                     "source": "handle_stop.run",
@@ -73,7 +74,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                     "fallback": "state_file_lookup"
                 })
             except Exception as log_e:
-                print(f"⚠️ MACF: Event logging also failed: {log_e}", file=sys.stderr)
+                emit_warning(Warning(source="stop", kind="event_log_write_failed", detail=f"Event logging also failed: {log_e}"))
 
         # No fallback - event log is sole source of truth
         # If event query failed, prompt_uuid stays empty/unknown
@@ -136,7 +137,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             active_modes = detect_active_modes(session_id, token_info)
             mode_indicator = format_mode_indicators(active_modes)
         except Exception as e:
-            print(f"⚠️ MACF: mode detection failed in stop hook: {e}", file=sys.stderr)
+            emit_warning(Warning(source="stop", kind="mode_detection_failed", detail=f"mode detection failed in stop hook: {e}"))
             mode_indicator = " 🤖" if auto_mode else ""
 
         # Format message with full timestamp and DEV_DRV summary
@@ -173,7 +174,7 @@ Development Drive Stats:
                 notify_text = f"DEV_DRV #{stats['count']} complete ({duration_str})"
             send_telegram_notification(notify_text, prefix=f"{symbol} Agent stopped")
         except Exception as e:
-            print(f"⚠️ MACF: Stop hook Telegram notification error: {e}", file=sys.stderr)
+            emit_warning(Warning(source="stop", kind="telegram_send_failed", detail=f"Stop hook Telegram notification error: {e}"))
 
         # --- Error-resilience gate (ANY mode) ---
         # If the agent stopped due to a tool error, nudge it to investigate.
@@ -206,7 +207,7 @@ Development Drive Stats:
                             hook_input=input_data,
                         )
                     except (OSError, IOError) as _e:
-                        print(f"⚠️ MACF: recoverable_error_blocked event log failed: {_e}", file=sys.stderr)
+                        emit_warning(Warning(source="stop", kind="event_log_write_failed", detail=f"recoverable_error_blocked event log failed: {_e}"))
                     return {
                         "continue": True,
                         "decision": "block",
@@ -218,7 +219,7 @@ Development Drive Stats:
                         ),
                     }
             except (ImportError, OSError, ValueError) as _e:
-                print(f"⚠️ MACF: recoverable-error gate error: {_e}", file=sys.stderr)
+                emit_warning(Warning(source="stop", kind="recoverable_error_gate_failed", detail=f"recoverable-error gate error: {_e}"))
 
         # --- Scope gate: block stop if active scoped tasks remain ---
         try:
@@ -257,7 +258,7 @@ Development Drive Stats:
                         f"--justification <reason>` (BUG #1067 — paused items "
                         f"don't count toward gate)."
                     )
-                    print(fail_open_msg, file=sys.stderr)
+                    emit_warning(Warning(source="stop", kind="scope_gate_failed", detail=fail_open_msg))
                     return {"continue": True, "systemMessage": fail_open_msg}
                 # ── END if _fail_open: failsafe early-return ──
 
@@ -351,7 +352,7 @@ Development Drive Stats:
                             }
                         # Chain exhausted (or last step): fall through to Markov path below
                 except (ImportError, OSError, ValueError) as e:
-                    print(f"⚠️ MACF: sprint_gate dispatch failed: {e}", file=sys.stderr)
+                    emit_warning(Warning(source="stop", kind="sprint_gate_failed", detail=f"sprint_gate dispatch failed: {e}"))
 
                 # Check if a timer is active — changes the gate message
                 timer_info = scope.get("timer", {})
@@ -365,7 +366,7 @@ Development Drive Stats:
                                 if timer_active else f"{scope['active_count']} scoped task(s) remaining")
                     send_telegram_notification(gate_msg, prefix="\U0001f6e1\ufe0f\U0001f440 Scope gate")
                 except Exception as e:
-                    print(f"⚠️ MACF: Scope gate Telegram error: {e}", file=sys.stderr)
+                    emit_warning(Warning(source="stop", kind="telegram_send_failed", detail=f"Scope gate Telegram error: {e}"))
 
                 error_context = ""
                 if is_error_stop:
@@ -392,7 +393,7 @@ Development Drive Stats:
                             selected, dist = sample_next_work_mode(current_wm, op_modes)
                             recommendation = "\n" + format_recommendation(current_wm, selected, dist, "maceff")
                     except (OSError, ValueError, ImportError) as e:
-                        print(f"⚠️ MACF: recommender failed: {e}", file=sys.stderr)
+                        emit_warning(Warning(source="stop", kind="recommender_failed", detail=f"recommender failed: {e}"))
 
                     _paused_summary = f"\n⏸️  Paused (excluded from gate): {paused_count} task(s)" if paused_count > 0 else ""
                     return {
@@ -438,7 +439,7 @@ Development Drive Stats:
                         prefix="\U0001f525\u26a0\ufe0f Error gate"
                     )
                 except Exception as e:
-                    print(f"⚠️ MACF: Error gate Telegram error: {e}", file=sys.stderr)
+                    emit_warning(Warning(source="stop", kind="telegram_send_failed", detail=f"Error gate Telegram error: {e}"))
                 task_list = "\n".join(
                     f"  - #{t['id']}: {t['subject']}" for t in scope["active"]
                 )
@@ -451,7 +452,7 @@ Development Drive Stats:
                     f"Read the error output, form a hypothesis, and retry."
                 )
         except Exception as e:
-            print(f"⚠️ MACF: Scope gate error (non-blocking): {e}", file=sys.stderr)
+            emit_warning(Warning(source="stop", kind="scope_gate_failed", detail=f"Scope gate error (non-blocking): {e}"))
 
         # --- Timer gate: block stop if autonomous work timer is still active ---
         # This fires when scope is EMPTY (all tasks done) but timer hasn't expired.
@@ -475,7 +476,7 @@ Development Drive Stats:
                                 prefix="\u23f1\ufe0f\U0001f504 Timer gate"
                             )
                         except Exception as e:
-                            print(f"⚠️ MACF: Timer gate Telegram error: {e}", file=sys.stderr)
+                            emit_warning(Warning(source="stop", kind="telegram_send_failed", detail=f"Timer gate Telegram error: {e}"))
                         # Markov recommender: suggest next work mode transition
                         # (suppressed in LOW_CONTEXT — BUG #1081 — replaced
                         # with mandatory wind-down directive).
@@ -490,7 +491,7 @@ Development Drive Stats:
                                 selected, dist = sample_next_work_mode(current_wm, op_modes)
                                 recommendation = "\n" + format_recommendation(current_wm, selected, dist, "maceff")
                         except (OSError, ValueError, ImportError) as e:
-                            print(f"⚠️ MACF: recommender failed: {e}", file=sys.stderr)
+                            emit_warning(Warning(source="stop", kind="recommender_failed", detail=f"recommender failed: {e}"))
 
                         return {
                             "continue": True,
@@ -509,7 +510,7 @@ Development Drive Stats:
                 elif event.get("event") == "scope_cleared":
                     break  # Scope was cleared after timer — don't search further
         except Exception as e:
-            print(f"⚠️ MACF: Timer gate error (non-blocking): {e}", file=sys.stderr)
+            emit_warning(Warning(source="stop", kind="timer_gate_failed", detail=f"Timer gate error (non-blocking): {e}"))
 
         # Return with systemMessage only (Stop hook doesn't support hookSpecificOutput)
         return {
@@ -530,7 +531,7 @@ Development Drive Stats:
             from macf.channels.telegram import send_telegram_notification
             send_telegram_notification(str(e), prefix="\u274c Stop hook error")
         except (ImportError, OSError, ConnectionError) as tg_e:
-            print(f"⚠️ MACF: Telegram error notification also failed: {tg_e}", file=sys.stderr)
+            emit_warning(Warning(source="stop", kind="telegram_send_failed", detail=f"Telegram error notification also failed: {tg_e}"))
         return {
             "continue": True,
             "systemMessage": f"🏗️ MACF | ❌ Stop hook error: {e}"

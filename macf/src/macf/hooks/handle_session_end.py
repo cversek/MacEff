@@ -19,6 +19,7 @@ from macf.utils import (
 from macf.agent_events_log import append_event
 from macf.event_queries import get_cycle_number_from_events
 from macf.hooks.hook_logging import log_hook_event
+from macf.observability import Warning, emit_warning
 
 
 def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
@@ -81,7 +82,7 @@ Breadcrumb: {breadcrumb}
                 prefix="\U0001f6d1 Session Ended"
             )
         except (ImportError, OSError, ConnectionError) as e:
-            print(f"⚠️ MACF: session-end telegram notification failed (non-blocking): {e}", file=sys.stderr)
+            emit_warning(Warning(source="session_end", kind="telegram_send_failed", detail=f"session-end telegram notification failed (non-blocking): {e}"))
 
         return {
             "continue": True,

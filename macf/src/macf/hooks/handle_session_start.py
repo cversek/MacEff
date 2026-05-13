@@ -31,6 +31,7 @@ from macf.hooks.recovery import (
     format_fresh_session_manual_recovery_message
 )
 from macf.hooks.hook_logging import log_hook_event
+from macf.observability import Warning, emit_warning
 from macf.agent_events_log import append_event
 from macf.event_queries import (
     get_last_session_end_time_from_events,
@@ -63,7 +64,7 @@ def detect_session_migration(current_session_id: str) -> tuple[bool, str, str]:
         from macf.event_queries import get_last_session_id_from_events
         previous_session_id = get_last_session_id_from_events()
     except Exception as e:
-        print(f"⚠️ MACF: Event query for last session failed: {e}", file=sys.stderr)
+        emit_warning(Warning(source="session_start", kind="event_log_read_failed", detail=f"Event query for last session failed: {e}"))
         try:
             append_event("error", {
                 "source": "handle_session_start.detect_session_migration",
@@ -72,7 +73,7 @@ def detect_session_migration(current_session_id: str) -> tuple[bool, str, str]:
                 "fallback": "empty_previous_session"
             })
         except Exception as log_e:
-            print(f"⚠️ MACF: Event logging also failed: {log_e}", file=sys.stderr)
+            emit_warning(Warning(source="session_start", kind="event_log_write_failed", detail=f"Event logging also failed: {log_e}"))
         previous_session_id = ""
 
     # NOTE: Event query is sole source of truth
@@ -137,7 +138,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # Claude Code provides session_id in hook input - this is the source of truth
         session_id = data.get("session_id")
         if not session_id:
-            print("⚠️ MACF: No session_id in hook input, falling back to mtime detection", file=sys.stderr)
+            emit_warning(Warning(source="session_start", kind="session_id_missing", detail="No session_id in hook input, falling back to mtime detection"))
             session_id = get_current_session_id()
 
         # Log hook start
@@ -205,7 +206,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                     try:
                         orphaned_todo_size = Path(orphaned_todo_path).stat().st_size
                     except (OSError, IOError) as e:
-                        print(f"⚠️ MACF: orphaned TODO stat failed: {e}", file=sys.stderr)
+                        emit_warning(Warning(source="session_start", kind="todo_stat_failed", detail=f"orphaned TODO stat failed: {e}"))
                         orphaned_todo_size = 0
 
                 # Get current cycle from events
@@ -560,7 +561,7 @@ Session Context:
                 prefix="\U0001f680 Session Started"
             )
         except (ImportError, OSError, ConnectionError) as e:
-            print(f"⚠️ MACF: session-start telegram notification failed: {e}", file=sys.stderr)
+            emit_warning(Warning(source="session_start", kind="telegram_send_failed", detail=f"session-start telegram notification failed: {e}"))
 
         # Pattern C: top-level systemMessage for user + hookSpecificOutput for agent
         return {
