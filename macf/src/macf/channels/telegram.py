@@ -21,6 +21,7 @@ import json
 import os
 import ssl
 import sys
+import threading
 import urllib.error
 import urllib.request
 import urllib.parse
@@ -29,6 +30,17 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 from ..observability import Warning, emit_warning
+
+
+class _UrlopenWallTimeout(TimeoutError):
+    """Raised when the wall-clock fallback timeout on ``_urlopen_with_walltime``
+    fires before the underlying urllib socket-level timeout returns.
+
+    Subclassing ``TimeoutError`` keeps it inside ``NETWORK_EXCEPTIONS`` so
+    existing except clauses catch it; the classifier checks for this
+    specific class to emit a ``wall_timeout`` kind distinct from a plain
+    socket ``request_timeout``.
+    """
 
 
 # Network exception family that maps to recoverable / user-actionable
@@ -40,6 +52,63 @@ NETWORK_EXCEPTIONS = (
     OSError,
     TimeoutError,
 )
+
+
+def _urlopen_with_walltime(req_or_url, data=None, *, timeout=5, wall_timeout=10):
+    """Wrap ``urllib.request.urlopen`` with a wall-clock backstop.
+
+    The ``timeout`` argument to urllib applies to individual socket reads
+    and writes. In rare conditions (DNS hang, kernel socket-buffer stalls,
+    mid-handshake TLS pauses) urlopen has been observed to exceed that
+    timeout. Running the call inside a daemon thread and joining with
+    ``wall_timeout`` gives us a hard upper bound: if the thread doesn't
+    return in time we raise :class:`_UrlopenWallTimeout` and abandon it.
+    Because the thread is ``daemon=True`` it cannot keep the interpreter
+    alive after main exits — a key property for one-shot CLI invocations.
+
+    Args:
+        req_or_url: URL string or ``urllib.request.Request`` instance to
+            pass to ``urlopen``.
+        data: POST body (forwarded to ``urlopen`` when not None).
+        timeout: Forwarded to urlopen's ``timeout`` parameter (socket-level).
+        wall_timeout: Hard upper bound in seconds. Should be > ``timeout``
+            to give the socket-level mechanism the first chance to fire.
+
+    Returns:
+        Whatever ``urllib.request.urlopen`` returned.
+
+    Raises:
+        Anything ``urlopen`` would have raised, plus
+        :class:`_UrlopenWallTimeout` if the wall-clock fallback fires.
+    """
+    result = [None]
+    exc: list = [None]
+
+    def _runner():
+        try:
+            if data is not None:
+                result[0] = urllib.request.urlopen(req_or_url, data, timeout=timeout)
+            else:
+                result[0] = urllib.request.urlopen(req_or_url, timeout=timeout)
+        except BaseException as e:  # noqa: BLE001
+            # Capture absolutely anything so the main thread can re-raise.
+            # Re-raising here would just kill this daemon thread silently.
+            exc[0] = e
+
+    t = threading.Thread(target=_runner, daemon=True)
+    t.start()
+    t.join(wall_timeout)
+
+    if t.is_alive():
+        # Thread is stuck in urlopen. Daemon=True means it dies with the
+        # interpreter; we abandon it and surface a typed timeout.
+        raise _UrlopenWallTimeout(
+            f"urlopen exceeded wall-clock timeout ({wall_timeout}s)"
+        )
+
+    if exc[0] is not None:
+        raise exc[0]
+    return result[0]
 
 
 @dataclass(frozen=True)
@@ -169,6 +238,17 @@ def _classify_network_exception(e: BaseException) -> Tuple[str, str, str]:
             "check system trust store, proxy interception, or network filtering",
         )
 
+    # Wall-clock backstop fires when urlopen's socket-level timeout
+    # didn't return in time. Distinct from a plain socket timeout
+    # because the diagnostic path differs (urllib timeout machinery
+    # itself didn't fire, vs server-side slowness).
+    if isinstance(e, _UrlopenWallTimeout):
+        return (
+            "wall_timeout",
+            "urlopen exceeded wall-clock backstop (socket timeout did not fire)",
+            "transient — check connectivity; if recurring, increase wall_timeout or investigate kernel-level socket state",
+        )
+
     if isinstance(e, TimeoutError):
         return (
             "request_timeout",
@@ -283,7 +363,7 @@ def send_telegram_notification(text: str, prefix: str = "",
         data = urllib.parse.urlencode(params).encode()
 
         try:
-            urllib.request.urlopen(url, data, timeout=5)
+            _urlopen_with_walltime(url, data, timeout=5, wall_timeout=10)
         except NETWORK_EXCEPTIONS as e:
             return NotifyResult(
                 success=False,
@@ -346,7 +426,7 @@ def send_telegram_document(content: str, filename: str,
     )
 
     try:
-        urllib.request.urlopen(req, timeout=10)
+        _urlopen_with_walltime(req, timeout=10, wall_timeout=20)
         return True
     except NETWORK_EXCEPTIONS as e:
         emit_warning(Warning(
