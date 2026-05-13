@@ -7,16 +7,64 @@ Config resolution (first match wins):
 Required files in config dir:
 - .env: contains TELEGRAM_BOT_TOKEN=...
 - access.json: contains allowFrom list with chat IDs
+
+Failure model: network-family exceptions during send are caught and
+translated into a structured :class:`~macf.observability.Warning`. The
+helper returns a :class:`NotifyResult` whose ``__bool__`` preserves the
+``True``/``False`` semantics existing callers depend on, while
+``result.warning`` carries the structured diagnostic for hooks that want
+to emit it via :func:`macf.observability.emit_warning`.
 """
 
 import io
 import json
 import os
+import ssl
 import sys
+import urllib.error
 import urllib.request
 import urllib.parse
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple
+
+from ..observability import Warning
+
+
+# Network exception family that maps to recoverable / user-actionable
+# warnings. Anything outside this family is a logic error and is allowed
+# to propagate so the caller's exception handler sees it as a real bug.
+NETWORK_EXCEPTIONS = (
+    urllib.error.URLError,
+    ssl.SSLError,
+    OSError,
+    TimeoutError,
+)
+
+
+@dataclass(frozen=True)
+class NotifyResult:
+    """Return type for :func:`send_telegram_notification`.
+
+    Attributes:
+        success: True if the message was delivered (or no network attempt
+            was made because Telegram is not configured — see note below).
+        warning: Structured :class:`Warning` when a network failure
+            translated cleanly; ``None`` otherwise. Existence of a
+            ``warning`` implies ``success is False``, but ``success is
+            False`` does NOT imply a warning (e.g. Telegram not
+            configured produces ``success=False, warning=None`` for
+            backward compatibility with the previous ``bool`` API).
+
+    Truthiness mirrors ``success`` so existing callers that did
+    ``if send_telegram_notification(...)`` continue to work unchanged.
+    """
+
+    success: bool
+    warning: Optional[Warning] = None
+
+    def __bool__(self) -> bool:  # noqa: D401
+        return self.success
 
 
 def _html_escape(text: str) -> str:
@@ -81,32 +129,117 @@ def resolve_telegram_config() -> Optional[Tuple[str, str]]:
     return None
 
 
+def _classify_network_exception(e: BaseException) -> Tuple[str, str, str]:
+    """Classify a network exception into (kind, likely_cause, user_remediation).
+
+    Falls back to a generic ``"network_error"`` kind when the exception
+    doesn't match a more specific case.
+    """
+    # HTTPError is the most informative — has .code with HTTP status.
+    if isinstance(e, urllib.error.HTTPError):
+        code = e.code
+        if code == 401:
+            return (
+                "auth_failed",
+                "bot token rejected by Telegram API",
+                "verify TELEGRAM_BOT_TOKEN in .env and that the bot is not revoked",
+            )
+        if code == 403:
+            return (
+                "forbidden",
+                "bot was blocked by the chat or kicked from the group",
+                "re-add the bot to the chat or check chat_id in access.json",
+            )
+        if 500 <= code < 600:
+            return (
+                "telegram_api_5xx",
+                f"Telegram API returned HTTP {code}",
+                "transient server-side issue — retry later; check api.telegram.org status",
+            )
+        return (
+            f"http_{code}",
+            f"unexpected HTTP {code} from Telegram API",
+            "inspect the response body for details",
+        )
+
+    if isinstance(e, ssl.SSLError):
+        return (
+            "ssl_handshake_failed",
+            "TLS handshake to api.telegram.org failed",
+            "check system trust store, proxy interception, or network filtering",
+        )
+
+    if isinstance(e, TimeoutError):
+        return (
+            "request_timeout",
+            "request to api.telegram.org timed out",
+            "network is slow or unreachable — retry; check connectivity",
+        )
+
+    if isinstance(e, urllib.error.URLError):
+        # Bare URLError (DNS failure, connection refused, etc.)
+        reason = getattr(e, "reason", e)
+        return (
+            "api_unreachable",
+            f"could not reach api.telegram.org ({reason})",
+            "check internet connectivity and DNS",
+        )
+
+    # Generic OSError fallback (broken pipe, network down, etc.)
+    return (
+        "network_error",
+        type(e).__name__,
+        "transient network issue — retry; check connectivity",
+    )
+
+
+def _build_network_warning(e: BaseException, page: int, total: int) -> Warning:
+    """Translate a caught network exception into a structured Warning."""
+    kind, likely_cause, user_remediation = _classify_network_exception(e)
+    page_tag = f" (page {page}/{total})" if total > 1 else ""
+    return Warning(
+        source="telegram",
+        kind=kind,
+        detail=f"{type(e).__name__}: {e}{page_tag}",
+        likely_cause=likely_cause,
+        user_remediation=user_remediation,
+    )
+
+
 def send_telegram_notification(text: str, prefix: str = "",
                                page_size: int = 4000,
-                               parse_mode: Optional[str] = None) -> bool:
+                               parse_mode: Optional[str] = None) -> NotifyResult:
     """Send a message to the configured Telegram chat, paginating if needed.
 
-    Returns False silently if Telegram is not configured.
-    Logs to stderr on API errors (visible but non-fatal).
-
     Long messages are split into multiple pages. When paginated, the prefix
-    is augmented with (page/total) on each message.
+    is augmented with (page/total) on each message. On the first network
+    failure the function bails — subsequent pages are skipped and the
+    structured warning for the failed page is returned.
 
     Args:
         text: Message body text.
         prefix: Optional prefix line (e.g. emoji + "Agent stopped").
             Placed before body on each page.
-        page_size: Max chars per Telegram message (API limit 4096, default 4000 for safety).
+        page_size: Max chars per Telegram message (API limit 4096, default
+            4000 for safety).
         parse_mode: Optional Telegram parse mode ("HTML" or "MarkdownV2").
             Default None sends plain text. When using HTML, caller must
             escape content with _html_escape().
 
     Returns:
-        True if all pages sent successfully, False if not configured or failed.
+        :class:`NotifyResult`. ``result.success`` mirrors the original
+        ``bool`` semantics (``if send_telegram_notification(...):`` still
+        works via ``__bool__``). ``result.warning`` carries the structured
+        diagnostic when delivery fails on a recognized network exception
+        — callers should merge it into their hook return dict via
+        ``return {**emit_warning(result.warning), ...}``.
     """
     config = resolve_telegram_config()
     if not config:
-        return False
+        # Not-configured is neither success nor a warning — it's an
+        # absence. Preserve the historical "silently False" behavior for
+        # callers that treat Telegram as opt-in.
+        return NotifyResult(success=False)
 
     token, chat_id = config
 
@@ -126,7 +259,6 @@ def send_telegram_notification(text: str, prefix: str = "",
 
     total = len(pages)
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    success = True
 
     for i, page_body in enumerate(pages, 1):
         if prefix:
@@ -152,12 +284,13 @@ def send_telegram_notification(text: str, prefix: str = "",
 
         try:
             urllib.request.urlopen(url, data, timeout=5)
-        except Exception as e:
-            print(f"MACF: Telegram notification failed (page {i}/{total}): {e}",
-                  file=sys.stderr)
-            success = False
+        except NETWORK_EXCEPTIONS as e:
+            return NotifyResult(
+                success=False,
+                warning=_build_network_warning(e, page=i, total=total),
+            )
 
-    return success
+    return NotifyResult(success=True)
 
 
 def send_telegram_document(content: str, filename: str,
