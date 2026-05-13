@@ -16,6 +16,7 @@ from macf.utils import (
 )
 from macf.agent_events_log import append_event
 from macf.hooks.hook_logging import log_hook_event
+from macf.observability import Warning, emit_warning
 
 
 def _send_permission_preview(tool_name, tool_input, send_notification, send_document, html_escape):
@@ -123,7 +124,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                                      send_telegram_document,
                                      _html_escape)
         except Exception as e:
-            print(f"MACF: Permission preview Telegram error: {e}", file=sys.stderr)
+            emit_warning(Warning(source="permission_request", kind="telegram_preview_failed", detail=f"Permission preview Telegram error: {e}"))
 
         return {
             "continue": True,

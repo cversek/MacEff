@@ -25,6 +25,7 @@ from macf.utils import (
 )
 from macf.agent_events_log import append_event
 from macf.hooks.hook_logging import log_hook_event
+from macf.observability import Warning, emit_warning
 
 
 def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
@@ -49,7 +50,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             hook_input = json.loads(stdin_json) if stdin_json else {}
             subagent_type = hook_input.get('subagent_type', 'unknown')
         except json.JSONDecodeError as e:
-            print(f"⚠️ MACF: subagent_stop stdin parse failed: {e}", file=sys.stderr)
+            emit_warning(Warning(source="subagent_stop", kind="stdin_parse_failed", detail=f"subagent_stop stdin parse failed: {e}"))
             hook_input = {}
             subagent_type = 'unknown'
 
@@ -126,7 +127,7 @@ Delegation Drive Stats:
                 prefix="\U0001f4dc DELEG_DRV Complete"
             )
         except (ImportError, OSError, ConnectionError) as e:
-            print(f"⚠️ MACF: DELEG_DRV telegram notification failed (non-blocking): {e}", file=sys.stderr)
+            emit_warning(Warning(source="subagent_stop", kind="deleg_drv_telegram_failed", detail=f"DELEG_DRV telegram notification failed (non-blocking): {e}"))
 
         # Return with systemMessage (user display only - SubagentStop hook doesn't support hookSpecificOutput)
         return {
