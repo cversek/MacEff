@@ -4067,6 +4067,17 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
         tasks_dir = reader.tasks_dir
         last_mtime = 0.0
 
+        # Brand the terminal window with the agent calling card so
+        # multi-agent terminal layouts are distinguishable at a glance.
+        # Set once (titles persist) and only for loop mode — single-render
+        # `task tree` exits too quickly to benefit.
+        try:
+            from .utils.identity import get_agent_identity
+            from .utils.terminal import set_terminal_title
+            set_terminal_title(f"{get_agent_identity()} - Task Tree")
+        except (OSError, IOError, ImportError) as e:
+            print(f"⚠️ MACF: could not set window title (non-blocking): {e}", file=sys.stderr)
+
         try:
             while True:
                 current_mtime = get_tasks_mtime(tasks_dir)
