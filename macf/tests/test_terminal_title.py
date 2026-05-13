@@ -28,8 +28,8 @@ def _force_tty(monkeypatch: pytest.MonkeyPatch, isatty: bool) -> None:
 
 # --- Happy path -----------------------------------------------------------
 
-def test_happy_path_writes_osc2_to_stderr(monkeypatch: pytest.MonkeyPatch):
-    """Interactive TTY + sane $TERM: writes the OSC 2 escape to stderr."""
+def test_happy_path_writes_osc0_to_stderr(monkeypatch: pytest.MonkeyPatch):
+    """Interactive TTY + sane $TERM: writes the OSC 0 escape to stderr."""
     _force_tty(monkeypatch, True)
     monkeypatch.setenv("TERM", "xterm-256color")
     buf = _capture_stderr(monkeypatch)
@@ -37,7 +37,7 @@ def test_happy_path_writes_osc2_to_stderr(monkeypatch: pytest.MonkeyPatch):
     ok = set_terminal_title("Hello")
 
     assert ok is True
-    assert buf.getvalue() == "\x1b]2;Hello\x07"
+    assert buf.getvalue() == "\x1b]0;Hello\x07"
 
 
 # --- Safety guards (each returns False without writing) -------------------
@@ -108,4 +108,4 @@ def test_strips_bel_and_esc_bytes(monkeypatch: pytest.MonkeyPatch):
     # appear in the emitted OSC sequence — only the wrapper's own BEL
     # terminator at the very end is allowed.
     emitted = buf.getvalue()
-    assert emitted == "\x1b]2;evilinjectedvalue\x07"
+    assert emitted == "\x1b]0;evilinjectedvalue\x07"
