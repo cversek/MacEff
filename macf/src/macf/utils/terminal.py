@@ -2,7 +2,7 @@
 
 Currently exposes one function:
 
-- ``set_terminal_title(title)`` — write an OSC 2 escape to set the terminal
+- ``set_terminal_title(title)`` — write an OSC 0 escape to set the terminal
   window title (e.g. so multi-agent terminal layouts can be told apart at a
   glance).
 
@@ -18,7 +18,13 @@ __all__ = ["set_terminal_title"]
 
 
 def set_terminal_title(title: str) -> bool:
-    """Set the terminal window title via an OSC 2 escape sequence.
+    """Set the terminal window title via an OSC 0 escape sequence.
+
+    OSC 0 sets both the icon name and the window title in one go. We chose
+    OSC 0 over OSC 2 (window-title only) because empirical testing on
+    Terminal.app showed OSC 2 was silently ignored while OSC 0 worked. OSC 0
+    is the most broadly supported of the title-setting escapes across
+    terminal emulators in practice.
 
     The escape is written to ``sys.stderr`` (never stdout) so it does not
     contaminate downstream data pipelines such as
@@ -36,7 +42,7 @@ def set_terminal_title(title: str) -> bool:
         is empty after stripping).
 
     Terminal support:
-        OSC 2 + BEL terminator is respected by Terminal.app, iTerm2, xterm,
+        OSC 0 + BEL terminator is respected by Terminal.app, iTerm2, xterm,
         gnome-terminal / Konsole / other VTE-based terminals, Windows Terminal
         and VS Code's integrated terminal. Plain ``ssh`` sessions pass the
         sequence through.
@@ -66,9 +72,11 @@ def set_terminal_title(title: str) -> bool:
     if not term or term == "dumb":
         return False
 
-    # OSC 2: set window title only. BEL terminator (universally accepted).
+    # OSC 0: set icon name AND window title. BEL terminator (universally
+    # accepted). OSC 0 is empirically more reliable than OSC 2 across
+    # terminal emulators (Terminal.app in particular ignores OSC 2).
     try:
-        sys.stderr.write(f"\x1b]2;{cleaned}\x07")
+        sys.stderr.write(f"\x1b]0;{cleaned}\x07")
         sys.stderr.flush()
     except (OSError, IOError, ValueError):
         # Write to closed stderr or pipe in a weird state — non-fatal.
