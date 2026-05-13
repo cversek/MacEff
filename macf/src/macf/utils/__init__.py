@@ -91,6 +91,9 @@ from .formatting import (
 from .identity import (
     get_agent_identity,
 )
+from .terminal import (
+    set_terminal_title,
+)
 # NOTE: recommend module NOT imported here (heavy deps: sentence_transformers ~3s)
 # Import directly: from macf.utils.recommend import get_recommendations
 
@@ -155,6 +158,7 @@ __all__ = [
     "read_json_safely",
     "record_delegation_complete",
     "record_delegation_start",
+    "set_terminal_title",
     "start_deleg_drv",
     "start_dev_drv",
     "write_json_safely",

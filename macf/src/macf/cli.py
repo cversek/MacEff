@@ -436,6 +436,26 @@ def cmd_env(args: argparse.Namespace) -> int:
 
     return 0
 
+
+def cmd_env_set_term_title(args: argparse.Namespace) -> int:
+    """Set the terminal window title (default: agent calling card).
+
+    Writes an OSC 2 escape to stderr. No-op (with informational stderr
+    note) when stdout is not a TTY or $TERM is unset/dumb.
+    """
+    from .utils.identity import get_agent_identity
+    from .utils.terminal import set_terminal_title
+
+    title = args.title if args.title else get_agent_identity()
+    ok = set_terminal_title(title)
+    if not ok:
+        print(
+            "ℹ️ MACF: terminal title not set (stdout is not a TTY, or $TERM unsupported)",
+            file=sys.stderr,
+        )
+    return 0
+
+
 def cmd_time(_: argparse.Namespace) -> int:
     current_time = _now_iso()
     print(current_time)
@@ -4047,6 +4067,17 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
         tasks_dir = reader.tasks_dir
         last_mtime = 0.0
 
+        # Brand the terminal window with the agent calling card so
+        # multi-agent terminal layouts are distinguishable at a glance.
+        # Set once (titles persist) and only for loop mode — single-render
+        # `task tree` exits too quickly to benefit.
+        try:
+            from .utils.identity import get_agent_identity
+            from .utils.terminal import set_terminal_title
+            set_terminal_title(f"{get_agent_identity()} - Task Tree")
+        except (OSError, IOError, ImportError) as e:
+            print(f"⚠️ MACF: could not set window title (non-blocking): {e}", file=sys.stderr)
+
         try:
             while True:
                 current_mtime = get_tasks_mtime(tasks_dir)
@@ -7110,9 +7141,24 @@ def _build_parser() -> argparse.ArgumentParser:
         func=lambda args: cmd_tree(args, root_parser=p)
     )
 
-    env_parser = sub.add_parser("env", help="print environment summary")
-    env_parser.add_argument("--json", action="store_true", help="output as JSON")
+    # env: flat command (env summary) with optional subcommands (set-term-title, ...)
+    env_parser = sub.add_parser("env", help="environment commands (summary by default)")
+    env_parser.add_argument("--json", action="store_true", help="output as JSON (default summary)")
     env_parser.set_defaults(func=cmd_env)
+    env_sub = env_parser.add_subparsers(dest="env_cmd")
+    set_title_parser = env_sub.add_parser(
+        "set-term-title",
+        help="set the terminal window title (default: agent calling card)"
+    )
+    set_title_parser.add_argument(
+        "title",
+        nargs="?",
+        default=None,
+        help="title string (default: agent calling card from get_agent_identity, "
+             "e.g. Name@abc123). Inside tmux, also run "
+             "'tmux set-option -g set-titles on' for titles to surface.",
+    )
+    set_title_parser.set_defaults(func=cmd_env_set_term_title)
     sub.add_parser("time", help="print current local time with CCP gap").set_defaults(func=cmd_time)
     sub.add_parser("budget", help="print budget thresholds (JSON)").set_defaults(func=cmd_budget)
 
