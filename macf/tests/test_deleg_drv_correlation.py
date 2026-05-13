@@ -42,13 +42,14 @@ def test_start_emits_correlation_id():
     assert data["subagent_type"] == "DevOpsEng"
 
 
-def test_active_start_query_returns_started_at_and_correlation_id():
-    """get_active_deleg_drv_start returns (started_at, correlation_id) tuple."""
+def test_active_start_query_returns_started_at_correlation_id_and_subagent_type():
+    """get_active_deleg_drv_start returns (started_at, correlation_id, subagent_type) tuple."""
     start_deleg_drv(SESSION, subagent_type="TestEng", correlation_id="xyz789")
 
-    started_at, correlation_id = get_active_deleg_drv_start(SESSION)
+    started_at, correlation_id, subagent_type = get_active_deleg_drv_start(SESSION)
     assert started_at > 0.0
     assert correlation_id == "xyz789"
+    assert subagent_type == "TestEng"
 
 
 def test_complete_propagates_correlation_id_into_ended_event():
@@ -56,7 +57,7 @@ def test_complete_propagates_correlation_id_into_ended_event():
     start_deleg_drv(SESSION, subagent_type="DevOpsEng", correlation_id="def456")
     time.sleep(0.01)  # ensure measurable duration
 
-    success, duration, correlation_id = complete_deleg_drv(SESSION, subagent_type="DevOpsEng")
+    success, duration, correlation_id, _ = complete_deleg_drv(SESSION, subagent_type="DevOpsEng")
 
     assert success is True
     assert duration > 0.0
@@ -72,19 +73,45 @@ def test_complete_returns_empty_correlation_when_start_had_none():
     start_deleg_drv(SESSION, subagent_type="TestEng")  # no correlation_id arg
     time.sleep(0.01)
 
-    success, _duration, correlation_id = complete_deleg_drv(SESSION)
+    success, _duration, correlation_id, _ = complete_deleg_drv(SESSION)
 
     assert success is True
     assert correlation_id == ""
 
 
 def test_complete_returns_false_when_no_active_drive():
-    """No active start → complete returns (False, 0.0, '')."""
-    success, duration, correlation_id = complete_deleg_drv(SESSION)
+    """No active start → complete returns (False, 0.0, '', '')."""
+    success, duration, correlation_id, subagent_type = complete_deleg_drv(SESSION)
 
     assert success is False
     assert duration == 0.0
     assert correlation_id == ""
+    assert subagent_type == ""
+
+
+def test_complete_resolves_subagent_type_from_started_event():
+    """When caller passes no subagent_type, complete returns the value from
+    the started event (covers the SubagentStop case where hook_input
+    doesn't carry subagent_type)."""
+    start_deleg_drv(SESSION, subagent_type="Explore", correlation_id="zzz999")
+    time.sleep(0.01)
+
+    success, _duration, correlation_id, sa_type = complete_deleg_drv(SESSION)
+
+    assert success is True
+    assert correlation_id == "zzz999"
+    assert sa_type == "Explore"
+
+
+def test_complete_resolves_subagent_type_when_caller_passed_unknown():
+    """Caller passing the literal 'unknown' is treated as no info — the
+    started event's subagent_type wins."""
+    start_deleg_drv(SESSION, subagent_type="DevOpsEng", correlation_id="abc")
+    time.sleep(0.01)
+
+    _, _, _, sa_type = complete_deleg_drv(SESSION, subagent_type="unknown")
+
+    assert sa_type == "DevOpsEng"
 
 
 def test_subagent_type_propagates_through_started_event():
