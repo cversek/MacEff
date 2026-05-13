@@ -16,11 +16,10 @@ Current contents:
   with CLI-terminal ↔ Telegram parity for remote observers. Carries
   optional ``originating_agent`` attribution for messages produced
   under a SubAgent's session.
-
-Planned siblings (separate modules within this namespace):
-
-- ``tool_metadata`` — concise per-tool metadata formatters used by
-  PreToolUse hook output (tool name + target/argument summary).
+- ``tool_metadata`` — :func:`format_tool_metadata` produces a concise
+  one-line summary per tool invocation (tool name + key argument
+  like skill name, file path, command prefix) for inclusion in
+  PreToolUse hook output.
 
 Producers expected: hook handlers in ``macf.hooks.*``, channel modules
 in ``macf.channels.*``, and CLI commands in ``macf.cli``.
@@ -28,6 +27,7 @@ in ``macf.channels.*``, and CLI commands in ``macf.cli``.
 from __future__ import annotations
 
 from .messages import HookMessage, emit_message
+from .tool_metadata import format_tool_metadata
 from .warnings import Warning, emit_warning, reset_dedup_registry
 
 __all__ = [
@@ -35,5 +35,6 @@ __all__ = [
     "Warning",
     "emit_message",
     "emit_warning",
+    "format_tool_metadata",
     "reset_dedup_registry",
 ]
