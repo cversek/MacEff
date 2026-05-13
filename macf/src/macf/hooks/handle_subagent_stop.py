@@ -60,12 +60,18 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # Get stats BEFORE completing (complete_deleg_drv clears current tracking!)
         stats = get_deleg_drv_stats(session_id)
 
-        # Complete Delegation Drive. correlation_id is propagated from the
-        # matching Started event so the Complete message can reference the
-        # same opaque pair-key the user already saw on the Started side.
-        success, duration, correlation_id = complete_deleg_drv(
+        # Complete Delegation Drive. correlation_id AND subagent_type are
+        # propagated from the matching Started event so the Complete
+        # message can reference the same opaque pair-key the user already
+        # saw on the Started side AND carry the right subagent identity
+        # (CC's SubagentStop hook input doesn't always include
+        # subagent_type, so the started event is the source of truth).
+        success, duration, correlation_id, resolved_subagent_type = complete_deleg_drv(
             session_id, subagent_type=subagent_type,
         )
+        # Use the resolved value (started-event-derived) for display.
+        # Falls back to the hook_input fetch only if both are empty.
+        subagent_type = resolved_subagent_type or subagent_type
 
         # Append delegation_completed event
         append_event(
