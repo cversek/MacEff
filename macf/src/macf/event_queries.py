@@ -436,8 +436,15 @@ def get_active_dev_drv_start(session_id: str) -> tuple[float, str]:
     return (0.0, "")
 
 
-def get_active_deleg_drv_start(session_id: str) -> float:
-    """Get start time of active (unended) deleg_drv from events."""
+def get_active_deleg_drv_start(session_id: str) -> tuple[float, str]:
+    """Get start time + correlation_id of active (unended) deleg_drv from events.
+
+    Returns:
+        Tuple of (started_at, correlation_id). ``(0.0, "")`` when no
+        active drive exists (most recent event is an ended marker or
+        no drive events found). ``correlation_id`` may be empty if the
+        Start event didn't carry one (legacy callers).
+    """
     from .agent_events_log import read_events
     session_prefix = session_id[:8] if session_id else ""
 
@@ -449,10 +456,10 @@ def get_active_deleg_drv_start(session_id: str) -> float:
         if session_prefix and event_session and not event_session.startswith(session_prefix):
             continue
         if event_type == "deleg_drv_ended":
-            return 0.0  # Most recent is ended - no active drive
+            return (0.0, "")  # Most recent is ended - no active drive
         if event_type == "deleg_drv_started":
-            return data.get("timestamp", 0.0)
-    return 0.0
+            return (data.get("timestamp", 0.0), data.get("correlation_id", ""))
+    return (0.0, "")
 
 
 def get_current_session_id_from_events() -> str:
