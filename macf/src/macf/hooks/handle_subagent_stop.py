@@ -60,8 +60,12 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # Get stats BEFORE completing (complete_deleg_drv clears current tracking!)
         stats = get_deleg_drv_stats(session_id)
 
-        # Complete Delegation Drive
-        success, duration = complete_deleg_drv(session_id)
+        # Complete Delegation Drive. correlation_id is propagated from the
+        # matching Started event so the Complete message can reference the
+        # same opaque pair-key the user already saw on the Started side.
+        success, duration, correlation_id = complete_deleg_drv(
+            session_id, subagent_type=subagent_type,
+        )
 
         # Append delegation_completed event
         append_event(
@@ -101,8 +105,15 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         token_section = format_token_context_full(token_info)
         boundary_guidance = get_boundary_guidance(token_info['cl_level'], auto_mode)
 
-        # Format message with full timestamp and DELEG_DRV summary
-        message = f"""🏗️ MACF | DELEG_DRV Complete
+        # Format message with full timestamp and DELEG_DRV summary.
+        # `Total Delegations` was dropped — the aggregate count across a
+        # session doesn't carry actionable signal. Per-call duration plus
+        # session-aggregate duration remain.
+        tag_line = (
+            f"[{subagent_type}@{correlation_id}]"
+            if correlation_id else f"[{subagent_type}]"
+        )
+        message = f"""🏗️ MACF | DELEG_DRV Complete {tag_line}
 Current Time: {temporal_ctx['timestamp_formatted']}
 Day: {temporal_ctx['day_of_week']}
 Time of Day: {temporal_ctx['time_of_day']}
@@ -110,7 +121,6 @@ Breadcrumb: {breadcrumb}
 
 Delegation Drive Stats:
 - This Delegation: {duration_str}
-- Total Delegations: {stats['count']}
 - Total Duration: {total_duration_str}
 
 {token_section}
@@ -119,12 +129,18 @@ Delegation Drive Stats:
 
 {format_macf_footer()}"""
 
-        # Notify Telegram (non-blocking)
+        # Notify Telegram (non-blocking). Tag matches the format used by
+        # the matching Started message in handle_pre_tool_use so observers
+        # can visually pair the boundary in the channel.
         try:
             from macf.channels.telegram import send_telegram_notification
+            tag = (
+                f"[{subagent_type}@{correlation_id}]"
+                if correlation_id else f"[{subagent_type}]"
+            )
             send_telegram_notification(
-                f"Agent: {subagent_type}\nDuration: {duration_str}\nTotal delegations: {stats['count']}\nCL: {token_info.get('cl_level', 'N/A')}",
-                prefix="\U0001f4dc DELEG_DRV Complete"
+                f"{tag}\nDuration: {duration_str}\nCL: {token_info.get('cl_level', 'N/A')}",
+                prefix="\U0001f4dc DELEG_DRV Complete",
             )
         except (ImportError, OSError, ConnectionError) as e:
             emit_warning(Warning(source="subagent_stop", kind="deleg_drv_telegram_failed", detail=f"DELEG_DRV telegram notification failed (non-blocking): {e}"))

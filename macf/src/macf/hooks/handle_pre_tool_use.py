@@ -264,7 +264,36 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             subagent_type = tool_input.get("subagent_type", "unknown")
             description = tool_input.get("description", "")
             prompt = tool_input.get("prompt", "")
-            start_deleg_drv(session_id)
+            # Correlation ID: 6 chars from the CC tool_use_id, after the
+            # constant "toolu_" prefix. Lets a remote observer pair this
+            # Started event with its later Ended event in the Telegram
+            # stream. Empty if hook input doesn't carry tool_use_id —
+            # the drives layer treats empty as "no correlation".
+            tool_use_id = data.get("tool_use_id", "")
+            correlation_id = tool_use_id[6:12] if len(tool_use_id) >= 12 else ""
+            start_deleg_drv(
+                session_id,
+                subagent_type=subagent_type,
+                correlation_id=correlation_id,
+            )
+
+            # Notify Telegram of the delegation start so remote observers
+            # see the boundary in real time (the matching Complete fires
+            # from handle_subagent_stop when the SA returns).
+            try:
+                from macf.channels.telegram import send_telegram_notification
+                tag = f"[{subagent_type}@{correlation_id}]" if correlation_id else f"[{subagent_type}]"
+                desc_short = description[:60] + ("…" if len(description) > 60 else "")
+                send_telegram_notification(
+                    f"{tag}\n{desc_short}",
+                    prefix="\U0001f680 DELEG_DRV Started",
+                )
+            except (ImportError, OSError, ConnectionError) as _tg_e:
+                emit_warning(Warning(
+                    source="pre_tool_use",
+                    kind="deleg_drv_telegram_failed",
+                    detail=f"DELEG_DRV Started telegram notification failed (non-blocking): {_tg_e}",
+                ))
 
             # Truncate long fields for event log (similar to tool output handling)
             MAX_DESC_LEN = 100
