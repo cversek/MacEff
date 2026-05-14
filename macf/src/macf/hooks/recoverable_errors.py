@@ -70,9 +70,16 @@ _PATTERN_SOURCES: List[Tuple[str, str, str]] = [
     ),
     (
         "input_validation_error",
-        r"<tool_use_error>InputValidationError: (?P<tool>\w+) failed due to the following issue:\s*(?P<details>[^<]+?)</tool_use_error>",
+        # Match both singular "issue:" and plural "issues:" headers; details
+        # may span multiple lines listing each violated parameter (e.g.
+        # "The required parameter `old_string` is missing\nThe required
+        # parameter `new_string` is missing"). [^<]+? lets the capture
+        # span newlines while staying non-greedy.
+        r"<tool_use_error>InputValidationError: (?P<tool>\w+) failed due to the following issues?:\s*(?P<details>[^<]+?)</tool_use_error>",
         "{tool} got bad parameters: {details}. Re-check the tool schema "
-        "(parameter names, types, required vs optional) and retry."
+        "(parameter names, types, required vs optional) and retry. "
+        "If multiple parameters are listed, supply ALL of them — partial "
+        "fixes will still fail."
     ),
     (
         "path_does_not_exist",
