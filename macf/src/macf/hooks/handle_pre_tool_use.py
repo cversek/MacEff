@@ -273,20 +273,19 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             # stream. Empty if hook input doesn't carry tool_use_id —
             # the drives layer treats empty as "no correlation".
             tool_use_id = data.get("tool_use_id", "")
-            correlation_id = tool_use_id[6:12] if len(tool_use_id) >= 12 else ""
+            tool_use_id_short = tool_use_id[6:12] if len(tool_use_id) >= 12 else ""
             start_deleg_drv(
                 session_id,
                 subagent_type=subagent_type,
-                correlation_id=correlation_id,
                 tool_use_id=tool_use_id,
             )
 
             # Notify Telegram of the delegation start so remote observers
-            # see the boundary in real time (the matching Complete fires
-            # from handle_subagent_stop when the SA returns).
+            # see the boundary in real time (the matching Booted +
+            # Complete fire later from SubagentStart + SubagentStop).
             try:
                 from macf.channels.telegram import send_telegram_notification
-                tag = f"[{subagent_type}@{correlation_id}]" if correlation_id else f"[{subagent_type}]"
+                tag = f"[{subagent_type}@{tool_use_id_short}]" if tool_use_id_short else f"[{subagent_type}]"
                 desc_short = description[:60] + ("…" if len(description) > 60 else "")
                 send_telegram_notification(
                     f"{tag}\n{desc_short}",

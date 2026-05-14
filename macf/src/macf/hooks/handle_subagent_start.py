@@ -30,8 +30,34 @@ from macf.utils import (
     get_current_session_id,
     bridge_deleg_drv_to_agent,
 )
+from macf.event_queries import get_deleg_drv_bridge_by_agent_id
 from macf.hooks.hook_logging import log_hook_event
 from macf.observability import Warning, emit_warning
+
+
+def _format_deleg_drv_tag(
+    subagent_type: str,
+    tool_use_id_short: str,
+    agent_id_short: str,
+) -> str:
+    """Uniform tag format used across all three DELEG_DRV Telegram messages.
+
+    Order: subagent_type @ tool_use_id_short | agent_id_short. Each
+    segment is omitted when its value is empty so partial-information
+    states (Started before bridge: no agent_id yet) degrade gracefully.
+
+    Examples:
+        format("Explore", "01SoJX", "")            → "[Explore@01SoJX]"
+        format("Explore", "01SoJX", "ad38b33c")    → "[Explore@01SoJX|ad38b33c]"
+        format("Explore", "", "ad38b33c")          → "[Explore|ad38b33c]"
+        format("Explore", "", "")                  → "[Explore]"
+    """
+    parts = [subagent_type or "unknown"]
+    if tool_use_id_short:
+        parts.append(f"@{tool_use_id_short}")
+    if agent_id_short:
+        parts.append(f"|{agent_id_short}")
+    return f"[{''.join(parts)}]"
 
 
 def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
@@ -67,11 +93,16 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # Complete (subagent-side).
         try:
             from macf.channels.telegram import send_telegram_notification
-            tag = f"[{agent_type}|{agent_id[:8]}]" if agent_id else f"[{agent_type}]"
+            # Look up the bridge we just emitted to recover the
+            # tool_use_id_short for tag consistency with Started + Complete.
+            bridge_data = get_deleg_drv_bridge_by_agent_id(session_id, agent_id) or {}
+            tool_use_id_short = bridge_data.get("tool_use_id_short", "")
+            agent_short = agent_id[:8] if agent_id else ""
+            tag = _format_deleg_drv_tag(agent_type, tool_use_id_short, agent_short)
             note = "bridged" if bridged else "no matching started (orphan)"
             send_telegram_notification(
                 f"{tag}\n{note}",
-                prefix="\U0001f9ea DELEG_DRV Booted",
+                prefix="\U0001f4dc DELEG_DRV Booted",
             )
         except (ImportError, OSError, ConnectionError) as e:
             emit_warning(Warning(

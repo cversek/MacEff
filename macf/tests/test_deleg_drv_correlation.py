@@ -1,12 +1,12 @@
 """Tests for DELEG_DRV Start/Complete correlation + subagent_type propagation.
 
 Verifies that:
-- start_deleg_drv emits the correlation_id and subagent_type in the
+- start_deleg_drv emits the tool_use_id_short and subagent_type in the
   deleg_drv_started event.
-- complete_deleg_drv reads the correlation_id from the active start
+- complete_deleg_drv reads the tool_use_id_short from the active start
   event and emits it (matching) in the deleg_drv_ended event, returning
   it as the third tuple element.
-- get_active_deleg_drv_start returns the (started_at, correlation_id)
+- get_active_deleg_drv_start returns the (started_at, tool_use_id_short)
   tuple.
 - Subagent_type isn't lost between caller and event (the bug user
   surfaced: it was being fetched in hooks but never passed to the
@@ -40,61 +40,61 @@ def _events_of_type(event_name: str):
             yield ev
 
 
-def test_start_emits_correlation_id():
-    """correlation_id passed to start_deleg_drv appears in the started event."""
-    start_deleg_drv(SESSION, subagent_type="DevOpsEng", correlation_id="abc123")
+def test_start_emits_tool_use_id_short():
+    """tool_use_id_short passed to start_deleg_drv appears in the started event."""
+    start_deleg_drv(SESSION, subagent_type="DevOpsEng", tool_use_id="toolu_abc123dummyXXXX")
 
     events = list(_events_of_type("deleg_drv_started"))
     assert len(events) == 1
     data = events[0]["data"]
-    assert data["correlation_id"] == "abc123"
+    assert data["tool_use_id_short"] == "abc123"
     assert data["subagent_type"] == "DevOpsEng"
 
 
-def test_active_start_query_returns_started_at_correlation_id_and_subagent_type():
-    """get_active_deleg_drv_start returns (started_at, correlation_id, subagent_type) tuple."""
-    start_deleg_drv(SESSION, subagent_type="TestEng", correlation_id="xyz789")
+def test_active_start_query_returns_started_at_tool_use_id_short_and_subagent_type():
+    """get_active_deleg_drv_start returns (started_at, tool_use_id_short, subagent_type) tuple."""
+    start_deleg_drv(SESSION, subagent_type="TestEng", tool_use_id="toolu_xyz789dummyXXXX")
 
-    started_at, correlation_id, subagent_type = get_active_deleg_drv_start(SESSION)
+    started_at, tool_use_id_short, subagent_type = get_active_deleg_drv_start(SESSION)
     assert started_at > 0.0
-    assert correlation_id == "xyz789"
+    assert tool_use_id_short == "xyz789"
     assert subagent_type == "TestEng"
 
 
-def test_complete_propagates_correlation_id_into_ended_event():
-    """The correlation_id from the active start flows through to the ended event."""
-    start_deleg_drv(SESSION, subagent_type="DevOpsEng", correlation_id="def456")
+def test_complete_propagates_tool_use_id_short_into_ended_event():
+    """The tool_use_id_short from the active start flows through to the ended event."""
+    start_deleg_drv(SESSION, subagent_type="DevOpsEng", tool_use_id="toolu_def456dummyXXXX")
     time.sleep(0.01)  # ensure measurable duration
 
-    success, duration, correlation_id, _ = complete_deleg_drv(SESSION, subagent_type="DevOpsEng")
+    success, duration, tool_use_id_short, _ = complete_deleg_drv(SESSION, subagent_type="DevOpsEng")
 
     assert success is True
     assert duration > 0.0
-    assert correlation_id == "def456"
+    assert tool_use_id_short == "def456"
 
     # ended event also carries it
     ended_events = list(_events_of_type("deleg_drv_ended"))
-    assert ended_events[-1]["data"]["correlation_id"] == "def456"
+    assert ended_events[-1]["data"]["tool_use_id_short"] == "def456"
 
 
 def test_complete_returns_empty_correlation_when_start_had_none():
-    """Legacy start (no correlation_id) still works; complete returns ''."""
-    start_deleg_drv(SESSION, subagent_type="TestEng")  # no correlation_id arg
+    """Legacy start (no tool_use_id_short) still works; complete returns ''."""
+    start_deleg_drv(SESSION, subagent_type="TestEng")  # no tool_use_id_short arg
     time.sleep(0.01)
 
-    success, _duration, correlation_id, _ = complete_deleg_drv(SESSION)
+    success, _duration, tool_use_id_short, _ = complete_deleg_drv(SESSION)
 
     assert success is True
-    assert correlation_id == ""
+    assert tool_use_id_short == ""
 
 
 def test_complete_returns_false_when_no_active_drive():
     """No active start → complete returns (False, 0.0, '', '')."""
-    success, duration, correlation_id, subagent_type = complete_deleg_drv(SESSION)
+    success, duration, tool_use_id_short, subagent_type = complete_deleg_drv(SESSION)
 
     assert success is False
     assert duration == 0.0
-    assert correlation_id == ""
+    assert tool_use_id_short == ""
     assert subagent_type == ""
 
 
@@ -102,20 +102,20 @@ def test_complete_resolves_subagent_type_from_started_event():
     """When caller passes no subagent_type, complete returns the value from
     the started event (covers the SubagentStop case where hook_input
     doesn't carry subagent_type)."""
-    start_deleg_drv(SESSION, subagent_type="Explore", correlation_id="zzz999")
+    start_deleg_drv(SESSION, subagent_type="Explore", tool_use_id="toolu_zzz999dummyXXXX")
     time.sleep(0.01)
 
-    success, _duration, correlation_id, sa_type = complete_deleg_drv(SESSION)
+    success, _duration, tool_use_id_short, sa_type = complete_deleg_drv(SESSION)
 
     assert success is True
-    assert correlation_id == "zzz999"
+    assert tool_use_id_short == "zzz999"
     assert sa_type == "Explore"
 
 
 def test_complete_resolves_subagent_type_when_caller_passed_unknown():
     """Caller passing the literal 'unknown' is treated as no info — the
     started event's subagent_type wins."""
-    start_deleg_drv(SESSION, subagent_type="DevOpsEng", correlation_id="abc")
+    start_deleg_drv(SESSION, subagent_type="DevOpsEng", tool_use_id="toolu_abc000dummyXXXX")
     time.sleep(0.01)
 
     _, _, _, sa_type = complete_deleg_drv(SESSION, subagent_type="unknown")
@@ -136,7 +136,7 @@ def test_subagent_type_propagates_through_ended_event():
     """The subagent_type the caller passes to complete_deleg_drv appears
     in the ended event (the bug user surfaced was that this was being
     fetched in hooks but never propagated to the drives layer)."""
-    start_deleg_drv(SESSION, subagent_type="DevOpsEng", correlation_id="ghi")
+    start_deleg_drv(SESSION, subagent_type="DevOpsEng", tool_use_id="toolu_ghi000dummyXXXX")
     time.sleep(0.01)
     complete_deleg_drv(SESSION, subagent_type="DevOpsEng")
 
