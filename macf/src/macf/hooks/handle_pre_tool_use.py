@@ -278,6 +278,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 session_id,
                 subagent_type=subagent_type,
                 correlation_id=correlation_id,
+                tool_use_id=tool_use_id,
             )
 
             # Notify Telegram of the delegation start so remote observers

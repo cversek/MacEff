@@ -55,6 +55,12 @@ from macf.hooks.recoverable_errors import (
             "<tool_use_error>InputValidationError: Read failed due to the following issue:\nThe parameter `offset` type is expected as `number` but provided as `string`</tool_use_error>",
         ),
         (
+            # Plural "issues:" + multi-line details (multiple missing required
+            # parameters listed back-to-back). Matches the same pattern.
+            "input_validation_error",
+            "<tool_use_error>InputValidationError: Edit failed due to the following issues:\nThe required parameter `old_string` is missing\nThe required parameter `new_string` is missing</tool_use_error>",
+        ),
+        (
             "path_does_not_exist",
             "<tool_use_error>Path does not exist: /Users/cversek/gitwork/cversek/MacEff/macf_tools</tool_use_error>",
         ),
