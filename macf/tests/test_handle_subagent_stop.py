@@ -12,7 +12,7 @@ def mock_dependencies():
          patch('macf.hooks.handle_subagent_stop.get_temporal_context') as mock_temporal:
 
         mock_session.return_value = "test-session-123"
-        mock_complete.return_value = (True, 65, "abc123", "Explore")  # (success, duration, correlation_id, subagent_type)
+        mock_complete.return_value = (True, 65, "abc123", "Explore")  # (success, duration, tool_use_id_short, subagent_type)
         mock_stats.return_value = {
             'count': 3,
             'total_duration': 180

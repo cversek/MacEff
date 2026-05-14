@@ -77,7 +77,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # Falls back to the legacy by-most-recent path if agent_id is empty
         # (extremely old CC, or transient hook-input issue).
         if agent_id:
-            success, duration, tool_use_id, correlation_id, resolved_subagent_type = (
+            success, duration, tool_use_id, tool_use_id_short, resolved_subagent_type = (
                 complete_deleg_drv_by_agent(
                     session_id,
                     agent_id=agent_id,
@@ -87,7 +87,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             )
         else:
             # Legacy fallback (no agent_id in hook input).
-            success, duration, correlation_id, resolved_subagent_type = complete_deleg_drv(
+            success, duration, tool_use_id_short, resolved_subagent_type = complete_deleg_drv(
                 session_id, subagent_type=agent_type_from_hook or "unknown",
             )
             tool_use_id = ""
@@ -140,8 +140,11 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # session doesn't carry actionable signal. Per-call duration plus
         # session-aggregate duration remain.
         tag_line = (
-            f"[{subagent_type}@{correlation_id}]"
-            if correlation_id else f"[{subagent_type}]"
+            f"[{subagent_type}@{tool_use_id_short}|{agent_id[:8]}]"
+            if tool_use_id_short and agent_id else
+            f"[{subagent_type}@{tool_use_id_short}]" if tool_use_id_short else
+            f"[{subagent_type}|{agent_id[:8]}]" if agent_id else
+            f"[{subagent_type}]"
         )
         message = f"""🏗️ MACF | DELEG_DRV Complete {tag_line}
 Current Time: {temporal_ctx['timestamp_formatted']}
@@ -167,9 +170,9 @@ Delegation Drive Stats:
         try:
             from macf.channels.telegram import send_telegram_notification
             tag = (
-                f"[{subagent_type}@{correlation_id}|{agent_id[:8]}]"
-                if correlation_id and agent_id else
-                f"[{subagent_type}@{correlation_id}]" if correlation_id else
+                f"[{subagent_type}@{tool_use_id_short}|{agent_id[:8]}]"
+                if tool_use_id_short and agent_id else
+                f"[{subagent_type}@{tool_use_id_short}]" if tool_use_id_short else
                 f"[{subagent_type}|{agent_id[:8]}]" if agent_id else
                 f"[{subagent_type}]"
             )
