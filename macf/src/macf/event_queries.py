@@ -437,21 +437,20 @@ def get_active_dev_drv_start(session_id: str) -> tuple[float, str]:
 
 
 def get_active_deleg_drv_start(session_id: str) -> tuple[float, str, str]:
-    """Get start time + correlation_id + subagent_type of active (unended)
+    """Get start time + tool_use_id_short + subagent_type of active (unended)
     deleg_drv from events.
 
     Returns:
-        Tuple of (started_at, correlation_id, subagent_type).
-        ``(0.0, "", "")`` when no active drive exists (most recent event
-        is an ended marker or no drive events found). Either string
-        field may be empty if the Start event didn't carry it (legacy
-        callers).
+        Tuple of (started_at, tool_use_id_short, subagent_type).
+        ``(0.0, "", "")`` when no active drive exists.
     """
     from .agent_events_log import read_events
     session_prefix = session_id[:8] if session_id else ""
 
-    # Read in reverse - find most recent started/ended first
-    for event in read_events(limit=100, reverse=True):
+    # Reverse stream — first started/ended event for this session
+    # wins. Phase 1 streaming readers make this O(events-to-answer),
+    # not O(total-events), so no cap is needed.
+    for event in read_events(reverse=True):
         event_type = event.get("event")
         data = event.get("data", {})
         event_session = data.get("session_id", "")
@@ -462,29 +461,44 @@ def get_active_deleg_drv_start(session_id: str) -> tuple[float, str, str]:
         if event_type == "deleg_drv_started":
             return (
                 data.get("timestamp", 0.0),
-                data.get("correlation_id", ""),
+                data.get("tool_use_id_short", ""),
                 data.get("subagent_type", ""),
             )
     return (0.0, "", "")
 
 
-def get_oldest_unbridged_deleg_drv_started(session_id: str) -> tuple:
-    """Find the oldest deleg_drv_started event without a matching booted event.
+def get_oldest_unbridged_deleg_drv_started(
+    session_id: str,
+    preferred_subagent_type: str = "",
+) -> tuple:
+    """Find the best-match deleg_drv_started event without a matching booted event.
 
-    Parallel-safe bridge primitive: when SubagentStart fires for a new
-    subagent, the FIFO-oldest unbridged started event in this parent
-    session is its match (because CC dispatches Agent tool calls
-    serially within a turn, so the started ordering matches the
-    SubagentStart ordering).
+    Bridge primitive that survives parallel-delegation out-of-order
+    SubagentStart firing:
 
-    Walks forward through events for this session, counting starteds
-    and matching them against subagent_booted events (which carry
-    tool_use_id). The first started whose tool_use_id has no matching
-    booted is the answer.
+    1. Filter starteds to unbridged + within the 120s recency window.
+    2. If ``preferred_subagent_type`` is supplied AND any candidate
+       matches it, return the OLDEST matching one. This handles
+       parallel same-type-pair delegations where SubagentStart fires
+       in an order that differs from PreToolUse:Agent dispatch order.
+    3. Otherwise fall back to the oldest unbridged candidate (FIFO).
+
+    The type-preference step makes the bridge robust to out-of-order
+    SubagentStart firing as long as the parallel SAs have distinct
+    subagent_types — which is the common practical case. Same-type
+    parallel pairs (two Explore SAs at once) still fall back to FIFO,
+    which is the best available signal given CC's hook payload.
+
+    Args:
+        session_id: Parent session UUID.
+        preferred_subagent_type: When non-empty, prefer a started whose
+            ``subagent_type`` matches. Pass this from SubagentStart's
+            ``agent_type`` field to disambiguate parallel different-type
+            delegations.
 
     Returns:
         Tuple of (started_at, tool_use_id, tool_use_id_short, subagent_type).
-        ``(0.0, "", "", "")`` when no unbridged started exists.
+        ``(0.0, "", "", "")`` when no unbridged started exists in window.
     """
     from .agent_events_log import read_events
     session_prefix = session_id[:8] if session_id else ""
@@ -506,20 +520,53 @@ def get_oldest_unbridged_deleg_drv_started(session_id: str) -> tuple:
             if tuid:
                 bridged_tool_use_ids.add(tuid)
 
-    # First started whose tool_use_id isn't already bridged wins
+    # Build the list of bridgeable candidates:
+    # - has tool_use_id (skip pre-schema starteds — not bridgeable)
+    # - not already bridged
+    # - within 120s recency window (CC's PreToolUse:Agent → SubagentStart
+    #   latency is sub-second; anything older is a stale unmatched
+    #   started from a prior demo / failed delegation and would yield
+    #   nonsense duration on the eventual SubagentStop).
+    import time
+    now = time.time()
+    max_age = 120.0
+
+    candidates = []
     for data in started_events:
         tuid = data.get("tool_use_id", "")
-        # Skip explicitly bridged ones. Legacy starteds without tool_use_id
-        # match by the absence of any bridge for empty string — i.e. only
-        # ONE legacy started can be unbridged at a time. Reasonable for
-        # the migration window.
+        if not tuid:
+            continue
         if tuid in bridged_tool_use_ids:
             continue
-        return (
-            data.get("timestamp", 0.0),
-            tuid,
-            data.get("tool_use_id_short", "") or data.get("correlation_id", ""),
-            data.get("subagent_type", ""),
+        ts = data.get("timestamp", 0.0)
+        if ts == 0.0 or (now - ts) > max_age:
+            continue
+        candidates.append(data)
+
+    if not candidates:
+        return (0.0, "", "", "")
+
+    # Type-preference step: if caller supplied a preferred_subagent_type
+    # AND any candidate matches, return the OLDEST matching one. This
+    # survives out-of-order SubagentStart firing for parallel SAs of
+    # distinct types. Same-type parallel pairs still fall back to FIFO.
+    if preferred_subagent_type:
+        for data in candidates:
+            if data.get("subagent_type", "") == preferred_subagent_type:
+                return (
+                    data.get("timestamp", 0.0),
+                    data.get("tool_use_id", ""),
+                    data.get("tool_use_id_short", ""),
+                    data.get("subagent_type", ""),
+                )
+
+    # FIFO fallback: oldest unbridged candidate.
+    data = candidates[0]
+    return (
+        data.get("timestamp", 0.0),
+        data.get("tool_use_id", ""),
+        data.get("tool_use_id_short", ""),
+        data.get("subagent_type", ""),
         )
     return (0.0, "", "", "")
 
