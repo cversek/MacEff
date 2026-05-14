@@ -577,11 +577,15 @@ def _update_settings_file(settings_path: Path, hooks_prefix: str) -> bool:
         if "hooks" not in settings:
             settings["hooks"] = {}
 
-        # All 10 hooks with their script names
+        # 11 lifecycle hooks with their script names. SubagentStart joins
+        # SubagentStop as the boot-boundary marker, used by MACF to bridge
+        # the parent's tool_use_id to the subagent's agent_id (CC doesn't
+        # supply a direct join key between the two surfaces).
         hook_configs = [
             ("SessionStart", "session_start.py"),
             ("UserPromptSubmit", "user_prompt_submit.py"),
             ("Stop", "stop.py"),
+            ("SubagentStart", "subagent_start.py"),
             ("SubagentStop", "subagent_stop.py"),
             ("PreToolUse", "pre_tool_use.py"),
             ("PostToolUse", "post_tool_use.py"),
@@ -782,11 +786,17 @@ def cmd_hook_install(args: argparse.Namespace) -> int:
         # Create hooks directory
         hooks_dir.mkdir(parents=True, exist_ok=True)
 
-        # All 10 hooks with their handler module names
+        # 11 lifecycle hooks with their handler module names.
+        # subagent_start.py was added alongside subagent_stop.py to act
+        # as the parent→child join-key bridge for delegation events
+        # (CC's SubagentStop hook input carries agent_id but not the
+        # parent's tool_use_id; SubagentStart sees agent_id at boot
+        # time and emits the bridging deleg_drv_subagent_booted event).
         hooks_to_install = [
             ("session_start.py", "handle_session_start"),
             ("user_prompt_submit.py", "handle_user_prompt_submit"),
             ("stop.py", "handle_stop"),
+            ("subagent_start.py", "handle_subagent_start"),
             ("subagent_stop.py", "handle_subagent_stop"),
             ("pre_tool_use.py", "handle_pre_tool_use"),
             ("post_tool_use.py", "handle_post_tool_use"),

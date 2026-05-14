@@ -468,6 +468,94 @@ def get_active_deleg_drv_start(session_id: str) -> tuple[float, str, str]:
     return (0.0, "", "")
 
 
+def get_oldest_unbridged_deleg_drv_started(session_id: str) -> tuple:
+    """Find the oldest deleg_drv_started event without a matching booted event.
+
+    Parallel-safe bridge primitive: when SubagentStart fires for a new
+    subagent, the FIFO-oldest unbridged started event in this parent
+    session is its match (because CC dispatches Agent tool calls
+    serially within a turn, so the started ordering matches the
+    SubagentStart ordering).
+
+    Walks forward through events for this session, counting starteds
+    and matching them against subagent_booted events (which carry
+    tool_use_id). The first started whose tool_use_id has no matching
+    booted is the answer.
+
+    Returns:
+        Tuple of (started_at, tool_use_id, tool_use_id_short, subagent_type).
+        ``(0.0, "", "", "")`` when no unbridged started exists.
+    """
+    from .agent_events_log import read_events
+    session_prefix = session_id[:8] if session_id else ""
+
+    started_events: List[dict] = []
+    bridged_tool_use_ids: set = set()
+
+    # Walk events in forward order to preserve FIFO semantics
+    for event in read_events(reverse=False):
+        event_type = event.get("event")
+        data = event.get("data", {})
+        event_session = data.get("session_id", "")
+        if session_prefix and event_session and not event_session.startswith(session_prefix):
+            continue
+        if event_type == "deleg_drv_started":
+            started_events.append(data)
+        elif event_type == "deleg_drv_subagent_booted":
+            tuid = data.get("tool_use_id", "")
+            if tuid:
+                bridged_tool_use_ids.add(tuid)
+
+    # First started whose tool_use_id isn't already bridged wins
+    for data in started_events:
+        tuid = data.get("tool_use_id", "")
+        # Skip explicitly bridged ones. Legacy starteds without tool_use_id
+        # match by the absence of any bridge for empty string — i.e. only
+        # ONE legacy started can be unbridged at a time. Reasonable for
+        # the migration window.
+        if tuid in bridged_tool_use_ids:
+            continue
+        return (
+            data.get("timestamp", 0.0),
+            tuid,
+            data.get("tool_use_id_short", "") or data.get("correlation_id", ""),
+            data.get("subagent_type", ""),
+        )
+    return (0.0, "", "", "")
+
+
+def get_deleg_drv_bridge_by_agent_id(session_id: str, agent_id: str) -> Optional[dict]:
+    """Find the deleg_drv_subagent_booted event for the given agent_id.
+
+    Returns the bridge event's data dict (carrying tool_use_id +
+    tool_use_id_short + agent_type + started_at) so callers can recover
+    the full pair-key at SubagentStop time. Returns ``None`` if no
+    bridge event exists for this agent_id (e.g. SA started before the
+    SubagentStart handler was instrumented).
+
+    Args:
+        session_id: Parent session UUID for filtering.
+        agent_id: The subagent's CC AgentId to match.
+
+    Returns:
+        The event's ``data`` dict, or ``None``.
+    """
+    from .agent_events_log import read_events
+    session_prefix = session_id[:8] if session_id else ""
+
+    # Reverse walk — most recent bridge for this agent_id wins
+    for event in read_events(reverse=True):
+        if event.get("event") != "deleg_drv_subagent_booted":
+            continue
+        data = event.get("data", {})
+        event_session = data.get("session_id", "")
+        if session_prefix and event_session and not event_session.startswith(session_prefix):
+            continue
+        if data.get("agent_id") == agent_id:
+            return data
+    return None
+
+
 def get_current_session_id_from_events() -> str:
     """
     Get current session ID from most recent event containing session_id.

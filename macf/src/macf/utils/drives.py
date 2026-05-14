@@ -122,42 +122,185 @@ def get_dev_drv_stats(session_id: str, agent_id: Optional[str] = None) -> dict:
             "from_snapshot": False
         }
 
+def _tool_use_id_short(tool_use_id: str) -> str:
+    """Return the 6-char display slice of a tool_use_id.
+
+    CC tool_use_ids are formatted ``toolu_<24+ chars>``. The constant
+    ``toolu_`` prefix is uninformative; slicing [6:12] gives the first
+    six unique characters — the right length for a human-readable
+    Telegram tag while preserving uniqueness within a session.
+    Returns empty string if input is too short.
+    """
+    if not tool_use_id or len(tool_use_id) < 12:
+        return ""
+    return tool_use_id[6:12]
+
+
 def start_deleg_drv(
     session_id: str,
     agent_id: Optional[str] = None,
     subagent_type: Optional[str] = None,
     correlation_id: str = "",
+    tool_use_id: str = "",
 ) -> bool:
     """
     Mark Delegation Drive start.
 
-    DELEG_DRV = period from Task tool invocation to SubagentStop hook.
-    Event-first: emits deleg_drv_started event as source of truth.
+    DELEG_DRV = period from Agent tool invocation (parent side) to
+    SubagentStop hook (subagent finished). Event-first: emits the
+    deleg_drv_started event as source of truth.
 
     Args:
-        session_id: Session identifier
-        agent_id: Agent identifier (unused, kept for API compatibility)
-        subagent_type: Type of subagent being delegated to (for event tracking)
-        correlation_id: Short opaque identifier (typically 6 chars from
-            the Task tool's tool_use_id) that allows a remote observer
-            to pair this Started event with its later Ended event.
-            Empty string disables correlation (legacy single-flight
-            matching by "most recent active start" still works).
+        session_id: Parent session UUID.
+        agent_id: Unused, kept for API compatibility.
+        subagent_type: Type of subagent being delegated to
+            (e.g. ``"Explore"``, ``"DevOpsEng"``).
+        correlation_id: Legacy 6-char display slice. If supplied
+            alongside ``tool_use_id``, the new emission honors the
+            longer ``tool_use_id`` as the primary key.
+        tool_use_id: Full Claude Code tool_use_id (``toolu_<24+ chars>``)
+            of the Agent tool invocation. Primary cross-surface join
+            key — grep this value in the parent's transcript JSONL to
+            find the assistant turn that invoked the SA and the user
+            turn that received its result. The 6-char display slice is
+            derived automatically. New schema field; preferred input.
 
     Returns:
-        True if successful, False otherwise
+        True if the event was emitted.
     """
     started_at = time.time()
 
-    # EVENT-FIRST: Event is sole truth
+    short = _tool_use_id_short(tool_use_id) if tool_use_id else correlation_id
+
     _emit_event("deleg_drv_started", {
         "session_id": session_id,
         "subagent_type": subagent_type or "unknown",
         "timestamp": started_at,
-        "correlation_id": correlation_id,
+        "correlation_id": short,  # back-compat — kept until callers migrate
+        "tool_use_id": tool_use_id,
+        "tool_use_id_short": short,
     })
 
     return True
+
+
+def bridge_deleg_drv_to_agent(
+    session_id: str,
+    agent_id: str,
+    agent_type: Optional[str] = None,
+) -> bool:
+    """Emit ``deleg_drv_subagent_booted`` — the parallel-safe bridge event.
+
+    Pairs a deleg_drv_started (parent's tool_use_id) with the subagent's
+    runtime agent_id. Called from the SubagentStart hook handler. The
+    bridge consumes the OLDEST UNBRIDGED started event for this parent
+    session — parallel-safe via FIFO matching because Claude Code
+    dispatches Agent tool invocations serially within a turn, so the
+    bridge order matches the started order.
+
+    Args:
+        session_id: Parent session UUID. (CC subagents share the parent's
+            session_id; see CC internals KB §10.31.)
+        agent_id: The subagent's CC AgentId (``a<16hex>``).
+        agent_type: Subagent type as reported by SubagentStart hook
+            (CC field: ``agent_type``).
+
+    Returns:
+        True if a started event was found and the bridge was paired.
+        False if no unbridged started event exists for this session
+        (the bridge still emits with empty tool_use_id so the SA's
+        existence is recorded even without parent linkage).
+    """
+    from ..event_queries import get_oldest_unbridged_deleg_drv_started
+
+    started_at, tool_use_id, tool_use_id_short, started_subagent_type = (
+        get_oldest_unbridged_deleg_drv_started(session_id)
+    )
+
+    found_match = started_at > 0.0
+
+    _emit_event("deleg_drv_subagent_booted", {
+        "session_id": session_id,
+        "agent_id": agent_id,
+        "agent_type": agent_type or started_subagent_type or "unknown",
+        "tool_use_id": tool_use_id,
+        "tool_use_id_short": tool_use_id_short,
+        "started_at": started_at,
+    })
+
+    return found_match
+
+
+def complete_deleg_drv_by_agent(
+    session_id: str,
+    agent_id: str,
+    agent_transcript_path: str = "",
+    last_assistant_message: str = "",
+) -> tuple:
+    """Emit ``deleg_drv_ended`` keyed on agent_id via the bridge event.
+
+    Looks up the bridge event for this agent_id (emitted at SubagentStart
+    time by :func:`bridge_deleg_drv_to_agent`) to recover the parent's
+    tool_use_id + subagent_type + start timestamp. Parallel-safe:
+    SubagentStops are matched by agent_id directly, not by "most-recent"
+    heuristics that fail for concurrent delegations.
+
+    Args:
+        session_id: Parent session UUID.
+        agent_id: The subagent's AgentId from SubagentStop hook input.
+        agent_transcript_path: Full path to the subagent's JSONL (from
+            SubagentStop ``hook_input.agent_transcript_path``).
+        last_assistant_message: Subagent's final response text (from
+            SubagentStop ``hook_input.last_assistant_message``).
+            Stored as a 200-char preview on the ended event.
+
+    Returns:
+        Tuple of (success, duration_seconds, tool_use_id,
+        tool_use_id_short, resolved_subagent_type). ``success=False``
+        when no bridge event exists for this agent_id (e.g. SA started
+        before SubagentStart instrumentation landed).
+    """
+    from ..event_queries import get_deleg_drv_bridge_by_agent_id
+
+    bridge = get_deleg_drv_bridge_by_agent_id(session_id, agent_id)
+    if bridge is None:
+        _emit_event("deleg_drv_ended", {
+            "session_id": session_id,
+            "agent_id": agent_id,
+            "agent_type": "unknown",
+            "subagent_type": "unknown",
+            "duration": 0.0,
+            "tool_use_id": "",
+            "tool_use_id_short": "",
+            "correlation_id": "",  # back-compat
+            "agent_transcript_path": agent_transcript_path,
+            "last_assistant_message_preview": last_assistant_message[:200],
+            "bridged": False,
+        })
+        return (False, 0.0, "", "", "unknown")
+
+    started_at = bridge.get("started_at", 0.0)
+    tool_use_id = bridge.get("tool_use_id", "")
+    tool_use_id_short = bridge.get("tool_use_id_short", "")
+    resolved_subagent_type = bridge.get("agent_type", "unknown")
+
+    duration = time.time() - started_at if started_at > 0.0 else 0.0
+
+    _emit_event("deleg_drv_ended", {
+        "session_id": session_id,
+        "agent_id": agent_id,
+        "agent_type": resolved_subagent_type,
+        "subagent_type": resolved_subagent_type,
+        "duration": duration,
+        "tool_use_id": tool_use_id,
+        "tool_use_id_short": tool_use_id_short,
+        "correlation_id": tool_use_id_short,  # back-compat
+        "agent_transcript_path": agent_transcript_path,
+        "last_assistant_message_preview": last_assistant_message[:200],
+        "bridged": True,
+    })
+
+    return (True, duration, tool_use_id, tool_use_id_short, resolved_subagent_type)
 
 def complete_deleg_drv(
     session_id: str,

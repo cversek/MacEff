@@ -15,6 +15,7 @@ from macf.utils import (
     get_rich_environment_string,
     get_current_session_id,
     complete_deleg_drv,
+    complete_deleg_drv_by_agent,
     get_deleg_drv_stats,
     format_duration,
     get_token_info,
@@ -45,33 +46,56 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # Get current session
         session_id = get_current_session_id()
 
-        # Parse stdin to get subagent type
+        # Parse stdin. CC's SubagentStop payload fields:
+        #   agent_id, agent_type, agent_transcript_path, last_assistant_message
+        # (the field name is `agent_type`, NOT `subagent_type` — earlier
+        # versions of this handler read the wrong field name and got
+        # "unknown" back).
         try:
             hook_input = json.loads(stdin_json) if stdin_json else {}
-            subagent_type = hook_input.get('subagent_type', 'unknown')
+            agent_id = hook_input.get('agent_id', '')
+            agent_type_from_hook = hook_input.get('agent_type', '')
+            agent_transcript_path = hook_input.get('agent_transcript_path', '')
+            last_assistant_message = hook_input.get('last_assistant_message', '')
         except json.JSONDecodeError as e:
             emit_warning(Warning(source="subagent_stop", kind="stdin_parse_failed", detail=f"subagent_stop stdin parse failed: {e}"))
             hook_input = {}
-            subagent_type = 'unknown'
+            agent_id = ''
+            agent_type_from_hook = ''
+            agent_transcript_path = ''
+            last_assistant_message = ''
 
-        # Get breadcrumb BEFORE completing (complete_deleg_drv may clear tracking state)
+        # Get breadcrumb BEFORE completing
         breadcrumb = get_breadcrumb()
 
-        # Get stats BEFORE completing (complete_deleg_drv clears current tracking!)
+        # Get stats BEFORE completing
         stats = get_deleg_drv_stats(session_id)
 
-        # Complete Delegation Drive. correlation_id AND subagent_type are
-        # propagated from the matching Started event so the Complete
-        # message can reference the same opaque pair-key the user already
-        # saw on the Started side AND carry the right subagent identity
-        # (CC's SubagentStop hook input doesn't always include
-        # subagent_type, so the started event is the source of truth).
-        success, duration, correlation_id, resolved_subagent_type = complete_deleg_drv(
-            session_id, subagent_type=subagent_type,
-        )
-        # Use the resolved value (started-event-derived) for display.
-        # Falls back to the hook_input fetch only if both are empty.
-        subagent_type = resolved_subagent_type or subagent_type
+        # Complete via the SubagentStart bridge when agent_id is available
+        # (current CC versions always send it). The bridge lookup is
+        # parallel-safe: matching is by agent_id, not "most recent unended".
+        # Falls back to the legacy by-most-recent path if agent_id is empty
+        # (extremely old CC, or transient hook-input issue).
+        if agent_id:
+            success, duration, tool_use_id, correlation_id, resolved_subagent_type = (
+                complete_deleg_drv_by_agent(
+                    session_id,
+                    agent_id=agent_id,
+                    agent_transcript_path=agent_transcript_path,
+                    last_assistant_message=last_assistant_message,
+                )
+            )
+        else:
+            # Legacy fallback (no agent_id in hook input).
+            success, duration, correlation_id, resolved_subagent_type = complete_deleg_drv(
+                session_id, subagent_type=agent_type_from_hook or "unknown",
+            )
+            tool_use_id = ""
+
+        # Display name resolution: prefer the started-event-derived value
+        # (more reliable than hook_input's agent_type), falling back to
+        # hook_input.agent_type if the bridge lookup came up empty.
+        subagent_type = resolved_subagent_type or agent_type_from_hook or 'unknown'
 
         # Append delegation_completed event
         append_event(
@@ -137,15 +161,28 @@ Delegation Drive Stats:
 
         # Notify Telegram (non-blocking). Tag matches the format used by
         # the matching Started message in handle_pre_tool_use so observers
-        # can visually pair the boundary in the channel.
+        # can visually pair the boundary in the channel. Includes agent_id
+        # (CC AgentId) and a short preview of the subagent's final reply
+        # for at-a-glance remote observability.
         try:
             from macf.channels.telegram import send_telegram_notification
             tag = (
-                f"[{subagent_type}@{correlation_id}]"
-                if correlation_id else f"[{subagent_type}]"
+                f"[{subagent_type}@{correlation_id}|{agent_id[:8]}]"
+                if correlation_id and agent_id else
+                f"[{subagent_type}@{correlation_id}]" if correlation_id else
+                f"[{subagent_type}|{agent_id[:8]}]" if agent_id else
+                f"[{subagent_type}]"
             )
+            reply_preview = (last_assistant_message or "").strip().replace("\n", " ")[:120]
+            body_lines = [
+                tag,
+                f"Duration: {duration_str}",
+                f"CL: {token_info.get('cl_level', 'N/A')}",
+            ]
+            if reply_preview:
+                body_lines.append(f"Reply: {reply_preview}")
             send_telegram_notification(
-                f"{tag}\nDuration: {duration_str}\nCL: {token_info.get('cl_level', 'N/A')}",
+                "\n".join(body_lines),
                 prefix="\U0001f4dc DELEG_DRV Complete",
             )
         except (ImportError, OSError, ConnectionError) as e:
