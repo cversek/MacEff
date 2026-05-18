@@ -304,12 +304,14 @@ def should_suppress_markov(modes: Set[str], current_work_mode: Optional[str]) ->
 
     Two suppression triggers:
     - SPRINT mode (existing — see is_markov_eligible)
-    - LOW_CONTEXT mode (new — closes BUG #1081): when the dashboard signals
-      🪫 LOW_CONTEXT, the agent must enter mandatory wind-down (CCP → JOTEWR
-      → final commits → let auto-compaction fire). Markov sampling at this
-      point produces out-of-phase mode-change suggestions (DISCOVER /
-      EXPERIMENT / BUILD) that compete with closeout discipline. The
-      recommender is replaced with a directive banner instead.
+    - LOW_CONTEXT mode (closes BUG #1081 + cycle 518 framing shift): when
+      the dashboard signals 🪫 LOW_CONTEXT in AUTO_MODE, the agent should
+      curate perishable wisdom (learnings, ideas, knowledge web) and then
+      continue active sprint/playtime work, not preemptively wind down.
+      Markov sampling at this point produces out-of-phase mode-change
+      suggestions (DISCOVER / EXPERIMENT / BUILD) that compete with
+      curation focus. The recommender is replaced with a curate-then-
+      continue directive banner (see ``format_low_context_directive``).
     """
     if current_work_mode == "SPRINT":
         return True
@@ -319,21 +321,25 @@ def should_suppress_markov(modes: Set[str], current_work_mode: Optional[str]) ->
 
 
 def format_low_context_directive() -> str:
-    """Mandatory wind-down banner — replaces Markov when LOW_CONTEXT active.
+    """Curation window banner — replaces Markov when LOW_CONTEXT active in AUTO_MODE.
 
-    The banner re-states the wind-down protocol (CCP → JOTEWR → commits →
-    compaction) so that the gate-firing message at low context is a
-    closeout directive, not an open-ended mode suggestion. Closes BUG
-    #1081.
+    Reframes low-CL in AUTO_MODE as a curation window for perishable wisdom
+    (learnings, ideas, knowledge web edges) followed by continuation of active
+    sprint/playtime work, not an automatic wind-down to compaction. Scarcity
+    instinct misreads CL on 1M context — CL≤10 still represents ~100K tokens
+    of headroom. CCP/JOTEWR remain available when the cycle is genuinely
+    closing (user direction or completion-state assessment), but are no
+    longer pushed preemptively. Closes BUG #1081 + extends per cycle 518.
     """
     return (
-        "🪫 LOW_CONTEXT — mandatory wind-down active. Markov suppressed.\n"
-        "Required sequence:\n"
-        "  1. CCP draft (strategic state preservation — minimum critical artifact)\n"
-        "  2. JOTEWR (cycle wisdom synthesis — if budget permits)\n"
-        "  3. Final commits + push\n"
-        "  4. Let auto-compaction fire naturally\n"
-        "Letting the timer expire is NOT wind-down — produce the CCP."
+        "🪫 LOW_CONTEXT — curation window active. Markov suppressed.\n"
+        "Recommended sequence:\n"
+        "  1. Curate perishable wisdom: learnings, ideas, knowledge web edges\n"
+        "  2. Continue active sprint or playtime work — substrate yields\n"
+        "  3. CCP/JOTEWR remain available if the cycle is genuinely closing,\n"
+        "     but do not preemptively wind down when curation + sprint work\n"
+        "     are still viable.\n"
+        "Curate then continue. Trust the substrate."
     )
 
 

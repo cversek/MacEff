@@ -381,11 +381,13 @@ Development Drive Stats:
                     try:
                         active_modes = detect_active_modes(session_id, token_info)
                         current_wm = get_current_work_mode(active_modes)
-                        # BUG #1081: when LOW_CONTEXT is active, suppress Markov
-                        # entirely and emit the mandatory wind-down directive
-                        # instead. Markov sampling at low context produces
-                        # out-of-phase mode-change suggestions that compete
-                        # with closeout discipline.
+                        # BUG #1081 + cycle 518: when LOW_CONTEXT is active in
+                        # AUTO_MODE, suppress Markov and emit a curation-window
+                        # directive (curate perishable wisdom, then continue
+                        # sprint/playtime work). Markov sampling at low context
+                        # produces out-of-phase mode-change suggestions that
+                        # compete with curation focus; the directive replaces
+                        # them with a clear curate-then-continue framing.
                         if should_suppress_markov(active_modes, current_wm) and "LOW_CONTEXT" in active_modes:
                             recommendation = "\n" + format_low_context_directive()
                         else:
@@ -478,8 +480,8 @@ Development Drive Stats:
                         except Exception as e:
                             emit_warning(Warning(source="stop", kind="telegram_send_failed", detail=f"Timer gate Telegram error: {e}"))
                         # Markov recommender: suggest next work mode transition
-                        # (suppressed in LOW_CONTEXT — BUG #1081 — replaced
-                        # with mandatory wind-down directive).
+                        # (suppressed in LOW_CONTEXT — BUG #1081 + cycle 518 —
+                        # replaced with a curate-then-continue directive).
                         recommendation = ""
                         try:
                             active_modes = detect_active_modes(session_id, token_info)

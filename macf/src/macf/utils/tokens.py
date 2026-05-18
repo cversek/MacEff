@@ -384,13 +384,16 @@ def get_boundary_guidance(cluac: int, auto_mode: bool) -> Optional[str]:
         elif cluac <= 10:
             return "🟡 BOUNDARY APPROACHING (MANUAL): Strategic preparation recommended"
 
-    # AUTO MODE: Autonomous preparation
+    # AUTO MODE: Curate perishable wisdom, then continue sprint/playtime work.
+    # CL on 1M context is more elastic than scarcity instinct believes —
+    # CL10 ≈ 100K remaining, CL5 ≈ 50K, CL2 ≈ 20K. Wind-down framing is
+    # an inherited 200K-era reflex; curate-then-continue fits the substrate.
     else:
         if cluac <= 2:
-            return "⚠️ EMERGENCY (AUTO): Write critical artifacts NOW - CCP minimum, JOTEWR if possible"
+            return "⚠️ DEEP CURATION (AUTO): Finalize active curation step (learning/idea/web), then resume sprint/playtime — substrate is elastic"
         elif cluac <= 5:
-            return "🟡 PREPARATION MODE (AUTO): Assess completion state, prepare CCP if incomplete"
+            return "🟡 CURATION WINDOW (AUTO): Curate perishable wisdom (learnings, ideas, knowledge web), then continue sprint/playtime work"
         elif cluac <= 10:
-            return "🟠 BOUNDARY APPROACHING (AUTO): Strategic choices matter - measure workflow costs"
+            return "🟠 CURATION REMINDER (AUTO): Capture pending learnings + ideas; continue sprint/playtime work in parallel"
 
     return None
