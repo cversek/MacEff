@@ -68,13 +68,19 @@ def test_boundary_guidance_manual_mode_cluac2():
 
 
 def test_boundary_guidance_auto_mode_cluac5():
-    """AUTO mode CL<=5 returns preparation message."""
+    """AUTO mode CL<=5 returns curation-then-continue message (not stop+wait)."""
     result = get_boundary_guidance(cluac=5, auto_mode=True)
 
     assert result is not None
-    assert "PREPARATION MODE" in result
+    assert "CURATION" in result
     assert "AUTO" in result
-    assert "CCP" in result
+    # Curate-then-continue framing: must reference both curation duties
+    # and continuation of sprint/playtime work
+    assert "Curate" in result or "curate" in result
+    assert "sprint" in result or "playtime" in result or "continue" in result.lower()
+    # Must NOT push wind-down framing or instruct stop+wait in AUTO_MODE
+    assert "STOP" not in result.upper()
+    assert "await" not in result.lower()
 
 
 def test_boundary_guidance_none_when_cluac_high():
@@ -99,9 +105,12 @@ def test_boundary_guidance_mode_aware_branching():
     assert "MANUAL" in manual_msg
     assert "AUTO" in auto_msg
 
-    # MANUAL says STOP, AUTO says write artifacts
+    # MANUAL says STOP + await user (user owns session strategy)
     assert "STOP" in manual_msg.upper()
-    assert ("CCP" in auto_msg or "artifacts" in auto_msg)
+    # AUTO directs curation duties + sprint/playtime continuation
+    # (no stop+wait framing — AUTO is autonomous through low CL)
+    assert "curation" in auto_msg.lower() or "curate" in auto_msg.lower()
+    assert "STOP" not in auto_msg.upper()
 
 
 def test_get_cluac_weather_affirmative_framing():
