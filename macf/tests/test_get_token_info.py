@@ -84,19 +84,20 @@ class TestGetTokenInfo:
             }
         })
 
-        with patch('macf.utils.get_current_session_id', return_value='test-session'):
-            with patch('macf.utils.get_session_transcript_path', return_value='/fake/path.jsonl'):
-                with patch('pathlib.Path.exists', return_value=True):
-                    with patch('builtins.open', create=True) as mock_open:
-                        # Setup mock file
-                        mock_file = MagicMock()
-                        mock_file.__enter__.return_value = mock_file
-                        mock_file.read.return_value = mock_jsonl_content.encode('utf-8')
-                        mock_file.seek.return_value = 0
-                        mock_file.__iter__.return_value = [mock_jsonl_content.encode('utf-8') + b'\n']
-                        mock_open.return_value = mock_file
+        with patch('macf.utils.tokens._compaction_lower_bound_iso', return_value=""):
+            with patch('macf.utils.get_current_session_id', return_value='test-session'):
+                with patch('macf.utils.get_session_transcript_path', return_value='/fake/path.jsonl'):
+                    with patch('pathlib.Path.exists', return_value=True):
+                        with patch('builtins.open', create=True) as mock_open:
+                            # Setup mock file
+                            mock_file = MagicMock()
+                            mock_file.__enter__.return_value = mock_file
+                            mock_file.read.return_value = mock_jsonl_content.encode('utf-8')
+                            mock_file.seek.return_value = 0
+                            mock_file.__iter__.return_value = [mock_jsonl_content.encode('utf-8') + b'\n']
+                            mock_open.return_value = mock_file
 
-                        result = get_token_info()
+                            result = get_token_info()
 
         # Verify calculation: 100000 actual tokens used
         from macf.utils.tokens import get_total_context
@@ -173,18 +174,19 @@ class TestGetTokenInfo:
             }
         })
 
-        with patch('macf.utils.get_current_session_id', return_value='test'):
-            with patch('macf.utils.get_session_transcript_path', return_value='/fake.jsonl'):
-                with patch('pathlib.Path.exists', return_value=True):
-                    with patch('builtins.open', create=True) as mock_open:
-                        mock_file = MagicMock()
-                        mock_file.__enter__.return_value = mock_file
-                        mock_file.read.return_value = mock_jsonl.encode('utf-8')
-                        mock_file.seek.return_value = 0
-                        mock_file.__iter__.return_value = [mock_jsonl.encode('utf-8') + b'\n']
-                        mock_open.return_value = mock_file
+        with patch('macf.utils.tokens._compaction_lower_bound_iso', return_value=""):
+            with patch('macf.utils.get_current_session_id', return_value='test'):
+                with patch('macf.utils.get_session_transcript_path', return_value='/fake.jsonl'):
+                    with patch('pathlib.Path.exists', return_value=True):
+                        with patch('builtins.open', create=True) as mock_open:
+                            mock_file = MagicMock()
+                            mock_file.__enter__.return_value = mock_file
+                            mock_file.read.return_value = mock_jsonl.encode('utf-8')
+                            mock_file.seek.return_value = 0
+                            mock_file.__iter__.return_value = [mock_jsonl.encode('utf-8') + b'\n']
+                            mock_open.return_value = mock_file
 
-                        result = get_token_info()
+                            result = get_token_info()
 
         # tokens_used reflects actual JSONL tokens (no buffer added)
         assert result['tokens_used'] == 80000, "tokens_used should be actual tokens"
@@ -351,18 +353,19 @@ class TestTokenInfoEdgeCases:
             }
         })
 
-        with patch('macf.utils.get_current_session_id', return_value='test'):
-            with patch('macf.utils.get_session_transcript_path', return_value='/fake.jsonl'):
-                with patch('pathlib.Path.exists', return_value=True):
-                    with patch('builtins.open', create=True) as mock_open:
-                        mock_file = MagicMock()
-                        mock_file.__enter__.return_value = mock_file
-                        mock_file.read.return_value = mock_jsonl.encode('utf-8')
-                        mock_file.seek.return_value = 0
-                        mock_file.__iter__.return_value = [mock_jsonl.encode('utf-8') + b'\n']
-                        mock_open.return_value = mock_file
+        with patch('macf.utils.tokens._compaction_lower_bound_iso', return_value=""):
+            with patch('macf.utils.get_current_session_id', return_value='test'):
+                with patch('macf.utils.get_session_transcript_path', return_value='/fake.jsonl'):
+                    with patch('pathlib.Path.exists', return_value=True):
+                        with patch('builtins.open', create=True) as mock_open:
+                            mock_file = MagicMock()
+                            mock_file.__enter__.return_value = mock_file
+                            mock_file.read.return_value = mock_jsonl.encode('utf-8')
+                            mock_file.seek.return_value = 0
+                            mock_file.__iter__.return_value = [mock_jsonl.encode('utf-8') + b'\n']
+                            mock_open.return_value = mock_file
 
-                        result = get_token_info()
+                            result = get_token_info()
 
         # 160k actual tokens used (no buffer added)
         from macf.utils.tokens import get_total_context

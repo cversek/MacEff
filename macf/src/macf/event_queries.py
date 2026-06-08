@@ -417,6 +417,45 @@ def get_delegations_this_drive_from_events(session_id: str) -> List[Dict]:
     return delegations
 
 
+def get_latest_compaction_event(session_id: str) -> Optional[dict]:
+    """Most recent ``compaction_detected`` event for a given session.
+
+    The SessionStart hook unconditionally emits ``compaction_detected`` whenever
+    it detects compaction, both for the ``source == 'compact'`` path and the
+    JSONL-fallback detection path. The event carries the session_id and the
+    event-record's own ``timestamp`` field (set by ``append_event`` at emission
+    time).
+
+    Token-reading code uses this event's timestamp as a lower bound on
+    "what counts as post-compaction" — any assistant message in the transcript
+    with ``timestamp < event.timestamp`` is pre-compaction (either before the
+    boundary or a preserved-segment replay with its original older timestamp)
+    and must be filtered out.
+
+    Args:
+        session_id: Session ID to filter events. Matching uses the first 8
+                    characters (same prefix convention as
+                    ``get_active_dev_drv_start``). A different session's
+                    compaction does NOT bound the current session's reads.
+
+    Returns:
+        The full event record dict (with ``timestamp``, ``event``, ``data``,
+        ``breadcrumb`` keys) or ``None`` if no matching event exists.
+    """
+    session_prefix = session_id[:8] if session_id else ""
+    if not session_prefix:
+        return None
+
+    for event in read_events(reverse=True):
+        if event.get("event") != "compaction_detected":
+            continue
+        event_session = event.get("data", {}).get("session_id", "")
+        if not event_session or not event_session.startswith(session_prefix):
+            continue
+        return event
+    return None
+
+
 def get_active_dev_drv_start(session_id: str) -> tuple[float, str]:
     """Get start time and prompt_uuid of active (unended) dev_drv from events."""
     from .agent_events_log import read_events
