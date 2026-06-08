@@ -185,10 +185,29 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
                             except (json.JSONDecodeError, UnicodeDecodeError):
                                 continue
 
-                        # Use the LAST (most recent) assistant message's token count
+                        # Pick the assistant message with the latest TIMESTAMP, not
+                        # the last in FILE ORDER. CC's compaction emits a
+                        # preservedSegment block in the compact_boundary, and the
+                        # preserved messages are RE-EMITTED into the JSONL with
+                        # their ORIGINAL (older) timestamps and ORIGINAL usage
+                        # blocks intact. The replays can sit near EOF in long
+                        # sessions; trusting file order picks up a phantom pre-
+                        # compaction tally as "current". Timestamp-priority skips
+                        # them automatically because the truly-current in-cycle
+                        # turn has the latest timestamp. The `>=` comparator means
+                        # later-in-file wins on ties (preserves legacy behavior
+                        # for content with missing/equal timestamps; only strictly
+                        # OLDER timestamps lose). Closes cversek/MacEff#110.
                         if assistant_messages:
-                            current_tokens = assistant_messages[-1]["tokens"]
-                            last_timestamp = assistant_messages[-1]["timestamp"]
+                            latest = assistant_messages[0]
+                            latest_ts_so_far = latest.get("timestamp", "")
+                            for m in assistant_messages[1:]:
+                                ts = m.get("timestamp", "")
+                                if ts >= latest_ts_so_far:
+                                    latest = m
+                                    latest_ts_so_far = ts
+                            current_tokens = latest["tokens"]
+                            last_timestamp = latest["timestamp"]
                         elif last_boundary_idx >= 0:
                             # Compaction detected but no post-boundary messages yet
                             # Return conservative estimate (~30% usage)
@@ -202,10 +221,18 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
                                 "source": "post_compaction_estimate",
                             }
 
-                    # If tail scan didn't find any data, do a full scan
+                    # If tail scan didn't find any data, do a full scan.
+                    # Same timestamp-priority discipline as the tail scan (see
+                    # comment above): pick the assistant message with the
+                    # latest timestamp, not the last seen in file order. The
+                    # full-scan loop keeps O(1) memory by tracking the
+                    # running latest-timestamp winner rather than materializing
+                    # every assistant message. Closes cversek/MacEff#110 in
+                    # the fallback path too.
                     if current_tokens == 0:
                         f.seek(0)
-                        last_assistant_tokens = 0
+                        latest_tokens = 0
+                        latest_ts = ""
                         for line in f:
                             try:
                                 line = line.decode("utf-8", errors="ignore").strip()
@@ -226,14 +253,22 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
                                     total_tokens += usage.get("input_tokens", 0)
                                     total_tokens += usage.get("output_tokens", 0)
                                     if total_tokens > 0:
-                                        # Always use the LATEST value, not the maximum
-                                        last_assistant_tokens = total_tokens
-                                        last_timestamp = data.get(
-                                            "timestamp", "unknown"
-                                        )
+                                        ts = data.get("timestamp", "")
+                                        # `>=` (not strict `>`) so later-in-file
+                                        # wins on missing/equal timestamps —
+                                        # preserves legacy behavior for content
+                                        # without timestamps. Only strictly
+                                        # OLDER timestamps lose, which is
+                                        # exactly the preserved-segment-replay
+                                        # case we need to skip.
+                                        if ts >= latest_ts:
+                                            latest_tokens = total_tokens
+                                            latest_ts = ts
                             except (json.JSONDecodeError, UnicodeDecodeError):
                                 continue
-                        current_tokens = last_assistant_tokens
+                        current_tokens = latest_tokens
+                        if latest_ts:
+                            last_timestamp = latest_ts
 
                 if current_tokens > 0:
                     # Calculate raw CL from actual token usage
