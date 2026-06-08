@@ -3585,7 +3585,15 @@ def cmd_task_list(args: argparse.Namespace) -> int:
     root_tasks = sorted(root_tasks, key=lambda t: str(t.id).zfill(10))
 
     def get_children(parent_id):
-        return sorted([t for t in tasks if t.parent_id == parent_id], key=lambda t: str(t.id).zfill(10))
+        # Normalize both sides to str() so a task whose parent_id was stored as
+        # int (e.g. mutated by a prior int-coercing `metadata set` — see GH #112
+        # Bug 1) still matches the framework's string sentinel "000" and any
+        # string parent IDs going forward.
+        target = str(parent_id) if parent_id is not None else None
+        return sorted(
+            [t for t in tasks if (str(t.parent_id) if t.parent_id is not None else None) == target],
+            key=lambda t: str(t.id).zfill(10),
+        )
 
     # Load scope state from MTMD scope_status field on tasks (same source as cmd_task_tree).
     # Without this, format_task's scope indicator block raises NameError (gh-48).
@@ -3803,8 +3811,14 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
         root = task_map[root_id]
 
         def get_children(parent_id):
-            # Zero-pad IDs for proper numeric string sorting
-            return sorted([t for t in all_tasks if t.parent_id == parent_id], key=lambda t: t.id.zfill(10))
+            # Zero-pad IDs for proper numeric string sorting.
+            # Normalize both sides to str() to handle tasks with int parent_id
+            # (see GH #112 Bug 1 — int-coerced legacy entries).
+            target = str(parent_id) if parent_id is not None else None
+            return sorted(
+                [t for t in all_tasks if (str(t.parent_id) if t.parent_id is not None else None) == target],
+                key=lambda t: t.id.zfill(10),
+            )
 
         def has_active_sibling(task, siblings):
             """Check if any sibling is active (in_progress or pending)."""
@@ -4393,13 +4407,20 @@ def cmd_task_metadata_set(args: argparse.Namespace) -> int:
         print(f"   Valid fields: {', '.join(sorted(mtmd_fields))}")
         return 1
 
-    # Parse value types for specific fields
+    # Parse value types for specific fields.
+    # NOTE: `parent_id` is kept as a STRING. The framework's top-level
+    # sentinel is the literal string "000" (SENTINEL_TASK_ID), and the
+    # tree-rendering get_children() does equality matching. Coercing to
+    # int here would store 0 and orphan the task from `task tree`
+    # because `0 == "000"` is False. The get_children helpers normalize
+    # both sides to str() to also catch tasks that were already mutated
+    # by the prior int-coercing version. Closes cversek/MacEff#112 Bug 1.
     if field == "parent_id" and value != "null":
-        try:
-            value = int(value)
-        except ValueError:
-            print(f"❌ parent_id must be an integer")
+        # Light validation: must be a positive integer literal or the sentinel.
+        if not (value.isdigit() or value == "000"):
+            print(f"❌ parent_id must be a digit string (e.g. '000', '42') or 'null'")
             return 1
+        # Keep as-is (string) — preserves "000" sentinel exactly.
     elif field == "created_cycle" and value != "null":
         try:
             value = int(value)
@@ -4446,17 +4467,29 @@ def cmd_task_metadata_set(args: argparse.Namespace) -> int:
     # Build updates dict
     updates = {"description": new_description}
 
-    # If title or other subject-affecting fields changed, recompose subject
+    # If title or other subject-affecting fields changed, recompose subject.
+    # Skip the recompose when MTMD title is None and the changed field isn't
+    # the title itself — compose_subject formats `... {title}` directly,
+    # which renders as the literal string "None" and blanks the visible
+    # title of plugin tasks (whose MTMD.title is intentionally None). The
+    # parent_id / task_type change is still reflected in MTMD; only the
+    # visible subject is preserved. Closes cversek/MacEff#112 Bug 3.
     if field in ("title", "task_type", "parent_id"):
-        from .task.create import compose_subject
-        # Use new MTMD values for recomposition
-        new_subject = compose_subject(
-            task_id=str(task_id),
-            task_type=new_mtmd.task_type,
-            title=new_mtmd.title or value if field == "title" else new_mtmd.title,
-            parent_id=new_mtmd.parent_id
-        )
-        updates["subject"] = new_subject
+        title_for_recompose = new_mtmd.title or (value if field == "title" else None)
+        if title_for_recompose is None:
+            # Conservative: keep the existing subject when we have no title
+            # to synthesize one from. The user can re-set title explicitly
+            # via `metadata set <id> title "..."` to trigger a fresh recompose.
+            pass
+        else:
+            from .task.create import compose_subject
+            new_subject = compose_subject(
+                task_id=str(task_id),
+                task_type=new_mtmd.task_type,
+                title=title_for_recompose,
+                parent_id=new_mtmd.parent_id,
+            )
+            updates["subject"] = new_subject
 
     # Apply update
     if update_task_file(task_id, updates):
