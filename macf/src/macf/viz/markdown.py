@@ -18,10 +18,8 @@ Usage::
     path = MarkdownPresenter("notes.md").render("/tmp/notes.html")
 """
 import hashlib
-import os
-import platform
-import subprocess
 import sys
+import webbrowser
 from datetime import datetime
 from pathlib import Path
 from string import Template
@@ -75,20 +73,28 @@ def _extract_title(md_text: str, file_path: Optional[str] = None) -> str:
 
 
 def _open_in_browser(path: str) -> None:
-    """Open a file in the default browser (cross-platform)."""
-    system = platform.system()
+    """Open a file in the default web browser.
+
+    Uses Python's `webbrowser` module to route through the user's
+    configured web browser (via `BROWSER` env or known-browser detection
+    on PATH) rather than the OS-level text/html MIME association, which
+    can be silently hijacked by non-browser apps (Slack, Electron
+    desktop apps) that register themselves as text/html handlers and
+    swallow the file without displaying it.
+
+    On failure, surfaces a clear manual-open fallback message instead
+    of silently succeeding. Closes cversek/MacEff#113.
+    """
+    url = f"file://{path}"
     try:
-        if system == "Darwin":
-            subprocess.Popen(["open", path],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        elif system == "Linux":
-            subprocess.Popen(["xdg-open", path],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        else:
-            # Windows or unknown
-            os.startfile(path)  # type: ignore[attr-defined]
-    except (OSError, AttributeError) as e:
+        opened = webbrowser.open(url)
+    except (webbrowser.Error, OSError) as e:
         print(f"⚠️ Could not open browser: {e}", file=sys.stderr)
+        print(f"   Open manually: {url}", file=sys.stderr)
+        return
+    if not opened:
+        print("⚠️ Could not open browser automatically.", file=sys.stderr)
+        print(f"   Open manually: {url}", file=sys.stderr)
 
 
 class MarkdownPresenter:
