@@ -1240,6 +1240,49 @@ def cmd_claude_config_show(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_config_show(args: argparse.Namespace) -> int:
+    """Show the resolved value + source for every unified-config setting.
+
+    Iterates ``macf.config.RESOLVED_SETTINGS`` and prints each setting's
+    name, current resolved value, and source label (``env`` / ``config`` /
+    ``default``). Output is column-aligned for fast scanning; ``--json``
+    emits the same data as a JSON array for programmatic consumers.
+
+    Closes the visible portion of cversek/MacEff#96 Phases 2-4.
+    """
+    from macf.config import resolve_setting, RESOLVED_SETTINGS
+    rows = []
+    for spec in RESOLVED_SETTINGS:
+        value, source = resolve_setting(
+            spec["env_var"],
+            spec["config_path"],
+            spec["default"],
+            coerce=spec.get("coerce"),
+        )
+        rows.append({
+            "name": spec["name"],
+            "env_var": spec["env_var"],
+            "value": value,
+            "source": source,
+            "description": spec.get("description", ""),
+        })
+    if getattr(args, "json_output", False):
+        print(json.dumps(rows, indent=2, default=str))
+        return 0
+    name_w = max(len(r["name"]) for r in rows)
+    val_w = max(len(str(r["value"])) for r in rows)
+    src_w = max(len(r["source"]) for r in rows)
+    header = f"  {'SETTING':<{name_w}}  {'VALUE':<{val_w}}  {'SOURCE':<{src_w}}  ENV_VAR"
+    print(header)
+    print("  " + "-" * (len(header) - 2))
+    for r in rows:
+        print(
+            f"  {r['name']:<{name_w}}  {str(r['value']):<{val_w}}  "
+            f"{r['source']:<{src_w}}  {r['env_var']}"
+        )
+    return 0
+
+
 def cmd_context(args: argparse.Namespace) -> int:
     """Show current token usage and CL (Context Left) level."""
     try:
@@ -7676,6 +7719,20 @@ def _build_parser() -> argparse.ArgumentParser:
                                help="output as JSON")
     context_parser.add_argument("--session", help="specific session ID (default: current)")
     context_parser.set_defaults(func=cmd_context)
+
+    # `macf_tools config show` — enumerate every unified-config setting +
+    # its resolved value + the source label (env / config / default). Closes
+    # cversek/MacEff#96 Phases 2-4 (visible CLI portion).
+    config_parser = sub.add_parser("config", help="unified config layer operations")
+    config_sub = config_parser.add_subparsers(dest="config_cmd")
+    config_show = config_sub.add_parser(
+        "show", help="show resolved value + source for every registered setting"
+    )
+    config_show.add_argument(
+        "--json", dest="json_output", action="store_true",
+        help="output as JSON array",
+    )
+    config_show.set_defaults(func=cmd_config_show)
 
     # Statusline command with subcommands
     statusline_parser = sub.add_parser("statusline", help="statusline operations for Claude Code")

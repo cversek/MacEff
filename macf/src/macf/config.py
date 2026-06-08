@@ -10,7 +10,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple, List, Callable
 
 try:
     import tomllib  # Python 3.11+
@@ -337,3 +337,164 @@ class ConsciousnessConfig:
             raise ConfigurationError(
                 f"Path '{path}' is not writable"
             )
+
+
+# ============================================================================
+# Unified config layer (cversek/MacEff#96 Phases 2-4)
+# ============================================================================
+#
+# Module-level helpers — NOT methods of ConsciousnessConfig. They implement
+# the env → .maceff/config.json → default resolution chain proposed in #96,
+# with explicit (value, source) returns so `macf_tools config show` can
+# render where each setting came from.
+#
+# Cycle 518's Phase 1 (commit 15ee4e2) added the agent_identity slot via a
+# bespoke helper in utils/identity.py; that pattern doesn't scale to the
+# three other env-only settings the issue calls out. This module centralizes
+# the resolution discipline so each migration is a one-line `resolve_setting`
+# call at the consumer site.
+
+
+def _load_maceff_config() -> Dict[str, Any]:
+    """Load ``.maceff/config.json`` from the agent home base.
+
+    Returns ``{}`` on absence — every consumer is required to have a default
+    that lets the agent boot without a config file at all. Malformed JSON
+    triggers a stderr warning and a fallback to ``{}`` — NOT silent, NOT
+    crashing the agent. Per-key type validation lives in ``resolve_setting``.
+    """
+    try:
+        from .utils.paths import find_agent_home
+        agent_home = find_agent_home()
+        if agent_home is None:
+            agent_home = Path.cwd()
+    except (ImportError, OSError):
+        agent_home = Path.cwd()
+
+    config_file = agent_home / '.maceff' / 'config.json'
+    if not config_file.exists():
+        return {}
+    try:
+        with open(config_file) as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        print(
+            f"⚠️ MACF: .maceff/config.json load failed ({e}); falling back to defaults.",
+            file=sys.stderr,
+        )
+        return {}
+
+
+def _dotted_lookup(config: Dict[str, Any], dotted_path: str) -> Any:
+    """Navigate a config dict by dotted path (e.g. ``'context.window'``).
+
+    Returns the value at the path, or ``None`` if any segment is missing.
+    An explicit ``null`` in the config returns ``None`` indistinguishable
+    from "key not present" — by design, both fall through to the default.
+    """
+    node: Any = config
+    for segment in dotted_path.split('.'):
+        if not isinstance(node, dict) or segment not in node:
+            return None
+        node = node[segment]
+    return node
+
+
+def resolve_setting(
+    env_var: str,
+    config_path: str,
+    default: Any,
+    coerce: Optional[Callable[[Any], Any]] = None,
+) -> Tuple[Any, str]:
+    """Resolve a deployment-wide setting via the unified resolution chain.
+
+    Resolution order (highest priority first):
+      1. ``env_var`` (inline / shell env override — one-off knob)
+      2. ``.maceff/config.json`` at the dotted ``config_path`` (per-project default)
+      3. ``default`` (last-resort fallback baked into the consumer)
+
+    Args:
+        env_var: Environment variable name (e.g. ``"MACF_CONTEXT_WINDOW"``).
+        config_path: Dotted path into ``.maceff/config.json``
+            (e.g. ``"context.window"``).
+        default: Value returned when neither env nor config supply one.
+        coerce: Optional callable to coerce env/config values to the right
+            type (e.g. ``int``). Coercion failures emit a stderr warning and
+            fall through to the next layer — visible misconfiguration, never
+            silent.
+
+    Returns:
+        ``(value, source)`` where ``source`` is one of ``'env'``, ``'config'``,
+        or ``'default'``.
+    """
+    # Layer 1: env override
+    env_val = os.environ.get(env_var)
+    if env_val is not None and env_val != "":
+        if coerce is None:
+            return (env_val, "env")
+        try:
+            return (coerce(env_val), "env")
+        except (ValueError, TypeError) as e:
+            print(
+                f"⚠️ MACF: {env_var}={env_val!r} failed coercion ({e}); "
+                f"falling through to config / default.",
+                file=sys.stderr,
+            )
+
+    # Layer 2: .maceff/config.json
+    config = _load_maceff_config()
+    config_val = _dotted_lookup(config, config_path)
+    if config_val is not None:
+        if coerce is None or isinstance(config_val, type(default)):
+            return (config_val, "config")
+        try:
+            return (coerce(config_val), "config")
+        except (ValueError, TypeError) as e:
+            print(
+                f"⚠️ MACF: .maceff/config.json {config_path}={config_val!r} "
+                f"failed coercion ({e}); falling through to default.",
+                file=sys.stderr,
+            )
+
+    # Layer 3: default
+    return (default, "default")
+
+
+# Inventory of all settings the unified resolution chain knows about. The
+# ``config show`` CLI iterates this list to render every setting plus the
+# source label resolved for it. Add new settings here when migrating
+# additional env vars.
+RESOLVED_SETTINGS: List[Dict[str, Any]] = [
+    {
+        "name": "context.window",
+        "env_var": "MACF_CONTEXT_WINDOW",
+        "config_path": "context.window",
+        "default": 200_000,
+        "coerce": int,
+        "description": "Total context window in tokens",
+    },
+    {
+        "name": "context.low_context_cl",
+        "env_var": "MACF_LOW_CONTEXT_CL",
+        "config_path": "context.low_context_cl",
+        "default": 5,
+        "coerce": int,
+        "description": "CL threshold below which LOW_CONTEXT mode engages",
+    },
+    {
+        "name": "session.user_idle_timeout_mins",
+        "env_var": "MACF_USER_IDLE_TIMEOUT_MINS",
+        "config_path": "session.user_idle_timeout_mins",
+        "default": 10,
+        "coerce": int,
+        "description": "Minutes of no user input before USER_IDLE engages",
+    },
+    {
+        "name": "agent_identity.calling_card",
+        "env_var": "MACEFF_AGENT_NAME",
+        "config_path": "agent_identity.calling_card",
+        "default": None,
+        "coerce": None,
+        "description": "Display name for the agent (cycle 518 Phase 1)",
+    },
+]
