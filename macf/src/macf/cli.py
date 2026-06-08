@@ -4553,6 +4553,332 @@ def cmd_task_metadata_add(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_task_reparent(args: argparse.Namespace) -> int:
+    """Atomically change a task's parent_id, gating on grant and rejecting cycles."""
+    from .task import TaskReader, update_task_file
+    from .utils.breadcrumbs import get_breadcrumb
+
+    try:
+        task_id = _parse_task_id_arg(args.task_id)
+    except ValueError:
+        print(f"❌ Invalid task ID: {args.task_id}")
+        return 1
+
+    new_parent_raw = args.parent
+    # Validate parent argument: must be digit string or the literal "null"
+    if new_parent_raw != "null" and not (new_parent_raw.isdigit() or new_parent_raw == "000"):
+        print(f"❌ <parent> must be a digit string (e.g. '000', '42') or 'null'")
+        return 1
+
+    # Normalise: "null" maps to None inside MTMD but we store "null" as sentinel
+    # on the wire so callers see consistent string output.
+    new_parent = new_parent_raw  # keep as string throughout
+
+    # Reject self-as-parent
+    if new_parent != "null" and str(task_id) == new_parent:
+        print(f"❌ Cannot make task its own parent")
+        return 1
+
+    reader = TaskReader()
+    task = reader.read_task(task_id)
+    if not task:
+        print(f"❌ Task #{task_id} not found")
+        return 1
+
+    old_parent = task.parent_id or "000"
+
+    # Cycle detection: walk new_parent's parent chain, looking for task_id
+    if new_parent not in ("null", "000"):
+        visited = set()
+        cursor = new_parent
+        depth = 0
+        while cursor and cursor not in ("null", "000") and depth < 10:
+            if str(cursor) == str(task_id):
+                print(f"❌ Cycle detected: reparenting #{task_id} under #{new_parent} would create a parent→child loop")
+                return 1
+            visited.add(cursor)
+            ancestor = reader.read_task(cursor)
+            if not ancestor:
+                break
+            next_parent = ancestor.parent_id
+            if next_parent is None or next_parent == "000":
+                break
+            cursor = next_parent
+            if cursor in visited:
+                break
+            depth += 1
+
+    # Grant gate for existing parent_id field
+    if task.mtmd and task.mtmd.parent_id is not None:
+        from .task.protection import check_grant_in_events, clear_grant
+        has_grant, _ = check_grant_in_events("update", task_id, field="parent_id", value=new_parent)
+        if not has_grant:
+            print(f"❌ Changing parent_id requires grant (current: {old_parent!r})")
+            print(f"   To authorize: macf_tools task grant-update {task_id} --field parent_id --value \"{new_parent}\"")
+            return 1
+        clear_grant("update", task_id, "consumed_by_reparent")
+
+    # Apply update via MTMD plumbing
+    breadcrumb = get_breadcrumb()
+    if task.mtmd:
+        # Store "null" as None in MTMD when caller passes "null"
+        mtmd_value = None if new_parent == "null" else new_parent
+        new_mtmd = task.mtmd.with_updated_field("parent_id", mtmd_value, breadcrumb, f"Reparent via CLI")
+    else:
+        from .task import MacfTaskMetaData
+        from .task.models import MacfTaskUpdate
+        new_mtmd = MacfTaskMetaData()
+        new_mtmd.parent_id = None if new_parent == "null" else new_parent
+        new_mtmd.updates.append(MacfTaskUpdate(
+            breadcrumb=breadcrumb,
+            description=f"Created MTMD with parent_id via reparent CLI",
+            agent="PA"
+        ))
+
+    new_description = task.description_with_updated_mtmd(new_mtmd)
+    updates = {"description": new_description}
+
+    # Recompose subject only when title is recoverable (Bug 3 invariant)
+    if new_mtmd.title is not None:
+        from .task.create import compose_subject
+        new_subject = compose_subject(
+            task_id=str(task_id),
+            task_type=new_mtmd.task_type,
+            title=new_mtmd.title,
+            parent_id=new_mtmd.parent_id,
+        )
+        updates["subject"] = new_subject
+
+    if update_task_file(task_id, updates):
+        print(f"✅ Reparented #{task_id}: {old_parent} → {new_parent}")
+        return 0
+    else:
+        print(f"❌ Failed to reparent task #{task_id}")
+        return 1
+
+
+def cmd_task_advance(args: argparse.Namespace) -> int:
+    """Drive a plugin task's lifecycle state through its declared state machine."""
+    from .task import TaskReader, update_task_file
+    from .utils.breadcrumbs import get_breadcrumb
+
+    try:
+        task_id = _parse_task_id_arg(args.task_id)
+    except ValueError:
+        print(f"❌ Invalid task ID: {args.task_id}")
+        return 1
+
+    new_state = args.state
+    reason = getattr(args, "reason", None) or ""
+
+    reader = TaskReader()
+    task = reader.read_task(task_id)
+    if not task:
+        print(f"❌ Task #{task_id} not found")
+        return 1
+
+    if not task.mtmd:
+        print(f"❌ Task #{task_id} has no MTMD and no lifecycle_state_machine declared in custom")
+        return 1
+
+    state_machine = task.mtmd.custom.get("lifecycle_state_machine")
+    if state_machine is None:
+        print(f"❌ Task #{task_id} has no lifecycle_state_machine declared in custom")
+        return 1
+
+    if not isinstance(state_machine, dict):
+        print(f"❌ Task #{task_id} lifecycle_state_machine must be a flat dict mapping state → [legal_next_states]")
+        return 1
+
+    # Determine current state
+    current_state = task.mtmd.custom.get("lifecycle_state")
+    if current_state is None:
+        # Use declared initial state or first key
+        current_state = task.mtmd.custom.get("lifecycle_state_machine_initial") or (
+            next(iter(state_machine), None)
+        )
+
+    if current_state not in state_machine:
+        print(f"❌ Current state {current_state!r} is not a key in lifecycle_state_machine")
+        return 1
+
+    legal_next = state_machine[current_state]
+    if new_state not in legal_next:
+        print(f"❌ Illegal transition: {current_state} → {new_state}. Legal: {set(legal_next)}")
+        return 1
+
+    # Update custom.lifecycle_state
+    breadcrumb = get_breadcrumb()
+    import copy
+    new_mtmd = copy.deepcopy(task.mtmd)
+    new_mtmd.custom["lifecycle_state"] = new_state
+    from .task.models import MacfTaskUpdate
+    new_mtmd.updates.append(MacfTaskUpdate(
+        breadcrumb=breadcrumb,
+        description=f"Lifecycle advanced {current_state} → {new_state} via CLI",
+        agent="PA"
+    ))
+
+    new_description = task.description_with_updated_mtmd(new_mtmd)
+
+    if update_task_file(task_id, {"description": new_description}):
+        # Emit forensic event
+        from .agent_events_log import append_event
+        append_event("task_lifecycle_advanced", {
+            "task_id": str(task_id),
+            "from_state": current_state,
+            "to_state": new_state,
+            "reason": reason,
+        })
+        print(f"✅ Advanced #{task_id}: {current_state} → {new_state}")
+        return 0
+    else:
+        print(f"❌ Failed to advance lifecycle for task #{task_id}")
+        return 1
+
+
+def _dotted_path_set(container: dict, path_segments: list, value):
+    """
+    Set a value in a nested dict/list structure using a list of path segments.
+
+    String segments index into dicts (creating intermediate dicts as needed).
+    Numeric segments index into lists.
+    """
+    if not path_segments:
+        return
+    key = path_segments[0]
+    # Numeric segment → list index
+    try:
+        idx = int(key)
+        is_index = True
+    except ValueError:
+        is_index = False
+
+    if len(path_segments) == 1:
+        if is_index:
+            container[idx] = value
+        else:
+            container[key] = value
+    else:
+        # Descend, creating intermediate dicts as needed
+        if is_index:
+            next_node = container[idx]
+        else:
+            if key not in container or not isinstance(container[key], (dict, list)):
+                container[key] = {}
+            next_node = container[key]
+        _dotted_path_set(next_node, path_segments[1:], value)
+
+
+def _dotted_path_exists(container: dict, path_segments: list) -> bool:
+    """Return True if the dotted path already exists in the container."""
+    node = container
+    for seg in path_segments:
+        try:
+            idx = int(seg)
+            if not isinstance(node, list) or idx >= len(node):
+                return False
+            node = node[idx]
+        except ValueError:
+            if not isinstance(node, dict) or seg not in node:
+                return False
+            node = node[seg]
+    return True
+
+
+def cmd_task_metadata_set_custom(args: argparse.Namespace) -> int:
+    """Set or create a key in MTMD.custom using a dotted-path syntax."""
+    import re
+    import json as _json
+    from .task import TaskReader, update_task_file, MacfTaskMetaData
+    from .utils.breadcrumbs import get_breadcrumb
+
+    try:
+        task_id = _parse_task_id_arg(args.task_id)
+    except ValueError:
+        print(f"❌ Invalid task ID: {args.task_id}")
+        return 1
+
+    dotted_path = args.path
+    raw_value = args.value
+    use_json = getattr(args, "json", False)
+
+    # Validate dotted path is non-empty
+    path_segments = dotted_path.split(".")
+    if not all(seg for seg in path_segments):
+        print(f"❌ Invalid path: {dotted_path!r} (empty segment)")
+        return 1
+
+    # Parse value
+    if use_json:
+        try:
+            value = _json.loads(raw_value)
+        except _json.JSONDecodeError as e:
+            print(f"❌ Invalid JSON: {e}")
+            return 1
+    else:
+        # Default coercion
+        low = raw_value.lower()
+        if low == "true":
+            value = True
+        elif low == "false":
+            value = False
+        elif low == "null":
+            value = None
+        elif re.fullmatch(r"-?\d+", raw_value):
+            value = int(raw_value)
+        elif re.fullmatch(r"-?\d+\.\d+", raw_value):
+            value = float(raw_value)
+        else:
+            value = raw_value
+
+    reader = TaskReader()
+    task = reader.read_task(task_id)
+    if not task:
+        print(f"❌ Task #{task_id} not found")
+        return 1
+
+    import copy
+    breadcrumb = get_breadcrumb()
+    if task.mtmd:
+        new_mtmd = copy.deepcopy(task.mtmd)
+    else:
+        new_mtmd = MacfTaskMetaData()
+
+    # Grant gate: only when the key already exists in custom
+    existing_custom = new_mtmd.custom
+    key_exists = _dotted_path_exists(existing_custom, path_segments)
+    if key_exists:
+        from .task.protection import check_grant_in_events, clear_grant
+        grant_field = f"custom.{dotted_path}"
+        has_grant, _ = check_grant_in_events("update", task_id, field=grant_field, value=value)
+        if not has_grant:
+            print(f"❌ Modifying existing custom.{dotted_path} requires grant")
+            print(f"   To authorize: macf_tools task grant-update {task_id} --field \"{grant_field}\" --value \"{value}\"")
+            return 1
+        clear_grant("update", task_id, "consumed_by_set_custom")
+
+    # Apply the dotted-path set
+    _dotted_path_set(existing_custom, path_segments, value)
+
+    # Record update
+    from .task.models import MacfTaskUpdate
+    new_mtmd.updates.append(MacfTaskUpdate(
+        breadcrumb=breadcrumb,
+        description=f"Set custom.{dotted_path} = {value!r} via CLI",
+        agent="PA"
+    ))
+
+    new_description = task.description_with_updated_mtmd(new_mtmd)
+
+    if update_task_file(task_id, {"description": new_description}):
+        print(f"✅ Set #{task_id} custom.{dotted_path} = {value!r}")
+        return 0
+    else:
+        print(f"❌ Failed to set custom.{dotted_path} on task #{task_id}")
+        return 1
+
+
 def cmd_task_create_mission(args: argparse.Namespace) -> int:
     """Create MISSION task with roadmap folder."""
     from .task.create import create_mission
@@ -7685,6 +8011,45 @@ def _build_parser() -> argparse.ArgumentParser:
     task_metadata_validate_parser = task_metadata_sub.add_parser("validate", help="validate MTMD against schema")
     task_metadata_validate_parser.add_argument("task_id", help="task ID (e.g., #67 or 67)")
     task_metadata_validate_parser.set_defaults(func=cmd_task_metadata_validate)
+
+    # task metadata set-custom
+    task_metadata_set_custom_parser = task_metadata_sub.add_parser(
+        "set-custom",
+        help="set a dotted-path key in MTMD.custom (e.g. decision_gates.submitted true)"
+    )
+    task_metadata_set_custom_parser.add_argument("task_id", help="task ID (e.g., #67 or 67)")
+    task_metadata_set_custom_parser.add_argument("path", help="dotted path into custom (e.g. decision_gates.submitted)")
+    task_metadata_set_custom_parser.add_argument("value", help="value to set")
+    task_metadata_set_custom_parser.add_argument(
+        "--json", dest="json", action="store_true", default=False,
+        help="interpret <value> as a JSON literal (e.g. '[1,2,3]' or 'true')"
+    )
+    task_metadata_set_custom_parser.set_defaults(func=cmd_task_metadata_set_custom)
+
+    # task reparent
+    task_reparent_parser = task_sub.add_parser(
+        "reparent",
+        help="atomically change a task's parent_id (grant-gated, cycle-safe)"
+    )
+    task_reparent_parser.add_argument("task_id", help="task ID (e.g., #67 or 67)")
+    task_reparent_parser.add_argument(
+        "parent",
+        help="new parent ID — digit string, '000' (top-level sentinel), or 'null' (orphan)"
+    )
+    task_reparent_parser.set_defaults(func=cmd_task_reparent)
+
+    # task advance
+    task_advance_parser = task_sub.add_parser(
+        "advance",
+        help="drive a plugin task's lifecycle state through its declared state machine"
+    )
+    task_advance_parser.add_argument("task_id", help="task ID (e.g., #67 or 67)")
+    task_advance_parser.add_argument("state", help="new state to transition to")
+    task_advance_parser.add_argument(
+        "--reason", default="", metavar="TEXT",
+        help="optional reason recorded in the task_lifecycle_advanced event"
+    )
+    task_advance_parser.set_defaults(func=cmd_task_advance)
 
     # task create subcommand
     task_create_parser = task_sub.add_parser("create", help="create new tasks with MTMD")
