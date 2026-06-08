@@ -15,7 +15,11 @@ from unittest.mock import patch
 
 import pytest
 
-from macf.cli import _count_hook_events_in_settings, cmd_framework_install
+from macf.cli import (
+    _count_hook_events_in_settings,
+    _hooks_to_install_list,
+    cmd_framework_install,
+)
 
 
 # --- _count_hook_events_in_settings ----------------------------------------
@@ -112,20 +116,20 @@ def test_framework_install_bails_when_settings_has_no_hooks(fake_framework_root,
 
 
 def test_framework_install_reports_actual_count_on_success(fake_framework_root, capsys):
-    """On success, the summary must reflect the ACTUAL hook count, not a hardcoded 10."""
+    """On success, the summary must reflect the ACTUAL hook count, derived from the canonical _hooks_to_install_list helper, not a hardcoded number."""
     real_exists = Path.exists
     def fake_exists(self):
         if str(self) == "/.dockerenv":
             return False
         return real_exists(self)
 
-    # Seed settings file with all 10 hooks as if hook_install wrote them
+    expected_count = len(_hooks_to_install_list())
+
+    # Seed the settings file with the canonical count of hook events as if
+    # cmd_hook_install wrote them. Names don't matter to _count_hook_events_in_settings;
+    # only the count of keys in the hooks dict.
     settings_file = Path.cwd() / ".claude" / "settings.local.json"
-    events = [
-        "SessionStart", "UserPromptSubmit", "Stop", "SubagentStop",
-        "PreToolUse", "PostToolUse", "SessionEnd", "PreCompact",
-        "PermissionRequest", "Notification",
-    ]
+    events = [f"Event{i}" for i in range(expected_count)]
     _write_settings(settings_file, {"hooks": {e: [] for e in events}})
 
     with patch("macf.cli.cmd_hook_install", return_value=0), \
@@ -135,6 +139,6 @@ def test_framework_install_reports_actual_count_on_success(fake_framework_root, 
 
     out = capsys.readouterr().out
     assert result == 0
-    assert "Hooks: 10" in out
+    assert f"Hooks: {expected_count}" in out
     # Must not have hit the failure path
     assert "Hook installation reported success" not in out

@@ -698,8 +698,31 @@ def _clear_hooks_from_settings(settings_path: Path) -> bool:
         return False
 
 
+def _hooks_to_install_list():
+    """Canonical (script_name, handler_module) pairs for MacEff hooks.
+
+    Single source of truth for `cmd_hook_install` (which writes the
+    symlinks + settings entries) and `cmd_framework_install` (which
+    verifies the post-install bound count). Adding a hook here is the
+    only edit needed for both install + self-validation to scale.
+    """
+    return [
+        ("session_start.py", "handle_session_start"),
+        ("user_prompt_submit.py", "handle_user_prompt_submit"),
+        ("stop.py", "handle_stop"),
+        ("subagent_start.py", "handle_subagent_start"),
+        ("subagent_stop.py", "handle_subagent_stop"),
+        ("pre_tool_use.py", "handle_pre_tool_use"),
+        ("post_tool_use.py", "handle_post_tool_use"),
+        ("session_end.py", "handle_session_end"),
+        ("pre_compact.py", "handle_pre_compact"),
+        ("permission_request.py", "handle_permission_request"),
+        ("notification.py", "handle_notification"),
+    ]
+
+
 def cmd_hook_install(args: argparse.Namespace) -> int:
-    """Install all 10 consciousness hooks with local/global mode selection.
+    """Install consciousness hooks with local/global mode selection.
 
     IDEMPOTENT: Always clears hooks from the OTHER location to prevent duplicate execution.
     If switching modes, prompts for confirmation.
@@ -792,19 +815,7 @@ def cmd_hook_install(args: argparse.Namespace) -> int:
         # (CC's SubagentStop hook input carries agent_id but not the
         # parent's tool_use_id; SubagentStart sees agent_id at boot
         # time and emits the bridging deleg_drv_subagent_booted event).
-        hooks_to_install = [
-            ("session_start.py", "handle_session_start"),
-            ("user_prompt_submit.py", "handle_user_prompt_submit"),
-            ("stop.py", "handle_stop"),
-            ("subagent_start.py", "handle_subagent_start"),
-            ("subagent_stop.py", "handle_subagent_stop"),
-            ("pre_tool_use.py", "handle_pre_tool_use"),
-            ("post_tool_use.py", "handle_post_tool_use"),
-            ("session_end.py", "handle_session_end"),
-            ("pre_compact.py", "handle_pre_compact"),
-            ("permission_request.py", "handle_permission_request"),
-            ("notification.py", "handle_notification"),
-        ]
+        hooks_to_install = _hooks_to_install_list()
 
         # Find installed package location for handler modules
         import macf.hooks as hooks_package
@@ -824,7 +835,7 @@ def cmd_hook_install(args: argparse.Namespace) -> int:
 
         # Update settings file
         if _update_settings_file(settings_file, hooks_prefix):
-            print(f"\n✅ All 10 hooks installed successfully!")
+            print(f"\n✅ All {len(hooks_to_install)} hooks installed successfully!")
             print(f"   Mode: {mode}")
             print(f"   Directory: {hooks_dir}")
             print(f"   Settings: {settings_file}")
@@ -886,8 +897,9 @@ def cmd_framework_install(args: argparse.Namespace) -> int:
                 print(f"   Expected settings file: {expected_settings}")
                 return 1
             actual_hook_count = _count_hook_events_in_settings(expected_settings)
-            if actual_hook_count != 10:
-                print(f"\n❌ Hook installation reported success but settings file has {actual_hook_count}/10 hook events bound.")
+            expected_hook_count = len(_hooks_to_install_list())
+            if actual_hook_count != expected_hook_count:
+                print(f"\n❌ Hook installation reported success but settings file has {actual_hook_count}/{expected_hook_count} hook events bound.")
                 print(f"   Expected settings file: {expected_settings}")
                 print(f"   This can happen after a global→local migration if the local write silently dropped the hooks block.")
                 print(f"   Recovery: re-run with `macf_tools framework install --hooks-only` from the same directory.")
