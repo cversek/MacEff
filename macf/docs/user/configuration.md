@@ -4,29 +4,63 @@ This document describes all configuration files and environment variables used b
 
 ## Configuration Files
 
-### `.maceff/config.json` - Agent Identity Configuration
+### `.maceff/config.json` - Unified Config Layer
 
-Location: `{project_root}/.maceff/config.json`
+Location: `{project_root}/.maceff/config.json` (resolved via `find_agent_home`).
 
-Agent identity configuration created by `macf_tools config init`.
+The canonical per-project configuration file. Replaces ad-hoc `~/.zshenv` / `~/.bashrc` env-var workarounds for deployment-wide settings. Per-project config travels with the repo, doesn't pollute the shell environment, and is enumerable via `macf_tools config show`.
 
-**Structure**:
+**Structure** (all blocks optional):
 ```json
 {
   "agent_identity": {
-    "moniker": "ClaudeTheBuilder",
-    "description": "Optional agent description",
+    "calling_card": "ShortName",
+    "moniker": "FullAgentName",
+    "description": "Optional human-readable description",
     "created": "2024-11-01T12:00:00Z"
+  },
+  "context": {
+    "window": 1000000,
+    "low_context_cl": 5
+  },
+  "session": {
+    "user_idle_timeout_mins": 10
   }
 }
 ```
 
-**Fields**:
-- `moniker` - Agent identifier used for logging paths and forensics
-- `description` - Optional human-readable description
-- `created` - Timestamp of config creation
+**Resolution chain** (highest priority first; per-setting):
 
-**Usage**: The moniker field is used by `ConsciousnessConfig.agent_id` for path resolution in host contexts.
+1. **Inline env var** — `MACF_CONTEXT_WINDOW=200000 macf_tools ...` (explicit one-off override)
+2. **`.maceff/config.json`** at the relevant dotted path (per-project default)
+3. **Hard-coded default** (last-resort fallback)
+
+Use **inline env vars** for ephemeral overrides (one invocation, one test). Use **`.maceff/config.json`** for persistent per-project defaults. **Anti-pattern**: baking persistent settings into `~/.zshenv` or `~/.bashrc` — these don't travel with the repo and silently break when running the same project on a different machine.
+
+**Migrated settings**:
+
+| Setting | Env Var | Config Path | Default | Description |
+|---------|---------|-------------|---------|-------------|
+| Context window | `MACF_CONTEXT_WINDOW` | `context.window` | `200000` | Total context window in tokens |
+| Low-context CL | `MACF_LOW_CONTEXT_CL` | `context.low_context_cl` | `5` | CL below which LOW_CONTEXT engages |
+| Idle timeout | `MACF_USER_IDLE_TIMEOUT_MINS` | `session.user_idle_timeout_mins` | `10` | Minutes before USER_IDLE engages |
+| Calling card | `MACEFF_AGENT_NAME` | `agent_identity.calling_card` | (none) | Display name for the agent |
+
+**Inspect resolution** at any time:
+```bash
+macf_tools config show
+```
+Output shows each setting's resolved value plus which layer supplied it (`env`, `config`, or `default`). Use `--json` for programmatic consumers.
+
+**Adding new migrations**: extend `RESOLVED_SETTINGS` in `macf/src/macf/config.py` with the four-tuple (`name`, `env_var`, `config_path`, `default` + optional `coerce`). The consumer site then calls `resolve_setting(...)` instead of `os.environ.get(...)`.
+
+**Fields** in the `agent_identity` block:
+- `calling_card` - Short-form display name (preferred). Resolved by `get_agent_identity` for statusline / Telegram signatures.
+- `moniker` - Full / formal agent name. Used as fallback when `calling_card` is absent.
+- `description` - Optional human-readable description.
+- `created` - Timestamp of config creation.
+
+**Usage**: `ConsciousnessConfig.agent_id` (host context) reads `agent_identity.moniker`; `get_agent_identity` (utils/identity.py) prefers `agent_identity.calling_card` then falls back to `moniker`.
 
 ### `.maceff/agent_state.json` - **DEPRECATED**
 

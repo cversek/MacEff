@@ -63,22 +63,27 @@ def get_total_context() -> int:
     """
     Get total context window size.
 
-    Detection priority:
-    1. MACF_CONTEXT_WINDOW env var (explicit override)
-    2. Default 200k
+    Detection priority (unified config layer per cversek/MacEff#96 Phase 2-4):
+    1. ``MACF_CONTEXT_WINDOW`` env var (explicit override)
+    2. ``.maceff/config.json`` ``context.window`` (per-project default)
+    3. Default 200k (fallback)
 
-    Emits one-time warning if model is claude-opus-4-6 and env var not set.
+    Emits one-time warning if model is claude-opus-4-6 and the resolution
+    fell through to the default.
 
     Returns:
         Total context window in tokens
     """
     global _1M_WARNING_SHOWN
-    env_val = os.environ.get("MACF_CONTEXT_WINDOW")
-    if env_val:
-        try:
-            return int(env_val)
-        except ValueError:
-            pass
+    from macf.config import resolve_setting
+    value, source = resolve_setting(
+        "MACF_CONTEXT_WINDOW",
+        "context.window",
+        _DEFAULT_CONTEXT,
+        coerce=int,
+    )
+    if source != "default":
+        return value
 
     if not _1M_WARNING_SHOWN:
         _1M_WARNING_SHOWN = True

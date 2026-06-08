@@ -114,9 +114,17 @@ def detect_active_modes(session_id: str, token_info: dict) -> Set[str]:
     except (OSError, ValueError) as e:
         print(f"⚠️ MACF: AUTO_MODE detection failed: {e}", file=sys.stderr)
 
-    # USER_IDLE: compare current time against last user activity
+    # USER_IDLE: compare current time against last user activity.
+    # Unified-config resolution (cversek/MacEff#96 Phase 2-4): env override
+    # > .maceff/config.json `session.user_idle_timeout_mins` > default 10.
     try:
-        idle_timeout = int(os.environ.get("MACF_USER_IDLE_TIMEOUT_MINS", "10"))
+        from macf.config import resolve_setting
+        idle_timeout, _ = resolve_setting(
+            "MACF_USER_IDLE_TIMEOUT_MINS",
+            "session.user_idle_timeout_mins",
+            10,
+            coerce=int,
+        )
         last_activity = _get_last_user_activity_timestamp(session_id)
         if last_activity and (time.time() - last_activity) > idle_timeout * 60:
             modes.add("USER_IDLE")
@@ -132,9 +140,17 @@ def detect_active_modes(session_id: str, token_info: dict) -> Set[str]:
     except (OSError, ValueError) as e:
         print(f"⚠️ MACF: QUIET_MODE detection failed: {e}", file=sys.stderr)
 
-    # LOW_CONTEXT: check CL level
+    # LOW_CONTEXT: check CL level.
+    # Unified-config resolution (cversek/MacEff#96 Phase 2-4): env override
+    # > .maceff/config.json `context.low_context_cl` > default 5.
     try:
-        low_cl = int(os.environ.get("MACF_LOW_CONTEXT_CL", "5"))
+        from macf.config import resolve_setting
+        low_cl, _ = resolve_setting(
+            "MACF_LOW_CONTEXT_CL",
+            "context.low_context_cl",
+            5,
+            coerce=int,
+        )
         cl_level = token_info.get("cl_level", 100)
         if isinstance(cl_level, (int, float)) and cl_level <= low_cl:
             modes.add("LOW_CONTEXT")
