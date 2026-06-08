@@ -16,27 +16,32 @@ def get_agent_identity() -> str:
     """
     Get agent identity in format 'DisplayName@uuid_prefix'.
 
-    Resolution:
-    1. Read GECOS field from getent passwd $USER (5th colon-delimited field)
-    2. Read UUID from ~/.maceff_primary_agent.id
-    3. Compose: {GECOS_no_spaces}@{uuid_prefix}
-    4. Fallback: {username}@unknown if UUID file missing
+    Resolution (highest priority first):
+    1. ``MACEFF_AGENT_NAME`` env var — explicit one-off override
+    2. ``.maceff/config.json`` ``agent_identity.calling_card`` (preferred) or
+       ``agent_identity.moniker`` (fallback) — per-project configured default
+    3. GECOS / Directory-Services display name (spaces stripped)
+    4. ``$USER`` — last-resort fallback
+
+    Layer 2 is the unified-config-layer slot added per cversek/MacEff#96
+    (Phase 1). It eliminates the prior need to bake ``MACEFF_AGENT_NAME`` into
+    a shell rc file just to override a stale GECOS reading; per-project
+    config travels with the repo.
 
     Returns:
-        str: Agent identity (e.g., 'MannyMacEff@a3f7c2') or fallback
+        str: Agent identity (e.g., 'Card@abcdef') or fallback
 
     Examples:
         >>> get_agent_identity()
-        'MannyMacEff@a3f7c2'
-
-        >>> # If UUID file missing
-        'manny@unknown'
+        'Card@abcdef'
     """
     # Get current user
     username = os.environ.get('USER', 'unknown')
 
-    # Get display name: MACEFF_AGENT_NAME env var > GECOS > username
+    # Resolve display name: env > config > GECOS > username
     display_name = os.environ.get('MACEFF_AGENT_NAME')
+    if not display_name:
+        display_name = _get_config_identity_name()
     if not display_name:
         display_name = _get_gecos_name()
     if not display_name:
@@ -47,6 +52,47 @@ def get_agent_identity() -> str:
 
     # Compose identity
     return f"{display_name}@{uuid_prefix}"
+
+
+def _get_config_identity_name() -> Optional[str]:
+    """Read display name from .maceff/config.json agent_identity block.
+
+    Prefers ``calling_card`` (the short-form display name added by
+    cversek/MacEff#96), falling back to ``moniker`` (the existing
+    formal-name field).
+
+    Resolution starts from the agent home base, so per-project config
+    is picked up correctly. Returns None on any failure — caller will
+    fall through to GECOS / username.
+    """
+    import json
+    try:
+        from macf.utils.paths import find_agent_home
+        try:
+            agent_home = find_agent_home()
+        except ImportError:
+            return None
+        if agent_home is None:
+            return None
+        config_file = agent_home / '.maceff' / 'config.json'
+        if not config_file.exists():
+            return None
+        try:
+            with open(config_file) as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"⚠️ MACF: .maceff/config.json read failed: {e}", file=sys.stderr)
+            return None
+        identity = data.get('agent_identity') or {}
+        # Prefer calling_card (short) over moniker (formal name)
+        for key in ('calling_card', 'moniker'):
+            value = identity.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
+    except (OSError, ImportError) as e:
+        print(f"⚠️ MACF: config-based identity lookup failed: {e}", file=sys.stderr)
+        return None
 
 
 def _get_gecos_name() -> Optional[str]:
