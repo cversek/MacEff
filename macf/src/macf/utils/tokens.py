@@ -5,12 +5,45 @@ Tokens utilities.
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 from .paths import find_project_root, get_session_dir, get_session_transcript_path
 from .session import get_current_session_id
 from .json_io import read_json, write_json_safely
 from .claude_settings import get_autocompact_setting
+
+
+def _compaction_lower_bound_iso(session_id: str) -> str:
+    """Return an ISO-8601 lower bound on post-compaction assistant timestamps.
+
+    Queries the event log for the most recent ``compaction_detected`` event
+    matching this session and converts its epoch timestamp to a string in
+    Claude Code's transcript format (``YYYY-MM-DDTHH:MM:SS.mmmZ``) so it
+    sorts lexicographically against assistant-message ``timestamp`` strings
+    from the JSONL transcript. Returns ``""`` when there is no session or
+    no recorded compaction — both are legitimate empty-state cases (every
+    real ISO timestamp sorts above the empty string, so an empty bound
+    accepts all messages, matching the pre-#111 behavior).
+
+    Closes cversek/MacEff#111: the bound tells ``get_token_info`` that any
+    assistant message older than the recorded compaction is either a
+    pre-compaction turn or a preserved-segment replay; either way, it must
+    be filtered out of the tail-scan / full-scan selectors. A wrong-type
+    ``timestamp`` on the event record is a contract violation by
+    ``append_event`` and will raise naturally — not silently swallowed.
+    """
+    if not session_id:
+        return ""
+    from ..event_queries import get_latest_compaction_event
+    event = get_latest_compaction_event(session_id)
+    if event is None:
+        return ""
+    epoch = event["timestamp"]
+    return (
+        datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.")
+        + f"{int((epoch - int(epoch)) * 1000):03d}Z"
+    )
 
 _DEFAULT_CONTEXT = 200_000
 
@@ -121,6 +154,14 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
 
         jsonl_path = get_session_transcript_path(session_id)
 
+        # Compaction-anchored lower bound on valid assistant-message timestamps.
+        # Empty string when there is no session or no compaction yet — every
+        # real ISO timestamp sorts above "", so the bound is a no-op then.
+        # Otherwise, pre-compaction turns and preserved-segment replays (which
+        # carry their ORIGINAL older timestamps) get filtered out of both
+        # scan paths below. Closes cversek/MacEff#111 and subsumes #110.
+        min_ts_iso = _compaction_lower_bound_iso(session_id)
+
         if jsonl_path and Path(jsonl_path).exists():
             try:
                 # Smart cache invalidation with real-time accuracy
@@ -153,7 +194,12 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
                         # Only scan lines AFTER the boundary (if found)
                         search_lines = lines[last_boundary_idx + 1:] if last_boundary_idx >= 0 else lines
 
-                        # Find the LAST assistant message with token data (most recent)
+                        # Find the LAST assistant message with token data (most recent).
+                        # `min_ts_iso` filter (when non-empty) rejects pre-compaction
+                        # turns and preserved-segment replays whose timestamps are
+                        # older than the recorded compaction event — closes #111
+                        # and also subsumes the #110 fix because replays carry
+                        # original older timestamps.
                         assistant_messages = []
                         for line in search_lines:
                             if not line.strip():
@@ -174,14 +220,18 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
                                     total_tokens += usage.get("input_tokens", 0)
                                     total_tokens += usage.get("output_tokens", 0)
                                     if total_tokens > 0:
-                                        assistant_messages.append(
-                                            {
-                                                "tokens": total_tokens,
-                                                "timestamp": data.get(
-                                                    "timestamp", "unknown"
-                                                ),
-                                            }
-                                        )
+                                        ts = data.get("timestamp", "unknown")
+                                        # Drop pre-compaction messages when an
+                                        # anchor exists. Empty `min_ts_iso`
+                                        # (no compaction yet) is a no-op since
+                                        # every real ISO string >= "".
+                                        if ts >= min_ts_iso:
+                                            assistant_messages.append(
+                                                {
+                                                    "tokens": total_tokens,
+                                                    "timestamp": ts,
+                                                }
+                                            )
                             except (json.JSONDecodeError, UnicodeDecodeError):
                                 continue
 
@@ -232,7 +282,12 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
                     if current_tokens == 0:
                         f.seek(0)
                         latest_tokens = 0
-                        latest_ts = ""
+                        # Initialize the running-latest timestamp to the
+                        # compaction lower bound (if any). The full-scan
+                        # `>=` test then naturally rejects any message older
+                        # than the bound — same #111 + #110 filter as the
+                        # tail-scan path.
+                        latest_ts = min_ts_iso
                         for line in f:
                             try:
                                 line = line.decode("utf-8", errors="ignore").strip()
