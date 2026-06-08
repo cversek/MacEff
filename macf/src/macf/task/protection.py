@@ -433,7 +433,14 @@ def check_grant_in_events(
             if grant_field is not None:
                 if field != grant_field:
                     return False, None
-                if grant_value is not None and value != grant_value:
+                # Normalize both sides to str() before comparing — grant_value
+                # is stored as a string by `task grant-update --value "..."`
+                # while the runtime `value` may be int (for fields the CLI
+                # int-coerces, e.g. `created_cycle`). Direct `int != str` is
+                # always True and the grant is silently rejected even when
+                # the user typed the correct value. Closes cversek/MacEff#112
+                # Bug 2.
+                if grant_value is not None and str(value) != str(grant_value):
                     return False, None
 
             return True, grant_event
