@@ -44,6 +44,30 @@ def _make_slug(title: str) -> str:
     return slug[:60]  # cap length
 
 
+def _normalize_wiki_links(raw: List[str]) -> List[str]:
+    """Normalize wiki-link tokens to canonical lowercase_underscored form.
+
+    Accepts inputs like ``"Foo Bar"``, ``"[[foo_bar]]"``, or already-canonical
+    ``"foo_bar"`` and returns ``"foo_bar"``. Strips ``[[ ]]`` wrappers (callers
+    sometimes paste in the markdown form). Lowercases, collapses whitespace
+    into underscores, drops anything outside ``[a-z0-9_-]``, drops empties,
+    and dedups while preserving first-seen order.
+    """
+    seen = set()
+    out: List[str] = []
+    for token in raw or []:
+        if not token:
+            continue
+        t = token.strip().strip("[]").strip().lower()
+        t = re.sub(r'\s+', '_', t)
+        t = re.sub(r'[^a-z0-9_\-]', '', t)
+        if not t or t in seen:
+            continue
+        seen.add(t)
+        out.append(t)
+    return out
+
+
 def create_idea(
     title: str,
     category: str,
@@ -53,6 +77,7 @@ def create_idea(
     reasoning: str = "",
     hypothesis: str = "",
     context: str = "",
+    wiki_links: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Create a new idea file and return its data."""
     ideas_dir = _get_ideas_dir()
@@ -98,7 +123,7 @@ def create_idea(
         "links": {
             "related_ideas": [],
             "related_learnings": [],
-            "wiki_links": [],
+            "wiki_links": _normalize_wiki_links(wiki_links or []),
             "promoted_to": None,
             "archived_reason": None,
         },

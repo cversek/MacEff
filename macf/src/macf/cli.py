@@ -6926,6 +6926,13 @@ def _cmd_ar_kill(args):
 def cmd_idea_create(args: argparse.Namespace) -> int:
     """Create a new idea."""
     from .ideas import create_idea
+    # Combine repeatable --wiki-link with comma-separated --wiki-links.
+    # The ideas module normalizes + dedups, so order-preservation here is
+    # mostly cosmetic: repeated flags come first, then the CSV split.
+    wiki_links_raw = list(getattr(args, "wiki_link", None) or [])
+    wiki_links_csv = getattr(args, "wiki_links", "") or ""
+    if wiki_links_csv:
+        wiki_links_raw.extend(s for s in wiki_links_csv.split(",") if s.strip())
     result = create_idea(
         title=args.title,
         category=args.category,
@@ -6935,11 +6942,14 @@ def cmd_idea_create(args: argparse.Namespace) -> int:
         reasoning=args.reasoning,
         hypothesis=args.hypothesis,
         context=args.context,
+        wiki_links=wiki_links_raw,
     )
     idea = result["idea"]
     print(f"✅ Idea #{idea['id']:03d} created: {idea['title']}")
     print(f"   Category: {idea['category']}")
     print(f"   Status: {idea['status']}")
+    if idea["links"]["wiki_links"]:
+        print(f"   Wiki-links: {', '.join(idea['links']['wiki_links'])}")
     print(f"   File: {result['path']}")
     return 0
 
@@ -8130,6 +8140,21 @@ def _build_parser() -> argparse.ArgumentParser:
     idea_create.add_argument("--reasoning", default="", help="why this might be valuable")
     idea_create.add_argument("--hypothesis", default="", help="testable prediction")
     idea_create.add_argument("--context", default="", help="what was happening when idea emerged")
+    idea_create.add_argument(
+        "--wiki-link",
+        dest="wiki_link",
+        action="append",
+        default=None,
+        metavar="CONCEPT",
+        help="add a wiki-link concept (repeatable, normalized to lowercase_underscored). e.g. --wiki-link audit_trail --wiki-link soft_delete",
+    )
+    idea_create.add_argument(
+        "--wiki-links",
+        dest="wiki_links",
+        default="",
+        metavar="A,B,C",
+        help="comma-separated wiki-links. Combines with --wiki-link if both used. e.g. --wiki-links audit_trail,soft_delete,cohort",
+    )
     idea_create.set_defaults(func=cmd_idea_create)
 
     idea_list = idea_sub.add_parser("list", help="list ideas")
