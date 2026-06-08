@@ -131,18 +131,26 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
                 with open(jsonl_path, "rb") as f:
                     file_size = f.seek(0, os.SEEK_END)
 
-                    # Quick scan: Read last 200KB for most recent token value
-                    # We scan MORE data (200KB vs 100KB) to ensure we find the
-                    # latest assistant message
-                    scan_size = min(200 * 1024, file_size)
-                    if scan_size > 0:
+                    # Adaptive tail scan for boundary detection.
+                    # Start at 200KB, expand (2x per iteration) until the
+                    # compact_boundary marker is found or the full file is
+                    # scanned. Prevents stale pre-compaction token counts
+                    # on long-lived transcripts where the boundary sits
+                    # more than 200KB from EOF.
+                    adaptive_chunk = 200 * 1024
+                    scan_size = 0
+                    last_boundary_idx = -1
+                    content = ""
+                    lines = []
+
+                    while scan_size < file_size:
+                        chunk = min(adaptive_chunk, file_size - scan_size)
+                        scan_size += chunk
                         f.seek(-scan_size, os.SEEK_END)
                         content = f.read().decode("utf-8", errors="ignore")
-
-                        # Find compact_boundary marker (compaction detection)
-                        # After compaction, pre-compaction messages have stale token counts
                         lines = content.split("\n")
-                        last_boundary_idx = -1
+
+                        # Find the LAST boundary marker in this chunk
                         for i, line in enumerate(lines):
                             if not line.strip():
                                 continue
@@ -150,6 +158,13 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
                             if '"compact_boundary"' in line or '"type":"summary"' in line:
                                 last_boundary_idx = i
 
+                        if last_boundary_idx >= 0:
+                            break
+
+                        # No boundary found yet — double chunk for next scan
+                        adaptive_chunk *= 2
+
+                    if content:
                         # Only scan lines AFTER the boundary (if found)
                         search_lines = lines[last_boundary_idx + 1:] if last_boundary_idx >= 0 else lines
 
