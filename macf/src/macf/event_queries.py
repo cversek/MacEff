@@ -28,7 +28,7 @@ def get_latest_state_snapshot() -> Optional[dict]:
         >>> if snapshot:
         ...     baseline = snapshot["data"]["event_tallies"].get("dev_drv_ended", 0)
     """
-    for event in read_events(limit=100, reverse=True):
+    for event in read_events(reverse=True):
         if event.get("event") == "state_snapshot":
             return event
     return None
@@ -423,7 +423,7 @@ def get_active_dev_drv_start(session_id: str) -> tuple[float, str]:
     session_prefix = session_id[:8] if session_id else ""
 
     # Read in reverse - find most recent started/ended first
-    for event in read_events(limit=100, reverse=True):
+    for event in read_events(reverse=True):
         event_type = event.get("event")
         data = event.get("data", {})
         event_session = data.get("session_id", "")
@@ -649,7 +649,7 @@ def get_last_session_id_from_events() -> str:
         Previous session ID string, or empty string if no migration detected
     """
     # Read most recent events first
-    for event in read_events(limit=100, reverse=True):
+    for event in read_events(reverse=True):
         if event.get("event") == "migration_detected":
             data = event.get("data", {})
             previous_session = data.get("previous_session", "")
@@ -672,7 +672,7 @@ def get_last_session_end_time_from_events() -> Optional[float]:
         Unix timestamp of last session end, or None if no session_ended events
     """
     # Read most recent events first
-    for event in read_events(limit=100, reverse=True):
+    for event in read_events(reverse=True):
         if event.get("event") == "session_ended":
             data = event.get("data", {})
             timestamp = data.get("timestamp")
