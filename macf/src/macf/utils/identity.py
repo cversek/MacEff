@@ -16,17 +16,28 @@ def get_agent_identity() -> str:
     """
     Get agent identity in format 'DisplayName@uuid_prefix'.
 
-    Resolution (highest priority first):
-    1. ``MACEFF_AGENT_NAME`` env var — explicit one-off override
-    2. ``.maceff/config.json`` ``agent_identity.calling_card`` (preferred) or
-       ``agent_identity.moniker`` (fallback) — per-project configured default
+    Both halves resolve from layered sources, and the layers have scopes:
+    per-project (``.maceff/config.json`` ``agent_identity.calling_card`` /
+    ``moniker``, ``{agent_home}/.maceff_primary_agent.id``) versus
+    host-global (``MACEFF_AGENT_NAME``, GECOS, ``~/.maceff_primary_agent.id``).
+
+    Name resolution, host-global UUID (highest priority first):
+    1. ``MACEFF_AGENT_NAME`` env var — explicit override
+    2. config ``calling_card`` (preferred) or ``moniker`` (fallback)
     3. GECOS / Directory-Services display name (spaces stripped)
     4. ``$USER`` — last-resort fallback
 
-    Layer 2 is the unified-config-layer slot added per cversek/MacEff#96
-    (Phase 1). It eliminates the prior need to bake ``MACEFF_AGENT_NAME`` into
-    a shell rc file just to override a stale GECOS reading; per-project
-    config travels with the repo.
+    Name resolution, per-project UUID: same chain but the env var drops to
+    just above ``$USER``. A host-global ``MACEFF_AGENT_NAME`` (typically baked
+    into a shell rc for the host's resident agent) must not rename a
+    per-project agent: pairing the global name with the per-project UUID
+    composes an identity that belongs to no agent. If the env var is
+    nonetheless the only name source available in per-project scope, it is
+    used and a scope-mismatch warning goes to stderr.
+
+    The config layer is the unified-config-layer slot added per
+    cversek/MacEff#96 (Phase 1) and is the right place to pin a per-project
+    agent's display name.
 
     Returns:
         str: Agent identity (e.g., 'Card@abcdef') or fallback
@@ -38,17 +49,35 @@ def get_agent_identity() -> str:
     # Get current user
     username = os.environ.get('USER', 'unknown')
 
-    # Resolve display name: env > config > GECOS > username
-    display_name = os.environ.get('MACEFF_AGENT_NAME')
-    if not display_name:
-        display_name = _get_config_identity_name()
-    if not display_name:
-        display_name = _get_gecos_name()
-    if not display_name:
-        display_name = username
+    uuid_prefix, uuid_scope = _resolve_uuid_prefix()
 
-    # Get UUID prefix
-    uuid_prefix = _get_uuid_prefix()
+    # Lazy name sources, in host-global priority order
+    candidates = [
+        ('env', lambda: os.environ.get('MACEFF_AGENT_NAME')),
+        ('config', _get_config_identity_name),
+        ('gecos', _get_gecos_name),
+    ]
+    if uuid_scope == 'project':
+        # Per-project agent: the host-global env var loses its override
+        # power and becomes the last resort before $USER.
+        candidates.append(candidates.pop(0))
+
+    display_name, name_source = username, 'user'
+    for source, getter in candidates:
+        value = getter()
+        if value:
+            display_name, name_source = value, source
+            break
+
+    if uuid_scope == 'project' and name_source == 'env':
+        print(
+            f"⚠️ MACF: identity scope mismatch — name '{display_name}' comes "
+            f"from host-global MACEFF_AGENT_NAME but UUID {uuid_prefix} comes "
+            f"from the per-project identity file; set "
+            f"agent_identity.calling_card in {{agent_home}}/.maceff/config.json "
+            f"to pin this agent's name",
+            file=sys.stderr,
+        )
 
     # Compose identity
     return f"{display_name}@{uuid_prefix}"
@@ -153,46 +182,57 @@ def _get_gecos_name() -> Optional[str]:
         return None
 
 
-def _get_uuid_prefix() -> str:
+def _resolve_uuid_prefix() -> "tuple[str, str]":
     """
-    Read UUID from agent identity file and return first 6 chars.
+    Read the agent UUID prefix together with the scope it resolved from.
 
     Resolution order:
-    1. {agent_home}/.maceff_primary_agent.id (per-project, via find_agent_home)
-    2. ~/.maceff_primary_agent.id (global fallback)
+    1. {agent_home}/.maceff_primary_agent.id when agent_home is somewhere
+       other than ~ (per-project identity, via find_agent_home) — scope
+       'project'
+    2. ~/.maceff_primary_agent.id — scope 'global'
+
+    The scope feeds get_agent_identity()'s name resolution: a per-project
+    UUID must not be paired with a host-global name override.
 
     Returns:
-        str: First 6 characters of UUID, or 'unknown' if unavailable
+        tuple[str, str]: (first 6 characters of UUID or 'unknown', scope)
     """
     try:
-        from macf.utils.paths import find_agent_home
-
-        # Priority 1: Per-project identity (agent home)
+        agent_home = None
         try:
+            from macf.utils.paths import find_agent_home
             agent_home = find_agent_home()
+        except ImportError as e:
+            print(f"⚠️ MACF: find_agent_home unavailable for identity resolution: {e}", file=sys.stderr)
+
+        # Priority 1: Per-project identity (agent home distinct from ~)
+        if agent_home is not None and agent_home != Path.home():
             per_project = agent_home / '.maceff_primary_agent.id'
-            if per_project.exists():
-                uuid_full = per_project.read_text().strip()
-                if uuid_full:
-                    return uuid_full[:6]
-        except ImportError:
-            pass  # find_agent_home not available — fall through to global
-        except (OSError, IOError) as e:
-            import sys
-            print(f"Warning: could not read per-project agent ID: {e}", file=sys.stderr)
+            try:
+                if per_project.exists():
+                    uuid_full = per_project.read_text().strip()
+                    if uuid_full:
+                        return uuid_full[:6], 'project'
+            except (OSError, IOError) as e:
+                print(f"Warning: could not read per-project agent ID: {e}", file=sys.stderr)
 
         # Priority 2: Global fallback
         uuid_file = Path.home() / '.maceff_primary_agent.id'
         if not uuid_file.exists():
-            return 'unknown'
+            return 'unknown', 'global'
 
         uuid_full = uuid_file.read_text().strip()
         if not uuid_full:
-            return 'unknown'
+            return 'unknown', 'global'
 
-        return uuid_full[:6]
+        return uuid_full[:6], 'global'
 
     except (OSError, IOError) as e:
-        import sys
         print(f"Warning: could not read agent ID: {e}", file=sys.stderr)
-        return 'unknown'
+        return 'unknown', 'global'
+
+
+def _get_uuid_prefix() -> str:
+    """Read UUID prefix from the agent identity file (scope-blind wrapper)."""
+    return _resolve_uuid_prefix()[0]
