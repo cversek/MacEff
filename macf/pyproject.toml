@@ -11,6 +11,7 @@ requires-python = ">=3.10"
 authors = [{ name = "Craig Versek" }]
 dependencies = [
     "PyYAML>=6.0.0",  # Required for task system YAML parsing
+    "pydantic>=2.0.0",  # Core: task/agent/project model validation, imported at CLI startup
 ]
 
 [project.optional-dependencies]

@@ -254,11 +254,14 @@ def mock_multiple_projects(tmp_path):
     }
     recent_file.write_text(json.dumps(recent_data) + "\n")
 
-    # Touch old file first, then recent file to ensure recent has newer mtime
-    import time
-    old_file.touch()
-    time.sleep(0.01)
-    recent_file.touch()
+    # Set explicit, well-separated mtimes so the recent file is unambiguously
+    # newer regardless of CI filesystem mtime granularity. A touch() + sleep(0.01)
+    # gap was flaky on coarse-granularity / loaded runners (files could tie or
+    # invert), making the mtime fallback select nondeterministically.
+    import os
+    now = datetime.now().timestamp()
+    os.utime(old_file, (now - 3600, now - 3600))
+    os.utime(recent_file, (now, now))
 
     yield tmp_path  # Return tmp_path for Path.home() mocking
 
