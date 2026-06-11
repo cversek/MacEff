@@ -1147,40 +1147,6 @@ def cmd_config_init(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_config_show(args: argparse.Namespace) -> int:
-    """Display current configuration."""
-    config = ConsciousnessConfig()
-
-    print(f"Agent ID: {config.agent_id}")
-    print(f"Agent Name: {config.agent_name}")
-    print(f"Agent Root: {config.agent_root}")
-
-    # Determine context
-    if config._is_container():
-        context = "container"
-    elif config._is_host():
-        context = "host"
-    else:
-        context = "fallback"
-    print(f"Detection Context: {context}")
-
-    # Load and display full config if available
-    config_data = config.load_config()
-    if config_data:
-        print("\nFull configuration:")
-        print(json.dumps(config_data, indent=2))
-    else:
-        print("\nNo .macf/config.json found (using defaults)")
-
-    # Show computed paths
-    print(f"\nComputed paths:")
-    print(f"  Checkpoints: {config.get_checkpoints_path()}")
-    print(f"  Reflections: {config.get_reflections_path()}")
-    print(f"  Logs: /tmp/macf_hooks/{config.agent_id}/{{session_id}}/")
-
-    return 0
-
-
 def cmd_claude_config_init(args: argparse.Namespace) -> int:
     """Initialize .claude.json with recommended defaults."""
     try:
@@ -7645,7 +7611,14 @@ def _build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("--force", action="store_true", help="overwrite existing config")
     init_parser.set_defaults(func=cmd_config_init)
 
-    config_sub.add_parser("show", help="show current configuration").set_defaults(func=cmd_config_show)
+    config_show = config_sub.add_parser(
+        "show", help="show resolved value + source for every registered setting"
+    )
+    config_show.add_argument(
+        "--json", dest="json_output", action="store_true",
+        help="output as JSON array",
+    )
+    config_show.set_defaults(func=cmd_config_show)
 
     # Claude Code configuration commands
     claude_config_parser = sub.add_parser("claude-config", help="Claude Code settings management")
@@ -7719,20 +7692,6 @@ def _build_parser() -> argparse.ArgumentParser:
                                help="output as JSON")
     context_parser.add_argument("--session", help="specific session ID (default: current)")
     context_parser.set_defaults(func=cmd_context)
-
-    # `macf_tools config show` — enumerate every unified-config setting +
-    # its resolved value + the source label (env / config / default). Closes
-    # cversek/MacEff#96 Phases 2-4 (visible CLI portion).
-    config_parser = sub.add_parser("config", help="unified config layer operations")
-    config_sub = config_parser.add_subparsers(dest="config_cmd")
-    config_show = config_sub.add_parser(
-        "show", help="show resolved value + source for every registered setting"
-    )
-    config_show.add_argument(
-        "--json", dest="json_output", action="store_true",
-        help="output as JSON array",
-    )
-    config_show.set_defaults(func=cmd_config_show)
 
     # Statusline command with subcommands
     statusline_parser = sub.add_parser("statusline", help="statusline operations for Claude Code")
