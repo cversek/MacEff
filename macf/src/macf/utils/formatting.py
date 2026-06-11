@@ -10,8 +10,9 @@ import sys
 try:
     from importlib.metadata import version
     __version__ = version("macf")
-except (ImportError, Exception) as e:
+except Exception as e:
     __version__ = "0.0.0-dev"  # Fallback for development
+    print(f"⚠️ MACF: macf package version unavailable, using {__version__}: {e}", file=sys.stderr)
 
 from .environment import get_rich_environment_string
 
@@ -79,17 +80,20 @@ def get_claude_code_version() -> str:
             # Find the claude script path (typically argv[1] after node)
             for arg in args:
                 arg_str = arg.decode('utf-8', errors='ignore')
+                # The substring test also matches our own hooks under
+                # ~/.claude/ (e.g. .claude/hooks/session_start.py). The CC CLI
+                # is a node bundle, never a Python script — skip .py candidates,
+                # and NEVER exec a matched file: when the parent was a hook that
+                # shells back into macf_tools, exec'ing it with --version created
+                # a self-sustaining fork loop (orphaned grandchildren survive the
+                # subprocess timeout). Content extraction only; Strategies 2-4
+                # remain as fallbacks.
+                if arg_str.endswith('.py'):
+                    continue
                 if 'claude' in arg_str.lower() and os.path.isfile(arg_str):
                     version = _extract_version_from_script(arg_str)
                     if version:
                         return version
-                    # Try running the specific binary
-                    result = subprocess.run(
-                        [arg_str, "--version"],
-                        capture_output=True, text=True, timeout=5
-                    )
-                    if result.returncode == 0:
-                        return _parse_version(result.stdout)
         except (OSError, subprocess.SubprocessError) as e:
             print(f"⚠️ MACF: Linux /proc-based claude version detection failed: {e}", file=sys.stderr)
 
