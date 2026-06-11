@@ -43,6 +43,11 @@ def _get_session_id_from_mtime() -> str:
     This is the legacy approach, kept as fallback for first run
     before any session_started events exist.
 
+    Selection is order-independent: among the candidate JSONL files it picks
+    the globally newest by mtime, with the filename as a tiebreaker, so the
+    result does not depend on glob / iterdir ordering (which is
+    filesystem-dependent and was a source of flaky behaviour).
+
     Returns:
         Session ID string or "unknown" if not found
     """
@@ -51,30 +56,26 @@ def _get_session_id_from_mtime() -> str:
     if not projects_dir.exists():
         return "unknown"
 
-    # Find project directory using current working directory name
-    project_name = find_project_root().name
-
-    # Try exact match first
-    for project_dir in projects_dir.glob(f"*{project_name}*"):
-        jsonl_files = sorted(
-            project_dir.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True
-        )
-        if jsonl_files:
-            # Extract session ID from filename
-            newest = jsonl_files[0]
-            return newest.stem
-
-    # Fallback: find newest JSONL across all projects
-    all_jsonl = []
-    for project_dir in projects_dir.iterdir():
-        if project_dir.is_dir():
-            all_jsonl.extend(project_dir.glob("*.jsonl"))
-
-    if all_jsonl:
-        newest = max(all_jsonl, key=lambda p: p.stat().st_mtime)
+    def _newest_stem(dirs) -> Optional[str]:
+        candidates = []
+        for project_dir in dirs:
+            if project_dir.is_dir():
+                candidates.extend(project_dir.glob("*.jsonl"))
+        if not candidates:
+            return None
+        # Global newest by mtime; filename tiebreaks equal mtimes so the
+        # result is deterministic regardless of iteration order.
+        newest = max(candidates, key=lambda p: (p.stat().st_mtime, p.name))
         return newest.stem
 
-    return "unknown"
+    # Prefer project directories matching the current project name; if none
+    # of them contain a JSONL, fall back to all projects.
+    project_name = find_project_root().name
+    return (
+        _newest_stem(projects_dir.glob(f"*{project_name}*"))
+        or _newest_stem(projects_dir.iterdir())
+        or "unknown"
+    )
 
 def get_last_user_prompt_uuid(session_id: Optional[str] = None) -> Optional[str]:
     """
