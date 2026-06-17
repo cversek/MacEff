@@ -99,7 +99,13 @@ class TestSessionIDExtraction:
         - Use file modification time to determine current session
         - Handle files with different modification times
         """
-        with patch('pathlib.Path.home', return_value=mock_multiple_projects):
+        with patch('pathlib.Path.home', return_value=mock_multiple_projects), \
+             patch('macf.utils.session.find_project_root') as mock_root:
+            # Pin the project name to one that does not match the fixture's
+            # project dirs, so selection is deterministic and hermetic against
+            # the real cwd. The function picks the globally newest by mtime
+            # regardless of glob/iterdir order.
+            mock_root.return_value.name = "macf-test-cwd"
             session_id = get_current_session_id()
 
         assert session_id == "most-recent-session-uuid"
