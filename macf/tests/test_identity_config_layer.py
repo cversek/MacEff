@@ -69,11 +69,16 @@ def test_config_identity_returns_none_when_values_empty(tmp_path):
 # ---------- get_agent_identity resolution chain ----------
 
 def test_env_var_still_takes_precedence_over_config(tmp_path, monkeypatch):
-    """MACEFF_AGENT_NAME overrides config — explicit one-off wins."""
+    """MACEFF_AGENT_NAME overrides config — explicit one-off wins (global scope).
+
+    In per-project UUID scope the env var now ranks below config and GECOS
+    (scope coherence — see test_agent_identity.py); this test pins the
+    surviving global-scope behavior.
+    """
     home = _write_config(tmp_path, {"calling_card": "Card"})
     monkeypatch.setenv("MACEFF_AGENT_NAME", "ExplicitOverride")
     with patch("macf.utils.paths.find_agent_home", return_value=home), \
-         patch("macf.utils.identity._get_uuid_prefix", return_value="abcdef"):
+         patch("macf.utils.identity._resolve_uuid_prefix", return_value=("abcdef", "global")):
         assert get_agent_identity() == "ExplicitOverride@abcdef"
 
 
@@ -84,7 +89,7 @@ def test_config_wins_over_gecos_when_env_unset(tmp_path, monkeypatch):
     monkeypatch.delenv("MACEFF_AGENT_NAME", raising=False)
     with patch("macf.utils.paths.find_agent_home", return_value=home), \
          patch("macf.utils.identity._get_gecos_name", return_value="GecosName"), \
-         patch("macf.utils.identity._get_uuid_prefix", return_value="abcdef"):
+         patch("macf.utils.identity._resolve_uuid_prefix", return_value=("abcdef", "global")):
         assert get_agent_identity() == "Card@abcdef"
 
 
@@ -93,5 +98,5 @@ def test_falls_through_to_gecos_when_no_config(tmp_path, monkeypatch):
     monkeypatch.delenv("MACEFF_AGENT_NAME", raising=False)
     with patch("macf.utils.paths.find_agent_home", return_value=tmp_path), \
          patch("macf.utils.identity._get_gecos_name", return_value="GecosName"), \
-         patch("macf.utils.identity._get_uuid_prefix", return_value="abcdef"):
+         patch("macf.utils.identity._resolve_uuid_prefix", return_value=("abcdef", "global")):
         assert get_agent_identity() == "GecosName@abcdef"
