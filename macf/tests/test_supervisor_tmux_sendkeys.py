@@ -155,3 +155,56 @@ def test_send_keys_no_enter(monkeypatch):
     assert rc == 0
     assert len(calls) == 1  # no Enter press
     assert calls[0][-3:] == ["-l", "--", "hello world"]
+
+
+# --- session spec resolution (the resume-latest continuity fix) -----------
+
+def test_resolve_spec_none_does_not_pin():
+    assert sup._resolve_session_spec(None) is None
+    assert sup._resolve_session_spec("") is None
+
+
+def test_resolve_spec_new_mints_uuid():
+    sid = sup._resolve_session_spec("new")
+    assert sup._UUID_RE.match(sid)
+
+
+def test_resolve_spec_explicit_uuid_passthrough():
+    u = "59ae6fca-58d3-4812-92fa-27932564b231"
+    assert sup._resolve_session_spec(u) == u
+
+
+def test_resolve_spec_latest_resumes_existing(monkeypatch):
+    # 'latest' must return the most-recent transcript id (so the launch RESUMES
+    # the user's current conversation instead of starting fresh).
+    monkeypatch.setattr(sup, "_latest_session_id",
+                        lambda: "59ae6fca-58d3-4812-92fa-27932564b231")
+    assert sup._resolve_session_spec("latest") == "59ae6fca-58d3-4812-92fa-27932564b231"
+
+
+def test_resolve_spec_latest_falls_back_to_new(monkeypatch):
+    monkeypatch.setattr(sup, "_latest_session_id", lambda: None)
+    sid = sup._resolve_session_spec("latest")
+    assert sup._UUID_RE.match(sid)  # minted fresh when no transcript exists
+
+
+def test_latest_session_id_picks_newest(tmp_path, monkeypatch):
+    import os
+    proj = tmp_path / ".claude" / "projects" / "encoded-proj"
+    proj.mkdir(parents=True)
+    older = proj / "11111111-1111-1111-1111-111111111111.jsonl"
+    newer = proj / "22222222-2222-2222-2222-222222222222.jsonl"
+    older.write_text("{}")
+    newer.write_text("{}")
+    os.utime(older, (1000, 1000))
+    os.utime(newer, (2000, 2000))
+    # a non-uuid file must be ignored
+    (proj / "notes.jsonl").write_text("{}")
+    os.utime(proj / "notes.jsonl", (3000, 3000))
+    monkeypatch.setattr(sup.Path, "home", staticmethod(lambda: tmp_path))
+    assert sup._latest_session_id() == "22222222-2222-2222-2222-222222222222"
+
+
+def test_latest_session_id_none_when_empty(tmp_path, monkeypatch):
+    monkeypatch.setattr(sup.Path, "home", staticmethod(lambda: tmp_path))
+    assert sup._latest_session_id() is None

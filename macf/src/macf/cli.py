@@ -7275,7 +7275,8 @@ def _cmd_ar_launch(args):
         return 1
     return launch_in_terminal(cmd, name=args.name, restart_delay=args.delay,
                               terminal=getattr(args, 'terminal', 'auto'),
-                              use_tmux=not getattr(args, 'no_tmux', False))
+                              use_tmux=not getattr(args, 'no_tmux', False),
+                              session_spec=getattr(args, 'session_id', None))
 
 def _cmd_ar_list(args=None):
     from .supervisor import list_processes
@@ -8488,6 +8489,11 @@ def _build_parser() -> argparse.ArgumentParser:
                            help="terminal app (default: auto-detect)")
     ar_launch.add_argument("--no-tmux", action="store_true",
                            help="do not back the session with tmux (disables send-keys)")
+    ar_launch.add_argument("--session-id", default=None,
+                           help="pin a session: 'latest' (resume most recent CC session, like -c), "
+                                "'new' (fresh), or an explicit UUID. Exported as MACF_SESSION_ID "
+                                "for the command to forward (e.g. claude --session-id). "
+                                "Default: unset (command resumes on its own).")
     ar_launch.add_argument("cmd", nargs=argparse.REMAINDER, help="command to supervise (after --)")
     ar_launch.set_defaults(func=lambda args: _cmd_ar_launch(args))
 
