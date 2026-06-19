@@ -332,11 +332,13 @@ def launch_in_terminal(cmd_args: list, name: str = "",
             live child can be driven via `auto-restart send-keys`. Degrades
             gracefully (direct launch, no send-keys) when tmux is absent.
         session_spec: Session id to pin: None (default - do not pin; the
-            command resumes on its own, e.g. its own `-c`), "latest" (resume
-            the most recent CC transcript - restores `-c` continuity while
-            yielding an id to name tmux after), "new" (a fresh session), or an
-            explicit UUID. When set it is exported as MACF_SESSION_ID for the
-            command to forward via `claude --session-id`.
+            command resumes on its own, e.g. its own `-c`), "latest" (the most
+            recent CC transcript id), "new" (a fresh session), or an explicit
+            UUID. When set it is exported as MACF_SESSION_ID for the command to
+            forward via `claude --session-id`. CAVEAT: CC refuses `--session-id`
+            for a session that is currently LIVE ("already in use"), so do not
+            pin the conversation you are still in - use None (the command's own
+            `-c`) for that case.
 
     Returns:
         Supervisor PID

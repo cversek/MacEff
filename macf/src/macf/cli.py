@@ -8490,10 +8490,12 @@ def _build_parser() -> argparse.ArgumentParser:
     ar_launch.add_argument("--no-tmux", action="store_true",
                            help="do not back the session with tmux (disables send-keys)")
     ar_launch.add_argument("--session-id", default=None,
-                           help="pin a session: 'latest' (resume most recent CC session, like -c), "
-                                "'new' (fresh), or an explicit UUID. Exported as MACF_SESSION_ID "
-                                "for the command to forward (e.g. claude --session-id). "
-                                "Default: unset (command resumes on its own).")
+                           help="pin a session: 'latest' (most recent CC session), 'new' (fresh), "
+                                "or an explicit UUID. Exported as MACF_SESSION_ID for the command "
+                                "to forward (e.g. claude --session-id). NOTE: CC refuses to attach "
+                                "to a session that is still LIVE ('already in use'), so do not pin "
+                                "the conversation you are currently in - prefer the command's own "
+                                "`-c` for that. Default: unset (command resumes on its own).")
     ar_launch.add_argument("cmd", nargs=argparse.REMAINDER, help="command to supervise (after --)")
     ar_launch.set_defaults(func=lambda args: _cmd_ar_launch(args))
 
