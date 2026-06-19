@@ -21,6 +21,8 @@ Architecture:
 import json
 import os
 import platform
+import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -91,6 +93,83 @@ def _format_duration(seconds: float) -> str:
     return f"{days}d{remaining_h}h"
 
 
+# Linux terminal emulators we know how to drive, in preference order.
+# x-terminal-emulator (the Debian "alternatives" symlink) is tried LAST as a
+# generic fallback and is resolved to its concrete target before dispatch.
+_LINUX_TERMINALS = [
+    "gnome-terminal", "ptyxis", "kgx", "tilix", "konsole",
+    "lxterminal", "foot", "xterm", "x-terminal-emulator",
+]
+
+
+def _shell_command_string(cmd: list) -> str:
+    """Render *cmd* (an argv list) as a single POSIX-shell-safe string.
+
+    For the consumers that re-parse their command argument through a shell
+    (macOS AppleScript ``do script`` / iTerm2 ``command``, and legacy
+    ``lxterminal -e``). ``shlex.quote`` keeps arguments that contain spaces or
+    metacharacters intact, which the previous naive backslash/quote escaping
+    did not.
+    """
+    return " ".join(shlex.quote(arg) for arg in cmd)
+
+
+def _applescript_quote(s: str) -> str:
+    """Escape *s* for embedding inside an AppleScript double-quoted literal."""
+    return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _terminal_command_form(base: str, term_path: str, cmd: list) -> list:
+    """Pure dispatch: given a terminal's *base* name and the *term_path* to
+    invoke, return the launch argv for *cmd* (an argv list). No filesystem or
+    PATH access, so this is deterministically unit-testable.
+
+    Cardinal rule: pass *cmd* as SEPARATE argv elements for any terminal that
+    execs its command argument directly. Collapsing the command into one
+    ``" ".join(...)`` token makes argv-respecting terminals (gnome-terminal,
+    ptyxis, konsole) try to exec the whole line as a single filename, e.g.
+    ``Failed to find executable 'python3 -m macf.supervisor ...': No such
+    file or directory``. Only legacy terminals whose flag genuinely takes one
+    shell-reparsed string (lxterminal) get a quoted join.
+    """
+    if base.endswith(".wrapper"):
+        base = base[: -len(".wrapper")]
+
+    # `--` separator camp: program + args follow a literal `--`.
+    if base in ("gnome-terminal", "ptyxis", "kgx", "tilix"):
+        return [term_path, "--", *cmd]
+    # `-e` + separate-argv camp: -e consumes the remaining argv tokens.
+    if base in ("konsole", "xterm"):
+        return [term_path, "-e", *cmd]
+    # foot takes the command directly, with no separator flag.
+    if base == "foot":
+        return [term_path, *cmd]
+    # Legacy single-string camp: -e wants one shell-reparsed string.
+    if base == "lxterminal":
+        return [term_path, "-e", _shell_command_string(cmd)]
+    # Unknown terminal: the `--` convention is the most widely supported
+    # argv-safe form among modern emulators.
+    return [term_path, "--", *cmd]
+
+
+def _terminal_argv(term: str, cmd: list) -> list:
+    """Build the argv to launch *cmd* in Linux terminal *term* (a bare command
+    name or a path).
+
+    *term* is resolved through PATH (``shutil.which``) and then symlinks
+    (``os.path.realpath``) so that (a) a bare name like ``"ptyxis"`` becomes a
+    real executable path rather than a bogus cwd-relative one, and (b)
+    ``x-terminal-emulator`` -- the Debian "alternatives" symlink, which on
+    GNOME hosts points at ptyxis -- resolves to the concrete terminal, so its
+    native invocation is used instead of the lossy ``-e <string>``
+    compatibility interface that caused the original bug.
+    """
+    resolved = shutil.which(term) or term
+    real = os.path.realpath(resolved)
+    base = os.path.basename(real)
+    return _terminal_command_form(base, real, cmd)
+
+
 def launch_in_terminal(cmd_args: list, name: str = "",
                        restart_delay: int = 5,
                        terminal: str = "auto") -> int:
@@ -101,7 +180,8 @@ def launch_in_terminal(cmd_args: list, name: str = "",
         name: Optional display name (defaults to command basename)
         restart_delay: Seconds between restarts
         terminal: Terminal app to use: "auto", "terminal", "iterm2",
-            "gnome-terminal", "lxterminal", "foot", "xterm", "konsole", "x-terminal-emulator"
+            "gnome-terminal", "ptyxis", "kgx", "tilix", "lxterminal", "foot",
+            "xterm", "konsole", "x-terminal-emulator"
 
     Returns:
         Supervisor PID
@@ -122,10 +202,9 @@ def launch_in_terminal(cmd_args: list, name: str = "",
         "--",
     ] + cmd_args
 
-    escaped_cmd = " ".join(
-        arg.replace("\\", "\\\\").replace('"', '\\"')
-        for arg in supervisor_cmd
-    )
+    # macOS terminals run their command argument through a shell, so build a
+    # shell-safe string and then escape it for the AppleScript literal.
+    escaped_cmd = _applescript_quote(_shell_command_string(supervisor_cmd))
 
     system = platform.system()
     if system == "Darwin":
@@ -161,18 +240,19 @@ def launch_in_terminal(cmd_args: list, name: str = "",
         time.sleep(1.5)
 
     elif system == "Linux":
-        # Linux: try common terminal emulators
-        for term in ["gnome-terminal", "lxterminal", "foot", "xterm", "konsole", "x-terminal-emulator"]:
+        # Linux: find the first available terminal emulator and launch the
+        # supervisor in it, passing the command as separate argv tokens (see
+        # _terminal_argv) so argv-respecting terminals do not mis-exec the
+        # whole command line as a single filename.
+        candidates = [terminal] if terminal not in ("auto", "") else _LINUX_TERMINALS
+        for term in candidates:
             if subprocess.run(["which", term], capture_output=True).returncode == 0:
-                if term == "gnome-terminal":
-                    subprocess.Popen([term, "--", *supervisor_cmd])
-                else:
-                    subprocess.Popen([term, "-e", " ".join(supervisor_cmd)])
+                subprocess.Popen(_terminal_argv(term, supervisor_cmd))
                 time.sleep(1.5)
                 break
         else:
             print("No terminal emulator found. Run directly:", file=sys.stderr)
-            print(f"  {' '.join(supervisor_cmd)}", file=sys.stderr)
+            print(f"  {_shell_command_string(supervisor_cmd)}", file=sys.stderr)
             return 1
     else:
         print(f"Unsupported platform: {system}", file=sys.stderr)

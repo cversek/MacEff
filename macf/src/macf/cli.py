@@ -8473,7 +8473,9 @@ def _build_parser() -> argparse.ArgumentParser:
     ar_launch.add_argument("--name", "-n", default="", help="display name (default: command basename)")
     ar_launch.add_argument("--delay", "-d", type=int, default=5, help="restart delay in seconds (default: 5)")
     ar_launch.add_argument("--terminal", "-t", default="auto",
-                           choices=["auto", "terminal", "iterm2", "gnome-terminal", "xterm", "konsole"],
+                           choices=["auto", "terminal", "iterm2", "gnome-terminal",
+                                    "ptyxis", "kgx", "tilix", "lxterminal", "foot",
+                                    "xterm", "konsole", "x-terminal-emulator"],
                            help="terminal app (default: auto-detect)")
     ar_launch.add_argument("cmd", nargs=argparse.REMAINDER, help="command to supervise (after --)")
     ar_launch.set_defaults(func=lambda args: _cmd_ar_launch(args))
