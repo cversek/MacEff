@@ -216,3 +216,89 @@ def test_helper_returns_empty_when_no_compaction_event():
     with patch("macf.event_queries.get_latest_compaction_event",
                return_value=None):
         assert _compaction_lower_bound_iso("test-session-id-deadbeef") == ""
+
+
+# ---------------------------------------------------------------------------
+# cversek/MacEff#118 — read-before-write transient (pre_compact anchor)
+# ---------------------------------------------------------------------------
+
+
+def _precompact_event(session_id: str, iso: str) -> dict:
+    """Fake ``pre_compact`` event-record shape (emitted BEFORE compaction)."""
+    return {
+        "event": "pre_compact",
+        "timestamp": _epoch_for(iso),
+        "breadcrumb": "s_test/c_test/g_test/p_test/t_test",
+        "data": {
+            "session_id": session_id,
+            "cycle": 100,
+            "tokens_used": 140_000,
+            "cl_level": 30,
+            "source": "auto",
+        },
+        "hook_input": {},
+    }
+
+
+def test_precompact_anchors_lower_bound_in_read_before_write_transient(patched_session):
+    """#118: deterministic offline repro of the post-compaction transient.
+
+    Immediately after compaction, SessionStart has NOT yet written
+    ``compaction_detected`` (returns None here), but the PreCompact hook
+    already wrote ``pre_compact`` BEFORE compaction. The transcript holds the
+    compact_boundary line and preserved-segment replays (original older
+    timestamps, high token counts) after it, with no post-boundary in-cycle
+    message yet. Without the pre_compact anchor the replays leak a stale high
+    count; with it, they are rejected and the reader returns the conservative
+    estimate.
+    """
+    precompact_iso = "2026-06-08T10:05:00.000Z"
+    replay_iso = "2026-05-01T08:00:00.000Z"  # original pre-compaction timestamps
+
+    lines = [
+        json.dumps({
+            "type": "summary",
+            "compact_boundary": True,
+            "timestamp": "2026-06-08T10:04:59.000Z",
+            "preservedSegment": {},
+        }),
+        _assistant_event(replay_iso, 900_000),  # preserved replay after boundary
+        _assistant_event(replay_iso, 880_000),  # another replay
+    ]
+    _write_jsonl(patched_session, lines)
+
+    fake_precompact = _precompact_event("test-session-id-deadbeef", precompact_iso)
+    with patch("macf.event_queries.get_latest_compaction_event", return_value=None), \
+         patch("macf.event_queries.get_latest_precompact_event",
+               return_value=fake_precompact):
+        result = get_token_info()
+
+    # Replays rejected by the pre_compact bound → conservative estimate,
+    # NOT the stale 900k/880k pre-compaction tally.
+    assert result["tokens_used"] not in (900_000, 880_000)
+    assert result["source"] == "post_compaction_estimate"
+
+
+def test_lower_bound_takes_later_of_compaction_and_precompact():
+    """#118: the bound is the LATER of compaction_detected and pre_compact,
+    whichever is present and newer — so the transient (pre_compact only) and
+    the steady state (compaction_detected) are both covered."""
+    from macf.utils.tokens import _compaction_lower_bound_iso
+
+    # pre_compact newer than compaction_detected → pre_compact wins
+    older = _compaction_event("test-session-id-deadbeef", "2026-06-08T10:00:00.000Z")
+    newer = _precompact_event("test-session-id-deadbeef", "2026-06-08T10:05:00.000Z")
+    with patch("macf.event_queries.get_latest_compaction_event", return_value=older), \
+         patch("macf.event_queries.get_latest_precompact_event", return_value=newer):
+        assert _compaction_lower_bound_iso("test-session-id-deadbeef").startswith(
+            "2026-06-08T10:05:00"
+        )
+
+    # compaction_detected newer than pre_compact → compaction_detected wins
+    old_pre = _precompact_event("test-session-id-deadbeef", "2026-06-08T10:00:00.000Z")
+    new_comp = _compaction_event("test-session-id-deadbeef", "2026-06-08T10:05:00.000Z")
+    with patch("macf.event_queries.get_latest_compaction_event", return_value=new_comp), \
+         patch("macf.event_queries.get_latest_precompact_event", return_value=old_pre):
+        assert _compaction_lower_bound_iso("test-session-id-deadbeef").startswith(
+            "2026-06-08T10:05:00"
+        )
