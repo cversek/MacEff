@@ -1820,6 +1820,51 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_agent_init_auth_token(args: argparse.Namespace) -> int:
+    """Generate and install the AUTO_MODE auth token on a host.
+
+    Writes a random ``auto_mode_auth_token`` into
+    ``<agent_home>/.maceff/settings.json`` (preserving existing keys). This is
+    the sanctioned bootstrap for bare-metal / migrated installs where
+    ``docker/scripts/start.py`` never ran (cversek/MacEff#115). Refuses to
+    overwrite an existing token unless ``--force``.
+    """
+    import secrets
+
+    agent_home = find_agent_home()
+    maceff_dir = agent_home / ".maceff"
+    maceff_dir.mkdir(parents=True, exist_ok=True)
+    settings_path = maceff_dir / "settings.json"
+
+    settings = {}
+    if settings_path.exists():
+        try:
+            settings = json.loads(settings_path.read_text())
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"❌ Could not read existing {settings_path}: {e}")
+            return 1
+
+    if settings.get("auto_mode_auth_token") and not getattr(args, "force", False):
+        print(f"⚠️ An auth token is already configured in {settings_path}.")
+        print("   Re-run with --force to regenerate (invalidates the old one).")
+        return 1
+
+    token = secrets.token_hex(16)
+    settings["auto_mode_auth_token"] = token
+    settings_path.write_text(json.dumps(settings, indent=2) + "\n")
+
+    print(f"✅ AUTO_MODE auth token written to {settings_path}")
+    print("   Activate with:")
+    print(f"     macf_tools mode set AUTO_MODE --auth-token '{token}'")
+    print(
+        "\n   Security note: on a single-user host this token is a coordination /\n"
+        "   accidental-self-auth gate, not a hard boundary — a same-user agent can\n"
+        "   read or rewrite this file. True enforcement requires the external harness\n"
+        "   classifier or a multi-user / file-permission setup."
+    )
+    return 0
+
+
 def cmd_agent_set_github(args: argparse.Namespace) -> int:
     """Set per-project GitHub identity via GH_TOKEN in settings.local.json."""
     username = args.username
@@ -7634,6 +7679,17 @@ def _build_parser() -> argparse.ArgumentParser:
     agent_init_parser = agent_sub.add_parser("init", help="initialize agent with PA preamble")
     agent_init_parser.add_argument("-y", "--yes", action="store_true", help="skip confirmation prompt")
     agent_init_parser.set_defaults(func=cmd_agent_init)
+
+    # AUTO_MODE auth token bootstrap (host / non-Docker installs) — #115
+    auth_token_parser = agent_sub.add_parser(
+        "init-auth-token",
+        help="generate + install the AUTO_MODE auth token (host bootstrap)",
+    )
+    auth_token_parser.add_argument(
+        "--force", action="store_true",
+        help="overwrite an existing token (invalidates the old one)",
+    )
+    auth_token_parser.set_defaults(func=cmd_agent_init_auth_token)
 
     # Agent backup subcommands
     backup_parser = agent_sub.add_parser("backup", help="consciousness backup operations")
