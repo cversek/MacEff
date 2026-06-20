@@ -84,22 +84,39 @@ def set_auto_mode(
         MANUAL_MODE can always be set without auth.
     """
     try:
-        # Validate auth token for AUTO_MODE activation
+        # Validate auth token for AUTO_MODE activation.
+        # FAIL CLOSED (cversek/MacEff#115): a configured, matching token is
+        # required. The old behaviour skipped validation entirely when the
+        # settings file was absent or the token was empty, which let ANY
+        # non-empty string activate AUTO_MODE on a host that never ran the
+        # docker bootstrap. The token is a coordination / accidental-self-auth
+        # gate — on a single-user host it is not a hard boundary (a same-user
+        # agent can rewrite the file), so true enforcement still depends on the
+        # external harness classifier — but it must at least not accept an
+        # arbitrary string.
         if enabled and auth_token is not None:
-            # Load expected token from settings
             if agent_home is None:
                 agent_home = find_agent_home()
             settings_path = agent_home / ".maceff" / "settings.json"
 
+            expected_token = None
             if settings_path.exists():
-                with open(settings_path, 'r') as f:
-                    settings = json.load(f)
-                expected_token = settings.get('auto_mode_auth_token')
+                try:
+                    with open(settings_path, 'r') as f:
+                        settings = json.load(f)
+                    expected_token = settings.get('auto_mode_auth_token')
+                except (OSError, json.JSONDecodeError) as e:
+                    return (False, f"Could not read auth token settings: {e}")
 
-                if expected_token and auth_token != expected_token:
-                    return (False, "Invalid auth token")
-            # If no settings file or no token configured, skip validation
-            # (allows initial setup before tokens exist)
+            if not expected_token:
+                return (
+                    False,
+                    "AUTO_MODE auth token not configured. Run "
+                    "`macf_tools agent init-auth-token` to generate one "
+                    f"(writes {settings_path}).",
+                )
+            if auth_token != expected_token:
+                return (False, "Invalid auth token")
 
         # Log mode change event
         try:
