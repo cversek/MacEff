@@ -417,6 +417,31 @@ def get_delegations_this_drive_from_events(session_id: str) -> List[Dict]:
     return delegations
 
 
+def _latest_session_event(event_type: str, session_id: str) -> Optional[dict]:
+    """Most recent event of ``event_type`` whose ``data.session_id`` matches.
+
+    Shared by the compaction-anchor queries below. Matching uses the first 8
+    characters of ``session_id`` (same prefix convention as
+    ``get_active_dev_drv_start``) so a different session's events do not bound
+    the current session's reads.
+
+    Returns the full event record dict (``timestamp``, ``event``, ``data``,
+    ``breadcrumb``) or ``None`` if no matching event exists.
+    """
+    session_prefix = session_id[:8] if session_id else ""
+    if not session_prefix:
+        return None
+
+    for event in read_events(reverse=True):
+        if event.get("event") != event_type:
+            continue
+        event_session = event.get("data", {}).get("session_id", "")
+        if not event_session or not event_session.startswith(session_prefix):
+            continue
+        return event
+    return None
+
+
 def get_latest_compaction_event(session_id: str) -> Optional[dict]:
     """Most recent ``compaction_detected`` event for a given session.
 
@@ -432,28 +457,38 @@ def get_latest_compaction_event(session_id: str) -> Optional[dict]:
     boundary or a preserved-segment replay with its original older timestamp)
     and must be filtered out.
 
+    NOTE: ``compaction_detected`` is written by SessionStart a few seconds AFTER
+    the compaction boundary. For the read-before-write transient immediately
+    after compaction, pair this with ``get_latest_precompact_event`` (emitted
+    BEFORE compaction) and take the later timestamp — see
+    ``tokens._compaction_lower_bound_iso`` (cversek/MacEff#118).
+
     Args:
-        session_id: Session ID to filter events. Matching uses the first 8
-                    characters (same prefix convention as
-                    ``get_active_dev_drv_start``). A different session's
-                    compaction does NOT bound the current session's reads.
+        session_id: Session ID to filter events (first-8-char prefix match).
 
     Returns:
-        The full event record dict (with ``timestamp``, ``event``, ``data``,
-        ``breadcrumb`` keys) or ``None`` if no matching event exists.
+        The full event record dict or ``None`` if no matching event exists.
     """
-    session_prefix = session_id[:8] if session_id else ""
-    if not session_prefix:
-        return None
+    return _latest_session_event("compaction_detected", session_id)
 
-    for event in read_events(reverse=True):
-        if event.get("event") != "compaction_detected":
-            continue
-        event_session = event.get("data", {}).get("session_id", "")
-        if not event_session or not event_session.startswith(session_prefix):
-            continue
-        return event
-    return None
+
+def get_latest_precompact_event(session_id: str) -> Optional[dict]:
+    """Most recent ``pre_compact`` event for a given session.
+
+    The PreCompact hook emits ``pre_compact`` immediately BEFORE compaction, so
+    it is already in the event log during the transient window after compaction
+    but before SessionStart writes ``compaction_detected``. Its timestamp (~the
+    compaction moment) is a valid lower bound on post-compaction assistant
+    timestamps, which closes the read-before-write race in that window
+    (cversek/MacEff#118).
+
+    Args:
+        session_id: Session ID to filter events (first-8-char prefix match).
+
+    Returns:
+        The full event record dict or ``None`` if no matching event exists.
+    """
+    return _latest_session_event("pre_compact", session_id)
 
 
 def get_active_dev_drv_start(session_id: str) -> tuple[float, str]:

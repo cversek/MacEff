@@ -32,14 +32,33 @@ def _compaction_lower_bound_iso(session_id: str) -> str:
     be filtered out of the tail-scan / full-scan selectors. A wrong-type
     ``timestamp`` on the event record is a contract violation by
     ``append_event`` and will raise naturally — not silently swallowed.
+
+    Closes cversek/MacEff#118: takes the LATER of two compaction anchors.
+    ``compaction_detected`` is written by SessionStart ~3-4s AFTER the
+    boundary; ``pre_compact`` is written by the PreCompact hook BEFORE
+    compaction. During the read-before-write transient (compaction done but
+    ``compaction_detected`` not yet emitted), only ``pre_compact`` is present —
+    using its timestamp as the lower bound rejects the pre-compaction tail and
+    preserved-segment replays that would otherwise leak a stale high token
+    count into the CL meter for a few seconds.
     """
     if not session_id:
         return ""
-    from ..event_queries import get_latest_compaction_event
-    event = get_latest_compaction_event(session_id)
-    if event is None:
+    from ..event_queries import (
+        get_latest_compaction_event,
+        get_latest_precompact_event,
+    )
+    epochs = [
+        ev["timestamp"]
+        for ev in (
+            get_latest_compaction_event(session_id),
+            get_latest_precompact_event(session_id),
+        )
+        if ev is not None
+    ]
+    if not epochs:
         return ""
-    epoch = event["timestamp"]
+    epoch = max(epochs)
     return (
         datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.")
         + f"{int((epoch - int(epoch)) * 1000):03d}Z"
@@ -264,14 +283,21 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
                             current_tokens = latest["tokens"]
                             last_timestamp = latest["timestamp"]
                         elif last_boundary_idx >= 0:
-                            # Compaction detected but no post-boundary messages yet
-                            # Return conservative estimate (~30% usage)
+                            # Compaction detected but no post-boundary in-cycle
+                            # message yet. Return a conservative estimate scaled
+                            # to the ACTUAL context window: the fixed 60000 was
+                            # 200K-calibrated, so its hardcoded 30%/CL70 were
+                            # wrong on 1M (60000 is ~6% there). Derive the bands
+                            # from max_tokens so the CL meter is sane on any
+                            # window. (cversek/MacEff#118)
+                            est_tokens = min(60000, max_tokens)
+                            pct_used = round(est_tokens / max_tokens * 100, 1)
                             return {
-                                "tokens_used": 60000,
-                                "tokens_remaining": max_tokens - 60000,
-                                "percentage_used": 30.0,
-                                "percentage_remaining": 70.0,
-                                "cl_level": 70,
+                                "tokens_used": est_tokens,
+                                "tokens_remaining": max_tokens - est_tokens,
+                                "percentage_used": pct_used,
+                                "percentage_remaining": round(100 - pct_used, 1),
+                                "cl_level": round(100 - pct_used),
                                 "last_updated": "post_compaction",
                                 "source": "post_compaction_estimate",
                             }
