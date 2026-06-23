@@ -21,12 +21,14 @@ Architecture:
 import json
 import os
 import platform
+import re
 import shlex
 import shutil
 import signal
 import subprocess
 import sys
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -170,9 +172,152 @@ def _terminal_argv(term: str, cmd: list) -> list:
     return _terminal_command_form(base, real, cmd)
 
 
+def _tmux_available() -> bool:
+    """True if a tmux binary is on PATH (Linux and macOS alike)."""
+    return shutil.which("tmux") is not None
+
+
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+def _new_session_id() -> str:
+    """A fresh CC-compatible session UUID. Its first 8 hex chars become the
+    breadcrumb short id (s_xxxxxxxx) and the tmux session-name suffix, so a
+    command that passes this through to `claude --session-id` lands a session
+    whose breadcrumb matches the tmux name by construction."""
+    return str(uuid.uuid4())
+
+
+def _latest_session_id() -> str:
+    """The session id of the most recently modified CC transcript under
+    ~/.claude/projects/ - i.e. the conversation `claude -c` would resume.
+    Returns None if there are no transcripts. Lets the supervisor pin (and
+    name the tmux session after) the session the user is actually continuing,
+    instead of minting a fresh empty one."""
+    projects = Path.home() / ".claude" / "projects"
+    if not projects.exists():
+        return None
+    latest, latest_mtime = None, -1.0
+    for jf in projects.glob("*/*.jsonl"):
+        if not _UUID_RE.match(jf.stem):
+            continue
+        try:
+            m = jf.stat().st_mtime
+        except OSError:
+            continue
+        if m > latest_mtime:
+            latest_mtime, latest = m, jf.stem
+    return latest
+
+
+def _resolve_session_spec(spec: str) -> str:
+    """Map a launch-time --session-id spec to a concrete session id (or None).
+
+    None/""  -> None      (do not pin; the command runs as-is, e.g. its own -c)
+    "new"    -> a fresh UUID
+    "latest" -> the most recent CC transcript's id (resume it), or a fresh UUID
+                if none exists - this restores `claude -c` continuity while
+                still yielding an id to name the tmux session after.
+    <uuid>   -> that explicit id
+    """
+    if spec in (None, ""):
+        return None
+    if spec == "new":
+        return _new_session_id()
+    if spec == "latest":
+        return _latest_session_id() or _new_session_id()
+    return spec
+
+
+def _sanitize_tmux_name(name: str) -> str:
+    """tmux forbids '.' and ':' in session names (they are window/pane
+    separators) and chokes on whitespace. Map those to '_'."""
+    cleaned = "".join("_" if ch in ".: \t\n" else ch for ch in name)
+    return cleaned or "session"
+
+
+def _tmux_wrap(tmux_session: str, cmd: list) -> list:
+    """Wrap *cmd* (an argv list) so it runs inside a named tmux session.
+
+    tmux's [shell-command] is a SINGLE argument re-parsed by `/bin/sh -c`, so
+    the command is passed as one shell-safe string. `-A` attaches to an
+    existing session of that name instead of erroring, which is the right
+    behaviour for a long-lived supervisor pane.
+    """
+    return ["tmux", "new-session", "-A", "-s", tmux_session,
+            _shell_command_string(cmd)]
+
+
+def _find_supervisor(target: str) -> dict | None:
+    """Find a RUNNING supervisor registry entry by supervisor PID or by name.
+    On multiple name matches, returns the most recently created."""
+    if not REGISTRY_DIR.exists():
+        return None
+    matches = []
+    for entry in REGISTRY_DIR.glob("*.json"):
+        if entry.name == "supervisor_crash.log":
+            continue
+        try:
+            data = json.loads(entry.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        sup_pid = data.get("supervisor_pid", 0)
+        if not _is_alive(sup_pid):
+            continue
+        if target == str(sup_pid) or target == data.get("name"):
+            matches.append(data)
+    if not matches:
+        return None
+    return max(matches, key=lambda d: d.get("created", 0))
+
+
+def send_keys(target: str, keys: list, enter: bool = True) -> int:
+    """Inject literal text (plus an optional Enter) into a supervised session's
+    tmux pane - the side channel for driving the live CC client (e.g. a real
+    `/compact`, which the client parses only from its own TTY input).
+
+    *target* is a supervisor name or PID. The text is sent with `-l` (literal,
+    no key-name interpretation) and the Enter is a separate key press, so text
+    that happens to contain 'Enter' or 'C-c' is not reinterpreted.
+    """
+    if not _tmux_available():
+        print("[auto-restart] tmux not found; send-keys requires a tmux-backed session.",
+              file=sys.stderr)
+        return 1
+    data = _find_supervisor(target)
+    if not data:
+        print(f"[auto-restart] No running supervised process matching '{target}'.",
+              file=sys.stderr)
+        return 1
+    tmux_session = data.get("tmux_session")
+    if not tmux_session:
+        print(f"[auto-restart] '{data.get('name')}' was launched without a tmux session; "
+              f"send-keys is unavailable.\n"
+              f"  Relaunch (with tmux on PATH) to enable the input side channel.",
+              file=sys.stderr)
+        return 1
+    text = " ".join(keys)
+    # `-t <session>` targets that session's active pane. `--` guards text that
+    # starts with '-'. CC's stdin reader receives the bytes as if typed.
+    rc = subprocess.run(
+        ["tmux", "send-keys", "-t", tmux_session, "-l", "--", text]
+    ).returncode
+    if rc == 0 and enter:
+        rc = subprocess.run(["tmux", "send-keys", "-t", tmux_session, "Enter"]).returncode
+    if rc == 0:
+        suffix = " + Enter" if enter else ""
+        print(f"[auto-restart] Sent to tmux session '{tmux_session}': {text!r}{suffix}")
+    else:
+        print(f"[auto-restart] tmux send-keys failed (rc={rc}). "
+              f"Is the session alive?  tmux ls", file=sys.stderr)
+    return rc
+
+
 def launch_in_terminal(cmd_args: list, name: str = "",
                        restart_delay: int = 5,
-                       terminal: str = "auto") -> int:
+                       terminal: str = "auto",
+                       use_tmux: bool = True,
+                       session_spec: str = None) -> int:
     """Launch a supervised process in a new terminal window.
 
     Args:
@@ -182,6 +327,18 @@ def launch_in_terminal(cmd_args: list, name: str = "",
         terminal: Terminal app to use: "auto", "terminal", "iterm2",
             "gnome-terminal", "ptyxis", "kgx", "tilix", "lxterminal", "foot",
             "xterm", "konsole", "x-terminal-emulator"
+        use_tmux: If True (default) and tmux is on PATH, run the supervisor
+            inside a named tmux session ("<name>_<short-session-id>") so the
+            live child can be driven via `auto-restart send-keys`. Degrades
+            gracefully (direct launch, no send-keys) when tmux is absent.
+        session_spec: Session id to pin: None (default - do not pin; the
+            command resumes on its own, e.g. its own `-c`), "latest" (the most
+            recent CC transcript id), "new" (a fresh session), or an explicit
+            UUID. When set it is exported as MACF_SESSION_ID for the command to
+            forward via `claude --session-id`. CAVEAT: CC refuses `--session-id`
+            for a session that is currently LIVE ("already in use"), so do not
+            pin the conversation you are still in - use None (the command's own
+            `-c`) for that case.
 
     Returns:
         Supervisor PID
@@ -193,18 +350,51 @@ def launch_in_terminal(cmd_args: list, name: str = "",
     if not name:
         name = os.path.basename(cmd_args[0])
 
-    # Build the supervisor command that runs in the new terminal
+    # Optionally pin a session id. When set, the supervised command (e.g. a
+    # wrapper around `claude`) forwards it via `claude --session-id
+    # "$MACF_SESSION_ID"`, so the CC breadcrumb (s_<first8>) matches the tmux
+    # session name below. "latest" resumes the user's current conversation.
+    session_id = _resolve_session_spec(session_spec)
+    short_id = session_id[:8] if session_id else None
+
+    # Optionally back the session with a named tmux session so the live child
+    # is reachable by `auto-restart send-keys`. The id suffix is added only
+    # when an id is pinned; otherwise the bare name is used.
+    tmuxify = use_tmux and _tmux_available()
+    if tmuxify:
+        tmux_session = _sanitize_tmux_name(f"{name}_{short_id}" if short_id else name)
+    else:
+        tmux_session = None
+    if use_tmux and not tmuxify:
+        print("[auto-restart] tmux not found - launching without the send-keys "
+              "side channel (install tmux to enable it).", file=sys.stderr)
+
+    # Build the supervisor command that runs in the new terminal. --session-id
+    # and --tmux-session are recorded by the supervisor in its registry entry.
     supervisor_cmd = [
         sys.executable, "-m", "macf.supervisor",
         "_run_loop",
         "--name", name,
         "--delay", str(restart_delay),
-        "--",
-    ] + cmd_args
+    ]
+    if session_id:
+        supervisor_cmd += ["--session-id", session_id]
+    if tmux_session:
+        supervisor_cmd += ["--tmux-session", tmux_session]
+    supervisor_cmd += ["--"] + cmd_args
+
+    # When tmux-backed, the terminal hosts `tmux new-session` which runs the
+    # supervisor in its pane (-A: attach if a session of that name already
+    # exists). tmux's [shell-command] is a single shell-reparsed argument, so
+    # pass the supervisor command as one shell-safe string.
+    if tmux_session:
+        launch_cmd = _tmux_wrap(tmux_session, supervisor_cmd)
+    else:
+        launch_cmd = supervisor_cmd
 
     # macOS terminals run their command argument through a shell, so build a
     # shell-safe string and then escape it for the AppleScript literal.
-    escaped_cmd = _applescript_quote(_shell_command_string(supervisor_cmd))
+    escaped_cmd = _applescript_quote(_shell_command_string(launch_cmd))
 
     system = platform.system()
     if system == "Darwin":
@@ -247,12 +437,12 @@ def launch_in_terminal(cmd_args: list, name: str = "",
         candidates = [terminal] if terminal not in ("auto", "") else _LINUX_TERMINALS
         for term in candidates:
             if subprocess.run(["which", term], capture_output=True).returncode == 0:
-                subprocess.Popen(_terminal_argv(term, supervisor_cmd))
+                subprocess.Popen(_terminal_argv(term, launch_cmd))
                 time.sleep(1.5)
                 break
         else:
             print("No terminal emulator found. Run directly:", file=sys.stderr)
-            print(f"  {_shell_command_string(supervisor_cmd)}", file=sys.stderr)
+            print(f"  {_shell_command_string(launch_cmd)}", file=sys.stderr)
             return 1
     else:
         print(f"Unsupported platform: {system}", file=sys.stderr)
@@ -266,6 +456,11 @@ def launch_in_terminal(cmd_args: list, name: str = "",
             pid = data.get("supervisor_pid", "?")
             print(f"[auto-restart] Launched '{name}' in new terminal (supervisor PID: {pid})")
             print(f"[auto-restart] Command: {' '.join(cmd_args)}")
+            if session_id:
+                print(f"[auto-restart] Session id: {session_id} (breadcrumb s_{short_id})")
+            if tmux_session:
+                print(f"[auto-restart] tmux session: {tmux_session}")
+                print(f"[auto-restart] Send input: macf_tools auto-restart send-keys {name} -- <text>")
             print(f"[auto-restart] Manage: macf_tools auto-restart list")
             return pid
 
@@ -273,13 +468,24 @@ def launch_in_terminal(cmd_args: list, name: str = "",
     return 0
 
 
-def run_loop(cmd_args: list, name: str = "", restart_delay: int = 5):
+def run_loop(cmd_args: list, name: str = "", restart_delay: int = 5,
+             tmux_session: str = None, session_id: str = None):
     """Run the supervisor loop (called inside the new terminal).
 
     This is the actual supervisor process — manages the child.
+
+    tmux_session / session_id are recorded in the registry (for `send-keys`
+    resolution and breadcrumb correlation). When session_id is set it is also
+    exported as MACF_SESSION_ID so the supervised command can forward it (e.g.
+    `claude --session-id "$MACF_SESSION_ID"`).
     """
     pid = os.getpid()
     created = time.time()
+
+    # Export the pinned session id so the child (run via $SHELL -ic, which
+    # inherits this environment) can pass it to `claude --session-id`.
+    if session_id:
+        os.environ["MACF_SESSION_ID"] = session_id
 
     _write_registry(pid, {
         "supervisor_pid": pid,
@@ -291,6 +497,8 @@ def run_loop(cmd_args: list, name: str = "", restart_delay: int = 5):
         "status": "running",
         "last_restart": None,
         "child_pid": None,
+        "tmux_session": tmux_session,
+        "session_id": session_id,
     })
 
     child = None
@@ -563,6 +771,8 @@ def status(pid: int):
     print(f"Command:         {' '.join(data.get('command', []))}")
     print(f"Status:          {data.get('status', '?')}")
     print(f"Child PID:       {data.get('child_pid', 'none')}")
+    print(f"tmux session:    {data.get('tmux_session') or 'none (send-keys unavailable)'}")
+    print(f"Session id:      {data.get('session_id') or 'N/A'}")
     print(f"Created:         {data.get('created_iso', '?')}")
     print(f"Restarts:        {data.get('restart_count', 0)}")
     print(f"Last exit code:  {data.get('last_exit_code', 'N/A')}")
@@ -593,11 +803,14 @@ if __name__ == "__main__":
         parser.add_argument("action", choices=["_run_loop"])
         parser.add_argument("--name", default="")
         parser.add_argument("--delay", type=int, default=2)
+        parser.add_argument("--tmux-session", default=None)
+        parser.add_argument("--session-id", default=None)
 
         args = parser.parse_args(supervisor_argv)
 
         if args.action == "_run_loop":
-            run_loop(cmd, name=args.name, restart_delay=args.delay)
+            run_loop(cmd, name=args.name, restart_delay=args.delay,
+                     tmux_session=args.tmux_session, session_id=args.session_id)
 
     except Exception as e:
         # Top-level supervisor crash handler — bare Exception is intentional:
