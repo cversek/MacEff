@@ -7319,7 +7319,9 @@ def _cmd_ar_launch(args):
         print("Usage: macf_tools auto-restart launch -- <command> [args...]")
         return 1
     return launch_in_terminal(cmd, name=args.name, restart_delay=args.delay,
-                              terminal=getattr(args, 'terminal', 'auto'))
+                              terminal=getattr(args, 'terminal', 'auto'),
+                              use_tmux=not getattr(args, 'no_tmux', False),
+                              session_spec=getattr(args, 'session_id', None))
 
 def _cmd_ar_list(args=None):
     from .supervisor import list_processes
@@ -7346,6 +7348,14 @@ def _cmd_ar_kill(args):
     from .supervisor import kill_process
     kill_process(args.pid)
     return 0
+
+def _cmd_ar_send_keys(args):
+    from .supervisor import send_keys
+    keys = [a for a in args.keys if a != "--"]
+    if not keys:
+        print("Usage: macf_tools auto-restart send-keys <name|pid> -- <text...>")
+        return 1
+    return send_keys(args.target, keys, enter=not getattr(args, 'no_enter', False))
 
 
 def cmd_idea_create(args: argparse.Namespace) -> int:
@@ -8529,8 +8539,19 @@ def _build_parser() -> argparse.ArgumentParser:
     ar_launch.add_argument("--name", "-n", default="", help="display name (default: command basename)")
     ar_launch.add_argument("--delay", "-d", type=int, default=5, help="restart delay in seconds (default: 5)")
     ar_launch.add_argument("--terminal", "-t", default="auto",
-                           choices=["auto", "terminal", "iterm2", "gnome-terminal", "xterm", "konsole"],
+                           choices=["auto", "terminal", "iterm2", "gnome-terminal",
+                                    "ptyxis", "kgx", "tilix", "lxterminal", "foot",
+                                    "xterm", "konsole", "x-terminal-emulator"],
                            help="terminal app (default: auto-detect)")
+    ar_launch.add_argument("--no-tmux", action="store_true",
+                           help="do not back the session with tmux (disables send-keys)")
+    ar_launch.add_argument("--session-id", default=None,
+                           help="pin a session: 'latest' (most recent CC session), 'new' (fresh), "
+                                "or an explicit UUID. Exported as MACF_SESSION_ID for the command "
+                                "to forward (e.g. claude --session-id). NOTE: CC refuses to attach "
+                                "to a session that is still LIVE ('already in use'), so do not pin "
+                                "the conversation you are currently in - prefer the command's own "
+                                "`-c` for that. Default: unset (command resumes on its own).")
     ar_launch.add_argument("cmd", nargs=argparse.REMAINDER, help="command to supervise (after --)")
     ar_launch.set_defaults(func=lambda args: _cmd_ar_launch(args))
 
@@ -8559,6 +8580,16 @@ def _build_parser() -> argparse.ArgumentParser:
     ar_kill = ar_sub.add_parser("kill", help="kill supervisor and child (nuclear option)")
     ar_kill.add_argument("pid", type=int, help="supervisor PID")
     ar_kill.set_defaults(func=lambda args: _cmd_ar_kill(args))
+
+    # auto-restart send-keys
+    ar_send = ar_sub.add_parser("send-keys",
+                                help="inject text into a supervised tmux session (drives the live CC client)")
+    ar_send.add_argument("target", help="supervisor name or PID")
+    ar_send.add_argument("--no-enter", action="store_true",
+                         help="do not press Enter after the text")
+    ar_send.add_argument("keys", nargs=argparse.REMAINDER,
+                         help="text to send (after --), e.g. -- /compact")
+    ar_send.set_defaults(func=lambda args: _cmd_ar_send_keys(args))
 
     # ── transcript-monitor ─────────────────────────────────────────────
     tm_parser = sub.add_parser("transcript-monitor", help="JSONL transcript monitoring daemon")
