@@ -58,11 +58,12 @@ macf_tools policy read scholarship
 3. What distinguishes learnings from reflections?
 4. What cross-reference patterns does the policy define?
 5. How does the policy describe the knowledge web architecture?
+6. What does the policy specify about the in-context pointer index -- location, pointer format, selection budget, and lifecycle?
 
 **From scholarship.md**:
-6. What citation formats apply to source artifacts?
-7. How does the policy specify bidirectional linking?
-8. What enables semantic discovery per the policy?
+7. What citation formats apply to source artifacts?
+8. How does the policy specify bidirectional linking?
+9. What enables semantic discovery per the policy?
 
 ---
 
@@ -106,6 +107,7 @@ grep -ri "topic_keyword" agent/private/learnings/
 5. Write to location specified by learnings.md
 6. Create cross-links per scholarship.md patterns
 7. **Update existing learnings** with back-links where identified in step 2
+8. **Reconcile the in-context pointer index** as the FINAL step, per the learnings policy's pointer-index section (promote/update/retire against its selection criteria; verify paths resolve)
 
 **Multiple mode**: Create separate files, cross-link related learnings
 

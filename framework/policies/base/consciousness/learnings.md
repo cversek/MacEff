@@ -91,6 +91,13 @@ Agents accumulate reusable wisdom through learnings - compact, cross-referenced 
 - Evolution tracking?
 - Wisdom accumulation flow?
 
+4.3 In-Context Pointer Index (MEMORY.md)
+- How does the pointer index differ from the master index (push vs pull)?
+- Where does the pointer index live?
+- What qualifies a learning for a pointer? What budget discipline applies?
+- What is the pointer format (activation hook, not summary)?
+- When are pointers added, updated, retired?
+
 5 Practical Usage
 - How to access learnings?
 - Search patterns?
@@ -198,11 +205,11 @@ Personal Policies (constitutional wisdom)
 2. Identify 3-7 key patterns
 3. Extract each as standalone learning
 4. Cross-reference back to source reflection
-5. Update master index
+5. Update master index (4.1) and reconcile the in-context pointer index (4.3)
 
 **Delegation Pattern** (LearningCurator):
 - Provide: List of unprocessed reflections
-- Authority: Create learning files, update index
+- Authority: Create learning files, update master + pointer indexes
 - Deliverables: Learning files + updated index + delegation checkpoint + reflection
 
 **Batch Processing**:
@@ -350,6 +357,47 @@ Delegation Topic Cluster:
 - Preserve original learnings (historical value)
 - Show progression path
 - Track wisdom accumulation
+
+### 4.3 In-Context Pointer Index (MEMORY.md)
+
+**Purpose**: The master index (4.1) is PULL -- the agent must think to consult
+it. The pointer index is PUSH -- it rides the platform's auto-loaded memory into
+every session's context, so a learning surfaces at the moment its activation
+pattern arises. Pointers are the hooks that turn archived wisdom into live
+reflexes.
+
+**Location**: the platform's auto-loaded memory index. On Claude Code:
+`~/.claude/projects/<project-key>/memory/MEMORY.md`, one pointer line per
+indexed learning, alongside ordinary memory pointers.
+
+**Pointer format** (one line):
+
+    - [Short Imperative Title](relative/path/to/learning.md) -- activation hook
+
+The trailing hook phrase states WHEN to read (the activation context), not what
+the learning concludes: "read when output goes silent after a reflash" triggers
+recall at the right moment; a conclusion summary lulls instead.
+
+**Selection discipline (the budget)**: every pointer costs context in EVERY
+session. Index only learnings whose activation is (a) recurring across cycles,
+(b) expensive when missed, and (c) not already surfaced by another mechanism
+(hook injection, a MANDATORY policy, an existing pointer's cluster). Prefer one
+GATEWAY pointer to the master INDEX.md plus a small set (single digits) of
+high-recurrence learnings over pointer sprawl. When several learnings share a
+domain, point at the INDEX.md topic cluster rather than each file.
+
+**Lifecycle** (pull model, like ideas):
+- PROMOTE: a learning earns a pointer when its activation recurs or a miss
+  proves costly.
+- UPDATE: refresh the hook phrase when the activation pattern sharpens.
+- RETIRE: remove the pointer when the learning is synthesized into policy,
+  superseded, or its situation can no longer arise. Stale pointers spend budget
+  without paying rent; retirement is curation, not loss (the learning file and
+  its INDEX.md entry remain).
+
+**Curation integration**: every learnings curation ends by reconciling the
+pointer index -- evaluate new learnings against the selection criteria, retire
+stale pointers, verify paths resolve from the memory directory.
 
 ## 5. Practical Usage
 
