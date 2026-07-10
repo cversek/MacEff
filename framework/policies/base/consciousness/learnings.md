@@ -384,7 +384,9 @@ tokens (<1% of a modern context window). At that price, COMPLETENESS WINS:
 point to every ACTIVE learning, because a hook only works as a reflex if it is
 in context -- anything behind a gateway requires already suspecting it exists
 (the pull model again). Exclude only learnings that are superseded, synthesized
-into policy, or duplicated by another in-context mechanism. The binding
+into policy, or duplicated by another in-context mechanism (a learning already
+carried as an ordinary memory entry needs no second pointer -- deduplicate,
+don't double-load). The binding
 constraint is SALIENCE, not tokens: an undifferentiated wall of lines fires
 nothing. Solve it with structure -- group pointers by activation domain, lead
 each line with its hook -- not with exclusion. Re-measure at each curation; if
