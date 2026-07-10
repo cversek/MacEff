@@ -378,13 +378,19 @@ The trailing hook phrase states WHEN to read (the activation context), not what
 the learning concludes: "read when output goes silent after a reflash" triggers
 recall at the right moment; a conclusion summary lulls instead.
 
-**Selection discipline (the budget)**: every pointer costs context in EVERY
-session. Index only learnings whose activation is (a) recurring across cycles,
-(b) expensive when missed, and (c) not already surfaced by another mechanism
-(hook injection, a MANDATORY policy, an existing pointer's cluster). Prefer one
-GATEWAY pointer to the master INDEX.md plus a small set (single digits) of
-high-recurrence learnings over pointer sprawl. When several learnings share a
-domain, point at the INDEX.md topic cluster rather than each file.
+**Selection discipline (the budget)**: the budget is MEASURED, not assumed --
+a pointer line costs ~30-40 tokens, so even a ~60-learning corpus costs ~2k
+tokens (<1% of a modern context window). At that price, COMPLETENESS WINS:
+point to every ACTIVE learning, because a hook only works as a reflex if it is
+in context -- anything behind a gateway requires already suspecting it exists
+(the pull model again). Exclude only learnings that are superseded, synthesized
+into policy, or duplicated by another in-context mechanism. The binding
+constraint is SALIENCE, not tokens: an undifferentiated wall of lines fires
+nothing. Solve it with structure -- group pointers by activation domain, lead
+each line with its hook -- not with exclusion. Re-measure at each curation; if
+the corpus grows until the set approaches ~1% of the working context, compress
+the low-recurrence tail into INDEX.md cluster pointers first. Always keep one
+GATEWAY pointer to the master INDEX.md.
 
 **Lifecycle** (pull model, like ideas):
 - PROMOTE: a learning earns a pointer when its activation recurs or a miss
