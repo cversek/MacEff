@@ -54,6 +54,7 @@ After reading policies, you should be able to answer:
 14. **What note-taking discipline does the policy require during task execution?** When should notes be added?
 15. **What types of developments warrant task notes?** What distinguishes significant events from routine steps?
 16. **How do task notes integrate with the task lifecycle?** What is their relationship to completion reports?
+17. **What does the policy require when resuming work last touched in an earlier cycle?** What signal marks this case, and what must precede execution before continuing?
 
 ---
 

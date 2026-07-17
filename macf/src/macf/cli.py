@@ -3924,19 +3924,29 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
                 return text
             return text[:max_len-3] + "..."
 
+        def get_last_update_breadcrumb(task):
+            """Breadcrumb of the task's most recent activity (last update, else creation)."""
+            if not task.mtmd or not task.mtmd.updates:
+                return task.mtmd.creation_breadcrumb if task.mtmd else None
+            return task.mtmd.updates[-1].breadcrumb
+
         def get_last_update_timestamp(task):
             """Extract Unix timestamp from last update's breadcrumb t_ field."""
-            if not task.mtmd or not task.mtmd.updates:
-                # Fall back to creation_breadcrumb if no updates
-                bc = task.mtmd.creation_breadcrumb if task.mtmd else None
-            else:
-                # Get last update's breadcrumb
-                bc = task.mtmd.updates[-1].breadcrumb
+            bc = get_last_update_breadcrumb(task)
             if not bc:
                 return None
             # Extract t_ timestamp from breadcrumb (format: s_.../c_.../g_.../p_.../t_XXXXXXXX)
             import re
             match = re.search(r't_(\d+)', bc)
+            return int(match.group(1)) if match else None
+
+        def get_last_update_cycle(task):
+            """Extract the cycle number from the last-activity breadcrumb (c_N)."""
+            bc = get_last_update_breadcrumb(task)
+            if not bc:
+                return None
+            import re
+            match = re.search(r'/c_(\d+)', bc) or re.search(r'(?:^|/)C(\d+)', bc)
             return int(match.group(1)) if match else None
 
         def format_task_suffix(task):
@@ -3955,6 +3965,10 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
             if ts:
                 dt = datetime.fromtimestamp(ts)
                 time_str = dt.strftime("%m/%d %H:%M")
+                # Append the cycle the timestamp belongs to, e.g. "07/17 16:20 C25"
+                cyc = get_last_update_cycle(task)
+                if cyc is not None:
+                    time_str = f"{time_str} C{cyc}"
                 # Color based on status
                 if task.status == "in_progress":
                     time_str = f"{ANSI_RED}{time_str}{ANSI_RESET}"
@@ -5651,6 +5665,41 @@ def cmd_task_grant_delete(args: argparse.Namespace) -> int:
     return 0
 
 
+def _stale_resume_info(task):
+    """Detect resuming work that was put down in an earlier cycle.
+
+    Returns (last_cycle, last_ts, current_cycle) if the task's most recent
+    activity was in a cycle before the current one and the task isn't complete;
+    otherwise None. Must be called BEFORE appending the new start update, so the
+    "last activity" reflects the prior work, not this resume.
+    """
+    from .utils.breadcrumbs import get_breadcrumb, parse_breadcrumb
+    if not task.mtmd or task.status == "completed":
+        return None
+    bc = None
+    if task.mtmd.updates:
+        bc = task.mtmd.updates[-1].breadcrumb
+    bc = bc or getattr(task.mtmd, "started_breadcrumb", None) or task.mtmd.creation_breadcrumb
+    prev = parse_breadcrumb(bc or "") or {}
+    cur = parse_breadcrumb(get_breadcrumb() or "") or {}
+    last_cycle, cur_cycle = prev.get("cycle"), cur.get("cycle")
+    if last_cycle is None or cur_cycle is None or last_cycle >= cur_cycle:
+        return None
+    return (last_cycle, prev.get("timestamp"), cur_cycle)
+
+
+def _print_stale_resume_banner(task_id, last_cycle, last_ts, cur_cycle):
+    """Terminal banner prompting the read-notes-and-narrate resume ritual."""
+    from .utils.temporal import format_duration
+    import time as _time
+    elapsed = f", {format_duration(_time.time() - last_ts)} ago" if last_ts else ""
+    print(f"🔁 Resuming #{task_id} — last worked in Cycle {last_cycle}{elapsed} (now Cycle {cur_cycle}).")
+    print(f"   Put down across cycles; the live working context was lost to compaction. Before continuing:")
+    print(f"   • Read the full history:  macf_tools task get {task_id}")
+    print(f"   • Re-read every note in the update stream, plus any plan/CA it references.")
+    print(f"   • Narrate your understanding of where things stand and the next step to the user before executing.")
+
+
 def cmd_task_start(args: argparse.Namespace) -> int:
     """Start work on a task - sets status to in_progress with started_breadcrumb."""
     from .task import TaskReader, update_task_file
@@ -5675,18 +5724,43 @@ def cmd_task_start(args: argparse.Namespace) -> int:
         print(f"❌ Task #{task_id} not found")
         return 1
 
-    if task.status == "in_progress":
-        print(f"⚠️  Task #{task_id} is already in_progress")
-        return 0
+    # Detect resuming work put down in an earlier cycle BEFORE mutating the task,
+    # so "last activity" reflects the prior work rather than this resume.
+    stale = _stale_resume_info(task)
 
     breadcrumb = get_breadcrumb()
+
+    if task.status == "in_progress":
+        # Already active. A same-cycle re-start is a no-op, but a stale resume
+        # (last worked an earlier cycle) still bumps the stamp + prompts the
+        # read-notes-and-narrate ritual -- the case task start otherwise misses.
+        if not stale:
+            print(f"⚠️  Task #{task_id} is already in_progress")
+            return 0
+        last_cycle, last_ts, cur_cycle = stale
+        if task.mtmd:
+            from .task.models import MacfTaskUpdate
+            import copy
+            new_mtmd = copy.deepcopy(task.mtmd)
+            new_mtmd.started_breadcrumb = breadcrumb
+            new_mtmd.updates.append(MacfTaskUpdate(
+                breadcrumb=breadcrumb,
+                description=f"Task resumed via CLI (stale-resume from Cycle {last_cycle})",
+                agent="PA"))
+            update_task_file(task_id, {"description": task.description_with_updated_mtmd(new_mtmd)})
+        append_event("task_resumed", {
+            "task_id": str(task_id), "from_cycle": last_cycle, "breadcrumb": breadcrumb})
+        _print_stale_resume_banner(task_id, last_cycle, last_ts, cur_cycle)
+        return 0
 
     if task.mtmd:
         from .task.models import MacfTaskUpdate
         import copy
         new_mtmd = copy.deepcopy(task.mtmd)
         new_mtmd.started_breadcrumb = breadcrumb
-        new_mtmd.updates.append(MacfTaskUpdate(breadcrumb=breadcrumb, description="Task started via CLI", agent="PA"))
+        desc = (f"Task resumed via CLI (stale-resume from Cycle {stale[0]})"
+                if stale else "Task started via CLI")
+        new_mtmd.updates.append(MacfTaskUpdate(breadcrumb=breadcrumb, description=desc, agent="PA"))
         new_description = task.description_with_updated_mtmd(new_mtmd)
         update_task_file(task_id, {"status": "in_progress", "description": new_description})
     else:
@@ -5723,6 +5797,8 @@ def cmd_task_start(args: argparse.Namespace) -> int:
     print(f"   Breadcrumb: {breadcrumb}")
     if injected_policies:
         print(f"   Auto-injected policies: {injected_policies}")
+    if stale:
+        _print_stale_resume_banner(task_id, stale[0], stale[1], stale[2])
     return 0
 
 
