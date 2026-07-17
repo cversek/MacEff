@@ -59,6 +59,12 @@ Policy writing guidelines ensure MacEff framework policies follow consistent str
 - How many examples per concept?
 - Good vs bad example comparisons?
 
+**2.3 Quantitative Prescriptions (Measured Constants)**
+- When may a policy state a numeric limit?
+- What derivation must accompany a number?
+- Which resource must a limit actually bind?
+- When to encode a procedure instead of a constant?
+
 **3 Integration with Policy Ecosystem**
 - How do policies reference each other?
 - Cross-policy consistency?
@@ -329,6 +335,32 @@ c_42/s_abc12345/p_ghi01234/t_1234567890/g_def6789  ❌
 
 ---
 
+### 2.3 Quantitative Prescriptions (Measured Constants)
+
+**Numbers must be derived, not asserted.** A numeric limit written from
+intuition ("keep it to single digits") feels prudent, survives review, and
+binds agents to a constraint nobody measured. Before a number enters a policy:
+
+1. **Measure it** in the current environment, and state the measurement next
+   to the number so future curators can re-derive it as environments change.
+2. **Name the binding resource.** A limit must constrain the resource that is
+   actually scarce. Field case: a pointer-count limit was justified as "context
+   token budget"; measurement showed the full set cost <1% of the working
+   context -- the genuinely scarce resource was reader salience, which grouping
+   solves and exclusion does not. A limit aimed at the wrong resource solves a
+   problem that does not exist while leaving the real one untouched.
+3. **Prefer procedures over constants.** "Keep the set under ~1% of the working
+   context; re-measure at each curation" adapts as platforms change. "Keep it
+   under 10" silently rots.
+4. **Tag unavoidable constants** with their basis and date, so staleness is
+   visible instead of authoritative.
+
+**Review heuristic**: for every number in a draft policy ask "where did this
+number come from, and what happens when the environment doubles?" If the answer
+is "intuition" and "nobody knows", replace it with a measurement procedure.
+
+---
+
 ## 3 Integration with Policy Ecosystem
 
 ### 3.1 Cross-Policy References
@@ -388,6 +420,10 @@ See also: `policy_name.md` - Brief description of why relevant
 **❌ Agent-Specific Examples in Framework Policies**:
 - **Problem**: References to specific agent cycles, breadcrumbs, or artifacts require personal context
 - **Fix**: Describe the pattern, not a specific instance
+
+**❌ Asserted Constants**:
+- **Problem**: Numeric limits with no derivation ("keep it single digits") bind agents to unmeasured intuition and rot silently as environments change
+- **Fix**: Measure, name the binding resource, encode the re-derivation procedure (see 2.3)
 
 **❌ Missing CEP Navigation Guide**:
 - **Problem**: Agents must read entire policy to find relevant section
