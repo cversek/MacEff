@@ -83,6 +83,7 @@ Task management policy governs the use of Claude Code native Task* tools (TaskCr
 **5 Mandatory Reading Discipline**
 - When must I read CA references?
 - How does MTMD enforce this?
+- What must precede resuming work put down in an earlier cycle?
 - What note-taking discipline does the policy require during task execution?
 - When should I add notes to tasks?
 - What developments warrant task notes vs routine steps?
@@ -678,6 +679,20 @@ macf_tools task archive #67   # → archived (with cascade)
 3. On completion → `macf_tools task complete #67 --report "..."`
 
 This is not optional - it's the **only way** the user maintains awareness of active work.
+
+### 5.3.1 Resuming Stale Work (Cross-Cycle)
+
+Work put down for one or more cycles loses its live working context to compaction. The task notes are the recovery surface, but nothing forces you to actually re-read them before diving back in.
+
+`macf_tools task start #N` detects the **stale-resume** case — the task's most recent activity was in an earlier cycle than the current one, and it is not complete — and responds even when the task is already `in_progress` (a task left active across a cycle boundary still counts). On a stale resume the command:
+
+1. **Bumps the stamp** — appends a `resumed via CLI (stale-resume from Cycle N)` update carrying a fresh breadcrumb, so the task's displayed date/cycle reflects the resumption (see §9 tree display).
+2. **Prints a resume banner** — which cycle the task was last worked, how long ago, and the current cycle.
+3. **Prompts the resume ritual** — read the full history (`task get #N`), re-read every note in the update stream plus any `plan_ca_ref` it references, and **narrate your understanding of where things stand and the next step to the user before executing.**
+
+A same-cycle re-start of an already-active task stays a plain no-op — no banner, no ritual.
+
+**Obligation**: when the banner fires, perform the ritual. Do not resume mechanically off the compaction summary alone. The narration is the evidence you re-oriented; skipping it is the stale-resume anti-pattern.
 
 ### 5.4 Note-Taking Discipline During Task Execution
 
