@@ -84,6 +84,11 @@ class TaskReader:
         env_dir = os.environ.get("MACF_TASK_STORE_DIR")
         if env_dir:
             return Path(env_dir)
+        # MACF_TASKS_DIR is the legacy per-session isolation override (tests, nested
+        # dirs). When it is set, stay on the legacy path and do NOT consult the agent
+        # home config — otherwise an isolated env would leak into the real home store.
+        if os.environ.get("MACF_TASKS_DIR"):
+            return None
         mode, rel = cls._load_task_store_config()
         if mode == "home":
             from ..utils.paths import find_agent_home
@@ -337,8 +342,8 @@ def _is_cc_session_dir(session_path: Path) -> bool:
     """
     try:
         cc_root = (Path.home() / ".claude" / "tasks").resolve()
-        return cc_root in session_path.resolve().parents
-    except (OSError, ValueError):
+        return cc_root in Path(session_path).resolve().parents
+    except (OSError, ValueError, TypeError):
         return False
 
 
