@@ -1,0 +1,93 @@
+"""Tests for the project-scoped home task store backend.
+
+Covers store resolution (config mode, env overrides, MACF_TASKS_DIR isolation
+precedence), the hide/unhide no-op outside CC's tree, and the reconcile guard.
+"""
+
+import json
+import pytest
+from pathlib import Path
+
+from macf.task.reader import (
+    TaskReader,
+    hide_task_file,
+    unhide_task_file,
+    _is_cc_session_dir,
+)
+from macf.task.reconcile import reconcile
+from macf.utils.paths import find_agent_home
+
+
+@pytest.fixture
+def home_agent(tmp_path, monkeypatch):
+    """An isolated agent home with task_store.mode=home configured."""
+    monkeypatch.delenv("MACF_TASKS_DIR", raising=False)
+    monkeypatch.delenv("MACF_TASK_STORE_DIR", raising=False)
+    monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(tmp_path))
+    find_agent_home.cache_clear()
+    maceff = tmp_path / ".maceff"
+    maceff.mkdir()
+    (maceff / "config.json").write_text(json.dumps(
+        {"task_store": {"mode": "home", "path": "agent/public/tasks"}}))
+    yield tmp_path
+    find_agent_home.cache_clear()
+
+
+class TestHomeStoreResolution:
+    def test_home_mode_resolves_to_agent_home_store(self, home_agent):
+        reader = TaskReader()
+        assert reader.session_uuid == TaskReader.HOME_STORE_UUID
+        assert reader.session_path == home_agent / "agent" / "public" / "tasks"
+
+    def test_macf_tasks_dir_forces_legacy(self, home_agent, tmp_path, monkeypatch):
+        # The legacy isolation override must win over the home config, or an
+        # isolated env leaks into the real home store (the bug the suite caught).
+        iso = tmp_path / "iso_tasks"
+        iso.mkdir()
+        monkeypatch.setenv("MACF_TASKS_DIR", str(iso))
+        assert TaskReader._resolve_home_store() is None
+
+    def test_task_store_dir_env_override(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("MACF_TASKS_DIR", raising=False)
+        store = tmp_path / "explicit_store"
+        monkeypatch.setenv("MACF_TASK_STORE_DIR", str(store))
+        assert TaskReader._resolve_home_store() == store
+
+    def test_unconfigured_agent_stays_legacy(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("MACF_TASKS_DIR", raising=False)
+        monkeypatch.delenv("MACF_TASK_STORE_DIR", raising=False)
+        monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(tmp_path))  # no config.json
+        find_agent_home.cache_clear()
+        assert TaskReader._resolve_home_store() is None
+        find_agent_home.cache_clear()
+
+
+class TestCcSessionDirDetection:
+    def test_accepts_str_and_path(self):
+        # Regression: hide/unhide pass a str; _is_cc_session_dir must not crash.
+        cc = Path.home() / ".claude" / "tasks" / "some-uuid"
+        assert _is_cc_session_dir(str(cc)) is True
+        assert _is_cc_session_dir(cc) is True
+
+    def test_home_store_is_not_a_cc_dir(self, tmp_path):
+        assert _is_cc_session_dir(tmp_path / "agent" / "public" / "tasks") is False
+
+
+class TestHideIsNoOpOutsideCc:
+    def test_hide_and_unhide_leave_home_store_visible(self, tmp_path):
+        store = tmp_path / "tasks"
+        store.mkdir()
+        task = store / "5.json"
+        task.write_text("{}")
+        assert hide_task_file(store, "5") is True
+        assert task.exists()  # not renamed to .5.json
+        assert not (store / ".5.json").exists()
+        assert unhide_task_file(store, "5") is True
+        assert task.exists()
+
+
+class TestReconcileGuard:
+    def test_raises_without_home_store(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("MACF_TASKS_DIR", str(tmp_path))  # forces legacy -> no home
+        with pytest.raises(RuntimeError):
+            reconcile(apply=False)
