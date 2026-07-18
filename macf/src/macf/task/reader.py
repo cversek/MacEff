@@ -42,14 +42,69 @@ class TaskReader:
         """Tasks directory (may be overridden by MACF_TASKS_DIR env var)."""
         return self._get_tasks_dir()
 
+    # Sentinel session_uuid meaning "resolve to the project-scoped home store
+    # instead of a CC per-session directory". See session_path / _resolve_home_store.
+    HOME_STORE_UUID = "home"
+
+    @classmethod
+    def _load_task_store_config(cls) -> tuple:
+        """Read the task_store block from {agent_home}/.maceff/config.json.
+
+        Returns:
+            (mode, rel_path) where mode is "home" or "legacy" and rel_path is the
+            store location relative to agent_home (default "agent/public/tasks").
+            Defaults to ("legacy", ...) so unconfigured agents keep CC-session storage.
+        """
+        try:
+            from ..utils.paths import find_agent_home
+            config_file = find_agent_home() / ".maceff" / "config.json"
+            if config_file.exists():
+                data = json.loads(config_file.read_text())
+                ts = data.get("task_store", {}) or {}
+                mode = ts.get("mode", "legacy")
+                rel = ts.get("path", "agent/public/tasks")
+                return mode, rel
+        except (OSError, ValueError) as e:
+            print(f"⚠️ MACF: task_store config read failed: {e}", file=sys.stderr)
+        return "legacy", "agent/public/tasks"
+
+    @classmethod
+    def _resolve_home_store(cls) -> Optional[Path]:
+        """Resolve the project-scoped home task store directory, or None for legacy.
+
+        Priority:
+        1. MACF_TASK_STORE_DIR env var (absolute path) - explicit override.
+        2. .maceff/config.json task_store.mode == "home" -> {agent_home}/{rel_path}.
+        3. None - legacy CC per-session storage (~/.claude/tasks/{session_uuid}/).
+
+        The home store is a single directory holding {id}.json files, NOT keyed by
+        CC session UUID, so it survives session fork/rewind and CC's completed-task
+        deletion.
+        """
+        env_dir = os.environ.get("MACF_TASK_STORE_DIR")
+        if env_dir:
+            return Path(env_dir)
+        mode, rel = cls._load_task_store_config()
+        if mode == "home":
+            from ..utils.paths import find_agent_home
+            return find_agent_home() / rel
+        return None
+
     def __init__(self, session_uuid: Optional[str] = None):
         """
-        Initialize reader for a specific session or current session.
+        Initialize reader for a specific session, the home store, or current session.
 
         Args:
-            session_uuid: Session UUID to read from. If None, auto-detect current session.
+            session_uuid: Session UUID to read from. If None, resolve to the home
+                store when configured (session_uuid becomes the HOME_STORE_UUID
+                sentinel), otherwise auto-detect the current CC session. An explicit
+                UUID always forces legacy per-session reads (used by migration and
+                cross-session tooling).
         """
-        self.session_uuid = session_uuid or self._detect_current_session()
+        if session_uuid is None and self._resolve_home_store() is not None:
+            self.session_uuid = self.HOME_STORE_UUID
+        else:
+            self.session_uuid = session_uuid or self._detect_current_session()
 
     @classmethod
     def _get_project_sessions(cls) -> Set[str]:
@@ -136,7 +191,14 @@ class TaskReader:
 
     @property
     def session_path(self) -> Optional[Path]:
-        """Path to current session's task folder."""
+        """Path to the directory holding this store's {id}.json task files.
+
+        Returns the project-scoped home store when session_uuid is the
+        HOME_STORE_UUID sentinel; otherwise the legacy CC per-session folder
+        ~/.claude/tasks/{session_uuid}/.
+        """
+        if self.session_uuid == self.HOME_STORE_UUID:
+            return self._resolve_home_store()
         if not self.session_uuid:
             return None
         return self.tasks_dir / self.session_uuid
@@ -266,12 +328,29 @@ def _protect_dir(dir_path: Path):
     os.chmod(dir_path, stat.S_IRUSR | stat.S_IXUSR | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)  # 555
 
 
+def _is_cc_session_dir(session_path: Path) -> bool:
+    """True only when session_path lives under CC's ~/.claude/tasks/ tree.
+
+    Hiding completed tasks as .{id}.json exists solely to keep them out of CC's
+    native scanner. The project-scoped home store is never scanned by CC, so
+    hide/unhide are no-ops there and tasks stay as plain {id}.json.
+    """
+    try:
+        cc_root = (Path.home() / ".claude" / "tasks").resolve()
+        return cc_root in session_path.resolve().parents
+    except (OSError, ValueError):
+        return False
+
+
 def hide_task_file(session_path: Path, task_id: str) -> bool:
     """Rename {id}.json -> .{id}.json to hide from CC's native scanner.
 
-    Idempotent: no-op if already hidden or file doesn't exist.
-    Handles chmod 555 directory protection.
+    Idempotent: no-op if already hidden or file doesn't exist. No-op success for
+    a non-CC store (the home store keeps plain {id}.json). Handles chmod 555
+    directory protection.
     """
+    if not _is_cc_session_dir(session_path):
+        return True  # home store: nothing to hide from
     visible = session_path / f"{task_id}.json"
     hidden = session_path / f".{task_id}.json"
 
@@ -296,9 +375,11 @@ def hide_task_file(session_path: Path, task_id: str) -> bool:
 def unhide_task_file(session_path: Path, task_id: str) -> bool:
     """Rename .{id}.json -> {id}.json to show to CC's native scanner.
 
-    Idempotent: no-op if already visible or file doesn't exist.
-    Handles chmod 555 directory protection.
+    Idempotent: no-op if already visible or file doesn't exist. No-op success for
+    a non-CC store (the home store never hides). Handles chmod 555 protection.
     """
+    if not _is_cc_session_dir(session_path):
+        return True  # home store: files are always visible
     hidden = session_path / f".{task_id}.json"
     visible = session_path / f"{task_id}.json"
 
