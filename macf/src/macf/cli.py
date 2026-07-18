@@ -5870,6 +5870,34 @@ def cmd_task_pause(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_task_reconcile(args: argparse.Namespace) -> int:
+    """Union-merge forked CC per-session task DBs into the home store.
+
+    Dry-run by default; pass --apply to write. Newest-mtime-per-id wins, so no
+    task ever worked on is dropped.
+    """
+    from .task.reconcile import reconcile
+
+    try:
+        report = reconcile(apply=args.apply)
+    except RuntimeError as e:
+        print(f"❌ {e}")
+        return 1
+
+    print(f"Sources ({len(report['sources'])} project session dirs):")
+    for name in report["sources"]:
+        print(f"  {name}")
+    print(f"Merged {report['merged_count']} unique task ids -> {report['dest']}")
+    if report["missing_status"]:
+        print(f"⚠️  {len(report['missing_status'])} task(s) missing a status field: "
+              f"{', '.join(report['missing_status'])}")
+    if report["applied"]:
+        print(f"✅ Wrote {report['merged_count']} task files to the home store.")
+    else:
+        print("DRY RUN — re-run with --apply to write.")
+    return 0
+
+
 def cmd_task_note(args: argparse.Namespace) -> int:
     """Add a note to a task's updates list (type='note').
 
@@ -6864,11 +6892,12 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
     })
 
     if success:
-        # Hide completed task file from CC's native scanner (dot-prefix)
-        from .task.reader import hide_task_file
+        # Hide completed task file from CC's native scanner (dot-prefix).
+        # No-op in the home store, which CC never scans — report accordingly.
+        from .task.reader import hide_task_file, _is_cc_session_dir
         if reader.session_path:
-            hidden = hide_task_file(reader.session_path, str(task_id))
-            if hidden:
+            hide_task_file(reader.session_path, str(task_id))
+            if _is_cc_session_dir(reader.session_path):
                 print(f"   📁 Hidden from CC scanner (.{task_id}.json)")
 
         # Emit task lifecycle event for downstream hooks and proxy integration
@@ -8127,6 +8156,14 @@ def _build_parser() -> argparse.ArgumentParser:
     tree_archive_group.add_argument("--all", action="store_true", dest="show_all",
                                     help="show all tasks including archived (default hides archived)")
     task_tree_parser.set_defaults(func=cmd_task_tree)
+
+    # task reconcile
+    task_reconcile_parser = task_sub.add_parser(
+        "reconcile",
+        help="union-merge forked CC per-session task DBs into the home store")
+    task_reconcile_parser.add_argument("--apply", action="store_true",
+                                       help="write the merge (default: dry-run report)")
+    task_reconcile_parser.set_defaults(func=cmd_task_reconcile)
 
     # task delete
     task_delete_parser = task_sub.add_parser("delete", help="delete task(s) (HIGH protection)")

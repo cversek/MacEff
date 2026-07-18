@@ -12,7 +12,11 @@
 
 Task management policy governs the use of Claude Code native Task* tools (TaskCreate, TaskUpdate, TaskGet, TaskList) with MacfTaskMetaData (MTMD) enhancement. Tasks provide persistent, structured work tracking with forensic breadcrumbs, hierarchy support, and lifecycle management.
 
-**Core Insight**: Tasks are persistent JSON files on disk (`~/.claude/tasks/{session_uuid}/*.json`), not ephemeral internal state. This changes everything about recovery, backup, and lifecycle management.
+**Core Insight**: Tasks are persistent JSON files on disk, not ephemeral internal state. This changes everything about recovery, backup, and lifecycle management.
+
+**Two storage backends** (see §0.1):
+- **Legacy (default)**: CC's `~/.claude/tasks/{session_uuid}/*.json`. Session-scoped — a new session UUID (continue / rewind / child) gets a *copy* that then diverges, and CC deletes all completed task files when the last open task completes. Fragile for long-lived history.
+- **Home store (opt-in)**: a single project-scoped directory under the agent home (`{agent_home}/agent/public/tasks/`, default), alongside the other consciousness artifacts. Set `task_store.mode: "home"` in `{agent_home}/.maceff/config.json` (or `MACF_TASK_STORE_DIR`). Not keyed by session UUID, so it survives fork/rewind and CC never touches it. This is the recommended backend for any agent that wants durable task history.
 
 **Supersedes**: `todo_hygiene.md` (DEPRECATED)
 
@@ -135,22 +139,21 @@ Task management policy governs the use of Claude Code native Task* tools (TaskCr
 
 ### 0.1 File Location
 
-Claude Code stores native task JSON files at:
-```
-~/.claude/tasks/{session_uuid}/*.json
-```
+Each task is stored as `{id}.json` (e.g., `1.json`, `67.json`) in the active store:
 
-Each task is stored as `{id}.json` (e.g., `1.json`, `67.json`).
+- **Legacy**: `~/.claude/tasks/{session_uuid}/{id}.json` — one directory per CC session.
+- **Home store**: `{agent_home}/agent/public/tasks/{id}.json` — one project-scoped directory, no session UUID. Activated by `task_store.mode: "home"` in `{agent_home}/.maceff/config.json` (path overridable; env `MACF_TASK_STORE_DIR` wins). The `TaskReader` resolves this via a `HOME_STORE_UUID` sentinel; all create/read/archive/CLI paths inherit it through `session_path`. Completed-task hiding (`.{id}.json`) is a CC-scanner concern and is skipped here, so the home store stays plain `{id}.json`.
 
 ### 0.2 Persistence Behavior
 
-| Event | Task Persistence | Confidence |
-|-------|------------------|------------|
-| Session restart | ✅ Tasks survive | HIGH |
-| Compaction | ⚠️ Likely survives | MEDIUM (needs validation) |
-| New session UUID | ❓ May not port | LOW (needs experiment) |
+| Event | Legacy store | Home store |
+|-------|--------------|------------|
+| Session restart | ✅ Survives | ✅ Survives |
+| Compaction | ✅ Survives (files on disk) | ✅ Survives |
+| New session UUID (continue/rewind/child) | ⚠️ Forks: CC copies the DB into the new UUID dir, then the copies diverge | ✅ Single store, no fork |
+| Last open task completed | ❌ CC deletes all completed task files | ✅ Nothing deleted |
 
-**Epistemological Honesty**: We have not empirically validated what creates new session UUIDs or whether tasks port across. Compaction behavior may have changed. See §12 for future experiments.
+**Empirically established (c25)**: a new session UUID does *not* cleanly port tasks — CC seeds the new directory with a copy and the databases then diverge (observed: one task present in only 2 of 7 sibling project session dirs). The macf `TaskReader` and CC's native tools also resolve the session directory differently (newest-mtime project dir vs literal `CLAUDE_CODE_SESSION_ID`), so they can read different DBs after a fork. The home store removes both failure modes by not keying storage on the session at all. Use `macf_tools task reconcile` to union-merge divergent legacy DBs into the home store (newest-mtime-per-id wins).
 
 ### 0.3 ID Assignment
 

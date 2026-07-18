@@ -1,5 +1,5 @@
 {
-  "_comment": "MACF Task Permissions Template - merged by hooks install",
+  "_comment": "MACF Task Permissions Template - merged additively into settings by hooks install",
   "permissions": {
     "allow": [
       "Bash(macf_tools mode:*)"
@@ -7,6 +7,12 @@
     "ask": [
       "Bash(macf_tools task grant-update:*)",
       "Bash(macf_tools task grant-delete:*)"
+    ],
+    "deny": [
+      "TaskCreate",
+      "TaskUpdate",
+      "TaskGet",
+      "TaskList"
     ]
   }
 }

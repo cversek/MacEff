@@ -356,6 +356,19 @@ def _create_task_file(
         "blockedBy": blocked_by or []
     }
 
+    # Collision guard: never silently overwrite an existing task. If a
+    # concurrent create raced us to this id (or the id was miscomputed), refuse
+    # rather than clobber. True atomic id allocation would hold a lock across
+    # _get_next_task_id + this write; single-active-session makes that rare, so
+    # this guard is the safety net that turns a silent data loss into an error.
+    from .reader import resolve_task_file
+    existing = resolve_task_file(reader.session_path, str(task_id)) if reader.session_path.exists() else None
+    if existing is not None:
+        raise FileExistsError(
+            f"Task #{task_id} already exists at {existing}. Refusing to overwrite "
+            f"(possible concurrent create or stale id). Re-run to allocate a fresh id."
+        )
+
     # Use protection context manager for directory operations
     # This temporarily unprotects if needed, then re-protects after
     with _unprotect_for_creation(reader.session_path):
