@@ -92,3 +92,23 @@ def test_update_settings_file_merges_ask_bucket_regression(tmp_path, monkeypatch
     ask = (data.get("permissions") or {}).get("ask") or []
     assert "Bash(macf_tools task grant-update:*)" in ask
     assert "Bash(macf_tools task grant-delete:*)" in ask
+
+
+def test_shipped_template_denies_native_task_tools():
+    """The shipped template must deny CC's native Task* tools so nothing writes
+    the per-session task dirs behind the project-scoped home store's back."""
+    root = find_maceff_root()
+    template = root / "framework" / "templates" / "settings.permissions.json"
+    deny = (_read(template).get("permissions") or {}).get("deny") or []
+    for tool in ("TaskCreate", "TaskUpdate", "TaskGet", "TaskList"):
+        assert tool in deny, f"template must deny native {tool}"
+
+
+def test_update_settings_file_merges_deny_bucket(tmp_path, monkeypatch):
+    """A fresh settings file should gain the shipped deny entries after merge."""
+    monkeypatch.chdir(tmp_path)
+    settings_file = tmp_path / "settings.json"
+    _update_settings_file(settings_file, "python .claude/hooks")
+    deny = (_read(settings_file).get("permissions") or {}).get("deny") or []
+    for tool in ("TaskCreate", "TaskUpdate", "TaskGet", "TaskList"):
+        assert tool in deny
