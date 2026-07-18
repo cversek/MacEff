@@ -86,8 +86,14 @@ def reconcile(apply: bool = False, dest: Optional[Path] = None) -> Dict[str, Any
         return report
 
     dest.mkdir(parents=True, exist_ok=True)
-    os.chmod(dest, 0o755)  # tolerate a prior chmod 555 protection
+    os.chmod(dest, 0o755)  # tolerate a prior chmod 555 dir protection
     for tid, (_m, f) in best.items():
-        shutil.copy2(f, dest / f"{tid}.json")
+        target = dest / f"{tid}.json"
+        # Task files may be read-only (copied from CC's protected dirs); make the
+        # target writable before overwriting so a re-reconcile doesn't fail midway.
+        if target.exists():
+            os.chmod(target, 0o644)
+        shutil.copy2(f, target)
+        os.chmod(target, 0o644)
     report["applied"] = True
     return report

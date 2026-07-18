@@ -91,3 +91,27 @@ class TestReconcileGuard:
         monkeypatch.setenv("MACF_TASKS_DIR", str(tmp_path))  # forces legacy -> no home
         with pytest.raises(RuntimeError):
             reconcile(apply=False)
+
+
+class TestReconcileOverwritesReadOnly:
+    def test_reapply_over_readonly_dest(self, tmp_path, monkeypatch):
+        # Task files copied from CC's protected dirs are read-only; a second
+        # reconcile must still overwrite them instead of failing midway.
+        import os
+        import macf.task.reconcile as rec
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "5.json").write_text('{"id": "5", "status": "completed"}')
+        dest = tmp_path / "dest"
+        monkeypatch.setenv("MACF_TASK_STORE_DIR", str(dest))
+        monkeypatch.setattr(rec, "_project_session_dirs", lambda: [src])
+
+        reconcile(apply=True)
+        target = dest / "5.json"
+        assert target.exists()
+        os.chmod(target, 0o444)  # simulate a protected/read-only dest file
+
+        # Must not raise despite the read-only target.
+        report = reconcile(apply=True)
+        assert report["applied"] is True
+        assert target.read_text().strip().startswith("{")
