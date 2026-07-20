@@ -298,7 +298,8 @@ def _create_task_file(
     description: str,
     status: str = "pending",
     session_uuid: Optional[str] = None,
-    blocked_by: Optional[List[str]] = None
+    blocked_by: Optional[List[str]] = None,
+    overwrite: bool = False
 ) -> Path:
     """Create task JSON file directly.
 
@@ -306,6 +307,11 @@ def _create_task_file(
     - Temporarily unprotects directory if protected
     - Creates the task file
     - Re-protects directory (protection becomes default state)
+
+    overwrite=True finalizes a provisional stub the caller already reserved at
+    this id (the SPRINT/PLAY_TIME reserve-then-finalize pattern); it skips the
+    collision guard for that one write. Leave False everywhere else so a real
+    id race still turns into an error instead of silent clobber.
     """
     reader = TaskReader(session_uuid)
 
@@ -363,7 +369,7 @@ def _create_task_file(
     # this guard is the safety net that turns a silent data loss into an error.
     from .reader import resolve_task_file
     existing = resolve_task_file(reader.session_path, str(task_id)) if reader.session_path.exists() else None
-    if existing is not None:
+    if existing is not None and not overwrite:
         raise FileExistsError(
             f"Task #{task_id} already exists at {existing}. Refusing to overwrite "
             f"(possible concurrent create or stale id). Re-run to allocate a fresh id."
@@ -1572,7 +1578,8 @@ def create_sprint(
     # Simpler subject using compose_subject pattern
     subject = f"{ANSI_DIM}{('  #' + str(task_id)).rjust(4)}{ANSI_DIM_OFF} 🏃 SPRINT: {title}"
 
-    task_file = _create_task_file(task_id, subject, description, session_uuid=session_uuid)
+    # overwrite=True: finalize the provisional stub reserved at this id above
+    task_file = _create_task_file(task_id, subject, description, session_uuid=session_uuid, overwrite=True)
 
     # ------------------------------------------------------------------
     # 6. Auto-start chain
@@ -1802,7 +1809,8 @@ def create_play_time(
     description = f"→ {ca_path_relative}\n\n{_generate_mtmd_block(mtmd)}"
     subject = f"{ANSI_DIM}{('  #' + str(task_id)).rjust(4)}{ANSI_DIM_OFF} ⏲️ PLAY_TIME: {title}"
 
-    task_file = _create_task_file(task_id, subject, description, session_uuid=session_uuid)
+    # overwrite=True: finalize the provisional stub reserved at this id above
+    task_file = _create_task_file(task_id, subject, description, session_uuid=session_uuid, overwrite=True)
 
     # ------------------------------------------------------------------
     # 6. Auto-start chain
