@@ -58,7 +58,7 @@ macf_tools policy read scholarship
 3. What distinguishes learnings from reflections?
 4. What cross-reference patterns does the policy define?
 5. How does the policy describe the knowledge web architecture?
-6. What does the policy specify about the in-context pointer index -- location, pointer format, selection budget, and lifecycle?
+6. What does the policy specify about the learnings index and the consultation trigger -- where the unbounded index lives, what a curation adds to it, how the auto-loaded consultation trigger's cluster taxonomy is kept current, and the Mandatory Consult Step it serves?
 
 **From scholarship.md**:
 7. What citation formats apply to source artifacts?
@@ -107,7 +107,7 @@ grep -ri "topic_keyword" agent/private/learnings/
 5. Write to location specified by learnings.md
 6. Create cross-links per scholarship.md patterns
 7. **Update existing learnings** with back-links where identified in step 2
-8. **Reconcile the in-context pointer index** as the FINAL step, per the learnings policy's pointer-index section (promote/update/retire against its selection criteria; verify paths resolve)
+8. **Update the master learnings index and verify the consultation trigger** as the FINAL step, per the learnings policy's index + consultation-trigger section (add each new learning to its cluster in the unbounded INDEX.md with an activation hook; keep the auto-loaded trigger's cluster taxonomy complete, adding a cluster name if a new domain emerged; verify paths resolve)
 
 **Multiple mode**: Create separate files, cross-link related learnings
 
