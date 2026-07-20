@@ -3819,6 +3819,27 @@ def cmd_task_get(args: argparse.Namespace) -> int:
     return 0
 
 
+def get_tasks_mtime(tasks_dir) -> float:
+    """Get latest modification time of any task file in the store directory."""
+    try:
+        if not tasks_dir or not tasks_dir.exists():
+            return 0.0
+
+        # Both backends are flat dirs of {id}.json (+ hidden .{id}.json).
+        # Include the directory's own mtime so create/delete/hide renames
+        # are detected even though they don't touch file mtimes.
+        mtimes = [tasks_dir.stat().st_mtime]
+        for task_file in tasks_dir.glob("*.json"):
+            mtimes.append(task_file.stat().st_mtime)
+        for task_file in tasks_dir.glob(".*.json"):
+            mtimes.append(task_file.stat().st_mtime)
+
+        return max(mtimes)
+    except (OSError, IOError) as e:
+        print(f"⚠️ MACF: task mtime scan failed: {e}", file=sys.stderr)
+        return 0.0
+
+
 def cmd_task_tree(args: argparse.Namespace) -> int:
     """Display task hierarchy tree from a root task."""
     import time
@@ -4137,24 +4158,6 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
 
         return True
 
-    def get_tasks_mtime(tasks_dir: Path) -> float:
-        """Get latest modification time of any file in tasks directory."""
-        try:
-            if not tasks_dir.exists():
-                return 0.0
-
-            # Get mtime of all JSON files in session subdirectories
-            mtimes = []
-            for session_dir in tasks_dir.iterdir():
-                if session_dir.is_dir():
-                    for task_file in session_dir.glob("*.json"):
-                        mtimes.append(task_file.stat().st_mtime)
-
-            return max(mtimes) if mtimes else 0.0
-        except (OSError, IOError) as e:
-            print(f"⚠️ MACF: task mtime scan failed: {e}", file=sys.stderr)
-            return 0.0
-
     # Parse task ID (preserve string IDs like "000")
     # Both branches set root_id to task_id_str — leading-zero forms (like "000")
     # need string identity preserved; ordinary numeric IDs are also kept as strings
@@ -4168,8 +4171,10 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
     # Loop mode - monitor for changes
     if args.loop:
         reader = TaskReader()
-        tasks_dir = reader.tasks_dir
-        last_mtime = 0.0
+        # Watch the resolved store (home store or legacy session dir), not the
+        # legacy per-session root — the home store lives outside ~/.claude/tasks.
+        tasks_dir = reader.session_path
+        last_mtime = None  # sentinel: always render the first iteration
 
         # Brand the terminal window with the agent calling card so
         # multi-agent terminal layouts are distinguishable at a glance.
@@ -4187,7 +4192,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
                 current_mtime = get_tasks_mtime(tasks_dir)
 
                 # Display tree if tasks changed or first iteration
-                if current_mtime != last_mtime:
+                if last_mtime is None or current_mtime != last_mtime:
                     # Clear screen using ANSI escape code (works on macOS/Linux)
                     print("\033[2J\033[H", end="")
 
