@@ -4170,6 +4170,8 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
         reader = TaskReader()
         tasks_dir = reader.tasks_dir
         last_mtime = 0.0
+        last_draw = 0.0
+        REDRAW_SECS = 60.0  # timed redraw keeps relative-age displays current
 
         # Brand the terminal window with the agent calling card so
         # multi-agent terminal layouts are distinguishable at a glance.
@@ -4185,11 +4187,15 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
         try:
             while True:
                 current_mtime = get_tasks_mtime(tasks_dir)
+                now = time.time()
 
-                # Display tree if tasks changed or first iteration
-                if current_mtime != last_mtime:
-                    # Clear screen using ANSI escape code (works on macOS/Linux)
-                    print("\033[2J\033[H", end="")
+                # Redraw when tasks changed, on first iteration, or on the
+                # timed interval so age displays don't go stale.
+                if current_mtime != last_mtime or (now - last_draw) >= REDRAW_SECS:
+                    # Clear scrollback (E3) + screen + home. Without E3 the
+                    # terminal keeps every stale tree in scrollback, which
+                    # reads as history that never happened.
+                    print("\033[3J\033[2J\033[H", end="")
 
                     if not display_tree(root_id):
                         return 1
@@ -4197,6 +4203,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
                     print()  # Add blank line
                     print(f"{ANSI_DIM}[Monitoring for changes... Press Ctrl+C to exit]{ANSI_RESET}")
                     last_mtime = current_mtime
+                    last_draw = now
 
                 time.sleep(1)  # Poll every second
 
