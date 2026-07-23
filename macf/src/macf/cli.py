@@ -8844,12 +8844,42 @@ def _build_parser() -> argparse.ArgumentParser:
                             help="output HTML path (default: /tmp/macf_md_*.html)")
     md_present.set_defaults(func=cmd_markdown_present)
 
+    # ── opsec ────────────────────────────────────────────────────────────
+    opsec_parser = sub.add_parser("opsec", help="private-context leakage gates for public repos")
+    opsec_sub = opsec_parser.add_subparsers(dest="opsec_cmd")
+    opsec_install = opsec_sub.add_parser(
+        "install-hook",
+        help="install a pre-commit gate that rejects staged private-context leaks")
+    opsec_install.add_argument("repo", help="path to the target git repository")
+    opsec_install.add_argument("--profile", default=None,
+                               help="pattern profile JSON (default: agent-home default profile, created if absent)")
+    opsec_install.set_defaults(func=cmd_opsec_install_hook)
+
     # ── shell ────────────────────────────────────────────────────────────
     shell_parser = sub.add_parser("shell", help="shell integration (tab completion)")
     shell_sub = shell_parser.add_subparsers(dest="shell_cmd")
     shell_sub.add_parser("setup", help="print tab completion setup instructions").set_defaults(func=cmd_shell_setup)
 
     return p
+
+
+def cmd_opsec_install_hook(args: argparse.Namespace) -> int:
+    """Install the private-context leakage pre-commit gate into a repo."""
+    from pathlib import Path
+    from .opsec import install_hook
+
+    try:
+        profile = Path(args.profile) if args.profile else None
+        facts = install_hook(Path(args.repo), profile)
+    except ValueError as e:
+        print(f"❌ {e}")
+        return 1
+    print("✅ OPSEC pre-commit gate installed")
+    print(f"   Repo:    {facts['repo']}")
+    print(f"   Hooks:   {facts['hooks_dir']}")
+    print(f"   Profile: {facts['profile']} (edit patterns there; NEVER commit it)")
+    print("   Bypass for reviewed disclosures: git commit --no-verify")
+    return 0
 
 
 def cmd_markdown_present(args: argparse.Namespace) -> int:
