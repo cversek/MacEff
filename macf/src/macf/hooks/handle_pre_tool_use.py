@@ -61,8 +61,10 @@ def _is_bare_cd_command(command: str) -> bool:
 ### Touch-discipline nag thresholds (tool calls since last task-store write).
 ### Gentle by design: single line, fires only AT thresholds (not continuously),
 ### ramps in tone, resets the moment any task is touched. Override the base
-### threshold with MACF_TOUCH_NAG_BASE; set 0 to disable.
-TOUCH_NAG_BASE = 40
+### threshold with MACF_TOUCH_NAG_BASE; set 0 to disable. Calibration note:
+### CC's native task nag re-floods context with the whole open-task list on a
+### ~10-call cadence; this one-liner at 20 is half as frequent and far smaller.
+TOUCH_NAG_BASE = 20
 
 
 def _touch_discipline_nag(session_id: str) -> str:
