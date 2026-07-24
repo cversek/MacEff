@@ -58,6 +58,51 @@ def _is_bare_cd_command(command: str) -> bool:
     return False
 
 
+### Touch-discipline nag thresholds (tool calls since last task-store write).
+### Gentle by design: single line, fires only AT thresholds (not continuously),
+### ramps in tone, resets the moment any task is touched. Override the base
+### threshold with MACF_TOUCH_NAG_BASE; set 0 to disable. Calibration note:
+### CC's native task nag re-floods context with the whole open-task list on a
+### ~10-call cadence; this one-liner at 20 is half as frequent and far smaller.
+TOUCH_NAG_BASE = 20
+
+
+def _touch_discipline_nag(session_id: str) -> str:
+    """One-line nag when many tool calls have passed without a task-store touch."""
+    import os
+    base = int(os.environ.get("MACF_TOUCH_NAG_BASE", TOUCH_NAG_BASE))
+    if base <= 0:
+        return ""
+    from macf.task import TaskReader
+    from macf.utils import get_session_dir
+
+    tasks_dir = TaskReader().tasks_dir
+    mtimes = [f.stat().st_mtime for f in tasks_dir.rglob("*.json")]
+    store_mtime = max(mtimes) if mtimes else 0.0
+
+    sdir = get_session_dir(session_id=session_id, subdir="hooks")
+    if not sdir:
+        return ""
+    state_file = sdir / "touch_nag.json"
+    try:
+        state = json.loads(state_file.read_text())
+    except (OSError, ValueError):
+        state = {}
+    if state.get("store_mtime") != store_mtime:
+        state = {"store_mtime": store_mtime, "count": 0}
+    state["count"] += 1
+    state_file.write_text(json.dumps(state))
+
+    n = state["count"]
+    if n == base:
+        return f"🌱 {n} tool calls since the task tree was last touched -- a note would anchor this work"
+    if n == base * 2:
+        return f"🌿 {n} tool calls untouched -- the tree can't see this work; add a note or start the right task"
+    if n >= base * 3 and n % base == 0:
+        return f"🌳 {n} tool calls untracked -- future-you cannot recover this work from the tree; touch it"
+    return ""
+
+
 def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
     """
     Run PreToolUse hook logic.
@@ -364,6 +409,15 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                     message_parts.append(f"🎯 {display_tool}")
                 else:
                     message_parts.append("⚙️")
+
+        # Touch-discipline nag (task_management policy: notes during work,
+        # not just at completion). Never let it break the hook.
+        try:
+            nag = _touch_discipline_nag(session_id)
+            if nag:
+                message_parts.append(nag)
+        except (OSError, ValueError, ImportError, AttributeError) as e:
+            print(f"⚠️ MACF: touch nag skipped: {e}", file=sys.stderr)
 
         # Format message (compact single line)
         message = " ".join(message_parts)

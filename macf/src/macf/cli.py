@@ -4110,6 +4110,8 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
                 if scope_state[task.id] == "active":
                     text += " 👀"
 
+            text += recency_marker(task)
+
             print(f"{prefix}{connector}{status_icon} {text}")
 
             # Print task details (plan, notes) with proper indentation
@@ -4122,6 +4124,32 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
 
             for i, child in enumerate(visible_children):
                 print_tree(child, prefix + extension, i == len(visible_children) - 1, depth + 1, children)
+
+        # Last-touched marker: the single most recently updated task (notes,
+        # lifecycle changes -- anything that stamps an update breadcrumb)
+        # carries a trailing left-pointing finger plus a dim relative age, so
+        # the reader can see at a glance where work last happened. Kept fresh
+        # by loop mode's timed redraw.
+        latest_id = None
+        latest_ts = 0
+        for t in all_tasks:
+            _ts = get_last_update_timestamp(t)
+            if _ts and _ts > latest_ts:
+                latest_ts = _ts
+                latest_id = t.id
+
+        def _rel_age(ts):
+            secs = max(0, int(time.time() - ts))
+            if secs < 3600:
+                return f"{secs // 60}m"
+            if secs < 86400:
+                return f"{secs // 3600}h"
+            return f"{secs // 86400}d"
+
+        def recency_marker(task):
+            if task.id != latest_id or not latest_ts:
+                return ""
+            return f" 👈 {ANSI_DIM}{_rel_age(latest_ts)}{ANSI_RESET}"
 
         # Print header
         total = 1 + count_descendants(root_id)
@@ -4144,6 +4172,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
         if scope_state and root.id in scope_state:
             if scope_state[root.id] == "active":
                 root_text += " 👀"
+        root_text += recency_marker(root)
         print(f"{status_icon} {root_text}")
 
         # Print root task details (plan, notes) - extra indent beyond header
