@@ -81,9 +81,12 @@ def _unprotect_for_creation(dir_path: Path) -> Generator[None, None, None]:
     try:
         yield
     finally:
-        # Always protect after creation (even if it wasn't protected before)
-        # This makes protection the default state
-        os.chmod(dir_path, stat.S_IRUSR | stat.S_IXUSR | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)  # 555
+        # Symmetric restoration: put back exactly the mode we found. Dirs are
+        # born protected (see the not-exists branch above), so protected stays
+        # protected; a dir the operator deliberately made writable must not be
+        # hijacked to 555 as a side effect of a create -- especially a FAILED
+        # one, which used to strand the store read-only mid-cleanup.
+        os.chmod(dir_path, stat.S_IMODE(current_mode))
 
 # ANSI escape codes for dim text (CC UI renders these!)
 ANSI_DIM = "\033[2m"
