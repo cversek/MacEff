@@ -91,12 +91,11 @@ Agents accumulate reusable wisdom through learnings - compact, cross-referenced 
 - Evolution tracking?
 - Wisdom accumulation flow?
 
-4.3 In-Context Pointer Index (MEMORY.md)
-- How does the pointer index differ from the master index (push vs pull)?
-- Where does the pointer index live?
-- What qualifies a learning for a pointer? What budget discipline applies?
-- What is the pointer format (activation hook, not summary)?
-- When are pointers added, updated, retired?
+4.3 The Consultation Trigger and the Mandatory Consult Step
+- Where does the learnings index live, and what rides in auto-loaded memory instead of per-learning pointers?
+- What is the Mandatory Consult Step -- at which moments must the agent consult the index?
+- How does the cluster taxonomy trigger the consult, and how does the pull model compensate for losing passive push?
+- What does a learnings curation reconcile in the index and the trigger?
 
 5 Practical Usage
 - How to access learnings?
@@ -205,11 +204,11 @@ Personal Policies (constitutional wisdom)
 2. Identify 3-7 key patterns
 3. Extract each as standalone learning
 4. Cross-reference back to source reflection
-5. Update master index (4.1) and reconcile the in-context pointer index (4.3)
+5. Update the master learnings index (4.1) and verify the consultation trigger's cluster taxonomy (4.3)
 
 **Delegation Pattern** (LearningCurator):
 - Provide: List of unprocessed reflections
-- Authority: Create learning files, update master + pointer indexes
+- Authority: Create learning files, update the master index and the consultation trigger
 - Deliverables: Learning files + updated index + delegation checkpoint + reflection
 
 **Batch Processing**:
@@ -293,6 +292,12 @@ Before writing new learnings, survey the existing knowledge web to identify cros
 
 ### 4.1 Master Index
 
+**The single, unbounded learnings index.** This is the one canonical index of all
+active learnings, grouped by topic cluster with an activation hook per entry. It
+grows without limit and is consulted on demand -- it is the target of the Mandatory
+Consult Step (4.3). It is NOT force-loaded into context; the lightweight
+consultation trigger in auto-loaded memory (4.3) is what points here.
+
 **Location**: `agent/private/learnings/INDEX.md`
 
 **Structure**:
@@ -358,54 +363,62 @@ Delegation Topic Cluster:
 - Show progression path
 - Track wisdom accumulation
 
-### 4.3 In-Context Pointer Index (MEMORY.md)
+### 4.3 The Consultation Trigger and the Mandatory Consult Step
 
-**Purpose**: The master index (4.1) is PULL -- the agent must think to consult
-it. The pointer index is PUSH -- it rides the platform's auto-loaded memory into
-every session's context, so a learning surfaces at the moment its activation
-pattern arises. Pointers are the hooks that turn archived wisdom into live
-reflexes.
+**The single index is PULL, and it is unbounded.** The master index (4.1,
+`agent/private/learnings/INDEX.md`) is the one canonical learnings index. It grows
+without limit -- every active learning earns an entry, forever, because it is
+consulted on demand rather than force-loaded. There is no second per-learning copy
+in the platform's auto-loaded memory file. An earlier design kept one; it grew
+unbounded inside a size-capped memory file and crowded out identity memory, which
+is the failure this architecture removes.
 
-**Location**: the platform's auto-loaded memory index. On Claude Code:
-`~/.claude/projects/<project-key>/memory/MEMORY.md`, one pointer line per
-indexed learning, alongside ordinary memory pointers.
+**What rides in auto-loaded memory instead: a lightweight trigger.** The platform's
+memory file (Claude Code: `~/.claude/projects/<project-key>/memory/MEMORY.md`)
+carries a single small **consultation trigger**, not per-learning pointers. The
+trigger holds three things: (a) the imperative to consult the index, (b) WHEN to
+consult, and (c) the **cluster taxonomy** -- the topic-domain NAMES only (e.g.
+"instrument-epistemology", "embedded-debug", "submission-integrity"). The taxonomy
+is the reflex layer: it stays in context so the agent can recognize whether the
+current problem plausibly belongs to a domain where prior wisdom exists, then pull
+the detail from INDEX.md. It is a table of contents in context, with the contents
+themselves one read away.
 
-**Pointer format** (one line):
+**The Mandatory Consult Step (MANDATORY).** Before beginning substantive work on a
+problem, the agent MUST consult the learnings index for previously-encountered
+problems of the same class. Consult at these moments:
+- **Task or phase orientation** -- before diving into a new problem.
+- **When a bug resists the first hypothesis** -- before building a fix on a guess.
+- **Before declaring a problem novel, hard, or a dead end** -- the "I have never
+  seen this" reflex is exactly when a prior learning most often exists.
+- **Before shipping a fix or a claim** -- a relevant learning may name the failure
+  mode you are about to repeat.
 
-    - [Short Imperative Title](relative/path/to/learning.md) -- activation hook
+Mechanism: match the current problem against the trigger's cluster taxonomy; if any
+cluster plausibly fits, open INDEX.md and scan that cluster's activation hooks. A
+hook names WHEN it applies, so the scan is fast. Consulting and finding nothing is
+a valid, cheap outcome; NOT consulting is the anti-pattern.
 
-The trailing hook phrase states WHEN to read (the activation context), not what
-the learning concludes: "read when output goes silent after a reflash" triggers
-recall at the right moment; a conclusion summary lulls instead.
+**The honest trade.** This replaces passive push of every activation hook with push
+of the taxonomy plus a hard requirement to pull. The risk is real and worth stating
+plainly: a pulled index only fires if the consult step is honored -- a hook works
+as a reflex only when it is in context, and most hooks are no longer in context.
+The design compensates three ways, and all three must hold: (1) the cluster
+taxonomy stays in context as the recognition layer, so the agent knows WHETHER to
+look without already knowing WHAT it will find; (2) the consult step is MANDATORY
+and is enforced at orientation -- the knowledge-web orientation skill discovers this
+requirement from policy and performs the consult as a workflow step; (3) the index
+is unbounded, so completeness is free and nothing is dropped for budget. If
+consultation stops happening in practice, that is a policy-compliance failure to
+surface, not a reason to re-bloat the memory file.
 
-**Selection discipline (the budget)**: the budget is MEASURED, not assumed --
-a pointer line costs ~30-40 tokens, so even a ~60-learning corpus costs ~2k
-tokens (<1% of a modern context window). At that price, COMPLETENESS WINS:
-point to every ACTIVE learning, because a hook only works as a reflex if it is
-in context -- anything behind a gateway requires already suspecting it exists
-(the pull model again). Exclude only learnings that are superseded, synthesized
-into policy, or duplicated by another in-context mechanism (a learning already
-carried as an ordinary memory entry needs no second pointer -- deduplicate,
-don't double-load). The binding
-constraint is SALIENCE, not tokens: an undifferentiated wall of lines fires
-nothing. Solve it with structure -- group pointers by activation domain, lead
-each line with its hook -- not with exclusion. Re-measure at each curation; if
-the corpus grows until the set approaches ~1% of the working context, compress
-the low-recurrence tail into INDEX.md cluster pointers first. Always keep one
-GATEWAY pointer to the master INDEX.md.
-
-**Lifecycle** (pull model, like ideas):
-- PROMOTE: a learning earns a pointer when its activation recurs or a miss
-  proves costly.
-- UPDATE: refresh the hook phrase when the activation pattern sharpens.
-- RETIRE: remove the pointer when the learning is synthesized into policy,
-  superseded, or its situation can no longer arise. Stale pointers spend budget
-  without paying rent; retirement is curation, not loss (the learning file and
-  its INDEX.md entry remain).
-
-**Curation integration**: every learnings curation ends by reconciling the
-pointer index -- evaluate new learnings against the selection criteria, retire
-stale pointers, verify paths resolve from the memory directory.
+**Curation integration.** Every learnings curation ends by (a) updating the master
+index INDEX.md -- add the new learning to its cluster with an activation hook, keep
+the header counts current -- and (b) verifying the consultation trigger's cluster
+taxonomy still names every active cluster, adding a name when a new domain emerges
+and retiring one only when its cluster empties. The trigger is the ONLY learnings
+content in the memory file; keep it lean. Verify that the trigger's path to INDEX.md
+resolves.
 
 ## 5. Practical Usage
 
