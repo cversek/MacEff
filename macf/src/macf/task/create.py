@@ -99,6 +99,35 @@ ANSI_STRIKE_OFF = "\033[29m"
 SENTINEL_TASK_ID = "000"
 
 
+def _compose_type_part(task_type: str, plan_ca_ref: Optional[str] = None,
+                       custom: Optional[dict] = None) -> str:
+    """The type-marker segment of a composed subject (e.g. '🐛 BUG:', '🔧', '📋').
+
+    Shared by compose_subject and title_from_subject so the two directions
+    agree on the exact marker text.
+    """
+    # PHASE type: 📋 if has subplan (plan_ca_ref), - if not
+    if task_type == "PHASE":
+        return "📋" if plan_ca_ref else "-"
+    type_map = {
+        "MISSION": "🗺️ MISSION:",
+        "EXPERIMENT": "🧪 EXPERIMENT:",
+        "DETOUR": "↩️ DETOUR:",
+        "DELEG_PLAN": "📜 DELEG:",
+        "BUG": "🐛 BUG:",
+        "TASK": "🔧",  # Generic task with wrench emoji
+    }
+    # GH_ISSUE has special format: 🐙 GH/owner/repo#N [label]: title
+    if task_type == "GH_ISSUE" and custom:
+        owner = custom.get("gh_owner", "?")
+        repo = custom.get("gh_repo", "?")
+        issue_num = custom.get("gh_issue_number", "?")
+        labels = custom.get("gh_labels", [])
+        label_str = f" [{labels[0]}]" if labels else ""
+        return f"🐙 GH/{owner}/{repo}#{issue_num}{label_str}:"
+    return type_map.get(task_type, "")
+
+
 def compose_subject(task_id: str, task_type: str, title: str,
                     parent_id: Optional[str] = None, status: str = "pending",
                     plan_ca_ref: Optional[str] = None,
@@ -129,31 +158,30 @@ def compose_subject(task_id: str, task_type: str, title: str,
     else:
         parent_part = ""
 
-    # Type emoji/marker
-    # PHASE type: 📋 if has subplan (plan_ca_ref), - if not
-    if task_type == "PHASE":
-        type_part = "📋" if plan_ca_ref else "-"
-    else:
-        type_map = {
-            "MISSION": "🗺️ MISSION:",
-            "EXPERIMENT": "🧪 EXPERIMENT:",
-            "DETOUR": "↩️ DETOUR:",
-            "DELEG_PLAN": "📜 DELEG:",
-            "BUG": "🐛 BUG:",
-            "TASK": "🔧",  # Generic task with wrench emoji
-        }
-        # GH_ISSUE has special format: 🐙 GH/owner/repo#N [label]: title
-        if task_type == "GH_ISSUE" and custom:
-            owner = custom.get("gh_owner", "?")
-            repo = custom.get("gh_repo", "?")
-            issue_num = custom.get("gh_issue_number", "?")
-            labels = custom.get("gh_labels", [])
-            label_str = f" [{labels[0]}]" if labels else ""
-            type_part = f"🐙 GH/{owner}/{repo}#{issue_num}{label_str}:"
-        else:
-            type_part = type_map.get(task_type, "")
+    # Type emoji/marker (shared with title_from_subject via _compose_type_part)
+    type_part = _compose_type_part(task_type, plan_ca_ref, custom)
 
     return f"{id_part}{parent_part} {type_part} {title}"
+
+
+def title_from_subject(subject: str, task_type: str,
+                       plan_ca_ref: Optional[str] = None,
+                       custom: Optional[dict] = None) -> str:
+    """Recover the plain title from a composed subject — the inverse of
+    compose_subject.
+
+    Robust to a stale or mismatched ``[^#N]`` parent marker: it strips ANY
+    parent marker present, not the one the caller expects. This lets
+    ``task reparent`` recompose a fresh subject even when the MTMD ``title``
+    field was never stored (the Bug-3 gap that left stale parent markers).
+    """
+    s = re.sub(r'\033\[[0-9;]*m', '', subject)   # strip ANSI
+    s = re.sub(r'^\s*#\d+\s*', '', s)             # id prefix (padded)
+    s = re.sub(r'^\[\^#\d+\]\s*', '', s)          # any parent marker
+    type_part = _compose_type_part(task_type, plan_ca_ref, custom)
+    if type_part and s.startswith(type_part):
+        s = s[len(type_part):]
+    return s.strip()
 
 
 def _ensure_sentinel_task(session_path: Path) -> None:
