@@ -22,9 +22,16 @@ Strengthen the knowledge web through gap-driven wiki-link curation.
 
 ```bash
 macf_tools policy navigate scholarship
+macf_tools policy navigate learnings
 ```
 
-Read the section that answers: "What wiki-link normalization rules and seed vocabulary does the scholarship policy specify?"
+Read the sections that answer:
+- (scholarship) "What wiki-link normalization rules and seed vocabulary does the scholarship policy specify?"
+- (learnings) "The learnings index is the target of a Mandatory Consult Step -- what must a curation reconcile in the master index and the consultation trigger so that consult keeps working, and how is a new cluster taxonomy name added?"
+
+The graph enrichment below is what makes the index worth consulting; keep the
+index and its trigger current per the learnings policy so the consult step a
+future agent performs actually finds this work.
 
 ---
 

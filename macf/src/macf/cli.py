@@ -3819,6 +3819,27 @@ def cmd_task_get(args: argparse.Namespace) -> int:
     return 0
 
 
+def get_tasks_mtime(tasks_dir) -> float:
+    """Get latest modification time of any task file in the store directory."""
+    try:
+        if not tasks_dir or not tasks_dir.exists():
+            return 0.0
+
+        # Both backends are flat dirs of {id}.json (+ hidden .{id}.json).
+        # Include the directory's own mtime so create/delete/hide renames
+        # are detected even though they don't touch file mtimes.
+        mtimes = [tasks_dir.stat().st_mtime]
+        for task_file in tasks_dir.glob("*.json"):
+            mtimes.append(task_file.stat().st_mtime)
+        for task_file in tasks_dir.glob(".*.json"):
+            mtimes.append(task_file.stat().st_mtime)
+
+        return max(mtimes)
+    except (OSError, IOError) as e:
+        print(f"⚠️ MACF: task mtime scan failed: {e}", file=sys.stderr)
+        return 0.0
+
+
 def cmd_task_tree(args: argparse.Namespace) -> int:
     """Display task hierarchy tree from a root task."""
     import time
@@ -4081,12 +4102,13 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
             if suffix:
                 text = f"{text} {suffix}"
 
-            # Scope indicator
+            # Scope indicator. Inactive scope gets NO marker: those tasks are
+            # completed, and the line already says so three ways (check icon,
+            # strikethrough, green timestamp) -- a fourth was pure noise, and
+            # the end-of-subject slot is reserved for the recency marker.
             if scope_state and task.id in scope_state:
                 if scope_state[task.id] == "active":
                     text += " 👀"
-                elif scope_state[task.id] == "inactive":
-                    text += " ✅"
 
             print(f"{prefix}{connector}{status_icon} {text}")
 
@@ -4122,8 +4144,6 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
         if scope_state and root.id in scope_state:
             if scope_state[root.id] == "active":
                 root_text += " 👀"
-            elif scope_state[root.id] == "inactive":
-                root_text += " ✅"
         print(f"{status_icon} {root_text}")
 
         # Print root task details (plan, notes) - extra indent beyond header
@@ -4136,24 +4156,6 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
             print_tree(child, "", i == len(visible_children) - 1, depth=1, siblings=children)
 
         return True
-
-    def get_tasks_mtime(tasks_dir: Path) -> float:
-        """Get latest modification time of any file in tasks directory."""
-        try:
-            if not tasks_dir.exists():
-                return 0.0
-
-            # Get mtime of all JSON files in session subdirectories
-            mtimes = []
-            for session_dir in tasks_dir.iterdir():
-                if session_dir.is_dir():
-                    for task_file in session_dir.glob("*.json"):
-                        mtimes.append(task_file.stat().st_mtime)
-
-            return max(mtimes) if mtimes else 0.0
-        except (OSError, IOError) as e:
-            print(f"⚠️ MACF: task mtime scan failed: {e}", file=sys.stderr)
-            return 0.0
 
     # Parse task ID (preserve string IDs like "000")
     # Both branches set root_id to task_id_str — leading-zero forms (like "000")
@@ -4168,8 +4170,10 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
     # Loop mode - monitor for changes
     if args.loop:
         reader = TaskReader()
-        tasks_dir = reader.tasks_dir
-        last_mtime = 0.0
+        # Watch the resolved store (home store or legacy session dir), not the
+        # legacy per-session root — the home store lives outside ~/.claude/tasks.
+        tasks_dir = reader.session_path
+        last_mtime = None  # sentinel: always render the first iteration
         last_draw = 0.0
         REDRAW_SECS = 60.0  # timed redraw keeps relative-age displays current
 
@@ -4191,11 +4195,11 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
 
                 # Redraw when tasks changed, on first iteration, or on the
                 # timed interval so age displays don't go stale.
-                if current_mtime != last_mtime or (now - last_draw) >= REDRAW_SECS:
-                    # Clear scrollback (E3) + screen + home. Without E3 the
-                    # terminal keeps every stale tree in scrollback, which
-                    # reads as history that never happened.
-                    print("\033[3J\033[2J\033[H", end="")
+                if last_mtime is None or current_mtime != last_mtime or (now - last_draw) >= REDRAW_SECS:
+                    # Home, clear screen, THEN clear scrollback (E3) — the order
+                    # tput/terminfo `clear` uses. 2J scrolls the old frame into
+                    # scrollback, so 3J must come after it to wipe that copy.
+                    print("\033[H\033[2J\033[3J", end="")
 
                     if not display_tree(root_id):
                         return 1
@@ -4325,17 +4329,17 @@ def cmd_task_edit(args: argparse.Namespace) -> int:
     if field == "subject":
         print(f"❌ Direct subject editing is not allowed")
         print(f"   Subject is composed from task metadata (id, parent, type, title)")
-        print(f"   To change the title: macf_tools task metadata set {task_id_str} title \"New Title\"")
+        print(f"   To change the title: macf_tools task metadata set {task_id} title \"New Title\"")
         return 1
 
     # Block direct status editing - use lifecycle commands instead
     if field == "status":
         print(f"❌ Direct status editing is not allowed")
         print(f"   Use lifecycle commands instead:")
-        print(f"   • macf_tools task start {task_id_str}    → in_progress")
-        print(f"   • macf_tools task pause {task_id_str}    → pending")
-        print(f"   • macf_tools task complete {task_id_str} → completed")
-        print(f"   • macf_tools task archive {task_id_str}  → archived")
+        print(f"   • macf_tools task start {task_id}    → in_progress")
+        print(f"   • macf_tools task pause {task_id}    → pending")
+        print(f"   • macf_tools task complete {task_id} → completed")
+        print(f"   • macf_tools task archive {task_id}  → archived")
         return 1
 
     # Block direct description editing - preserves MTMD metadata
@@ -4343,8 +4347,8 @@ def cmd_task_edit(args: argparse.Namespace) -> int:
         print(f"❌ Direct description editing is not allowed")
         print(f"   Description contains MTMD metadata set during creation.")
         print(f"   Use structured commands instead:")
-        print(f"   • macf_tools task note {task_id_str} \"message\"  → append notes")
-        print(f"   • macf_tools task edit {task_id_str} plan \"ref\" → update plan reference")
+        print(f"   • macf_tools task note {task_id} \"message\"  → append notes")
+        print(f"   • macf_tools task edit {task_id} plan \"ref\" → update plan reference")
         return 1
 
     editable_fields = []
@@ -4713,16 +4717,24 @@ def cmd_task_reparent(args: argparse.Namespace) -> int:
     new_description = task.description_with_updated_mtmd(new_mtmd)
     updates = {"description": new_description}
 
-    # Recompose subject only when title is recoverable (Bug 3 invariant)
-    if new_mtmd.title is not None:
-        from .task.create import compose_subject
-        new_subject = compose_subject(
-            task_id=str(task_id),
-            task_type=new_mtmd.task_type,
-            title=new_mtmd.title,
-            parent_id=new_mtmd.parent_id,
-        )
-        updates["subject"] = new_subject
+    # Always recompose the subject so its [^#parent] marker tracks parent_id.
+    # When the MTMD title isn't stored, recover it from the current subject —
+    # closing the Bug-3 gap where a title-less task kept a stale parent marker.
+    from .task.create import compose_subject, title_from_subject
+    custom = new_mtmd.custom or None
+    title = new_mtmd.title
+    if title is None:
+        title = title_from_subject(task.subject, new_mtmd.task_type,
+                                   new_mtmd.plan_ca_ref, custom)
+    new_subject = compose_subject(
+        task_id=str(task_id),
+        task_type=new_mtmd.task_type,
+        title=title,
+        parent_id=new_mtmd.parent_id,
+        plan_ca_ref=new_mtmd.plan_ca_ref,
+        custom=custom,
+    )
+    updates["subject"] = new_subject
 
     if update_task_file(task_id, updates):
         print(f"✅ Reparented #{task_id}: {old_parent} → {new_parent}")
@@ -6223,16 +6235,26 @@ def cmd_task_scope_set(args: argparse.Namespace) -> int:
 
 def cmd_task_scope_show(args: argparse.Namespace) -> int:
     """Display current scope with status."""
-    from .task.scope import get_active_scope
+    from .task.scope import get_active_scope, find_orphaned_scope_tasks
 
     tasks = get_active_scope()
-    if not tasks:
+    orphans = find_orphaned_scope_tasks()
+    if not tasks and not orphans:
         print("No active scope.")
         return 0
 
     active = [t for t in tasks if t["status"] == "active"]
     paused = [t for t in tasks if t["status"] == "paused"]
     inactive = [t for t in tasks if t["status"] == "inactive"]
+
+    if not tasks:
+        print(f"No active scope (event state empty).")
+        print(f"⚠️  {len(orphans)} task(s) carry stale scope_status with no event history (orphans):")
+        for tid in sorted(orphans, key=lambda x: int(x) if x.isdigit() else 0):
+            print(f"   🧟 #{tid} (mtmd: {orphans[tid]})")
+        print("   Heal with: macf_tools task scope remove <ids>  (drop from scope)")
+        print("         or:  macf_tools task scope pause <ids> --justification ...  (adopt as paused)")
+        return 0
 
     summary_parts = [f"{len(active)} active"]
     if paused:
@@ -6245,6 +6267,12 @@ def cmd_task_scope_show(args: argparse.Namespace) -> int:
         print(f"   ⏸️  #{t['id']} {t['subject']}")
     for t in inactive:
         print(f"   ✅ #{t['id']} {t['subject']}")
+    if orphans:
+        print(f"⚠️  {len(orphans)} task(s) carry stale scope_status with no event history (orphans):")
+        for tid in sorted(orphans, key=lambda x: int(x) if x.isdigit() else 0):
+            print(f"   🧟 #{tid} (mtmd: {orphans[tid]})")
+        print("   Heal with: macf_tools task scope remove <ids>  (drop from scope)")
+        print("         or:  macf_tools task scope pause <ids> --justification ...  (adopt as paused)")
     return 0
 
 
@@ -8851,12 +8879,42 @@ def _build_parser() -> argparse.ArgumentParser:
                             help="output HTML path (default: /tmp/macf_md_*.html)")
     md_present.set_defaults(func=cmd_markdown_present)
 
+    # ── opsec ────────────────────────────────────────────────────────────
+    opsec_parser = sub.add_parser("opsec", help="private-context leakage gates for public repos")
+    opsec_sub = opsec_parser.add_subparsers(dest="opsec_cmd")
+    opsec_install = opsec_sub.add_parser(
+        "install-hook",
+        help="install a pre-commit gate that rejects staged private-context leaks")
+    opsec_install.add_argument("repo", help="path to the target git repository")
+    opsec_install.add_argument("--profile", default=None,
+                               help="pattern profile JSON (default: agent-home default profile, created if absent)")
+    opsec_install.set_defaults(func=cmd_opsec_install_hook)
+
     # ── shell ────────────────────────────────────────────────────────────
     shell_parser = sub.add_parser("shell", help="shell integration (tab completion)")
     shell_sub = shell_parser.add_subparsers(dest="shell_cmd")
     shell_sub.add_parser("setup", help="print tab completion setup instructions").set_defaults(func=cmd_shell_setup)
 
     return p
+
+
+def cmd_opsec_install_hook(args: argparse.Namespace) -> int:
+    """Install the private-context leakage pre-commit gate into a repo."""
+    from pathlib import Path
+    from .opsec import install_hook
+
+    try:
+        profile = Path(args.profile) if args.profile else None
+        facts = install_hook(Path(args.repo), profile)
+    except ValueError as e:
+        print(f"❌ {e}")
+        return 1
+    print("✅ OPSEC pre-commit gate installed")
+    print(f"   Repo:    {facts['repo']}")
+    print(f"   Hooks:   {facts['hooks_dir']}")
+    print(f"   Profile: {facts['profile']} (edit patterns there; NEVER commit it)")
+    print("   Bypass for reviewed disclosures: git commit --no-verify")
+    return 0
 
 
 def cmd_markdown_present(args: argparse.Namespace) -> int:

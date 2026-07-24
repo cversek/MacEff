@@ -916,8 +916,12 @@ def detect_graph_gaps(kg: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any
                 "target_cluster": target_cluster or "isolated",
             })
 
-    # Check ideas
+    # Check ideas. Archived ideas are retired seeds -- suggesting new links
+    # for them is pure noise, so they are excluded from gap analysis (they
+    # stay in the graph itself for historical edges).
     for idea_id, idea in ideas.items():
+        if idea.get("status") == "archived":
+            continue
         deg = len(edges.get(idea_id, set()))
         _check_node(idea_id, idea.get("title", ""), "idea", deg)
 

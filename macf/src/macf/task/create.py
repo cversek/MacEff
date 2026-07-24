@@ -81,9 +81,12 @@ def _unprotect_for_creation(dir_path: Path) -> Generator[None, None, None]:
     try:
         yield
     finally:
-        # Always protect after creation (even if it wasn't protected before)
-        # This makes protection the default state
-        os.chmod(dir_path, stat.S_IRUSR | stat.S_IXUSR | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)  # 555
+        # Symmetric restoration: put back exactly the mode we found. Dirs are
+        # born protected (see the not-exists branch above), so protected stays
+        # protected; a dir the operator deliberately made writable must not be
+        # hijacked to 555 as a side effect of a create -- especially a FAILED
+        # one, which used to strand the store read-only mid-cleanup.
+        os.chmod(dir_path, stat.S_IMODE(current_mode))
 
 # ANSI escape codes for dim text (CC UI renders these!)
 ANSI_DIM = "\033[2m"
@@ -97,6 +100,35 @@ ANSI_STRIKE_OFF = "\033[29m"
 
 # Sentinel task ID (reserved system ID)
 SENTINEL_TASK_ID = "000"
+
+
+def _compose_type_part(task_type: str, plan_ca_ref: Optional[str] = None,
+                       custom: Optional[dict] = None) -> str:
+    """The type-marker segment of a composed subject (e.g. '🐛 BUG:', '🔧', '📋').
+
+    Shared by compose_subject and title_from_subject so the two directions
+    agree on the exact marker text.
+    """
+    # PHASE type: 📋 if has subplan (plan_ca_ref), - if not
+    if task_type == "PHASE":
+        return "📋" if plan_ca_ref else "-"
+    type_map = {
+        "MISSION": "🗺️ MISSION:",
+        "EXPERIMENT": "🧪 EXPERIMENT:",
+        "DETOUR": "↩️ DETOUR:",
+        "DELEG_PLAN": "📜 DELEG:",
+        "BUG": "🐛 BUG:",
+        "TASK": "🔧",  # Generic task with wrench emoji
+    }
+    # GH_ISSUE has special format: 🐙 GH/owner/repo#N [label]: title
+    if task_type == "GH_ISSUE" and custom:
+        owner = custom.get("gh_owner", "?")
+        repo = custom.get("gh_repo", "?")
+        issue_num = custom.get("gh_issue_number", "?")
+        labels = custom.get("gh_labels", [])
+        label_str = f" [{labels[0]}]" if labels else ""
+        return f"🐙 GH/{owner}/{repo}#{issue_num}{label_str}:"
+    return type_map.get(task_type, "")
 
 
 def compose_subject(task_id: str, task_type: str, title: str,
@@ -129,31 +161,30 @@ def compose_subject(task_id: str, task_type: str, title: str,
     else:
         parent_part = ""
 
-    # Type emoji/marker
-    # PHASE type: 📋 if has subplan (plan_ca_ref), - if not
-    if task_type == "PHASE":
-        type_part = "📋" if plan_ca_ref else "-"
-    else:
-        type_map = {
-            "MISSION": "🗺️ MISSION:",
-            "EXPERIMENT": "🧪 EXPERIMENT:",
-            "DETOUR": "↩️ DETOUR:",
-            "DELEG_PLAN": "📜 DELEG:",
-            "BUG": "🐛 BUG:",
-            "TASK": "🔧",  # Generic task with wrench emoji
-        }
-        # GH_ISSUE has special format: 🐙 GH/owner/repo#N [label]: title
-        if task_type == "GH_ISSUE" and custom:
-            owner = custom.get("gh_owner", "?")
-            repo = custom.get("gh_repo", "?")
-            issue_num = custom.get("gh_issue_number", "?")
-            labels = custom.get("gh_labels", [])
-            label_str = f" [{labels[0]}]" if labels else ""
-            type_part = f"🐙 GH/{owner}/{repo}#{issue_num}{label_str}:"
-        else:
-            type_part = type_map.get(task_type, "")
+    # Type emoji/marker (shared with title_from_subject via _compose_type_part)
+    type_part = _compose_type_part(task_type, plan_ca_ref, custom)
 
     return f"{id_part}{parent_part} {type_part} {title}"
+
+
+def title_from_subject(subject: str, task_type: str,
+                       plan_ca_ref: Optional[str] = None,
+                       custom: Optional[dict] = None) -> str:
+    """Recover the plain title from a composed subject — the inverse of
+    compose_subject.
+
+    Robust to a stale or mismatched ``[^#N]`` parent marker: it strips ANY
+    parent marker present, not the one the caller expects. This lets
+    ``task reparent`` recompose a fresh subject even when the MTMD ``title``
+    field was never stored (the Bug-3 gap that left stale parent markers).
+    """
+    s = re.sub(r'\033\[[0-9;]*m', '', subject)   # strip ANSI
+    s = re.sub(r'^\s*#\d+\s*', '', s)             # id prefix (padded)
+    s = re.sub(r'^\[\^#\d+\]\s*', '', s)          # any parent marker
+    type_part = _compose_type_part(task_type, plan_ca_ref, custom)
+    if type_part and s.startswith(type_part):
+        s = s[len(type_part):]
+    return s.strip()
 
 
 def _ensure_sentinel_task(session_path: Path) -> None:
@@ -298,7 +329,8 @@ def _create_task_file(
     description: str,
     status: str = "pending",
     session_uuid: Optional[str] = None,
-    blocked_by: Optional[List[str]] = None
+    blocked_by: Optional[List[str]] = None,
+    overwrite: bool = False
 ) -> Path:
     """Create task JSON file directly.
 
@@ -306,6 +338,11 @@ def _create_task_file(
     - Temporarily unprotects directory if protected
     - Creates the task file
     - Re-protects directory (protection becomes default state)
+
+    overwrite=True finalizes a provisional stub the caller already reserved at
+    this id (the SPRINT/PLAY_TIME reserve-then-finalize pattern); it skips the
+    collision guard for that one write. Leave False everywhere else so a real
+    id race still turns into an error instead of silent clobber.
     """
     reader = TaskReader(session_uuid)
 
@@ -363,7 +400,7 @@ def _create_task_file(
     # this guard is the safety net that turns a silent data loss into an error.
     from .reader import resolve_task_file
     existing = resolve_task_file(reader.session_path, str(task_id)) if reader.session_path.exists() else None
-    if existing is not None:
+    if existing is not None and not overwrite:
         raise FileExistsError(
             f"Task #{task_id} already exists at {existing}. Refusing to overwrite "
             f"(possible concurrent create or stale id). Re-run to allocate a fresh id."
@@ -1572,7 +1609,8 @@ def create_sprint(
     # Simpler subject using compose_subject pattern
     subject = f"{ANSI_DIM}{('  #' + str(task_id)).rjust(4)}{ANSI_DIM_OFF} 🏃 SPRINT: {title}"
 
-    task_file = _create_task_file(task_id, subject, description, session_uuid=session_uuid)
+    # overwrite=True: finalize the provisional stub reserved at this id above
+    task_file = _create_task_file(task_id, subject, description, session_uuid=session_uuid, overwrite=True)
 
     # ------------------------------------------------------------------
     # 6. Auto-start chain
@@ -1802,7 +1840,8 @@ def create_play_time(
     description = f"→ {ca_path_relative}\n\n{_generate_mtmd_block(mtmd)}"
     subject = f"{ANSI_DIM}{('  #' + str(task_id)).rjust(4)}{ANSI_DIM_OFF} ⏲️ PLAY_TIME: {title}"
 
-    task_file = _create_task_file(task_id, subject, description, session_uuid=session_uuid)
+    # overwrite=True: finalize the provisional stub reserved at this id above
+    task_file = _create_task_file(task_id, subject, description, session_uuid=session_uuid, overwrite=True)
 
     # ------------------------------------------------------------------
     # 6. Auto-start chain
