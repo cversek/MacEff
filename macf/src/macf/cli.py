@@ -4102,12 +4102,13 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
             if suffix:
                 text = f"{text} {suffix}"
 
-            # Scope indicator
+            # Scope indicator. Inactive scope gets NO marker: those tasks are
+            # completed, and the line already says so three ways (check icon,
+            # strikethrough, green timestamp) -- a fourth was pure noise, and
+            # the end-of-subject slot is reserved for the recency marker.
             if scope_state and task.id in scope_state:
                 if scope_state[task.id] == "active":
                     text += " 👀"
-                elif scope_state[task.id] == "inactive":
-                    text += " ✅"
 
             print(f"{prefix}{connector}{status_icon} {text}")
 
@@ -4143,8 +4144,6 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
         if scope_state and root.id in scope_state:
             if scope_state[root.id] == "active":
                 root_text += " 👀"
-            elif scope_state[root.id] == "inactive":
-                root_text += " ✅"
         print(f"{status_icon} {root_text}")
 
         # Print root task details (plan, notes) - extra indent beyond header
