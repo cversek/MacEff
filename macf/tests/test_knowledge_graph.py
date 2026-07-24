@@ -194,3 +194,43 @@ class TestIdeaGraphWikiLinks:
         graph = build_idea_graph()
         assert "valid-concept" in graph["wiki_index"]
         assert 4 in graph["wiki_index"]["valid-concept"]
+
+
+class TestGapDetectionExcludesArchived:
+    """Archived ideas are retired seeds; suggesting links for them is noise."""
+
+    def _write_idea(self, agent_root, idea_id, title, status, wiki_links):
+        ideas_dir = agent_root / "agent" / "public" / "ideas"
+        ideas_dir.mkdir(parents=True, exist_ok=True)
+        path = ideas_dir / f"{idea_id:03d}_2026-01-01_120000_test_idea.json"
+        path.write_text(json.dumps({
+            "schema_version": "1.0",
+            "id": idea_id,
+            "title": title,
+            "slug": f"test_idea_{idea_id}",
+            "status": status,
+            "category": "tooling",
+            "description": "fixture",
+            "links": {
+                "related_ideas": [],
+                "related_learnings": [],
+                "wiki_links": wiki_links,
+                "promoted_to": None,
+                "archived_reason": None,
+            },
+            "history": [],
+        }))
+
+    def test_archived_idea_generates_no_gap_suggestion(self, fake_agent_root, monkeypatch):
+        from macf.ideas import build_knowledge_graph, detect_graph_gaps
+        from macf.utils import paths as paths_mod
+        monkeypatch.setattr(paths_mod, "find_agent_home", lambda: fake_agent_root)
+        # Idea 1 establishes the concept; ideas 2 and 3 share a suggestible
+        # title, differing only in status.
+        self._write_idea(fake_agent_root, 1, "anchor", "captured", ["sonar_gate"])
+        self._write_idea(fake_agent_root, 2, "Sonar gate improvements", "captured", [])
+        self._write_idea(fake_agent_root, 3, "Sonar gate improvements", "archived", [])
+        gaps = detect_graph_gaps(build_knowledge_graph())
+        suggested_ids = {g["node_id"] for g in gaps if g["suggested_concept"] == "sonar_gate"}
+        assert "2" in suggested_ids
+        assert "3" not in suggested_ids

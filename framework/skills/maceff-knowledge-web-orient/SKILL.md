@@ -22,13 +22,25 @@ Orient to a task domain using the knowledge graph before diving into work.
 
 ```bash
 macf_tools policy navigate scholarship
+macf_tools policy navigate learnings
 ```
 
-Read the section that answers: "How do wiki-links create concept-mediated edges and what graph tooling exists?"
+Read the sections that answer:
+- (scholarship) "How do wiki-links create concept-mediated edges and what graph tooling exists?"
+- (learnings) "What is the Mandatory Consult Step -- when must I consult the learnings index for previously-encountered problems, where does the index live, and how does the cluster taxonomy trigger it?"
 
 ---
 
 ## The Orientation Workflow
+
+### Step 0: Consult the Learnings Index (Mandatory Consult Step)
+
+Orientation is one of the moments the learnings policy names for the Mandatory
+Consult Step. Do what that policy section prescribes: match this task against the
+consultation trigger's cluster taxonomy in auto-loaded memory, and where a cluster
+plausibly fits, open the learnings index and scan that cluster's activation hooks
+for a problem of the same class as this one. Reading a relevant prior learning
+before you start is the point of orienting; finding none is a valid, cheap outcome.
 
 ### Step 1: Identify Key Concepts
 
