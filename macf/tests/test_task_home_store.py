@@ -161,3 +161,43 @@ class TestLoopWatcherFlatStore:
         reader = TaskReader()
         assert reader.session_uuid == TaskReader.HOME_STORE_UUID
         assert reader.session_path == home_agent / "agent" / "public" / "tasks"
+
+
+class TestSprintPlayTimeNoSelfCollision:
+    """create_sprint/create_play_time reserve a provisional stub then finalize
+    at the same id; the PR #134 collision guard must not block that finalize
+    (BUG #157). Regression: both must create without raising and the finalized
+    file must carry the real subject, not the '(provisional)' stub.
+    """
+
+    def test_create_sprint_scoped_finalizes(self, home_agent):
+        from macf.task.create import create_task, create_sprint
+        a = create_task(title="target A", plan="x")
+        b = create_task(title="target B", plan="x")
+        res = create_sprint(
+            "renewal-style sprint",
+            scoped_task_ids=[a.task_id, b.task_id],
+            no_auto_start=True,
+            agent_root=home_agent,
+        )
+        sid = res["task_id"]
+        f = home_agent / "agent" / "public" / "tasks" / f"{sid}.json"
+        assert f.exists()
+        data = json.loads(f.read_text())
+        assert "provisional" not in data["subject"]
+        assert "🏃 SPRINT:" in data["subject"]
+
+    def test_create_play_time_children_finalizes(self, home_agent):
+        from macf.task.create import create_play_time
+        res = create_play_time(
+            "play block",
+            timer_minutes=30,
+            children_titles=["c1", "c2"],
+            no_auto_start=True,
+            agent_root=home_agent,
+        )
+        pid = res["task_id"]
+        f = home_agent / "agent" / "public" / "tasks" / f"{pid}.json"
+        assert f.exists()
+        data = json.loads(f.read_text())
+        assert "provisional" not in data["subject"]

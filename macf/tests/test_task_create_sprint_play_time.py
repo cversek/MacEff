@@ -73,7 +73,7 @@ def mock_task_infra(tmp_path, monkeypatch):
 
     def fake_create_task_file(task_id, subject, description,
                               status="pending", session_uuid=None,
-                              blocked_by=None):
+                              blocked_by=None, overwrite=False):
         path = tmp_path / f"{task_id}.json"
         path.write_text(json.dumps({"id": str(task_id), "subject": subject,
                                     "description": description, "status": status}))
