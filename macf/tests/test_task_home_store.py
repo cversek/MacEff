@@ -115,3 +115,49 @@ class TestReconcileOverwritesReadOnly:
         report = reconcile(apply=True)
         assert report["applied"] is True
         assert target.read_text().strip().startswith("{")
+
+
+class TestLoopWatcherFlatStore:
+    """task tree --loop must detect changes in a flat store dir (#144)."""
+
+    def test_mtime_none_and_missing_dir(self, tmp_path):
+        from macf.cli import get_tasks_mtime
+        assert get_tasks_mtime(None) == 0.0
+        assert get_tasks_mtime(tmp_path / "nope") == 0.0
+
+    def test_mtime_sees_flat_store_files(self, tmp_path):
+        import os
+        from macf.cli import get_tasks_mtime
+        store = tmp_path / "tasks"
+        store.mkdir()
+        task = store / "7.json"
+        task.write_text("{}")
+        first = get_tasks_mtime(store)
+        assert first > 0.0
+        # A later write must move the watermark (flat glob, no session subdirs)
+        os.utime(task, (first + 10, first + 10))
+        assert get_tasks_mtime(store) > first
+
+    def test_mtime_sees_hidden_files_and_dir_changes(self, tmp_path):
+        import os
+        from macf.cli import get_tasks_mtime
+        store = tmp_path / "tasks"
+        store.mkdir()
+        hidden = store / ".8.json"
+        hidden.write_text("{}")
+        base = get_tasks_mtime(store)
+        assert base > 0.0
+        os.utime(hidden, (base + 10, base + 10))
+        assert get_tasks_mtime(store) > base
+        # Deleting a file bumps the dir mtime -> watermark changes even
+        # though no surviving file mtime moved.
+        before = get_tasks_mtime(store)
+        hidden.unlink()
+        os.utime(store, (before + 20, before + 20))
+        assert get_tasks_mtime(store) != before
+
+    def test_loop_watches_session_path_not_legacy_root(self, home_agent):
+        # The watcher dir must be the resolved store, not ~/.claude/tasks root.
+        reader = TaskReader()
+        assert reader.session_uuid == TaskReader.HOME_STORE_UUID
+        assert reader.session_path == home_agent / "agent" / "public" / "tasks"
