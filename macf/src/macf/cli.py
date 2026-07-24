@@ -4711,16 +4711,24 @@ def cmd_task_reparent(args: argparse.Namespace) -> int:
     new_description = task.description_with_updated_mtmd(new_mtmd)
     updates = {"description": new_description}
 
-    # Recompose subject only when title is recoverable (Bug 3 invariant)
-    if new_mtmd.title is not None:
-        from .task.create import compose_subject
-        new_subject = compose_subject(
-            task_id=str(task_id),
-            task_type=new_mtmd.task_type,
-            title=new_mtmd.title,
-            parent_id=new_mtmd.parent_id,
-        )
-        updates["subject"] = new_subject
+    # Always recompose the subject so its [^#parent] marker tracks parent_id.
+    # When the MTMD title isn't stored, recover it from the current subject —
+    # closing the Bug-3 gap where a title-less task kept a stale parent marker.
+    from .task.create import compose_subject, title_from_subject
+    custom = new_mtmd.custom or None
+    title = new_mtmd.title
+    if title is None:
+        title = title_from_subject(task.subject, new_mtmd.task_type,
+                                   new_mtmd.plan_ca_ref, custom)
+    new_subject = compose_subject(
+        task_id=str(task_id),
+        task_type=new_mtmd.task_type,
+        title=title,
+        parent_id=new_mtmd.parent_id,
+        plan_ca_ref=new_mtmd.plan_ca_ref,
+        custom=custom,
+    )
+    updates["subject"] = new_subject
 
     if update_task_file(task_id, updates):
         print(f"✅ Reparented #{task_id}: {old_parent} → {new_parent}")
