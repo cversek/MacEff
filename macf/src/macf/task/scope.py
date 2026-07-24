@@ -151,10 +151,12 @@ def clear_scope(session_id: str = "") -> dict:
     scope = get_scope_state()
     active = [tid for tid, s in scope.items() if s == "active"]
     inactive = [tid for tid, s in scope.items() if s == "inactive"]
+    orphans = list(find_orphaned_scope_tasks())
 
     result = {
         "active_removed": active,
         "inactive_removed": inactive,
+        "orphans_swept": orphans,
         "success": False,
     }
 
@@ -168,9 +170,10 @@ def clear_scope(session_id: str = "") -> dict:
         },
     )
 
-    # Clear MTMD scope_status on all scoped tasks
+    # Clear MTMD scope_status on all scoped tasks, plus any orphans whose
+    # scope events were lost (their stale MTMD is what makes them orphans).
     if success:
-        for tid in active + inactive:
+        for tid in set(active + inactive + orphans):
             _update_task_scope_status(str(tid), None)
 
     result["success"] = success
@@ -228,14 +231,41 @@ def get_scope_state() -> Dict[str, str]:
                 state[tid] = "inactive"
         elif event_type == "scope_paused":
             for tid in data.get("task_ids", []):
-                if str(tid) in state and state[str(tid)] == "active":
-                    state[str(tid)] = "paused"
+                stid = str(tid)
+                # Unknown tids are adopted as paused: pausing implies scope
+                # membership, and this lets orphan-healing pause events
+                # (BUG: stale MTMD with lost event history) replay correctly.
+                if stid not in state or state[stid] == "active":
+                    state[stid] = "paused"
         elif event_type == "scope_unpaused":
             for tid in data.get("task_ids", []):
                 if str(tid) in state and state[str(tid)] == "paused":
                     state[str(tid)] = "active"
 
     return state
+
+
+def find_orphaned_scope_tasks() -> Dict[str, str]:
+    """Find tasks whose MTMD scope_status is set but which are absent from
+    the event-derived scope state.
+
+    Orphans arise when scope events are lost (legacy sessions, log rotation,
+    or clears that found an already-empty event state) while the durable
+    task-file MTMD keeps its scope_status. The tree renders such tasks as
+    scoped, but scope commands cannot see them -- the BUG this heals.
+
+    Returns:
+        Dict of {task_id: mtmd_scope_status} for statuses 'active'/'paused'.
+    """
+    from .reader import TaskReader
+
+    event_scope = get_scope_state()
+    orphans: Dict[str, str] = {}
+    for task in TaskReader().read_all_tasks():
+        mtmd_status = task.mtmd.scope_status if task.mtmd else None
+        if mtmd_status in ("active", "paused") and str(task.id) not in event_scope:
+            orphans[str(task.id)] = mtmd_status
+    return orphans
 
 
 def pause_scoped_tasks(task_ids: List[str], justification: str, session_id: str = "") -> dict:
@@ -254,17 +284,25 @@ def pause_scoped_tasks(task_ids: List[str], justification: str, session_id: str 
         Dict with 'paused_ids' (list, those that transitioned), 'skipped_ids'
         (list with reasons), 'success' (bool).
     """
-    result = {"paused_ids": [], "skipped_ids": [], "success": False}
+    result = {"paused_ids": [], "skipped_ids": [], "healed_ids": [], "success": False}
 
     if not justification or not justification.strip():
         result["skipped_ids"] = [{"id": tid, "reason": "missing_justification"} for tid in task_ids]
         return result
 
     scope = get_scope_state()
+    orphans = find_orphaned_scope_tasks()
+    healed: List[str] = []
     pausable: List[str] = []
     for tid in task_ids:
         sid = str(tid)
         if sid not in scope:
+            if sid in orphans:
+                # Stale MTMD scope_status with no event history: adopt and
+                # pause it so the durable state and event state re-converge.
+                pausable.append(sid)
+                healed.append(sid)
+                continue
             result["skipped_ids"].append({"id": sid, "reason": "not_in_scope"})
             continue
         if scope[sid] == "paused":
@@ -294,6 +332,7 @@ def pause_scoped_tasks(task_ids: List[str], justification: str, session_id: str 
             # Also append a task note for human audit (best-effort)
             add_task_note(tid, f"⏸️ SCOPE PAUSED: {justification}")
         result["paused_ids"] = pausable
+        result["healed_ids"] = healed
 
     result["success"] = success
     return result
@@ -397,12 +436,19 @@ def remove_from_scope(task_ids: List[str], session_id: str = "") -> dict:
     Returns:
         Dict with 'removed_ids', 'skipped_ids' (not in scope), 'success'.
     """
-    result = {"removed_ids": [], "skipped_ids": [], "success": False}
+    result = {"removed_ids": [], "skipped_ids": [], "healed_ids": [], "success": False}
     scope = get_scope_state()
+    orphans = find_orphaned_scope_tasks()
     removable: List[str] = []
     for tid in task_ids:
         sid = str(tid)
         if sid not in scope:
+            if sid in orphans:
+                # Stale MTMD with no event history: removing clears the MTMD
+                # and records the removal event -- the orphan is healed.
+                removable.append(sid)
+                result["healed_ids"].append(sid)
+                continue
             result["skipped_ids"].append({"id": sid, "reason": "not_in_scope"})
             continue
         removable.append(sid)
