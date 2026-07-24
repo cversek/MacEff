@@ -113,6 +113,44 @@ def isolated_events_log(tmp_path, monkeypatch):
     set_log_path(None)
 
 
+@pytest.fixture(autouse=True)
+def isolated_agent_home(tmp_path, monkeypatch):
+    """
+    Isolate the agent home so tests can never write into the live agent's
+    consciousness artifacts (ideas bank, task store, learnings, ...).
+
+    Why this exists: find_agent_home() is lru_cached. The test process
+    inherits the real MACEFF_AGENT_HOME_DIR from the developer's shell, so
+    whichever test resolves the home first pins the LIVE home into the cache
+    and every later per-test monkeypatch of the env var is silently ignored.
+    Three separate suite runs wrote test ideas into a live agent's bank
+    (2026-07-20 twice, 2026-07-22) before this fixture.
+
+    Applies to ALL tests (autouse). It:
+    - points MACEFF_AGENT_HOME_DIR at a per-test tmp home (inherited by
+      subprocess CLI invocations too)
+    - clears the find_agent_home cache before the test, so the tmp home
+      actually takes effect regardless of test order
+    - clears it again after, so no test leaks its home to the next
+
+    Tests that need their own home layout can still monkeypatch the env var
+    on top of this; the pre-cleared cache makes that reliable.
+
+    Yields:
+        Path to the isolated agent home
+    """
+    from macf.utils.paths import find_agent_home
+
+    test_home = tmp_path / "_macf_isolated_home"
+    test_home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(test_home))
+    find_agent_home.cache_clear()
+
+    yield test_home
+
+    find_agent_home.cache_clear()
+
+
 @pytest.fixture
 def mock_environment_detection():
     """Mock environment detection utilities."""
