@@ -4323,17 +4323,17 @@ def cmd_task_edit(args: argparse.Namespace) -> int:
     if field == "subject":
         print(f"❌ Direct subject editing is not allowed")
         print(f"   Subject is composed from task metadata (id, parent, type, title)")
-        print(f"   To change the title: macf_tools task metadata set {task_id_str} title \"New Title\"")
+        print(f"   To change the title: macf_tools task metadata set {task_id} title \"New Title\"")
         return 1
 
     # Block direct status editing - use lifecycle commands instead
     if field == "status":
         print(f"❌ Direct status editing is not allowed")
         print(f"   Use lifecycle commands instead:")
-        print(f"   • macf_tools task start {task_id_str}    → in_progress")
-        print(f"   • macf_tools task pause {task_id_str}    → pending")
-        print(f"   • macf_tools task complete {task_id_str} → completed")
-        print(f"   • macf_tools task archive {task_id_str}  → archived")
+        print(f"   • macf_tools task start {task_id}    → in_progress")
+        print(f"   • macf_tools task pause {task_id}    → pending")
+        print(f"   • macf_tools task complete {task_id} → completed")
+        print(f"   • macf_tools task archive {task_id}  → archived")
         return 1
 
     # Block direct description editing - preserves MTMD metadata
@@ -4341,8 +4341,8 @@ def cmd_task_edit(args: argparse.Namespace) -> int:
         print(f"❌ Direct description editing is not allowed")
         print(f"   Description contains MTMD metadata set during creation.")
         print(f"   Use structured commands instead:")
-        print(f"   • macf_tools task note {task_id_str} \"message\"  → append notes")
-        print(f"   • macf_tools task edit {task_id_str} plan \"ref\" → update plan reference")
+        print(f"   • macf_tools task note {task_id} \"message\"  → append notes")
+        print(f"   • macf_tools task edit {task_id} plan \"ref\" → update plan reference")
         return 1
 
     editable_fields = []
@@ -6229,16 +6229,26 @@ def cmd_task_scope_set(args: argparse.Namespace) -> int:
 
 def cmd_task_scope_show(args: argparse.Namespace) -> int:
     """Display current scope with status."""
-    from .task.scope import get_active_scope
+    from .task.scope import get_active_scope, find_orphaned_scope_tasks
 
     tasks = get_active_scope()
-    if not tasks:
+    orphans = find_orphaned_scope_tasks()
+    if not tasks and not orphans:
         print("No active scope.")
         return 0
 
     active = [t for t in tasks if t["status"] == "active"]
     paused = [t for t in tasks if t["status"] == "paused"]
     inactive = [t for t in tasks if t["status"] == "inactive"]
+
+    if not tasks:
+        print(f"No active scope (event state empty).")
+        print(f"⚠️  {len(orphans)} task(s) carry stale scope_status with no event history (orphans):")
+        for tid in sorted(orphans, key=lambda x: int(x) if x.isdigit() else 0):
+            print(f"   🧟 #{tid} (mtmd: {orphans[tid]})")
+        print("   Heal with: macf_tools task scope remove <ids>  (drop from scope)")
+        print("         or:  macf_tools task scope pause <ids> --justification ...  (adopt as paused)")
+        return 0
 
     summary_parts = [f"{len(active)} active"]
     if paused:
@@ -6251,6 +6261,12 @@ def cmd_task_scope_show(args: argparse.Namespace) -> int:
         print(f"   ⏸️  #{t['id']} {t['subject']}")
     for t in inactive:
         print(f"   ✅ #{t['id']} {t['subject']}")
+    if orphans:
+        print(f"⚠️  {len(orphans)} task(s) carry stale scope_status with no event history (orphans):")
+        for tid in sorted(orphans, key=lambda x: int(x) if x.isdigit() else 0):
+            print(f"   🧟 #{tid} (mtmd: {orphans[tid]})")
+        print("   Heal with: macf_tools task scope remove <ids>  (drop from scope)")
+        print("         or:  macf_tools task scope pause <ids> --justification ...  (adopt as paused)")
     return 0
 
 
