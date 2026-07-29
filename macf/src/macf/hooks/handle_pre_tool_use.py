@@ -236,8 +236,9 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 "  macf_tools task create task \"Title\"         # Standalone task\n\n"
                 "📚 For guidance: macf_tools policy navigate task_management"
             )
+            # deny (without continue:False) blocks the call but lets the agent
+            # read the reason and retry via the CLI (gh-154)
             return {
-                "continue": False,
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
                     "permissionDecision": "deny",
@@ -282,8 +283,9 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 f"{hint}\n\n"
                 "📚 For guidance: macf_tools policy navigate task_management"
             )
+            # deny (without continue:False) blocks the call but lets the agent
+            # read the reason and retry via the CLI (gh-154)
             return {
-                "continue": False,
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
                     "permissionDecision": "deny",
@@ -393,10 +395,10 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                         # AUTO_MODE: warn but continue
                         message_parts.append(f"⚠️ Bare cd detected - use subshell or absolute paths")
                     else:
-                        # MANUAL_MODE: Use permissionDecision pattern (like TodoWrite)
-                        # This shows as permission dialog, not scary "Error:"
+                        # MANUAL_MODE: deny (without continue:False) blocks the
+                        # call but lets the agent read the reason, rewrap the
+                        # command, and retry in the same turn (gh-154)
                         return {
-                            "continue": False,
                             "hookSpecificOutput": {
                                 "hookEventName": "PreToolUse",
                                 "permissionDecision": "deny",
