@@ -848,8 +848,33 @@ GH_ISSUE tasks bridge to external GitHub issues. Completion requires the agent t
    - The agent's `--report` text as the body (the agent's conscious, professional contribution)
    - Commit links (automated from `--commit` hashes)
    - Verification method (automated from `--verified` text)
-   - Agent calling card footer: `[AgentName: task#N breadcrumb]` for traceability
+   - Agent calling card footer: `[AgentName: task#N breadcrumb]` for traceability —
+     **opt-in only**, gated by `opsec.public_attribution` in `{agent_home}/.maceff/config.json`
+     (default `false`; see below)
    - Issue closed with reason "completed"
+
+   **Calling-card attribution is opt-in (`opsec.public_attribution`)**:
+
+   ```json
+   {
+     "opsec": {
+       "public_attribution": true
+     }
+   }
+   ```
+
+   🚨 **OPSEC WARNING**: enabling this publishes the agent's calling card
+   (moniker + id fragment) and breadcrumb on a **public** GitHub issue. The
+   pair is a deliberate link between public artifacts and the agent's private
+   task/transcript context: fully traceable by the agent's operator, innocuous
+   to third parties — but it still reveals to the public that an agent produced
+   the work and gives that agent a stable public identity. Default is OFF so
+   operator-proxy deployments (public work authored under the operator's
+   identity, no agent attribution) are safe out of the box. Turn it ON
+   deliberately — the intended case is dogfooding agents contributing to MacEff
+   or other repos where agent traceability is part of the development story.
+   The `--report` body itself must still never contain private-context
+   non-sequiturs; the gate covers only the structured footer.
 
    **Agent Responsibility in the Report**: The `--report` text IS the professional contribution. Draft it with the posture of an excellent OSS maintainer:
    - Thank the contributor for the report (if filed by someone other than the closing agent)
@@ -884,7 +909,7 @@ The gate pattern generalizes to any task type. Each gate redirects to its own po
 
 | Type | Gate Concept | Status |
 |------|-------------|--------|
-| GH_ISSUE | Commit citations + verification method + GitHub closeout + calling card | Implemented (DETOUR #99) |
+| GH_ISSUE | Commit citations + verification method + GitHub closeout + calling card (opt-in via opsec.public_attribution) | Implemented (DETOUR #99) |
 | MISSION | All phases completed | Future |
 | EXPERIMENT | Results documented | Future |
 | DELEG_PLAN | Delegation executed | Future |

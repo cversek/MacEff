@@ -6491,12 +6491,41 @@ def _commit_landed_in_merged_pr(repo_slug: str, commits: list) -> bool:
     return False
 
 
+def _public_attribution_enabled() -> bool:
+    """Read opsec.public_attribution from {agent_home}/.maceff/config.json.
+
+    Gates the calling-card footer on public GitHub close-out comments
+    (GH issue #156). Default False: operators running agents in proxy mode
+    (public artifacts authored under the operator's identity) must not leak
+    agent monikers, id fragments, or breadcrumbs to public surfaces.
+
+    🚨 OPSEC: setting this to true publishes the agent's calling card and
+    breadcrumb on public issues. The pair is only traceable by the agent's
+    operator (it links public artifacts back to private task/transcript
+    context) and is innocuous to third parties, but it still reveals that an
+    agent produced the work and gives it a stable public identity. Enable it
+    deliberately — e.g. for dogfooding agents contributing to MacEff itself —
+    never by default.
+    """
+    try:
+        from .utils.paths import find_agent_home
+        config_file = find_agent_home() / ".maceff" / "config.json"
+        if config_file.exists():
+            data = json.loads(config_file.read_text())
+            opsec = data.get("opsec", {}) or {}
+            return bool(opsec.get("public_attribution", False))
+    except (OSError, ValueError) as e:
+        print(f"⚠️ MACF: opsec config read failed: {e}", file=sys.stderr)
+    return False
+
+
 def _gh_issue_closeout(task_id: int, mtmd, args, breadcrumb: str) -> None:
     """Post close-out comment and close GitHub issue.
 
     The --report is the agent's conscious, professional contribution — passed
     through as the comment body. Automation adds structured metadata (commits,
-    verification) and a calling card footer for agent traceability.
+    verification) and — only when opsec.public_attribution is enabled — a
+    calling card footer for agent traceability (GH issue #156).
 
     Closure semantics (GH issue #79): the upstream issue is closed ONLY if at
     least one of the supplied --commit hashes is verifiably in a merged PR on
@@ -6518,20 +6547,12 @@ def _gh_issue_closeout(task_id: int, mtmd, args, breadcrumb: str) -> None:
         print("   ⚠️  Missing GitHub metadata — skipping GitHub closeout")
         return
 
-    # Resolve agent identity for calling card
-    try:
-        from .utils.identity import get_agent_identity
-        agent_name = get_agent_identity()
-    except (ImportError, OSError) as e:
-        print(f"⚠️ MACF: agent identity resolution failed: {e}", file=sys.stderr)
-        agent_name = "unknown"
-
     repo_slug = f"{gh_owner}/{gh_repo}"
 
     # Compose close-out comment:
     # - Report body (agent's conscious contribution)
     # - Structured commits and verification
-    # - Calling card footer
+    # - Calling card footer (opt-in via opsec.public_attribution — issue #156)
     comment_lines = ["## Close-out Report", ""]
     comment_lines.append(args.report)
 
@@ -6545,9 +6566,17 @@ def _gh_issue_closeout(task_id: int, mtmd, args, breadcrumb: str) -> None:
         comment_lines.append("")
         comment_lines.append(f"**Verification:** {args.verified}")
 
-    comment_lines.append("")
-    comment_lines.append("---")
-    comment_lines.append(f"*[{agent_name}: task#{task_id} {breadcrumb}]*")
+    if _public_attribution_enabled():
+        # Resolve agent identity for calling card
+        try:
+            from .utils.identity import get_agent_identity
+            agent_name = get_agent_identity()
+        except (ImportError, OSError) as e:
+            print(f"⚠️ MACF: agent identity resolution failed: {e}", file=sys.stderr)
+            agent_name = "unknown"
+        comment_lines.append("")
+        comment_lines.append("---")
+        comment_lines.append(f"*[{agent_name}: task#{task_id} {breadcrumb}]*")
 
     comment_body = "\n".join(comment_lines)
 
