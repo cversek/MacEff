@@ -26,6 +26,16 @@ DEFAULT_HOST = "127.0.0.1"
 PID_FILE_NAME = "macf_proxy.pid"
 LOG_FILE_NAME = "agent_api_log.jsonl"
 
+# aiohttp's web.Application defaults to client_max_size=1 MiB and rejects larger
+# bodies with 413 *before* any handler runs (so nothing is logged). Conversation
+# requests routinely exceed 1 MiB, and Claude Code renders any 413 as
+# "Request too large (max 32MB)" — a hardcoded label unrelated to the real limit.
+# Its recovery then strips images/documents; with none present the retry is
+# byte-identical, so the session wedges permanently (even /compact fails, since
+# the compaction request takes the same path). Cap generously instead: a
+# pass-through proxy must not impose a limit stricter than upstream's.
+MAX_REQUEST_BYTES = int(os.environ.get("MACF_PROXY_MAX_REQUEST_BYTES", 256 * 1024 * 1024))
+
 
 # --------------- Feature gates ---------------
 
@@ -543,7 +553,7 @@ def _create_app():
         if _client_session and not _client_session.closed:
             await _client_session.close()
 
-    app = web.Application()
+    app = web.Application(client_max_size=MAX_REQUEST_BYTES)
     app.router.add_post("/v1/messages", handle_messages)
     app.router.add_route("*", "/{path_info:.*}", handle_catchall)
     app.on_cleanup.append(on_cleanup)
