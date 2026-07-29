@@ -12,6 +12,7 @@ Architecture:
 """
 
 import json
+import logging
 import os
 import signal
 import sys
@@ -104,6 +105,97 @@ def _log_event(event: dict) -> None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with open(log_path, "a") as f:
         f.write(json.dumps(event) + "\n")
+
+
+# --------------- Failure-path observability ---------------
+#
+# Every instrument in this proxy used to sit *after* `await request.read()` in
+# the handler — which is precisely the call that fails when a request exceeds
+# client_max_size. Rejected requests therefore produced no log line at all, and
+# that silence was repeatedly misread as "the request never reached the proxy".
+# An empty log is only evidence of absence if the log is known to cover the
+# failure mode. These three additions make it cover them.
+
+
+def _log_error_event(request, status: int, kind: str, detail: str) -> None:
+    """Record a failed request in the SAME log readers already watch.
+
+    Idempotent per request: a handler may log a precise diagnosis before the
+    middleware sees the same exception, and one failure should be one record.
+    """
+    try:
+        if request.get("_macf_error_logged"):
+            return
+        request["_macf_error_logged"] = True
+    except (AttributeError, TypeError):
+        pass  # not a mutable request mapping — log anyway
+
+    _log_event({
+        "type": "api_error",
+        "ts": int(time.time()),
+        "status": status,
+        "kind": kind,
+        "detail": detail[:500],
+        "method": getattr(request, "method", "?"),
+        "path": str(getattr(request, "path", "?")),
+        "content_length": getattr(request, "content_length", None),
+        "client_max_size": MAX_REQUEST_BYTES,
+    })
+    print(f"[proxy:error] {status} {kind}: {detail[:200]}", file=sys.stderr)
+
+
+def _make_error_middleware():
+    """Middleware logging every failed request, including framework rejections.
+
+    aiohttp enforces client_max_size inside request.read(), raising
+    HTTPRequestEntityTooLarge. Without this, that exception becomes a bare 413
+    on the wire with zero telemetry.
+    """
+    from aiohttp import web
+
+    @web.middleware
+    async def error_middleware(request, handler):
+        try:
+            response = await handler(request)
+        except web.HTTPException as exc:
+            kind = ("request_too_large_REJECTED_BY_THIS_PROXY"
+                    if exc.status == 413 else "http_exception")
+            _log_error_event(request, exc.status, kind, str(exc.reason or exc))
+            raise
+        except Exception as exc:
+            _log_error_event(request, 500, type(exc).__name__, str(exc))
+            raise
+        if response.status >= 400:
+            _log_error_event(request, response.status, "upstream_error_status", "")
+        return response
+
+    return error_middleware
+
+
+def _log_effective_config(port: int, host: str) -> None:
+    """Log the limits actually in force. Silent defaults are invisible policy."""
+    cfg = {
+        "type": "proxy_start",
+        "ts": int(time.time()),
+        "pid": os.getpid(),
+        "host": host,
+        "port": port,
+        "upstream": ANTHROPIC_API_URL,
+        "client_max_size": MAX_REQUEST_BYTES,
+        # Read the env directly rather than calling a gate helper: that helper
+        # lives on a feature branch, and a startup banner must never be the
+        # thing that crashes the server it is describing.
+        "rewrite_enabled": os.environ.get("MACF_PROXY_REWRITE", "off").strip().lower()
+        in ("on", "1", "true", "yes"),
+        "capture_dir": os.environ.get("MACF_PROXY_CAPTURE_DIR") or None,
+    }
+    _log_event(cfg)
+    print(
+        f"[proxy:start] pid={cfg['pid']} {host}:{port} -> {ANTHROPIC_API_URL} | "
+        f"client_max_size={MAX_REQUEST_BYTES:,}B | rewrite={cfg['rewrite_enabled']} | "
+        f"capture={cfg['capture_dir'] or 'off'}",
+        file=sys.stderr,
+    )
 
 
 # --------------- SSE metadata extraction ---------------
@@ -355,7 +447,17 @@ def _create_app():
 
     async def handle_messages(request: web.Request) -> web.StreamResponse:
         """Proxy /v1/messages with metadata logging."""
-        body = await request.read()
+        # Guarded explicitly: this is the call that raises when a request
+        # exceeds client_max_size, and it is the FIRST statement in the handler
+        # — so an unguarded failure here skips every instrument below it.
+        try:
+            body = await request.read()
+        except web.HTTPRequestEntityTooLarge as exc:
+            _log_error_event(
+                request, 413, "request_too_large_REJECTED_BY_THIS_PROXY",
+                f"body exceeds client_max_size={MAX_REQUEST_BYTES}: {exc}",
+            )
+            raise
 
         # Log request metadata
         req_meta = _extract_request_meta(body)
@@ -553,7 +655,10 @@ def _create_app():
         if _client_session and not _client_session.closed:
             await _client_session.close()
 
-    app = web.Application(client_max_size=MAX_REQUEST_BYTES)
+    app = web.Application(
+        client_max_size=MAX_REQUEST_BYTES,
+        middlewares=[_make_error_middleware()],
+    )
     app.router.add_post("/v1/messages", handle_messages)
     app.router.add_route("*", "/{path_info:.*}", handle_catchall)
     app.on_cleanup.append(on_cleanup)
@@ -579,6 +684,18 @@ def run_proxy(port: int = DEFAULT_PORT, host: str = DEFAULT_HOST) -> None:
     print(f"[proxy] listening on {host}:{port}", file=sys.stderr)
     print(f"[proxy] Log: {get_log_path()}", file=sys.stderr)
     print(f"[proxy] Activate: ANTHROPIC_BASE_URL=http://{host}:{port} claude", file=sys.stderr)
+
+    # aiohttp's access logger is enabled by default but emits at INFO, and
+    # nothing here ever configured logging — so every access record, including
+    # the 413s this proxy was issuing, was discarded before reaching the
+    # journal. Default-on instrumentation that is never wired up is worse than
+    # none: it looks like coverage. Wire it to stderr, which systemd captures.
+    logging.basicConfig(
+        level=logging.INFO,
+        stream=sys.stderr,
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    )
+    _log_effective_config(port, host)
 
     try:
         web.run_app(app, host=host, port=port, print=None)
