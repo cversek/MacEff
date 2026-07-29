@@ -686,8 +686,16 @@ class TestGHIssueCompletionGate:
 class TestGHIssueCloseoutFunction:
     """Test _gh_issue_closeout helper directly with mocked subprocess."""
 
-    def test_posts_comment_with_calling_card(self):
-        """Verify comment format includes report, commits, verification, calling card."""
+    @staticmethod
+    def _closeout_body(mock_run):
+        """Extract the --body payload from the gh issue comment call."""
+        comment_call = [c for c in mock_run.call_args_list
+                        if c[0][0][:3] == ['gh', 'issue', 'comment']][0]
+        cmd = comment_call[0][0]
+        return cmd[cmd.index('--body') + 1]
+
+    def test_posts_comment_with_calling_card_when_attribution_enabled(self):
+        """With opsec.public_attribution on: report, commits, verification, calling card."""
         from macf.cli import _gh_issue_closeout
         from macf.task.models import MacfTaskMetaData
 
@@ -699,20 +707,41 @@ class TestGHIssueCloseoutFunction:
         args.verified = 'Unit tests pass'
         bc = 's_test/c_1/g_abc/p_def/t_123'
 
-        with patch('subprocess.run', return_value=Mock(returncode=0, stdout='', stderr='')) as mock_run:
+        with patch('subprocess.run', return_value=Mock(returncode=0, stdout='', stderr='')) as mock_run, \
+             patch('macf.cli._public_attribution_enabled', return_value=True):
             _gh_issue_closeout(42, mtmd, args, bc)
             assert mock_run.call_count >= 2
-            # Find the comment call (gh issue comment ...)
-            comment_call = [c for c in mock_run.call_args_list
-                            if c[0][0][:3] == ['gh', 'issue', 'comment']][0]
-            cmd = comment_call[0][0]
-            body = cmd[cmd.index('--body') + 1]
+            body = self._closeout_body(mock_run)
             assert 'Close-out Report' in body
             assert 'Fixed the API bug' in body
             assert 'abc12345' in body  # truncated hash link
             assert 'Unit tests pass' in body
             assert 'task#42' in body
             assert bc in body
+
+    def test_omits_calling_card_by_default(self):
+        """OPSEC default (issue #156): no agent attribution on public comments."""
+        from macf.cli import _gh_issue_closeout
+        from macf.task.models import MacfTaskMetaData
+
+        mtmd = MacfTaskMetaData(task_type='GH_ISSUE', custom={
+            'gh_owner': 'testowner', 'gh_repo': 'testrepo', 'gh_issue_number': 42})
+        args = Mock()
+        args.report = 'Fixed the API bug'
+        args.commit = ['abc1234567890']
+        args.verified = 'Unit tests pass'
+        bc = 's_test/c_1/g_abc/p_def/t_123'
+
+        with patch('subprocess.run', return_value=Mock(returncode=0, stdout='', stderr='')) as mock_run, \
+             patch('macf.cli._public_attribution_enabled', return_value=False):
+            _gh_issue_closeout(42, mtmd, args, bc)
+            body = self._closeout_body(mock_run)
+            assert 'Close-out Report' in body
+            assert 'Fixed the API bug' in body
+            # No calling card, no breadcrumb, no trailing separator
+            assert 'task#42' not in body
+            assert bc not in body
+            assert not body.rstrip().endswith('---')
 
     def test_handles_missing_gh_cli(self):
         """_gh_issue_closeout handles FileNotFoundError gracefully."""
