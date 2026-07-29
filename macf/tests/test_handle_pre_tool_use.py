@@ -311,3 +311,62 @@ def test_anticipate_compound_shell_command(mock_dependencies):
     assert "🔨" in context
     # Old work mode should NOT appear — set-work replaces, not stacks
     assert "🔍" not in context
+
+
+# ==================== Deny-Without-Halt Tests (issue #154) ====================
+# permissionDecision "deny" must NOT be paired with continue:False — deny alone
+# rejects the tool call and feeds the reason back so the agent can retry in the
+# same turn; continue:False halts the whole turn (unrecoverable without a human).
+
+def _assert_deny_with_continuation(result):
+    hso = result["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny"
+    assert hso["permissionDecisionReason"]
+    # The critical regression check: no turn-halting flag on a recoverable deny
+    assert result.get("continue") is not False
+
+
+def test_taskcreate_deny_does_not_halt_turn(mock_dependencies):
+    """TaskCreate redirect denies the call but leaves the turn continuable."""
+    from macf.hooks.handle_pre_tool_use import run
+    import json
+
+    stdin = json.dumps({
+        "tool_name": "TaskCreate",
+        "tool_input": {"subject": "some task"}
+    })
+    result = run(stdin)
+
+    _assert_deny_with_continuation(result)
+    assert "Use CLI commands" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_taskupdate_deny_does_not_halt_turn(mock_dependencies):
+    """TaskUpdate redirect denies the call but leaves the turn continuable."""
+    from macf.hooks.handle_pre_tool_use import run
+    import json
+
+    stdin = json.dumps({
+        "tool_name": "TaskUpdate",
+        "tool_input": {"taskId": "7", "status": "completed"}
+    })
+    result = run(stdin)
+
+    _assert_deny_with_continuation(result)
+    assert "task complete" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_bare_cd_manual_mode_deny_does_not_halt_turn(mock_dependencies):
+    """MANUAL_MODE bare-cd guard denies the call but leaves the turn continuable."""
+    from macf.hooks.handle_pre_tool_use import run
+    import json
+
+    with patch('macf.hooks.handle_pre_tool_use.detect_auto_mode', return_value=(False, None)):
+        stdin = json.dumps({
+            "tool_name": "Bash",
+            "tool_input": {"command": "cd /some/path && make test"}
+        })
+        result = run(stdin)
+
+    _assert_deny_with_continuation(result)
+    assert "Bare 'cd'" in result["hookSpecificOutput"]["permissionDecisionReason"]
