@@ -10,6 +10,7 @@ import traceback
 from typing import Dict, Any
 
 from macf.utils import (
+    format_macf_brand,
     get_temporal_context,
     format_macf_footer,
     get_rich_environment_string,
@@ -146,7 +147,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             f"[{subagent_type}|{agent_id[:8]}]" if agent_id else
             f"[{subagent_type}]"
         )
-        message = f"""🏗️ MACF | DELEG_DRV Complete {tag_line}
+        message = f"""{format_macf_brand()} | DELEG_DRV Complete {tag_line}
 Current Time: {temporal_ctx['timestamp_formatted']}
 Day: {temporal_ctx['day_of_week']}
 Time of Day: {temporal_ctx['time_of_day']}
@@ -207,7 +208,7 @@ Delegation Drive Stats:
         })
         # Note: SubagentStop hook doesn't support hookSpecificOutput
         # (only PreToolUse, UserPromptSubmit, PostToolUse do)
-        error_msg = f"🏗️ MACF | ❌ SubagentStop hook error: {e}"
+        error_msg = f"{format_macf_brand()} | ❌ SubagentStop hook error: {e}"
         return {
             "continue": True,
             "systemMessage": error_msg
