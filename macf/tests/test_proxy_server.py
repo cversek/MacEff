@@ -261,3 +261,84 @@ class TestQueryStringReachesUpstreamLive:
         # Entitlement also rides on these; the hop-by-hop filter must not eat them.
         assert seen["beta"] == "context-1m-2025-08-07"
         assert seen["auth"] == "Bearer test-token"
+
+
+class TestWindowClampDetector:
+    """The 200K-window clamp is silent on the client side; the proxy must not be.
+
+    This is the instrument that would have collapsed a months-long hunt into one
+    log line. It is tested for the property that actually matters: it fires
+    BEFORE the ~167K compaction point, so the warning arrives while the session
+    is still alive to act on it.
+    """
+
+    def _reset(self):
+        from macf.proxy import server
+        server._window_warned = False
+
+    def test_fires_before_the_167k_compaction_point(self):
+        """A warning that arrives after the symptom is useless."""
+        from macf.proxy import server
+        assert server.WINDOW_WARN_AT < 167_000, (
+            "warn threshold must sit below the observed ~167K compaction point"
+        )
+
+    def test_warns_when_context_crosses_threshold(self, capsys):
+        from macf.proxy import server
+        self._reset()
+        server._warn_if_approaching_clamp({"input_tokens": 160_000})
+        err = capsys.readouterr().err
+        assert "_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL" in err, (
+            "the warning must name the remedy, not just report a number"
+        )
+        assert "160,000" in err
+
+    def test_silent_below_threshold(self, capsys):
+        from macf.proxy import server
+        self._reset()
+        server._warn_if_approaching_clamp({"input_tokens": 1_000})
+        assert capsys.readouterr().err == ""
+
+    def test_sums_cache_tokens_not_just_input_tokens(self, capsys):
+        """input_tokens alone is ~2 on a cached turn; summing is the whole point."""
+        from macf.proxy import server
+        self._reset()
+        server._warn_if_approaching_clamp({
+            "input_tokens": 2,
+            "cache_read_input_tokens": 155_000,
+            "cache_creation_input_tokens": 1_000,
+        })
+        assert "156,002" in capsys.readouterr().err
+
+    def test_warns_only_once_per_process(self, capsys):
+        from macf.proxy import server
+        self._reset()
+        server._warn_if_approaching_clamp({"input_tokens": 160_000})
+        capsys.readouterr()
+        server._warn_if_approaching_clamp({"input_tokens": 170_000})
+        assert capsys.readouterr().err == ""
+
+    def test_wired_into_log_event_for_api_responses(self, capsys, tmp_path,
+                                                    monkeypatch):
+        """Negative control on the wiring: the detector is useless if unreachable."""
+        from macf.proxy import server
+        self._reset()
+        monkeypatch.setattr(server, "get_log_path",
+                            lambda: tmp_path / "proxy.jsonl")
+        server._log_event({"type": "api_response",
+                           "usage": {"input_tokens": 160_000}})
+        assert "_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL" in capsys.readouterr().err
+
+    def test_log_event_does_not_recurse(self, capsys, tmp_path, monkeypatch):
+        """The detector logs an event itself; that must not re-enter the guard."""
+        from macf.proxy import server
+        self._reset()
+        monkeypatch.setattr(server, "get_log_path",
+                            lambda: tmp_path / "proxy.jsonl")
+        server._log_event({"type": "api_response",
+                           "usage": {"input_tokens": 160_000}})
+        import json as _json
+        lines = (tmp_path / "proxy.jsonl").read_text().strip().split("\n")
+        kinds = [_json.loads(x)["type"] for x in lines]
+        assert kinds.count("window_clamp_watch") == 1
+        assert kinds.count("api_response") == 1

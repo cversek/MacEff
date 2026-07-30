@@ -105,6 +105,12 @@ def _log_event(event: dict) -> None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with open(log_path, "a") as f:
         f.write(json.dumps(event) + "\n")
+    # Single choke point for response metadata, so the clamp detector hangs here
+    # rather than being duplicated across the streaming and non-streaming paths.
+    # The guard also terminates the one-level recursion: the detector's own event
+    # is not an "api_response", so it cannot re-enter.
+    if event.get("type") == "api_response":
+        _warn_if_approaching_clamp(event.get("usage") or {})
 
 
 # --------------- Failure-path observability ---------------
@@ -203,6 +209,64 @@ def _rewrite_enabled() -> bool:
     )
 
 
+# --------------- 200K-window clamp detector ---------------
+#
+# This proxy's own existence downgrades the client's context window, silently.
+#
+# Observed behaviour: when ANTHROPIC_BASE_URL points at a host that is not
+# api.anthropic.com, the client stops extending the 1M long-context window and
+# falls back to 200K -- so it auto-compacts around 167K while every UI surface
+# still reports 1M. Nothing is logged, warned, or errored on the client side;
+# the only symptom is compacting early. That is what made it cost months.
+#
+# Established by A/B, not by assumption: same conversation, proxy ON compacted
+# at 166,403 and again at 167,108 (a 700-token spread); proxy OFF ran past 180K
+# with no compaction at all. The undocumented env var below restores the window
+# with the proxy in place. Its name is the clue to the rule -- the client wants
+# to know the endpoint is first-party, and decides that from the base URL host.
+#
+# The proxy cannot read the client's env, so it cannot check the flag directly.
+# What it CAN see is every request's true input size. So it says the actionable
+# thing at the moment the evidence first exists, rather than leaving a silence to
+# be misread later. Warn once per process; this is a config fault, not an event.
+
+CLAMPED_WINDOW = 200_000
+# Warn below the ~167K compaction point so the message lands BEFORE the symptom.
+WINDOW_WARN_AT = 150_000
+_window_warned = False
+
+
+def _warn_if_approaching_clamp(usage: dict) -> None:
+    """Say the actionable thing while the session is still alive to act on it."""
+    global _window_warned
+    if _window_warned or not isinstance(usage, dict):
+        return
+    total = (
+        (usage.get("input_tokens") or 0)
+        + (usage.get("cache_creation_input_tokens") or 0)
+        + (usage.get("cache_read_input_tokens") or 0)
+    )
+    if total < WINDOW_WARN_AT:
+        return
+    _window_warned = True
+    _log_event({
+        "type": "window_clamp_watch", "ts": int(time.time()),
+        "input_tokens": total, "clamped_window": CLAMPED_WINDOW,
+        "remedy_env": "_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL",
+    })
+    print(
+        f"[proxy:window] ⚠️  context reached {total:,} tokens.\n"
+        f"  If this session compacts before ~{CLAMPED_WINDOW:,}, the client is on the\n"
+        f"  200K fallback window, NOT the 1M it displays. Routing through this proxy\n"
+        f"  makes ANTHROPIC_BASE_URL's host != api.anthropic.com, and the client then\n"
+        f"  withholds the 1M long-context window.\n"
+        f"  Remedy: set _CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1 in the client's env\n"
+        f"  (accurate here -- this proxy forwards to {ANTHROPIC_API_URL} unmodified).\n"
+        f"  Verify with the ACTUAL compaction point, never a status line/banner.",
+        file=sys.stderr,
+    )
+
+
 def _log_effective_config(port: int, host: str) -> None:
     """Log the limits actually in force. Silent defaults are invisible policy."""
     cfg = {
@@ -221,6 +285,15 @@ def _log_effective_config(port: int, host: str) -> None:
         f"[proxy:start] pid={cfg['pid']} {host}:{port} -> {ANTHROPIC_API_URL} | "
         f"client_max_size={MAX_REQUEST_BYTES:,}B | rewrite={cfg['rewrite_enabled']} | "
         f"capture={cfg['capture_dir'] or 'off'}",
+        file=sys.stderr,
+    )
+    # Stated at every start because it is a precondition of correct operation,
+    # not an incident: any client pointed here MUST also set this, or it silently
+    # runs on the 200K fallback window while displaying 1M.
+    print(
+        "[proxy:start] clients routed here MUST set "
+        "_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1, else their context window "
+        f"silently falls back to {CLAMPED_WINDOW:,} (compacts ~167K, still displays 1M).",
         file=sys.stderr,
     )
 
