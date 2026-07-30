@@ -166,7 +166,22 @@ def _make_error_middleware():
             _log_error_event(request, 500, type(exc).__name__, str(exc))
             raise
         if response.status >= 400:
-            _log_error_event(request, response.status, "upstream_error_status", "")
+            # Capture the upstream error BODY, not just the status. A 429 whose
+            # message says "…required for long context" makes the client clamp
+            # its context window 1M -> 200K for the rest of the process, after
+            # which it refuses to send at ~180K while still displaying 1M. The
+            # status alone cannot distinguish that from an ordinary rate limit,
+            # and we lost days to exactly that ambiguity. Streaming responses
+            # expose no .body; record what is available and say which it was.
+            detail = ""
+            body = getattr(response, "body", None)
+            if isinstance(body, (bytes, bytearray)):
+                detail = bytes(body)[:2048].decode("utf-8", "replace")
+            elif body is not None:
+                detail = f"<unreadable body type {type(body).__name__}>"
+            else:
+                detail = "<streaming response; body not buffered>"
+            _log_error_event(request, response.status, "upstream_error_status", detail)
         return response
 
     return error_middleware

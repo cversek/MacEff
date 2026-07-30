@@ -157,3 +157,51 @@ class TestRewriteGate:
         assert "if _rewrite_enabled():" in src
         gated = src.split("if _rewrite_enabled():", 1)[1]
         assert "rewrite_messages(messages)" in gated.split("# 3.", 1)[0]
+
+
+class TestUpstreamErrorBodyCaptured:
+    """A 4xx status without its body is not a diagnosis.
+
+    The middleware logged upstream_error_status with detail="" hardcoded. When
+    a 429 arrived, we could see that it happened but not what it said -- and
+    the distinction mattered enormously: a long-context-credits 429 makes the
+    client permanently clamp its context window to 200K, while an ordinary rate
+    limit is harmless. Same status, opposite meaning, no way to tell them apart.
+    """
+
+    def _log(self, tmp_path, monkeypatch, response):
+        import asyncio, json
+        monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(tmp_path))
+        from macf.proxy import server
+
+        class FakeRequest(dict):
+            method = "POST"
+            path = "/v1/messages"
+            headers = {}
+
+        async def handler(_req):
+            return response
+
+        mw = server._make_error_middleware()
+        asyncio.run(mw(FakeRequest(), handler))
+
+        log = tmp_path / ".maceff" / "agent_api_log.jsonl"
+        if not log.exists():
+            log = next(tmp_path.rglob("agent_api_log.jsonl"))
+        recs = [json.loads(x) for x in log.read_text().splitlines() if x.strip()]
+        return [r for r in recs if r.get("kind") == "upstream_error_status"][-1]
+
+    def test_body_is_recorded(self, tmp_path, monkeypatch):
+        class Resp:
+            status = 429
+            body = b'{"error":{"message":"Extra usage is required for long context"}}'
+        rec = self._log(tmp_path, monkeypatch, Resp())
+        assert "long context" in rec["detail"]
+
+    def test_streaming_body_is_named_not_silently_empty(self, tmp_path, monkeypatch):
+        class Resp:
+            status = 429
+            body = None
+        rec = self._log(tmp_path, monkeypatch, Resp())
+        assert rec["detail"], "an empty detail is indistinguishable from 'no body existed'"
+        assert "streaming" in rec["detail"]
