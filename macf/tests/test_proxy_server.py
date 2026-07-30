@@ -205,3 +205,59 @@ class TestUpstreamErrorBodyCaptured:
         rec = self._log(tmp_path, monkeypatch, Resp())
         assert rec["detail"], "an empty detail is indistinguishable from 'no body existed'"
         assert "streaming" in rec["detail"]
+
+
+class TestQueryStringReachesUpstreamLive:
+    """End-to-end proof, against a real upstream, that ?beta=true survives.
+
+    The source-level assertions above catch the regression, but only this
+    catches it if the URL is ever built somewhere new. Verified to FAIL when
+    request.path_qs is reverted to request.path -- an assertion never observed
+    failing is not evidence.
+    """
+
+    def test_query_string_and_entitlement_headers_survive(self, tmp_path, monkeypatch):
+        import asyncio, json
+        from aiohttp import web, ClientSession
+        monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(tmp_path))
+        from macf.proxy import server
+
+        seen = {}
+
+        async def echo(request):
+            seen["path_qs"] = request.path_qs
+            seen["beta"] = request.headers.get("anthropic-beta")
+            seen["auth"] = request.headers.get("authorization")
+            return web.json_response({"ok": True})
+
+        async def scenario():
+            up = web.Application()
+            up.router.add_route("*", "/{p:.*}", echo)
+            r1 = web.AppRunner(up); await r1.setup()
+            s1 = web.TCPSite(r1, "127.0.0.1", 8741); await s1.start()
+
+            monkeypatch.setattr(server, "ANTHROPIC_API_URL", "http://127.0.0.1:8741")
+            r2 = web.AppRunner(server._create_app()); await r2.setup()
+            s2 = web.TCPSite(r2, "127.0.0.1", 8742); await s2.start()
+            try:
+                async with ClientSession() as c:
+                    await c.post(
+                        "http://127.0.0.1:8742/v1/messages?beta=true",
+                        data=json.dumps({"model": "claude-opus-5", "messages": []}),
+                        headers={
+                            "anthropic-beta": "context-1m-2025-08-07",
+                            "authorization": "Bearer test-token",
+                            "content-type": "application/json",
+                        },
+                    )
+            finally:
+                await r2.cleanup(); await r1.cleanup()
+
+        asyncio.run(scenario())
+
+        # The query string carries the beta opt-in. Dropping it caused upstream
+        # to answer as if the long-context entitlement were absent.
+        assert seen["path_qs"] == "/v1/messages?beta=true"
+        # Entitlement also rides on these; the hop-by-hop filter must not eat them.
+        assert seen["beta"] == "context-1m-2025-08-07"
+        assert seen["auth"] == "Bearer test-token"
