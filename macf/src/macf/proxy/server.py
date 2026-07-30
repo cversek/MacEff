@@ -337,6 +337,98 @@ def _parse_sse_chunk(chunk: bytes, meta: dict) -> None:
             pass  # Partial JSON across chunk boundary — acceptable loss
 
 
+# --------------- Bounded, guarded capture ---------------
+#
+# Capture was shipped as an unbounded dump: one full request + one full response
+# per call, never evicted. Measured at 117 MB / 427 files after a single session
+# (up from 73 MB within that same session). It was also UNGUARDED -- the write
+# sat outside the handler's try block, so a full disk would have taken the proxy
+# down with a 500 rather than degrading to "no capture". A diagnostic that can
+# kill the thing it observes is a liability, and an unbounded one eventually
+# fills the disk it shares with everything else.
+#
+# Both properties are fixed here: writes never raise, and total capture size is
+# capped with oldest-first eviction (a ring buffer by bytes rather than count,
+# since request sizes vary by orders of magnitude).
+
+CAPTURE_MAX_MB = 512
+_capture_writes = 0
+# Eviction scans the directory, so amortise it rather than paying per write.
+_CAPTURE_EVICT_EVERY = 20
+
+
+def _capture_cap_bytes() -> int:
+    """Cap in bytes. MACF_PROXY_CAPTURE_MAX_MB=0 disables the bound entirely."""
+    raw = os.environ.get("MACF_PROXY_CAPTURE_MAX_MB")
+    try:
+        mb = int(raw) if raw is not None and raw.strip() != "" else CAPTURE_MAX_MB
+    except ValueError:
+        mb = CAPTURE_MAX_MB
+    return max(0, mb) * 1024 * 1024
+
+
+def _capture_evict(cap: Path) -> None:
+    """Drop oldest captures until under the cap. Never raises."""
+    limit = _capture_cap_bytes()
+    if limit <= 0:
+        return
+    try:
+        files = []
+        for f in cap.glob("*.json"):
+            try:
+                files.append((f.stat().st_mtime, f.stat().st_size, f))
+            except OSError:
+                continue
+        total = sum(s for _, s, _ in files)
+        if total <= limit:
+            return
+        files.sort(key=lambda x: x[0])  # oldest first
+        freed = removed = 0
+        for _, size, f in files:
+            if total - freed <= limit:
+                break
+            try:
+                f.unlink()
+            except OSError:
+                continue
+            freed += size
+            removed += 1
+        if removed:
+            print(
+                f"[proxy:capture] evicted {removed} file(s), freed "
+                f"{freed/1024/1024:.1f} MB (cap {limit/1024/1024:.0f} MB)",
+                file=sys.stderr,
+            )
+    except OSError as e:
+        print(f"[proxy:capture] eviction skipped: {e}", file=sys.stderr)
+
+
+def _capture_write(cap: Path, filename: str, payload) -> bool:
+    """Write one capture file (str or bytes). False on failure, never raises.
+
+    Capture is a diagnostic; losing it must never fail the request it is
+    observing. Callers log their own success line only if this returns True.
+    """
+    global _capture_writes
+    try:
+        cap.mkdir(parents=True, exist_ok=True)
+        target = cap / filename
+        if isinstance(payload, (bytes, bytearray)):
+            target.write_bytes(bytes(payload))
+        else:
+            target.write_text(payload)
+    except OSError as e:
+        print(
+            f"[proxy:capture] write FAILED, continuing without capture: {e}",
+            file=sys.stderr,
+        )
+        return False
+    _capture_writes += 1
+    if _capture_writes % _CAPTURE_EVICT_EVERY == 0:
+        _capture_evict(cap)
+    return True
+
+
 # --------------- Request metadata extraction ---------------
 
 def _extract_request_meta(body: bytes) -> dict:
@@ -368,16 +460,15 @@ def _extract_request_meta(body: bytes) -> dict:
     # Dump full request to capture dir if enabled
     capture_dir = os.environ.get("MACF_PROXY_CAPTURE_DIR")
     if capture_dir:
+        # Bounded + guarded: this call sits OUTSIDE the handler's try block, so
+        # an unguarded write here fails the request itself. See _capture_write.
         cap = Path(capture_dir)
-        cap.mkdir(parents=True, exist_ok=True)
         ts = int(time.time())
         model = data.get("model", "unknown").replace("/", "_")
         filename = f"{ts}_{model}_request.json"
-        (cap / filename).write_text(
-            json.dumps(data, indent=2, default=str)
-        )
-        # VERBOSE: Echo captured filename
-        print(f"[proxy:capture] → {filename}", file=sys.stderr)
+        if _capture_write(cap, filename, json.dumps(data, indent=2, default=str)):
+            # VERBOSE: Echo captured filename
+            print(f"[proxy:capture] → {filename}", file=sys.stderr)
 
     return meta
 
@@ -394,7 +485,8 @@ def _capture_response(data, resp_meta: dict, model: str, streaming: bool = True)
         return
 
     cap = Path(capture_dir)
-    cap.mkdir(parents=True, exist_ok=True)
+    # mkdir happens inside _capture_write, guarded — an unguarded mkdir here
+    # would raise on a read-only or full filesystem before any write is tried.
     ts = int(time.time())
     model_safe = model.replace("/", "_")
 
@@ -456,25 +548,22 @@ def _capture_response(data, resp_meta: dict, model: str, streaming: bool = True)
         captured["ts"] = ts
 
         filename = f"{ts}_{model_safe}_response.json"
-        (cap / filename).write_text(
-            json.dumps(captured, indent=2, default=str)
-        )
-        # VERBOSE: Echo captured filename
-        print(f"[proxy:capture] ← {filename}", file=sys.stderr)
+        if _capture_write(cap, filename, json.dumps(captured, indent=2, default=str)):
+            # VERBOSE: Echo captured filename
+            print(f"[proxy:capture] ← {filename}", file=sys.stderr)
     else:
         # Non-streaming: save raw response
+        # The except clause below covers only parse failures; an OSError from the
+        # write would previously have escaped and failed the request. Both writes
+        # now go through _capture_write, which swallows OSError by contract.
         try:
             resp_data = json.loads(data) if isinstance(data, bytes) else data
             filename = f"{ts}_{model_safe}_response.json"
-            (cap / filename).write_text(
-                json.dumps(resp_data, indent=2, default=str)
-            )
-            print(f"[proxy:capture] ← {filename}", file=sys.stderr)
+            payload = json.dumps(resp_data, indent=2, default=str)
         except (json.JSONDecodeError, TypeError):
             filename = f"{ts}_{model_safe}_response.raw"
-            (cap / filename).write_bytes(
-                data if isinstance(data, bytes) else b""
-            )
+            payload = data if isinstance(data, bytes) else b""
+        if _capture_write(cap, filename, payload):
             print(f"[proxy:capture] ← {filename}", file=sys.stderr)
 
 

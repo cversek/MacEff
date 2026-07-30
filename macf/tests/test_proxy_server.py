@@ -342,3 +342,72 @@ class TestWindowClampDetector:
         kinds = [_json.loads(x)["type"] for x in lines]
         assert kinds.count("window_clamp_watch") == 1
         assert kinds.count("api_response") == 1
+
+
+class TestCaptureBounded:
+    """Capture must not be able to fill the disk or kill the request it observes.
+
+    Shipped unbounded and unguarded: measured 117MB/427 files after one session,
+    with the request-side write sitting OUTSIDE the handler's try block.
+    """
+
+    def _mk(self, tmp_path, n, size=1000):
+        import os as _os
+        for i in range(n):
+            f = tmp_path / f"{1000+i}_m_request.json"
+            f.write_text("x" * size)
+            _os.utime(f, (1000 + i, 1000 + i))  # deterministic age ordering
+        return sorted(tmp_path.glob("*.json"))
+
+    def test_cap_default_and_override(self, monkeypatch):
+        from macf.proxy import server
+        monkeypatch.delenv("MACF_PROXY_CAPTURE_MAX_MB", raising=False)
+        assert server._capture_cap_bytes() == server.CAPTURE_MAX_MB * 1024 * 1024
+        monkeypatch.setenv("MACF_PROXY_CAPTURE_MAX_MB", "3")
+        assert server._capture_cap_bytes() == 3 * 1024 * 1024
+
+    def test_zero_disables_the_bound(self, monkeypatch, tmp_path):
+        """0 must mean unbounded, not 'evict everything'."""
+        from macf.proxy import server
+        monkeypatch.setenv("MACF_PROXY_CAPTURE_MAX_MB", "0")
+        self._mk(tmp_path, 5)
+        server._capture_evict(tmp_path)
+        assert len(list(tmp_path.glob("*.json"))) == 5
+
+    def test_garbage_env_falls_back_to_default(self, monkeypatch):
+        from macf.proxy import server
+        monkeypatch.setenv("MACF_PROXY_CAPTURE_MAX_MB", "not-a-number")
+        assert server._capture_cap_bytes() == server.CAPTURE_MAX_MB * 1024 * 1024
+
+    def test_evicts_oldest_first_until_under_cap(self, monkeypatch, tmp_path):
+        from macf.proxy import server
+        # 10 files x 1000B = ~10KB; cap to roughly 4KB worth
+        self._mk(tmp_path, 10, size=1000)
+        monkeypatch.setattr(server, "_capture_cap_bytes", lambda: 4000)
+        server._capture_evict(tmp_path)
+        left = sorted(p.name for p in tmp_path.glob("*.json"))
+        assert sum(p.stat().st_size for p in tmp_path.glob("*.json")) <= 4000
+        # the SURVIVORS must be the newest ones
+        assert left == sorted(f"{1000+i}_m_request.json" for i in range(6, 10))
+
+    def test_write_failure_returns_false_and_does_not_raise(self, tmp_path):
+        """A full/read-only disk must degrade to 'no capture', not fail the request."""
+        from macf.proxy import server
+        blocked = tmp_path / "afile"
+        blocked.write_text("not a directory")
+        assert server._capture_write(blocked, "x.json", "data") is False
+
+    def test_writes_bytes_payload(self, tmp_path):
+        from macf.proxy import server
+        assert server._capture_write(tmp_path, "r.raw", b"\x00\x01raw") is True
+        assert (tmp_path / "r.raw").read_bytes() == b"\x00\x01raw"
+
+    def test_eviction_is_amortised_not_every_write(self, tmp_path, monkeypatch):
+        """Scanning the dir on every write would add O(n) stats to the hot path."""
+        from macf.proxy import server
+        calls = []
+        monkeypatch.setattr(server, "_capture_evict", lambda c: calls.append(1))
+        server._capture_writes = 0
+        for i in range(server._CAPTURE_EVICT_EVERY):
+            server._capture_write(tmp_path, f"f{i}.json", "x")
+        assert len(calls) == 1
