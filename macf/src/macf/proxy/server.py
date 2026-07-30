@@ -172,6 +172,22 @@ def _make_error_middleware():
     return error_middleware
 
 
+def _rewrite_enabled() -> bool:
+    """Single source of truth for the message-rewrite gate.
+
+    Both the startup banner and the request path MUST call this. Previously the
+    banner read this env var while the rewrite path ignored it entirely, so the
+    proxy advertised rewrite=off while rewriting every request. An instrument
+    that reports a value nobody enforces is worse than no instrument at all.
+    """
+    return os.environ.get("MACF_PROXY_REWRITE", "off").strip().lower() in (
+        "on",
+        "1",
+        "true",
+        "yes",
+    )
+
+
 def _log_effective_config(port: int, host: str) -> None:
     """Log the limits actually in force. Silent defaults are invisible policy."""
     cfg = {
@@ -182,11 +198,7 @@ def _log_effective_config(port: int, host: str) -> None:
         "port": port,
         "upstream": ANTHROPIC_API_URL,
         "client_max_size": MAX_REQUEST_BYTES,
-        # Read the env directly rather than calling a gate helper: that helper
-        # lives on a feature branch, and a startup banner must never be the
-        # thing that crashes the server it is describing.
-        "rewrite_enabled": os.environ.get("MACF_PROXY_REWRITE", "off").strip().lower()
-        in ("on", "1", "true", "yes"),
+        "rewrite_enabled": _rewrite_enabled(),
         "capture_dir": os.environ.get("MACF_PROXY_CAPTURE_DIR") or None,
     }
     _log_event(cfg)
@@ -480,7 +492,8 @@ def _create_app():
                 # 1. Detect injections BEFORE rewrite
                 pre_injections = _detect_current_injections(messages)
 
-                # 2. Run stateless rewrite (retract inactive + dedup active)
+                # 2. Run stateless rewrite (retract inactive + dedup active),
+                #    but ONLY when the gate the banner advertises is actually on.
                 # EXPERIMENTAL — gated OFF by default: mutating the message-array
                 # prefix can invalidate Anthropic prompt-cache prefix stability,
                 # causing cache misses, inflated token burn, and premature forced
@@ -550,7 +563,11 @@ def _create_app():
             print(f"[proxy:injection] ERROR: {e}", file=sys.stderr)
 
         headers = _forward_headers(request)
-        target_url = f"{ANTHROPIC_API_URL}{request.path}"
+        # path_qs, NOT path: the client sends /v1/messages?beta=true, and dropping
+        # that query string changes what upstream grants. A rejected/limited beta
+        # request can come back 429, which the client treats as a permanent
+        # entitlement clamp for the life of the process. (Diagnosed 2026-07-29.)
+        target_url = f"{ANTHROPIC_API_URL}{request.path_qs}"
         start_time = time.time()
 
         session = await _get_client()
@@ -636,7 +653,7 @@ def _create_app():
         """Proxy any non-messages request transparently."""
         body = await request.read()
         headers = _forward_headers(request)
-        target_url = f"{ANTHROPIC_API_URL}{request.path}"
+        target_url = f"{ANTHROPIC_API_URL}{request.path_qs}"  # see handle_messages
 
         session = await _get_client()
         async with session.request(

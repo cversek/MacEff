@@ -86,3 +86,74 @@ class TestFailurePathObservability:
         assert rec["type"] == "proxy_start"
         assert rec["client_max_size"] == server.MAX_REQUEST_BYTES
         assert rec["port"] == 8019
+
+
+class TestQueryStringPreservation:
+    """The upstream URL must carry the client's query string.
+
+    Both handlers built target_url from `request.path`, which silently drops
+    everything after `?`. The client sends `/v1/messages?beta=true`; upstream
+    therefore never saw the long-context beta flag. A beta request stripped of
+    its flag is the shape that draws a 429 — and one 429 latches a sticky,
+    process-lifetime clamp of the client's context window from 1M down to 200K.
+    The client then refuses to send at ~180K while its own banner still shows
+    1M, fabricating "Prompt is too long" locally without calling the API.
+
+    Nothing about that failure points back here, so it is asserted at the source.
+    """
+
+    def _handler_sources(self):
+        import inspect
+        from macf.proxy import server
+        src = inspect.getsource(server)
+        return [
+            line for line in src.splitlines()
+            if "target_url" in line and "ANTHROPIC_API_URL" in line
+        ]
+
+    def test_handlers_exist(self):
+        # Guards the assertions below against silently matching nothing.
+        assert len(self._handler_sources()) >= 2
+
+    def test_no_handler_uses_bare_request_path(self):
+        for line in self._handler_sources():
+            assert "request.path_qs" in line, (
+                f"target_url must preserve the query string, got: {line.strip()}"
+            )
+            assert "{request.path}" not in line
+
+
+class TestRewriteGate:
+    """The advertised gate and the enforced gate must be the same value.
+
+    The startup banner reported `rewrite_enabled` from MACF_PROXY_REWRITE while
+    the request path called rewrite_messages unconditionally — so the proxy
+    printed rewrite=off while rewriting every request. A reported value that
+    diverges from the enforced value, with nothing reconciling them, is the
+    antipattern this whole investigation kept rediscovering.
+    """
+
+    def test_gate_defaults_off(self, monkeypatch):
+        monkeypatch.delenv("MACF_PROXY_REWRITE", raising=False)
+        from macf.proxy.server import _rewrite_enabled
+        assert _rewrite_enabled() is False
+
+    def test_gate_accepts_truthy_spellings(self, monkeypatch):
+        from macf.proxy.server import _rewrite_enabled
+        for val in ("on", "1", "true", "yes", "ON", " True "):
+            monkeypatch.setenv("MACF_PROXY_REWRITE", val)
+            assert _rewrite_enabled() is True, val
+        for val in ("off", "0", "false", "no", ""):
+            monkeypatch.setenv("MACF_PROXY_REWRITE", val)
+            assert _rewrite_enabled() is False, val
+
+    def test_request_path_consults_the_same_helper_as_the_banner(self):
+        import inspect
+        from macf.proxy import server
+        src = inspect.getsource(server)
+        # The banner reports it...
+        assert '"rewrite_enabled": _rewrite_enabled()' in src
+        # ...and the request path must gate on it, not run unconditionally.
+        assert "if _rewrite_enabled():" in src
+        gated = src.split("if _rewrite_enabled():", 1)[1]
+        assert "rewrite_messages(messages)" in gated.split("# 3.", 1)[0]
