@@ -945,9 +945,17 @@ def cmd_framework_install(args: argparse.Namespace) -> int:
             print(f"ℹ️  Commands and skills NOT installed; rerun without `--hooks-only` (or use `--skip-hooks` if hooks are already in place) to install those.")
             return 0
 
+        # An install that reports success while linking nothing is
+        # indistinguishable from one that worked, and the agent only finds out
+        # much later when a command it was told it had turns out to be missing.
+        # Both an absent source tree and a present-but-empty one are recorded
+        # here and made fatal at the summary.
+        problems: list[str] = []
+
         # Install commands (symlink maceff*/ namespace directories)
         print("\n📦 Installing commands...")
         commands_src = framework_root / "commands"
+        linked_commands = 0
         if commands_src.exists():
             commands_dir.mkdir(parents=True, exist_ok=True)
             for cmd_ns in commands_src.glob("maceff*/"):
@@ -960,12 +968,19 @@ def cmd_framework_install(args: argparse.Namespace) -> int:
                             import shutil
                             shutil.rmtree(target)
                     target.symlink_to(cmd_ns)
+                    linked_commands += 1
                     # Count .md files in namespace for reporting
                     md_count = sum(1 for _ in cmd_ns.rglob("*.md"))
                     installed_count["commands"] += md_count
                     print(f"   ✓ {cmd_ns.name}/ ({md_count} commands)")
+            if linked_commands == 0:
+                problems.append(
+                    f"commands: {commands_src} exists but contains no maceff*/ namespace directories"
+                )
+                print(f"   ❌ no maceff*/ namespaces found in {commands_src}", file=sys.stderr)
         else:
-            print(f"   No commands directory at {commands_src}")
+            problems.append(f"commands: source tree missing at {commands_src}")
+            print(f"   ❌ no commands directory at {commands_src}", file=sys.stderr)
 
         # Install skills (symlink maceff-*/ directories)
         print("\n📦 Installing skills...")
@@ -984,10 +999,28 @@ def cmd_framework_install(args: argparse.Namespace) -> int:
                     target.symlink_to(skill_dir)
                     installed_count["skills"] += 1
                     print(f"   ✓ {skill_dir.name}/")
+            if installed_count["skills"] == 0:
+                problems.append(
+                    f"skills: {skills_src} exists but contains no maceff-*/ directories"
+                )
+                print(f"   ❌ no maceff-*/ skills found in {skills_src}", file=sys.stderr)
         else:
-            print(f"   No skills directory at {skills_src}")
+            problems.append(f"skills: source tree missing at {skills_src}")
+            print(f"   ❌ no skills directory at {skills_src}", file=sys.stderr)
 
         # Summary
+        if problems:
+            print(f"\n❌ Framework installation INCOMPLETE — nothing was installed for:", file=sys.stderr)
+            for problem in problems:
+                print(f"   • {problem}", file=sys.stderr)
+            print(f"   Framework root resolved to: {framework_root}", file=sys.stderr)
+            print(f"   Hooks: {installed_count['hooks']}   Commands: {installed_count['commands']}   Skills: {installed_count['skills']}", file=sys.stderr)
+            print(f"   This usually means the framework tree was never deployed to this", file=sys.stderr)
+            print(f"   root — on a container, check that framework/ is mounted and that", file=sys.stderr)
+            print(f"   the sync step ran ('make framework-upgrade' on the host).", file=sys.stderr)
+            print(f"   Use --hooks-only if installing hooks alone is what you intended.", file=sys.stderr)
+            return 1
+
         print(f"\n✅ Framework installation complete!")
         print(f"   Hooks: {installed_count['hooks']}")
         print(f"   Commands: {installed_count['commands']}")
@@ -4104,8 +4137,33 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
                     return True
             return False
 
-        def should_show_task(task, siblings, depth):
-            """Determine if task should be shown in succinct mode."""
+        def is_fully_completed(task, _seen=None):
+            """True when this task AND every descendant are completed.
+
+            "Completed" alone is not enough to hide a subtree: a completed
+            parent can still own active children, and hiding the parent hides
+            them with it — the work disappears from the tree entirely rather
+            than merely collapsing.
+            """
+            if task.status != "completed":
+                return False
+            # Same cycle guard as count_descendants: a self-parenting task is
+            # malformed but reachable, and must not take the render down.
+            _seen = set() if _seen is None else _seen
+            if task.id in _seen:
+                return True
+            _seen.add(task.id)
+            return all(is_fully_completed(c, _seen) for c in get_children(task.id))
+
+        def should_show_task(task, siblings, depth, parent=None):
+            """Determine if task should be shown in succinct mode.
+
+            Succinct is progressive disclosure, not a completed-filter. The
+            rule that matters: a parent still open means its finished children
+            are the context that makes the remaining work legible. Hiding them
+            renders an in-progress parent as a bare line with nothing under it,
+            which reads as "nothing was done here" — the opposite of the truth.
+            """
             if not succinct:
                 return True
             # Always show root sentinel (depth 0)
@@ -4119,10 +4177,18 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
             # Show if active/pending
             if task.status in ("in_progress", "pending"):
                 return True
-            # Top tier (depth 1): hide ALL completed - too many to show siblings
+            # Top tier (depth 1): hide only a subtree that is done all the way
+            # down. A completed task with active descendants stays, or those
+            # descendants would have no path to the surface.
             if depth == 1:
-                return False
-            # Deeper tiers: show completed only if has active sibling (provides context)
+                return not is_fully_completed(task)
+            # Deeper tiers: while the parent is still open, show its completed
+            # children. Their own finished descendants collapse by the same
+            # rule one level further in, so a resolved branch costs one line
+            # rather than a subtree.
+            if parent is not None and parent.status != "completed":
+                return True
+            # Under a completed parent, fall back to sibling context.
             if task.status == "completed" and has_active_sibling(task, siblings):
                 return True
             return False
@@ -4353,7 +4419,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
 
             children = get_children(task.id)
             # Filter children in succinct mode
-            visible_children = [c for c in children if should_show_task(c, children, depth + 1)]
+            visible_children = [c for c in children if should_show_task(c, children, depth + 1, task)]
 
             for i, child in enumerate(visible_children):
                 print_tree(child, prefix + extension, i == len(visible_children) - 1, depth + 1, children)

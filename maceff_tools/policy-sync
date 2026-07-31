@@ -5,8 +5,14 @@ set -euo pipefail
 # Bind mount makes changes immediately visible in container (no docker cp needed)
 
 SET_NAME="${1:-base}"
-REPO_ROOT="$(cd "$(dirname "$0")"/../.. && pwd)"
-SRC_DIR="$REPO_ROOT/policies/${SET_NAME}"
+# This script lives in <repo>/maceff_tools/, so the repo root is one level up.
+# It was ../.. while these scripts lived in <repo>/tools/bin/; the move to
+# maceff_tools/ flattened one level and the path was never adjusted, which
+# silently resolved REPO_ROOT to the repo's PARENT.
+REPO_ROOT="$(cd "$(dirname "$0")"/.. && pwd)"
+SRC_ROOT="$REPO_ROOT/framework/policies"
+SRC_DIR="$SRC_ROOT/${SET_NAME}"
+SRC_MANIFEST="$SRC_ROOT/manifest.json"
 DEST_DIR="$REPO_ROOT/.maceff/framework/policies/sets/${SET_NAME}"
 POLICIES_ROOT="$REPO_ROOT/.maceff/framework/policies"
 
@@ -23,7 +29,7 @@ if [[ ! -d "$REPO_ROOT/.maceff/framework" ]]; then
 fi
 
 echo "Syncing policies from version control to framework..."
-echo "  Source: policies/${SET_NAME}/"
+echo "  Source: framework/policies/${SET_NAME}/"
 echo "  Dest:   .maceff/framework/policies/sets/${SET_NAME}/"
 
 # Create destination directory
@@ -31,6 +37,16 @@ mkdir -p "$DEST_DIR"
 
 # Copy files from version control to .maceff/framework/
 rsync -av --delete "$SRC_DIR/" "$DEST_DIR/"
+
+# The manifest sits at the root of framework/policies/, outside any set, and so
+# was never carried by the per-set rsync above. Agents resolve policies through
+# it, so a synced set without it is not usable.
+if [[ -f "$SRC_MANIFEST" ]]; then
+  echo "  Manifest: framework/policies/manifest.json -> .maceff/framework/policies/manifest.json"
+  rsync -a "$SRC_MANIFEST" "$POLICIES_ROOT/manifest.json"
+else
+  echo "warning: no manifest.json at $SRC_MANIFEST — policy resolution may fail" >&2
+fi
 
 # Update current symlink
 ln -sfn "sets/${SET_NAME}" "$POLICIES_ROOT/current"
