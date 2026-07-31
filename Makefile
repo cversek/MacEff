@@ -30,8 +30,11 @@ help:
 	@echo "  make claude        - launch Claude in /shared_workspace/\$(PROJ) (args forwarded)"
 	@echo "  make claude-doctor - run 'claude doctor' inside the container"
 	@echo "  make test            - run pytest suite (macf/tests/)"
-	@echo "  make policy-sync     - sync policies/<set> (default: base) into container & link current"
-	@echo "  make policy-sync-SET - sync policies/SET (e.g., policy-sync-base)"
+	@echo "  make policy-sync     - sync framework/policies/<set> (default: base) into container & link current"
+	@echo "  make policy-sync-SET - sync framework/policies/SET (e.g., policy-sync-base)"
+	@echo "  make template-sync   - sync framework/templates/ into container"
+	@echo "  make assets-sync     - sync framework/{commands,skills,subagents,output-styles}/"
+	@echo "  make framework-upgrade - run every sync step, then upgrade preambles"
 
 build:
 	maceff_tools/compose build
@@ -66,13 +69,22 @@ claude:
 claude-doctor:
 	maceff_tools/claude-doctor
 
-.PHONY: policy-sync policy-sync-%
+.PHONY: policy-sync policy-sync-% template-sync assets-sync framework-upgrade
 
 policy-sync:
 	maceff_tools/policy-sync
 
 policy-sync-%:
 	maceff_tools/policy-sync $*
+
+template-sync:
+	maceff_tools/template-sync
+
+assets-sync:
+	maceff_tools/assets-sync
+
+framework-upgrade:
+	maceff_tools/framework-upgrade
 
 init:
 	maceff_tools/maceff-init

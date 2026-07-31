@@ -42,10 +42,18 @@ Makefile.bak.*
 keys/*
 !keys/*.pub
 # MacEff customization layer (user-specific, created by maceff-init)
-.maceff/framework/         # All framework content (policies, templates, agent_defs)
-.maceff/config/            # All configuration (env files, config.json)
-.maceff/sessions/          # Session state files (runtime artifacts)
-.maceff/agent_state.json   # Agent cycle/state tracking (runtime artifact)
+# NOTE: gitignore treats '#' as a comment only at the START of a line. These
+# four patterns carried trailing inline comments, which made each pattern the
+# literal string "path/ # comment ..." — matching nothing. They looked
+# configured and ignored nothing for as long as they had existed.
+# All framework content (policies, templates, agent_defs)
+.maceff/framework/
+# All configuration (env files, config.json)
+.maceff/config/
+# Session state files (runtime artifacts)
+.maceff/sessions/
+# Agent cycle/state tracking (runtime artifact)
+.maceff/agent_state.json
 
 # Optional: Keep example templates in git if needed
 # !.maceff/config/config.json.example
