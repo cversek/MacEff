@@ -6788,18 +6788,22 @@ def _gh_pr_closeout(task_id: int, mtmd, args, breadcrumb: str) -> str:
 
     print(f"   🔀 PR outcome: {outcome}" + (f" (merge {merge_commit[:8]})" if merge_commit else ""))
 
-    # Post a review close-out comment (agent's report + calling card).
-    try:
-        from .utils.identity import get_agent_identity
-        agent_name = get_agent_identity()
-    except (ImportError, OSError):
-        agent_name = "unknown"
-    comment = "\n".join([
+    # Post a review close-out comment (agent's report + outcome). The calling
+    # card footer is opt-in via opsec.public_attribution (issue #156).
+    comment_lines = [
         "## Review Close-out", "", args.report, "",
         f"**Outcome:** {outcome}",
-        (f"**Verification:** {args.verified}" if getattr(args, "verified", None) else ""),
-        "", "---", f"*[{agent_name}: task#{task_id} {breadcrumb}]*",
-    ])
+    ]
+    if getattr(args, "verified", None):
+        comment_lines.append(f"**Verification:** {args.verified}")
+    if _public_attribution_enabled():
+        try:
+            from .utils.identity import get_agent_identity
+            agent_name = get_agent_identity()
+        except (ImportError, OSError):
+            agent_name = "unknown"
+        comment_lines += ["", "---", f"*[{agent_name}: task#{task_id} {breadcrumb}]*"]
+    comment = "\n".join(comment_lines)
     try:
         cr = _subprocess.run(
             ["gh", "pr", "comment", str(gh_pr_number), "--repo", repo_slug, "--body", comment],
