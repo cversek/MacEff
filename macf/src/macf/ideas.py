@@ -186,8 +186,16 @@ def update_idea(
     idea_id: int,
     status: Optional[str] = None,
     promoted_to: Optional[str] = None,
+    wiki_links: Optional[List[str]] = None,
+    remove_wiki_links: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Update an idea's status or promotion target."""
+    """Update an idea's status, promotion target, or wiki-links.
+
+    `wiki_links` are normalized and merged into the existing set (order
+    preserved, duplicates dropped); `remove_wiki_links` prunes links found to be
+    spurious during curation. Both accept the same loose forms as `create_idea`
+    ("Foo Bar", "[[foo_bar]]", "foo_bar").
+    """
     result = get_idea(idea_id)
     if not result:
         return None
@@ -215,6 +223,30 @@ def update_idea(
 
     if promoted_to:
         idea.setdefault("links", {})["promoted_to"] = promoted_to
+
+    if wiki_links or remove_wiki_links:
+        links = idea.setdefault("links", {})
+        current = list(links.get("wiki_links") or [])
+        if wiki_links:
+            added = [w for w in _normalize_wiki_links(wiki_links) if w not in current]
+            current.extend(added)
+            if added:
+                idea.setdefault("history", []).append({
+                    "timestamp": ts_str,
+                    "action": f"wiki_links_added:{','.join(added)}",
+                    "breadcrumb": breadcrumb,
+                })
+        if remove_wiki_links:
+            drop = set(_normalize_wiki_links(remove_wiki_links))
+            removed = [w for w in current if w in drop]
+            current = [w for w in current if w not in drop]
+            if removed:
+                idea.setdefault("history", []).append({
+                    "timestamp": ts_str,
+                    "action": f"wiki_links_removed:{','.join(removed)}",
+                    "breadcrumb": breadcrumb,
+                })
+        links["wiki_links"] = current
 
     with open(path, "w") as f:
         json.dump(idea, f, indent=2)

@@ -7892,12 +7892,23 @@ def cmd_idea_get(args: argparse.Namespace) -> int:
 
 
 def cmd_idea_update(args: argparse.Namespace) -> int:
-    """Update idea status."""
+    """Update idea status, promotion target, or wiki-links."""
     from .ideas import update_idea
+
+    # Same combining rule as `idea create`: repeatable --wiki-link plus
+    # comma-separated --wiki-links, merged into one list.
+    wiki_links_raw = list(getattr(args, "wiki_link", None) or [])
+    wiki_links_csv = getattr(args, "wiki_links", "") or ""
+    if wiki_links_csv:
+        wiki_links_raw.extend(s for s in wiki_links_csv.split(",") if s.strip())
+    remove_raw = list(getattr(args, "remove_wiki_link", None) or [])
+
     result = update_idea(
         args.id,
         status=getattr(args, "status", None),
         promoted_to=getattr(args, "promoted_to", None),
+        wiki_links=wiki_links_raw,
+        remove_wiki_links=remove_raw,
     )
     if not result:
         print(f"Idea #{args.id} not found.")
@@ -7906,6 +7917,9 @@ def cmd_idea_update(args: argparse.Namespace) -> int:
     print(f"✅ Idea #{idea['id']:03d} updated: status={idea['status']}")
     if idea.get("links", {}).get("promoted_to"):
         print(f"   Promoted to: {idea['links']['promoted_to']}")
+    if wiki_links_raw or remove_raw:
+        current = idea.get("links", {}).get("wiki_links") or []
+        print(f"   Wiki-links: {', '.join(current) if current else '(none)'}")
     return 0
 
 
@@ -9169,10 +9183,19 @@ def _build_parser() -> argparse.ArgumentParser:
     idea_get.add_argument("id", type=int, help="idea ID")
     idea_get.set_defaults(func=cmd_idea_get)
 
-    idea_update = idea_sub.add_parser("update", help="update idea status")
+    idea_update = idea_sub.add_parser("update", help="update idea status or wiki-links")
     idea_update.add_argument("id", type=int, help="idea ID")
     idea_update.add_argument("--status", choices=["captured", "exploring", "promoted", "archived"], help="new status")
     idea_update.add_argument("--promoted-to", dest="promoted_to", help="what the idea became (path/ref)")
+    idea_update.add_argument(
+        "--wiki-link", dest="wiki_link", action="append", metavar="CONCEPT",
+        help="add a wiki-link concept (repeatable, normalized to lowercase_underscored)")
+    idea_update.add_argument(
+        "--wiki-links", dest="wiki_links", metavar="A,B,C",
+        help="add wiki-link concepts, comma-separated (combines with --wiki-link)")
+    idea_update.add_argument(
+        "--remove-wiki-link", dest="remove_wiki_link", action="append", metavar="CONCEPT",
+        help="remove a wiki-link concept (repeatable)")
     idea_update.set_defaults(func=cmd_idea_update)
 
     idea_archive = idea_sub.add_parser("archive", help="archive an idea")
