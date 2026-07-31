@@ -1157,3 +1157,75 @@ class TestSubjectTitleTruncation:
         out = _truncate_subject_title(subject, 30)
         assert out.endswith("...")
         assert len(out) < len(subject)
+
+
+class TestTaskDoctor:
+    """`task doctor` reconciles stored records against their authority.
+
+    Read-time re-derivation keeps *displays* honest. The stored record is what
+    other consumers read, so it needs a reconcile pass of its own.
+    """
+
+    def _seed(self, session_dir, task_id, subject, parent_id):
+        payload = {
+            "id": task_id,
+            "subject": subject,
+            "status": "pending",
+            "description": (
+                '<macf_task_metadata version="1.0">\n'
+                'task_type: TASK\n'
+                'created_by: PA\n'
+                f'parent_id: {parent_id}\n'
+                '</macf_task_metadata>\n'
+            ),
+        }
+        (session_dir / f"{task_id}.json").write_text(json.dumps(payload))
+
+    def test_reports_divergent_marker_and_exits_nonzero(self, isolated_task_env):
+        self._seed(isolated_task_env['session_dir'], "42",
+                   "  #42 [^#10] 🔧 stale marker task", parent_id="20")
+
+        result = subprocess.run(
+            ["macf_tools", "task", "doctor"],
+            capture_output=True, text=True, env=isolated_task_env['env'],
+        )
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert "1 divergent" in result.stdout
+        assert "#42" in result.stdout
+        assert "--fix" in result.stdout
+
+    def test_report_only_does_not_mutate(self, isolated_task_env):
+        session_dir = isolated_task_env['session_dir']
+        self._seed(session_dir, "42", "  #42 [^#10] 🔧 stale marker task", parent_id="20")
+        before = (session_dir / "42.json").read_text()
+
+        subprocess.run(["macf_tools", "task", "doctor"],
+                       capture_output=True, text=True, env=isolated_task_env['env'])
+
+        assert (session_dir / "42.json").read_text() == before, "report-only wrote to disk"
+
+    def test_fix_heals_the_stored_subject(self, isolated_task_env):
+        session_dir = isolated_task_env['session_dir']
+        self._seed(session_dir, "42", "  #42 [^#10] 🔧 stale marker task", parent_id="20")
+
+        result = subprocess.run(
+            ["macf_tools", "task", "doctor", "--fix"],
+            capture_output=True, text=True, env=isolated_task_env['env'],
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+        healed = json.loads((session_dir / "42.json").read_text())["subject"]
+        assert "[^#20]" in healed
+        assert "[^#10]" not in healed
+        assert "stale marker task" in healed, "healing damaged the title"
+
+    def test_clean_tree_reports_no_drift(self, isolated_task_env):
+        self._seed(isolated_task_env['session_dir'], "42",
+                   "  #42 [^#20] 🔧 honest marker task", parent_id="20")
+
+        result = subprocess.run(
+            ["macf_tools", "task", "doctor"],
+            capture_output=True, text=True, env=isolated_task_env['env'],
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "No drift detected" in result.stdout
