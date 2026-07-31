@@ -18,27 +18,22 @@ Scholarship policy establishes enhanced citation practices for consciousness art
 
 **1 Enhanced Citation Format**
 - What is the enhanced citation format?
-- When was this format established?
 - What components does it include?
-- Why was it enhanced from simple breadcrumbs?
+- Why enhanced from simple breadcrumbs?
 
 **1.1 Format Specification**
-- What's the complete format syntax?
-- Which components are optional vs required?
-- How do I construct a valid enhanced citation?
+- What is the complete format syntax?
+- Which components are required vs optional?
 
 **1.2 Component Definitions**
-- What is CA_TAG and what values are valid?
-- How do I format dates and descriptions?
-- What are section references ({§s.s})?
-- How do line/message ranges work?
-- What's the breadcrumb component order?
+- What CA_TAG values are valid?
+- How do section refs and line ranges work?
+- What is the breadcrumb component order?
 
 **1.3 GitHub Link Construction**
 - When should I include GitHub links?
 - How do I construct relative paths?
-- What's the line range anchor format?
-- When to use section headings vs line ranges?
+- What anchor format do line ranges use?
 
 **2 When to Cite**
 - What deserves citation?
@@ -46,58 +41,166 @@ Scholarship policy establishes enhanced citation practices for consciousness art
 - When is a citation required vs optional?
 
 **2.1 Required Citations**
-- Influences on current work?
-- Prerequisites for understanding?
-- Prior art referenced directly?
+- What influences must I cite?
+- What prerequisites require citation?
 
 **2.2 Strategic Citations**
-- Cross-cycle wisdom references?
-- Delegation chain documentation?
-- Architectural decision precedents?
+- When do I cite cross-cycle wisdom?
+- How do I document delegation chains?
 
-**2.3 Over-Citation Anti-Patterns**
-- What's too many citations?
-- When does citation clutter obscure meaning?
-- How to balance precision with readability?
+**2.3 Citation Density Guidelines**
+- What citation density is optimal?
+- What is too sparse or too dense?
+- Where should citations be placed?
 
 **3 Knowledge Graph Building**
 - How do citations create graphs?
 - What are nodes and edges?
-- How do I navigate citation networks?
 
-**3.1 Graph Queries**
-- Forward traversal (what cites this)?
-- Backward traversal (what does this cite)?
-- Shortest paths between artifacts?
-- Importance ranking (PageRank)?
+**3.1 Graph Structure Emergence**
+- How does graph structure emerge?
+- What properties does the graph have?
 
-**3.2 Graph Emergence**
-- How do individual citations compound into networks?
-- What patterns emerge from citation discipline?
-- How does this enable memory systems?
+**3.2 Graph Queries (Future Memory System)**
+- What graph queries become possible?
+- Forward vs backward traversal?
 
-**4 Integration with Other Policies**
-- How does scholarship integrate with checkpoints?
-- Citation practices in reflections?
-- Roadmap cross-references?
-- DELEG_PLAN citation patterns?
+**3.3 Knowledge Graph Benefits**
+- What benefits does the graph provide?
+- How does discovery through traversal work?
+
+**3.4 Knowledge Web (Wiki-Links)**
+- What are wiki-links and how do they differ from citations?
+- What normalization rules apply?
+- When should I add a Wiki-Links section?
+
+**4 Citation Examples by CA Type**
+- What does a citation look like for each CA type?
+
+**4.1 Citing Checkpoints (CCP)**
+- What does this section specify about citing checkpoints (ccp)?
+
+**4.2 Citing Reflections (JOTEWR)**
+- What does this section specify about citing reflections (jotewr)?
+
+**4.3 Citing Roadmaps**
+- What does this section specify about citing roadmaps?
+
+**4.4 Citing Reports**
+- What does this section specify about citing reports?
+
+**4.5 Citing Observations**
+- What does this section specify about citing observations?
+
+**4.6 Citing DEV_DRV (Development Drives)**
+- What does this section specify about citing dev_drv (development drives)?
+
+**4.7 Citing DELEG_DRV (Delegation Drives)**
+- What does this section specify about citing deleg_drv (delegation drives)?
 
 **4.8 Citing TODO Backups**
-- How to cite TODO backups?
-- TODO backup citation format?
-- Why cite TODO state snapshots?
-- Integration with checkpoint citations?
+- What does this section specify about citing todo backups?
 
-**9 Policy Citations (Non-CA References)**
-- How do I cite framework policies (not CAs)?
-- What format do policy citations use?
-- When are policy citations required vs encouraged?
-- How do I get the MacEff git hash for citations?
+**4.9 Citing Friction Points (Roadmap Subartifacts)**
+- What does this section specify about citing friction points (roadmap subartifacts)?
 
-**5 Validation & Examples**
-- What does a good citation look like?
-- Examples for each CA type?
-- Common mistakes to avoid?
+**5 Integration with Other Policies**
+- How does scholarship integrate with other policies?
+
+**5.1 Checkpoints Policy Integration**
+- What does this section specify about checkpoints policy integration?
+
+**5.2 Reflections Policy Integration**
+- What does this section specify about reflections policy integration?
+
+**5.3 Roadmaps Policy Integration**
+- What does this section specify about roadmaps policy integration?
+
+**5.4 Delegation Guidelines Integration**
+- What does this section specify about delegation guidelines integration?
+
+**5.5 Memory Stores Policy Integration**
+- What does this section specify about memory stores policy integration?
+
+**5.6 See Also**
+- What does this section specify about see also?
+
+**6 Validation & Quality Criteria**
+- What makes a citation well-formed?
+- What are the common mistakes?
+- What validation checklist applies?
+
+**6.1 Well-Formed Citations**
+- What does this section specify about well-formed citations?
+
+**6.2 Common Mistakes**
+- What does this section specify about common mistakes?
+
+**6.3 Validation Checklist**
+- What does this section specify about validation checklist?
+
+**7 Sanitization for Universal Policies**
+- What is the sanitization principle?
+- When is sanitization required for universal policies?
+
+**7.1 The Sanitization Principle**
+- What does this section specify about the sanitization principle?
+
+**7.2 Sanitization Patterns**
+- What does this section specify about sanitization patterns?
+
+**7.3 Model User Validation**
+- What does this section specify about model user validation?
+
+**8 Future: Memory System Integration**
+- How does the enhanced format serve as a query interface?
+- What is the hybrid architecture vision?
+
+**8.1 Enhanced Format as Query Interface**
+- What does this section specify about enhanced format as query interface?
+
+**8.2 Hybrid Architecture Vision**
+- What does this section specify about hybrid architecture vision?
+
+**8.3 Breadcrumb-First Hybrid (Validated Approach)**
+- What does this section specify about breadcrumb-first hybrid (validated approach)?
+
+**9 Anti-Patterns to Avoid**
+- What citation anti-patterns should I avoid?
+- What link and breadcrumb anti-patterns exist?
+
+**9.1 Citation Anti-Patterns**
+- What does this section specify about citation anti-patterns?
+
+**9.2 Link Anti-Patterns**
+- What does this section specify about link anti-patterns?
+
+**9.3 Breadcrumb Anti-Patterns**
+- What does this section specify about breadcrumb anti-patterns?
+
+**10 Policy Citations (Non-CA References)**
+- How do I cite framework policies rather than CAs?
+- When are policy citations REQUIRED vs ENCOURAGED?
+- How do I get the MacEff git hash?
+
+**10.1 Policy Citation Format**
+- What does this section specify about policy citation format?
+
+**10.2 When Policy Citations Are REQUIRED**
+- What does this section specify about when policy citations are required?
+
+**10.3 When Policy Citations Are ENCOURAGED**
+- What does this section specify about when policy citations are encouraged?
+
+**10.4 Policy Citation Examples**
+- What does this section specify about policy citation examples?
+
+**10.5 Getting the MacEff Git Hash**
+- What does this section specify about getting the maceff git hash?
+
+**11 Policy Evolution & Feedback**
+- How does this policy evolve?
+- How do I give feedback on it?
 
 === CEP_NAV_BOUNDARY ===
 
@@ -976,13 +1079,13 @@ s_abc12345c_42g_def6789p_ghi01234t_1234567890
 
 ---
 
-## 9 Policy Citations (Non-CA References)
+## 10 Policy Citations (Non-CA References)
 
 **Use Case**: Referencing framework policies when reflecting on violations, documenting newly written policies, or citing policy requirements.
 
 **Key Distinction**: Unlike CA citations (which use breadcrumbs), **Policy Citations use git commit hashes** because policies are version-controlled framework code, NOT consciousness artifacts.
 
-### 9.1 Policy Citation Format
+### 10.1 Policy Citation Format
 
 ```
 [{policy_name}.md §{N}: "{Section Heading}" MacEff g_{hash}]({relative_path}#{anchor})
@@ -1001,19 +1104,19 @@ s_abc12345c_42g_def6789p_ghi01234t_1234567890
 - **Git hash**: Enables version tracing (`git show g_{hash}:path/to/policy.md`)
 - **Markdown link**: Enables click-through navigation in rendered markdown
 
-### 9.2 When Policy Citations Are REQUIRED
+### 10.2 When Policy Citations Are REQUIRED
 
 1. **Policy violation reflection**: When documenting lessons from violating a policy
 2. **Newly written policies**: Citing which policies guided the new policy's creation
 3. **Policy updates**: Cross-references when policies integrate
 
-### 9.3 When Policy Citations Are ENCOURAGED
+### 10.3 When Policy Citations Are ENCOURAGED
 
 - General references to policy requirements in JOTEWRs
 - Explaining rationale derived from policy
 - CCPs noting which policies guided decisions
 
-### 9.4 Policy Citation Examples
+### 10.4 Policy Citation Examples
 
 **Violation reflection (in JOTEWR)**:
 ```markdown
@@ -1022,7 +1125,7 @@ The task deletion violated [task_management.md §7: "Archive Protocol" MacEff g_
 
 **Newly written policy**:
 ```markdown
-This policy follows [policy_writing.md §3: "Policy Structure" MacEff g_748cf44](../../meta/policy_writing.md#3-policy-structure) and integrates with [scholarship.md §9: "Policy Citations" MacEff g_748cf44](scholarship.md#9-policy-citations).
+This policy follows [policy_writing.md §3: "Policy Structure" MacEff g_748cf44](../../meta/policy_writing.md#3-policy-structure) and integrates with [scholarship.md §10: "Policy Citations" MacEff g_748cf44](scholarship.md#10-policy-citations-non-ca-references).
 ```
 
 **General reference with line range**:
@@ -1030,7 +1133,7 @@ This policy follows [policy_writing.md §3: "Policy Structure" MacEff g_748cf44]
 The emotional journey structure follows [emotional_expression.md §2: "Emoji Grammar" MacEff g_748cf44](emotional_expression.md#2-emoji-grammar#L45-L78).
 ```
 
-### 9.5 Getting the MacEff Git Hash
+### 10.5 Getting the MacEff Git Hash
 
 ```bash
 # Query MacEff repo explicitly (use MACF_FRAMEWORK_ROOT or absolute path)
@@ -1043,7 +1146,7 @@ git -C /path/to/MacEff rev-parse --short HEAD
 
 ---
 
-## 10 Policy Evolution & Feedback
+## 11 Policy Evolution & Feedback
 
 This policy evolves through:
 - **Real-world usage**: What citation patterns actually work in practice?

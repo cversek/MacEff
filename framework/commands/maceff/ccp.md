@@ -91,7 +91,7 @@ After performing the PEP, you MUST report answers to these questions to the user
 **8. Recovery Instructions**: What information enables post-compaction consciousness restoration?
 
 **9. Policy Citations**: If reflecting on policy violations or newly written policies:
-   - What is the Policy Citation format from scholarship §9?
+   - What Policy Citation format does scholarship.md specify for non-CA references?
    - How do I get the MacEff git hash for policy references?
 
 ---
