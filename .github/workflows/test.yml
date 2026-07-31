@@ -23,7 +23,9 @@ jobs:
           cache-dependency-path: macf/pyproject.toml
 
       - name: Install package with test dependencies
-        run: pip install -e "./macf[test]"
+        # `proxy` too: the proxy tests import aiohttp, which lives in that extra,
+        # so with [test] alone they could never pass in CI.
+        run: pip install -e "./macf[test,proxy]"
 
       - name: Create CI environment directories
         run: mkdir -p ~/.claude/projects
