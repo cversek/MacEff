@@ -1,7 +1,7 @@
 {
   "version": "2.0.0",
   "description": "MacEff Core Policy System with CEP Navigation - Full Policy Index",
-  "last_updated": "2026-02-13",
+  "last_updated": "2026-07-31",
   "base_path": "/opt/maceff/policies",
   "consciousness_patterns": {
     "description": "CEPs help agents recognize when they need specific knowledge",
@@ -152,6 +152,20 @@
     "location": "base/consciousness/",
     "policies": [
       {
+        "name": "ideas",
+        "short_name": "IDEAS",
+        "path": "base/consciousness/ideas.md",
+        "CEP_triggers": [
+          "How do ideas differ from learnings, observations, and experiments?",
+          "When should I capture an idea vs create an experiment?",
+          "What is the pull model for idea promotion?",
+          "What is the JSON schema for idea files?",
+          "What fields are required vs optional?",
+          "What are the valid status values?"
+        ],
+        "keywords": ["idea", "capture", "promote", "experiment"]
+      },
+      {
         "name": "checkpoints",
         "short_name": "CCP",
         "path": "base/consciousness/checkpoints.md",
@@ -246,6 +260,48 @@
     "opt_in": true,
     "location": "base/development/",
     "policies": [
+      {
+        "name": "public_voice",
+        "short_name": "VOICE",
+        "path": "base/development/public_voice.md",
+        "CEP_triggers": [
+          "What is the standard this policy holds output to?",
+          "When does this policy apply?",
+          "What overrides it?",
+          "How should I refer to myself?",
+          "What phrases give the output away?",
+          "How should an answer open?"
+        ],
+        "keywords": ["public voice", "DADTTT", "unicode", "tone", "external text"]
+      },
+      {
+        "name": "release_workflow",
+        "short_name": "RELEASE",
+        "path": "base/development/release_workflow.md",
+        "CEP_triggers": [
+          "What must be complete before release?",
+          "How do I verify work completion?",
+          "What documentation is required?",
+          "What tests must pass?",
+          "How do I verify all release-associated work complete?",
+          "What about multiple MISSIONs in one release?"
+        ],
+        "keywords": ["release", "version", "changelog", "tag"]
+      },
+      {
+        "name": "task_management",
+        "short_name": "TASK_MGMT",
+        "path": "base/development/task_management.md",
+        "CEP_triggers": [
+          "Where are task files stored?",
+          "What creates new session UUIDs?",
+          "What is the ID assignment behavior?",
+          "What epistemological gaps remain?",
+          "What is the MTMD schema?",
+          "What tag format is used?"
+        ],
+        "keywords": ["task", "MTMD", "hierarchy", "completion", "archive"]
+      },
       {
         "name": "testing_standards",
         "short_name": "TEST_STD",
@@ -438,6 +494,48 @@
     "description": "Operational policies for backup, restore, modes, and system management",
     "location": "base/operations/",
     "policies": [
+      {
+        "name": "autonomous_sprint",
+        "short_name": "SPRINT",
+        "path": "base/operations/autonomous_sprint.md",
+        "CEP_triggers": [
+          "What defines a SPRINT task?",
+          "When should I use SPRINT instead of PLAY_TIME?",
+          "What is mode-locking and why does SPRINT use it?",
+          "What does SPRINT mode lock mean for the Markov recommender?",
+          "What is the agent's posture during a SPRINT?",
+          "How does the Stop hook behave in SPRINT mode?"
+        ],
+        "keywords": ["sprint", "autonomous", "scope", "workload"]
+      },
+      {
+        "name": "mode_system",
+        "short_name": "MODE",
+        "path": "base/operations/mode_system.md",
+        "CEP_triggers": [
+          "How do modes differ from the old binary AUTO/MANUAL?",
+          "What does \"simultaneously active\" mean?",
+          "What are the three layers?",
+          "What operational modes exist?",
+          "What does each operational mode mean?",
+          "What emoji represents each mode?"
+        ],
+        "keywords": ["mode", "AUTO", "MANUAL", "work mode"]
+      },
+      {
+        "name": "play_time",
+        "short_name": "PLAY",
+        "path": "base/operations/play_time.md",
+        "CEP_triggers": [
+          "What defines a PLAY_TIME session?",
+          "When should I use PLAY_TIME instead of SPRINT?",
+          "What makes PLAY_TIME distinct from other autonomous work?",
+          "What is the predetermined chain?",
+          "How does the agent declare the initial chain?",
+          "How does the chain advance?"
+        ],
+        "keywords": ["play_time", "timer", "exploration", "chain"]
+      },
       {
         "name": "agent_backup",
         "short_name": "AGENT_BACKUP",
@@ -669,5 +767,61 @@
     "observability_trap": ["base/philosophy/empiricism"],
     "false_absence": ["base/philosophy/empiricism"],
     "skepticism": ["base/philosophy/empiricism"]
+  },
+  "infrastructure_policies": {
+    "description": "Infrastructure service policies",
+    "opt_in": true,
+    "location": "base/infrastructure/",
+    "policies": [
+      {
+        "name": "search_service",
+        "short_name": "SEARCH",
+        "path": "base/infrastructure/search_service.md",
+        "CEP_triggers": [
+          "What is the search service daemon?",
+          "How does warm caching improve performance?",
+          "What is the socket client pattern?",
+          "When does the search service start?",
+          "What happens during initialization?",
+          "How do I verify it's running?"
+        ],
+        "keywords": ["search", "daemon", "index", "cache"]
+      }
+    ]
+  },
+  "language_policies": {
+    "description": "Language-specific standards",
+    "opt_in": true,
+    "location": "lang/",
+    "policies": [
+      {
+        "name": "python_coding_standards",
+        "short_name": "PY_CODE",
+        "path": "lang/python/coding_standards.md",
+        "CEP_triggers": [
+          "What exception types should I catch?",
+          "Why avoid bare `except:`?",
+          "Why avoid `except Exception:`?",
+          "How do I warn to stderr in Python?",
+          "What is the standard message format?",
+          "How do I log to the event system?"
+        ],
+        "keywords": ["python", "exceptions", "style"]
+      },
+      {
+        "name": "python_testing",
+        "short_name": "PY_TEST",
+        "path": "lang/python/testing_python.md",
+        "CEP_triggers": [
+          "How do I structure pytest tests?",
+          "What are pytest naming conventions?",
+          "How do I organize test files?",
+          "What is conftest.py for?",
+          "How do I use test classes?",
+          "What naming patterns does pytest recognize?"
+        ],
+        "keywords": ["pytest", "fixtures", "python tests"]
+      }
+    ]
   }
 }
