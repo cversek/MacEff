@@ -83,3 +83,73 @@ def test_create_idea_no_wiki_links_yields_empty_list(tmp_path, monkeypatch):
     )
     written = json.loads(Path(result["path"]).read_text())
     assert written["links"]["wiki_links"] == []
+
+
+# ---------- update_idea integration (#124) ----------
+#
+# `idea update` had no wiki-link surface, so links could only be set at
+# creation. Gap-driven curation operates on EXISTING ideas, so closing a
+# suggested gap meant hand-editing JSON.
+
+def _make_idea(tmp_path, monkeypatch, **kw):
+    monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(tmp_path))
+    from macf.ideas import create_idea
+    return create_idea(title="Idea under test", category="infrastructure",
+                       description="testing", **kw)
+
+
+def test_update_idea_adds_and_normalizes_wiki_links(tmp_path, monkeypatch):
+    from macf.ideas import update_idea
+    created = _make_idea(tmp_path, monkeypatch, wiki_links=["initial_concept"])
+
+    update_idea(created["idea"]["id"], wiki_links=["Foo Bar", "[[qux]]"])
+
+    written = json.loads(Path(created["path"]).read_text())
+    assert written["links"]["wiki_links"] == ["initial_concept", "foo_bar", "qux"]
+
+
+def test_update_idea_dedups_against_existing_links(tmp_path, monkeypatch):
+    """Re-adding an existing link is a no-op, not a duplicate."""
+    from macf.ideas import update_idea
+    created = _make_idea(tmp_path, monkeypatch, wiki_links=["audit_trail"])
+
+    update_idea(created["idea"]["id"], wiki_links=["Audit Trail"])
+
+    written = json.loads(Path(created["path"]).read_text())
+    assert written["links"]["wiki_links"] == ["audit_trail"]
+
+
+def test_update_idea_removes_wiki_links(tmp_path, monkeypatch):
+    """--remove-wiki-link prunes a link found spurious during curation."""
+    from macf.ideas import update_idea
+    created = _make_idea(tmp_path, monkeypatch, wiki_links=["keep_me", "drop_me"])
+
+    update_idea(created["idea"]["id"], remove_wiki_links=["Drop Me"])
+
+    written = json.loads(Path(created["path"]).read_text())
+    assert written["links"]["wiki_links"] == ["keep_me"]
+
+
+def test_update_idea_records_history_for_link_changes(tmp_path, monkeypatch):
+    """Link edits are auditable, like status changes."""
+    from macf.ideas import update_idea
+    created = _make_idea(tmp_path, monkeypatch)
+
+    update_idea(created["idea"]["id"], wiki_links=["added_one"])
+    update_idea(created["idea"]["id"], remove_wiki_links=["added_one"])
+
+    actions = [h["action"] for h in json.loads(Path(created["path"]).read_text())["history"]]
+    assert any(a.startswith("wiki_links_added:") for a in actions)
+    assert any(a.startswith("wiki_links_removed:") for a in actions)
+
+
+def test_update_idea_status_only_leaves_links_untouched(tmp_path, monkeypatch):
+    """Backward-compat: a status-only update must not disturb existing links."""
+    from macf.ideas import update_idea
+    created = _make_idea(tmp_path, monkeypatch, wiki_links=["untouched"])
+
+    update_idea(created["idea"]["id"], status="exploring")
+
+    written = json.loads(Path(created["path"]).read_text())
+    assert written["links"]["wiki_links"] == ["untouched"]
+    assert written["status"] == "exploring"
