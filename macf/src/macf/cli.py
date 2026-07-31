@@ -1716,6 +1716,44 @@ def cmd_agent_sleep(args: argparse.Namespace) -> int:
     return 1
 
 
+def _editable_source_suffix() -> str:
+    """Describe the live source checkout when running from an editable install.
+
+    A bare dev version string says nothing about *which* checkout is running.
+    Dogfooding a feature branch or a worktree, `macf_tools --version` reported
+    the same `0.5.1.dev0` whether the code under it was main, a branch, or a
+    dirty tree — so "is my fix actually loaded?" could not be answered from the
+    tool itself.
+
+    Returns:
+        `` (empty) for a normal wheel install, or e.g.
+        `` (main @ 9dbeab3, dirty)`` when the package resolves to a git
+        checkout.
+    """
+    import subprocess as _subprocess
+    try:
+        pkg_root = Path(__file__).resolve().parent
+        r = _subprocess.run(
+            ["git", "-C", str(pkg_root), "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=5)
+        if r.returncode != 0:
+            return ""  # installed from a wheel, not a checkout
+        repo = r.stdout.strip()
+
+        def _git(*a):
+            out = _subprocess.run(["git", "-C", repo, *a],
+                                  capture_output=True, text=True, timeout=5)
+            return out.stdout.strip() if out.returncode == 0 else ""
+
+        branch = _git("rev-parse", "--abbrev-ref", "HEAD") or "?"
+        commit = _git("rev-parse", "--short", "HEAD") or "?"
+        dirty = ", dirty" if _git("status", "--porcelain") else ""
+        return f" ({branch} @ {commit}{dirty})"
+    except (FileNotFoundError, _subprocess.TimeoutExpired, OSError):
+        # No git, or it hung: the version string is still useful without this.
+        return ""
+
+
 def _ensure_agent_uuid(
     pa_home: Path,
     *,
@@ -4089,9 +4127,20 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
                 return True
             return False
 
-        def count_descendants(task_id):
+        def count_descendants(task_id, _seen=None):
+            # A task whose parent_id points at itself (or a cycle of them) is
+            # malformed but reachable — a hand-edited file, a bad fixture, an
+            # interrupted reparent. Without the guard this recurses until the
+            # interpreter dies, taking the whole tree render with it, and the
+            # traceback names recursion rather than the malformed task.
+            _seen = set() if _seen is None else _seen
+            if task_id in _seen:
+                print(f"Warning: cycle in task hierarchy at #{task_id} — "
+                      f"descendant count truncated", file=sys.stderr)
+                return 0
+            _seen.add(task_id)
             children = get_children(task_id)
-            return len(children) + sum(count_descendants(c.id) for c in children)
+            return len(children) + sum(count_descendants(c.id, _seen) for c in children)
 
         def get_task_notes(task):
             """Extract notes from task MTMD updates."""
@@ -4251,7 +4300,21 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
                     else:
                         print(f"{detail_prefix}{fmt('✅ ' + truncate(report, 60))}")
 
+        _rendered = set()
+
         def print_tree(task, prefix="", is_last=True, depth=0, siblings=None):
+            # A cyclic parent chain — a hand-edited file, a bad fixture, an
+            # interrupted reparent — otherwise recurses until the interpreter
+            # dies, and the traceback blames recursion rather than naming the
+            # malformed task. Render the node once, say so, and stop descending.
+            if task.id in _rendered:
+                print(f"{prefix}{'└── ' if is_last else '├── '}"
+                      f"⚠️  #{task.id} — cycle in task hierarchy, not descended")
+                print(f"Warning: cycle in task hierarchy at #{task.id}; "
+                      f"check parent_id", file=sys.stderr)
+                return
+            _rendered.add(task.id)
+
             connector = "└── " if is_last else "├── "
             extension = "    " if is_last else "│   "
 
@@ -8395,7 +8458,23 @@ def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="macf_tools", description="macf demo CLI (no external deps)"
     )
-    p.add_argument("--version", action="version", version=f"%(prog)s {_ver}")
+    class _VersionAction(argparse.Action):
+        """Print the version, resolving the source checkout only when asked.
+
+        The suffix costs a few `git` calls; computing it eagerly would charge
+        every `macf_tools` invocation — including the ones hooks make on every
+        tool use — for information only `--version` displays.
+        """
+
+        def __init__(self, option_strings, dest, **kwargs):
+            super().__init__(option_strings, dest, nargs=0, **kwargs)
+
+        def __call__(self, parser, namespace, values, option_string=None):
+            print(f"{parser.prog} {_ver}{_editable_source_suffix()}")
+            parser.exit()
+
+    p.add_argument("--version", action=_VersionAction,
+                   help="show version (with source checkout when editable)")
     sub = p.add_subparsers(dest="cmd")  # keep non-required for compatibility
 
     # cmd-tree: introspect parser structure (like unix tree command)
