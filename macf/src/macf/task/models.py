@@ -67,7 +67,7 @@ class MacfTaskMetaData:
     created_by: Optional[str] = None  # PA | SA:{agent_type}
 
     # Task type - AUTHORITATIVE source (takes precedence over subject line emoji parsing)
-    # Valid values: MISSION, EXPERIMENT, DETOUR, PHASE, TASK, BUG, DELEG_PLAN, SUBPLAN, ARCHIVE, GH_ISSUE
+    # Valid values: MISSION, EXPERIMENT, DETOUR, PHASE, TASK, BUG, DELEG_PLAN, SUBPLAN, ARCHIVE, GH_ISSUE, GH_PR
     # See task_management.md §2.1 for definitions
     task_type: Optional[str] = None
 
@@ -336,6 +336,10 @@ class MacfTask:
             task_type = "DETOUR"
         elif "📋" in subject:
             task_type = "PHASE"
+        elif "🔀" in subject:
+            task_type = "GH_PR"
+        elif "🐙" in subject:
+            task_type = "GH_ISSUE"
 
         return cls(
             id=task_id,
@@ -378,6 +382,7 @@ class MacfTask:
             "DETOUR": "↩️",
             "PHASE": "📋",
             "GH_ISSUE": "🐙",
+            "GH_PR": "🔀",
         }
         return emoji_map.get(self.task_type, "")
 
