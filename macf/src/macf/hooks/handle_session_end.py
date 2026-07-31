@@ -10,6 +10,7 @@ import traceback
 from typing import Dict, Any
 
 from macf.utils import (
+    format_macf_brand,
     get_temporal_context,
     format_macf_footer,
     get_current_session_id,
@@ -68,7 +69,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # Format message
         # Note: SessionEnd hook doesn't support hookSpecificOutput
         # (only PreToolUse, UserPromptSubmit, PostToolUse do)
-        message = f"""🏗️ MACF | Session Ended
+        message = f"""{format_macf_brand()} | Session Ended
 Time: {temporal_ctx['timestamp_formatted']}
 Session: {session_id[:8]}...
 Breadcrumb: {breadcrumb}
@@ -99,7 +100,7 @@ Breadcrumb: {breadcrumb}
         })
         return {
             "continue": True,
-            "systemMessage": f"🏗️ MACF | ❌ SessionEnd hook error: {e}"
+            "systemMessage": f"{format_macf_brand()} | ❌ SessionEnd hook error: {e}"
         }
 
 

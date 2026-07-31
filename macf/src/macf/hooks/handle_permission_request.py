@@ -10,6 +10,7 @@ import traceback
 from typing import Dict, Any
 
 from macf.utils import (
+    format_macf_brand,
     get_minimal_timestamp,
     get_current_session_id,
     get_breadcrumb
@@ -112,7 +113,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # (only PreToolUse, UserPromptSubmit, PostToolUse do)
         timestamp = get_minimal_timestamp()
         breadcrumb = get_breadcrumb()
-        message = f"🏗️ MACF | {timestamp} | {breadcrumb} | 🔐 Permission: {tool_name}"
+        message = f"{format_macf_brand()} | {timestamp} | {breadcrumb} | 🔐 Permission: {tool_name}"
 
         # Send file preview to Telegram (non-blocking, never fails the hook)
         try:
@@ -142,7 +143,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         })
         return {
             "continue": True,
-            "systemMessage": f"🏗️ MACF | ❌ PermissionRequest hook error: {e}"
+            "systemMessage": f"{format_macf_brand()} | ❌ PermissionRequest hook error: {e}"
         }
 
 

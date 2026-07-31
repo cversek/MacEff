@@ -86,6 +86,7 @@ from .manifest import (
     list_policy_files,
 )
 from .formatting import (
+    format_macf_brand,
     format_macf_footer,
     format_proprioception_awareness,
     get_claude_code_version,
@@ -124,6 +125,7 @@ __all__ = [
     "find_project_root",
     "format_breadcrumb",
     "format_duration",
+    "format_macf_brand",
     "format_macf_footer",
     "format_proprioception_awareness",
     "get_agent_identity",

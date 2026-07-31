@@ -212,3 +212,33 @@ def format_proprioception_awareness() -> str:
         print(f"⚠️ MACF: macf_tools env failed during proprioception: {e}", file=sys.stderr)
 
     return "\n\n".join(sections)
+
+
+def format_macf_brand(session_id=None, auto_mode=None, indicators=None) -> str:
+    """
+    Canonical MACF brand segment — the first token of every hook banner.
+
+    Single source of truth for "🏗️ MACF" plus mode indicators, replacing
+    per-hook hand-rolled f-string prefixes.
+
+    Args:
+        session_id: If given (and auto_mode is None), AUTO_MODE is detected
+            hierarchically via detect_auto_mode(session_id).
+        auto_mode: Explicit AUTO_MODE flag; appends " 🤖" when True.
+        indicators: Pre-computed indicator string (e.g. from
+            format_mode_indicators). Takes precedence; appended verbatim.
+
+    Returns:
+        "🏗️ MACF", "🏗️ MACF 🤖", or "🏗️ MACF{indicators}".
+    """
+    if indicators is not None:
+        return f"🏗️ MACF{indicators}"
+    if auto_mode is None:
+        auto_mode = False
+        if session_id:
+            try:
+                from .cycles import detect_auto_mode
+                auto_mode, _ = detect_auto_mode(session_id)
+            except Exception:
+                auto_mode = False
+    return "🏗️ MACF 🤖" if auto_mode else "🏗️ MACF"

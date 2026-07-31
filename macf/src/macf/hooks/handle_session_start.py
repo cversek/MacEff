@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Dict, Any
 
 from macf.utils import (
+    format_macf_brand,
     get_current_session_id,
     get_latest_consciousness_artifacts,
     detect_auto_mode,
@@ -524,8 +525,13 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         compaction_info = get_compaction_count_from_events(session_id)
         compaction_count = compaction_info.get('count', 0)
 
+        # AUTO_MODE detection for banner parity with other hooks (issue #164).
+        # Previously only the migration/compaction branches detected mode, so
+        # fresh and resume banners never showed the 🤖 indicator.
+        auto_mode, mode_source = detect_auto_mode(session_id)
+
         # Format temporal awareness message
-        message = f"""🏗️ MACF | Session Start
+        message = f"""{format_macf_brand(auto_mode=auto_mode)} | Session Start
 Current Time: {temporal_ctx['timestamp_formatted']}
 Day: {temporal_ctx['day_of_week']}
 Time of Day: {temporal_ctx['time_of_day']}
@@ -564,12 +570,28 @@ Session Context:
             emit_warning(Warning(source="session_start", kind="telegram_send_failed", detail=f"session-start telegram notification failed: {e}"))
 
         # Pattern C: top-level systemMessage for user + hookSpecificOutput for agent
+        additional_context = f"<system-reminder>\n{message}\n</system-reminder>"
+
+        # AUTO_MODE resume kick (issue #164): SessionStart:resume hands the turn
+        # back to the user, which strands an unattended AUTO_MODE agent. Hooks
+        # cannot submit a prompt, so inject a standing directive that tells the
+        # agent to continue its authorized work whenever the next turn fires
+        # (operator Enter, supervisor kick, or queued prompt).
+        if source == 'resume' and auto_mode:
+            additional_context += (
+                "\n<system-reminder>\n"
+                f"🤖 AUTO_MODE RESUME (source: {mode_source}): persistent AUTO_MODE is active. "
+                "Resume your authorized in-progress work immediately — do not stop to await "
+                "a new operator prompt.\n"
+                "</system-reminder>"
+            )
+
         return {
             "continue": True,
             "systemMessage": message,  # TOP LEVEL - user sees this
             "hookSpecificOutput": {
                 "hookEventName": "SessionStart",
-                "additionalContext": f"<system-reminder>\n{message}\n</system-reminder>"
+                "additionalContext": additional_context
             }
         }
 

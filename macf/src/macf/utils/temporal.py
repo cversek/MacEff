@@ -231,4 +231,5 @@ def format_minimal_temporal_message(timestamp: str) -> str:
     Returns:
         Formatted message with 🏗️ MACF tag
     """
-    return f"🏗️ MACF | {timestamp}"
+    from .formatting import format_macf_brand
+    return f"{format_macf_brand()} | {timestamp}"

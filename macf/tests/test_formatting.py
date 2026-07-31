@@ -98,3 +98,37 @@ class TestStrategy1HookRecursionRegression:
         monkeypatch.setenv("MACF_CC_VERSION", "1.2.3")
 
         assert get_claude_code_version() == "1.2.3"
+
+
+class TestFormatMacfBrand:
+    """format_macf_brand — canonical banner first segment (issue #164)."""
+
+    def test_bare_brand(self):
+        from macf.utils.formatting import format_macf_brand
+        assert format_macf_brand() == "🏗️ MACF"
+
+    def test_auto_mode_true_appends_robot(self):
+        from macf.utils.formatting import format_macf_brand
+        assert format_macf_brand(auto_mode=True) == "🏗️ MACF 🤖"
+
+    def test_auto_mode_false_bare(self):
+        from macf.utils.formatting import format_macf_brand
+        assert format_macf_brand(auto_mode=False) == "🏗️ MACF"
+
+    def test_indicators_verbatim(self):
+        from macf.utils.formatting import format_macf_brand
+        assert format_macf_brand(indicators=" 🤖 ⚙️") == "🏗️ MACF 🤖 ⚙️"
+
+    def test_indicators_take_precedence(self):
+        from macf.utils.formatting import format_macf_brand
+        assert format_macf_brand(auto_mode=True, indicators="") == "🏗️ MACF"
+
+    def test_session_id_detection(self):
+        from macf.utils.formatting import format_macf_brand
+        with patch('macf.utils.cycles.detect_auto_mode', return_value=(True, "event")):
+            assert format_macf_brand(session_id="s-123") == "🏗️ MACF 🤖"
+
+    def test_detection_failure_falls_back_to_bare(self):
+        from macf.utils.formatting import format_macf_brand
+        with patch('macf.utils.cycles.detect_auto_mode', side_effect=OSError("boom")):
+            assert format_macf_brand(session_id="s-123") == "🏗️ MACF"

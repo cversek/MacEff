@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Dict, Any
 
 from macf.utils import (
+    format_macf_brand,
     get_temporal_context,
     format_macf_footer,
     get_rich_environment_string,
@@ -194,7 +195,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             mode_indicator = " 🤖" if auto_mode else ""
 
         # Format temporal section with breadcrumb
-        temporal_section = f"""🏗️ MACF{mode_indicator} | DEV_DRV Started
+        temporal_section = f"""{format_macf_brand(indicators=mode_indicator)} | DEV_DRV Started
 Current Time: {temporal_ctx['timestamp_formatted']}
 Day: {temporal_ctx['day_of_week']}
 Time of Day: {temporal_ctx['time_of_day']}
@@ -292,7 +293,7 @@ Breadcrumb: {breadcrumb}"""
             "error": str(e),
             "traceback": traceback.format_exc()
         })
-        error_msg = f"🏗️ MACF | ❌ UserPromptSubmit hook error: {e}"
+        error_msg = f"{format_macf_brand()} | ❌ UserPromptSubmit hook error: {e}"
         return {
             "continue": True,
             "systemMessage": error_msg,

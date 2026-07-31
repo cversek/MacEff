@@ -10,6 +10,7 @@ import traceback
 from typing import Dict, Any
 
 from macf.utils import (
+    format_macf_brand,
     get_temporal_context,
     format_macf_footer,
     get_rich_environment_string,
@@ -141,7 +142,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             mode_indicator = " 🤖" if auto_mode else ""
 
         # Format message with full timestamp and DEV_DRV summary
-        message = f"""🏗️ MACF{mode_indicator} | DEV_DRV Complete
+        message = f"""{format_macf_brand(indicators=mode_indicator)} | DEV_DRV Complete
 Current Time: {temporal_ctx['timestamp_formatted']}
 Day: {temporal_ctx['day_of_week']}
 Time of Day: {temporal_ctx['time_of_day']}
@@ -536,7 +537,7 @@ Development Drive Stats:
             emit_warning(Warning(source="stop", kind="telegram_send_failed", detail=f"Telegram error notification also failed: {tg_e}"))
         return {
             "continue": True,
-            "systemMessage": f"🏗️ MACF | ❌ Stop hook error: {e}"
+            "systemMessage": f"{format_macf_brand()} | ❌ Stop hook error: {e}"
         }
 
 
