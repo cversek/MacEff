@@ -650,13 +650,62 @@ def stop_proxy() -> bool:
         return False
 
 
+def _socket_owner_pid(port: int) -> Optional[int]:
+    """PID actually listening on `port`, or None if that can't be determined.
+
+    The pidfile records who *we* started; this reports who actually holds the
+    socket. They diverge in the split-brain case (an ad-hoc daemon keeps
+    answering while a systemd unit crash-loops on EADDRINUSE), which is exactly
+    when the pidfile alone is misleading.
+    """
+    import re
+    import shutil
+    import subprocess as _sp
+
+    if shutil.which("ss"):
+        cmd = ["ss", "-tlnp"]
+    elif shutil.which("lsof"):
+        cmd = ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN"]
+    else:
+        return None
+
+    try:
+        out = _sp.run(cmd, capture_output=True, text=True, timeout=5)
+    except (OSError, _sp.TimeoutExpired):
+        return None
+    if out.returncode != 0:
+        return None
+
+    for line in out.stdout.splitlines():
+        if f":{port}" not in line:
+            continue
+        # ss:   users:(("python3",pid=1234,fd=7))
+        m = re.search(r'pid=(\d+)', line)
+        if m:
+            return int(m.group(1))
+        # lsof: python3 1234 user ...
+        parts = line.split()
+        if len(parts) >= 2 and parts[1].isdigit():
+            return int(parts[1])
+    return None
+
+
 def get_proxy_status() -> dict:
-    """Get proxy status information."""
+    """Get proxy status information.
+
+    Includes a socket-owner cross-check: "it answers on the port" is not the
+    same as "the process we think is running owns the port".
+    """
     running = is_proxy_running()
+    pid = _read_pid() if running else None
+    owner = _socket_owner_pid(DEFAULT_PORT)
     result = {
         "running": running,
-        "pid": _read_pid() if running else None,
+        "pid": pid,
         "port": DEFAULT_PORT,
+        "socket_owner_pid": owner,
+        # True when something else holds the socket — the split-brain signature.
+        "socket_owner_mismatch": bool(owner and pid and owner != pid),
         "log_path": str(get_log_path()),
         "pid_file": str(_get_pid_file()),
     }
