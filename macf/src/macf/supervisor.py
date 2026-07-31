@@ -32,16 +32,42 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-REGISTRY_DIR = Path("/tmp/macf/auto-restart")
+def _resolve_registry_dir() -> Path:
+    """Per-user supervisor registry directory.
+
+    A single global `/tmp/macf/auto-restart` is owned by whichever uid creates
+    it first, so the *second* agent user on a shared host or container dies with
+    PermissionError the moment its supervisor starts — and the symptom ("the
+    tmux session vanished instantly") reads as anything but a permissions
+    problem. A shared directory is also a shared namespace: `auto-restart list`
+    would show other users' supervisors, and lookup-by-name could match them.
+
+    Resolution order:
+    1. `$XDG_RUNTIME_DIR/macf/auto-restart` — per-user by construction, and the
+       same base the proxy already uses for its pid/log files.
+    2. `/tmp/macf-{uid}/auto-restart` — uid-qualified fallback, created 0700.
+    """
+    xdg = os.environ.get("XDG_RUNTIME_DIR")
+    if xdg:
+        return Path(xdg) / "macf" / "auto-restart"
+    return Path(f"/tmp/macf-{os.getuid()}") / "auto-restart"
+
+
+REGISTRY_DIR = _resolve_registry_dir()
 
 
 def _registry_file(pid: int) -> Path:
     return REGISTRY_DIR / f"{pid}.json"
 
 
+def _ensure_registry_dir() -> None:
+    """Create the registry dir owner-only, so it can never be hijacked."""
+    REGISTRY_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+
 def _write_registry(pid: int, data: dict):
     """Write process stats to registry."""
-    REGISTRY_DIR.mkdir(parents=True, exist_ok=True)
+    _ensure_registry_dir()
     _registry_file(pid).write_text(json.dumps(data, indent=2))
 
 
@@ -819,7 +845,7 @@ if __name__ == "__main__":
         error_msg = traceback.format_exc()
         print(f"\n[auto-restart] CRASH ({type(e).__name__}: {e}):\n{error_msg}", file=sys.stderr)
         # Log to file (persists after window closes)
-        REGISTRY_DIR.mkdir(parents=True, exist_ok=True)
+        _ensure_registry_dir()
         with open(LOG_FILE, "a") as f:
             f.write(f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
             f.write(f"argv: {sys.argv}\n")
