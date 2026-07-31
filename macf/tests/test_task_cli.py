@@ -853,9 +853,13 @@ class TestGHPRCloseoutFunction:
         view = Mock(returncode=0, stdout=json.dumps(
             {"state": "MERGED", "mergeCommit": {"oid": "deadbeef1234"}}), stderr="")
         comment = Mock(returncode=0, stdout="", stderr="")
-        with patch('macf.cli._public_attribution_enabled', return_value=True):
-            with patch('subprocess.run', side_effect=[view, comment]) as mock_run:
-                outcome = _gh_pr_closeout(168, mtmd, args, 's_test/c_1/g_abc/p_def/t_123')
+        # Patch identity so it never shells out — otherwise get_agent_identity()
+        # consumes a subprocess.run slot in environments without a cached identity
+        # (green locally, StopIteration in CI). Keep the mock to exactly view+comment.
+        with patch('macf.utils.identity.get_agent_identity', return_value='TestAgent'):
+            with patch('macf.cli._public_attribution_enabled', return_value=True):
+                with patch('subprocess.run', side_effect=[view, comment]) as mock_run:
+                    outcome = _gh_pr_closeout(168, mtmd, args, 's_test/c_1/g_abc/p_def/t_123')
         assert outcome == 'MERGED'
         comment_call = [c for c in mock_run.call_args_list
                         if c[0][0][:3] == ['gh', 'pr', 'comment']][0]
