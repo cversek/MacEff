@@ -945,9 +945,17 @@ def cmd_framework_install(args: argparse.Namespace) -> int:
             print(f"ℹ️  Commands and skills NOT installed; rerun without `--hooks-only` (or use `--skip-hooks` if hooks are already in place) to install those.")
             return 0
 
+        # An install that reports success while linking nothing is
+        # indistinguishable from one that worked, and the agent only finds out
+        # much later when a command it was told it had turns out to be missing.
+        # Both an absent source tree and a present-but-empty one are recorded
+        # here and made fatal at the summary.
+        problems: list[str] = []
+
         # Install commands (symlink maceff*/ namespace directories)
         print("\n📦 Installing commands...")
         commands_src = framework_root / "commands"
+        linked_commands = 0
         if commands_src.exists():
             commands_dir.mkdir(parents=True, exist_ok=True)
             for cmd_ns in commands_src.glob("maceff*/"):
@@ -960,12 +968,19 @@ def cmd_framework_install(args: argparse.Namespace) -> int:
                             import shutil
                             shutil.rmtree(target)
                     target.symlink_to(cmd_ns)
+                    linked_commands += 1
                     # Count .md files in namespace for reporting
                     md_count = sum(1 for _ in cmd_ns.rglob("*.md"))
                     installed_count["commands"] += md_count
                     print(f"   ✓ {cmd_ns.name}/ ({md_count} commands)")
+            if linked_commands == 0:
+                problems.append(
+                    f"commands: {commands_src} exists but contains no maceff*/ namespace directories"
+                )
+                print(f"   ❌ no maceff*/ namespaces found in {commands_src}", file=sys.stderr)
         else:
-            print(f"   No commands directory at {commands_src}")
+            problems.append(f"commands: source tree missing at {commands_src}")
+            print(f"   ❌ no commands directory at {commands_src}", file=sys.stderr)
 
         # Install skills (symlink maceff-*/ directories)
         print("\n📦 Installing skills...")
@@ -984,10 +999,28 @@ def cmd_framework_install(args: argparse.Namespace) -> int:
                     target.symlink_to(skill_dir)
                     installed_count["skills"] += 1
                     print(f"   ✓ {skill_dir.name}/")
+            if installed_count["skills"] == 0:
+                problems.append(
+                    f"skills: {skills_src} exists but contains no maceff-*/ directories"
+                )
+                print(f"   ❌ no maceff-*/ skills found in {skills_src}", file=sys.stderr)
         else:
-            print(f"   No skills directory at {skills_src}")
+            problems.append(f"skills: source tree missing at {skills_src}")
+            print(f"   ❌ no skills directory at {skills_src}", file=sys.stderr)
 
         # Summary
+        if problems:
+            print(f"\n❌ Framework installation INCOMPLETE — nothing was installed for:", file=sys.stderr)
+            for problem in problems:
+                print(f"   • {problem}", file=sys.stderr)
+            print(f"   Framework root resolved to: {framework_root}", file=sys.stderr)
+            print(f"   Hooks: {installed_count['hooks']}   Commands: {installed_count['commands']}   Skills: {installed_count['skills']}", file=sys.stderr)
+            print(f"   This usually means the framework tree was never deployed to this", file=sys.stderr)
+            print(f"   root — on a container, check that framework/ is mounted and that", file=sys.stderr)
+            print(f"   the sync step ran ('make framework-upgrade' on the host).", file=sys.stderr)
+            print(f"   Use --hooks-only if installing hooks alone is what you intended.", file=sys.stderr)
+            return 1
+
         print(f"\n✅ Framework installation complete!")
         print(f"   Hooks: {installed_count['hooks']}")
         print(f"   Commands: {installed_count['commands']}")
