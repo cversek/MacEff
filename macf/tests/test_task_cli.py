@@ -759,6 +759,37 @@ class TestGHIssueCloseoutFunction:
             _gh_issue_closeout(42, mtmd, args, 's_test/c_1/g_abc/p_def/t_123')
 
 
+class TestTaskTreeSuccinctRecencyMarker:
+    """Succinct mode must never hide the recency-marked (last-touched) task (#150)."""
+
+    def _write_task(self, session_dir, task_id, subject, status, ts, parent="'000'"):
+        parent_line = f"parent_id: {parent}\n" if parent else ""
+        mtmd = (f"task_type: {'SENTINEL' if not parent else 'TASK'}\n"
+                f"creation_breadcrumb: s_t/c_1/g_a/p_b/t_{ts}\n"
+                f"created_cycle: 1\ncreated_by: PA\n{parent_line}")
+        desc = f'Task\n\n<macf_task_metadata version="1.0">\n{mtmd}</macf_task_metadata>'
+        (session_dir / f"{task_id}.json").write_text(json.dumps(
+            {"id": str(task_id), "subject": subject, "description": desc, "status": status}))
+
+    def test_completed_recency_marked_task_still_shown_in_succinct(self, isolated_task_env):
+        """The 👈-marked task stays visible in --succinct after it completes."""
+        d = isolated_task_env['session_dir']
+        # Sentinel root (no parent — a self-parented sentinel recurses infinitely).
+        self._write_task(d, "000", "🛡️ MACF TASK LIST", "in_progress", 1000, parent=None)
+        # An active sibling (visible regardless) and the newest-touched COMPLETED task.
+        self._write_task(d, 2, "🔧 active work", "in_progress", 2000)
+        self._write_task(d, 3, "🔧 most recently touched", "completed", 9999999999)
+
+        result = subprocess.run(
+            ['macf_tools', 'task', 'tree', '--succinct'],
+            capture_output=True, text=True, env=isolated_task_env['env'])
+        out = result.stdout
+        # Before the fix, the completed depth-1 task was filtered out and its
+        # marker vanished; the marker must travel with the task.
+        assert 'most recently touched' in out, f"recency-marked task hidden in succinct:\n{out}"
+        assert '👈' in out, f"recency marker missing:\n{out}"
+
+
 class TestTaskCreateGHPRCommand:
     """Test GH_PR task creation function (inbound PR review/merge tracking)."""
 
