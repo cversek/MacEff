@@ -4137,8 +4137,33 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
                     return True
             return False
 
-        def should_show_task(task, siblings, depth):
-            """Determine if task should be shown in succinct mode."""
+        def is_fully_completed(task, _seen=None):
+            """True when this task AND every descendant are completed.
+
+            "Completed" alone is not enough to hide a subtree: a completed
+            parent can still own active children, and hiding the parent hides
+            them with it — the work disappears from the tree entirely rather
+            than merely collapsing.
+            """
+            if task.status != "completed":
+                return False
+            # Same cycle guard as count_descendants: a self-parenting task is
+            # malformed but reachable, and must not take the render down.
+            _seen = set() if _seen is None else _seen
+            if task.id in _seen:
+                return True
+            _seen.add(task.id)
+            return all(is_fully_completed(c, _seen) for c in get_children(task.id))
+
+        def should_show_task(task, siblings, depth, parent=None):
+            """Determine if task should be shown in succinct mode.
+
+            Succinct is progressive disclosure, not a completed-filter. The
+            rule that matters: a parent still open means its finished children
+            are the context that makes the remaining work legible. Hiding them
+            renders an in-progress parent as a bare line with nothing under it,
+            which reads as "nothing was done here" — the opposite of the truth.
+            """
             if not succinct:
                 return True
             # Always show root sentinel (depth 0)
@@ -4152,10 +4177,18 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
             # Show if active/pending
             if task.status in ("in_progress", "pending"):
                 return True
-            # Top tier (depth 1): hide ALL completed - too many to show siblings
+            # Top tier (depth 1): hide only a subtree that is done all the way
+            # down. A completed task with active descendants stays, or those
+            # descendants would have no path to the surface.
             if depth == 1:
-                return False
-            # Deeper tiers: show completed only if has active sibling (provides context)
+                return not is_fully_completed(task)
+            # Deeper tiers: while the parent is still open, show its completed
+            # children. Their own finished descendants collapse by the same
+            # rule one level further in, so a resolved branch costs one line
+            # rather than a subtree.
+            if parent is not None and parent.status != "completed":
+                return True
+            # Under a completed parent, fall back to sibling context.
             if task.status == "completed" and has_active_sibling(task, siblings):
                 return True
             return False
@@ -4386,7 +4419,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
 
             children = get_children(task.id)
             # Filter children in succinct mode
-            visible_children = [c for c in children if should_show_task(c, children, depth + 1)]
+            visible_children = [c for c in children if should_show_task(c, children, depth + 1, task)]
 
             for i, child in enumerate(visible_children):
                 print_tree(child, prefix + extension, i == len(visible_children) - 1, depth + 1, children)
