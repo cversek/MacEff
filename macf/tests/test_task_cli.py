@@ -1157,3 +1157,292 @@ class TestSubjectTitleTruncation:
         out = _truncate_subject_title(subject, 30)
         assert out.endswith("...")
         assert len(out) < len(subject)
+
+
+class TestTaskDoctor:
+    """`task doctor` reconciles stored records against their authority.
+
+    Read-time re-derivation keeps *displays* honest. The stored record is what
+    other consumers read, so it needs a reconcile pass of its own.
+    """
+
+    def _seed(self, session_dir, task_id, subject, parent_id):
+        payload = {
+            "id": task_id,
+            "subject": subject,
+            "status": "pending",
+            "description": (
+                '<macf_task_metadata version="1.0">\n'
+                'task_type: TASK\n'
+                'created_by: PA\n'
+                f'parent_id: {parent_id}\n'
+                '</macf_task_metadata>\n'
+            ),
+        }
+        (session_dir / f"{task_id}.json").write_text(json.dumps(payload))
+
+    def test_reports_divergent_marker_and_exits_nonzero(self, isolated_task_env):
+        self._seed(isolated_task_env['session_dir'], "42",
+                   "  #42 [^#10] 🔧 stale marker task", parent_id="20")
+
+        result = subprocess.run(
+            ["macf_tools", "task", "doctor"],
+            capture_output=True, text=True, env=isolated_task_env['env'],
+        )
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert "1 divergent" in result.stdout
+        assert "#42" in result.stdout
+        assert "--fix" in result.stdout
+
+    def test_report_only_does_not_mutate(self, isolated_task_env):
+        session_dir = isolated_task_env['session_dir']
+        self._seed(session_dir, "42", "  #42 [^#10] 🔧 stale marker task", parent_id="20")
+        before = (session_dir / "42.json").read_text()
+
+        subprocess.run(["macf_tools", "task", "doctor"],
+                       capture_output=True, text=True, env=isolated_task_env['env'])
+
+        assert (session_dir / "42.json").read_text() == before, "report-only wrote to disk"
+
+    def test_fix_heals_the_stored_subject(self, isolated_task_env):
+        session_dir = isolated_task_env['session_dir']
+        self._seed(session_dir, "42", "  #42 [^#10] 🔧 stale marker task", parent_id="20")
+
+        result = subprocess.run(
+            ["macf_tools", "task", "doctor", "--fix"],
+            capture_output=True, text=True, env=isolated_task_env['env'],
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+        healed = json.loads((session_dir / "42.json").read_text())["subject"]
+        assert "[^#20]" in healed
+        assert "[^#10]" not in healed
+        assert "stale marker task" in healed, "healing damaged the title"
+
+    def test_clean_tree_reports_no_drift(self, isolated_task_env):
+        self._seed(isolated_task_env['session_dir'], "42",
+                   "  #42 [^#20] 🔧 honest marker task", parent_id="20")
+
+        result = subprocess.run(
+            ["macf_tools", "task", "doctor"],
+            capture_output=True, text=True, env=isolated_task_env['env'],
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "No drift detected" in result.stdout
+
+
+class TestTaskDoctorGitHubState:
+    """A GitHub-backed task must be reconciled against GitHub, not against the
+    copy of GitHub's answer it stored when it was created.
+
+    The motivating incident: a task sat pending for hours after its PR merged,
+    because everything downstream read `custom.gh_state` and that field had
+    said OPEN since creation.
+    """
+
+    class _Mtmd:
+        def __init__(self, task_type, custom):
+            self.task_type = task_type
+            self.custom = custom
+            self.parent_id = None
+
+    class _Task:
+        def __init__(self, task_id, task_type, custom, status="pending"):
+            self.id = task_id
+            self.status = status
+            self.subject = f"  #{task_id} tracked"
+            self.mtmd = TestTaskDoctorGitHubState._Mtmd(task_type, custom)
+
+    def _pr_task(self, task_id="1", status="pending", cached="OPEN"):
+        return self._Task(task_id, "GH_PR", {
+            "gh_owner": "o", "gh_repo": "r", "gh_pr_number": 7, "gh_state": cached,
+        }, status=status)
+
+    def test_open_task_whose_pr_merged_is_flagged_for_closeout(self):
+        from macf import cli
+        with patch.object(cli, "_gh_live_state", return_value="MERGED"):
+            found = cli._doctor_check_gh_state([self._pr_task()])
+        assert len(found) == 1
+        assert found[0]["resolved_upstream"] is True
+        assert found[0]["live"] == "MERGED"
+        assert found[0]["cached"] == "OPEN"
+
+    def test_completed_task_whose_pr_merged_is_not_flagged_for_closeout(self):
+        """That is the correct end state — only the cached field is stale."""
+        from macf import cli
+        with patch.object(cli, "_gh_live_state", return_value="MERGED"):
+            found = cli._doctor_check_gh_state(
+                [self._pr_task(status="completed")], include_completed=True)
+        assert len(found) == 1, "cached-state drift should still be reported"
+        assert found[0]["resolved_upstream"] is False
+
+    def test_completed_tasks_are_skipped_by_default(self):
+        from macf import cli
+        with patch.object(cli, "_gh_live_state", return_value="MERGED") as live:
+            found = cli._doctor_check_gh_state([self._pr_task(status="completed")])
+        assert found == []
+        live.assert_not_called(), "skipped tasks should not cost an API call"
+
+    def test_agreeing_state_is_not_a_finding(self):
+        from macf import cli
+        with patch.object(cli, "_gh_live_state", return_value="OPEN"):
+            found = cli._doctor_check_gh_state([self._pr_task()])
+        assert found == []
+
+    def test_unreachable_authority_is_reported_not_assumed_to_agree(self):
+        """An authority that cannot be reached is unknown, never agreement."""
+        from macf import cli
+        with patch.object(cli, "_gh_live_state", return_value=None):
+            found = cli._doctor_check_gh_state([self._pr_task()])
+        assert len(found) == 1
+        assert found[0]["unreachable"] is True
+        assert found[0]["live"] is None
+
+    def test_cached_state_is_never_used_as_the_answer(self):
+        """Even a cached MERGED gets verified — the point is not to trust it."""
+        from macf import cli
+        with patch.object(cli, "_gh_live_state", return_value="OPEN") as live:
+            found = cli._doctor_check_gh_state([self._pr_task(cached="MERGED")])
+        live.assert_called_once()
+        assert len(found) == 1 and found[0]["live"] == "OPEN"
+
+    def test_no_github_flag_skips_the_live_check(self, isolated_task_env):
+        result = subprocess.run(
+            ["macf_tools", "task", "doctor", "--no-github"],
+            capture_output=True, text=True, env=isolated_task_env['env'],
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "skipped (--no-github)" in result.stdout
+
+
+class TestHierarchyCycleGuard:
+    """A malformed hierarchy must degrade, not take the renderer down with it.
+
+    A self-parented task is reachable in practice — a hand-edited file, a bad
+    fixture, an interrupted reparent. Unguarded, the descendant count recursed
+    until the interpreter died, and the traceback blamed recursion rather than
+    naming the malformed task.
+    """
+
+    def test_self_parented_task_does_not_hang_the_tree(self, isolated_task_env):
+        session_dir = isolated_task_env['session_dir']
+        # Quoted: an unquoted `000` parses as the integer 0 and never matches
+        # the string sentinel id (the int-coercion noted on GH #112).
+        for task_id, parent in (("000", '"000"'), ("42", '"000"')):
+            (session_dir / f"{task_id}.json").write_text(json.dumps({
+                "id": task_id,
+                "subject": f"  #{task_id} 🔧 task",
+                "status": "in_progress" if task_id == "000" else "pending",
+                "description": (
+                    '<macf_task_metadata version="1.0">\n'
+                    f'task_type: {"SENTINEL" if task_id == "000" else "TASK"}\n'
+                    'created_by: PA\n'
+                    f'parent_id: {parent}\n'
+                    '</macf_task_metadata>\n'
+                ),
+            }))
+
+        result = subprocess.run(
+            ["macf_tools", "task", "tree"],
+            capture_output=True, text=True, env=isolated_task_env['env'],
+            timeout=60,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "RecursionError" not in result.stderr
+        assert "cycle in task hierarchy" in result.stderr
+
+
+class TestTaskTreeSuccinctProgressiveDisclosure:
+    """Succinct mode is progressive disclosure, not a completed-filter.
+
+    An in-progress parent whose finished children are all hidden renders as a
+    bare line with nothing beneath it, which reads as "nothing was done here" —
+    the opposite of the truth. And hiding a completed task hides its subtree,
+    so a completed parent with active children took those children off the
+    tree entirely.
+    """
+
+    def _write_task(self, session_dir, task_id, subject, status, ts, parent="'000'"):
+        parent_line = f"parent_id: {parent}\n" if parent else ""
+        mtmd = (f"task_type: {'SENTINEL' if not parent else 'TASK'}\n"
+                f"creation_breadcrumb: s_t/c_1/g_a/p_b/t_{ts}\n"
+                f"created_cycle: 1\ncreated_by: PA\n{parent_line}")
+        desc = f'Task\n\n<macf_task_metadata version="1.0">\n{mtmd}</macf_task_metadata>'
+        (session_dir / f"{task_id}.json").write_text(json.dumps(
+            {"id": str(task_id), "subject": subject, "description": desc, "status": status}))
+
+    def _tree(self, env):
+        return subprocess.run(
+            ['macf_tools', 'task', 'tree', '--succinct'],
+            capture_output=True, text=True, env=env).stdout
+
+    def _root(self, d):
+        self._write_task(d, "000", "🛡️ MACF TASK LIST", "in_progress", 1000, parent=None)
+        # Newest-touched task, and active anyway, so the recency marker never
+        # lands on a task a test expects to be hidden.
+        self._write_task(d, 99, "🔧 newest active decoy", "in_progress", 9999999999)
+
+    def test_completed_children_show_under_an_incomplete_parent(self, isolated_task_env):
+        """Rule 1 — the reason this exists."""
+        d = isolated_task_env['session_dir']
+        self._root(d)
+        self._write_task(d, 2, "🔧 open parent", "in_progress", 2000)
+        self._write_task(d, 3, "PHASE ONE done", "completed", 2001, parent="2")
+        self._write_task(d, 4, "PHASE TWO done", "completed", 2002, parent="2")
+
+        out = self._tree(isolated_task_env['env'])
+        assert 'open parent' in out
+        assert 'PHASE ONE done' in out, f"completed child hidden under open parent:\n{out}"
+        assert 'PHASE TWO done' in out, f"completed child hidden under open parent:\n{out}"
+
+    def test_fully_completed_top_level_subtree_is_hidden(self, isolated_task_env):
+        """Rule 3 — done all the way down, so it collapses out of view."""
+        d = isolated_task_env['session_dir']
+        self._root(d)
+        self._write_task(d, 2, "FINISHED TOPLEVEL", "completed", 2000)
+        self._write_task(d, 3, "FINISHED CHILD", "completed", 2001, parent="2")
+
+        out = self._tree(isolated_task_env['env'])
+        assert 'FINISHED TOPLEVEL' not in out, f"fully-done top-level task shown:\n{out}"
+        assert 'FINISHED CHILD' not in out
+
+    def test_completed_top_level_with_active_descendant_stays(self, isolated_task_env):
+        """Rule 3, the case that made it a bug rather than a preference.
+
+        Hiding the parent hides the subtree, so an active child under a
+        completed parent had no path to the surface at all.
+        """
+        d = isolated_task_env['session_dir']
+        self._root(d)
+        self._write_task(d, 2, "COMPLETED PARENT", "completed", 2000)
+        self._write_task(d, 3, "STILL ACTIVE CHILD", "in_progress", 2001, parent="2")
+
+        out = self._tree(isolated_task_env['env'])
+        assert 'COMPLETED PARENT' in out, f"completed parent hidden despite active child:\n{out}"
+        assert 'STILL ACTIVE CHILD' in out, f"active child lost with its parent:\n{out}"
+
+    def test_resolved_branch_collapses_to_one_line(self, isolated_task_env):
+        """Rule 2 — a completed child under an open parent shows, but its own
+        finished descendants do not expand."""
+        d = isolated_task_env['session_dir']
+        self._root(d)
+        self._write_task(d, 2, "open parent", "in_progress", 2000)
+        self._write_task(d, 3, "RESOLVED BRANCH", "completed", 2001, parent="2")
+        self._write_task(d, 4, "BURIED GRANDCHILD", "completed", 2002, parent="3")
+
+        out = self._tree(isolated_task_env['env'])
+        assert 'RESOLVED BRANCH' in out, f"completed child hidden under open parent:\n{out}"
+        assert 'BURIED GRANDCHILD' not in out, f"resolved branch expanded instead of collapsing:\n{out}"
+
+    def test_branch_with_active_grandchild_does_not_collapse(self, isolated_task_env):
+        """The interaction case: collapsing keys on the subtree being finished,
+        not on the child being completed."""
+        d = isolated_task_env['session_dir']
+        self._root(d)
+        self._write_task(d, 2, "open parent", "in_progress", 2000)
+        self._write_task(d, 3, "COMPLETED MIDDLE", "completed", 2001, parent="2")
+        self._write_task(d, 4, "ACTIVE GRANDCHILD", "in_progress", 2002, parent="3")
+
+        out = self._tree(isolated_task_env['env'])
+        assert 'COMPLETED MIDDLE' in out
+        assert 'ACTIVE GRANDCHILD' in out, f"active grandchild hidden by collapse:\n{out}"

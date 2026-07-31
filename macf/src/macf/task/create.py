@@ -196,6 +196,140 @@ def title_from_subject(subject: str, task_type: str,
     return s.strip()
 
 
+def _ensure_store_gitignored(store_path: Path) -> None:
+    """Add the home task store to .gitignore when it lands inside a repo.
+
+    The home store is a project-scoped directory alongside the other
+    consciousness artifacts, which means it can sit inside a tracked repo — and
+    it accumulates a JSON file per task. Left tracked, an ordinary ``git add -A``
+    stages thousands of files nobody meant to commit, and the noise is
+    discovered only at review time.
+
+    Opt out with ``task_store.track: true`` in the agent config; some projects
+    genuinely want the history versioned.
+
+    No-ops for the legacy per-session store (which lives under ``~/.claude``,
+    outside any project repo), outside a git repo, when the path is already
+    ignored, or when git is unavailable. Never rewrites an existing rule.
+    """
+    import subprocess as _subprocess
+
+    try:
+        mode, _rel = TaskReader._load_task_store_config()
+        if mode != "home":
+            return
+        from ..utils.paths import find_agent_home
+        config_file = find_agent_home() / ".maceff" / "config.json"
+        if config_file.exists():
+            track = (json.loads(config_file.read_text())
+                     .get("task_store", {}) or {}).get("track", False)
+            if track:
+                return  # the project has opted into versioning its task history
+    except (AttributeError, OSError, ValueError) as e:
+        print(f"Warning: could not read task store config: {e}", file=sys.stderr)
+        return
+
+    try:
+        r = _subprocess.run(
+            ["git", "-C", str(store_path.parent), "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=5)
+        if r.returncode != 0:
+            return  # not inside a repo — nothing to ignore it from
+        repo_root = Path(r.stdout.strip())
+
+        check = _subprocess.run(
+            ["git", "-C", str(repo_root), "check-ignore", "-q", str(store_path)],
+            capture_output=True, timeout=5)
+        if check.returncode == 0:
+            return  # already ignored
+
+        # Resolve both sides: `git rev-parse` reports the real path, while
+        # store_path may still carry a symlink (/var vs /private/var on macOS),
+        # and relative_to() compares them literally.
+        rule = f"{store_path.resolve().relative_to(repo_root.resolve()).as_posix()}/"
+        gitignore = repo_root / ".gitignore"
+        existing = gitignore.read_text() if gitignore.exists() else ""
+        if rule in existing.splitlines():
+            return
+        prefix = "" if (not existing or existing.endswith("\n")) else "\n"
+        gitignore.write_text(
+            existing + prefix
+            + "\n# MACF task store (one JSON file per task). Set task_store.track\n"
+            + "# to true in the agent config if you want this history versioned.\n"
+            + rule + "\n"
+        )
+        print(f"📝 Added {rule} to .gitignore (task store is not tracked by default)")
+    except (OSError, ValueError, FileNotFoundError, _subprocess.TimeoutExpired) as e:
+        print(f"Warning: could not gitignore the task store at {store_path}: {e}",
+              file=sys.stderr)
+
+
+# A hierarchy marker as it appears in a stored subject, with any surrounding
+# ANSI runs. Historical subjects padded the id inside the brackets
+# (``[^  #5]``), so the inner whitespace is tolerated on the way in even
+# though it is never produced on the way out.
+_PARENT_MARKER_RE = re.compile(
+    r'\s*(?:\033\[[0-9;]*m)*\[\^\s*#\d+\](?:\033\[[0-9;]*m)*'
+)
+
+
+def subject_with_live_parent(task) -> str:
+    """Return the task's subject with its ``[^#N]`` marker re-derived from
+    live ``parent_id``.
+
+    The stored subject is a *rendering*, not a source of truth: the marker is
+    a copy of ``parent_id`` frozen at compose time, and a later reparent moves
+    the authority without touching the copy. Callers that render a task should
+    use this rather than reading ``task.subject`` directly, so the marker
+    cannot outlive the relationship it describes. See the derived-state
+    discipline section of the coding standards policy — the authority is a
+    field on the same object, so re-deriving at read is the cheap repair.
+
+    Deliberately narrow. Only the marker is touched; the id prefix, type part
+    and title are passed through byte-for-byte. A full recomposition was
+    measured against the live corpus first and rejected: title recovery is
+    only reliable for subjects composed by current code, and on historical
+    ones it duplicated the title or stranded an old type marker. Re-deriving
+    a value must not be able to damage the values next to it.
+
+    An *absent* marker is left absent even when ``parent_id`` is set. Absence
+    is honest — a reader who needs the hierarchy goes and looks, and the tree
+    shows it structurally. A wrong marker is the failure worth repairing,
+    because it persuades a reader not to look.
+
+    Args:
+        task: A task object exposing ``subject`` and ``mtmd``.
+
+    Returns:
+        The subject with a marker that agrees with ``parent_id``, or the
+        stored subject when there is no marker to correct.
+    """
+    stored = getattr(task, "subject", "") or ""
+    mtmd = getattr(task, "mtmd", None)
+    if mtmd is None:
+        return stored
+
+    match = _PARENT_MARKER_RE.search(stored)
+    if not match:
+        return stored
+
+    parent_id = getattr(mtmd, "parent_id", None)
+    if parent_id is not None:
+        parent_id = str(parent_id)
+
+    current = re.search(r'\[\^\s*#(\d+)\]', match.group(0))
+    current_id = current.group(1) if current else None
+    if current_id == parent_id:
+        return stored
+
+    if parent_id and parent_id != SENTINEL_TASK_ID:
+        replacement = f" {ANSI_DIM}[^#{parent_id}]{ANSI_DIM_OFF}"
+    else:
+        replacement = ""
+
+    return stored[:match.start()] + replacement + stored[match.end():]
+
+
 def _ensure_sentinel_task(session_path: Path) -> None:
     """Create sentinel task #000 if it doesn't exist.
 
@@ -419,7 +553,10 @@ def _create_task_file(
     # This temporarily unprotects if needed, then re-protects after
     with _unprotect_for_creation(reader.session_path):
         # Ensure session directory exists
+        existed = reader.session_path.exists()
         reader.session_path.mkdir(parents=True, exist_ok=True)
+        if not existed:
+            _ensure_store_gitignored(reader.session_path)
 
         # Ensure sentinel task exists (belt-and-suspenders CC purge protection)
         _ensure_sentinel_task(reader.session_path)

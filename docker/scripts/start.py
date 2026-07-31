@@ -143,6 +143,78 @@ def provision_agent_identity(username: str, home_dir: str, display_name: Optiona
     return agent_uuid
 
 
+AMAIL_README = """# amail/ — inter-agent mailbox (v0)
+
+A simple file-based inter-agent communications channel. Deliberately plain so
+the convention can be exercised before any infrastructure is committed to.
+
+## Convention (provisional, v0)
+
+- `inbox/` — messages addressed TO the owning agent land here.
+- `outbox/` — copies of what the owner sends out.
+- One message per file. HTML (`.html`) renders richly; plain `.md` is fine too.
+  Name: `YYYY-MM-DD_<from-shortname>_<slug>_NNN.html`.
+- Email-style headers inside the message: From / To / Date / Subject / Msg-ID /
+  Broker. Sender and recipient are MacEff calling cards (`name@6hex`).
+- A message with attachments may be a directory of the same name, or a `.zip`
+  beside the message file.
+
+## Permissions
+
+Both boxes are owned by the agent and group `agents_all` at mode 750: the owner
+reads and writes, peer agents on the same host can traverse and read. A peer
+delivering to this agent writes into `inbox/`.
+
+## Known gaps (v0, on purpose)
+
+- **No notification/watcher.** Dropping a file here does not alert the owner.
+  Discovery is manual or brokered by the operator.
+- **No delivery guarantee, threading, or auth.** Replying into the sender's
+  inbox with an `In-Reply-To` header is proposed but not enforced.
+- **Cross-machine placement is manual** (copy into the recipient's agent home).
+- **No signing.** Authorship rests entirely on trusting the relay.
+
+If you extend the convention, leave a note here so it stays shared.
+"""
+
+
+def create_amail_tree(public: Path, username: str) -> Path:
+    """Create the agent's amail mailbox under agent/public/.
+
+    Like task_archives this is MACF infrastructure rather than a consciousness
+    artifact type, so it is created unconditionally rather than opted into via
+    the agent spec — an agent with no mailbox cannot be written to, and the
+    absence is only discovered by the agent trying to send.
+
+    Must run at init time: agent/public/ is 550 under immutable_structure, so
+    nothing can be added afterwards.
+
+    Group `agents_all` at mode 750 so peers can traverse and read, and deliver
+    into inbox/. The README ships with the tree because two empty directories
+    do not tell a fresh agent what a message looks like or where a reply goes.
+    """
+    amail = public / 'amail'
+    amail.mkdir(mode=0o750, exist_ok=True)
+
+    for box in ('inbox', 'outbox'):
+        box_dir = amail / box
+        box_dir.mkdir(mode=0o750, exist_ok=True)
+        run_command(['chown', f'{username}:agents_all', str(box_dir)])
+        run_command(['chmod', '750', str(box_dir)])
+
+    readme = amail / 'README.md'
+    if not readme.exists():
+        readme.write_text(AMAIL_README)
+        run_command(['chown', f'{username}:agents_all', str(readme)])
+        run_command(['chmod', '640', str(readme)])
+
+    # mkdir's mode= is unreliable under umask, so set it explicitly — and after
+    # the contents, since the dir must stay writable while they are created.
+    run_command(['chown', f'{username}:agents_all', str(amail)])
+    run_command(['chmod', '750', str(amail)])
+    return amail
+
+
 def create_pa_user(agent_name: str, agent_spec: AgentSpec, defaults_dict: Optional[Dict] = None) -> None:
     """Create Primary Agent Linux user."""
     username = agent_spec.username
@@ -469,6 +541,9 @@ def create_agent_tree(username: str, agent_spec: AgentSpec, defaults_config: Opt
     task_archives.mkdir(mode=0o750, exist_ok=True)
     run_command(['chown', f'{username}:agents_all', str(task_archives)])
     run_command(['chmod', '750', str(task_archives)])
+
+    # Create the amail mailbox (MACF infrastructure, always needed).
+    create_amail_tree(public, username)
 
     # Create subagents directory (owner-only, like private)
     subagents = agent / 'subagents'

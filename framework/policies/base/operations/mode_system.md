@@ -96,6 +96,12 @@ Agent behavior is governed by multiple **simultaneously active** conditions — 
 - How does the CLI expose modes?
 - How do policies reference modes?
 
+**13 Nag Design**
+- What distinguishes a nag from a dashboard report?
+- What three properties must a nag have?
+- Why is habituation the budget a nag spends?
+- What should be done about a host's reminders for a capability the framework supersedes?
+
 ---
 
 ## 1. What Are Modes?
@@ -580,9 +586,42 @@ Define:
 
 ---
 
+## 13. Nag Design
+
+A **nag** is any unsolicited message the framework injects into an agent's context to prompt a corrective action — the touch-discipline reminder, the scope gate, the idle-stop counter. It is the same channel as the dashboard: infrastructure telling the agent about its own state. The dashboard reports; a nag asks for something.
+
+That difference is what makes nags expensive. A report costs a glance. A request costs a decision, every time it fires, and an agent that decides "not now" often enough stops deciding at all.
+
+### 13.1 Three required properties
+
+**Computed from observed state, never from a timer.** A nag that fires on elapsed time cannot know whether the thing it is asking for has already happened. It will therefore fire during exemplary behavior, and the agent learns that its own diligence has no effect on the signal.
+
+**Names the specific remedy.** "Consider tracking your progress" costs a decision and supplies nothing to decide with. "Add a note or start the right task" names the two commands that resolve it. The remedy must be an action the agent can take immediately, not a category of virtue.
+
+**Clears on the action.** The agent must be able to make the nag stop by doing the thing. A nag that cannot be satisfied — because nothing the agent is willing to do resets its trigger — is not a reminder, it is a permanent background condition, and the only available response is to tune it out.
+
+Any nag failing one of these should be fixed or removed. Two of three is not a passing grade: a state-derived nag that names no remedy still costs a decision, and a remedy-naming nag on a timer still fires during good behavior.
+
+### 13.2 Habituation is the real budget
+
+The scarce resource is not context space — it is the agent's willingness to read injected messages carefully. Every nag spends from that budget, and the spending is shared: an agent trained by repetition to discount one category of injected message does not keep the discount neatly scoped to the nag that earned it.
+
+So the count matters as much as the quality. Prefer one nag that fires rarely and correctly over three that fire often and approximately. When adding a nag, the question is not "is this useful?" but "is this more useful than the attention it will cost across every future session?"
+
+### 13.3 Foreign nags
+
+A framework that supersedes a host capability inherits the host's reminders about it, and those reminders keep running against a model of the world the framework replaced. They will be timer-driven, they will recommend the superseded surface, and they will be computed from a view of state the framework no longer writes to.
+
+Such a nag cannot be satisfied by good behavior — only silenced. Where the host offers a suppression lever, use it: leaving a permanently-unsatisfiable request in the agent's context spends the habituation budget on nothing. Where it does not, say so plainly in the agent's instructions, because "ignore that one" is a rule an agent can hold, while an unexplained contradiction is one it must re-litigate every time.
+
+Document the mechanism when you find it. A suppression lever discovered and not written down is discovered again by the next agent, at full cost.
+
+---
+
 ## Anti-Patterns (Summary)
 
 - **Mode anxiety**: Announcing mode states anxiously. The dashboard shows state — act on it calmly.
+- **The unsatisfiable nag**: Shipping a reminder whose trigger no available action resets. It does not change behavior; it trains the agent to skim injected messages.
 - **Premature closeout**: Starting closeout when only AUTO_MODE is active. Requires dual condition.
 - **Notification spam in QUIET_MODE**: Sending messages when QUIET_MODE is active. Silence is respectful.
 - **Ignoring LOW_CONTEXT**: Continuing normal work at CL5 without closeout. LOW_CONTEXT is urgency.

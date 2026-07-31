@@ -24,6 +24,7 @@ test = [
     "psutil>=5.9.0",  # For performance testing
     "pydantic>=2.0.0",  # For agent/project spec validation tests
     "lancedb>=0.26.0",  # For hybrid search / recommend tests
+    "tomli>=2.0.0; python_version < '3.11'",  # pyproject introspection in test_ci_extras_coverage (tomllib is 3.11+)
 ]
 viz = [
     "markdown>=3.0",  # Markdown-to-HTML for CA presentation
