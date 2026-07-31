@@ -1229,3 +1229,87 @@ class TestTaskDoctor:
         )
         assert result.returncode == 0, result.stdout + result.stderr
         assert "No drift detected" in result.stdout
+
+
+class TestTaskDoctorGitHubState:
+    """A GitHub-backed task must be reconciled against GitHub, not against the
+    copy of GitHub's answer it stored when it was created.
+
+    The motivating incident: a task sat pending for hours after its PR merged,
+    because everything downstream read `custom.gh_state` and that field had
+    said OPEN since creation.
+    """
+
+    class _Mtmd:
+        def __init__(self, task_type, custom):
+            self.task_type = task_type
+            self.custom = custom
+            self.parent_id = None
+
+    class _Task:
+        def __init__(self, task_id, task_type, custom, status="pending"):
+            self.id = task_id
+            self.status = status
+            self.subject = f"  #{task_id} tracked"
+            self.mtmd = TestTaskDoctorGitHubState._Mtmd(task_type, custom)
+
+    def _pr_task(self, task_id="1", status="pending", cached="OPEN"):
+        return self._Task(task_id, "GH_PR", {
+            "gh_owner": "o", "gh_repo": "r", "gh_pr_number": 7, "gh_state": cached,
+        }, status=status)
+
+    def test_open_task_whose_pr_merged_is_flagged_for_closeout(self):
+        from macf import cli
+        with patch.object(cli, "_gh_live_state", return_value="MERGED"):
+            found = cli._doctor_check_gh_state([self._pr_task()])
+        assert len(found) == 1
+        assert found[0]["resolved_upstream"] is True
+        assert found[0]["live"] == "MERGED"
+        assert found[0]["cached"] == "OPEN"
+
+    def test_completed_task_whose_pr_merged_is_not_flagged_for_closeout(self):
+        """That is the correct end state — only the cached field is stale."""
+        from macf import cli
+        with patch.object(cli, "_gh_live_state", return_value="MERGED"):
+            found = cli._doctor_check_gh_state(
+                [self._pr_task(status="completed")], include_completed=True)
+        assert len(found) == 1, "cached-state drift should still be reported"
+        assert found[0]["resolved_upstream"] is False
+
+    def test_completed_tasks_are_skipped_by_default(self):
+        from macf import cli
+        with patch.object(cli, "_gh_live_state", return_value="MERGED") as live:
+            found = cli._doctor_check_gh_state([self._pr_task(status="completed")])
+        assert found == []
+        live.assert_not_called(), "skipped tasks should not cost an API call"
+
+    def test_agreeing_state_is_not_a_finding(self):
+        from macf import cli
+        with patch.object(cli, "_gh_live_state", return_value="OPEN"):
+            found = cli._doctor_check_gh_state([self._pr_task()])
+        assert found == []
+
+    def test_unreachable_authority_is_reported_not_assumed_to_agree(self):
+        """An authority that cannot be reached is unknown, never agreement."""
+        from macf import cli
+        with patch.object(cli, "_gh_live_state", return_value=None):
+            found = cli._doctor_check_gh_state([self._pr_task()])
+        assert len(found) == 1
+        assert found[0]["unreachable"] is True
+        assert found[0]["live"] is None
+
+    def test_cached_state_is_never_used_as_the_answer(self):
+        """Even a cached MERGED gets verified — the point is not to trust it."""
+        from macf import cli
+        with patch.object(cli, "_gh_live_state", return_value="OPEN") as live:
+            found = cli._doctor_check_gh_state([self._pr_task(cached="MERGED")])
+        live.assert_called_once()
+        assert len(found) == 1 and found[0]["live"] == "OPEN"
+
+    def test_no_github_flag_skips_the_live_check(self, isolated_task_env):
+        result = subprocess.run(
+            ["macf_tools", "task", "doctor", "--no-github"],
+            capture_output=True, text=True, env=isolated_task_env['env'],
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "skipped (--no-github)" in result.stdout
