@@ -66,7 +66,7 @@ Task management policy governs the use of Claude Code native Task* tools (TaskCr
 
 **2.3.1 GH_ISSUE Fix Workflow (PR-Based)**
 - What is the PR-based fix workflow?
-- When must DADTTT be read?
+- When must the public voice policy be read?
 - What branch naming convention is used?
 - How does the PR auto-close the issue?
 
@@ -354,11 +354,13 @@ Labels appear in brackets if present. Multiple labels use the first one. No labe
    git -C /path/to/repo checkout -b fix/gh-3-wrong-directory
    ```
 
-3. **Read DADTTT policy** before writing any public-facing text (issue comments, PR title/body, review responses):
+3. **Read the public voice policy** before writing any public-facing text (issue comments, PR title/body, review responses):
    ```bash
-   macf_tools policy read dadttt   # or equivalent path
+   macf_tools policy read public_voice
    ```
-   DADTTT shapes public voice for community engagement — read it every time, not just once.
+   It shapes public voice for community engagement - read it every time, not just
+   once. (Formerly referenced as "DADTTT"; that name is retained in the policy's
+   title and history section.)
 
 4. **Implement the fix** on the feature branch. Commit with standard semantic messages.
 
