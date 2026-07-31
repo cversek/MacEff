@@ -7509,13 +7509,27 @@ def cmd_proxy_status(args: argparse.Namespace) -> int:
         print(json.dumps(status, indent=2))
     else:
         running = status.get('running', False)
+        owner = status.get('socket_owner_pid')
         if running:
             print(f"✅ Proxy running (PID {status['pid']}, port {status['port']})")
+            if owner:
+                print(f"   Socket owner: PID {owner}")
             print(f"   Log: {status['log_path']}")
             print(f"   Activate: ANTHROPIC_BASE_URL=http://localhost:{status['port']} claude")
         else:
             print("⭕ Proxy not running")
-            print("   Start: macf_tools proxy start --daemon")
+            if owner:
+                # Something answers on the port that we did not start — the
+                # split-brain case where "it responds" hides an unsupervised
+                # or crash-looping service.
+                print(f"   ⚠️  But PID {owner} is listening on port {status['port']}.")
+                print(f"      Another start path (systemd unit or ad-hoc daemon) owns the socket.")
+                print(f"      Inspect: ss -tlnp | grep {status['port']}   /   systemctl --user status")
+            else:
+                print("   Start: macf_tools proxy start --daemon")
+        if status.get('socket_owner_mismatch'):
+            print(f"   ⚠️  Socket owner (PID {owner}) differs from the recorded PID "
+                  f"({status['pid']}) — the pidfile is stale or a second instance holds the port.")
     return 0
 
 
