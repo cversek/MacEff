@@ -27,6 +27,22 @@ PID_FILE_NAME = "macf_proxy.pid"
 LOG_FILE_NAME = "agent_api_log.jsonl"
 
 
+# --------------- Feature gates ---------------
+
+def _rewrite_enabled() -> bool:
+    """Whether in-flight message rewriting is enabled. Default: OFF.
+
+    Rewriting (policy-injection retraction/dedup) mutates the message-array
+    prefix, which can invalidate Anthropic prompt-cache prefix stability —
+    cache misses inflate token burn and can force premature compaction.
+    It is therefore EXPERIMENTAL and opt-in: set MACF_PROXY_REWRITE=on
+    (accepted truthy values: on/1/true/yes) to enable for scratch-session
+    experiments. Detection and stderr reporting remain active either way —
+    the gate covers only the mutation.
+    """
+    return os.environ.get("MACF_PROXY_REWRITE", "off").strip().lower() in ("on", "1", "true", "yes")
+
+
 # --------------- Path helpers ---------------
 
 def _get_runtime_dir() -> Path:
@@ -353,15 +369,22 @@ def _create_app():
                 pre_injections = _detect_current_injections(messages)
 
                 # 2. Run stateless rewrite (retract inactive + dedup active)
+                # EXPERIMENTAL — gated OFF by default: mutating the message-array
+                # prefix can invalidate Anthropic prompt-cache prefix stability,
+                # causing cache misses, inflated token burn, and premature forced
+                # compaction. Pass-through (observe + report, never mutate) is the
+                # safe default; enable mutation explicitly with MACF_PROXY_REWRITE=on
+                # for scratch-session experiments only.
                 rewrite_stats = None
-                try:
-                    from .message_rewriter import rewrite_messages
-                    messages, rewrite_stats = rewrite_messages(messages)
-                    if rewrite_stats["replacements_made"] > 0:
-                        body_json["messages"] = messages
-                        body = json.dumps(body_json).encode("utf-8")
-                except Exception as e:
-                    print(f"[proxy:rewrite] ERROR (forwarding original): {e}", file=sys.stderr)
+                if _rewrite_enabled():
+                    try:
+                        from .message_rewriter import rewrite_messages
+                        messages, rewrite_stats = rewrite_messages(messages)
+                        if rewrite_stats["replacements_made"] > 0:
+                            body_json["messages"] = messages
+                            body = json.dumps(body_json).encode("utf-8")
+                    except Exception as e:
+                        print(f"[proxy:rewrite] ERROR (forwarding original): {e}", file=sys.stderr)
 
                 # 3. Detect injections AFTER rewrite
                 post_injections = _detect_current_injections(messages) if rewrite_stats and rewrite_stats["replacements_made"] > 0 else pre_injections
