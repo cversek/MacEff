@@ -5021,6 +5021,143 @@ def _doctor_check_subject_markers(tasks) -> "list[tuple[str, str, str]]":
     return findings
 
 
+def cmd_task_migrate_store(args: argparse.Namespace) -> int:
+    """Move the legacy per-session task store into the project-scoped home store.
+
+    The legacy store lives under CC's ``~/.claude/tasks/{session_uuid}/`` and is
+    keyed by session: a continue, rewind or fork gets a *copy* that then
+    diverges, and CC deletes completed task files once the last open task
+    closes. The home store is a single directory under the agent home, so it
+    survives all of that.
+
+    Done by hand this is: copy every file including the dot-prefixed completed
+    ones, edit the config, then hope. The ordering is what matters — **copy,
+    verify, then flip** — because a config flipped before verification points
+    the agent at a store that may be incomplete, and the failure looks like
+    amnesia rather than like a bad migration.
+
+    The legacy directory is never deleted. Reverting is a one-line config edit
+    as long as it is still there.
+    """
+    import hashlib
+    from .task import TaskReader
+
+    dry_run = getattr(args, "dry_run", False)
+    force = getattr(args, "force", False)
+
+    mode, rel = TaskReader._load_task_store_config()
+    if mode == "home" and not force:
+        print("✅ Already on the home store — nothing to migrate.")
+        print("   Re-run with --force to copy the current session's legacy "
+              "files in anyway.")
+        return 0
+
+    legacy = TaskReader(session_uuid=TaskReader()._detect_current_session())
+    source = legacy.session_path
+    if not source or not source.exists():
+        print(f"❌ No legacy task store found for the current session.")
+        return 1
+
+    agent_home = find_agent_home()
+    target = agent_home / rel
+    config_path = agent_home / ".maceff" / "config.json"
+
+    files = legacy.list_task_files(include_hidden=True)
+    hidden = [f for f in files if f.name.startswith(".")]
+    print(f"📦 Migrate task store")
+    print(f"   from: {source}  ({len(files)} files, {len(hidden)} hidden)")
+    print(f"   to:   {target}")
+    print(f"   config: {config_path}")
+
+    if not files:
+        print("❌ Legacy store is empty — refusing to migrate nothing.")
+        return 1
+
+    collisions = []
+    if target.exists():
+        for f in files:
+            if (target / f.name).exists():
+                collisions.append(f.name)
+    if collisions and not force:
+        print(f"\n❌ {len(collisions)} file(s) already exist in the target "
+              f"(e.g. {collisions[:3]}).")
+        print("   Refusing to overwrite. Re-run with --force if that is intended.")
+        return 1
+
+    if dry_run:
+        print("\n🔍 Dry run — nothing copied, config untouched.")
+        return 0
+
+    # 1. COPY
+    target.mkdir(parents=True, exist_ok=True)
+    copied = 0
+    for f in files:
+        try:
+            (target / f.name).write_bytes(f.read_bytes())
+            copied += 1
+        except OSError as e:
+            print(f"❌ Copy failed at {f.name}: {e}", file=sys.stderr)
+            print("   Config NOT flipped; the legacy store is untouched.")
+            return 1
+
+    # 2. VERIFY before flipping. A config pointed at an unverified store fails
+    #    later, elsewhere, and looks like data loss rather than a bad copy.
+    def _digest(p):
+        return hashlib.sha256(p.read_bytes()).hexdigest()
+
+    mismatched = []
+    for f in files:
+        dest = target / f.name
+        if not dest.exists() or _digest(dest) != _digest(f):
+            mismatched.append(f.name)
+    if mismatched:
+        print(f"\n❌ Verification failed for {len(mismatched)} file(s): "
+              f"{mismatched[:5]}")
+        print("   Config NOT flipped. The legacy store remains authoritative.")
+        return 1
+    print(f"\n✅ Copied and verified {copied} file(s) (sha256, byte-for-byte)")
+
+    # 3. FLIP
+    try:
+        config = json.loads(config_path.read_text()) if config_path.exists() else {}
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"❌ Could not read {config_path}: {e}", file=sys.stderr)
+        print("   Files are copied and verified; set task_store.mode=home by hand.")
+        return 1
+
+    config.setdefault("task_store", {})
+    config["task_store"]["mode"] = "home"
+    config["task_store"].setdefault("path", rel)
+    try:
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(json.dumps(config, indent=2) + "\n")
+    except OSError as e:
+        print(f"❌ Could not write {config_path}: {e}", file=sys.stderr)
+        print("   Files are copied and verified; set task_store.mode=home by hand.")
+        return 1
+
+    print(f"✅ Config flipped: task_store.mode = home")
+
+    # Only now does the store read as "home", which is what the gitignore
+    # helper gates on — calling it before the flip would silently no-op.
+    _ensure_store_gitignored_for_migration(target)
+
+    print(f"\n📁 The legacy store is retained at:\n   {source}")
+    print("   Nothing was deleted — revert by setting task_store.mode back to "
+          "\"legacy\".")
+    print("\n▶️  Verify with: macf_tools task tree")
+    return 0
+
+
+def _ensure_store_gitignored_for_migration(target: Path) -> None:
+    """Gitignore a store created by migration rather than by first task write."""
+    try:
+        from .task.create import _ensure_store_gitignored
+        _ensure_store_gitignored(target)
+    except (ImportError, OSError) as e:
+        print(f"Warning: could not gitignore {target}: {e}", file=sys.stderr)
+
+
 def _gh_live_state(kind: str, repo_slug: str, number: str) -> "Optional[str]":
     """Query GitHub for the current state of an issue or PR.
 
@@ -9283,6 +9420,20 @@ def _build_parser() -> argparse.ArgumentParser:
     task_pause_parser.set_defaults(func=cmd_task_pause)
 
     # task note - append note to updates
+    task_migrate_parser = task_sub.add_parser(
+        "migrate-store",
+        help="move the legacy per-session task store into the home store",
+    )
+    task_migrate_parser.add_argument(
+        "--dry-run", action="store_true",
+        help="report what would be copied without touching anything",
+    )
+    task_migrate_parser.add_argument(
+        "--force", action="store_true",
+        help="proceed even if the target already holds files of the same name",
+    )
+    task_migrate_parser.set_defaults(func=cmd_task_migrate_store)
+
     task_doctor_parser = task_sub.add_parser(
         "doctor",
         help="reconcile stored task records against the authorities they derive from",
