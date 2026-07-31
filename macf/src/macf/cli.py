@@ -3909,6 +3909,11 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
             # Always show root sentinel (depth 0)
             if depth == 0:
                 return True
+            # Always show the recency-marked (last-touched) task so its 👈 marker
+            # never vanishes when that task completes — otherwise a completed
+            # depth-1 task carrying the marker gets hidden below (issue #150).
+            if task.id == latest_id:
+                return True
             # Show if active/pending
             if task.status in ("in_progress", "pending"):
                 return True
