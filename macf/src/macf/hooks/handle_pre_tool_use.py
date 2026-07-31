@@ -410,8 +410,12 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                             }
                         }
 
-                # Show enriched tool name for Skill invocations, generic gear for others
-                if display_tool != tool_name:
+                # Skills get a distinct glyph plus their name — "⚙️" alone is
+                # nearly information-free when scanning a channel timeline,
+                # while the skill name is the whole signal (#163).
+                if tool_name == "Skill":
+                    message_parts.append(f"🎛️ {display_tool}")
+                elif display_tool != tool_name:
                     message_parts.append(f"🎯 {display_tool}")
                 else:
                     message_parts.append("⚙️")
