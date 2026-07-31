@@ -3,26 +3,52 @@ Session utilities.
 """
 
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Optional
 from .paths import find_project_root
 # Events are sole source of truth - state file reads removed
 
-def get_current_session_id() -> str:
+def get_current_session_id(hook_input: Optional[dict] = None) -> str:
     """Get current session ID.
 
-    PRIMARY: Query event log for most recent session_started event (authoritative).
-    FALLBACK: Use mtime-based JSONL file detection (for first run before events).
+    Resolution order, most authoritative first:
 
-    The event-based approach is deterministic and consistent across all hooks,
-    unlike mtime-based detection which can vary when multiple session files
-    are being written concurrently (e.g., after `claude -c`).
+    1. ``hook_input['session_id']`` — CC hands every hook its own session id;
+       when the caller has it, nothing else can be more correct.
+    2. ``MACF_SESSION_ID`` / ``CLAUDE_CODE_SESSION_ID`` env — covers CLI
+       invocations made from inside a session (and test isolation).
+    3. Most recent ``session_started`` event — out-of-band CLI with no env.
+    4. mtime-based JSONL detection — first run, before any events exist.
+
+    Tiers 1-2 exist because the event log is a *global* last-writer-wins
+    singleton: the moment a second session starts under the same agent home,
+    its ``session_started`` makes every hook in every session — including the
+    original, still-live one — stamp the newcomer's id. Ordinary hooks never
+    write ``session_started``, so the original could never reclaim its identity
+    (cversek/MacEff#159's sibling, #158). The hook process already holds the
+    right answer; prefer it over the shared log.
+
+    Args:
+        hook_input: Parsed hook stdin payload, when the caller is a hook.
 
     Returns:
         Session ID string or "unknown" if not found
     """
-    # PRIMARY: Event-first approach - query session_started event
+    # TIER 1: the caller's own session, straight from CC.
+    if hook_input:
+        sid = hook_input.get("session_id")
+        if sid:
+            return str(sid)
+
+    # TIER 2: environment (session-scoped by construction).
+    for var in ("MACF_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
+        sid = os.environ.get(var)
+        if sid:
+            return sid
+
+    # TIER 3: Event-first approach - query session_started event
     try:
         from ..event_queries import get_current_session_id_from_events
         session_id = get_current_session_id_from_events()
