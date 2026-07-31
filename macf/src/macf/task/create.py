@@ -196,6 +196,74 @@ def title_from_subject(subject: str, task_type: str,
     return s.strip()
 
 
+def _ensure_store_gitignored(store_path: Path) -> None:
+    """Add the home task store to .gitignore when it lands inside a repo.
+
+    The home store is a project-scoped directory alongside the other
+    consciousness artifacts, which means it can sit inside a tracked repo — and
+    it accumulates a JSON file per task. Left tracked, an ordinary ``git add -A``
+    stages thousands of files nobody meant to commit, and the noise is
+    discovered only at review time.
+
+    Opt out with ``task_store.track: true`` in the agent config; some projects
+    genuinely want the history versioned.
+
+    No-ops for the legacy per-session store (which lives under ``~/.claude``,
+    outside any project repo), outside a git repo, when the path is already
+    ignored, or when git is unavailable. Never rewrites an existing rule.
+    """
+    import subprocess as _subprocess
+
+    try:
+        mode, _rel = TaskReader._load_task_store_config()
+        if mode != "home":
+            return
+        from ..utils.paths import find_agent_home
+        config_file = find_agent_home() / ".maceff" / "config.json"
+        if config_file.exists():
+            track = (json.loads(config_file.read_text())
+                     .get("task_store", {}) or {}).get("track", False)
+            if track:
+                return  # the project has opted into versioning its task history
+    except (AttributeError, OSError, ValueError) as e:
+        print(f"Warning: could not read task store config: {e}", file=sys.stderr)
+        return
+
+    try:
+        r = _subprocess.run(
+            ["git", "-C", str(store_path.parent), "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=5)
+        if r.returncode != 0:
+            return  # not inside a repo — nothing to ignore it from
+        repo_root = Path(r.stdout.strip())
+
+        check = _subprocess.run(
+            ["git", "-C", str(repo_root), "check-ignore", "-q", str(store_path)],
+            capture_output=True, timeout=5)
+        if check.returncode == 0:
+            return  # already ignored
+
+        # Resolve both sides: `git rev-parse` reports the real path, while
+        # store_path may still carry a symlink (/var vs /private/var on macOS),
+        # and relative_to() compares them literally.
+        rule = f"{store_path.resolve().relative_to(repo_root.resolve()).as_posix()}/"
+        gitignore = repo_root / ".gitignore"
+        existing = gitignore.read_text() if gitignore.exists() else ""
+        if rule in existing.splitlines():
+            return
+        prefix = "" if (not existing or existing.endswith("\n")) else "\n"
+        gitignore.write_text(
+            existing + prefix
+            + "\n# MACF task store (one JSON file per task). Set task_store.track\n"
+            + "# to true in the agent config if you want this history versioned.\n"
+            + rule + "\n"
+        )
+        print(f"📝 Added {rule} to .gitignore (task store is not tracked by default)")
+    except (OSError, ValueError, FileNotFoundError, _subprocess.TimeoutExpired) as e:
+        print(f"Warning: could not gitignore the task store at {store_path}: {e}",
+              file=sys.stderr)
+
+
 # A hierarchy marker as it appears in a stored subject, with any surrounding
 # ANSI runs. Historical subjects padded the id inside the brackets
 # (``[^  #5]``), so the inner whitespace is tolerated on the way in even
@@ -485,7 +553,10 @@ def _create_task_file(
     # This temporarily unprotects if needed, then re-protects after
     with _unprotect_for_creation(reader.session_path):
         # Ensure session directory exists
+        existed = reader.session_path.exists()
         reader.session_path.mkdir(parents=True, exist_ok=True)
+        if not existed:
+            _ensure_store_gitignored(reader.session_path)
 
         # Ensure sentinel task exists (belt-and-suspenders CC purge protection)
         _ensure_sentinel_task(reader.session_path)

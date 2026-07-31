@@ -1313,3 +1313,40 @@ class TestTaskDoctorGitHubState:
         )
         assert result.returncode == 0, result.stdout + result.stderr
         assert "skipped (--no-github)" in result.stdout
+
+
+class TestHierarchyCycleGuard:
+    """A malformed hierarchy must degrade, not take the renderer down with it.
+
+    A self-parented task is reachable in practice — a hand-edited file, a bad
+    fixture, an interrupted reparent. Unguarded, the descendant count recursed
+    until the interpreter died, and the traceback blamed recursion rather than
+    naming the malformed task.
+    """
+
+    def test_self_parented_task_does_not_hang_the_tree(self, isolated_task_env):
+        session_dir = isolated_task_env['session_dir']
+        # Quoted: an unquoted `000` parses as the integer 0 and never matches
+        # the string sentinel id (the int-coercion noted on GH #112).
+        for task_id, parent in (("000", '"000"'), ("42", '"000"')):
+            (session_dir / f"{task_id}.json").write_text(json.dumps({
+                "id": task_id,
+                "subject": f"  #{task_id} 🔧 task",
+                "status": "in_progress" if task_id == "000" else "pending",
+                "description": (
+                    '<macf_task_metadata version="1.0">\n'
+                    f'task_type: {"SENTINEL" if task_id == "000" else "TASK"}\n'
+                    'created_by: PA\n'
+                    f'parent_id: {parent}\n'
+                    '</macf_task_metadata>\n'
+                ),
+            }))
+
+        result = subprocess.run(
+            ["macf_tools", "task", "tree"],
+            capture_output=True, text=True, env=isolated_task_env['env'],
+            timeout=60,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "RecursionError" not in result.stderr
+        assert "cycle in task hierarchy" in result.stderr
