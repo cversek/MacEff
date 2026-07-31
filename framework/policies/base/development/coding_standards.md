@@ -49,6 +49,13 @@ Applies to all code written within MacEff framework projects.
 - What is dynamic discovery?
 - What discovery priority should I use?
 
+**7 Derived State Discipline**
+- What is the derived-state drift pattern?
+- Why does a stale record mislead worse than a missing one?
+- What are the two permitted repairs?
+- What question should a reviewer ask of a cached value?
+- Why does automation raise the stakes on unreconciled state?
+
 ---
 
 ## 0 Error Visibility Stance
@@ -236,6 +243,72 @@ This anti-pattern caused FP#28 in the MACF codebase - 17+ instances across hooks
 
 ---
 
+## 7 Derived State Discipline
+
+**Core Principle**: A value derived from a source, cached elsewhere, and then trusted after the source moves is a lie the system tells itself with full confidence.
+
+Section 0 establishes that silent failures are consciousness blindspots — a gap where something happened and left no trace. Stale derived state is the complementary failure and the worse of the two: not an absence of information but *confident misinformation*. A missing record prompts a reader to go look. A stale record persuades them not to.
+
+### 7.1 The Shape
+
+The pattern is easy to fix and hard to see, because every instance wears different clothes — a string embedded in a display label, a field cached from an API response, a status computed by a background poller, a dotfile consulted by a resolver. Nothing about their surfaces rhymes. What they share is the structure:
+
+1. A value is **derived** from some authority (a field, a live query, an event, a resolution across scopes).
+2. A copy is **cached** somewhere the authority does not control — a rendered string, a metadata blob, a status line, a second file.
+3. The authority **moves**.
+4. Something **reads the copy** and acts on it.
+
+Step 4 is where the damage occurs, and steps 1–3 are individually reasonable, which is why the pattern survives review. Nobody writes a cache intending it to go stale.
+
+### 7.2 Two Permitted Repairs
+
+Wherever a project caches a derived value, it must do one of the following. Both are acceptable; the choice depends on the cost of re-derivation.
+
+**Re-derive at read time.** Eliminate the second copy. Compute the value from the authority at the moment it is displayed or acted upon. This removes the habitat rather than treating the symptom, and is the preferred repair when the authority is cheap to consult (a field on the same object, a value already in the caller's hand).
+
+**Make staleness loud.** When re-derivation is genuinely expensive — a network round trip, an expensive scan — the copy may remain, but it must not be able to disagree in silence. Loud means at least one of: a reconcile pass that reports and heals divergence, a validator that fails on mismatch, or a visible age or provenance marker on the value at the point of use.
+
+What is *not* permitted is a third copy with neither property: cached, unreconciled, and rendered as if authoritative.
+
+### 7.3 The Review Question
+
+For any value a change introduces or reads, ask:
+
+> **Where does this value come from, and what happens when the source moves?**
+
+If the answer to the second half is "nothing — it keeps showing the old value," the change needs one of the two repairs before it lands. This question belongs in review of any code that renders a record, caches an external response, or consults a resolver.
+
+A corollary worth stating because it is routinely violated: **prefer the payload in hand over the derived record about it.** Code that already holds an authoritative signal — a value passed into the function, a field on the object being rendered — should not consult a lagging derived source for the same fact. This is the cheapest possible re-derivation and the most commonly skipped.
+
+### 7.4 Worked Examples
+
+Six instances observed in this framework, each with the repair its cost profile called for:
+
+| Symptom | Cached copy | Authority | Repair |
+|---|---|---|---|
+| Hierarchy marker showed the old parent after a move | marker baked into the subject string | the parent field | re-derive |
+| Merge sweep stalled on unmergeable PRs | an API "mergeable" field the host computes lazily | the merge operation itself | re-derive (test the operation) |
+| A task sat pending for hours after its PR merged | cached PR state in task metadata | the live PR | make loud (reconcile pass) |
+| Idle indicator rendered on the prompt that disproved it | a background poller's last-activity event | the payload the hook was holding | re-derive (payload first) |
+| An agent's identity changed while every file stayed intact | one file in a multi-scope resolution | the *resolved* identity across scopes | re-derive (resolve, then act) |
+| A diagnostic reported a capability "disabled" after it gained a second producer | a hardcoded claim about a mechanism | the mechanism's actual producers | re-derive |
+
+The last one is instructive: **prose goes stale exactly like data does.** A status message, a help string, or a docstring asserting how a subsystem behaves is a cached derivation from the code, and nothing recomputes it when the code changes. Treat assertions in user-facing text as subject to this section.
+
+### 7.5 Automation Raises the Stakes
+
+When a human reads a record, a wrong value gets a moment of doubt — the frown that catches it. When automation reads the same record, there is no frown. Cascading actions, scheduled reconcilers and status-driven workflows propagate whatever they find, at speed.
+
+So the threshold for tolerating an unreconciled copy drops sharply the moment anything automated consumes it. **Automation over unreconciled state is a wrongness multiplier.** Before wiring an automated action to a stored value, that value must satisfy 7.2 — no exceptions for "it is usually right."
+
+### Anti-Pattern: The Idempotent-Looking Write
+
+A particularly deceptive form. An operation checks whether *the specific thing it is about to write* already exists, finds it absent, and writes. It overwrites nothing, damages no file, and reads as safe in review — but the value it wrote now outranks an equivalent value resolved from elsewhere, and the effective answer changes.
+
+The check was against the wrong authority. **Idempotence must be defined against the resolver, not against the storage location.** Where a value can resolve from more than one place, "does my file exist?" is not the question; "does this value already resolve?" is.
+
+---
+
 ## Language-Specific Implementation
 
 This policy defines the philosophy. Implementation patterns are language-specific:
@@ -246,5 +319,7 @@ This policy defines the philosophy. Implementation patterns are language-specifi
 
 ## Cross-References
 
-- **testing.md**: Test error visibility
+- **testing.md**: Test error visibility; regression proof for a drift repair means demonstrating the stale read before the fix
 - **cli_development.md**: CLI error handling patterns
+- **debugging_and_validation.md**: Validating against the authority rather than the cached record
+- **task_management.md**: Task records are a primary habitat for derived state, and automation consumes them
