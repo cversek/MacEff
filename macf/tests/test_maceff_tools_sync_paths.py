@@ -193,6 +193,45 @@ class TestGeneratedTreeIsIgnored:
         )
         assert result.returncode == 0, f"no .gitignore pattern matches {path}"
 
+    @pytest.mark.parametrize(
+        "path",
+        [
+            ".maceff/framework/.gitkeep",
+            ".maceff/config/.gitkeep",
+            ".maceff/config/config.json.example",
+            ".maceff/config/global.env",
+            ".maceff/config/projects/demo.env",
+        ],
+    )
+    def test_shipped_scaffolding_is_not_ignored(self, path):
+        """The generated tree is ignored; the scaffolding inside it is not.
+
+        These have to stay tracked — a .gitkeep exists purely to be tracked,
+        and a fresh clone needs the starter config. The patterns use the
+        ``dir/*`` form specifically for this: a re-include cannot resurrect a
+        file whose parent DIRECTORY is excluded, because git never descends
+        into an excluded directory. Rewriting ``dir/*`` back to ``dir/`` would
+        silently drop every file below.
+        """
+        result = subprocess.run(
+            ["git", "check-ignore", "--no-index", "-q", path],
+            cwd=REPO,
+            capture_output=True,
+        )
+        assert result.returncode != 0, f"{path} is ignored but must stay tracked"
+
+    @pytest.mark.parametrize(
+        "path", [".maceff/framework/.gitkeep", ".maceff/config/config.json.example"]
+    )
+    def test_shipped_scaffolding_is_actually_tracked(self, path):
+        """Not ignored is necessary but not sufficient — it must be in the index."""
+        result = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", path],
+            cwd=REPO,
+            capture_output=True,
+        )
+        assert result.returncode == 0, f"{path} is not tracked"
+
 
 class TestNoScriptResolvesAboveTheRepo:
     """Repo-wide guard against the ``../..`` class of defect returning."""
