@@ -50,6 +50,12 @@ def _rewrite_enabled() -> bool:
     (accepted truthy values: on/1/true/yes) to enable for scratch-session
     experiments. Detection and stderr reporting remain active either way —
     the gate covers only the mutation.
+
+    Single source of truth: both the startup banner and the request path MUST
+    call this. The banner once read the env var while the rewrite path ignored
+    it entirely, so the proxy advertised rewrite=off while rewriting every
+    request — an instrument reporting a value nobody enforces is worse than no
+    instrument at all.
     """
     return os.environ.get("MACF_PROXY_REWRITE", "off").strip().lower() in ("on", "1", "true", "yes")
 
@@ -191,22 +197,6 @@ def _make_error_middleware():
         return response
 
     return error_middleware
-
-
-def _rewrite_enabled() -> bool:
-    """Single source of truth for the message-rewrite gate.
-
-    Both the startup banner and the request path MUST call this. Previously the
-    banner read this env var while the rewrite path ignored it entirely, so the
-    proxy advertised rewrite=off while rewriting every request. An instrument
-    that reports a value nobody enforces is worse than no instrument at all.
-    """
-    return os.environ.get("MACF_PROXY_REWRITE", "off").strip().lower() in (
-        "on",
-        "1",
-        "true",
-        "yes",
-    )
 
 
 # --------------- 200K-window clamp detector ---------------
