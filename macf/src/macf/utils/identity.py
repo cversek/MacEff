@@ -182,9 +182,9 @@ def _get_gecos_name() -> Optional[str]:
         return None
 
 
-def _resolve_uuid_prefix() -> "tuple[str, str]":
+def _resolve_uuid_source() -> "tuple[Optional[str], str, Optional[Path]]":
     """
-    Read the agent UUID prefix together with the scope it resolved from.
+    Resolve the agent UUID together with its scope and the file it came from.
 
     Resolution order:
     1. {agent_home}/.maceff_primary_agent.id when agent_home is somewhere
@@ -192,11 +192,15 @@ def _resolve_uuid_prefix() -> "tuple[str, str]":
        'project'
     2. ~/.maceff_primary_agent.id — scope 'global'
 
-    The scope feeds get_agent_identity()'s name resolution: a per-project
-    UUID must not be paired with a host-global name override.
+    This is the single implementation of that precedence; callers that only
+    need the display prefix go through _resolve_uuid_prefix(). Callers that
+    need to *move* an identity between scopes need the whole value and its
+    origin, which is what this returns — reading the file a second time from
+    a caller's own copy of the precedence rules is how identities drift.
 
     Returns:
-        tuple[str, str]: (first 6 characters of UUID or 'unknown', scope)
+        tuple: (full UUID or None when nothing resolves, scope, source path
+        or None)
     """
     try:
         agent_home = None
@@ -213,24 +217,41 @@ def _resolve_uuid_prefix() -> "tuple[str, str]":
                 if per_project.exists():
                     uuid_full = per_project.read_text().strip()
                     if uuid_full:
-                        return uuid_full[:6], 'project'
+                        return uuid_full, 'project', per_project
             except (OSError, IOError) as e:
                 print(f"Warning: could not read per-project agent ID: {e}", file=sys.stderr)
 
         # Priority 2: Global fallback
         uuid_file = Path.home() / '.maceff_primary_agent.id'
         if not uuid_file.exists():
-            return 'unknown', 'global'
+            return None, 'global', None
 
         uuid_full = uuid_file.read_text().strip()
         if not uuid_full:
-            return 'unknown', 'global'
+            return None, 'global', None
 
-        return uuid_full[:6], 'global'
+        return uuid_full, 'global', uuid_file
 
     except (OSError, IOError) as e:
         print(f"Warning: could not read agent ID: {e}", file=sys.stderr)
-        return 'unknown', 'global'
+        return None, 'global', None
+
+
+def _resolve_uuid_prefix() -> "tuple[str, str]":
+    """
+    Read the agent UUID prefix together with the scope it resolved from.
+
+    Thin projection of _resolve_uuid_source(); see that function for the
+    resolution order. The scope feeds get_agent_identity()'s name resolution:
+    a per-project UUID must not be paired with a host-global name override.
+
+    Returns:
+        tuple[str, str]: (first 6 characters of UUID or 'unknown', scope)
+    """
+    uuid_full, scope, _source = _resolve_uuid_source()
+    if not uuid_full:
+        return 'unknown', scope
+    return uuid_full[:6], scope
 
 
 def _get_uuid_prefix() -> str:
