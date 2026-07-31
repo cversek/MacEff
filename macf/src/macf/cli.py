@@ -4958,47 +4958,174 @@ def _doctor_check_subject_markers(tasks) -> "list[tuple[str, str, str]]":
     return findings
 
 
+def _gh_live_state(kind: str, repo_slug: str, number: str) -> "Optional[str]":
+    """Query GitHub for the current state of an issue or PR.
+
+    Args:
+        kind: ``"issue"`` or ``"pr"``.
+        repo_slug: ``owner/repo``.
+        number: Issue or PR number.
+
+    Returns:
+        ``OPEN`` / ``CLOSED`` / ``MERGED``, or None when the query fails —
+        an unreachable authority is reported as unknown, never as agreement.
+    """
+    import subprocess as _subprocess
+    try:
+        r = _subprocess.run(
+            ["gh", kind, "view", str(number), "--repo", repo_slug, "--json", "state"],
+            capture_output=True, text=True, timeout=15)
+        if r.returncode != 0:
+            return None
+        return (json.loads(r.stdout) or {}).get("state")
+    except (FileNotFoundError, _subprocess.TimeoutExpired, ValueError, OSError) as e:
+        print(f"Warning: could not query {repo_slug} {kind} #{number}: {e}",
+              file=sys.stderr)
+        return None
+
+
+def _doctor_check_gh_state(tasks, include_completed: bool = False):
+    """Compare open GitHub-backed tasks against live GitHub state.
+
+    Only tasks that are still open are checked by default: a completed task's
+    cached state has no operational consequence, while an open task whose
+    issue or PR has already been resolved is the drift that matters — it is
+    what left a task pending for hours after its PR merged.
+
+    The cached ``gh_state`` is never trusted as the answer; it is one of the
+    two values being compared.
+
+    Returns:
+        list of dicts with task id, reference, cached state, live state, and
+        whether the task itself should be closed out.
+    """
+    findings = []
+    for t in tasks:
+        mtmd = getattr(t, "mtmd", None)
+        if not mtmd or getattr(mtmd, "task_type", None) not in ("GH_ISSUE", "GH_PR"):
+            continue
+        if not include_completed and t.status in ("completed", "archived"):
+            continue
+
+        custom = getattr(mtmd, "custom", None) or {}
+        owner, repo = custom.get("gh_owner"), custom.get("gh_repo")
+        is_pr = mtmd.task_type == "GH_PR"
+        number = custom.get("gh_pr_number") if is_pr else custom.get("gh_issue_number")
+        if not (owner and repo and number):
+            continue
+
+        repo_slug = f"{owner}/{repo}"
+        live = _gh_live_state("pr" if is_pr else "issue", repo_slug, number)
+        if live is None:
+            findings.append({
+                "id": t.id, "ref": f"{repo_slug}#{number}",
+                "cached": custom.get("gh_state"), "live": None,
+                "task_status": t.status, "resolved_upstream": False,
+                "unreachable": True,
+            })
+            continue
+
+        cached = custom.get("gh_state")
+        # "Resolved upstream" is only a finding when the task has NOT been
+        # closed out. A completed task whose PR merged is the correct end
+        # state, not drift — its cached field may still be stale, which is
+        # reported separately and is harmless once nothing acts on the task.
+        open_task = t.status not in ("completed", "archived")
+        resolved = open_task and live in ("CLOSED", "MERGED")
+        if cached != live or resolved:
+            findings.append({
+                "id": t.id, "ref": f"{repo_slug}#{number}",
+                "cached": cached, "live": live,
+                "task_status": t.status, "resolved_upstream": resolved,
+                "unreachable": False,
+            })
+    return findings
+
+
 def cmd_task_doctor(args: argparse.Namespace) -> int:
     """Reconcile stored task records against the authorities they derive from.
 
     Read-only by default: it reports divergence and exits non-zero so a caller
-    can gate on it. ``--fix`` applies the corrections.
+    can gate on it. ``--fix`` applies the corrections it is safe to apply
+    unattended.
 
-    Complements the read-time re-derivation in the renderers. Displays are
-    already truthful without this; the stored records are what other consumers
-    read, and healing them keeps the file honest for anything that does not go
-    through the render path.
+    Two checks, two authorities. The hierarchy marker is compared against
+    ``parent_id`` on the same object; a GitHub-backed task is compared against
+    live GitHub. Both complement the read-time re-derivation in the renderers:
+    displays are truthful without this, but the stored records are what other
+    consumers — including automation — actually read.
     """
     from .task import TaskReader, update_task_file
 
     fix = getattr(args, "fix", False)
+    skip_gh = getattr(args, "no_github", False)
+    include_completed = getattr(args, "all", False)
     tasks = TaskReader().read_all_tasks()
     print(f"🩺 Task doctor — {len(tasks)} task(s) scanned\n")
 
-    findings = _doctor_check_subject_markers(tasks)
-    print(f"Hierarchy markers: {len(findings)} divergent")
-    if not findings:
+    marker_findings = _doctor_check_subject_markers(tasks)
+    print(f"Hierarchy markers: {len(marker_findings)} divergent")
+    if not marker_findings:
         print("   ✅ every [^#N] marker agrees with its parent_id")
-    for task_id, stored, corrected in findings:
+    for task_id, stored, corrected in marker_findings:
         print(f"   #{task_id}")
         print(f"     stored:    {_strip_ansi(stored)}")
         print(f"     corrected: {_strip_ansi(corrected)}")
         if fix:
             if update_task_file(task_id, {"subject": corrected}):
-                print(f"     ✅ healed")
+                print("     ✅ healed")
             else:
                 print(f"     ❌ could not write #{task_id}")
 
-    total = len(findings)
+    gh_findings = []
+    print()
+    if skip_gh:
+        print("GitHub state: skipped (--no-github)")
+    else:
+        gh_findings = _doctor_check_gh_state(tasks, include_completed=include_completed)
+        checked = "all" if include_completed else "open"
+        print(f"GitHub state ({checked} tasks): {len(gh_findings)} divergent")
+        if not gh_findings:
+            print("   ✅ every tracked issue/PR agrees with its task")
+        for f in gh_findings:
+            if f["unreachable"]:
+                print(f"   #{f['id']} {f['ref']} — ⚠️  unreachable, state unknown")
+                continue
+            print(f"   #{f['id']} {f['ref']}  cached={f['cached']} live={f['live']}")
+            if f["resolved_upstream"]:
+                print(f"     ⚠️  resolved upstream while the task is still "
+                      f"{f['task_status']} — close it out with a report:")
+                print(f"        macf_tools task complete {f['id']} --report \"...\"")
+            if fix and f["cached"] != f["live"]:
+                task = next((t for t in tasks if t.id == f["id"]), None)
+                if task is None:
+                    continue
+                new_mtmd = task.mtmd
+                new_mtmd.custom = {**(new_mtmd.custom or {}), "gh_state": f["live"]}
+                if update_task_file(
+                    f["id"], {"description": task.description_with_updated_mtmd(new_mtmd)}
+                ):
+                    print(f"     ✅ cached state refreshed to {f['live']}")
+                else:
+                    print(f"     ❌ could not write #{f['id']}")
+
+    # Completion is a judgement call that owes a report, so --fix refreshes
+    # cached metadata but never closes a task on the operator's behalf.
+    needs_closeout = [f for f in gh_findings if f.get("resolved_upstream")]
+    total = len(marker_findings) + len(gh_findings)
     print()
     if total == 0:
         print("✅ No drift detected.")
         return 0
-    if fix:
+    if fix and not needs_closeout:
         print(f"🔧 Healed {total} record(s).")
         return 0
-    print(f"⚠️  {total} record(s) diverge from their authority. "
-          f"Re-run with --fix to heal.")
+    if needs_closeout:
+        print(f"⚠️  {len(needs_closeout)} task(s) resolved upstream still need a "
+              f"completion report — task doctor will not write one for you.")
+    if not fix:
+        print(f"⚠️  {total} record(s) diverge from their authority. "
+              f"Re-run with --fix to heal what is safe to heal.")
     return 1
 
 
@@ -9084,6 +9211,14 @@ def _build_parser() -> argparse.ArgumentParser:
     task_doctor_parser.add_argument(
         "--fix", action="store_true",
         help="apply the corrections (default is report-only, exits 1 on drift)",
+    )
+    task_doctor_parser.add_argument(
+        "--no-github", action="store_true",
+        help="skip the live GitHub check (offline, or to avoid API calls)",
+    )
+    task_doctor_parser.add_argument(
+        "--all", action="store_true",
+        help="also check GitHub-backed tasks that are already completed",
     )
     task_doctor_parser.set_defaults(func=cmd_task_doctor)
 
