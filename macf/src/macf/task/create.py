@@ -128,6 +128,15 @@ def _compose_type_part(task_type: str, plan_ca_ref: Optional[str] = None,
         labels = custom.get("gh_labels", [])
         label_str = f" [{labels[0]}]" if labels else ""
         return f"🐙 GH/{owner}/{repo}#{issue_num}{label_str}:"
+    # GH_PR has special format: 🔀 PR/owner/repo#N [label] (draft): title
+    if task_type == "GH_PR" and custom:
+        owner = custom.get("gh_owner", "?")
+        repo = custom.get("gh_repo", "?")
+        pr_num = custom.get("gh_pr_number", "?")
+        labels = custom.get("gh_labels", [])
+        label_str = f" [{labels[0]}]" if labels else ""
+        draft_str = " (draft)" if custom.get("is_draft") else ""
+        return f"🔀 PR/{owner}/{repo}#{pr_num}{label_str}{draft_str}:"
     return type_map.get(task_type, "")
 
 
@@ -1001,6 +1010,126 @@ def create_gh_issue(
 
     subject = compose_subject(
         str(task_id), "GH_ISSUE", title,
+        parent_id=effective_parent_id, custom=custom
+    )
+
+    _create_task_file(task_id, subject, description)
+
+    return CreateResult(
+        task_id=task_id,
+        subject=subject,
+        mtmd=mtmd
+    )
+
+
+def create_gh_pr(
+    pr_url: str,
+    parent_id: Optional[str] = None,
+) -> CreateResult:
+    """
+    Create GH_PR task by auto-fetching metadata from a GitHub pull request.
+
+    Parses a /pull/N URL, calls `gh pr view --json` to fetch title, labels,
+    state, branches, draft status, review decision, and linked (closing)
+    issues, and creates a task with that metadata in custom fields plus a
+    declared review lifecycle_state_machine.
+
+    Args:
+        pr_url: GitHub PR URL (https://github.com/owner/repo/pull/N)
+        parent_id: Optional parent task ID
+
+    Returns:
+        CreateResult with task_id and mtmd
+
+    Raises:
+        ValueError: If URL can't be parsed or gh CLI fails
+    """
+    import subprocess as _subprocess
+    import json as _json
+
+    # Parse URL: https://github.com/owner/repo/pull/N
+    url_match = re.match(r'https?://github\.com/([^/]+)/([^/]+)/pull/(\d+)', pr_url)
+    if not url_match:
+        raise ValueError(f"Cannot parse GitHub PR URL: {pr_url}\n"
+                         f"Expected: https://github.com/owner/repo/pull/N")
+    owner, repo, pr_number = url_match.group(1), url_match.group(2), int(url_match.group(3))
+
+    # Fetch PR metadata via gh CLI. `mergeable` is intentionally NOT fetched or
+    # gated on — it is a lazy/stale field; the merge operation is ground truth.
+    gh_result = _subprocess.run(
+        ["gh", "pr", "view", str(pr_number),
+         "--repo", f"{owner}/{repo}",
+         "--json", "title,labels,state,url,headRefName,baseRefName,isDraft,"
+                   "reviewDecision,closingIssuesReferences,body"],
+        capture_output=True, text=True, timeout=15
+    )
+    if gh_result.returncode != 0:
+        raise ValueError(f"gh pr view failed: {gh_result.stderr.strip()}")
+
+    gh_data = _json.loads(gh_result.stdout)
+    title = gh_data["title"]
+    labels = [label["name"] for label in gh_data.get("labels", [])]
+    state = gh_data.get("state", "OPEN")
+    url = gh_data.get("url", pr_url)
+    head_branch = gh_data.get("headRefName", "")
+    base_branch = gh_data.get("baseRefName", "")
+    is_draft = bool(gh_data.get("isDraft", False))
+    review_decision = gh_data.get("reviewDecision") or "REVIEW_REQUIRED"
+
+    # Linked (closing) issues: GitHub's closingIssuesReferences + Fixes/Closes #N body parse
+    linked = {ref["number"] for ref in gh_data.get("closingIssuesReferences", []) if "number" in ref}
+    body = gh_data.get("body") or ""
+    for m in re.finditer(r'(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)', body):
+        linked.add(int(m.group(1)))
+    linked_issues = sorted(linked)
+
+    from ..utils.breadcrumbs import get_breadcrumb, parse_breadcrumb
+
+    breadcrumb = get_breadcrumb()
+    parsed = parse_breadcrumb(breadcrumb)
+    cycle = parsed['cycle'] if parsed else 1
+
+    task_id = _get_next_task_id()
+    effective_parent_id = parent_id if parent_id else SENTINEL_TASK_ID
+
+    # PR metadata + declared review lifecycle stored in custom fields
+    custom = {
+        "gh_owner": owner,
+        "gh_repo": repo,
+        "gh_pr_number": pr_number,
+        "gh_labels": labels,
+        "gh_state": state,
+        "gh_url": url,
+        "head_branch": head_branch,
+        "base_branch": base_branch,
+        "is_draft": is_draft,
+        "review_decision": review_decision,
+        "linked_issues": linked_issues,
+        "lifecycle_state": "pending",
+        "lifecycle_state_machine": {
+            "pending": ["reviewing"],
+            "reviewing": ["approved", "changes_requested", "closed"],
+            "approved": ["merged"],
+            "changes_requested": ["reviewing", "closed"],
+        },
+    }
+
+    mtmd = MacfTaskMetaData(
+        version="1.0",
+        creation_breadcrumb=breadcrumb,
+        created_cycle=cycle,
+        created_by="PA",
+        task_type="GH_PR",
+        title=title,
+        parent_id=effective_parent_id,
+        plan_ca_ref=pr_url,
+        custom=custom,
+    )
+
+    description = _generate_mtmd_block(mtmd)
+
+    subject = compose_subject(
+        str(task_id), "GH_PR", title,
         parent_id=effective_parent_id, custom=custom
     )
 

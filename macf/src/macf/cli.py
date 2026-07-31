@@ -5299,6 +5299,55 @@ def cmd_task_create_gh_issue(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_task_create_gh_pr(args: argparse.Namespace) -> int:
+    """Create GH_PR task by auto-fetching from a GitHub pull request."""
+    from .task.create import create_gh_pr
+
+    parent_id = None
+    if args.parent:
+        parent_id = args.parent.lstrip('#')
+
+    try:
+        result = create_gh_pr(
+            pr_url=args.pr_url,
+            parent_id=parent_id,
+        )
+
+        if args.json:
+            output = {
+                "task_id": result.task_id,
+                "subject": result.subject,
+                "mtmd": {
+                    "version": result.mtmd.version,
+                    "creation_breadcrumb": result.mtmd.creation_breadcrumb,
+                    "created_cycle": result.mtmd.created_cycle,
+                    "created_by": result.mtmd.created_by,
+                    "parent_id": result.mtmd.parent_id,
+                    "custom": result.mtmd.custom,
+                }
+            }
+            print(json.dumps(output, indent=2))
+        else:
+            custom = result.mtmd.custom
+            labels = custom.get("gh_labels", [])
+            linked = custom.get("linked_issues", [])
+            print(f"✅ Created GH_PR task #{result.task_id}")
+            print(f"🏷️  Subject: {result.subject}")
+            if labels:
+                print(f"🏷️  Labels: {', '.join(labels)}")
+            print(f"🌿 {custom.get('head_branch', '?')} → {custom.get('base_branch', '?')}")
+            if linked:
+                print(f"🔗 Fixes: {', '.join('#' + str(n) for n in linked)}")
+            print(f"🔗 {custom.get('gh_url', args.pr_url)}")
+            if parent_id:
+                print(f"📎 Parent: #{parent_id}")
+
+        return 0
+    except Exception as e:
+        print(f"❌ Failed to create GH_PR: {e}")
+        return 1
+
+
 def cmd_task_create_deleg(args: argparse.Namespace) -> int:
     """Create DELEG_PLAN task for delegation work."""
     from .task.create import create_deleg
@@ -8404,6 +8453,14 @@ def _build_parser() -> argparse.ArgumentParser:
     task_create_gh_issue_parser.add_argument("--json", dest="json", action="store_true",
                                              help="output as JSON")
     task_create_gh_issue_parser.set_defaults(func=cmd_task_create_gh_issue)
+
+    # task create gh_pr
+    task_create_gh_pr_parser = task_create_sub.add_parser("gh_pr", help="create task from GitHub PR for review/merge (auto-fetches metadata)")
+    task_create_gh_pr_parser.add_argument("pr_url", help="GitHub PR URL (https://github.com/owner/repo/pull/N)")
+    task_create_gh_pr_parser.add_argument("--parent", default="000", help="parent task ID (default: 000)")
+    task_create_gh_pr_parser.add_argument("--json", dest="json", action="store_true",
+                                          help="output as JSON")
+    task_create_gh_pr_parser.set_defaults(func=cmd_task_create_gh_pr)
 
     # task create deleg
     task_create_deleg_parser = task_create_sub.add_parser("deleg", help="create DELEG_PLAN task for delegation")
