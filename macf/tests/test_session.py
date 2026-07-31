@@ -73,6 +73,17 @@ def get_session_temp_dir(session_id: str, agent_id: str = "test_agent") -> Path:
 class TestSessionIDExtraction:
     """Test suite for session ID extraction from JSONL files."""
 
+    @pytest.fixture(autouse=True)
+    def _isolate_higher_tiers(self, monkeypatch):
+        """Exercise the mtime tier specifically.
+
+        `get_current_session_id()` prefers the hook payload and then the
+        environment (#158); these tests target the filename/mtime fallback, so
+        the higher tiers must be cleared or the ambient session leaks in.
+        """
+        monkeypatch.delenv("MACF_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+
     def test_get_current_session_id_from_claude_project(self, mock_claude_project):
         """
         Test extracting session ID from .claude project JSONL files.
