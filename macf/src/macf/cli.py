@@ -7402,6 +7402,36 @@ def cmd_task_metadata_validate(args: argparse.Namespace) -> int:
         return 0
 
 
+def _systemd_unit_for_pid(pid: int) -> "str | None":
+    """Name of the systemd unit owning `pid`, or None.
+
+    Read from /proc/<pid>/cgroup, where the unit appears verbatim in the path.
+    That is a plain file read, unlike parsing `systemctl` output whose format
+    varies by version — and it returns None on any non-systemd host (macOS has
+    no /proc at all), so callers get a clean "not applicable".
+
+    Matters because the remedy differs entirely: a unit-owned port must be
+    handled with `systemctl --user stop`, and killing the PID just feeds a
+    Restart=always loop.
+    """
+    import re
+    try:
+        with open(f"/proc/{pid}/cgroup") as f:
+            content = f.read()
+    except (OSError, ValueError):
+        return None
+    # A cgroup path nests several .service components, e.g.
+    #   /user.slice/user-1000.slice/user@1000.service/app.slice/macf-proxy.service
+    # The leaf is the unit actually running the process; the `user@NNNN.service`
+    # ancestor is the session manager, and naming it would send the operator to
+    # `systemctl status user@1000.service` — true, useless, and confusing.
+    units = re.findall(r'([A-Za-z0-9_@.\-]+\.service)', content)
+    for unit in reversed(units):
+        if not re.fullmatch(r'user@\d+\.service', unit):
+            return unit
+    return units[-1] if units else None
+
+
 def _check_port_available(port: int, host: str = "127.0.0.1") -> tuple:
     """Check if port is available. Returns (available: bool, owner_pid: int|None)."""
     import socket
@@ -7445,9 +7475,21 @@ def cmd_proxy_start(args: argparse.Namespace) -> int:
 
     # Pre-check port availability (catches zombies without PID files)
     available, owner_pid = _check_port_available(port)
-    if not available:
+    if not available and not getattr(args, 'force', False):
+        unit = _systemd_unit_for_pid(owner_pid) if owner_pid else None
         print(f"❌ Port {port} is already in use", file=sys.stderr)
-        if owner_pid:
+        if unit:
+            # Two start paths for one singleton service. Killing a unit-managed
+            # PID just feeds Restart=always: the unit respawns, loses the race
+            # for the port, and crash-loops while the old instance keeps
+            # answering — supervision that looks healthy but isn't (#161).
+            print(f"   Held by PID {owner_pid}, managed by systemd unit '{unit}'", file=sys.stderr)
+            print(f"   That service is already supervised — starting a second ad-hoc", file=sys.stderr)
+            print(f"   instance would split-brain the port.", file=sys.stderr)
+            print(f"   Inspect: systemctl --user status {unit}", file=sys.stderr)
+            print(f"   Migrate: systemctl --user stop {unit}   # then start ad-hoc", file=sys.stderr)
+            print(f"   Override: macf_tools proxy start --force", file=sys.stderr)
+        elif owner_pid:
             print(f"   Held by PID {owner_pid}", file=sys.stderr)
             print(f"   Fix: kill {owner_pid} && macf_tools proxy start --daemon", file=sys.stderr)
         else:
@@ -8985,6 +9027,10 @@ def _build_parser() -> argparse.ArgumentParser:
                                     help="run in background (daemonize)")
     proxy_start_parser.add_argument("--port", type=int, default=8019,
                                     help="port to listen on (default: 8019)")
+    proxy_start_parser.add_argument("--force", action="store_true",
+                                    help="start even if the port is already held (skips the "
+                                         "occupied-port refusal; the bind will still fail if "
+                                         "the holder keeps it)")
     proxy_start_parser.set_defaults(func=cmd_proxy_start)
 
     # proxy stop
