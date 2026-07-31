@@ -2948,10 +2948,14 @@ def cmd_mode_show(args: argparse.Namespace) -> int:
         from .transcript_monitor.daemon import is_running as tm_is_running
         tm_running = tm_is_running()
         print(f"  Transcript Monitor: {'✅ running' if tm_running else '⏹️  stopped'}")
-        print(f"  USER_IDLE detection: {'✅ active (via TM)' if tm_running else '⚠️  disabled (TM not running)'}")
+        if tm_running:
+            print("  USER_IDLE detection: ✅ active (transcript monitor + prompt hook)")
+        else:
+            print("  USER_IDLE detection: ⚠️  partial (prompt hook only — no mid-turn "
+                  "or channel activity while TM is stopped)")
     except (ImportError, OSError) as e:
         print(f"  Transcript Monitor: ❌ unavailable ({e})")
-        print(f"  USER_IDLE detection: ⚠️  disabled")
+        print("  USER_IDLE detection: ⚠️  partial (prompt hook only)")
 
     return 0
 
