@@ -4,8 +4,10 @@ set -euo pipefail
 # template-sync: Copy version-controlled templates to .maceff/framework/
 # Bind mount makes changes immediately visible in container (no docker cp needed)
 
-REPO_ROOT="$(cd "$(dirname "$0")"/../.. && pwd)"
-SRC_DIR="$REPO_ROOT/templates"
+# See policy-sync for why this is .. and not ../.. — the scripts moved from
+# <repo>/tools/bin/ to <repo>/maceff_tools/ and the level was never adjusted.
+REPO_ROOT="$(cd "$(dirname "$0")"/.. && pwd)"
+SRC_DIR="$REPO_ROOT/framework/templates"
 DEST_DIR="$REPO_ROOT/.maceff/framework/templates"
 
 if [[ ! -d "$SRC_DIR" ]]; then
@@ -21,7 +23,7 @@ if [[ ! -d "$REPO_ROOT/.maceff/framework" ]]; then
 fi
 
 echo "Syncing templates from version control to framework..."
-echo "  Source: templates/"
+echo "  Source: framework/templates/"
 echo "  Dest:   .maceff/framework/templates/"
 
 # Create destination directory

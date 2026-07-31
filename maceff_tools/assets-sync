@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# assets-sync: Copy version-controlled framework assets to .maceff/framework/
+#
+# Covers the trees that policy-sync and template-sync do not: commands/,
+# skills/, subagents/, output-styles/. Until this existed there was no sync
+# path for them at all, so a container built from this repo received policies
+# and templates but none of the commands, skills, subagents, or output styles —
+# they had to be hand-copied, which meant they silently went missing on any
+# rebuild.
+#
+# Bind mount makes changes immediately visible in container (no docker cp needed)
+
+# See policy-sync for why this is .. and not ../.. (scripts moved from tools/bin/).
+REPO_ROOT="$(cd "$(dirname "$0")"/.. && pwd)"
+SRC_ROOT="$REPO_ROOT/framework"
+DEST_ROOT="$REPO_ROOT/.maceff/framework"
+
+ASSETS=(commands skills subagents output-styles)
+
+# Allow syncing a single asset tree: assets-sync skills
+if [[ $# -gt 0 ]]; then
+  ASSETS=("$@")
+fi
+
+if [[ ! -d "$DEST_ROOT" ]]; then
+  echo "error: .maceff/framework/ not initialized" >&2
+  echo "       run: make init" >&2
+  exit 1
+fi
+
+echo "Syncing framework assets from version control to framework..."
+
+synced=0
+for asset in "${ASSETS[@]}"; do
+  src="$SRC_ROOT/$asset"
+  dest="$DEST_ROOT/$asset"
+
+  if [[ ! -d "$src" ]]; then
+    # Absent source is a hard error, not a silent skip. A sync that reports
+    # success while copying nothing is how these four trees stayed missing.
+    echo "error: source asset tree not found: framework/$asset/" >&2
+    echo "       (expected at $src)" >&2
+    exit 1
+  fi
+
+  echo "  Source: framework/$asset/"
+  echo "  Dest:   .maceff/framework/$asset/"
+  mkdir -p "$dest"
+  rsync -av --delete "$src/" "$dest/"
+  synced=$((synced + 1))
+done
+
+if [[ "$synced" -eq 0 ]]; then
+  echo "error: no asset trees synced" >&2
+  exit 1
+fi
+
+echo "✅ Framework assets synced ($synced tree(s))"
+for asset in "${ASSETS[@]}"; do
+  printf '   %-14s %s file(s)\n' "$asset" "$(find "$DEST_ROOT/$asset" -type f | wc -l)"
+done

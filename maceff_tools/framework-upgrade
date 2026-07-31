@@ -3,31 +3,50 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# Steps run in order. Each entry is "label:script".
+#
+# tools-sync used to be step 3 here. It was deleted on purpose ("macf/ now
+# bind-mounted directly") but this caller was never updated, so every upgrade
+# died partway through on a script that had not existed for as long as anyone
+# had been running it. The preflight below exists so a missing step is a named
+# error before any work happens, rather than a half-applied upgrade.
+STEPS=(
+  "Syncing policies:policy-sync"
+  "Syncing templates:template-sync"
+  "Syncing framework assets:assets-sync"
+  "Upgrading preambles:preamble-upgrade"
+)
+
 echo "=== MacEff Framework Upgrade ==="
 echo ""
 
-# Step 1: Sync policies
-echo "[1/4] Syncing policies..."
-"${SCRIPT_DIR}/policy-sync"
-echo ""
+# Preflight: every step script must exist and be executable before we start.
+missing=0
+for step in "${STEPS[@]}"; do
+  script="${step#*:}"
+  if [[ ! -x "${SCRIPT_DIR}/${script}" ]]; then
+    echo "error: upgrade step script missing or not executable: maceff_tools/${script}" >&2
+    missing=$((missing + 1))
+  fi
+done
+if [[ "$missing" -gt 0 ]]; then
+  echo "error: ${missing} upgrade step(s) unavailable — refusing to run a partial upgrade" >&2
+  exit 1
+fi
 
-# Step 2: Sync templates
-echo "[2/4] Syncing templates..."
-"${SCRIPT_DIR}/template-sync"
-echo ""
-
-# Step 3: Sync tools (macf_tools package)
-echo "[3/4] Syncing macf_tools package..."
-"${SCRIPT_DIR}/tools-sync"
-echo ""
-
-# Step 4: Upgrade preambles
-echo "[4/4] Upgrading preambles..."
-"${SCRIPT_DIR}/preamble-upgrade"
-echo ""
+total="${#STEPS[@]}"
+n=0
+for step in "${STEPS[@]}"; do
+  label="${step%%:*}"
+  script="${step#*:}"
+  n=$((n + 1))
+  echo "[${n}/${total}] ${label}..."
+  "${SCRIPT_DIR}/${script}"
+  echo ""
+done
 
 echo "✅ Framework upgrade complete"
-echo "   - Policies synced"
+echo "   - Policies synced (+ manifest)"
 echo "   - Templates synced"
-echo "   - macf_tools package updated"
+echo "   - Framework assets synced (commands, skills, subagents, output-styles)"
 echo "   - Preambles upgraded (user content preserved)"

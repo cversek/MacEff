@@ -10,30 +10,30 @@ This guide covers operational procedures for upgrading MacEff framework componen
 
 ```bash
 # Full framework upgrade (all components)
-tools/bin/framework-upgrade
+maceff_tools/framework-upgrade
 
 # Individual component upgrades
-tools/bin/policy-sync [set_name]     # Sync policies
-tools/bin/template-sync              # Sync templates
-tools/bin/tools-sync                 # Deploy macf_tools package
-tools/bin/preamble-upgrade [pa_user] # Upgrade PA preambles
+maceff_tools/policy-sync [set_name]     # Sync policies (+ manifest.json)
+maceff_tools/template-sync              # Sync templates
+maceff_tools/assets-sync [tree...]      # Sync commands/skills/subagents/output-styles
+maceff_tools/preamble-upgrade [pa_user] # Upgrade PA preambles
 ```
 
 ---
 
 ## Upgrading Policies
 
-**Command**: `tools/bin/policy-sync [set_name]`
+**Command**: `maceff_tools/policy-sync [set_name]`
 
 **Purpose**: Sync policy files from host to running container
 
 **Usage**:
 ```bash
 # Sync base policy set (default)
-tools/bin/policy-sync
+maceff_tools/policy-sync
 
 # Sync specific policy set
-tools/bin/policy-sync experimental
+maceff_tools/policy-sync experimental
 ```
 
 **What it does**:
@@ -51,13 +51,13 @@ docker exec maceff-sandbox cat /opt/maceff/policies/current/manifest.json | jq .
 
 ## Upgrading Templates
 
-**Command**: `tools/bin/template-sync`
+**Command**: `maceff_tools/template-sync`
 
 **Purpose**: Deploy latest preamble and template files to container
 
 **Usage**:
 ```bash
-tools/bin/template-sync
+maceff_tools/template-sync
 ```
 
 **What it does**:
@@ -75,46 +75,56 @@ docker exec maceff-sandbox cat /opt/maceff/templates/PA_PREAMBLE.md | head -20
 
 ---
 
-## Upgrading macf_tools Package
+## Upgrading Framework Assets (commands, skills, subagents, output-styles)
 
-**Command**: `tools/bin/tools-sync`
+**Command**: `maceff_tools/assets-sync [tree...]`
 
-**Purpose**: Deploy latest macf_tools Python package code to container
+**Purpose**: Sync the framework asset trees that `policy-sync` and `template-sync` do not cover
 
 **Usage**:
 ```bash
-tools/bin/tools-sync
+# All four trees
+maceff_tools/assets-sync
+
+# A single tree
+maceff_tools/assets-sync skills
 ```
 
 **What it does**:
-- Copies `tools/src/` directory to container `/opt/tools/src/`
-- Reinstalls package in container: `pip install -e /opt/tools`
-- Displays updated version
+- rsyncs `framework/{commands,skills,subagents,output-styles}/` to
+  `.maceff/framework/<tree>/`, which is bind-mounted into the container
+- Treats an absent source tree as a hard error rather than a silent skip
 
 **Validation**:
 ```bash
-docker exec maceff-sandbox bash -lc "macf_tools --version"
-docker exec maceff-sandbox bash -lc "python -c 'import macf; print(macf.__version__)'"
+ls -1 .maceff/framework/commands .maceff/framework/skills
+docker exec maceff-sandbox bash -lc "ls /opt/maceff/framework/skills"
 ```
 
-**When to use**: After making changes to macf_tools CLI or hook code
+**When to use**: After adding or editing a command, skill, subagent, or output style
+
+> **Note on `tools-sync`**: earlier versions of this guide documented a
+> `tools-sync` step for deploying the `macf_tools` package. That script was
+> removed when `macf/` became a direct bind mount — the package no longer needs
+> a copy step. `framework-upgrade` called it for some time after it was deleted,
+> which made every framework upgrade fail partway through.
 
 ---
 
 ## Upgrading PA Preambles
 
-**Command**: `tools/bin/preamble-upgrade [pa_user]`
+**Command**: `maceff_tools/preamble-upgrade [pa_user]`
 
 **Purpose**: Update PA CLAUDE.md files with latest framework preamble while preserving user content
 
 **Usage**:
 ```bash
 # Upgrade default PA (from common.sh)
-tools/bin/preamble-upgrade
+maceff_tools/preamble-upgrade
 
 # Upgrade specific PA
-tools/bin/preamble-upgrade alice
-tools/bin/preamble-upgrade maceff_user001
+maceff_tools/preamble-upgrade alice
+maceff_tools/preamble-upgrade maceff_user001
 ```
 
 **What it does**:
@@ -149,20 +159,23 @@ docker exec -u maceff_user001 maceff-sandbox grep "DO NOT WRITE BELOW" ~/.claude
 
 ## Full Framework Upgrade
 
-**Command**: `tools/bin/framework-upgrade`
+**Command**: `maceff_tools/framework-upgrade`
 
 **Purpose**: One-command upgrade of all framework components
 
 **Usage**:
 ```bash
-tools/bin/framework-upgrade
+maceff_tools/framework-upgrade
 ```
 
 **What it does** (in order):
-1. **[1/4]** Sync policies (`policy-sync`)
+1. **[1/4]** Sync policies and the policy manifest (`policy-sync`)
 2. **[2/4]** Sync templates (`template-sync`)
-3. **[3/4]** Sync macf_tools package (`tools-sync`)
+3. **[3/4]** Sync framework assets — commands, skills, subagents, output-styles (`assets-sync`)
 4. **[4/4]** Upgrade PA preambles (`preamble-upgrade`)
+
+Every step script is checked for existence before step 1 runs; a missing step
+aborts the upgrade rather than applying it halfway.
 
 **When to use**:
 - After pulling framework updates from git
@@ -200,7 +213,7 @@ git log --oneline -10
 git checkout <previous-commit-hash>
 
 # 3. Re-sync to container (overwrites with old version)
-tools/bin/framework-upgrade
+maceff_tools/framework-upgrade
 
 # 4. Validate rollback worked
 docker exec maceff-sandbox cat /opt/maceff/policies/current/manifest.json | jq .version
@@ -256,10 +269,10 @@ docker ps | grep maceff
 **Fix**:
 ```bash
 # Fix template permissions
-tools/bin/template-sync
+maceff_tools/template-sync
 
 # Fix policy permissions
-tools/bin/policy-sync
+maceff_tools/policy-sync
 
 # Manual permission fix (if needed)
 docker exec -u 0 maceff-sandbox chmod 644 /opt/maceff/policies/current/*.md
@@ -286,12 +299,13 @@ docker exec -u maceff_user001 maceff-sandbox bash -lc "cd ~/.claude && git check
 
 ### macf_tools Version Not Updating
 
-**Symptom**: `macf_tools --version` shows old version after `tools-sync`
+**Symptom**: `macf_tools --version` shows an old version even though `macf/` is
+bind-mounted and the host source is current
 
 **Fix**:
 ```bash
 # Force reinstall in container
-docker exec maceff-sandbox bash -lc "pip install --force-reinstall -e /opt/tools"
+docker exec maceff-sandbox bash -lc "pip install --force-reinstall -e /opt/macf_tools"
 
 # Verify
 docker exec maceff-sandbox bash -lc "macf_tools --version"
@@ -318,7 +332,7 @@ docker exec -u maceff_user001 maceff-sandbox cat ~/.claude/CLAUDE.md | head -20
 
 ```bash
 # Weekly or after framework updates
-tools/bin/framework-upgrade
+maceff_tools/framework-upgrade
 ```
 
 ### Development Workflow
@@ -329,7 +343,7 @@ git add -p
 git commit -m "feat: description"
 
 # 2. Sync to running container (no rebuild)
-tools/bin/framework-upgrade
+maceff_tools/framework-upgrade
 
 # 3. Test in container
 make ssh-pa

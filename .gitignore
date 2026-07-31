@@ -42,14 +42,36 @@ Makefile.bak.*
 keys/*
 !keys/*.pub
 # MacEff customization layer (user-specific, created by maceff-init)
-.maceff/framework/         # All framework content (policies, templates, agent_defs)
-.maceff/config/            # All configuration (env files, config.json)
-.maceff/sessions/          # Session state files (runtime artifacts)
-.maceff/agent_state.json   # Agent cycle/state tracking (runtime artifact)
+# NOTE: gitignore treats '#' as a comment only at the START of a line. These
+# four patterns carried trailing inline comments, which made each pattern the
+# literal string "path/ # comment ..." — matching nothing. They looked
+# configured and ignored nothing for as long as they had existed.
+#
+# These use the "dir/*" form rather than "dir/", because a re-include cannot
+# resurrect a file whose PARENT DIRECTORY is excluded — git never descends into
+# an excluded directory, so "!dir/.gitkeep" under "dir/" silently does nothing.
+# The scaffolding below has to survive: a .gitkeep whose whole purpose is to be
+# tracked, and the starter config a fresh clone needs.
 
-# Optional: Keep example templates in git if needed
-# !.maceff/config/config.json.example
-# !.maceff/framework/.gitkeep
+# All generated framework content (policies, templates, commands, skills, ...)
+.maceff/framework/*
+!.maceff/framework/.gitkeep
+
+# User configuration, minus the shipped starters
+.maceff/config/*
+!.maceff/config/.gitkeep
+!.maceff/config/config.json.example
+!.maceff/config/global.env
+!.maceff/config/projects/
+.maceff/config/projects/*
+!.maceff/config/projects/demo.env
+
+# Session state files (runtime artifacts)
+.maceff/sessions/
+# Agent cycle/state tracking (runtime artifact)
+.maceff/agent_state.json
+# Agent event log (runtime artifact, append-only and unbounded)
+.maceff/agent_events_log.jsonl
 
 # Local backup files
 docker-compose.yml.bak.*
