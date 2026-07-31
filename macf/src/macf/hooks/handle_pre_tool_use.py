@@ -136,7 +136,10 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # Get tool details
         tool_name = data.get("tool_name", "unknown")
         tool_input = data.get("tool_input", {})
-        session_id = get_current_session_id()
+        # Pass the payload: CC tells each hook its own session id, which beats
+        # the globally-shared session_started event when a second session is
+        # running under the same agent home (#158).
+        session_id = get_current_session_id(data)
 
         # Append tool_call_started event
         event_data = {
