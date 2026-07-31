@@ -21,11 +21,20 @@ BOUNDARY = (
 USER_TEXT = "This is genuine user content that must survive an upgrade."
 
 
-def _run_init(home):
+def _run_init(home, *, host_home=None, extra_args=()):
+    """Run `agent init -y` against an isolated agent home.
+
+    ``host_home`` overrides ``HOME``, which isolates the *global* identity
+    scope. Without it the developer's own ``~/.maceff_primary_agent.id`` is
+    visible to the test and identity assertions become host-dependent —
+    passing on a machine with no global id and failing on one with.
+    """
+    env = {**os.environ, "MACEFF_AGENT_HOME_DIR": str(home)}
+    if host_home is not None:
+        env["HOME"] = str(host_home)
     return subprocess.run(
-        ["macf_tools", "agent", "init", "-y"],
-        capture_output=True, text=True,
-        env={**os.environ, "MACEFF_AGENT_HOME_DIR": str(home)},
+        ["macf_tools", "agent", "init", "-y", *extra_args],
+        capture_output=True, text=True, env=env,
     )
 
 
@@ -75,11 +84,20 @@ def test_user_content_without_stale_block_is_untouched(agent_home):
     assert "stale preamble block" not in result.stdout
 
 
-class TestAgentUuidMint:
-    """`agent init` mints the agent UUID so identity never resolves to @unknown (#131)."""
+@pytest.fixture
+def host_home(tmp_path):
+    """An empty stand-in for ``~`` so the global identity scope is isolated."""
+    home = tmp_path / "hosthome"
+    home.mkdir()
+    return home
 
-    def test_mints_uuid_when_absent(self, agent_home):
-        result = _run_init(agent_home)
+
+class TestAgentUuidMint:
+    """`agent init` establishes the agent UUID so identity never resolves to
+    @unknown (#131) — without ever silently changing it (#180)."""
+
+    def test_mints_uuid_when_absent(self, agent_home, host_home):
+        result = _run_init(agent_home, host_home=host_home)
         assert result.returncode == 0, result.stdout + result.stderr
 
         uuid_file = agent_home / ".maceff_primary_agent.id"
@@ -89,13 +107,52 @@ class TestAgentUuidMint:
         assert (uuid_file.stat().st_mode & 0o077) == 0
         assert "Minted agent UUID" in result.stdout
 
-    def test_mint_is_idempotent(self, agent_home):
+    def test_mint_is_idempotent(self, agent_home, host_home):
         """A second init must not re-roll an established identity."""
-        _run_init(agent_home)
+        _run_init(agent_home, host_home=host_home)
         uuid_file = agent_home / ".maceff_primary_agent.id"
         first = uuid_file.read_text()
 
-        result = _run_init(agent_home)
+        result = _run_init(agent_home, host_home=host_home)
         assert uuid_file.read_text() == first, "re-init changed the agent UUID"
         assert "Minted agent UUID" not in result.stdout
         assert "Agent UUID present" in result.stdout
+
+    def test_transfers_resolving_global_identity_rather_than_shadowing_it(
+        self, agent_home, host_home
+    ):
+        """The #180 regression: an identity that already resolves globally is
+        carried into the project file, not shadowed by a fresh one.
+
+        Minting here overwrites nothing on disk, which is why it read as safe —
+        but the project file outranks the global one in the resolver, so the
+        agent's calling card changes anyway.
+        """
+        established = "a1b2c3d4-0000-4000-8000-000000000001"
+        (host_home / ".maceff_primary_agent.id").write_text(established + "\n")
+
+        result = _run_init(agent_home, host_home=host_home)
+        assert result.returncode == 0, result.stdout + result.stderr
+
+        uuid_file = agent_home / ".maceff_primary_agent.id"
+        assert uuid_file.read_text().strip() == established, (
+            "init minted a new identity over one that already resolved globally"
+        )
+        assert (host_home / ".maceff_primary_agent.id").read_text().strip() == established
+        assert "Transferred agent UUID" in result.stdout
+        assert "resolves from another scope" in result.stdout
+        assert "Minted agent UUID" not in result.stdout
+
+    def test_mint_fresh_id_opts_into_a_new_identity(self, agent_home, host_home):
+        """The deliberate case stays available behind an explicit flag."""
+        established = "a1b2c3d4-0000-4000-8000-000000000001"
+        (host_home / ".maceff_primary_agent.id").write_text(established + "\n")
+
+        result = _run_init(
+            agent_home, host_home=host_home, extra_args=("--mint-fresh-id",)
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+        minted = (agent_home / ".maceff_primary_agent.id").read_text().strip()
+        assert minted and minted != established
+        assert "Minted agent UUID" in result.stdout

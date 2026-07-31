@@ -393,10 +393,31 @@ Initialize agent with Primary Agent preamble.
 
 **Syntax:**
 ```bash
-macf_tools agent init
+macf_tools agent init [-y] [--mint-fresh-id]
 ```
 
+**Options:**
+- `-y`, `--yes` - Skip confirmation prompts (used by container provisioning and tests)
+- `--mint-fresh-id` - Mint a **new** agent UUID even when one already resolves from another scope
+
 **Description:** Sets up agent consciousness infrastructure and identity.
+
+**Identity handling.** The agent UUID lives in `.maceff_primary_agent.id`, resolved
+per-agent-home first and host-global (`~`) second. A per-agent-home file is the canonical
+mechanism — one `~` cannot serve several agents on a shared host or container. `agent init`
+establishes that file without ever silently changing who the agent is:
+
+| Situation | Behavior |
+|---|---|
+| Identity already in this agent home | Reported, left untouched |
+| Identity resolves from another scope (e.g. global) | Warns, offers to **transfer** that exact value |
+| No identity resolves anywhere | Offers a fresh value, previewed and re-rollable |
+
+The first six characters are the agent's public calling card (breadcrumbs, closeout
+comments, channel signatures), so a minted value is shown before it is accepted. Under
+`-y` every fork takes the safe branch: transfer when an identity resolves, mint only on
+genuine absence. Use `--mint-fresh-id` for the rare deliberate case of a distinct new
+identity in a home that would otherwise inherit one.
 
 **Related:** `config init`, `session info`
 

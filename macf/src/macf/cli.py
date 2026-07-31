@@ -1715,6 +1715,102 @@ def cmd_agent_sleep(args: argparse.Namespace) -> int:
     return 1
 
 
+def _ensure_agent_uuid(
+    pa_home: Path,
+    *,
+    assume_yes: bool = False,
+    mint_fresh: bool = False,
+) -> None:
+    """Establish the agent's identity file at ``pa_home`` without ever
+    silently changing who the agent is.
+
+    Without an id file the resolver returns ``unknown``, so a freshly
+    provisioned host displays ``Name@unknown`` and breadcrumbs lose their UUID
+    half (#131). The naive fix — mint whenever *this* file is missing — checks
+    the wrong thing: the resolver prefers the per-project file over the
+    host-global one, so minting into an agent home while a global identity is
+    already resolving changes the effective identity while overwriting nothing
+    (#180). Nothing on disk is damaged and the calling card changes anyway.
+
+    The per-project file is the canonical mechanism: one ``~`` cannot serve N
+    agents on a shared host or container, while a per-agent-home file can. So
+    the response to "resolves globally, project file absent" is to *carry the
+    existing value across*, not to skip the write and not to mint a stranger:
+
+        already in this file      → report, leave untouched
+        resolves from elsewhere   → warn, offer to transfer that exact value
+        nothing resolves anywhere → offer a fresh value, previewed, re-rollable
+
+    The first six characters become the agent's public calling card, so a
+    minted value is shown before it is accepted and can be re-rolled.
+
+    Non-interactive (``-y``, used by container start.py and the test suite)
+    takes the safe branch at every fork: transfer when an identity resolves,
+    mint only on genuine absence. ``mint_fresh`` is the explicit opt-in for the
+    rare deliberate case of a *new* identity in a home that would otherwise
+    inherit one.
+    """
+    import uuid as _uuid
+    from .utils.identity import _resolve_uuid_source
+
+    uuid_file = pa_home / '.maceff_primary_agent.id'
+    target_scope = 'project' if pa_home != Path.home() else 'global'
+
+    def _write(value: str, verb: str) -> None:
+        try:
+            uuid_file.write_text(value + "\n")
+            uuid_file.chmod(0o600)
+            print(f"\n🆔 {verb} agent UUID ({target_scope}): {value[:6]} → {uuid_file}")
+        except OSError as e:
+            print(f"⚠️  Could not write agent UUID at {uuid_file}: {e}", file=sys.stderr)
+
+    # Already established here — the only fully silent branch.
+    try:
+        if uuid_file.exists() and uuid_file.read_text().strip():
+            print(f"\n🆔 Agent UUID present ({target_scope}): {uuid_file}")
+            return
+    except OSError as e:
+        print(f"⚠️  Could not read agent UUID at {uuid_file}: {e}", file=sys.stderr)
+        return
+
+    resolved, resolved_scope, resolved_source = _resolve_uuid_source()
+    inherited = bool(resolved) and resolved_source != uuid_file
+
+    if inherited and not mint_fresh:
+        print(f"\n⚠️  This agent already has an identity that resolves from another scope:")
+        print(f"      {resolved[:6]}  ({resolved_scope}) ← {resolved_source}")
+        print(f"    Writing a different value to {uuid_file} would take precedence")
+        print(f"    over it and change the agent's calling card.")
+        if assume_yes:
+            print("    Non-interactive: transferring the existing identity (use "
+                  "--mint-fresh-id to mint a new one instead).")
+            _write(resolved, "Transferred")
+            return
+        answer = input(f"\n  Transfer {resolved[:6]} into {uuid_file.name}? [Y/n]: ").strip().lower()
+        if answer in ('', 'y', 'yes'):
+            _write(resolved, "Transferred")
+            return
+        print("    Keeping the resolved identity; not writing a project file.")
+        return
+
+    # Genuine absence (or an explicit --mint-fresh-id): offer a value.
+    while True:
+        candidate = str(_uuid.uuid4())
+        if assume_yes:
+            _write(candidate, "Minted")
+            return
+        print(f"\n🆔 Proposed agent UUID: {candidate}")
+        print(f"    Calling card would be: @{candidate[:6]}")
+        answer = input("  [A]ccept / [r]egenerate / [s]kip: ").strip().lower()
+        if answer in ('', 'a', 'accept', 'y', 'yes'):
+            _write(candidate, "Minted")
+            return
+        if answer in ('s', 'skip', 'n', 'no'):
+            print("    Skipped — the agent will resolve to @unknown until an id exists.")
+            return
+        # anything else re-rolls
+
+
 def cmd_agent_init(args: argparse.Namespace) -> int:
     """Initialize agent with preamble injection (idempotent)."""
     try:
@@ -1861,27 +1957,11 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
                 json.dump(manifest_data, f, indent=2)
             print(f"✅ Created personal policy manifest at {personal_manifest}")
 
-        # Mint the agent UUID if absent (idempotent). Without this file the
-        # identity resolver returns 'unknown', so every freshly provisioned host
-        # displayed Name@unknown and breadcrumbs lost their UUID half until
-        # someone hand-created it (issue #131).
-        #
-        # Scope mirrors _resolve_uuid_prefix()'s own priority: a per-project home
-        # (distinct from ~) gets its own id, otherwise the host-global one — so
-        # the file is minted exactly where the resolver will look for it first.
-        import uuid as _uuid
-        uuid_scope = 'project' if pa_home != Path.home() else 'global'
-        uuid_file = pa_home / '.maceff_primary_agent.id'
-        if uuid_file.exists() and uuid_file.read_text().strip():
-            print(f"\n🆔 Agent UUID present ({uuid_scope}): {uuid_file}")
-        else:
-            try:
-                agent_uuid = str(_uuid.uuid4())
-                uuid_file.write_text(agent_uuid + "\n")
-                uuid_file.chmod(0o600)
-                print(f"\n🆔 Minted agent UUID ({uuid_scope}): {agent_uuid[:6]} → {uuid_file}")
-            except OSError as e:
-                print(f"⚠️  Could not mint agent UUID at {uuid_file}: {e}", file=sys.stderr)
+        _ensure_agent_uuid(
+            pa_home,
+            assume_yes=getattr(args, 'yes', False),
+            mint_fresh=getattr(args, 'mint_fresh_id', False),
+        )
 
         print(f"\n📍 PA Home: {pa_home}")
         print(f"📍 Personal Policies: {personal_policies_dir}")
@@ -8226,6 +8306,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
     agent_init_parser = agent_sub.add_parser("init", help="initialize agent with PA preamble")
     agent_init_parser.add_argument("-y", "--yes", action="store_true", help="skip confirmation prompt")
+    agent_init_parser.add_argument(
+        "--mint-fresh-id", action="store_true",
+        help="mint a NEW agent UUID even if one already resolves from another "
+             "scope (default is to transfer the existing identity, preserving "
+             "the calling card)",
+    )
     agent_init_parser.set_defaults(func=cmd_agent_init)
 
     # AUTO_MODE auth token bootstrap (host / non-Docker installs) — #115
