@@ -225,6 +225,56 @@ CLAMPED_WINDOW = 200_000
 WINDOW_WARN_AT = 150_000
 _window_warned = False
 
+# The client rejects oversized requests with "Request too large (max 32MB)" —
+# a hardcoded client-side label, so 32MB is the wall we are measured against,
+# not a limit this proxy imposes. Warn at a fraction of it while the session is
+# still alive to act (compact, clear a runaway tool_result). Override the ratio
+# with MACF_PROXY_SIZE_WARN_RATIO; 0 disables the warning.
+CLIENT_REQUEST_WALL_BYTES = 32 * 1024 * 1024
+_request_size_warned = False
+
+
+def _request_warn_at() -> int:
+    """Byte threshold for the growth warning (0 = disabled)."""
+    try:
+        ratio = float(os.environ.get("MACF_PROXY_SIZE_WARN_RATIO", "0.6"))
+    except ValueError:
+        ratio = 0.6
+    if ratio <= 0:
+        return 0
+    return int(CLIENT_REQUEST_WALL_BYTES * ratio)
+
+
+def _warn_if_request_growing(request_bytes: int) -> None:
+    """Make the request-size cliff visible before it is fatal.
+
+    Hitting the wall is unrecoverable in practice: the client refuses to
+    serialize, `/compact` fails on the same wall because the compaction request
+    takes the same path, and `/clear` — total context loss — is the only exit.
+    One warning per process, on the way up, is the whole point.
+    """
+    global _request_size_warned
+    threshold = _request_warn_at()
+    if _request_size_warned or not threshold or request_bytes < threshold:
+        return
+    _request_size_warned = True
+    pct = round(100 * request_bytes / CLIENT_REQUEST_WALL_BYTES)
+    _log_event({
+        "type": "request_size_watch", "ts": int(time.time()),
+        "request_bytes": request_bytes,
+        "wall_bytes": CLIENT_REQUEST_WALL_BYTES,
+        "pct_of_wall": pct,
+    })
+    print(
+        f"[proxy:size] ⚠️  request reached {request_bytes / 1_048_576:.1f} MB "
+        f"({pct}% of the client's ~32MB wall).\n"
+        f"  At the wall the client refuses to serialize, and /compact fails the same\n"
+        f"  way (it takes this path too) — /clear becomes the only exit, losing the\n"
+        f"  whole context. Compact NOW while it still works.\n"
+        f"  See per-block bytes in this request's api_request log entry to find what grew.",
+        file=sys.stderr,
+    )
+
 
 def _warn_if_approaching_clamp(usage: dict) -> None:
     """Say the actionable thing while the session is still alive to act on it."""
@@ -421,12 +471,45 @@ def _capture_write(cap: Path, filename: str, payload) -> bool:
 
 # --------------- Request metadata extraction ---------------
 
+def _block_byte_census(messages: list) -> dict:
+    """Bytes per content-block type across all messages.
+
+    Metadata like `message_count` says how *many* blocks there are, never how
+    heavy they are — so when a session walks into the request-size wall, the log
+    cannot say what grew. A census names the culprit directly (a tool_result
+    that ballooned, images accumulating, system-reminders piling up) instead of
+    leaving it to transcript inference after the fact.
+    """
+    census: dict = {}
+    for msg in messages or []:
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if isinstance(content, str):
+            census["text"] = census.get("text", 0) + len(content)
+            continue
+        for block in content or []:
+            if not isinstance(block, dict):
+                continue
+            btype = block.get("type", "unknown")
+            # Serialized size of the block itself: images live in nested
+            # source.data, tool_results in nested content, so a top-level
+            # len() would undercount exactly the blocks that matter most.
+            try:
+                size = len(json.dumps(block))
+            except (TypeError, ValueError):
+                size = len(str(block))
+            census[btype] = census.get(btype, 0) + size
+    return census
+
+
 def _extract_request_meta(body: bytes) -> dict:
     """Extract metadata from API request body."""
     try:
         data = json.loads(body)
     except json.JSONDecodeError:
-        return {"type": "api_request", "ts": int(time.time()), "parse_error": True}
+        # Even unparseable bodies get their size recorded: a body too large or
+        # malformed to parse is precisely the case worth seeing in the log.
+        return {"type": "api_request", "ts": int(time.time()),
+                "parse_error": True, "request_bytes": len(body)}
 
     messages = data.get("messages", [])
     system = data.get("system", "")
@@ -436,6 +519,7 @@ def _extract_request_meta(body: bytes) -> dict:
     else:
         system_chars = len(str(system))
 
+    request_bytes = len(body)
     meta = {
         "type": "api_request",
         "ts": int(time.time()),
@@ -445,7 +529,14 @@ def _extract_request_meta(body: bytes) -> dict:
         "tool_count": len(data.get("tools", [])),
         "stream": data.get("stream", False),
         "max_tokens": data.get("max_tokens", 0),
+        # Tier-1 flight-recorder telemetry: the serialized size and what it is
+        # made of. The trend across a session predicts the request-size cliff
+        # many turns before it becomes fatal.
+        "request_bytes": request_bytes,
+        "block_bytes": _block_byte_census(messages),
     }
+
+    _warn_if_request_growing(request_bytes)
 
     # Dump full request to capture dir if enabled
     capture_dir = os.environ.get("MACF_PROXY_CAPTURE_DIR")
