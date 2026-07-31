@@ -63,6 +63,22 @@ def _send_permission_preview(tool_name, tool_input, send_notification, send_docu
         msg += f"\n\n<pre>{html_escape(command[:3000])}</pre>"
         send_notification(msg, parse_mode="HTML")
 
+    elif tool_name == "Skill":
+        # The skill name is the entire signal here: from a phone, a generic
+        # gear glyph says almost nothing, while "maceff:jotewr" says what the
+        # agent is about to do. Distinct glyph so skills are scannable in a
+        # channel timeline (#163).
+        skill = tool_input.get("skill", "unknown")
+        args = tool_input.get("args", "") or ""
+        msg = f"\U0001f39b\ufe0f <b>Skill</b>: <code>{html_escape(str(skill))}</code>"
+        if args:
+            args_str = str(args)
+            summary = html_escape(args_str[:200])
+            if len(args_str) > 200:
+                summary += "\u2026"
+            msg += f"\n\n<pre>{summary}</pre>"
+        send_notification(msg, parse_mode="HTML")
+
 
 def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
     """
