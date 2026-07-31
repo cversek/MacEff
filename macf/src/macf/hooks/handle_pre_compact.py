@@ -10,6 +10,7 @@ import traceback
 from typing import Dict, Any
 
 from macf.utils import (
+    format_macf_brand,
     get_temporal_context,
     format_macf_footer,
     get_current_session_id,
@@ -72,7 +73,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # Format message
         # Note: PreCompact hook doesn't support hookSpecificOutput
         # (only PreToolUse, UserPromptSubmit, PostToolUse do)
-        message = f"""🏗️ MACF | Pre-Compact
+        message = f"""{format_macf_brand()} | Pre-Compact
 Time: {temporal_ctx['timestamp_formatted']}
 Breadcrumb: {breadcrumb}
 CL: {token_info.get('cl_level', 'N/A')}
@@ -103,7 +104,7 @@ CL: {token_info.get('cl_level', 'N/A')}
         })
         return {
             "continue": True,
-            "systemMessage": f"🏗️ MACF | ❌ PreCompact hook error: {e}"
+            "systemMessage": f"{format_macf_brand()} | ❌ PreCompact hook error: {e}"
         }
 
 

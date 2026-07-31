@@ -11,6 +11,7 @@ import traceback
 from typing import Dict, Any
 
 from macf.utils import (
+    format_macf_brand,
     get_minimal_timestamp,
     get_current_session_id,
     start_deleg_drv,
@@ -214,7 +215,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             emit_warning(Warning(source="pre_tool_use", kind="mode_detection_failed", detail=f"mode detection failed, falling back: {e}"))
             auto_mode_active, _ = detect_auto_mode(session_id)
             mode_indicator = " 🤖" if auto_mode_active else ""
-        message_parts = [f"🏗️ MACF{mode_indicator} | {timestamp} | {breadcrumb}"]
+        message_parts = [f"{format_macf_brand(indicators=mode_indicator)} | {timestamp} | {breadcrumb}"]
 
         # Surface any injection errors to user
         if injection_errors:
@@ -482,7 +483,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             "error": str(e),
             "traceback": traceback.format_exc()
         })
-        error_msg = f"🏗️ MACF | ❌ PreToolUse hook error: {e}"
+        error_msg = f"{format_macf_brand()} | ❌ PreToolUse hook error: {e}"
         return {
             "continue": True,
             "systemMessage": error_msg,

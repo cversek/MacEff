@@ -461,3 +461,69 @@ def test_source_resume_skips_compaction_detection(mock_dependencies):
 
 # NOTE: test_cycle_increments_on_compaction removed - tested deleted increment_agent_cycle function
 # Event-first architecture: cycle tracked via compaction_detected events, not state mutations
+
+
+def _run_shared_path(mock_dependencies, stdin_json, auto_mode):
+    """Drive the fresh/resume shared banner path with all IO mocked."""
+    from macf.hooks.handle_session_start import run
+    from unittest.mock import patch
+
+    mock_dependencies['detect_compaction'].return_value = False
+    mock_dependencies['auto_mode'].return_value = (auto_mode, "event" if auto_mode else "default")
+
+    with patch('macf.hooks.handle_session_start.get_temporal_context') as mock_temporal, \
+         patch('macf.hooks.handle_session_start.get_rich_environment_string') as mock_env, \
+         patch('macf.hooks.handle_session_start.get_breadcrumb') as mock_breadcrumb, \
+         patch('macf.hooks.handle_session_start.get_last_session_end_time_from_events') as mock_last_end, \
+         patch('macf.hooks.handle_session_start.get_token_info') as mock_token, \
+         patch('macf.hooks.handle_session_start.format_token_context_full') as mock_token_fmt, \
+         patch('macf.hooks.handle_session_start.format_manifest_awareness') as mock_manifest, \
+         patch('macf.hooks.handle_session_start.format_macf_footer') as mock_footer, \
+         patch('macf.hooks.handle_session_start.get_compaction_count_from_events') as mock_compact_count:
+
+        mock_temporal.return_value = {
+            'timestamp_formatted': 'Wednesday, July 29, 2026 at 06:00:00 PM EDT',
+            'day_of_week': 'Wednesday',
+            'time_of_day': 'Evening'
+        }
+        mock_env.return_value = 'Host System'
+        mock_breadcrumb.return_value = 's_test/c_1/p_x/t_0'
+        mock_last_end.return_value = None
+        mock_token.return_value = {}
+        mock_token_fmt.return_value = 'Token section'
+        mock_manifest.return_value = 'Manifest'
+        mock_footer.return_value = 'Footer'
+        mock_compact_count.return_value = {'count': 0}
+
+        return run(stdin_json, testing=True)
+
+
+def test_banner_shows_auto_mode_indicator(mock_dependencies):
+    """Fresh-session banner carries 🤖 when AUTO_MODE is active (issue #164)."""
+    result = _run_shared_path(mock_dependencies, '{"source": "startup"}', auto_mode=True)
+    assert "🏗️ MACF 🤖 | Session Start" in result["systemMessage"]
+
+
+def test_banner_plain_when_manual_mode(mock_dependencies):
+    result = _run_shared_path(mock_dependencies, '{"source": "startup"}', auto_mode=False)
+    assert "🏗️ MACF | Session Start" in result["systemMessage"]
+    assert "🤖" not in result["systemMessage"].split("\n")[0]
+
+
+def test_resume_auto_mode_injects_resumption_prompt(mock_dependencies):
+    """SessionStart:resume + AUTO_MODE injects the continue-work directive."""
+    result = _run_shared_path(mock_dependencies, '{"source": "resume"}', auto_mode=True)
+    ctx = result["hookSpecificOutput"]["additionalContext"]
+    assert "AUTO_MODE RESUME" in ctx
+    assert "🏗️ MACF 🤖 | Session Start" in result["systemMessage"]
+
+
+def test_resume_manual_mode_no_resumption_prompt(mock_dependencies):
+    result = _run_shared_path(mock_dependencies, '{"source": "resume"}', auto_mode=False)
+    assert "AUTO_MODE RESUME" not in result["hookSpecificOutput"]["additionalContext"]
+
+
+def test_fresh_auto_mode_no_resumption_prompt(mock_dependencies):
+    """The kick is resume-specific: fresh startups don't get it."""
+    result = _run_shared_path(mock_dependencies, '{"source": "startup"}', auto_mode=True)
+    assert "AUTO_MODE RESUME" not in result["hookSpecificOutput"]["additionalContext"]

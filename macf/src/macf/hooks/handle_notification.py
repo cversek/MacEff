@@ -10,6 +10,7 @@ import traceback
 from typing import Dict, Any
 
 from macf.utils import (
+    format_macf_brand,
     get_minimal_timestamp,
     get_current_session_id,
     get_breadcrumb
@@ -65,7 +66,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # Format message (Pattern C: top-level for user + hookSpecificOutput for agent)
         timestamp = get_minimal_timestamp()
         breadcrumb = get_breadcrumb()
-        message = f"🏗️ MACF | {timestamp} | {breadcrumb} | 📢 Notification: {notification_type}"
+        message = f"{format_macf_brand()} | {timestamp} | {breadcrumb} | 📢 Notification: {notification_type}"
 
         # Note: Notification hook doesn't support hookSpecificOutput
         # (only PreToolUse, UserPromptSubmit, PostToolUse do)
@@ -84,7 +85,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         })
         return {
             "continue": True,
-            "systemMessage": f"🏗️ MACF | ❌ Notification hook error: {e}"
+            "systemMessage": f"{format_macf_brand()} | ❌ Notification hook error: {e}"
         }
 
 
