@@ -14,6 +14,15 @@ Communication standards establish universal patterns for how agents report work,
 
 **Core Insight**: Great technical communication is **code-first, evidence-based, and concise**. Show working results, not lengthy explanations. Prove claims with artifacts. Report completion systematically so PA can integrate work without guesswork.
 
+**Scope boundary**: This policy governs *internal* communication - how agents
+report work, evidence, and errors to a PA. For text that leaves the machine and is
+read by other people (issue comments, PR bodies, review responses, published
+documentation), see the companion policy:
+
+```bash
+macf_tools policy read public_voice
+```
+
 ---
 
 ## CEP Navigation Guide
