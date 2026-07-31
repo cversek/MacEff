@@ -131,3 +131,91 @@ def test_hook_event_name_present(mock_dependencies):
     assert "hookSpecificOutput" in result
     assert "hookEventName" in result["hookSpecificOutput"]
     assert result["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
+
+
+class TestUserActivityFromPayload:
+    """A submit must never render as idle — the event disproves the mode (#181).
+
+    USER_IDLE is derived from ``user_activity_detected``, which the Transcript
+    Monitor writes on a poll interval. The hook fires before TM has polled, so
+    deriving staleness here read the *previous* activity and could render 😴 on
+    the very prompt that contradicts it. The hook holds the authoritative
+    signal in its own payload.
+    """
+
+    def _activity_events(self, log_path):
+        import json
+        if not log_path.exists():
+            return []
+        out = []
+        for line in log_path.read_text().splitlines():
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            if e.get("event") == "user_activity_detected":
+                out.append(e)
+        return out
+
+    def test_typed_prompt_records_user_activity(self, mock_dependencies, isolated_events_log):
+        import json
+        from macf.hooks.handle_user_prompt_submit import run
+
+        run(json.dumps({"session_id": "s1", "prompt": "please fix the thing"}))
+
+        events = self._activity_events(isolated_events_log)
+        assert len(events) == 1, "a typed prompt did not record user activity"
+        assert events[0]["data"]["detector"] == "user_prompt_submit_hook"
+        assert events[0]["data"]["source"] == "direct"
+
+    def test_channel_prompt_is_tagged_as_channel(self, mock_dependencies, isolated_events_log):
+        import json
+        from macf.hooks.handle_user_prompt_submit import run
+
+        run(json.dumps({
+            "session_id": "s1",
+            "prompt": '<channel source="plugin:x:x" chat_id="1">hello</channel>',
+        }))
+
+        events = self._activity_events(isolated_events_log)
+        assert len(events) == 1
+        assert events[0]["data"]["source"] == "channel"
+
+    def test_system_generated_invocation_records_nothing(self, mock_dependencies, isolated_events_log):
+        """The constraint that removed dev_drv_started as a source still holds.
+
+        UserPromptSubmit also fires for invocations the user did not type; those
+        must not reset the idle clock from the agent's own activity.
+        """
+        import json
+        from macf.hooks.handle_user_prompt_submit import run
+
+        run(json.dumps({"session_id": "s1", "prompt": ""}))
+        run(json.dumps({"session_id": "s1", "prompt": "   \n  "}))
+        run(json.dumps({"session_id": "s1"}))
+
+        assert self._activity_events(isolated_events_log) == []
+
+    def test_submit_is_not_idle_despite_stale_monitor_event(self, mock_dependencies, isolated_events_log):
+        """The regression: a long-stale TM event must not survive a fresh submit."""
+        import json
+        import time
+        from datetime import datetime, timedelta, timezone
+        from macf.modes.detection import _get_last_user_activity_timestamp
+
+        stale = datetime.now(timezone.utc) - timedelta(minutes=45)
+        isolated_events_log.write_text(json.dumps({
+            "event": "user_activity_detected",
+            "timestamp": stale.isoformat(),
+            "data": {"source": "direct", "detector": "transcript_monitor"},
+        }) + "\n")
+
+        assert time.time() - _get_last_user_activity_timestamp("s1") > 40 * 60, (
+            "fixture did not establish a stale activity timestamp"
+        )
+
+        from macf.hooks.handle_user_prompt_submit import run
+        run(json.dumps({"session_id": "s1", "prompt": "I am right here"}))
+
+        age = time.time() - _get_last_user_activity_timestamp("s1")
+        assert age < 60, f"submit still read as {age / 60:.0f} minutes stale"

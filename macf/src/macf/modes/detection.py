@@ -533,13 +533,21 @@ def format_recommendation(
 def _get_last_user_activity_timestamp(session_id: str) -> Optional[float]:
     """Get epoch timestamp of last user activity from event log.
 
-    ONLY uses user_activity_detected events from Transcript Monitor.
+    ONLY uses user_activity_detected events. Two producers write them: the
+    Transcript Monitor (polling the transcript) and the UserPromptSubmit hook
+    (from a payload carrying a typed prompt). Both are evidence of real user
+    input; the hook's is simply the earlier of the two, which is what keeps a
+    submit from rendering as idle while TM has yet to poll (#181).
+
     dev_drv_started was removed as a source because it fires on ALL
     UserPromptSubmit invocations — including system-generated ones
     (tool results, background notifications), causing false positives
-    that reset the idle timer from the agent's own activity.
+    that reset the idle timer from the agent's own activity. The hook's
+    producer preserves that constraint by discriminating on the payload
+    rather than on the invocation.
 
-    Returns None when TM is not running (no false signals > wrong signals).
+    Returns None when neither producer has recorded anything for this agent
+    (no false signals > wrong signals).
     """
     for event in read_events(limit=200, reverse=True):
         event_type = event.get("event", "")

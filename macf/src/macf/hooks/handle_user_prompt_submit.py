@@ -135,6 +135,55 @@ def get_policy_injection(prompt: str) -> str:
         return ""  # Fail gracefully - don't block session
 
 
+def record_user_activity_from_payload(prompt: str) -> bool:
+    """Record user activity when *this* invocation carries a typed prompt.
+
+    USER_IDLE is derived from ``user_activity_detected`` events, which the
+    Transcript Monitor writes on an interval. This hook fires the instant the
+    user submits — before TM has polled — so a staleness computation here reads
+    the *previous* activity and can render 😴 on the very prompt that disproves
+    it (cversek/MacEff#181). The hook does not need to ask a monitor whether
+    the user is active: the user just acted, and the payload proves it.
+
+    ``dev_drv_started`` was deliberately removed as an idle source because it
+    fires on *all* UserPromptSubmit invocations, including system-generated
+    ones, which reset the idle timer from the agent's own activity. That
+    constraint still holds, so the discrimination is made from the payload
+    rather than by trusting every invocation: a typed prompt (direct, slash
+    command, or channel message) is present only for genuine user input.
+    Empirically the split is near-even across a long event log, and every
+    non-empty prompt corresponds to real user input.
+
+    Emitting here (rather than only suppressing the indicator) also corrects
+    the clock for the renders that follow — Stop, PreToolUse — instead of
+    leaving them a TM poll interval behind.
+
+    Args:
+        prompt: The ``prompt`` field of the hook payload.
+
+    Returns:
+        True when an activity event was recorded.
+    """
+    if not prompt or not prompt.strip():
+        return False
+
+    source = "channel" if prompt.lstrip().startswith("<channel ") else "direct"
+    try:
+        from macf.agent_events_log import append_event
+        append_event("user_activity_detected", {
+            "source": source,
+            "detector": "user_prompt_submit_hook",
+        })
+        return True
+    except (OSError, ValueError, ImportError) as e:
+        emit_warning(Warning(
+            source="user_prompt_submit",
+            kind="user_activity_emit_failed",
+            detail=f"could not record user activity from payload: {e}",
+        ))
+        return False
+
+
 def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
     """
     Run UserPromptSubmit hook logic.
@@ -169,6 +218,11 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # Extract prompt preview for forensic recovery (first 200 chars)
         prompt = hook_input.get('prompt', '') if hook_input else ''
         prompt_preview = prompt[:200] if prompt else None
+
+        # Record activity from the payload in hand before anything derives
+        # staleness from the event log, so this render and the ones after it
+        # agree with the event that produced them (#181).
+        record_user_activity_from_payload(prompt)
 
         # Start Development Drive tracking with current UUID and prompt preview
         # Note: start_dev_drv() emits dev_drv_started event internally
