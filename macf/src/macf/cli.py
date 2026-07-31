@@ -7801,7 +7801,9 @@ def _cmd_ar_launch(args):
     return launch_in_terminal(cmd, name=args.name, restart_delay=args.delay,
                               terminal=getattr(args, 'terminal', 'auto'),
                               use_tmux=not getattr(args, 'no_tmux', False),
-                              session_spec=getattr(args, 'session_id', None))
+                              session_spec=getattr(args, 'session_id', None),
+                              post_start_keys=getattr(args, 'post_start_keys', None),
+                              post_start_delay=getattr(args, 'post_start_delay', 18))
 
 def _cmd_ar_list(args=None):
     from .supervisor import list_processes
@@ -9062,6 +9064,13 @@ def _build_parser() -> argparse.ArgumentParser:
                            help="terminal app (default: auto-detect)")
     ar_launch.add_argument("--no-tmux", action="store_true",
                            help="do not back the session with tmux (disables send-keys)")
+    ar_launch.add_argument("--post-start-keys", default=None, metavar="KEYS",
+                           help="tmux keys to send after every child spawn (initial and each "
+                                "restart), e.g. 'Enter' to dismiss a workspace-trust dialog that "
+                                "would otherwise hang an unattended session. Requires tmux.")
+    ar_launch.add_argument("--post-start-delay", type=int, default=18, metavar="SECS",
+                           help="seconds to wait after spawn before sending --post-start-keys "
+                                "(default: 18)")
     ar_launch.add_argument("--session-id", default=None,
                            help="pin a session: 'latest' (most recent CC session), 'new' (fresh), "
                                 "or an explicit UUID. Exported as MACF_SESSION_ID for the command "

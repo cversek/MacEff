@@ -27,6 +27,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from datetime import datetime
@@ -343,7 +344,9 @@ def launch_in_terminal(cmd_args: list, name: str = "",
                        restart_delay: int = 5,
                        terminal: str = "auto",
                        use_tmux: bool = True,
-                       session_spec: str = None) -> int:
+                       session_spec: str = None,
+                       post_start_keys: str = None,
+                       post_start_delay: int = 18) -> int:
     """Launch a supervised process in a new terminal window.
 
     Args:
@@ -407,6 +410,9 @@ def launch_in_terminal(cmd_args: list, name: str = "",
         supervisor_cmd += ["--session-id", session_id]
     if tmux_session:
         supervisor_cmd += ["--tmux-session", tmux_session]
+    if post_start_keys:
+        supervisor_cmd += ["--post-start-keys", post_start_keys,
+                           "--post-start-delay", str(post_start_delay)]
     supervisor_cmd += ["--"] + cmd_args
 
     # When tmux-backed, the terminal hosts `tmux new-session` which runs the
@@ -494,8 +500,24 @@ def launch_in_terminal(cmd_args: list, name: str = "",
     return 0
 
 
+def _send_post_start_keys(tmux_session: str, keys: str, delay: int) -> None:
+    """Send `keys` to the child's tmux pane `delay` seconds after it spawns.
+
+    Runs on a daemon thread: the wait must not delay supervision, and a failure
+    here must never take down the supervisor — the child is fine either way.
+    """
+    time.sleep(max(0, delay))
+    try:
+        subprocess.run(["tmux", "send-keys", "-t", tmux_session, keys],
+                       capture_output=True, timeout=10)
+        print(f"[auto-restart] Sent post-start keys to '{tmux_session}': {keys!r}")
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"[auto-restart] post-start keys failed (non-fatal): {e}", file=sys.stderr)
+
+
 def run_loop(cmd_args: list, name: str = "", restart_delay: int = 5,
-             tmux_session: str = None, session_id: str = None):
+             tmux_session: str = None, session_id: str = None,
+             post_start_keys: str = None, post_start_delay: int = 18):
     """Run the supervisor loop (called inside the new terminal).
 
     This is the actual supervisor process — manages the child.
@@ -504,6 +526,11 @@ def run_loop(cmd_args: list, name: str = "", restart_delay: int = 5,
     resolution and breadcrumb correlation). When session_id is set it is also
     exported as MACF_SESSION_ID so the supervised command can forward it (e.g.
     `claude --session-id "$MACF_SESSION_ID"`).
+
+    post_start_keys / post_start_delay drive the post-spawn keystroke hook,
+    which fires after *every* spawn — initial and each restart — so a relaunch
+    that re-presents the workspace-trust dialog does not strand an unattended
+    agent at a prompt. Requires a tmux-backed session.
     """
     pid = os.getpid()
     created = time.time()
@@ -592,6 +619,20 @@ def run_loop(cmd_args: list, name: str = "", restart_delay: int = 5,
                 start_new_session=True,
             )
             _update_registry(pid, child_pid=child.pid, status="running")
+
+            # Post-start keys: some deployments re-present the workspace-trust
+            # dialog on every relaunch, which parks the child at an interactive
+            # prompt. Attended, that's a keystroke; unattended, it's an
+            # indefinite hang the supervisor reads as "healthy" (#164). Fire in
+            # a background thread so the delay never blocks supervision, and
+            # only for tmux-backed sessions (there is no pane to type into
+            # otherwise). Harmless when no prompt is showing.
+            if post_start_keys and tmux_session:
+                threading.Thread(
+                    target=_send_post_start_keys,
+                    args=(tmux_session, post_start_keys, post_start_delay),
+                    daemon=True,
+                ).start()
 
             exit_code = child.wait()
             child = None
@@ -831,12 +872,16 @@ if __name__ == "__main__":
         parser.add_argument("--delay", type=int, default=2)
         parser.add_argument("--tmux-session", default=None)
         parser.add_argument("--session-id", default=None)
+        parser.add_argument("--post-start-keys", default=None)
+        parser.add_argument("--post-start-delay", type=int, default=18)
 
         args = parser.parse_args(supervisor_argv)
 
         if args.action == "_run_loop":
             run_loop(cmd, name=args.name, restart_delay=args.delay,
-                     tmux_session=args.tmux_session, session_id=args.session_id)
+                     tmux_session=args.tmux_session, session_id=args.session_id,
+                     post_start_keys=args.post_start_keys,
+                     post_start_delay=args.post_start_delay)
 
     except Exception as e:
         # Top-level supervisor crash handler — bare Exception is intentional:
