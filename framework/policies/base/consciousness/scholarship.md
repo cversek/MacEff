@@ -1125,7 +1125,7 @@ The task deletion violated [task_management.md §7: "Archive Protocol" MacEff g_
 
 **Newly written policy**:
 ```markdown
-This policy follows [policy_writing.md §3: "Policy Structure" MacEff g_748cf44](../../meta/policy_writing.md#3-policy-structure) and integrates with [scholarship.md §9: "Policy Citations" MacEff g_748cf44](scholarship.md#9-policy-citations).
+This policy follows [policy_writing.md §3: "Policy Structure" MacEff g_748cf44](../../meta/policy_writing.md#3-policy-structure) and integrates with [scholarship.md §10: "Policy Citations" MacEff g_748cf44](scholarship.md#10-policy-citations-non-ca-references).
 ```
 
 **General reference with line range**:
