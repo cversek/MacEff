@@ -196,6 +196,72 @@ def title_from_subject(subject: str, task_type: str,
     return s.strip()
 
 
+# A hierarchy marker as it appears in a stored subject, with any surrounding
+# ANSI runs. Historical subjects padded the id inside the brackets
+# (``[^  #5]``), so the inner whitespace is tolerated on the way in even
+# though it is never produced on the way out.
+_PARENT_MARKER_RE = re.compile(
+    r'\s*(?:\033\[[0-9;]*m)*\[\^\s*#\d+\](?:\033\[[0-9;]*m)*'
+)
+
+
+def subject_with_live_parent(task) -> str:
+    """Return the task's subject with its ``[^#N]`` marker re-derived from
+    live ``parent_id``.
+
+    The stored subject is a *rendering*, not a source of truth: the marker is
+    a copy of ``parent_id`` frozen at compose time, and a later reparent moves
+    the authority without touching the copy. Callers that render a task should
+    use this rather than reading ``task.subject`` directly, so the marker
+    cannot outlive the relationship it describes. See the derived-state
+    discipline section of the coding standards policy — the authority is a
+    field on the same object, so re-deriving at read is the cheap repair.
+
+    Deliberately narrow. Only the marker is touched; the id prefix, type part
+    and title are passed through byte-for-byte. A full recomposition was
+    measured against the live corpus first and rejected: title recovery is
+    only reliable for subjects composed by current code, and on historical
+    ones it duplicated the title or stranded an old type marker. Re-deriving
+    a value must not be able to damage the values next to it.
+
+    An *absent* marker is left absent even when ``parent_id`` is set. Absence
+    is honest — a reader who needs the hierarchy goes and looks, and the tree
+    shows it structurally. A wrong marker is the failure worth repairing,
+    because it persuades a reader not to look.
+
+    Args:
+        task: A task object exposing ``subject`` and ``mtmd``.
+
+    Returns:
+        The subject with a marker that agrees with ``parent_id``, or the
+        stored subject when there is no marker to correct.
+    """
+    stored = getattr(task, "subject", "") or ""
+    mtmd = getattr(task, "mtmd", None)
+    if mtmd is None:
+        return stored
+
+    match = _PARENT_MARKER_RE.search(stored)
+    if not match:
+        return stored
+
+    parent_id = getattr(mtmd, "parent_id", None)
+    if parent_id is not None:
+        parent_id = str(parent_id)
+
+    current = re.search(r'\[\^\s*#(\d+)\]', match.group(0))
+    current_id = current.group(1) if current else None
+    if current_id == parent_id:
+        return stored
+
+    if parent_id and parent_id != SENTINEL_TASK_ID:
+        replacement = f" {ANSI_DIM}[^#{parent_id}]{ANSI_DIM_OFF}"
+    else:
+        replacement = ""
+
+    return stored[:match.start()] + replacement + stored[match.end():]
+
+
 def _ensure_sentinel_task(session_path: Path) -> None:
     """Create sentinel task #000 if it doesn't exist.
 

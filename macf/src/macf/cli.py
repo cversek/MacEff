@@ -19,6 +19,7 @@ from .hooks.compaction import detect_compaction, inject_recovery
 from .agent_events_log import append_event
 from .event_queries import get_cycle_number_from_events
 from .task.reader import TaskReader
+from .task.create import subject_with_live_parent
 from .utils import (
     get_current_session_id,
     get_dev_scripts_dir,
@@ -3824,19 +3825,19 @@ def cmd_task_list(args: argparse.Namespace) -> int:
             ANSI_BROWN = "\033[38;5;137m"  # Tan/cardboard brown
             status_icon = f"{ANSI_BROWN}▪{ANSI_RESET}"
             # Dim + strikethrough for archived (strip embedded ANSI first)
-            clean_subject = _strip_ansi(t.subject)
+            clean_subject = _strip_ansi(subject_with_live_parent(t))
             line = f"{prefix}{status_icon} {ANSI_DIM}{ANSI_STRIKE}{clean_subject}{ANSI_RESET}"
         elif t.status == "completed":
             status_icon = f"{ANSI_GREEN}✔{ANSI_RESET}"
             # Strikethrough only for completed (strip embedded ANSI first)
-            clean_subject = _strip_ansi(t.subject)
+            clean_subject = _strip_ansi(subject_with_live_parent(t))
             line = f"{prefix}{status_icon} {ANSI_STRIKE}{clean_subject}{ANSI_RESET}"
         elif t.status == "in_progress":
             status_icon = f"{ANSI_RED}◼{ANSI_RESET}"
-            line = f"{prefix}{status_icon} {_dim_task_ids(t.subject)}"
+            line = f"{prefix}{status_icon} {_dim_task_ids(subject_with_live_parent(t))}"
         else:  # pending
             status_icon = "◻"
-            line = f"{prefix}{status_icon} {_dim_task_ids(t.subject)}"
+            line = f"{prefix}{status_icon} {_dim_task_ids(subject_with_live_parent(t))}"
 
         # Scope indicator (👀 for active, ✅ for completed/inactive)
         if scope_state and t.id in scope_state:
@@ -3932,7 +3933,7 @@ def cmd_task_get(args: argparse.Namespace) -> int:
     print(f"{'='*60}")
     print(f"Task #{task.id} {status_icon}")
     print(f"{'='*60}")
-    print(f"Subject: {task.subject}")
+    print(f"Subject: {subject_with_live_parent(task)}")
     print(f"Status: {task.status}")
     if task.task_type:
         print(f"Type: {task.task_type}")
@@ -4256,7 +4257,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
 
             # CC-style markers with colors - subject now contains #N prefix
             suffix = format_task_suffix(task)
-            subject = _truncate_subject_title(task.subject, title_width)
+            subject = _truncate_subject_title(subject_with_live_parent(task), title_width)
             if task.status == "completed":
                 status_icon = f"{ANSI_GREEN}✔{ANSI_RESET}"
                 text = f"{ANSI_DIM}{ANSI_STRIKE}{subject}{ANSI_RESET}"
@@ -4327,7 +4328,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
 
         # Print root specially with CC-style markers - subject now contains #N prefix
         root_suffix = format_task_suffix(root)
-        root_subject = _truncate_subject_title(root.subject, title_width)
+        root_subject = _truncate_subject_title(subject_with_live_parent(root), title_width)
         if root.status == "completed":
             status_icon = f"{ANSI_GREEN}✔{ANSI_RESET}"
             root_text = f"{ANSI_DIM}{ANSI_STRIKE}{root_subject}{ANSI_RESET}"
@@ -4941,6 +4942,64 @@ def cmd_task_reparent(args: argparse.Namespace) -> int:
     else:
         print(f"❌ Failed to reparent task #{task_id}")
         return 1
+
+
+def _doctor_check_subject_markers(tasks) -> "list[tuple[str, str, str]]":
+    """Find tasks whose stored ``[^#N]`` marker disagrees with ``parent_id``.
+
+    Returns:
+        list of (task_id, stored_subject, corrected_subject) for divergent tasks.
+    """
+    findings = []
+    for t in tasks:
+        corrected = subject_with_live_parent(t)
+        if corrected != t.subject:
+            findings.append((t.id, t.subject, corrected))
+    return findings
+
+
+def cmd_task_doctor(args: argparse.Namespace) -> int:
+    """Reconcile stored task records against the authorities they derive from.
+
+    Read-only by default: it reports divergence and exits non-zero so a caller
+    can gate on it. ``--fix`` applies the corrections.
+
+    Complements the read-time re-derivation in the renderers. Displays are
+    already truthful without this; the stored records are what other consumers
+    read, and healing them keeps the file honest for anything that does not go
+    through the render path.
+    """
+    from .task import TaskReader, update_task_file
+
+    fix = getattr(args, "fix", False)
+    tasks = TaskReader().read_all_tasks()
+    print(f"🩺 Task doctor — {len(tasks)} task(s) scanned\n")
+
+    findings = _doctor_check_subject_markers(tasks)
+    print(f"Hierarchy markers: {len(findings)} divergent")
+    if not findings:
+        print("   ✅ every [^#N] marker agrees with its parent_id")
+    for task_id, stored, corrected in findings:
+        print(f"   #{task_id}")
+        print(f"     stored:    {_strip_ansi(stored)}")
+        print(f"     corrected: {_strip_ansi(corrected)}")
+        if fix:
+            if update_task_file(task_id, {"subject": corrected}):
+                print(f"     ✅ healed")
+            else:
+                print(f"     ❌ could not write #{task_id}")
+
+    total = len(findings)
+    print()
+    if total == 0:
+        print("✅ No drift detected.")
+        return 0
+    if fix:
+        print(f"🔧 Healed {total} record(s).")
+        return 0
+    print(f"⚠️  {total} record(s) diverge from their authority. "
+          f"Re-run with --fix to heal.")
+    return 1
 
 
 def cmd_task_advance(args: argparse.Namespace) -> int:
@@ -9018,6 +9077,16 @@ def _build_parser() -> argparse.ArgumentParser:
     task_pause_parser.set_defaults(func=cmd_task_pause)
 
     # task note - append note to updates
+    task_doctor_parser = task_sub.add_parser(
+        "doctor",
+        help="reconcile stored task records against the authorities they derive from",
+    )
+    task_doctor_parser.add_argument(
+        "--fix", action="store_true",
+        help="apply the corrections (default is report-only, exits 1 on drift)",
+    )
+    task_doctor_parser.set_defaults(func=cmd_task_doctor)
+
     task_note_parser = task_sub.add_parser("note", help="add a note to task (appends to updates with type='note')")
     task_note_parser.add_argument("task_id", help="task ID (e.g., #67 or 67)")
     task_note_parser.add_argument("message", help="note text")
