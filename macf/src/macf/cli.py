@@ -1767,6 +1767,25 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
                 user_content = existing_content.rstrip()
                 action_desc = "⚠️  Add PA Preamble to existing"
 
+            # Strip stale managed preamble blocks stranded in the user region.
+            # A preamble installed before the boundary convention (or moved above
+            # it) sits in what is otherwise treated as user content, so upgrades
+            # left the old copy in place and appended the new one — injecting the
+            # preamble twice, with the stale copy's superseded guidance still in
+            # play (issue #153). The MACEFF_PA_PREAMBLE_vX.Y_START/_END sentinels
+            # exist precisely to make managed blocks identifiable wherever they
+            # sit; honor them, and leave genuine user content untouched.
+            import re
+            stale_versions = re.findall(
+                r'<!--\s*MACEFF_PA_PREAMBLE_v([\d.]+)_START\s*-->', user_content)
+            if stale_versions:
+                user_content = re.sub(
+                    r'<!--\s*MACEFF_PA_PREAMBLE_v[\d.]+_START\s*-->.*?'
+                    r'<!--\s*MACEFF_PA_PREAMBLE_v[\d.]+_END\s*-->\s*',
+                    '', user_content, flags=re.DOTALL).rstrip()
+                print(f"🧹 Removing {len(stale_versions)} stale preamble block(s): "
+                      f"{', '.join('v' + v for v in stale_versions)}")
+
             # Confirmation prompt for modifying existing file
             print(f"\n{action_desc} CLAUDE.md:")
             print(f"  📄 {claude_md_path}")
