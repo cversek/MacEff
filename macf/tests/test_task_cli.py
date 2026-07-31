@@ -759,6 +759,134 @@ class TestGHIssueCloseoutFunction:
             _gh_issue_closeout(42, mtmd, args, 's_test/c_1/g_abc/p_def/t_123')
 
 
+class TestTaskCreateGHPRCommand:
+    """Test GH_PR task creation function (inbound PR review/merge tracking)."""
+
+    _FAKE_PR = {
+        "title": "raise client_max_size for large requests",
+        "labels": [{"name": "bug"}],
+        "state": "OPEN",
+        "url": "https://github.com/owner/repo/pull/168",
+        "headRefName": "fix/proxy-client-max-size",
+        "baseRefName": "main",
+        "isDraft": False,
+        "reviewDecision": "REVIEW_REQUIRED",
+        "closingIssuesReferences": [{"number": 167}],
+        "body": "Fixes #167\n\nRaise the limit.",
+    }
+
+    def _run_create(self, pr_json):
+        from macf.task.create import create_gh_pr
+        mock_result = Mock(returncode=0, stdout=json.dumps(pr_json), stderr="")
+        with patch('macf.utils.breadcrumbs.get_breadcrumb', return_value='s_test/c_1/g_abc/p_123/t_456'):
+            with patch('macf.utils.breadcrumbs.parse_breadcrumb', return_value={'cycle': 1}):
+                with patch('subprocess.run', return_value=mock_result):
+                    return create_gh_pr('https://github.com/owner/repo/pull/168')
+
+    def test_create_gh_pr_from_url(self, isolated_task_env, monkeypatch):
+        """GH_PR creation auto-fetches PR metadata into custom, incl. linked issues + lifecycle."""
+        result = self._run_create(self._FAKE_PR)
+        assert result.mtmd.task_type == 'GH_PR'
+        assert result.mtmd.title == 'raise client_max_size for large requests'
+        assert result.mtmd.plan_ca_ref == 'https://github.com/owner/repo/pull/168'
+        c = result.mtmd.custom
+        assert c['gh_owner'] == 'owner' and c['gh_repo'] == 'repo'
+        assert c['gh_pr_number'] == 168
+        assert c['gh_labels'] == ['bug']
+        assert c['head_branch'] == 'fix/proxy-client-max-size'
+        assert c['base_branch'] == 'main'
+        assert c['is_draft'] is False
+        assert c['review_decision'] == 'REVIEW_REQUIRED'
+        assert c['linked_issues'] == [167]
+        assert c['lifecycle_state'] == 'pending'
+        assert 'reviewing' in c['lifecycle_state_machine']['pending']
+        # mergeable must NOT be stored (stale-field anti-pattern)
+        assert 'mergeable' not in c
+
+    def test_create_gh_pr_subject_draft_and_label(self, isolated_task_env):
+        """Subject renders 🔀 PR/owner/repo#N [label] (draft): title."""
+        from macf.task.create import compose_subject
+        subject = compose_subject(
+            "42", "GH_PR", "Refactor banner",
+            custom={"gh_owner": "owner", "gh_repo": "repo", "gh_pr_number": 42,
+                    "gh_labels": ["enhancement"], "is_draft": True})
+        assert '🔀' in subject
+        assert 'PR/owner/repo#42' in subject
+        assert '[enhancement]' in subject
+        assert '(draft)' in subject
+        assert 'Refactor banner' in subject
+
+    def test_create_gh_pr_linked_issues_body_fallback(self, isolated_task_env):
+        """When closingIssuesReferences is empty, linked_issues parse from Fixes/Closes body."""
+        pr = dict(self._FAKE_PR)
+        pr["closingIssuesReferences"] = []
+        pr["body"] = "Closes #12 and fixes #34"
+        result = self._run_create(pr)
+        assert result.mtmd.custom['linked_issues'] == [12, 34]
+
+    def test_create_gh_pr_url_and_cli_failures(self, isolated_task_env):
+        """An /issues/ URL is rejected, and a gh CLI failure raises."""
+        from macf.task.create import create_gh_pr
+        with pytest.raises(ValueError, match="Cannot parse GitHub PR URL"):
+            create_gh_pr('https://github.com/owner/repo/issues/5')
+        mock_fail = Mock(returncode=1, stdout="", stderr="not found")
+        with patch('macf.utils.breadcrumbs.get_breadcrumb', return_value='s_test/c_1/g_abc/p_1/t_4'):
+            with patch('macf.utils.breadcrumbs.parse_breadcrumb', return_value={'cycle': 1}):
+                with patch('subprocess.run', return_value=mock_fail):
+                    with pytest.raises(ValueError, match="gh pr view failed"):
+                        create_gh_pr('https://github.com/owner/repo/pull/999')
+
+
+class TestGHPRCloseoutFunction:
+    """Test GH_PR closeout: outcome ground-truthing, comment, cascade selection."""
+
+    def test_gh_pr_closeout_merged_outcome_and_comment(self):
+        """Merged PR → outcome MERGED, review close-out comment posted."""
+        from macf.cli import _gh_pr_closeout
+        from macf.task.models import MacfTaskMetaData
+        mtmd = MacfTaskMetaData(task_type='GH_PR', custom={
+            'gh_owner': 'o', 'gh_repo': 'r', 'gh_pr_number': 168, 'linked_issues': []})
+        args = Mock()
+        args.report = 'Reviewed and merged after local tests.'
+        args.verified = 'make test green'
+        args.cascade = False
+        view = Mock(returncode=0, stdout=json.dumps(
+            {"state": "MERGED", "mergeCommit": {"oid": "deadbeef1234"}}), stderr="")
+        comment = Mock(returncode=0, stdout="", stderr="")
+        with patch('subprocess.run', side_effect=[view, comment]) as mock_run:
+            outcome = _gh_pr_closeout(168, mtmd, args, 's_test/c_1/g_abc/p_def/t_123')
+        assert outcome == 'MERGED'
+        comment_call = [c for c in mock_run.call_args_list
+                        if c[0][0][:3] == ['gh', 'pr', 'comment']][0]
+        body = comment_call[0][0][comment_call[0][0].index('--body') + 1]
+        assert 'Review Close-out' in body
+        assert 'Reviewed and merged' in body
+        assert 'MERGED' in body
+        assert 'task#168' in body
+
+    def test_gh_pr_find_linked_issue_tasks_selects_matching(self):
+        """Cascade selection matches open GH_ISSUE tasks by number + repo, skips others."""
+        from macf.cli import _gh_pr_find_linked_issue_tasks
+        def mk(tid, ttype, number, owner="o", repo="r", status="in_progress"):
+            t = Mock()
+            t.id = tid
+            t.status = status
+            t.mtmd = Mock(task_type=ttype, custom={
+                "gh_issue_number": number, "gh_owner": owner, "gh_repo": repo})
+            return t
+        tasks = [
+            mk(1, "GH_ISSUE", 167),                    # match
+            mk(2, "GH_ISSUE", 999),                    # wrong number
+            mk(3, "GH_ISSUE", 167, status="completed"),  # already done
+            mk(4, "GH_ISSUE", 167, repo="other"),      # wrong repo
+            mk(5, "GH_PR", 167),                        # not an issue
+        ]
+        with patch('macf.task.TaskReader') as MockReader:
+            MockReader.return_value.read_all_tasks.return_value = tasks
+            found = _gh_pr_find_linked_issue_tasks([167], "o/r")
+        assert [tid for tid, _ in found] == [1]
+
+
 class TestTaskLifecycleEvents:
     """Test task_started and task_completed event emission."""
 
