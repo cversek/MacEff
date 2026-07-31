@@ -1767,6 +1767,25 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
                 user_content = existing_content.rstrip()
                 action_desc = "⚠️  Add PA Preamble to existing"
 
+            # Strip stale managed preamble blocks stranded in the user region.
+            # A preamble installed before the boundary convention (or moved above
+            # it) sits in what is otherwise treated as user content, so upgrades
+            # left the old copy in place and appended the new one — injecting the
+            # preamble twice, with the stale copy's superseded guidance still in
+            # play (issue #153). The MACEFF_PA_PREAMBLE_vX.Y_START/_END sentinels
+            # exist precisely to make managed blocks identifiable wherever they
+            # sit; honor them, and leave genuine user content untouched.
+            import re
+            stale_versions = re.findall(
+                r'<!--\s*MACEFF_PA_PREAMBLE_v([\d.]+)_START\s*-->', user_content)
+            if stale_versions:
+                user_content = re.sub(
+                    r'<!--\s*MACEFF_PA_PREAMBLE_v[\d.]+_START\s*-->.*?'
+                    r'<!--\s*MACEFF_PA_PREAMBLE_v[\d.]+_END\s*-->\s*',
+                    '', user_content, flags=re.DOTALL).rstrip()
+                print(f"🧹 Removing {len(stale_versions)} stale preamble block(s): "
+                      f"{', '.join('v' + v for v in stale_versions)}")
+
             # Confirmation prompt for modifying existing file
             print(f"\n{action_desc} CLAUDE.md:")
             print(f"  📄 {claude_md_path}")
@@ -1808,6 +1827,28 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
             with open(personal_manifest, 'w') as f:
                 json.dump(manifest_data, f, indent=2)
             print(f"✅ Created personal policy manifest at {personal_manifest}")
+
+        # Mint the agent UUID if absent (idempotent). Without this file the
+        # identity resolver returns 'unknown', so every freshly provisioned host
+        # displayed Name@unknown and breadcrumbs lost their UUID half until
+        # someone hand-created it (issue #131).
+        #
+        # Scope mirrors _resolve_uuid_prefix()'s own priority: a per-project home
+        # (distinct from ~) gets its own id, otherwise the host-global one — so
+        # the file is minted exactly where the resolver will look for it first.
+        import uuid as _uuid
+        uuid_scope = 'project' if pa_home != Path.home() else 'global'
+        uuid_file = pa_home / '.maceff_primary_agent.id'
+        if uuid_file.exists() and uuid_file.read_text().strip():
+            print(f"\n🆔 Agent UUID present ({uuid_scope}): {uuid_file}")
+        else:
+            try:
+                agent_uuid = str(_uuid.uuid4())
+                uuid_file.write_text(agent_uuid + "\n")
+                uuid_file.chmod(0o600)
+                print(f"\n🆔 Minted agent UUID ({uuid_scope}): {agent_uuid[:6]} → {uuid_file}")
+            except OSError as e:
+                print(f"⚠️  Could not mint agent UUID at {uuid_file}: {e}", file=sys.stderr)
 
         print(f"\n📍 PA Home: {pa_home}")
         print(f"📍 Personal Policies: {personal_policies_dir}")
