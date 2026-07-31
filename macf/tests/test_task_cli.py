@@ -1127,3 +1127,33 @@ class TestTaskListCommand:
             capture_output=True, text=True, env=isolated_task_env['env'])
         assert result.returncode == 0, f'stderr: {result.stderr}'
         assert '✅' in result.stdout
+
+
+class TestSubjectTitleTruncation:
+    """--title-width trims only the semantic title (#1174 FEAT)."""
+
+    def test_truncates_title_but_keeps_structural_prefix(self):
+        from macf.cli import _truncate_subject_title
+        subject = "#1148 🐙 GH/owner/repo#124 [enhancement]: " + "x" * 100
+        out = _truncate_subject_title(subject, 40)
+        assert "🐙 GH/owner/repo#124 [enhancement]:" in out, "prefix was damaged"
+        assert out.endswith("...")
+        assert len(out) < len(subject)
+
+    def test_short_title_untouched(self):
+        from macf.cli import _truncate_subject_title
+        subject = "#12 🔧 short title"
+        assert _truncate_subject_title(subject, 40) == subject
+
+    def test_zero_width_disables_truncation(self):
+        from macf.cli import _truncate_subject_title
+        subject = "#12 🔧 " + "y" * 200
+        assert _truncate_subject_title(subject, 0) == subject
+
+    def test_bare_emoji_type_marker_title_is_trimmed(self):
+        """Types without a ':' marker (🔧, 📋) still get their title trimmed."""
+        from macf.cli import _truncate_subject_title
+        subject = "#12 🔧 " + "z" * 100
+        out = _truncate_subject_title(subject, 30)
+        assert out.endswith("...")
+        assert len(out) < len(subject)

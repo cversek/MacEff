@@ -66,6 +66,39 @@ def _strip_ansi(text: str) -> str:
     return re.sub(r'\x1b\[[0-9;]*m', '', text)
 
 
+def _truncate_subject_title(subject: str, width: int) -> str:
+    """Trim the semantic title of a composed subject to `width` visible chars.
+
+    Only the free-text title is shortened. The structural prefix — id, `[^#N]`
+    parent marker, and type marker (`🗺️ MISSION:`, `🐙 GH/owner/repo#3 [bug]:`,
+    `🔧`, …) — is preserved in full, as are anything appended downstream
+    (timestamps, scope/recency markers), which are added after this runs.
+
+    Width is measured on visible characters, so ANSI styling never eats budget.
+    """
+    if not width or width <= 0:
+        return subject
+
+    import re
+    # The title starts after the structural prefix. Type markers end in ':' for
+    # the labelled types; the bare-emoji types (🔧, 📋, -) have no colon, so fall
+    # back to the id/parent prefix and treat the remainder as the title.
+    visible = _strip_ansi(subject)
+    m = re.match(r'^(\s*#\d+\s*)?(\[\^#\d+\]\s*)?(\S+[^:]*:\s*)?', visible)
+    prefix_len = m.end() if m else 0
+    title = visible[prefix_len:]
+    if len(title) <= width:
+        return subject
+
+    trimmed = title[:max(1, width - 3)].rstrip() + '...'
+    # Rebuild against the original so ANSI in the prefix survives; the title
+    # region of a composed subject carries no styling of its own.
+    idx = subject.find(title[:20]) if len(title) >= 20 else subject.find(title)
+    if idx == -1:
+        return subject
+    return subject[:idx] + trimmed
+
+
 # -------- helpers --------
 def _pick_tz():
     """Prefer MACEFF_TZ, then TZ, else system local; fall back to UTC."""
@@ -3848,6 +3881,11 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
 
     succinct = getattr(args, 'succinct', False)
     verbose = getattr(args, 'verbose', False)
+    # Title width: succinct mode is a scanning view, so it trims harder. An
+    # explicit --title-width overrides both defaults; 0 disables truncation.
+    title_width = getattr(args, 'title_width', None)
+    if title_width is None:
+        title_width = 40 if succinct else 80
     show_archived_only = getattr(args, 'archived', False)
     show_all = getattr(args, 'show_all', False)
 
@@ -4093,15 +4131,16 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
 
             # CC-style markers with colors - subject now contains #N prefix
             suffix = format_task_suffix(task)
+            subject = _truncate_subject_title(task.subject, title_width)
             if task.status == "completed":
                 status_icon = f"{ANSI_GREEN}✔{ANSI_RESET}"
-                text = f"{ANSI_DIM}{ANSI_STRIKE}{task.subject}{ANSI_RESET}"
+                text = f"{ANSI_DIM}{ANSI_STRIKE}{subject}{ANSI_RESET}"
             elif task.status == "in_progress":
                 status_icon = f"{ANSI_RED}◼{ANSI_RESET}"
-                text = _dim_task_ids(task.subject)
+                text = _dim_task_ids(subject)
             else:
                 status_icon = "◻"
-                text = _dim_task_ids(task.subject)
+                text = _dim_task_ids(subject)
 
             # Append suffix (repo, version, timestamp) after subject
             if suffix:
@@ -4163,15 +4202,16 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
 
         # Print root specially with CC-style markers - subject now contains #N prefix
         root_suffix = format_task_suffix(root)
+        root_subject = _truncate_subject_title(root.subject, title_width)
         if root.status == "completed":
             status_icon = f"{ANSI_GREEN}✔{ANSI_RESET}"
-            root_text = f"{ANSI_DIM}{ANSI_STRIKE}{root.subject}{ANSI_RESET}"
+            root_text = f"{ANSI_DIM}{ANSI_STRIKE}{root_subject}{ANSI_RESET}"
         elif root.status == "in_progress":
             status_icon = f"{ANSI_RED}◼{ANSI_RESET}"
-            root_text = _dim_task_ids(root.subject)
+            root_text = _dim_task_ids(root_subject)
         else:
             status_icon = "◻"
-            root_text = _dim_task_ids(root.subject)
+            root_text = _dim_task_ids(root_subject)
         if root_suffix:
             root_text = f"{root_text} {root_suffix}"
         if scope_state and root.id in scope_state:
@@ -8430,6 +8470,11 @@ def _build_parser() -> argparse.ArgumentParser:
                                   help="hide notes/plans, show only active/pending tasks")
     task_tree_parser.add_argument("--verbose", "-v", action="store_true",
                                   help="show full plans, breadcrumbs, and all updates")
+    task_tree_parser.add_argument("--title-width", dest="title_width", type=int, default=None,
+                                  metavar="N",
+                                  help="truncate task titles to N chars (default: 40 with "
+                                       "--succinct, 80 otherwise; 0 disables). Timestamps and "
+                                       "end markers are never truncated.")
     tree_archive_group = task_tree_parser.add_mutually_exclusive_group()
     tree_archive_group.add_argument("--archived", action="store_true",
                                     help="show ONLY archived tasks")
