@@ -869,6 +869,24 @@ class TestGHPRCloseoutFunction:
         assert 'MERGED' in body
         assert 'task#168' in body
 
+    def test_gh_pr_closeout_flags_red_ci_merge(self, capsys):
+        """A merged PR with failing CI checks emits a CI-gate-violation warning."""
+        from macf.cli import _gh_pr_closeout
+        from macf.task.models import MacfTaskMetaData
+        mtmd = MacfTaskMetaData(task_type='GH_PR', custom={
+            'gh_owner': 'o', 'gh_repo': 'r', 'gh_pr_number': 9, 'linked_issues': []})
+        args = Mock(report='merged', verified='x', cascade=False)
+        view = Mock(returncode=0, stdout=json.dumps({
+            "state": "MERGED", "mergeCommit": {"oid": "abc123"},
+            "statusCheckRollup": [{"conclusion": "SUCCESS"}, {"conclusion": "FAILURE"}]}), stderr="")
+        comment = Mock(returncode=0, stdout="", stderr="")
+        with patch('macf.utils.identity.get_agent_identity', return_value='T'):
+            with patch('macf.cli._public_attribution_enabled', return_value=False):
+                with patch('subprocess.run', side_effect=[view, comment]):
+                    outcome = _gh_pr_closeout(9, mtmd, args, 's/c/g/p/t')
+        assert outcome == 'MERGED'
+        assert 'CI GATE VIOLATION' in capsys.readouterr().out
+
     def test_gh_pr_find_linked_issue_tasks_selects_matching(self):
         """Cascade selection matches open GH_ISSUE tasks by number + repo, skips others."""
         from macf.cli import _gh_pr_find_linked_issue_tasks

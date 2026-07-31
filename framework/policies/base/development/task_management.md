@@ -477,6 +477,12 @@ The maintainer workflow for landing an inbound PR. Where §2.3.1 authors a fix, 
    make test
    ```
 
+   **🚦 CI Gate (MANDATORY — never merge red).** Before merging, the PR's CI checks MUST be green:
+   ```bash
+   gh pr checks N          # every check must read "pass"
+   ```
+   A green **local** run is NOT sufficient. CI runs a stricter, cleaner environment and catches environment-dependent failures a local suite hides — a passing local run alongside a failing CI run is the **strict-mirror gap**, and CI is the authoritative signal, not your local run. **If CI is red:** do NOT merge. Create a fix task that documents the failure (root cause + the test/code fix), resolve it, push, and re-verify CI green before merging. A red-CI merge is a policy violation, not a judgment call. **Platform backstop:** enable GitHub branch protection `required_status_checks` on the target branch so a red merge is *rejected mechanically* rather than relying on discipline (note: required-status-checks gates PR merges, not direct-to-main pushes — see `release_workflow.md`).
+
 5. **Decide** — one of:
    - **Merge** (squash, delete branch):
      ```bash

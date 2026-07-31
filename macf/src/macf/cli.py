@@ -6768,18 +6768,24 @@ def _gh_pr_closeout(task_id: int, mtmd, args, breadcrumb: str) -> str:
 
     repo_slug = f"{gh_owner}/{gh_repo}"
 
-    # Ground-truth outcome from GitHub (live), plus the merge commit.
-    outcome, merge_commit = "OPEN", None
+    # Ground-truth outcome from GitHub (live), plus the merge commit and CI
+    # conclusion (statusCheckRollup folded into the same call — no extra request).
+    outcome, merge_commit, ci_red = "OPEN", None, False
     try:
         r = _subprocess.run(
             ["gh", "pr", "view", str(gh_pr_number), "--repo", repo_slug,
-             "--json", "state,mergeCommit"],
+             "--json", "state,mergeCommit,statusCheckRollup"],
             capture_output=True, text=True, timeout=15)
         if r.returncode == 0:
             d = _json.loads(r.stdout)
             state = d.get("state", "OPEN")
             outcome = "MERGED" if state == "MERGED" else ("CLOSED_UNMERGED" if state == "CLOSED" else "OPEN")
             merge_commit = (d.get("mergeCommit") or {}).get("oid")
+            _bad = {"FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "ERROR", "STARTUP_FAILURE"}
+            for chk in (d.get("statusCheckRollup") or []):
+                if (chk.get("conclusion") or chk.get("state") or "").upper() in _bad:
+                    ci_red = True
+                    break
         else:
             outcome = "UNKNOWN"
     except (FileNotFoundError, _subprocess.TimeoutExpired, ValueError) as e:
@@ -6787,6 +6793,14 @@ def _gh_pr_closeout(task_id: int, mtmd, args, breadcrumb: str) -> str:
         outcome = "UNKNOWN"
 
     print(f"   🔀 PR outcome: {outcome}" + (f" (merge {merge_commit[:8]})" if merge_commit else ""))
+
+    # CI gate awareness: a MERGED PR whose checks are red is a red-CI merge —
+    # surface it loudly with the resolution path (task_management.md §2.3.3).
+    if ci_red and outcome == "MERGED":
+        print("   🚨 CI GATE VIOLATION: this PR merged with FAILING CI checks.")
+        print("      Resolution: create a fix task documenting the failure (root cause + test/code fix),")
+        print("      resolve it, and re-verify CI green. Never merge red — see task_management.md §2.3.3.")
+        print("      Platform backstop: enable branch protection required_status_checks on the target branch.")
 
     # Post a review close-out comment (agent's report + outcome). The calling
     # card footer is opt-in via opsec.public_attribution (issue #156).
