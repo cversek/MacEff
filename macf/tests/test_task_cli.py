@@ -1350,3 +1350,99 @@ class TestHierarchyCycleGuard:
         assert result.returncode == 0, result.stdout + result.stderr
         assert "RecursionError" not in result.stderr
         assert "cycle in task hierarchy" in result.stderr
+
+
+class TestTaskTreeSuccinctProgressiveDisclosure:
+    """Succinct mode is progressive disclosure, not a completed-filter.
+
+    An in-progress parent whose finished children are all hidden renders as a
+    bare line with nothing beneath it, which reads as "nothing was done here" —
+    the opposite of the truth. And hiding a completed task hides its subtree,
+    so a completed parent with active children took those children off the
+    tree entirely.
+    """
+
+    def _write_task(self, session_dir, task_id, subject, status, ts, parent="'000'"):
+        parent_line = f"parent_id: {parent}\n" if parent else ""
+        mtmd = (f"task_type: {'SENTINEL' if not parent else 'TASK'}\n"
+                f"creation_breadcrumb: s_t/c_1/g_a/p_b/t_{ts}\n"
+                f"created_cycle: 1\ncreated_by: PA\n{parent_line}")
+        desc = f'Task\n\n<macf_task_metadata version="1.0">\n{mtmd}</macf_task_metadata>'
+        (session_dir / f"{task_id}.json").write_text(json.dumps(
+            {"id": str(task_id), "subject": subject, "description": desc, "status": status}))
+
+    def _tree(self, env):
+        return subprocess.run(
+            ['macf_tools', 'task', 'tree', '--succinct'],
+            capture_output=True, text=True, env=env).stdout
+
+    def _root(self, d):
+        self._write_task(d, "000", "🛡️ MACF TASK LIST", "in_progress", 1000, parent=None)
+        # Newest-touched task, and active anyway, so the recency marker never
+        # lands on a task a test expects to be hidden.
+        self._write_task(d, 99, "🔧 newest active decoy", "in_progress", 9999999999)
+
+    def test_completed_children_show_under_an_incomplete_parent(self, isolated_task_env):
+        """Rule 1 — the reason this exists."""
+        d = isolated_task_env['session_dir']
+        self._root(d)
+        self._write_task(d, 2, "🔧 open parent", "in_progress", 2000)
+        self._write_task(d, 3, "PHASE ONE done", "completed", 2001, parent="2")
+        self._write_task(d, 4, "PHASE TWO done", "completed", 2002, parent="2")
+
+        out = self._tree(isolated_task_env['env'])
+        assert 'open parent' in out
+        assert 'PHASE ONE done' in out, f"completed child hidden under open parent:\n{out}"
+        assert 'PHASE TWO done' in out, f"completed child hidden under open parent:\n{out}"
+
+    def test_fully_completed_top_level_subtree_is_hidden(self, isolated_task_env):
+        """Rule 3 — done all the way down, so it collapses out of view."""
+        d = isolated_task_env['session_dir']
+        self._root(d)
+        self._write_task(d, 2, "FINISHED TOPLEVEL", "completed", 2000)
+        self._write_task(d, 3, "FINISHED CHILD", "completed", 2001, parent="2")
+
+        out = self._tree(isolated_task_env['env'])
+        assert 'FINISHED TOPLEVEL' not in out, f"fully-done top-level task shown:\n{out}"
+        assert 'FINISHED CHILD' not in out
+
+    def test_completed_top_level_with_active_descendant_stays(self, isolated_task_env):
+        """Rule 3, the case that made it a bug rather than a preference.
+
+        Hiding the parent hides the subtree, so an active child under a
+        completed parent had no path to the surface at all.
+        """
+        d = isolated_task_env['session_dir']
+        self._root(d)
+        self._write_task(d, 2, "COMPLETED PARENT", "completed", 2000)
+        self._write_task(d, 3, "STILL ACTIVE CHILD", "in_progress", 2001, parent="2")
+
+        out = self._tree(isolated_task_env['env'])
+        assert 'COMPLETED PARENT' in out, f"completed parent hidden despite active child:\n{out}"
+        assert 'STILL ACTIVE CHILD' in out, f"active child lost with its parent:\n{out}"
+
+    def test_resolved_branch_collapses_to_one_line(self, isolated_task_env):
+        """Rule 2 — a completed child under an open parent shows, but its own
+        finished descendants do not expand."""
+        d = isolated_task_env['session_dir']
+        self._root(d)
+        self._write_task(d, 2, "open parent", "in_progress", 2000)
+        self._write_task(d, 3, "RESOLVED BRANCH", "completed", 2001, parent="2")
+        self._write_task(d, 4, "BURIED GRANDCHILD", "completed", 2002, parent="3")
+
+        out = self._tree(isolated_task_env['env'])
+        assert 'RESOLVED BRANCH' in out, f"completed child hidden under open parent:\n{out}"
+        assert 'BURIED GRANDCHILD' not in out, f"resolved branch expanded instead of collapsing:\n{out}"
+
+    def test_branch_with_active_grandchild_does_not_collapse(self, isolated_task_env):
+        """The interaction case: collapsing keys on the subtree being finished,
+        not on the child being completed."""
+        d = isolated_task_env['session_dir']
+        self._root(d)
+        self._write_task(d, 2, "open parent", "in_progress", 2000)
+        self._write_task(d, 3, "COMPLETED MIDDLE", "completed", 2001, parent="2")
+        self._write_task(d, 4, "ACTIVE GRANDCHILD", "in_progress", 2002, parent="3")
+
+        out = self._tree(isolated_task_env['env'])
+        assert 'COMPLETED MIDDLE' in out
+        assert 'ACTIVE GRANDCHILD' in out, f"active grandchild hidden by collapse:\n{out}"
