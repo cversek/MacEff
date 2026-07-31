@@ -70,6 +70,18 @@ Task management policy governs the use of Claude Code native Task* tools (TaskCr
 - What branch naming convention is used?
 - How does the PR auto-close the issue?
 
+**2.3.2 🔀 GH_PR Type**
+- How do I create a GH_PR task?
+- How does GH_PR differ from GH_ISSUE (inbound review vs outbound fix)?
+- What PR metadata is auto-fetched into custom?
+- What review lifecycle does GH_PR declare?
+
+**2.3.3 GH_PR Review/Merge Workflow**
+- What is the inbound review/merge workflow?
+- How does completion record MERGED vs CLOSED_UNMERGED?
+- How does cascade linkage to GH_ISSUE tasks work?
+- Why is the `mergeable` field never gated on?
+
 **2.5 MISSION Pinning Protocol**
 - What happens when a MISSION roadmap is approved?
 - What tasks are created during pinning?
@@ -222,7 +234,8 @@ custom: {}                             # Type-specific extension fields
 
 | Task Type | Custom Fields | Purpose |
 |-----------|--------------|---------|
-| GH_ISSUE | `github_url`, `github_owner`, `github_repo`, `github_number`, `github_labels`, `github_state` | External system linkage |
+| GH_ISSUE | `gh_url`, `gh_owner`, `gh_repo`, `gh_issue_number`, `gh_labels`, `gh_state` | External GitHub issue linkage (outbound fix) |
+| GH_PR | `gh_url`, `gh_owner`, `gh_repo`, `gh_pr_number`, `gh_labels`, `gh_state`, `head_branch`, `base_branch`, `is_draft`, `review_decision`, `linked_issues`, `lifecycle_state`, `lifecycle_state_machine` | Inbound GitHub PR review/merge linkage |
 | SPRINT | `goal`, `scoped_task_ids`, `scoped_progress`, `ideas_captured`, `learnings_curated`, `initial_work_mode`, `closure_invoked` | Workload-defined autonomous session tracking |
 | PLAY_TIME | `goal`, `timer_minutes`, `timer_started_at`, `timer_expires_at`, `timer_cleared_at`, `predetermined_chain`, `chain_position`, `chain_exhausted`, `initial_work_mode`, `current_work_mode`, `mode_transitions`, `markov_gates`, `ideas_captured`, `learnings_curated`, `wind_down_started_at`, `closure_invoked` | Time-bounded autonomous play tracking |
 | (future) | Type-specific fields as needed | Extensibility without schema changes |
@@ -253,7 +266,8 @@ updates:
 | ↩️ | DETOUR | ✅ roadmap.md | Unplanned necessary work |
 | 📜 | DELEG_PLAN | ✅ deleg_plan.md | Active delegation (usually under MISSION/DETOUR) |
 | 📋 | SUBPLAN | ✅ subplan CA | Detailed phase with own CA (under MISSION/DETOUR) |
-| 🐙 | GH_ISSUE | - (GitHub is CA) | External GitHub issue tracked as task |
+| 🐙 | GH_ISSUE | - (GitHub is CA) | External GitHub issue tracked as task (outbound fix) |
+| 🔀 | GH_PR | - (GitHub is CA) | External GitHub PR tracked for review/merge (inbound) |
 | 📦 | ARCHIVE | - | Archived/completed hierarchy |
 | 🔧 | TASK | - | General work item (task file IS the CA) |
 | 🐛 | BUG | ⚠️ XOR | Defect - requires EITHER plan OR plan_ca_ref |
@@ -303,12 +317,12 @@ macf_tools task create gh_issue https://github.com/owner/repo/issues/3
 ```
 
 **Auto-Fetched Metadata**: The CLI invokes `gh issue view --json` to populate:
-- `github_url` — Full issue URL
-- `github_owner` — Repository owner
-- `github_repo` — Repository name
-- `github_number` — Issue number
-- `github_labels` — Issue labels (list)
-- `github_state` — Current state (OPEN/CLOSED)
+- `gh_url` — Full issue URL
+- `gh_owner` — Repository owner
+- `gh_repo` — Repository name
+- `gh_issue_number` — Issue number
+- `gh_labels` — Issue labels (list)
+- `gh_state` — Current state (OPEN/CLOSED)
 
 These are stored in the MTMD `custom` dict, preserving the external system's state at task creation time.
 
@@ -398,7 +412,95 @@ Labels appear in brackets if present. Multiple labels use the first one. No labe
     macf_tools task complete N --verified "CI passed (GitHub Actions), make test green, PR merged"
     ```
 
-**What This Does NOT Change**: MISSION phases, DETOUR tasks, EXPERIMENT tasks, and standalone TASK/BUG items all continue using direct-to-main commits. The PR ceremony is exclusive to GH_ISSUE task type.
+**What This Does NOT Change**: MISSION phases, DETOUR tasks, EXPERIMENT tasks, and standalone TASK/BUG items all continue using direct-to-main commits. The PR ceremony described here is the *outbound* direction (an agent authoring a fix for an issue it owns). Tracking an *inbound* PR — one that has arrived to be reviewed and merged — is the 🔀 GH_PR type below.
+
+### 2.3.2 🔀 GH_PR Type
+
+GH_PR tasks bridge an external GitHub pull request into the MACF task system for the **review/merge (maintainer) workflow**. The PR itself is the external CA — no `plan_ca_ref` required.
+
+**GH_ISSUE vs GH_PR — the direction distinction**: GH_ISSUE tracks *a problem the agent owns to resolve*; a PR is its **outbound** fix mechanism (§2.3.1). GH_PR tracks *a proposed change the agent owns to review and land*; the **PR object itself** is the unit of work (**inbound**). A PR that fixes an already-tracked issue is represented both ways — a GH_ISSUE task for the problem and a GH_PR task for the change — linked so merging the PR completes both (see cascade linkage below).
+
+**Creation**:
+```bash
+macf_tools task create gh_pr https://github.com/owner/repo/pull/N
+```
+
+The GitHub-URL parser is kind-aware: it accepts both `/issues/N` (→ GH_ISSUE) and `/pull/N` (→ GH_PR).
+
+**Auto-Fetched Metadata**: The CLI invokes `gh pr view --json` to populate the `custom` dict:
+- `gh_url`, `gh_owner`, `gh_repo`, `gh_pr_number` — PR identity
+- `gh_labels` — PR labels (list)
+- `gh_state` — current state (OPEN/CLOSED/MERGED)
+- `head_branch`, `base_branch` — the merge topology
+- `is_draft` — whether the PR is a draft
+- `review_decision` — APPROVED / CHANGES_REQUESTED / REVIEW_REQUIRED
+- `linked_issues` — issue numbers this PR closes, from GitHub's `closingIssuesReferences` plus `Fixes/Closes #N` body parsing
+
+**`mergeable` is intentionally NOT stored as a gating field.** It is a lazily-computed, frequently-stale indicator; concluding "cannot merge" from it manufactures blocks that do not exist. The merge operation is ground truth — attempt it (see anti-pattern below and §10).
+
+**Subject Format**:
+```
+🔀 PR/{owner}/{repo}#{number} [{label}]: {title}
+🔀 PR/acme/widgets#42 [bug]: raise client_max_size for large requests
+🔀 PR/acme/widgets#43 (draft): refactor banner branding
+```
+Labels appear in brackets (first label if multiple; omitted if none). Draft PRs annotate `(draft)`.
+
+**Review Lifecycle (declared, optional)**: GH_PR creation declares a review state machine in `custom.lifecycle_state_machine` (consumed by the generic `task advance` verb — see §9.3.5), so review progress is trackable without new mechanism:
+```yaml
+lifecycle_state_machine:
+  pending: [reviewing]
+  reviewing: [approved, changes_requested, closed]
+  approved: [merged]
+  changes_requested: [reviewing, closed]
+lifecycle_state: pending
+```
+
+**Requirements**: The `gh` CLI must be authenticated with access to the target repository.
+
+### 2.3.3 GH_PR Review/Merge Workflow (Inbound)
+
+The maintainer workflow for landing an inbound PR. Where §2.3.1 authors a fix, this one *evaluates and merges* a change that has arrived.
+
+1. **Track it**: `macf_tools task create gh_pr <pull-url>`.
+
+2. **Verify identity** before any repo operations:
+   ```bash
+   gh auth switch --user <identity>
+   gh auth status
+   ```
+
+3. **Review the diff against project foundation.** The submitter's mechanism is a hypothesis, not a spec — reconcile it against the architecture before accepting. Advance the review state as you go: `macf_tools task advance N reviewing`.
+
+4. **Test locally** against a faithful environment (checkout the head branch; run the strictest available test suite). Do not rely on the PR's own green checkmark alone.
+   ```bash
+   make test
+   ```
+
+   **🚦 CI Gate (MANDATORY — never merge red).** Before merging, the PR's CI checks MUST be green:
+   ```bash
+   gh pr checks N          # every check must read "pass"
+   ```
+   A green **local** run is NOT sufficient. CI runs a stricter, cleaner environment and catches environment-dependent failures a local suite hides — a passing local run alongside a failing CI run is the **strict-mirror gap**, and CI is the authoritative signal, not your local run. **If CI is red:** do NOT merge. Create a fix task that documents the failure (root cause + the test/code fix), resolve it, push, and re-verify CI green before merging. A red-CI merge is a policy violation, not a judgment call. **Platform backstop:** enable GitHub branch protection `required_status_checks` on the target branch so a red merge is *rejected mechanically* rather than relying on discipline (note: required-status-checks gates PR merges, not direct-to-main pushes — see `release_workflow.md`).
+
+5. **Decide** — one of:
+   - **Merge** (squash, delete branch):
+     ```bash
+     gh pr merge N --squash --delete-branch
+     ```
+     Any `Fixes #M` in the PR body auto-closes linked issue M on merge. Retry a mergeability refusal that arrives immediately after a push — it is usually lazy-compute lag, not a real conflict.
+   - **Request changes**: `macf_tools task advance N changes_requested`; the task stays open pending revision.
+   - **Close unmerged**: reject the change; the task completes with terminal outcome CLOSED_UNMERGED.
+
+6. **Complete the task** with the terminal outcome and evidence:
+   ```bash
+   macf_tools task complete N --verified "CI green, tested locally, merged as <sha>"
+   ```
+   Completion records **MERGED** (success) or **CLOSED_UNMERGED** (rejected).
+
+7. **Cascade linkage**: on a MERGED gh_pr whose `linked_issues` names locally-tracked GH_ISSUE tasks, those issue tasks are completed too (the merge already closed the GitHub issues). Default behavior reports the cascade for confirmation; `--cascade` completes them automatically.
+
+**Stacked PRs**: merge base-first; do not `--delete-branch` a PR that others are stacked on until dependents are rebased, or accept the auto-close and recreate the dependent PR from its intact head branch.
 
 ### 2.4 Subject Line Format
 
@@ -910,6 +1012,7 @@ The gate pattern generalizes to any task type. Each gate redirects to its own po
 | Type | Gate Concept | Status |
 |------|-------------|--------|
 | GH_ISSUE | Commit citations + verification method + GitHub closeout + calling card (opt-in via opsec.public_attribution) | Implemented (DETOUR #99) |
+| GH_PR | Terminal outcome (MERGED/CLOSED_UNMERGED) + verification + cascade to linked GH_ISSUE tasks (§2.3.3) | Spec'd — impl MISSION #1161 |
 | MISSION | All phases completed | Future |
 | EXPERIMENT | Results documented | Future |
 | DELEG_PLAN | Delegation executed | Future |

@@ -5299,6 +5299,55 @@ def cmd_task_create_gh_issue(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_task_create_gh_pr(args: argparse.Namespace) -> int:
+    """Create GH_PR task by auto-fetching from a GitHub pull request."""
+    from .task.create import create_gh_pr
+
+    parent_id = None
+    if args.parent:
+        parent_id = args.parent.lstrip('#')
+
+    try:
+        result = create_gh_pr(
+            pr_url=args.pr_url,
+            parent_id=parent_id,
+        )
+
+        if args.json:
+            output = {
+                "task_id": result.task_id,
+                "subject": result.subject,
+                "mtmd": {
+                    "version": result.mtmd.version,
+                    "creation_breadcrumb": result.mtmd.creation_breadcrumb,
+                    "created_cycle": result.mtmd.created_cycle,
+                    "created_by": result.mtmd.created_by,
+                    "parent_id": result.mtmd.parent_id,
+                    "custom": result.mtmd.custom,
+                }
+            }
+            print(json.dumps(output, indent=2))
+        else:
+            custom = result.mtmd.custom
+            labels = custom.get("gh_labels", [])
+            linked = custom.get("linked_issues", [])
+            print(f"✅ Created GH_PR task #{result.task_id}")
+            print(f"🏷️  Subject: {result.subject}")
+            if labels:
+                print(f"🏷️  Labels: {', '.join(labels)}")
+            print(f"🌿 {custom.get('head_branch', '?')} → {custom.get('base_branch', '?')}")
+            if linked:
+                print(f"🔗 Fixes: {', '.join('#' + str(n) for n in linked)}")
+            print(f"🔗 {custom.get('gh_url', args.pr_url)}")
+            if parent_id:
+                print(f"📎 Parent: #{parent_id}")
+
+        return 0
+    except Exception as e:
+        print(f"❌ Failed to create GH_PR: {e}")
+        return 1
+
+
 def cmd_task_create_deleg(args: argparse.Namespace) -> int:
     """Create DELEG_PLAN task for delegation work."""
     from .task.create import create_deleg
@@ -6675,6 +6724,135 @@ def _write_final_synthesis(log_path, aggregate: str, open_children) -> None:
     Path(log_path).write_text(new_text, encoding="utf-8")
 
 
+def _gh_pr_find_linked_issue_tasks(linked_issues: list, repo_slug: str) -> list:
+    """Find local, still-open GH_ISSUE tasks whose gh_issue_number is in
+    `linked_issues` for the same repo. Returns list of (task_id:int, task)."""
+    if not linked_issues:
+        return []
+    from .task import TaskReader
+    wanted = {int(n) for n in linked_issues}
+    out = []
+    for t in TaskReader().read_all_tasks():
+        mtmd = getattr(t, "mtmd", None)
+        if not mtmd or getattr(mtmd, "task_type", None) != "GH_ISSUE":
+            continue
+        if getattr(t, "status", None) in ("completed", "archived"):
+            continue
+        c = getattr(mtmd, "custom", {}) or {}
+        if c.get("gh_issue_number") in wanted and f"{c.get('gh_owner')}/{c.get('gh_repo')}" == repo_slug:
+            out.append((int(t.id), t))
+    return out
+
+
+def _gh_pr_closeout(task_id: int, mtmd, args, breadcrumb: str) -> str:
+    """GH_PR review/merge closeout: ground-truth the terminal outcome, post a
+    review close-out comment, and (with --cascade) complete linked GH_ISSUE tasks.
+
+    Returns the outcome string (MERGED / CLOSED_UNMERGED / OPEN / UNKNOWN).
+    The PR's live state is queried at completion time — NOT read from the
+    cached `gh_state` stored at creation (that field goes stale). Failures are
+    warnings, not errors — the task is already marked complete.
+    """
+    import subprocess as _subprocess
+    import json as _json
+
+    custom = mtmd.custom or {}
+    gh_owner = custom.get("gh_owner")
+    gh_repo = custom.get("gh_repo")
+    gh_pr_number = custom.get("gh_pr_number")
+    linked_issues = custom.get("linked_issues", []) or []
+
+    if not (gh_owner and gh_repo and gh_pr_number):
+        print("   ⚠️  Missing GitHub PR metadata — skipping GH_PR closeout")
+        return "UNKNOWN"
+
+    repo_slug = f"{gh_owner}/{gh_repo}"
+
+    # Ground-truth outcome from GitHub (live), plus the merge commit and CI
+    # conclusion (statusCheckRollup folded into the same call — no extra request).
+    outcome, merge_commit, ci_red = "OPEN", None, False
+    try:
+        r = _subprocess.run(
+            ["gh", "pr", "view", str(gh_pr_number), "--repo", repo_slug,
+             "--json", "state,mergeCommit,statusCheckRollup"],
+            capture_output=True, text=True, timeout=15)
+        if r.returncode == 0:
+            d = _json.loads(r.stdout)
+            state = d.get("state", "OPEN")
+            outcome = "MERGED" if state == "MERGED" else ("CLOSED_UNMERGED" if state == "CLOSED" else "OPEN")
+            merge_commit = (d.get("mergeCommit") or {}).get("oid")
+            _bad = {"FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "ERROR", "STARTUP_FAILURE"}
+            for chk in (d.get("statusCheckRollup") or []):
+                if (chk.get("conclusion") or chk.get("state") or "").upper() in _bad:
+                    ci_red = True
+                    break
+        else:
+            outcome = "UNKNOWN"
+    except (FileNotFoundError, _subprocess.TimeoutExpired, ValueError) as e:
+        print(f"   ⚠️  Could not fetch PR state ({e}) — outcome UNKNOWN")
+        outcome = "UNKNOWN"
+
+    print(f"   🔀 PR outcome: {outcome}" + (f" (merge {merge_commit[:8]})" if merge_commit else ""))
+
+    # CI gate awareness: a MERGED PR whose checks are red is a red-CI merge —
+    # surface it loudly with the resolution path (task_management.md §2.3.3).
+    if ci_red and outcome == "MERGED":
+        print("   🚨 CI GATE VIOLATION: this PR merged with FAILING CI checks.")
+        print("      Resolution: create a fix task documenting the failure (root cause + test/code fix),")
+        print("      resolve it, and re-verify CI green. Never merge red — see task_management.md §2.3.3.")
+        print("      Platform backstop: enable branch protection required_status_checks on the target branch.")
+
+    # Post a review close-out comment (agent's report + outcome). The calling
+    # card footer is opt-in via opsec.public_attribution (issue #156).
+    comment_lines = [
+        "## Review Close-out", "", args.report, "",
+        f"**Outcome:** {outcome}",
+    ]
+    if getattr(args, "verified", None):
+        comment_lines.append(f"**Verification:** {args.verified}")
+    if _public_attribution_enabled():
+        try:
+            from .utils.identity import get_agent_identity
+            agent_name = get_agent_identity()
+        except (ImportError, OSError):
+            agent_name = "unknown"
+        comment_lines += ["", "---", f"*[{agent_name}: task#{task_id} {breadcrumb}]*"]
+    comment = "\n".join(comment_lines)
+    try:
+        cr = _subprocess.run(
+            ["gh", "pr", "comment", str(gh_pr_number), "--repo", repo_slug, "--body", comment],
+            capture_output=True, text=True, timeout=15)
+        if cr.returncode == 0:
+            print(f"   📝 Close-out comment posted to {repo_slug}#{gh_pr_number}")
+        else:
+            print(f"   ⚠️  Failed to post PR comment: {cr.stderr.strip()}")
+    except (FileNotFoundError, _subprocess.TimeoutExpired):
+        print("   ⚠️  gh CLI unavailable — skipping PR comment")
+
+    # Cascade to linked GH_ISSUE tasks (only when merged).
+    linked_tasks = _gh_pr_find_linked_issue_tasks(linked_issues, repo_slug) if outcome == "MERGED" else []
+    if linked_tasks:
+        ids = ", ".join(f"#{tid}" for tid, _ in linked_tasks)
+        if getattr(args, "cascade", False) and merge_commit:
+            print(f"   🔗 Cascade: completing linked GH_ISSUE tasks {ids}")
+            for tid, _t in linked_tasks:
+                cc = _subprocess.run(
+                    ["macf_tools", "task", "complete", str(tid),
+                     "--report", f"Auto-completed via merged PR #{gh_pr_number} (GH_PR task #{task_id}).",
+                     "--commit", merge_commit,
+                     "--verified", f"Fixed by merged PR #{gh_pr_number}"],
+                    capture_output=True, text=True, timeout=30)
+                if cc.returncode == 0:
+                    print(f"      ✅ #{tid} completed")
+                else:
+                    print(f"      ⚠️  #{tid} cascade failed: {(cc.stderr or cc.stdout).strip()[:120]}")
+        else:
+            hint = "pass --cascade to auto-complete" if merge_commit else "merge commit unavailable; complete manually"
+            print(f"   🔗 Linked GH_ISSUE tasks ({hint}): {ids}")
+
+    return outcome
+
+
 def cmd_task_complete(args: argparse.Namespace) -> int:
     """Mark task complete with mandatory report, breadcrumb, and status change."""
     from .task import TaskReader, update_task_file
@@ -7024,6 +7202,10 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
 
             # GitHub integration: post close-out comment and close issue
             _gh_issue_closeout(task_id, new_mtmd, args, breadcrumb)
+
+        if task_type == "GH_PR":
+            # Review/merge closeout: ground-truth outcome + cascade to linked issues
+            _gh_pr_closeout(task_id, new_mtmd, args, breadcrumb)
 
         return 0
     else:
@@ -8405,6 +8587,14 @@ def _build_parser() -> argparse.ArgumentParser:
                                              help="output as JSON")
     task_create_gh_issue_parser.set_defaults(func=cmd_task_create_gh_issue)
 
+    # task create gh_pr
+    task_create_gh_pr_parser = task_create_sub.add_parser("gh_pr", help="create task from GitHub PR for review/merge (auto-fetches metadata)")
+    task_create_gh_pr_parser.add_argument("pr_url", help="GitHub PR URL (https://github.com/owner/repo/pull/N)")
+    task_create_gh_pr_parser.add_argument("--parent", default="000", help="parent task ID (default: 000)")
+    task_create_gh_pr_parser.add_argument("--json", dest="json", action="store_true",
+                                          help="output as JSON")
+    task_create_gh_pr_parser.set_defaults(func=cmd_task_create_gh_pr)
+
     # task create deleg
     task_create_deleg_parser = task_create_sub.add_parser("deleg", help="create DELEG_PLAN task for delegation")
     task_create_deleg_parser.add_argument("--parent", default="000", help="parent task ID (default: 000)")
@@ -8600,6 +8790,8 @@ def _build_parser() -> argparse.ArgumentParser:
                                       help="REQUIRED when --force is used on a SPRINT with incomplete scoped tasks. "
                                            "Recorded in completion_report and audited. "
                                            "See autonomous_sprint.md §3.3.2 for acceptable vs unacceptable justifications.")
+    task_complete_parser.add_argument("--cascade", action="store_true", default=False,
+                                      help="GH_PR only: auto-complete linked GH_ISSUE tasks when the PR is merged")
     task_complete_parser.set_defaults(func=cmd_task_complete)
 
     # task block - add blocking relationship

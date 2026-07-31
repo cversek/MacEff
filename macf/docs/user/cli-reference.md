@@ -1342,6 +1342,40 @@ macf_tools task create play_time "Prototype knowledge web indexer" \
 
 **Related:** See `play_time.md` policy and `maceff-play-time` skill for full behavioral specification including chain advancement, Markov-after-exhaustion, and wind-down sequence.
 
+#### task create gh_issue
+
+Create a 🐙 GH_ISSUE task bridging an external GitHub issue (the *outbound* fix direction — resolve a problem you own by opening a PR). Auto-fetches metadata via `gh issue view`.
+
+**Syntax:**
+```bash
+macf_tools task create gh_issue <issue-url> [--parent TASK_ID] [--json]
+```
+
+**Example:**
+```bash
+macf_tools task create gh_issue https://github.com/owner/repo/issues/3
+```
+
+**Related:** `task_management.md` §2.3 (type) and §2.3.1 (PR-based fix workflow).
+
+#### task create gh_pr
+
+Create a 🔀 GH_PR task bridging an external GitHub pull request (the *inbound* review/merge direction — evaluate and land a proposed change). Auto-fetches metadata via `gh pr view`: title, labels, state, head/base branch, draft status, review decision, and linked (closing) issues. Declares a review `lifecycle_state_machine` in `custom`. The `mergeable` field is intentionally not stored (it goes stale; the merge operation is ground truth).
+
+**Syntax:**
+```bash
+macf_tools task create gh_pr <pull-url> [--parent TASK_ID] [--json]
+```
+
+**Example:**
+```bash
+macf_tools task create gh_pr https://github.com/owner/repo/pull/168
+```
+
+Completion records a terminal outcome (MERGED / CLOSED_UNMERGED) and, with `macf_tools task complete <id> --cascade`, auto-completes the linked GH_ISSUE tasks a merged PR closes.
+
+**Related:** `task_management.md` §2.3.2 (type) and §2.3.3 (review/merge workflow).
+
 ---
 
 ### Task Lifecycle Commands
