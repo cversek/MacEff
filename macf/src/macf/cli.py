@@ -1828,6 +1828,28 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
                 json.dump(manifest_data, f, indent=2)
             print(f"✅ Created personal policy manifest at {personal_manifest}")
 
+        # Mint the agent UUID if absent (idempotent). Without this file the
+        # identity resolver returns 'unknown', so every freshly provisioned host
+        # displayed Name@unknown and breadcrumbs lost their UUID half until
+        # someone hand-created it (issue #131).
+        #
+        # Scope mirrors _resolve_uuid_prefix()'s own priority: a per-project home
+        # (distinct from ~) gets its own id, otherwise the host-global one — so
+        # the file is minted exactly where the resolver will look for it first.
+        import uuid as _uuid
+        uuid_scope = 'project' if pa_home != Path.home() else 'global'
+        uuid_file = pa_home / '.maceff_primary_agent.id'
+        if uuid_file.exists() and uuid_file.read_text().strip():
+            print(f"\n🆔 Agent UUID present ({uuid_scope}): {uuid_file}")
+        else:
+            try:
+                agent_uuid = str(_uuid.uuid4())
+                uuid_file.write_text(agent_uuid + "\n")
+                uuid_file.chmod(0o600)
+                print(f"\n🆔 Minted agent UUID ({uuid_scope}): {agent_uuid[:6]} → {uuid_file}")
+            except OSError as e:
+                print(f"⚠️  Could not mint agent UUID at {uuid_file}: {e}", file=sys.stderr)
+
         print(f"\n📍 PA Home: {pa_home}")
         print(f"📍 Personal Policies: {personal_policies_dir}")
         print(f"\nAgent initialization complete!")

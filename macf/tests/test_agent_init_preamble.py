@@ -73,3 +73,29 @@ def test_user_content_without_stale_block_is_untouched(agent_home):
     assert USER_TEXT in content
     assert content.count("_START -->") == 1
     assert "stale preamble block" not in result.stdout
+
+
+class TestAgentUuidMint:
+    """`agent init` mints the agent UUID so identity never resolves to @unknown (#131)."""
+
+    def test_mints_uuid_when_absent(self, agent_home):
+        result = _run_init(agent_home)
+        assert result.returncode == 0, result.stdout + result.stderr
+
+        uuid_file = agent_home / ".maceff_primary_agent.id"
+        assert uuid_file.exists(), "agent init did not mint the UUID file"
+        assert uuid_file.read_text().strip(), "UUID file is empty"
+        # Owner-only: the id is an identity credential, not world-readable trivia.
+        assert (uuid_file.stat().st_mode & 0o077) == 0
+        assert "Minted agent UUID" in result.stdout
+
+    def test_mint_is_idempotent(self, agent_home):
+        """A second init must not re-roll an established identity."""
+        _run_init(agent_home)
+        uuid_file = agent_home / ".maceff_primary_agent.id"
+        first = uuid_file.read_text()
+
+        result = _run_init(agent_home)
+        assert uuid_file.read_text() == first, "re-init changed the agent UUID"
+        assert "Minted agent UUID" not in result.stdout
+        assert "Agent UUID present" in result.stdout
