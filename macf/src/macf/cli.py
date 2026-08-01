@@ -1387,6 +1387,134 @@ def cmd_statusline(args: argparse.Namespace) -> int:
         return 1
 
 
+def _harness_params(args: argparse.Namespace):
+    from .utils.harness import default_params
+    return default_params(agent=getattr(args, "agent", None), home=getattr(args, "home", None))
+
+
+def cmd_harness_generate(args: argparse.Namespace) -> int:
+    """Render harness artifacts to stdout without touching anything.
+
+    Rendering and installing are separate verbs so the output can be reviewed,
+    diffed against a live unit, or scanned for identifiers before it lands
+    anywhere — the hand-edited predecessor drifted precisely because there was
+    nothing to diff against.
+    """
+    from .utils.harness import render_unit, render_child, render_tmux_conf
+
+    try:
+        p = _harness_params(args)
+        attach = not getattr(args, "no_proxy", False)
+        what = getattr(args, "what", "unit")
+        if what in ("unit", "all"):
+            print(render_unit(p, attach_proxy=attach), end="")
+        if what in ("child", "all"):
+            if what == "all":
+                print(f"\n# ===== {p.child_path} =====")
+            print(render_child(p), end="")
+        if what in ("tmux", "all"):
+            if what == "all":
+                print(f"\n# ===== {p.home}/.tmux-{p.agent}.conf =====")
+            print(render_tmux_conf(p), end="")
+        return 0
+    except Exception as e:
+        print(f"Error rendering harness: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_harness_install(args: argparse.Namespace) -> int:
+    """Write the rendered artifacts into place.
+
+    Refuses to clobber a unit that differs unless --force, and --check reports
+    drift without writing. A live unit that has diverged from what the generator
+    produces is the failure this command exists to make visible rather than
+    silently overwrite.
+    """
+    from pathlib import Path
+    import stat as _stat
+    from .utils.harness import render_unit, render_child, render_tmux_conf
+
+    try:
+        p = _harness_params(args)
+        attach = not getattr(args, "no_proxy", False)
+        unit_dir = Path.home() / ".config" / "systemd" / "user"
+        targets = [
+            (unit_dir / p.unit_name, render_unit(p, attach_proxy=attach), False),
+            (Path(p.child_path), render_child(p), True),
+            (p.home / f".tmux-{p.agent}.conf", render_tmux_conf(p), False),
+        ]
+
+        if getattr(args, "check", False):
+            drift = 0
+            for path, content, _ in targets:
+                if not path.exists():
+                    print(f"   ABSENT   {path}")
+                    drift += 1
+                elif path.read_text() != content:
+                    print(f"   DRIFTED  {path}")
+                    drift += 1
+                else:
+                    print(f"   ok       {path}")
+            if drift:
+                print(f"\n{drift} artifact(s) differ from what would be rendered.", file=sys.stderr)
+                return 1
+            print("\nAll harness artifacts match the generator output.")
+            return 0
+
+        for path, content, executable in targets:
+            if path.exists() and path.read_text() != content and not getattr(args, "force", False):
+                print(f"Error: {path} exists and differs from the rendered output.", file=sys.stderr)
+                print("       Review with `macf_tools harness install --check`, then re-run with --force.", file=sys.stderr)
+                return 1
+
+        for path, content, executable in targets:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+            if executable:
+                path.chmod(path.stat().st_mode | _stat.S_IXUSR)
+            print(f"   ✓ {path}")
+
+        print(f"\n✅ Harness installed for agent '{p.agent}'")
+        print(f"   systemctl --user daemon-reload && systemctl --user enable --now {p.unit_name}")
+        print(f"   attach:  tmux attach -t {p.agent}")
+        print(f"   status:  macf_tools harness status --agent {p.agent}")
+        print(f"   stop:    systemctl --user stop {p.unit_name}   (stops the supervisor, not the child)")
+        return 0
+    except Exception as e:
+        print(f"Error installing harness: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_harness_status(args: argparse.Namespace) -> int:
+    """Report unit state, session presence and proxy attachment."""
+    from pathlib import Path
+
+    try:
+        p = _harness_params(args)
+        unit_path = Path.home() / ".config" / "systemd" / "user" / p.unit_name
+        print(f"agent:   {p.agent}")
+        print(f"unit:    {unit_path} {'(present)' if unit_path.exists() else '(ABSENT)'}")
+
+        active = subprocess.run(["systemctl", "--user", "is-active", p.unit_name],
+                                capture_output=True, text=True).stdout.strip()
+        print(f"active:  {active or 'unknown'}")
+
+        has_session = subprocess.run(["tmux", "has-session", "-t", p.agent],
+                                     capture_output=True).returncode == 0
+        print(f"session: {'up' if has_session else 'absent'} (tmux -t {p.agent})")
+
+        probe = subprocess.run(
+            ["curl", "-s", "--max-time", "2", "-o", "/dev/null",
+             f"http://127.0.0.1:{p.proxy_port}/"], capture_output=True).returncode == 0
+        # Reported the same way the unit decides it, so this cannot claim an
+        # attachment the unit would not actually make.
+        print(f"proxy:   {'answering on ' + str(p.proxy_port) + ' — harness would attach' if probe else 'not answering — harness would run direct'}")
+        return 0
+    except Exception as e:
+        print(f"Error reading harness status: {e}", file=sys.stderr)
+        return 1
+
+
 def cmd_statusline_install(args: argparse.Namespace) -> int:
     """Install statusline script and configure Claude Code settings."""
     from pathlib import Path
@@ -8869,6 +8997,36 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # Default to generate if no subcommand
     statusline_parser.set_defaults(func=cmd_statusline)
+
+    # Harness command with subcommands (mirrors statusline generate/install)
+    harness_parser = sub.add_parser("harness", help="persistent supervised agent session (systemd + tmux)")
+    harness_sub = harness_parser.add_subparsers(dest="harness_cmd")
+
+    harness_generate = harness_sub.add_parser("generate", help="render harness artifacts to stdout (no writes)")
+    harness_generate.add_argument("--agent", help="agent slug naming the unit and tmux session")
+    harness_generate.add_argument("--home", help="agent home directory")
+    harness_generate.add_argument("--no-proxy", action="store_true",
+                                  help="render without proxy attachment")
+    harness_generate.add_argument("--what", choices=["unit", "child", "tmux", "all"], default="unit",
+                                  help="which artifact to render (default: unit)")
+    harness_generate.set_defaults(func=cmd_harness_generate)
+
+    harness_install = harness_sub.add_parser("install", help="write harness artifacts into place")
+    harness_install.add_argument("--agent", help="agent slug naming the unit and tmux session")
+    harness_install.add_argument("--home", help="agent home directory")
+    harness_install.add_argument("--no-proxy", action="store_true",
+                                 help="install without proxy attachment")
+    harness_install.add_argument("--check", action="store_true",
+                                 help="report drift against what would be rendered; write nothing")
+    harness_install.add_argument("--force", action="store_true",
+                                 help="overwrite an existing unit that differs")
+    harness_install.set_defaults(func=cmd_harness_install)
+
+    harness_status = harness_sub.add_parser("status", help="show harness unit and session state")
+    harness_status.add_argument("--agent", help="agent slug")
+    harness_status.set_defaults(func=cmd_harness_status)
+
+    harness_parser.set_defaults(func=cmd_harness_status)
 
     # Breadcrumb command
     breadcrumb_parser = sub.add_parser("breadcrumb", help="generate fresh breadcrumb for TODO completion")
