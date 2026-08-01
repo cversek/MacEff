@@ -268,3 +268,69 @@ def test_hooks_only_does_not_fail_on_absent_command_trees(fake_framework_root, c
     captured = capsys.readouterr()
     assert result == 0, captured.err
     assert "Hooks-only installation complete" in captured.out
+
+
+# --- orphaned symlink pruning ----------------------------------------------
+#
+# Installing relinked what the source tree still had, but nothing removed links
+# to what it no longer had. Every framework rename or retirement therefore left
+# an orphan behind permanently. Claude Code drops broken symlinks from
+# autocomplete silently, so the only symptom is a command quietly missing —
+# one agent was found carrying seven, another had hand-cleaned thirty.
+
+
+def test_orphaned_framework_links_are_pruned(fake_framework_root, capsys):
+    _seed_hooks_settings()
+    commands_dir = Path.cwd() / ".claude" / "commands"
+    skills_dir = Path.cwd() / ".claude" / "skills"
+    commands_dir.mkdir(parents=True)
+    skills_dir.mkdir(parents=True)
+    # Links to framework content that has since been renamed or retired.
+    (commands_dir / "maceff_jotewr.md").symlink_to("/nonexistent/maceff_jotewr.md")
+    (skills_dir / "maceff-todo-hygiene").symlink_to("/nonexistent/maceff-todo-hygiene")
+
+    result = _run_install()
+
+    captured = capsys.readouterr()
+    assert result == 0, captured.err
+    assert not (commands_dir / "maceff_jotewr.md").is_symlink(), "orphaned command link survived"
+    assert not (skills_dir / "maceff-todo-hygiene").is_symlink(), "orphaned skill link survived"
+    assert "maceff_jotewr.md" in captured.out
+    assert "orphaned link" in captured.out
+
+
+def test_pruning_never_touches_an_agents_own_files(fake_framework_root, capsys):
+    """Agents keep their own commands and skills in these same directories.
+
+    A prune that removed a real file, or a link the framework does not own,
+    would destroy the agent's work — strictly worse than the orphan it fixes.
+    """
+    _seed_hooks_settings()
+    commands_dir = Path.cwd() / ".claude" / "commands"
+    commands_dir.mkdir(parents=True)
+    # A real file, not a link.
+    (commands_dir / "manny_gist.md").write_text("# my own command\n")
+    # A broken link the framework does not own.
+    (commands_dir / "my_scratch.md").symlink_to("/nonexistent/my_scratch.md")
+    # A framework-named link that RESOLVES — must not be pruned either.
+    real_target = fake_framework_root / "framework" / "commands" / "maceff"
+    (commands_dir / "maceff_live.md").symlink_to(real_target)
+
+    result = _run_install()
+
+    assert result == 0
+    assert (commands_dir / "manny_gist.md").is_file(), "a real file was deleted"
+    assert (commands_dir / "manny_gist.md").read_text() == "# my own command\n"
+    assert (commands_dir / "my_scratch.md").is_symlink(), "a non-framework link was deleted"
+    assert (commands_dir / "maceff_live.md").is_symlink(), "a resolving link was deleted"
+
+
+def test_install_still_succeeds_when_there_is_nothing_to_prune(fake_framework_root, capsys):
+    """Positive control: the prune must be a no-op on a clean tree."""
+    _seed_hooks_settings()
+
+    result = _run_install()
+
+    captured = capsys.readouterr()
+    assert result == 0, captured.err
+    assert "orphaned link" not in captured.out

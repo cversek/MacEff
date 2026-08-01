@@ -4,6 +4,12 @@ FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 LC_ALL=C.UTF-8
 SHELL ["/bin/bash","-lc"]
 
+# tmux and rsync are load-bearing, not conveniences: macf.supervisor's
+# --tmux-session is how a detached, joinable agent session runs at all (agents'
+# own harness functions call tmux directly), and every maceff_tools/*-sync
+# script invokes rsync. Both had been hand-installed into a running container,
+# which worked right up until a rebuild removed them and left two agents unable
+# to start, with nothing recording what had gone missing.
 RUN --mount=type=cache,target=/var/cache/apt \
     --mount=type=cache,target=/var/lib/apt \
     apt-get update && apt-get install -y --no-install-recommends \
@@ -13,6 +19,7 @@ RUN --mount=type=cache,target=/var/cache/apt \
       nodejs npm \
       acl jq tini \
       tree \
+      tmux rsync \
       libgl1 libxrender1 libxext6 libx11-6 libosmesa6 \
  && rm -rf /var/lib/apt/lists/* \
  && git lfs install --system
