@@ -17,6 +17,9 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import re
+import socket
+
 import pytest
 
 from macf.utils.harness import (
@@ -128,8 +131,14 @@ class TestNoHostIdentifiersLeak:
         # The username as a path component is the tell; a bare substring match
         # would false-positive on ordinary words.
         assert f"/{user}/" not in text
-        import socket
-        assert socket.gethostname() not in text
+        # Same hazard, and it bites: a host named "Mac" is a substring of
+        # "MacEff" in the template's own header, so a bare `in` check fails on
+        # that machine while passing on a CI runner whose hostname is long and
+        # random. Match on word boundaries — "Mac" then no longer matches
+        # "MacEff", while a genuine leak of the hostname as a token still does.
+        assert not re.search(rf"\b{re.escape(socket.gethostname())}\b", text), (
+            "a render must contain no host identifier"
+        )
 
 
 class TestChildEntrypoint:
