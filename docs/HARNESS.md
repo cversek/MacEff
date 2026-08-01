@@ -67,6 +67,14 @@ tmux kill-session -t <slug>    # only if you also want the running session gone
 Each of these cost a real incident. They are asserted in
 `macf/tests/test_harness_render.py` so they cannot regress silently.
 
+The six operational invariants — including the two that belong to the proxy
+rather than the harness — live in `macf/tests/test_operational_invariants.py` as
+a single registry pairing each checker with the incident that produced it. Every
+one carries a **negative control**: a mutation that must make its checker fail.
+A check never observed failing is not a check, so if someone weakens a checker
+into something that always passes, its control fails and says so. Read that
+registry rather than this list when you want the full account.
+
 **`$${BASE}` is escaped.** systemd expands `$VAR` and `${VAR}` in `Exec*` lines
 using the *unit's* environment before any shell runs. `BASE` is not a unit
 variable, so an unescaped `${BASE}` was replaced with an empty string and the
