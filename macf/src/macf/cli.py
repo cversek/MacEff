@@ -952,6 +952,41 @@ def cmd_framework_install(args: argparse.Namespace) -> int:
         # here and made fatal at the summary.
         problems: list[str] = []
 
+        def prune_orphaned_links(target_dir, owned_prefixes):
+            """Remove framework-owned symlinks whose target no longer exists.
+
+            Installing relinks what the source tree still has; nothing removed
+            links to what it no longer has. So every framework rename or
+            retirement left an orphan behind permanently, and Claude Code drops
+            broken symlinks from autocomplete silently — the only symptom is a
+            command quietly missing, with nothing pointing at the install as
+            the cause.
+
+            Deliberately narrow, because agents keep their own commands and
+            skills in these same directories and a prune that ate one would be
+            strictly worse than the orphan it fixes. Two guards do that work:
+            the entry must fail to resolve (which already excludes every real
+            file and every link that still points somewhere), and its name must
+            be one the framework owns. The is_symlink() check is intent rather
+            than protection — it is redundant with the resolve check, and
+            removing it does not change behaviour.
+            """
+            removed = []
+            if not target_dir.is_dir():
+                return removed
+            for entry in sorted(target_dir.iterdir()):
+                if not entry.is_symlink():
+                    continue
+                # exists() follows the link, so this is False exactly when the
+                # target is gone.
+                if entry.exists():
+                    continue
+                if not any(entry.name.startswith(p) for p in owned_prefixes):
+                    continue
+                entry.unlink()
+                removed.append(entry.name)
+            return removed
+
         # Install commands (symlink maceff*/ namespace directories)
         print("\n📦 Installing commands...")
         commands_src = framework_root / "commands"
@@ -973,6 +1008,8 @@ def cmd_framework_install(args: argparse.Namespace) -> int:
                     md_count = sum(1 for _ in cmd_ns.rglob("*.md"))
                     installed_count["commands"] += md_count
                     print(f"   ✓ {cmd_ns.name}/ ({md_count} commands)")
+            for orphan in prune_orphaned_links(commands_dir, ("maceff",)):
+                print(f"   🧹 removed orphaned link {orphan} (target no longer in framework)")
             if linked_commands == 0:
                 problems.append(
                     f"commands: {commands_src} exists but contains no maceff*/ namespace directories"
@@ -999,6 +1036,8 @@ def cmd_framework_install(args: argparse.Namespace) -> int:
                     target.symlink_to(skill_dir)
                     installed_count["skills"] += 1
                     print(f"   ✓ {skill_dir.name}/")
+            for orphan in prune_orphaned_links(skills_dir, ("maceff-",)):
+                print(f"   🧹 removed orphaned link {orphan} (target no longer in framework)")
             if installed_count["skills"] == 0:
                 problems.append(
                     f"skills: {skills_src} exists but contains no maceff-*/ directories"
