@@ -5,8 +5,26 @@ Models correspond to the YAML structure documented in:
 docs/arch_v0.3_named_agents/05_implementation_guide.md (lines 48-125)
 """
 
+from enum import Enum
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+class AgentFlavor(str, Enum):
+    """How much of the MacEff framework an account receives.
+
+    MACEFF: the full footprint — consciousness artifact trees, hooks, PREAMBLEs,
+        layered CLAUDE.md, personal policies, framework commands/skills/output-styles.
+
+    VANILLA: a plain Linux account with a home directory, SSH access, shell
+        environment, toolchain, workspace and mailbox — and none of the above.
+        Vanilla accounts exist so a deployment can host agents (or humans) that
+        should see an ordinary environment, with no framework-specific files,
+        tools, or context anywhere in their home.
+    """
+
+    MACEFF = "maceff"
+    VANILLA = "vanilla"
 
 
 class ClaudeCodePreferencesConfig(BaseModel):
@@ -137,9 +155,36 @@ class AgentSpec(BaseModel):
         description="Human-readable display name for GECOS field and statusline (e.g., 'Manny MacEff')"
     )
 
-    personality: str = Field(
-        ...,
-        description="Path to personality file (Identity layer CLAUDE.md source)"
+    flavor: AgentFlavor = Field(
+        default=AgentFlavor.MACEFF,
+        description=(
+            "How much of the MacEff framework this account receives. "
+            "'maceff' (default) installs the full footprint; 'vanilla' installs none "
+            "of it. Defaulting to 'maceff' keeps every pre-existing agents.yaml valid."
+        )
+    )
+
+    personality: Optional[str] = Field(
+        default=None,
+        description=(
+            "Path to personality file (Identity layer CLAUDE.md source). "
+            "Required for maceff-flavored agents, meaningless for vanilla ones — "
+            "enforced by the require_personality_for_maceff validator rather than by "
+            "the field itself, so vanilla accounts need not invent one."
+        )
+    )
+
+    ssh_keys: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Public keys authorized for this account, in order. Each entry is either "
+            "a key NAME resolved against the mounted key directory (e.g. 'cversek' -> "
+            "/keys/cversek.pub) or a literal public key line ('ssh-ed25519 AAAA...'). "
+            "All entries are installed, which is what lets an account be shared with a "
+            "collaborator. When omitted, provisioning falls back to the legacy "
+            "single-file lookup (/keys/{username}.pub) so existing deployments are "
+            "unaffected."
+        )
     )
 
     subagents: Optional[List[str]] = Field(
@@ -166,6 +211,54 @@ class AgentSpec(BaseModel):
         default=None,
         description="Claude Code settings override for this agent"
     )
+
+    @property
+    def is_vanilla(self) -> bool:
+        """True when this account must receive no MacEff footprint at all."""
+        return self.flavor == AgentFlavor.VANILLA
+
+    @model_validator(mode='after')
+    def require_personality_for_maceff(self) -> 'AgentSpec':
+        """A maceff-flavored agent needs an identity layer; a vanilla one must not have one.
+
+        Rejecting a personality on a vanilla account is deliberate. Silently ignoring
+        it would let a deployment believe it had configured an identity that was never
+        installed — the config would report one thing while the home directory showed
+        another.
+        """
+        if self.flavor == AgentFlavor.MACEFF and not self.personality:
+            raise ValueError(
+                f"agent '{self.username}': personality is required for "
+                f"flavor='maceff' (omit it only on flavor='vanilla')"
+            )
+        if self.flavor == AgentFlavor.VANILLA and self.personality:
+            raise ValueError(
+                f"agent '{self.username}': personality is meaningless for "
+                f"flavor='vanilla' and would never be installed — remove it"
+            )
+        return self
+
+    @field_validator('ssh_keys')
+    @classmethod
+    def validate_ssh_keys(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        """Reject empty entries and an empty list.
+
+        An empty list is rejected rather than treated as "no keys" because the two
+        readings differ in consequence: it most likely means the operator intended to
+        list keys and the templating produced nothing, which would silently lock the
+        account out. Omit the field entirely to get the legacy single-key fallback.
+        """
+        if v is None:
+            return v
+        if not v:
+            raise ValueError(
+                "ssh_keys must not be an empty list — omit the field entirely for "
+                "the legacy /keys/{username}.pub fallback"
+            )
+        for entry in v:
+            if not entry or not entry.strip():
+                raise ValueError("ssh_keys entries must be non-empty")
+        return v
 
 
 class SubagentSpec(BaseModel):
@@ -216,6 +309,17 @@ class DefaultsConfig(BaseModel):
     claude_config: Optional[ClaudeCodeConfig] = Field(
         default=None,
         description="Default Claude Code settings for all agents"
+    )
+
+    admin_ssh_keys: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Public keys authorized for the container's admin (sudoer) account, in "
+            "the same NAME-or-literal form as AgentSpec.ssh_keys. Declared here "
+            "rather than resolved from a hardcoded /keys/admin.pub so that operator "
+            "access is configuration like every other account. When omitted, the "
+            "legacy /keys/admin.pub lookup still applies."
+        )
     )
 
     container_env: Dict[str, str] = Field(

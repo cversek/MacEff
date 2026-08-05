@@ -215,6 +215,62 @@ def create_amail_tree(public: Path, username: str) -> Path:
     return amail
 
 
+# Every path here is installed by some MacEff provisioning step. A vanilla account
+# is defined as an account where none of them exist, so this tuple IS the
+# definition — when a new provisioning step is added, its artifact belongs here or
+# the definition has silently drifted.
+MACEFF_FOOTPRINT_PATHS = (
+    'agent',                    # CA trees, amail, task_archives, subagents
+    'CLAUDE.md',                # three-layer context (system PREAMBLE + identity + project)
+    '.maceff',                  # per-agent settings, auto-mode token, agent state
+    '.claude/commands',         # framework slash commands
+    '.claude/skills',           # framework skills
+    '.claude/output-styles',    # maceff-compliance and friends
+    '.claude/agents',           # subagent definitions
+)
+
+
+def vanilla_home_violations(home: Path) -> List[str]:
+    """Return every MacEff artifact found in a home that is supposed to have none.
+
+    An empty list means the account is genuinely vanilla. This exists as a callable
+    check rather than a comment because "we skip those steps" is a claim about
+    control flow, and control flow changes. Running it against the finished home
+    tests the property that actually matters — what is on disk.
+    """
+    violations: List[str] = []
+
+    for rel in MACEFF_FOOTPRINT_PATHS:
+        if (home / rel).exists():
+            violations.append(rel)
+
+    # Hooks are installed by editing settings.json rather than by adding a file, so
+    # their absence cannot be checked by path.
+    settings = home / '.claude' / 'settings.json'
+    if settings.exists():
+        try:
+            data = json.loads(settings.read_text())
+        except (json.JSONDecodeError, OSError):
+            data = {}
+        if data.get('hooks'):
+            violations.append('.claude/settings.json:hooks')
+        style = data.get('outputStyle')
+        if style and 'maceff' in str(style).lower():
+            violations.append(f'.claude/settings.json:outputStyle={style}')
+
+    # MACEFF_* variables are "special context" even though they are not files.
+    bash_init = home / '.bash_init.sh'
+    if bash_init.exists():
+        for line in bash_init.read_text().splitlines():
+            stripped = line.strip()
+            if stripped.startswith('#'):
+                continue
+            if 'MACEFF_' in stripped:
+                violations.append(f'.bash_init.sh:{stripped}')
+
+    return violations
+
+
 def create_pa_user(agent_name: str, agent_spec: AgentSpec, defaults_dict: Optional[Dict] = None) -> None:
     """Create Primary Agent Linux user."""
     username = agent_spec.username
@@ -235,15 +291,20 @@ def create_pa_user(agent_name: str, agent_spec: AgentSpec, defaults_dict: Option
     display_name = getattr(agent_spec, 'display_name', None)
     agent_uuid = provision_agent_identity(username, str(home_dir), display_name, agent_name)
 
-    # Install SSH key if present
-    install_ssh_key(username)
+    # Install every declared SSH key (falls back to /keys/{username}.pub when undeclared)
+    install_ssh_key(username, getattr(agent_spec, 'ssh_keys', None))
+
+    # Every account gets a mailbox, vanilla included — email is a capability, not
+    # a framework artifact.
+    create_maildir(username)
 
     # Create bash_init.sh (MUST come before configure_bashrc)
     # This is the single source of truth for PA environment setup
     channels = None
     if agent_spec.claude_config and agent_spec.claude_config.channels:
         channels = agent_spec.claude_config.channels
-    create_bash_init(username, agent_name, channels=channels)
+    create_bash_init(username, agent_name, channels=channels,
+                     vanilla=getattr(agent_spec, 'is_vanilla', False))
 
     # Configure .bashrc to source bash_init.sh
     configure_bashrc(username)
@@ -252,26 +313,108 @@ def create_pa_user(agent_name: str, agent_spec: AgentSpec, defaults_dict: Option
     configure_claude_settings(username, agent_name, agent_spec, defaults_dict)
 
 
-def install_ssh_key(username: str) -> None:
-    """Install SSH key for user if available."""
+KEY_LINE_PREFIXES = ('ssh-', 'ecdsa-', 'sk-ssh-', 'sk-ecdsa-')
+
+# Mounted read-only by compose. A module constant rather than a literal so tests can
+# point it at a fixture directory.
+KEYS_DIR = Path('/keys')
+
+# Root of agent home directories. Constant for the same reason as KEYS_DIR; new code
+# should prefer it over the '/home/{user}' literals that predate it.
+HOME_ROOT = Path('/home')
+
+
+def resolve_ssh_keys(username: str, ssh_keys: Optional[List[str]]) -> List[str]:
+    """Resolve declared key references into public key lines.
+
+    Each entry is either a literal public key line (recognised by its key-type
+    prefix) or a NAME resolved against /keys/{name}.pub. Returns the key lines in
+    declaration order.
+
+    When ssh_keys is None the legacy single-file lookup applies, so existing
+    deployments that never declared keys keep working unchanged.
+
+    Unresolvable named keys raise. The alternative — skipping them — produces an
+    account that looks provisioned and cannot be logged into, and the operator
+    discovers it only when authentication fails.
+    """
+    if ssh_keys is None:
+        legacy = KEYS_DIR / f'{username}.pub'
+        if not legacy.exists():
+            return []
+        return [legacy.read_text().strip()]
+
+    resolved: List[str] = []
+    missing: List[str] = []
+
+    for entry in ssh_keys:
+        entry = entry.strip()
+        if entry.startswith(KEY_LINE_PREFIXES):
+            resolved.append(entry)
+            continue
+        key_file = KEYS_DIR / f'{entry}.pub'
+        if key_file.exists():
+            resolved.append(key_file.read_text().strip())
+        else:
+            missing.append(str(key_file))
+
+    if missing:
+        raise FileNotFoundError(
+            f"agent '{username}': declared ssh_keys could not be resolved: "
+            f"{', '.join(missing)}. Add the key file(s) to the mounted key "
+            f"directory, or inline the public key in agents.yaml."
+        )
+
+    return resolved
+
+
+def install_ssh_key(username: str, ssh_keys: Optional[List[str]] = None) -> None:
+    """Install every authorized public key for a user.
+
+    Multiple keys are what allows an account to be shared with a collaborator
+    without editing provisioning code.
+    """
     if not user_exists(username):
         return
 
+    key_lines = resolve_ssh_keys(username, ssh_keys)
+    if not key_lines:
+        return
+
     ssh_dir = Path(f'/home/{username}/.ssh')
-    key_file = Path(f'/keys/{username}.pub')
+    ssh_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    run_command(['chown', f'{username}:{username}', str(ssh_dir)])
+    run_command(['chmod', '700', str(ssh_dir)])
 
-    if key_file.exists():
-        ssh_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-        run_command(['chown', f'{username}:{username}', str(ssh_dir)])
-
-        authorized_keys = ssh_dir / 'authorized_keys'
-        run_command(['cp', str(key_file), str(authorized_keys)])
-        run_command(['chown', f'{username}:{username}', str(authorized_keys)])
-        run_command(['chmod', '600', str(authorized_keys)])
-        log(f"SSH key installed: {username}")
+    authorized_keys = ssh_dir / 'authorized_keys'
+    authorized_keys.write_text('\n'.join(key_lines) + '\n')
+    run_command(['chown', f'{username}:{username}', str(authorized_keys)])
+    run_command(['chmod', '600', str(authorized_keys)])
+    log(f"SSH keys installed: {username} ({len(key_lines)} key(s))")
 
 
-def create_bash_init(username: str, agent_name: str, channels: list = None) -> None:
+def create_maildir(username: str) -> Path:
+    """Create a standard Maildir in the account's home.
+
+    Deliberately NOT under agent/ — that tree is the MacEff footprint a vanilla
+    account is defined by not having, so putting mail inside it would make email a
+    framework-only capability. ~/Maildir is the universal convention and is readable
+    by any ordinary mail client with no framework knowledge.
+
+    Mode 700 throughout: mail is private to its owner. The broker delivers into it
+    as root, so group access is never needed.
+    """
+    maildir = HOME_ROOT / username / 'Maildir'
+    for sub in ('', 'cur', 'new', 'tmp'):
+        d = maildir / sub if sub else maildir
+        d.mkdir(mode=0o700, parents=True, exist_ok=True)
+    run_command(['chown', '-R', f'{username}:{username}', str(maildir)])
+    run_command(['chmod', '-R', '700', str(maildir)])
+    return maildir
+
+
+def create_bash_init(username: str, agent_name: str, channels: list = None,
+                     vanilla: bool = False) -> None:
     """Create ~/.bash_init.sh for shell initialization (interactive + non-interactive).
 
     This file is the single source of truth for PA-specific environment setup.
@@ -295,24 +438,33 @@ def create_bash_init(username: str, agent_name: str, channels: list = None) -> N
 
     # Build channels env var block if configured
     channels_block = ''
-    if channels:
+    if channels and not vanilla:
         channels_str = ' '.join(channels)
         channels_block = f'''
 # CC Channels configuration (from agents.yaml claude_config.channels)
 export MACEFF_CHANNELS="{channels_str}"
 '''
 
+    # Vanilla accounts get the toolchain environment but no MACEFF_* variables.
+    # env.d/ is deployment-provided toolchain setup (conda, Lean, TeX), not framework
+    # semantics, so it is sourced for both flavors — a vanilla agent still needs a
+    # working compiler on its PATH.
+    if vanilla:
+        identity_block = '# Vanilla account: no MacEff environment by design'
+    else:
+        identity_block = f'''# PA-specific environment (container-wide vars in /etc/environment)
+export MACEFF_AGENT_HOME_DIR="$HOME"
+export MACEFF_AGENT_NAME="{agent_name}"'''
+
     bash_init_content = f'''#!/bin/bash
-# MacEff: Shell initialization for both interactive and non-interactive shells
+# Shell initialization for both interactive and non-interactive shells
 # Created by start.py - DO NOT EDIT MANUALLY
 # Sourced by: ~/.bashrc (interactive) and BASH_ENV (non-interactive)
 
 # Self-referential BASH_ENV for nested shells
 export BASH_ENV="$HOME/.bash_init.sh"
 
-# PA-specific environment (container-wide vars in /etc/environment)
-export MACEFF_AGENT_HOME_DIR="$HOME"
-export MACEFF_AGENT_NAME="{agent_name}"
+{identity_block}
 {channels_block}
 # Source deployment-provided environment scripts (alphanumeric order)
 # Scripts: 00-core, 10-lang-managers, 20-path, 50-custom, 90-final
@@ -422,22 +574,32 @@ def configure_claude_settings(
             for field in layer.model_fields:
                 setattr(merged_prefs, field, getattr(layer, field))
 
-    # Apply layers: defaults < agent overrides
-    if defaults_dict and defaults_dict.get('claude_config'):
+    # Apply layers: defaults < agent overrides.
+    #
+    # Vanilla accounts skip the deployment defaults entirely. Those defaults are
+    # MacEff deployment defaults — they name things like outputStyle
+    # 'maceff-compliance', whose backing file is installed by a step vanilla
+    # accounts do not run. Inheriting them would point the account's config at
+    # framework assets that are not there. An explicit per-agent claude_config is
+    # still honoured, so a vanilla account can be configured deliberately.
+    is_vanilla = getattr(agent_spec, 'is_vanilla', False)
+    if defaults_dict and defaults_dict.get('claude_config') and not is_vanilla:
         merge_layer(defaults_dict['claude_config'])
     if agent_spec.claude_config:
         merge_layer(agent_spec.claude_config.model_dump())
 
     # Inject PA-specific environment variables (belt-and-suspenders with BASH_ENV)
-    # These are available to Claude Code directly without shell sourcing
-    pa_env_vars = {
-        'MACEFF_AGENT_HOME_DIR': str(home_dir),
-        'MACEFF_AGENT_NAME': agent_name,
-    }
-    # Merge PA vars into env (don't overwrite explicit config)
-    for key, value in pa_env_vars.items():
-        if key not in merged_settings.env:
-            merged_settings.env[key] = value
+    # These are available to Claude Code directly without shell sourcing.
+    # Skipped for vanilla accounts, which must carry no MACEFF_* context anywhere.
+    if not is_vanilla:
+        pa_env_vars = {
+            'MACEFF_AGENT_HOME_DIR': str(home_dir),
+            'MACEFF_AGENT_NAME': agent_name,
+        }
+        # Merge PA vars into env (don't overwrite explicit config)
+        for key, value in pa_env_vars.items():
+            if key not in merged_settings.env:
+                merged_settings.env[key] = value
 
     # Write ~/.claude/settings.json (preserve user keys like 'theme')
     settings_file = claude_dir / 'settings.json'
@@ -958,6 +1120,14 @@ def initialize_agents(agents_config: AgentsConfig) -> None:
     for agent_name, agent_spec in agents_config.agents.items():
         username = agent_spec.username
 
+        # Vanilla accounts get neither the macf agent scaffolding nor the hooks.
+        # Hooks are the loudest part of the MacEff footprint — they inject banners
+        # and policy into every turn — so installing them would contradict the
+        # flavor outright.
+        if getattr(agent_spec, 'is_vanilla', False):
+            log(f"Vanilla account, skipping macf init and hooks: {username}")
+            continue
+
         # Run macf_tools agent init
         cmd = f'su - {username} -c "macf_tools agent init"'
         result = subprocess.run(cmd, shell=True, capture_output=True)
@@ -1370,10 +1540,24 @@ def main() -> int:
 
         # Create Primary Agents
         for agent_name, agent_spec in agents_config.agents.items():
-            log(f"Setting up PA: {agent_spec.username}")
+            flavor = getattr(agent_spec, 'flavor', None)
+            flavor_label = getattr(flavor, 'value', 'maceff')
+            log(f"Setting up PA: {agent_spec.username} (flavor={flavor_label})")
 
-            # Create user
+            # Create user — both flavors get home, SSH, mailbox, shell env, settings
             create_pa_user(agent_name, agent_spec, defaults_dict)
+
+            # Everything below this line IS the MacEff footprint. A vanilla account
+            # is defined by receiving none of it: no agent/ tree, no consciousness
+            # artifacts, no personal policies, no layered CLAUDE.md, no PREAMBLEs, no
+            # framework commands/skills/output-styles, no subagents.
+            if getattr(agent_spec, 'is_vanilla', False):
+                log(f"  Vanilla account — skipping MacEff provisioning entirely")
+                violations = vanilla_home_violations(Path(f'/home/{agent_spec.username}'))
+                if violations:
+                    log(f"  WARNING: vanilla home is not clean: {', '.join(violations)}")
+                    log(f"  (a previous maceff-flavored run may have left artifacts behind)")
+                continue
 
             # Create agent tree
             create_agent_tree(agent_spec.username, agent_spec, defaults_dict)
@@ -1430,8 +1614,11 @@ def main() -> int:
         # Initialize agents with macf_tools
         initialize_agents(agents_config)
 
-        # Install SSH key for admin
-        install_ssh_key('admin')
+        # Install SSH keys for admin (declared in agents.yaml defaults, or legacy file)
+        admin_keys = None
+        if agents_config.defaults:
+            admin_keys = getattr(agents_config.defaults, 'admin_ssh_keys', None)
+        install_ssh_key('admin', admin_keys)
 
         # Setup policies
         setup_policies()
