@@ -4,7 +4,7 @@
 **Type**: Infrastructure (opt-in)
 **Scope**: All agents (PA and SA), and the broker that serves them
 **Status**: ACTIVE — specification. No implementation is authorized by this document.
-**Version**: 1.0
+**Version**: 1.1
 **Supersedes**: the provisional `amail/v0` convention shipped in agent mailbox READMEs
 
 ---
@@ -58,6 +58,18 @@ becomes tractable once the address stops encoding how the message travels.
 **6 Inbound Handling**
 - What happens to mail from a sender who is not on the contact list?
 - Why is inbound mail untrusted input even from a trusted sender?
+- What do SPF, DKIM and DMARC each actually authenticate?
+- Why is an Authentication-Results header never trusted from the wire?
+- What are the four inbound trust classes and what does each prove?
+- Why must a trust label be unforgeable from the message body?
+- Why does sender authenticity matter more when the recipient is a model?
+
+**9 Authorship Signing**
+- Why is DKIM not sufficient when the contact book names correspondents?
+- Who holds the private key, and why is that not a credential in the
+  compromised-agent sense?
+- What does a signature cover, and what does it deliberately not cover?
+- How does key rotation work without a flag day?
 
 **7 Threat Model**
 - What does this design actually defend against?
@@ -333,6 +345,256 @@ message takes, and its arrival from a permitted address does not change that.
 
 ---
 
+### 6.3 What the internet proves, and what it does not
+
+Mail from outside the deployment arrives over SMTP, which authenticates nothing
+on its own. Three mechanisms exist, and **each authenticates something different
+from what its name suggests**. Stating this precisely is not pedantry: every one
+of them is routinely cited as protection against a threat it does not address.
+
+| mechanism | what it actually authenticates |
+|---|---|
+| SPF | that the sending IP is authorised for the **envelope** sender (`MAIL FROM` / `Return-Path`) — *not* the `From:` a reader sees |
+| DKIM | that the message was signed by the **domain** in the `d=` tag, and that the signed headers and body are unmodified |
+| DMARC | that an SPF- or DKIM-authenticated domain **aligns** with the visible `From:` domain, plus a published disposition |
+
+Three consequences are normative:
+
+1. **SPF alone does not protect the header a reader sees.** A message can pass
+   SPF and still display any `From:` at all.
+2. **DMARC passing does not mean the message is from who it appears to be
+   from.** It means the message is from the domain it claims. A message reading
+   `"Some Trusted Person" <attacker@attacker.test>` passes DMARC cleanly,
+   because the attacker's domain genuinely is the attacker's domain.
+3. **The display name is free text that no protocol validates.** Contact
+   matching MUST be performed on the address and MUST NOT consider the display
+   name. A renderer MUST NOT present a display name where it could be mistaken
+   for an authenticated identity.
+
+### 6.4 Authentication results are established here, never trusted from the wire
+
+An `Authentication-Results` header is ordinary text. Anything that can send mail
+can write one.
+
+The broker MUST discard every inbound `Authentication-Results`, `ARC-*` and
+amail trust header before evaluation, and MUST perform its own SPF/DKIM/DMARC
+evaluation at a boundary it controls. RFC 8601 §5 requires the same thing for
+the same reason: without it, a forged header leads a reader to a false
+conclusion.
+
+**A third party's verdict is a claim in the payload.** Relying on a hosted
+provider's stamp rather than evaluating at our own boundary reintroduces exactly
+the defect this specification's local socket was designed to exclude — identity
+taken from the message instead of from something the sender cannot control. It
+is the same mistake at a different scale, and it is named here so it is not
+re-argued later as a convenience.
+
+### 6.5 Inbound trust classification
+
+Every stored inbound message MUST carry a classification. The taxonomy extends
+the outbound trust boundary — where fields the broker mints, checks, binds and
+passes through are distinguished — to mail the broker did not mint at all:
+
+| class | what has been proven |
+|---|---|
+| `ATTESTED` | a signature verified against the public key this agent has declared for the correspondent — the **correspondent** is proven |
+| `DOMAIN_AUTH` | DMARC passed with alignment, evaluated at our own boundary — the **domain** is proven; the person is not |
+| `UNVERIFIED` | the message arrived; nothing about its origin was established |
+| `SUSPECT` | authentication was attempted and **failed**, or a correspondent who has declared a key sent unsigned mail |
+
+Rules:
+
+- Classification MUST be computed by the broker and MUST NOT be settable, or
+  influenceable, by anything in the message.
+- A message MUST NOT be promoted to `ATTESTED` on the strength of domain
+  authentication. The two answer different questions, and conflating them
+  discards the distinction the taxonomy exists to preserve.
+- `SUSPECT` MUST NOT be collapsed into `UNVERIFIED`. **A failed check is
+  evidence; an absent check is not.** A system that renders them identically has
+  discarded the more valuable of the two.
+- Unsigned mail from a correspondent who has declared a key is `SUSPECT`.
+  Declaring a key is a commitment to using one, and an attacker holding the
+  address but not the key will simply omit the signature and hope nobody checks.
+- Classification MUST be recorded in the audit log alongside the delivery
+  decision.
+
+**Classification is not permission.** An `ATTESTED` message from an unlisted
+sender is still quarantined per §6.1. A proof of identity is not a grant of
+access, and the contact list remains the authority on who may reach an agent.
+
+### 6.6 Trust labelling MUST be unforgeable from the message
+
+The classification MUST be stored as metadata alongside the message, and any
+client presenting it MUST render it from that metadata. A client MUST NOT derive
+displayed trust status from message content.
+
+An attacker's most direct answer to a trust banner is to type one into the
+message body. If a reader renders the body verbatim, a forged banner appears
+beside the real one — in the same style, with the same words — and the label
+then raises confidence in precisely the messages it should lower it for.
+
+Therefore:
+
+1. **Stored metadata is authoritative.** It is the only source for a rendered
+   label.
+2. **A renderer MUST neutralise content that can alter the display itself** —
+   terminal control sequences and Unicode format characters — since either can
+   redraw or reorder a label that was rendered correctly.
+3. An unrecognised classification MUST render as unrecognised. A value a build
+   does not understand is not a reason for confidence.
+
+### 6.7 Why this matters more here than in ordinary mail
+
+**The recipient is a language model.**
+
+A human who receives a message that appears to be from a colleague brings
+scepticism to it; an unusual request reads as unusual. An agent reading mail
+from an allowlisted contact treats it as being from that contact — and §6.2
+concedes that the protocol enforces no part of the "bodies are data" posture it
+requires.
+
+So for this system, sender authenticity is not presentation quality. It is the
+**authorization boundary**: a message that appears to be from a trusted human
+reads as carrying that human's authority unless something structural prevents
+it. §6.3 through §6.6 exist to be that structure.
+
+---
+
+## 9 Authorship Signing
+
+v1.0 §8 deferred this, for a reason that was correct: *"signing without key
+custody and rotation is ceremony, and key management deserves its own decision
+rather than being smuggled in beneath a mail spec."* This section is that
+decision, taken deliberately.
+
+### 9.1 Why domain authentication is not enough
+
+DKIM is already public-key authentication, already deployed, and already
+understood — and it authenticates the wrong granularity. Its `d=` tag names a
+**signing domain**. Every agent beneath one mail domain shares that domain's
+key, so a DKIM signature proves a message passed through some infrastructure,
+not which correspondent composed it.
+
+A contact book that names **correspondents** cannot be enforced by a mechanism
+that authenticates **domains**. §5.3 already says this in prose; §9 is what it
+looks like when acted on.
+
+### 9.2 Key custody
+
+A contact entry MAY declare one or more public keys for that correspondent.
+
+**Agents hold their own private signing keys, mode 600, in their own homes. The
+broker holds only public keys.**
+
+This looks like it contradicts §3's "the agent has never held a credential" and
+does not. A signing key is not a **transport** credential. Holding one lets an
+agent prove it is itself. It does not let the agent reach the internet, does not
+let it reach an unlisted recipient, and does not let it sign as anyone else — a
+forged signature fails against that correspondent's public key, and the broker
+refuses a sender that disagrees with the kernel long before it gets that far. A
+compromised agent can strip its own signature, which makes its own mail
+`SUSPECT` at every correspondent that has declared a key for it: self-harm, not
+attack.
+
+**This requires that locally-submitted mail be classified by the same classifier
+as inbound mail.** A v1.1 implementation minted `ATTESTED` unconditionally for
+local submissions — on the defensible argument that peer credentials prove
+authorship more strongly than a signature does — and thereby made the sentence
+above false: a stripped signature still arrived labelled as signed, as did a
+signature that demonstrably did not verify. Kernel-established authorship is a
+real fact and belongs in the audit record, which is broker-owned. It MUST NOT be
+reported through a label whose entire purpose is to tell a reader what that
+reader could re-check for themselves.
+
+What this buys over broker-held keys: a signature proves authorship **even to a
+party that does not trust the broker**. A broker holding private keys could
+forge any agent's mail, and §7.2 already concedes a compromised broker is
+undefended. This narrows that concession for authorship specifically, which is
+the one place it is cheap to narrow.
+
+**Two kinds of signing key exist and their custody rules are opposite.** They
+share a name, which makes conflating them easy and expensive:
+
+| key | signs | custody |
+|---|---|---|
+| domain key (e.g. DKIM) | **for the domain** — anything holding it signs as every agent | broker's drawer, readable by no agent |
+| authorship key (§9) | **as one correspondent** | that correspondent's own home |
+
+A domain key in an agent's home is a forgery key for the entire namespace. Where
+a hosted relay generates and holds the domain key, none exists on the
+deployment's side and the question does not arise — but it returns the moment an
+operator signs for themselves, so the rule is recorded here rather than left in
+whichever conversation happened to notice it.
+
+A key declared for a correspondent MUST be scoped to the agent whose contact
+list declares it. Two agents may know the same correspondent under different
+keys, and merging them would let one agent's configuration decide what another
+agent is willing to believe.
+
+### 9.3 What a signature covers
+
+The signature MUST cover a canonical serialisation of: `from`, `to`, `subject`,
+and a cryptographic hash of `body`. Canonical means deterministic bytes — two
+implementations that agree on the fields must not be able to disagree on the
+encoding.
+
+The body is covered **by hash**, so a signature can be checked without
+re-transmitting the body, and so a truncated body fails verification rather than
+silently verifying against text the sender never wrote.
+
+**Message id and date are deliberately NOT covered.** The broker re-mints both
+on inbound — a remote-chosen message id shadows a real message, and a
+remote-chosen date controls reader ordering. Covering them would mean every
+inbound signature verified once at ingress and never again, because the fields
+it committed to would have been replaced by the time the message was stored.
+That would make the broker the sole and unrepeatable verifier, which is the
+thing end-to-end signing exists to avoid. The payload therefore covers what the
+message **is**, not what it was called in transit, and a stored message remains
+verifiable by anyone holding the correspondent's public key.
+
+**The signature MUST be computed over the message's canonical STORED form, not
+over an in-memory object.** This is not an optimisation. A v1.1 implementation
+that signed the in-memory values produced signatures that verified once, at
+ingress, and never again — storage rewrites the body's trailing newlines, strips
+header whitespace, and folds control characters. Seven of ten realistic inputs
+became unverifiable the moment they were stored, while their recorded label
+still read `ATTESTED`, and the most common real send — a body read from a file,
+which ends in a newline — was among the broken cases.
+
+An implementation MUST therefore guarantee `sign(m) == sign(deserialize(
+serialize(m)))`, and SHOULD assert it as a property over adversarial inputs.
+The failure is invisible at the only moment anyone would look, because the
+ingress check runs on the pre-storage object and passes.
+
+The cost is stated rather than hidden: a captured message can be re-delivered
+and will still verify. That is replay, not forgery, and it appears in §7.2.
+
+Transport headers MUST NOT be covered. §5.3: they belong to the journey.
+
+### 9.4 Algorithm and rotation
+
+The algorithm MUST be named in the key, never in the message. An algorithm field
+a message can choose is an algorithm an attacker can choose — including "none",
+which is how a generation of token implementations was broken.
+
+A contact entry MAY declare several keys, and a signature verifying against
+**any** of them is accepted. This is what makes rotation possible without a flag
+day: publish the new key alongside the old, let in-flight mail verify, then drop
+the old one. Rotation that requires coordination is rotation that never happens,
+and the key that is never rotated is the one that eventually leaks.
+
+### 9.5 The backend is required, not optional
+
+An implementation MUST NOT provide amail without the cryptographic backend §9
+depends on.
+
+Degrading — running without it and classifying everything `UNVERIFIED` — would
+produce a mail system that works, whose trust labels are structurally incapable
+of ever saying anything, and whose operator has no way to notice. A capability
+that is absent is honest. A capability that is present but hollow is not.
+
+---
+
 ## 7 Threat Model
 
 State the boundary explicitly, because an unstated boundary gets assumed to be
@@ -355,11 +617,25 @@ wherever the reader hopes.
 - **Content disclosure to a permitted correspondent.** See §4.3.
 - **Social relay.** An agent may ask a permitted human to forward something.
 - **Prompt injection arriving by mail.** §6.2 states the required posture; the
-  protocol enforces no part of it.
+  protocol enforces no part of it. §6.3–§6.7 make the *source* legible — they do
+  not make the *content* safe, and an `ATTESTED` message from a genuine
+  correspondent can still carry hostile instructions.
 - **Metadata at the relay.** Rung 3 exposes correspondents and timing to the
   transport provider. Rungs 1 and 2 avoid this, which is one reason the ladder
   prefers them.
-- **Authorship.** Nothing in v1 proves which agent composed a message.
+- **Authorship, where no key is declared.** v1.0 listed this as wholly
+  undefended. Since v1.1 a correspondent who declares a public key and signs is
+  provable (§9), and the classification records which case a message is in. The
+  residue is visible rather than assumed away: a correspondent with no declared
+  key is exactly as unproven as before, and the label says so.
+- **Replay of a signed message.** The signature does not cover the message id or
+  date (§9.3), so a captured message can be re-delivered and will still verify.
+  The content is genuinely from that correspondent — this is duplication, not
+  forgery — and it is the price of keeping a stored message verifiable by
+  anyone rather than only by the broker that received it.
+- **A correspondent's compromised key or account.** A signature proves custody
+  of a key, not the intentions of whoever holds it.
+- **A correspondent who forwards hostile content in good faith.**
 - **Recipient-side compromise.** Out of scope entirely.
 
 ---
@@ -380,13 +656,19 @@ wherever the reader hopes.
 - *No diagnostic trail existed for a channel outage.* Resolved by §3.3.
 - *Protocol shaped by its first transport.* Resolved by writing this before the
   client, and by §5.3 naming what must not propagate inward.
+- *Nothing proved which agent composed a message.* Resolved in v1.1 by §9, with
+  the residue for keyless correspondents left visible in the classification
+  rather than assumed away.
+- *An upstream authentication verdict could be believed.* Resolved by §6.4: the
+  verdict is established at our own boundary and every inbound claim to one is
+  discarded.
 
 **Deferred, with reasons:**
 
-- **Per-message authorship signing.** Genuinely wanted, and §5.1 leaves room for a
-  signature field. Deferred because signing without key custody and rotation is
-  ceremony, and key management deserves its own decision rather than being smuggled
-  in beneath a mail spec.
+- ~~**Per-message authorship signing.**~~ **RESOLVED in v1.1 by §9.** The
+  deferral's reasoning was right and is the reason §9 exists as its own section
+  with explicit custody (§9.2) and rotation (§9.4) decisions, rather than as a
+  signature field added quietly to §5.1.
 - **Encryption at rest and in transit beyond transport TLS.** Same reasoning.
 - **A dedicated task type for inbound mail.** Wanted so mail is tracked natively
   rather than becoming a generic task with hand-built structure. Deferred to

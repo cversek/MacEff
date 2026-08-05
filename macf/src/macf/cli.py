@@ -1,6 +1,6 @@
 # PYTHON_ARGCOMPLETE_OK
 # tools/src/maceff/cli.py
-import argparse, json, os, subprocess, sys, glob, platform, socket
+import argparse, json, os, re, subprocess, sys, glob, platform, socket, unicodedata
 from pathlib import Path
 from datetime import datetime, timezone
 try:
@@ -8158,6 +8158,359 @@ def _check_port_available(port: int, host: str = "127.0.0.1") -> tuple:
     return False, None
 
 
+def _amail_config() -> dict:
+    """Resolve amail settings: agent address and broker socket.
+
+    Environment wins over the config file so a test or a one-off can retarget
+    without editing agent state.
+    """
+    from macf.utils.paths import find_agent_home
+    cfg = {}
+    home = find_agent_home()
+    if home:
+        p = Path(home) / ".maceff" / "amail.json"
+        if p.exists():
+            try:
+                cfg = json.loads(p.read_text())
+            except (OSError, ValueError):
+                cfg = {}
+            # json.loads succeeds on any JSON value, not just an object. A file
+            # containing `[]`, `"x"`, `7`, `null` or `true` parses fine and then
+            # has no .setdefault, crashing every amail subcommand with an
+            # AttributeError traceback. Fail-closed either way — but a clean
+            # "not configured" message is diagnosable and a traceback is not.
+            if not isinstance(cfg, dict):
+                cfg = {}
+    cfg.setdefault("domain", os.environ.get("MACF_AMAIL_DOMAIN", ""))
+    cfg.setdefault("socket", os.environ.get("MACF_AMAIL_SOCKET", "/run/amail/broker.sock"))
+    cfg.setdefault("agent", os.environ.get("MACEFF_AGENT_NAME", ""))
+    # The agent's OWN private signing key. It lives in the agent's home, not the
+    # broker's: a signing key proves authorship and reaches nothing, so holding
+    # one does not give a compromised agent any reach it did not have. Keeping it
+    # out of the broker is what lets a signature mean something to a party that
+    # does not trust the broker.
+    cfg.setdefault("signing_key", os.environ.get(
+        "MACF_AMAIL_SIGNING_KEY",
+        str(Path(home) / ".maceff" / "amail_signing_key.pem") if home else ""))
+    for k in ("domain", "socket", "agent"):
+        if os.environ.get(f"MACF_AMAIL_{k.upper()}"):
+            cfg[k] = os.environ[f"MACF_AMAIL_{k.upper()}"]
+    cfg["home"] = str(home) if home else ""
+    return cfg
+
+
+#: Control characters that must never reach a terminal verbatim.
+#:
+#: C0 except tab and newline, DEL, and the C1 block: ESC is the one that
+#: matters, since it opens the sequences that reposition the cursor, recolour,
+#: or clear the screen.
+#:
+#: Plus the Unicode bidirectional overrides and isolates (U+202A–U+202E,
+#: U+2066–U+2069). These drive no cursor and forge no escape sequence, so the
+#: first version passed them — but they reorder how text RENDERS, which is the
+#: Trojan-source technique, and the whole reason this function exists is that a
+#: reader must be able to trust what the screen says. Reordering the display is
+#: a quieter way of achieving what cursor control achieves loudly.
+#:
+#: Written as escapes, not as the characters themselves: a literal bidi override
+#: inside this source file would reorder the very line that defines it.
+_TERM_UNSAFE = re.compile("[\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f]")
+
+
+def _escape_codepoint(ch: str) -> str:
+    """\\xNN for a byte-range code point, \\uNNNN above it.
+
+    Formatting U+202E as \\x202e would be ambiguous — it reads as \\x20 followed
+    by the literal text '2e'. The escape has to be unambiguous or the rendering
+    is itself a small forgery.
+    """
+    n = ord(ch)
+    return f"\\x{n:02x}" if n <= 0xFF else f"\\u{n:04x}"
+
+
+def _term_safe(value: object) -> str:
+    """Render untrusted message content without handing the terminal control.
+
+    Message bodies come from a correspondent and are printed to the operator's
+    terminal. An escape sequence in a body can overwrite what was already
+    displayed — including the trust labelling above it — so a message could
+    claim to be from someone it is not by simply redrawing the screen. Headers
+    are already sanitised by _hdr() at serialisation; the body deliberately is
+    not, because a body may legitimately contain anything. That makes the
+    RENDERER the correct place to neutralise it.
+
+    Escaped rather than stripped: the reader should be able to see that the
+    message contained control characters, since that is itself informative.
+    """
+    s = "" if value is None else str(value)
+    # Fast path in C for the overwhelmingly common case: plain ASCII with no
+    # control characters. Everything else is inspected one code point at a time,
+    # which a 256 KiB body can afford once, at read time, on a human's request.
+    if s.isascii() and not _TERM_UNSAFE.search(s):
+        return s
+    out = []
+    for ch in s:
+        # Cf is the CATEGORY, not a hand-kept list. The first version enumerated
+        # the bidi overrides and isolates and shipped — and round 8 found it
+        # still passed LRM/RLM (which are bidi controls too), every zero-width
+        # character, the word joiner, the soft hyphen, and the Unicode tag block,
+        # which can smuggle entirely invisible text into a rendered sender label.
+        # Enumerating members of a category is how you get a list that is right
+        # on the day it is written; naming the category is how you get one that
+        # stays right.
+        if _TERM_UNSAFE.match(ch) or (not ch.isascii()
+                                      and unicodedata.category(ch) == "Cf"):
+            out.append(_escape_codepoint(ch))
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+#: Rendered trust labels. Deliberately NOT derived from anything in the message
+#: body — see _trust_badge.
+_TRUST_BADGES = {
+    "attested": "✅ [signed by this correspondent]",
+    "domain_auth": "🔶 [domain authenticated — sender NOT proven]",
+    "unverified": "❔ [unverified origin]",
+    "suspect": "🚨 [SUSPECT — authentication failed]",
+    None: "❔ [no classification recorded]",
+}
+
+
+def _trust_badge(message) -> str:
+    """The trust label, rendered FROM STORED METADATA and never from the body.
+
+    THIS IS THE RULE THAT MAKES THE LABEL WORTH ANYTHING. An attacker's most
+    direct answer to a trust banner is to type one into their message. If the
+    renderer took its label from message content, a forged badge would appear
+    beside the real one, in the same style, with the same words — and the label
+    would raise confidence in exactly the messages it exists to lower it for.
+
+    So the badge comes from `message.trust`, which the broker mints and a sender
+    can never set, and the body is separately neutralised by _term_safe() so it
+    cannot redraw the badge that was already printed.
+
+    An unrecognised value renders as unrecognised rather than falling through to
+    something reassuring. A classification this build does not understand is not
+    a reason for confidence.
+    """
+    value = getattr(message, "trust", None)
+    return _TRUST_BADGES.get(value, f"❔ [unrecognised classification: {_term_safe(value)}]")
+
+
+def cmd_amail_keygen(args: argparse.Namespace) -> int:
+    """Generate this agent's authorship signing key and print its public half."""
+    from macf.amail import SigningError, generate_keypair
+
+    cfg = _amail_config()
+    target = Path(args.path) if args.path else Path(cfg.get("signing_key") or "")
+    if not str(target):
+        print("❌ cannot determine where to write the key; pass --path")
+        return 1
+    if target.exists():
+        # Never silently replace one: overwriting invalidates every signature
+        # this correspondent has already published, and doing it by accident is
+        # indistinguishable from doing it maliciously.
+        print(f"❌ a signing key already exists at {target}.")
+        print("   Refusing to overwrite it — that would invalidate every signature")
+        print("   you have published. Move it aside deliberately if you mean to rotate.")
+        return 1
+    try:
+        public = generate_keypair(target)
+    except (SigningError, OSError) as e:
+        print(f"❌ could not generate a signing key: {e}")
+        return 1
+    print(f"✅ signing key written to {target} (mode 600)")
+    print("\nGive your correspondents this public key so they can verify you:\n")
+    print(f"    {public}\n")
+    print("In their contact list, as an entry for your address:")
+    print(f'    {{"address": "{cfg.get("agent","<you>")}@{cfg.get("domain","<domain>")}", '
+          f'"key": "{public}"}}')
+    print("\nKeep the private key where it is. It proves authorship and reaches")
+    print("nothing — the broker never holds it, which is what lets your signature")
+    print("mean something to someone who does not trust the broker.")
+    return 0
+
+
+def cmd_amail_send(args: argparse.Namespace) -> int:
+    """Submit a message to the broker.
+
+    The broker decides whether it may be sent. This command never delivers
+    directly and never falls back to another transport when the broker is
+    unreachable — that would route around the only thing enforcing the contact
+    list.
+    """
+    from macf.amail import Message, submit, BrokerUnavailable
+
+    cfg = _amail_config()
+    if not cfg["agent"] or not cfg["domain"]:
+        print("❌ amail is not configured: need an agent name and a mail domain.")
+        print("   Set MACF_AMAIL_DOMAIN / MACEFF_AGENT_NAME, or write ~/.maceff/amail.json")
+        return 1
+
+    body = args.body
+    if args.body_file:
+        try:
+            body = Path(args.body_file).read_text()
+        except OSError as e:
+            print(f"❌ cannot read --body-file: {e}")
+            return 1
+        except UnicodeDecodeError:
+            # A mail body is text. Saying so beats a traceback whose top frame is
+            # a codec the operator never invoked.
+            print(f"❌ --body-file {args.body_file} is not valid UTF-8 text.")
+            return 1
+    if body is None:
+        print("❌ nothing to send: pass --body or --body-file")
+        return 1
+
+    msg = Message(sender=f"{cfg['agent']}@{cfg['domain']}", to=list(args.to),
+                  subject=args.subject or "", body=body)
+    if args.reply_to:
+        from macf.amail import store
+        parent = store.find(Path(cfg["home"]), args.reply_to) if cfg["home"] else None
+        if parent is None:
+            print(f"❌ no message '{args.reply_to}' in this mailbox to reply to")
+            return 1
+        msg = parent.reply(sender=msg.sender, body=body, subject=args.subject)
+        msg.to = list(args.to) or msg.to
+
+    # SIGN BEFORE SUBMITTING, if this agent has a key.
+    #
+    # Signing here rather than in the broker is the whole point: the broker holds
+    # no private key, so it cannot forge this agent's mail, and a recipient who
+    # distrusts the broker can still establish authorship. Absence of a key is
+    # not an error — an agent whose correspondents have not asked for signatures
+    # has nothing to prove — but a key that exists and CANNOT BE USED is, because
+    # sending unsigned when the correspondent expects signed is exactly the shape
+    # of an impersonation.
+    keypath = Path(cfg["signing_key"]) if cfg.get("signing_key") else None
+    if keypath and keypath.exists():
+        from macf.amail import SigningError, load_private_key, sign
+        try:
+            msg.signature = sign(msg, load_private_key(keypath))
+        except SigningError as e:
+            print(f"❌ cannot sign with {keypath}: {e}")
+            print("   Refusing to send unsigned: a correspondent who has your key "
+                  "treats unsigned mail as suspect.")
+            return 1
+
+    try:
+        result = submit(cfg["agent"], msg, Path(cfg["socket"]))
+    except BrokerUnavailable as e:
+        print(f"❌ {e}")
+        return 1
+
+    if args.json:
+        print(json.dumps(result, indent=2))
+        return 0 if result.get("ok") else 1
+
+    if not result.get("ok"):
+        # Refusals are surfaced, never swallowed. An agent that cannot tell a
+        # message was refused learns to believe mail was delivered.
+        for r in result.get("refused", []):
+            print(f"🚫 refused: {r}")
+        for f in result.get("failures", []):
+            print(f"❌ {f['recipient']}: {f['error']}")
+        if result.get("error"):
+            print(f"❌ {result['error']}")
+        return 1
+    for d in result.get("delivered", []):
+        print(f"✅ delivered to {d['recipient']} (rung: {d['rung']})")
+    print(f"   message-id: {result['message_id']}")
+    print(f"   thread-id:  {result['thread_id']}")
+    return 0
+
+
+def cmd_amail_list(args: argparse.Namespace) -> int:
+    """List messages in this agent's mailbox."""
+    from macf.amail import store
+
+    cfg = _amail_config()
+    if not cfg["home"]:
+        print("❌ cannot locate agent home")
+        return 1
+    msgs = store.read_all(Path(cfg["home"]))
+    if args.thread:
+        msgs = [m for m in msgs if m.thread_id == args.thread]
+    if args.json:
+        print(json.dumps([m.to_dict() for m in msgs], indent=2))
+        return 0
+    if not msgs:
+        print("(no messages)")
+        return 0
+    for m in msgs:
+        print(f"{_term_safe(m.date)}  {_term_safe(m.sender)}  {_trust_badge(m)}")
+        print(f"    {_term_safe(m.subject)}")
+        print(f"    id={_term_safe(m.message_id)} thread={_term_safe(m.thread_id)}"
+              + (f" reply-to={_term_safe(m.parent)}" if m.parent else ""))
+    print(f"\n{len(msgs)} message(s)")
+    return 0
+
+
+def cmd_amail_read(args: argparse.Namespace) -> int:
+    """Print one message in full."""
+    from macf.amail import store
+
+    cfg = _amail_config()
+    if not cfg["home"]:
+        print("❌ cannot locate agent home")
+        return 1
+    m = store.find(Path(cfg["home"]), args.message_id)
+    if m is None:
+        print(f"❌ no message '{args.message_id}'")
+        return 1
+    if args.json:
+        print(json.dumps(m.to_dict(), indent=2))
+        return 0
+    # The badge is printed from stored metadata BEFORE the message, and the
+    # message body is neutralised so it cannot redraw what was already shown.
+    # Both halves are needed: a label the body can forge is decorative, and a
+    # label the body can erase is worse.
+    print(_trust_badge(m))
+    print(_term_safe(m.serialize()))
+    return 0
+
+
+def cmd_amail_status(args: argparse.Namespace) -> int:
+    """Report whether amail is usable, and say precisely what is missing if not."""
+    import socket as _socket
+    from macf.amail import store
+
+    cfg = _amail_config()
+    sock = Path(cfg["socket"])
+    reachable = False
+    if sock.exists():
+        try:
+            s = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+            s.settimeout(2.0)
+            s.connect(str(sock))
+            s.close()
+            reachable = True
+        except OSError:
+            reachable = False
+    box = store.maildir_for(Path(cfg["home"])) if cfg["home"] else None
+    count = len(store.read_all(Path(cfg["home"]))) if cfg["home"] else 0
+    info = {
+        "agent": cfg["agent"] or None,
+        "address": f"{cfg['agent']}@{cfg['domain']}" if cfg["agent"] and cfg["domain"] else None,
+        "socket": str(sock),
+        "broker_reachable": reachable,
+        "maildir": str(box) if box else None,
+        "messages": count,
+    }
+    if args.json:
+        print(json.dumps(info, indent=2))
+        return 0 if reachable else 1
+    print(f"address:  {info['address'] or '(unconfigured)'}")
+    print(f"maildir:  {info['maildir'] or '(unknown)'}  [{count} message(s)]")
+    print(f"broker:   {'✅ reachable' if reachable else '❌ unreachable'} at {sock}")
+    if not reachable:
+        print("\n   Mail cannot be sent without the broker. There is no fallback")
+        print("   transport by design — the broker is what enforces the contact list.")
+    return 0 if reachable else 1
+
+
 def cmd_proxy_start(args: argparse.Namespace) -> int:
     """Start the API proxy."""
     try:
@@ -9812,6 +10165,55 @@ def _build_parser() -> argparse.ArgumentParser:
     scope_check_parser.set_defaults(func=cmd_task_scope_check)
 
     # Proxy commands
+    # --- amail: agent mail (see `macf_tools policy navigate amail`) ---
+    amail_parser = sub.add_parser("amail", help="agent mail: send and read correspondence")
+    amail_sub = amail_parser.add_subparsers(dest="amail_cmd")
+
+    amail_send = amail_sub.add_parser(
+        "send", help="submit a message to the broker",
+        description=(
+            "Submit a message. The BROKER decides whether it may be sent — this "
+            "command holds no credential and performs no delivery. A refusal is "
+            "reported, never swallowed."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  macf_tools amail send --to peer@example.org --subject 'status' --body 'done'\n"
+            "  macf_tools amail send --to peer@example.org --body-file report.md\n"
+            "  macf_tools amail send --to peer@example.org --reply-to msg-123 --body 'ack'\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    amail_send.add_argument("--to", action="append", required=True, metavar="ADDRESS",
+                            help="recipient (repeat for several)")
+    amail_send.add_argument("--subject", help="subject line")
+    amail_send.add_argument("--body", help="message body")
+    amail_send.add_argument("--body-file", help="read the body from a file")
+    amail_send.add_argument("--reply-to", metavar="MESSAGE_ID",
+                            help="reply, joining that message's thread")
+    amail_send.add_argument("--json", action="store_true", help="machine-readable result")
+    amail_send.set_defaults(func=cmd_amail_send)
+
+    amail_list = amail_sub.add_parser("list", help="list messages in this mailbox")
+    amail_list.add_argument("--thread", metavar="THREAD_ID", help="only this thread")
+    amail_list.add_argument("--json", action="store_true", help="machine-readable output")
+    amail_list.set_defaults(func=cmd_amail_list)
+
+    amail_read = amail_sub.add_parser("read", help="print one message in full")
+    amail_read.add_argument("message_id", help="message id (see `amail list`)")
+    amail_read.add_argument("--json", action="store_true", help="machine-readable output")
+    amail_read.set_defaults(func=cmd_amail_read)
+
+    amail_keygen = amail_sub.add_parser(
+        "keygen", help="generate this agent's authorship signing key")
+    amail_keygen.add_argument("--path", help="where to write the private key "
+                                            "(default: ~/.maceff/amail_signing_key.pem)")
+    amail_keygen.set_defaults(func=cmd_amail_keygen)
+
+    amail_status = amail_sub.add_parser("status", help="is amail usable? what is missing?")
+    amail_status.add_argument("--json", action="store_true", help="machine-readable output")
+    amail_status.set_defaults(func=cmd_amail_status)
+
     proxy_parser = sub.add_parser("proxy", help="API proxy for CC call interception")
     proxy_sub = proxy_parser.add_subparsers(dest="proxy_cmd")
 
