@@ -57,6 +57,15 @@ MAX_SUBJECT = 998
 MAX_BODY = 1 << 18      # 256 KiB
 MAX_RECIPIENTS = 64     # ContactBook is consulted per recipient
 
+#: The trust classification, as data rather than prose. canonicalize() asserts
+#: its union covers every Message field, so a field added later fails loudly
+#: instead of silently defaulting to trusted.
+MINTED = frozenset({"message_id", "date"})
+CHECKED = frozenset({"sender"})
+BOUND = frozenset({"thread_id", "parent"})
+PASSED = frozenset({"subject", "body", "to"})
+_CLASSIFIED_FIELDS = MINTED | CHECKED | BOUND | PASSED
+
 
 class DeliveryError(RuntimeError):
     """Transport could not deliver. Never swallowed into a success."""
@@ -163,6 +172,19 @@ class Broker:
         several-kilobyte covert channel in fields that are supposed to be
         identifiers.
         """
+        # The enumeration is ASSERTED, not described. Round 4 demonstrated that
+        # adding one field to Message delivered 4,000 attacker bytes with ok=True
+        # and the suite still green — the docstring's "untrusted by default" was
+        # false, because the actual default was PASS. A claim in prose cannot
+        # notice a new field; this can.
+        unclassified = set(Message.__dataclass_fields__) - _CLASSIFIED_FIELDS
+        if unclassified:
+            raise AssertionError(
+                f"Message fields {sorted(unclassified)} are not classified in "
+                "canonicalize(). Add each to MINTED/CHECKED/BOUND/PASSED and "
+                "handle it, or it reaches storage untrusted."
+            )
+
         reasons: List[str] = []
 
         # CHECKED
@@ -273,6 +295,26 @@ class Broker:
         if not agent:
             raise DeliveryError(f"'{recipient}' is not a local mailbox")
         home = self.config.agent_homes[agent]
+
+        # Canonicalise INBOUND too. This is the other path that writes a Message
+        # to storage, and the one where the message is genuinely hostile rather
+        # than merely untrusted. Without it a remote sender chose message_id
+        # (shadowing a real message in find()), date (controlling reader
+        # ordering), and kilobytes of free text in the identifier fields — and a
+        # remote-chosen message_id then satisfied the outbound "parent must be
+        # visible" check. The inversion was applied to one path and not its twin,
+        # which is the same sibling-blindness the earlier rounds kept finding.
+        remote_sender = message.sender
+        message.message_id = new_id("msg")
+        message.date = _now_iso()
+        if message.parent is not None and not _ID_RE.match(message.parent or ""):
+            message.parent = None
+        if message.thread_id and not _THR_RE.match(message.thread_id):
+            message.thread_id = new_id("thr")
+        message.subject = (message.subject or "")[:MAX_SUBJECT]
+        message.body = (message.body or "")[:MAX_BODY]
+        message.sender = remote_sender
+
         permitted = self.contacts.permits(agent, message.sender) if self.contacts else False
         if permitted:
             deliver(home, message)

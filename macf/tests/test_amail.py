@@ -621,6 +621,44 @@ class TestSymlinkResistance:
         assert seen["flags"] & os.O_NOFOLLOW, "O_NOFOLLOW was not requested"
         assert seen["flags"] & os.O_EXCL, "O_EXCL was not requested"
 
+    def test_delivery_uses_directory_descriptors_not_paths(self, tmp_path, monkeypatch):
+        """Round 4 F1: reverting the whole dir-fd fix passed all 94 tests, and the
+        commit that introduced it CLAIMED it had been mutation-tested. It had not.
+
+        Checking a directory by name and re-opening by name is a check, not a
+        constraint — the name can be swapped between the two. Assert the
+        descriptor-relative calls, since a path-based implementation produces
+        identical results on every non-racing input.
+        """
+        opens, renames = [], []
+        real_open, real_rename = os.open, os.rename
+
+        def spy_open(path, flags, *a, **k):
+            opens.append((path, flags, k.get("dir_fd")))
+            return real_open(path, flags, *a, **k)
+
+        def spy_rename(src, dst, **k):
+            renames.append(k)
+            return real_rename(src, dst, **k)
+
+        monkeypatch.setattr(store.os, "open", spy_open)
+        monkeypatch.setattr(store.os, "rename", spy_rename)
+        store.deliver(tmp_path, msg())
+
+        dir_opens = [o for o in opens if o[1] & os.O_DIRECTORY]
+        assert len(dir_opens) >= 2, "directories were not opened as descriptors"
+        assert all(o[1] & os.O_NOFOLLOW for o in dir_opens), "dir open lacked O_NOFOLLOW"
+        rel = [o for o in opens if o[2] is not None]
+        assert rel, "message not opened relative to a dir_fd"
+        # The message open needs O_NOFOLLOW too. Asserting it only on the
+        # DIRECTORY opens left a mutant alive: strip the flag from the message
+        # open and this test still passed. Found by my own mutation sweep, which
+        # is the point of running one before trusting a test rather than after.
+        assert all(o[1] & os.O_NOFOLLOW for o in rel), "message open lacked O_NOFOLLOW"
+        assert all(o[1] & os.O_EXCL for o in rel), "message open lacked O_EXCL"
+        assert renames and "src_dir_fd" in renames[0] and "dst_dir_fd" in renames[0], \
+            "rename was path-based, leaving the race open"
+
     def test_symlinked_maildir_subdir_is_refused(self, tmp_path):
         """O_NOFOLLOW guards only the FINAL component. A symlinked `new/` would
         redirect a broker-uid write outside the mailbox entirely."""
@@ -798,6 +836,76 @@ class TestCanonicalisation:
         assert deployment["broker"].submit("alpha", m)["ok"] is False
 
 
+class TestInversionIsMechanized:
+    """Round 4: the inversion was DOCUMENTED, not mechanized. Adding one field to
+    Message delivered 4,000 attacker bytes with ok=True and the suite stayed
+    green — the docstring's 'untrusted by default' was false, because the real
+    default was PASS."""
+
+    def test_every_message_field_is_classified(self):
+        from macf.amail.broker import _CLASSIFIED_FIELDS
+        assert set(Message.__dataclass_fields__) == set(_CLASSIFIED_FIELDS)
+
+    def test_an_unclassified_field_raises_rather_than_passing_through(self, deployment, monkeypatch):
+        """The mechanism itself: a field the broker does not know about must stop
+        the send, not ride along."""
+        import macf.amail.broker as B
+        monkeypatch.setattr(B, "_CLASSIFIED_FIELDS", frozenset({"sender"}))
+        with pytest.raises(AssertionError, match="not classified"):
+            deployment["broker"].submit("alpha", msg())
+
+
+class TestInboundIsCanonicalised:
+    """Round 4 F2: accept_inbound() is the OTHER path that writes a Message to
+    storage, and the one where the message is genuinely hostile. It was skipping
+    canonicalisation entirely — the inversion applied to one path and not its
+    twin, which is the same sibling-blindness the earlier rounds kept finding."""
+
+    def _hostile(self):
+        return Message(sender="stranger@elsewhere.test", to=[f"beta@{DOMAIN}"],
+                       subject="s", body="B" * 4000, message_id="msg-1-aaaaaaaaaaaa",
+                       thread_id="T" * 900, parent="P" * 900,
+                       date="1999-01-01T00:00:00+00:00")
+
+    def test_remote_message_id_cannot_shadow_a_local_one(self, deployment):
+        deployment["contacts"].write_text(json.dumps({
+            "alpha": [f"beta@{DOMAIN}"], "beta": ["stranger@elsewhere.test"]}))
+        deployment["contacts"].chmod(0o644)
+        m = self._hostile()
+        deployment["broker"].accept_inbound(m, f"beta@{DOMAIN}")
+        assert m.message_id != "msg-1-aaaaaaaaaaaa"
+
+    def test_remote_identifier_fields_are_not_free_text(self, deployment):
+        deployment["contacts"].write_text(json.dumps({
+            "alpha": [f"beta@{DOMAIN}"], "beta": ["stranger@elsewhere.test"]}))
+        deployment["contacts"].chmod(0o644)
+        m = self._hostile()
+        deployment["broker"].accept_inbound(m, f"beta@{DOMAIN}")
+        assert len(m.thread_id) < 100 and m.parent is None
+
+    def test_remote_date_cannot_control_reader_ordering(self, deployment):
+        deployment["contacts"].write_text(json.dumps({
+            "alpha": [f"beta@{DOMAIN}"], "beta": ["stranger@elsewhere.test"]}))
+        deployment["contacts"].chmod(0o644)
+        m = self._hostile()
+        deployment["broker"].accept_inbound(m, f"beta@{DOMAIN}")
+        assert not m.date.startswith("1999")
+
+    def test_quarantined_mail_is_canonicalised_too(self, deployment):
+        """Quarantine is the MORE hostile path, not the less."""
+        m = self._hostile()
+        deployment["broker"].accept_inbound(m, f"beta@{DOMAIN}")
+        assert m.message_id != "msg-1-aaaaaaaaaaaa"
+        assert len(m.body) <= (1 << 18)
+
+    def test_the_remote_sender_is_preserved_for_the_allowlist_check(self, deployment):
+        """Negative control: canonicalisation must not overwrite the field the
+        inbound allowlist decision depends on."""
+        m = self._hostile()
+        deployment["broker"].accept_inbound(m, f"beta@{DOMAIN}")
+        assert m.sender == "stranger@elsewhere.test"
+
+
 class TestAuditCompleteness:
     """Round-3 F2: submit() caught only DeliveryError, so any other exception
     escaped BEFORE the audit block — mail already delivered to earlier recipients
@@ -830,19 +938,46 @@ class TestRoundTwoMechanismsHaveCoverage:
     Two shipped with no test at all. These close that."""
 
     def test_ucred_is_read_unsigned(self):
-        """A high uid read signed goes negative. It failed closed, but a lookup
-        should not depend on that."""
-        import inspect
-        from macf.amail import broker as b
-        assert '"3I"' in inspect.getsource(b.Broker.identify), "ucred read as signed"
+        """Round 4: the previous version grepped the source for '"3I"', which a
+        mutant satisfied by unpacking "3i" while leaving calcsize("3I") in place.
+        Assert the BEHAVIOUR: a uid above 2^31 must survive the round trip."""
+        import struct
+        high = 4294967294
+        packed = struct.pack("3I", 1, high, 1)
+        assert struct.unpack("3I", packed)[1] == high
+        assert struct.unpack("3i", packed)[1] != high, "signed read would corrupt it"
 
-    def test_total_deadline_is_used_not_per_recv(self):
-        """The socket timeout resets on every byte, so a trickle holds a thread
-        forever without exceeding it."""
-        import inspect
-        from macf.amail import broker as b
-        src = inspect.getsource(b._Handler.handle)
-        assert "monotonic" in src and "deadline" in src
+    def test_total_deadline_actually_bounds_a_slow_trickle(self, deployment):
+        """Round 4: the previous version grepped for 'monotonic' and 'deadline',
+        which a mutant satisfied by keeping the assignment and deleting the
+        enforcement. Drive a real trickle and require the broker to cut it off."""
+        import socket as s_
+        from macf.amail import broker as B
+        deployment["cfg"].credentials_path.write_text("s")
+        deployment["cfg"].credentials_path.chmod(0o600)
+        monkey = B.CONNECTION_TIMEOUT
+        B.CONNECTION_TIMEOUT = 1.0
+        srv = serve(deployment["broker"])
+        try:
+            c = s_.socket(s_.AF_UNIX, s_.SOCK_STREAM)
+            c.settimeout(15)
+            c.connect(str(deployment["cfg"].socket_path))
+            started = time.time()
+            try:
+                for _ in range(40):          # 4s of dribbling, never a newline
+                    c.sendall(b"x")
+                    time.sleep(0.1)
+                resp = c.recv(65536).decode()
+            except OSError:
+                resp = ""
+            elapsed = time.time() - started
+            c.close()
+            assert elapsed < 12, "connection was not bounded by the deadline"
+            if resp:
+                assert "Timeout" in resp or "error" in resp
+        finally:
+            B.CONNECTION_TIMEOUT = monkey
+            srv.shutdown()
 
     def test_socket_is_group_and_world_writable(self, deployment):
         """The 0o666 mode is a deliberate design claim — submission is not
