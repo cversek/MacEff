@@ -67,8 +67,22 @@ def _get_runtime_dir() -> Path:
     return Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp"))
 
 
-def _get_pid_file() -> Path:
-    return _get_runtime_dir() / PID_FILE_NAME
+def _get_pid_file(port: Optional[int] = None) -> Path:
+    """Path to the pid file for a proxy on `port`.
+
+    The pid file used to be a single global path with no port in it. Start a
+    second proxy on another port and it overwrote the first's identity, so
+    `status` reported the wrong process; stop that second one and `_remove_pid`
+    deleted the file outright while the first was still serving traffic, after
+    which `status` reported nothing running at all. Bookkeeping that tracks
+    something other than what it claims to.
+
+    `port=None` yields the legacy unported path, which is still read (never
+    written) so a proxy started before this change stays discoverable.
+    """
+    if port is None:
+        return _get_runtime_dir() / PID_FILE_NAME
+    return _get_runtime_dir() / f"macf_proxy-{port}.pid"
 
 
 def get_log_path() -> Path:
@@ -81,24 +95,39 @@ def get_log_path() -> Path:
 
 # --------------- PID file management ---------------
 
-def _write_pid(pid: int) -> None:
-    path = _get_pid_file()
-    path.write_text(str(pid))
+def _write_pid(pid: int, port: Optional[int] = None) -> None:
+    """Write the pid file. Always port-scoped — the legacy path is read-only."""
+    _get_pid_file(port if port is not None else DEFAULT_PORT).write_text(str(pid))
 
 
-def _read_pid() -> Optional[int]:
-    path = _get_pid_file()
-    if not path.exists():
-        return None
+def _read_pid(port: Optional[int] = None) -> Optional[int]:
+    """Read the pid for a proxy on `port`, falling back to the legacy path.
+
+    The fallback matters on a live upgrade: a proxy started before this change
+    wrote the unported filename, and without it `status` and `stop` would both
+    report it as not running while it went on serving traffic.
+    """
+    candidates = [_get_pid_file(port if port is not None else DEFAULT_PORT)]
+    if port is None or port == DEFAULT_PORT:
+        candidates.append(_get_pid_file(None))
+    for path in candidates:
+        if not path.exists():
+            continue
+        try:
+            return int(path.read_text().strip())
+        except (ValueError, OSError):
+            continue
+    return None
+
+
+def _remove_pid(port: Optional[int] = None) -> None:
+    """Remove only THIS proxy's pid file.
+
+    Scoped deliberately: the old unscoped removal is what let a short-lived
+    test instance delete the record of a long-running one.
+    """
     try:
-        return int(path.read_text().strip())
-    except (ValueError, OSError):
-        return None
-
-
-def _remove_pid() -> None:
-    try:
-        _get_pid_file().unlink(missing_ok=True)
+        _get_pid_file(port if port is not None else DEFAULT_PORT).unlink(missing_ok=True)
     except OSError:
         pass
 
@@ -947,11 +976,11 @@ def run_proxy(port: int = DEFAULT_PORT, host: str = DEFAULT_HOST) -> None:
     from aiohttp import web
 
     app = _create_app()
-    _write_pid(os.getpid())
+    _write_pid(os.getpid(), port)
 
     # Register cleanup for PID file
     def _cleanup_handler(signum, frame):
-        _remove_pid()
+        _remove_pid(port)
         sys.exit(0)
 
     signal.signal(signal.SIGTERM, _cleanup_handler)
@@ -975,7 +1004,7 @@ def run_proxy(port: int = DEFAULT_PORT, host: str = DEFAULT_HOST) -> None:
     try:
         web.run_app(app, host=host, port=port, print=None)
     finally:
-        _remove_pid()
+        _remove_pid(port)
 
 
 def start_proxy_daemon(port: int = DEFAULT_PORT, host: str = DEFAULT_HOST) -> int:
@@ -988,7 +1017,7 @@ def start_proxy_daemon(port: int = DEFAULT_PORT, host: str = DEFAULT_HOST) -> in
     if pid > 0:
         # Parent waits briefly then checks PID file
         time.sleep(0.5)
-        child_pid = _read_pid()
+        child_pid = _read_pid(port)
         return child_pid if child_pid else pid
 
     # Child: decouple
@@ -1015,37 +1044,38 @@ def start_proxy_daemon(port: int = DEFAULT_PORT, host: str = DEFAULT_HOST) -> in
     os._exit(0)
 
 
-def is_proxy_running() -> bool:
-    """Check if proxy daemon is running."""
-    pid = _read_pid()
+def is_proxy_running(port: Optional[int] = None) -> bool:
+    """Is a proxy running on `port`? Port-scoped: a proxy on another port is
+    not this one, and must not be reported as though it were."""
+    pid = _read_pid(port)
     if pid is None:
         return False
     try:
         os.kill(pid, 0)
         return True
     except ProcessLookupError:
-        _remove_pid()
+        _remove_pid(port)
         return False
     except PermissionError:
         return True
 
 
-def stop_proxy() -> bool:
-    """Stop running proxy daemon. Returns True if stopped."""
-    pid = _read_pid()
+def stop_proxy(port: Optional[int] = None) -> bool:
+    """Stop the proxy on `port`. Returns True if stopped."""
+    pid = _read_pid(port)
     if pid is None:
         return False
     try:
         os.kill(pid, signal.SIGTERM)
         for _ in range(20):
             time.sleep(0.1)
-            if not is_proxy_running():
+            if not is_proxy_running(port):
                 return True
         os.kill(pid, signal.SIGKILL)
-        _remove_pid()
+        _remove_pid(port)
         return True
     except ProcessLookupError:
-        _remove_pid()
+        _remove_pid(port)
         return False
     except PermissionError:
         print(f"Permission denied stopping PID {pid}", file=sys.stderr)
@@ -1092,19 +1122,19 @@ def _socket_owner_pid(port: int) -> Optional[int]:
     return None
 
 
-def get_proxy_status() -> dict:
+def get_proxy_status(port: int = DEFAULT_PORT) -> dict:
     """Get proxy status information.
 
     Includes a socket-owner cross-check: "it answers on the port" is not the
     same as "the process we think is running owns the port".
     """
-    running = is_proxy_running()
-    pid = _read_pid() if running else None
-    owner = _socket_owner_pid(DEFAULT_PORT)
+    running = is_proxy_running(port)
+    pid = _read_pid(port) if running else None
+    owner = _socket_owner_pid(port)
     result = {
         "running": running,
         "pid": pid,
-        "port": DEFAULT_PORT,
+        "port": port,
         "socket_owner_pid": owner,
         # True when something else holds the socket — the split-brain signature.
         "socket_owner_mismatch": bool(owner and pid and owner != pid),

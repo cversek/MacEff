@@ -8168,13 +8168,18 @@ def cmd_proxy_start(args: argparse.Namespace) -> int:
         print(f"\nImport error: {e}")
         return 1
 
-    if is_proxy_running():
-        print("⚠️  Proxy is already running")
-        print("   Use 'macf_tools proxy stop' to stop it first")
-        return 1
-
     port = getattr(args, 'port', 8019)
     daemonize = getattr(args, 'daemon', False)
+
+    # Port-scoped, deliberately. This check used to be global, so a proxy on ANY
+    # port blocked starting one on another — while the unsupported path (running
+    # the module directly) started a second instance that silently overwrote the
+    # first's pid file. The supported route refused a safe thing; the workaround
+    # did an unsafe one.
+    if is_proxy_running(port):
+        print(f"⚠️  Proxy is already running on port {port}")
+        print(f"   Use 'macf_tools proxy stop --port {port}' to stop it first")
+        return 1
 
     # Pre-check port availability (catches zombies without PID files)
     available, owner_pid = _check_port_available(port)
@@ -8223,13 +8228,15 @@ def cmd_proxy_stop(args: argparse.Namespace) -> int:
         print(f"Import error: {e}")
         return 1
 
-    if not is_proxy_running():
-        print("Proxy is not running")
+    port = getattr(args, 'port', 8019)
+
+    if not is_proxy_running(port):
+        print(f"Proxy is not running on port {port}")
         return 0
 
     try:
-        if stop_proxy():
-            print("✅ Proxy stopped")
+        if stop_proxy(port):
+            print(f"✅ Proxy stopped (port {port})")
             return 0
         else:
             print("⚠️  Proxy was not running")
@@ -8247,7 +8254,7 @@ def cmd_proxy_status(args: argparse.Namespace) -> int:
         print(f"Import error: {e}")
         return 1
 
-    status = get_proxy_status()
+    status = get_proxy_status(getattr(args, 'port', 8019))
     json_output = getattr(args, 'json_output', False)
 
     if json_output:
@@ -9821,10 +9828,13 @@ def _build_parser() -> argparse.ArgumentParser:
     proxy_start_parser.set_defaults(func=cmd_proxy_start)
 
     # proxy stop
-    proxy_sub.add_parser("stop", help="stop running proxy").set_defaults(func=cmd_proxy_stop)
+    proxy_stop_parser = proxy_sub.add_parser("stop", help="stop running proxy")
+    proxy_stop_parser.add_argument("--port", type=int, default=8019, help="port of the proxy to stop (default: 8019)")
+    proxy_stop_parser.set_defaults(func=cmd_proxy_stop)
 
     # proxy status
     proxy_status_parser = proxy_sub.add_parser("status", help="show proxy status")
+    proxy_status_parser.add_argument("--port", type=int, default=8019, help="port to report on (default: 8019)")
     proxy_status_parser.add_argument("--json", dest="json_output", action="store_true",
                                      help="output as JSON")
     proxy_status_parser.set_defaults(func=cmd_proxy_status)
