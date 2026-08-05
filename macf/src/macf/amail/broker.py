@@ -30,6 +30,7 @@ import os
 import socket
 import socketserver
 import stat
+import struct
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -59,6 +60,13 @@ class BrokerConfig:
     audit_path: Optional[Path] = None
     socket_path: Path = Path(DEFAULT_SOCKET)
     credentials_path: Optional[Path] = None
+
+    #: uid -> agent name. THE authentication table. The socket is world-writable,
+    #: so the only thing distinguishing one submitter from another is the kernel's
+    #: view of who is on the other end. A submitted `sender` field is a claim; this
+    #: mapping is the fact. An empty mapping means nobody can be authenticated and
+    #: every submission is refused — see Broker.identify().
+    agent_uids: Dict[int, str] = field(default_factory=dict)
 
     def address_for(self, agent: str) -> str:
         return f"{agent}@{self.domain}"
@@ -179,6 +187,52 @@ class Broker:
 
     # -------------------------------------------------------------- credentials
 
+    def identify(self, conn: socket.socket) -> str:
+        """Authenticate the connecting process from kernel-supplied credentials.
+
+        SO_PEERCRED returns the pid/uid/gid the kernel recorded at connect time.
+        The peer cannot influence it, which is what makes a world-writable socket
+        safe to expose: reaching the socket is not identity, and identity is not
+        something the request gets to assert.
+
+        Fails closed on every path. An unmapped uid is refused rather than given a
+        default agent, because a default here would hand an unknown caller
+        somebody's contact list.
+        """
+        try:
+            raw = conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED,
+                                  struct.calcsize("3i"))
+            _pid, uid, _gid = struct.unpack("3i", raw)
+        except (OSError, AttributeError, struct.error) as e:
+            raise PermissionError(
+                f"cannot determine peer credentials ({e}); refusing to accept a "
+                "submission from an unidentifiable process"
+            ) from e
+
+        agent = self.config.agent_uids.get(uid)
+        if not agent:
+            raise PermissionError(
+                f"uid {uid} is not a provisioned agent; refusing submission. "
+                "Reaching the socket is not authorization."
+            )
+        return agent
+
+    def assert_credential_custody(self) -> None:
+        """Refuse to run if the transport credential is exposed.
+
+        THIS EXISTS BECAUSE THE CHECK BELOW WAS PREVIOUSLY NEVER CALLED. It was
+        written, unit-tested with negative controls, and then invoked by nothing
+        but its own tests — a guarantee that was verified in the abstract and
+        enforced nowhere. Starting the broker is the moment the guarantee has to
+        hold, so the check belongs on that path.
+        """
+        if self.credential_readable_by_others():
+            raise PermissionError(
+                f"credential {self.config.credentials_path} is readable by group "
+                "or other. The security property depends on agents being unable to "
+                "read it. Refusing to start; chmod 600 and retry."
+            )
+
     def credential_readable_by_others(self) -> bool:
         """True if any non-owner can read the credential file.
 
@@ -195,23 +249,66 @@ class Broker:
 
 # ---------------------------------------------------------------------- server
 
+#: Largest submission accepted, in bytes. Without a cap, readline() buffers until
+#: memory runs out, and any local process can do it.
+MAX_REQUEST_BYTES = 1 << 20  # 1 MiB
+
+#: Idle connections are dropped. Without this a handful of open-and-wait
+#: connections pin threads and file descriptors indefinitely.
+CONNECTION_TIMEOUT = 30.0
+
+
 class _Handler(socketserver.StreamRequestHandler):
+    timeout = CONNECTION_TIMEOUT
+
     def handle(self) -> None:
         broker: Broker = self.server.broker  # type: ignore[attr-defined]
+        resp: Dict[str, Any]
         try:
-            raw = self.rfile.readline()
+            # IDENTITY COMES FROM THE KERNEL, NOT THE PAYLOAD.
+            #
+            # The socket is world-writable, so any local process can connect. If
+            # the submitter's identity were taken from the request body, an agent
+            # could name a peer and inherit that peer's contact list — the
+            # reachable set would become the union of everyone's contacts, and the
+            # audit log would blame the impersonated agent. SO_PEERCRED is supplied
+            # by the kernel about the connected process and cannot be forged by it.
+            sender = broker.identify(self.connection)
+
+            raw = self.rfile.readline(MAX_REQUEST_BYTES + 1)
             if not raw:
                 return
+            if len(raw) > MAX_REQUEST_BYTES:
+                raise ValueError(f"request exceeds {MAX_REQUEST_BYTES} bytes")
+
             req = json.loads(raw.decode("utf-8"))
-            sender = req["sender"]
+            claimed = req.get("sender")
+            if claimed is not None and claimed != sender:
+                # Refused rather than silently corrected: a client that believes
+                # it is someone else has a bug or an intention, and both deserve
+                # a record.
+                if broker.audit:
+                    broker.audit.refused(
+                        sender=sender, recipients=[],
+                        reason=f"identity mismatch: peer is '{sender}', claimed '{claimed}'")
+                raise PermissionError(
+                    f"submitted as '{claimed}' but the connecting process is '{sender}'")
+
             msg = Message.from_dict(req["message"])
             resp = broker.submit(sender, msg)
         except Exception as e:  # noqa: BLE001 - a broker that dies on one bad
             # request stops serving every agent; answer with the error instead.
             resp = {"ok": False, "error": f"{type(e).__name__}: {e}"}
             if broker.audit:
-                broker.audit.error(context="request", detail=str(e))
-        self.wfile.write((json.dumps(resp) + "\n").encode("utf-8"))
+                broker.audit.error(context="request", detail=f"{type(e).__name__}: {e}")
+        try:
+            self.wfile.write((json.dumps(resp) + "\n").encode("utf-8"))
+        except OSError as e:
+            # The peer may have hung up. Log it rather than letting the write
+            # throw out of handle() unrecorded — an outage with no trace is the
+            # gap the audit log exists to close.
+            if broker.audit:
+                broker.audit.error(context="response", detail=str(e))
 
 
 class _Server(socketserver.ThreadingUnixStreamServer):
@@ -226,6 +323,14 @@ def serve(broker: Broker) -> _Server:
     precisely because submission is not authority. Everything an agent could do
     by reaching this socket is checked against its contact list on the other side.
     """
+    # Enforce the guarantee at the moment it starts mattering.
+    broker.assert_credential_custody()
+    if not broker.config.agent_uids:
+        raise PermissionError(
+            "no agent_uids configured: with a world-writable socket and no uid "
+            "mapping, no submitter can be authenticated and every submission "
+            "would be refused. Refusing to start rather than serve a socket that "
+            "cannot identify anyone.")
     path = Path(broker.config.socket_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():

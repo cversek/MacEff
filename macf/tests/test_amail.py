@@ -42,6 +42,10 @@ def deployment(tmp_path):
         domain=DOMAIN, agent_homes=homes, contacts_path=contacts,
         audit_path=tmp_path / "audit.jsonl", socket_path=tmp_path / "b.sock",
         credentials_path=tmp_path / "smarthost.cred",
+        # The test process has one uid, so it can only BE one agent. That is
+        # exactly the point: anything it submits is 'alpha', and a claim to be
+        # 'beta' must be refused rather than believed.
+        agent_uids={os.getuid(): "alpha"},
     )
     return {"cfg": cfg, "broker": Broker(cfg), "homes": homes,
             "contacts": contacts, "tmp": tmp_path}
@@ -409,9 +413,202 @@ class TestDeliveryHonesty:
 # ---------------------------------------------------------------------------
 
 
+class TestPeerAuthentication:
+    """Regression tests for the round-1 audit's critical finding.
+
+    The socket is world-writable, so reaching it must not be identity. Before
+    these existed, the submitter's name was read out of the request body: any
+    process could name any agent and inherit that agent's contact list, making
+    the reachable set the union of everyone's contacts — and the audit log then
+    recorded the send under the impersonated agent's name.
+
+    The wider lesson these encode: every earlier test passed `sender` as a
+    TRUSTED ARGUMENT, so the whole suite would have passed with peer
+    authentication entirely absent. It was absent. A guarantee about *whose*
+    contact list applies cannot be tested by tests that hand over the identity.
+    """
+
+    @pytest.fixture
+    def running(self, deployment):
+        (deployment["cfg"].credentials_path).write_text("secret")
+        (deployment["cfg"].credentials_path).chmod(0o600)
+        srv = serve(deployment["broker"])
+        time.sleep(0.15)
+        yield deployment
+        srv.shutdown()
+
+    def test_claiming_another_agent_is_refused(self, running):
+        """THE critical finding. This process is 'alpha'; claiming 'beta' fails."""
+        r = submit("beta", msg(to=f"alpha@{DOMAIN}", sender=f"beta@{DOMAIN}"),
+                   running["cfg"].socket_path)
+        assert r["ok"] is False
+        assert "PermissionError" in r["error"]
+        assert "connecting process is 'alpha'" in r["error"]
+
+    def test_spoofed_submission_delivers_nothing(self, running):
+        submit("beta", msg(to=f"alpha@{DOMAIN}", sender=f"beta@{DOMAIN}"),
+               running["cfg"].socket_path)
+        assert store.read_all(running["homes"]["alpha"]) == []
+
+    def test_identity_mismatch_is_audited(self, running):
+        """The forensic record must show the attempt, attributed to the real peer
+        rather than to the name it claimed."""
+        submit("beta", msg(to=f"alpha@{DOMAIN}", sender=f"beta@{DOMAIN}"),
+               running["cfg"].socket_path)
+        mismatches = [r for r in running["broker"].audit.refusals()
+                      if "identity mismatch" in r.get("reason", "")]
+        assert len(mismatches) == 1
+        assert mismatches[0]["sender"] == "alpha"
+
+    def test_unmapped_uid_is_refused(self, deployment):
+        """An unknown caller gets no default agent — a default would hand a
+        stranger somebody's contact list."""
+        deployment["cfg"].agent_uids = {999999: "ghost"}
+        (deployment["cfg"].credentials_path).write_text("s")
+        (deployment["cfg"].credentials_path).chmod(0o600)
+        srv = serve(deployment["broker"])
+        time.sleep(0.15)
+        try:
+            r = submit("alpha", msg(), deployment["cfg"].socket_path)
+            assert r["ok"] is False
+            assert "not a provisioned agent" in r["error"]
+        finally:
+            srv.shutdown()
+
+    def test_broker_refuses_to_start_with_no_uid_mapping(self, deployment):
+        """With a world-writable socket and no way to identify anyone, serving is
+        worse than not serving."""
+        deployment["cfg"].agent_uids = {}
+        with pytest.raises(PermissionError, match="no agent_uids"):
+            serve(deployment["broker"])
+
+
+class TestCredentialEnforcementIsWired:
+    """The round-1 audit found credential_readable_by_others() was never called
+    by anything but its own tests — verified in the abstract, enforced nowhere.
+    A check that nothing invokes is not a control."""
+
+    def test_broker_refuses_to_start_with_an_exposed_credential(self, deployment):
+        cred = deployment["cfg"].credentials_path
+        cred.write_text("secret")
+        cred.chmod(0o644)
+        with pytest.raises(PermissionError, match="readable by group"):
+            serve(deployment["broker"])
+
+    def test_broker_starts_when_the_credential_is_locked_down(self, deployment):
+        """Negative control: same path, correct permissions, must start."""
+        cred = deployment["cfg"].credentials_path
+        cred.write_text("secret")
+        cred.chmod(0o600)
+        srv = serve(deployment["broker"])
+        srv.shutdown()
+
+
+class TestHeaderInjection:
+    """Round-1 audit finding: unsanitised interpolation into a line-delimited
+    format. Same class of bug as SQL injection; same fix — neutralise the
+    delimiter."""
+
+    def test_newline_in_subject_cannot_forge_a_header(self):
+        m = msg(subject="benign\nX-Injected: yes")
+        raw = m.serialize()
+        assert "X-Injected:" not in raw.split("\n\n")[0].replace("Subject: benign X-Injected: yes", "")
+        # The injected text survives as DATA on the subject line, not as structure
+        assert "Subject: benign X-Injected: yes" in raw
+
+    def test_newline_in_subject_cannot_orphan_the_body(self):
+        """The dangerous form: a blank line ends the header block, so attacker
+        text becomes the body a client renders and the real body is orphaned."""
+        m = msg(subject="x\n\nattacker body", body="the real body")
+        _, _, body = m.serialize().partition("\n\n")
+        assert body.strip() == "the real body"
+
+    def test_injection_via_sender_and_recipient_is_neutralised(self):
+        m = msg(sender="a@b\nBcc: victim@elsewhere", to="c@d\nBcc: other@elsewhere")
+        header = m.serialize().split("\n\n")[0]
+        assert "Bcc:" not in header.replace("Bcc: victim@elsewhere", "").replace("Bcc: other@elsewhere", "")
+        assert len([l for l in header.splitlines() if l.startswith("From:")]) == 1
+
+    def test_control_characters_are_folded(self):
+        assert "\x00" not in msg(subject="a\x00b\x07c").serialize()
+
+    def test_quarantine_reason_cannot_inject(self, deployment):
+        m = Message(sender="s@x\nX-Evil: 1", to=[f"beta@{DOMAIN}"], subject="?", body="b")
+        deployment["broker"].accept_inbound(m, f"beta@{DOMAIN}")
+        q = next((deployment["homes"]["beta"] / "Maildir" / "quarantine").iterdir())
+        head = q.read_text().split("\n\n")[0]
+        assert not any(l.startswith("X-Evil:") for l in head.splitlines())
+
+
+class TestResourceLimits:
+    """Round-1 audit finding: unbounded reads and no idle timeout let any local
+    process exhaust memory or pin threads."""
+
+    @pytest.fixture
+    def running(self, deployment):
+        (deployment["cfg"].credentials_path).write_text("s")
+        (deployment["cfg"].credentials_path).chmod(0o600)
+        srv = serve(deployment["broker"])
+        time.sleep(0.15)
+        yield deployment
+        srv.shutdown()
+
+    def test_oversized_request_is_rejected_not_buffered(self, running):
+        import socket as s_
+        from macf.amail.broker import MAX_REQUEST_BYTES
+        c = s_.socket(s_.AF_UNIX, s_.SOCK_STREAM)
+        c.settimeout(20)
+        c.connect(str(running["cfg"].socket_path))
+        try:
+            c.sendall(b"x" * (MAX_REQUEST_BYTES + 4096))  # never a newline
+            c.shutdown(s_.SHUT_WR)
+            resp = c.recv(65536).decode()
+        finally:
+            c.close()
+        assert "exceeds" in resp or "error" in resp
+
+    def test_broker_still_serves_after_an_oversized_request(self, running):
+        """One abusive client must not stop the broker serving everyone else."""
+        import socket as s_
+        c = s_.socket(s_.AF_UNIX, s_.SOCK_STREAM)
+        c.settimeout(20)
+        c.connect(str(running["cfg"].socket_path))
+        try:
+            c.sendall(b"x" * (2 << 20))
+            c.shutdown(s_.SHUT_WR)
+            c.recv(4096)
+        except OSError:
+            pass
+        finally:
+            c.close()
+        assert submit("alpha", msg(), running["cfg"].socket_path)["ok"] is True
+
+
+class TestSymlinkResistance:
+    """Round-1 audit finding (design tension): the mailbox is agent-owned but
+    broker-written, so a hostile agent could pre-plant a symlink at a predictable
+    tmp path and redirect a broker-uid write."""
+
+    def test_delivery_refuses_to_follow_a_planted_symlink(self, tmp_path, monkeypatch):
+        target = tmp_path / "victim"
+        target.write_text("original")
+        store.ensure_maildir(tmp_path)
+        monkeypatch.setattr(store, "_unique_name", lambda: "predictable")
+        (tmp_path / "Maildir" / "tmp" / "predictable").symlink_to(target)
+        with pytest.raises(OSError):
+            store.deliver(tmp_path, msg())
+        assert target.read_text() == "original", "symlink target was overwritten"
+
+    def test_normal_delivery_still_works(self, tmp_path):
+        """Negative control: the hardening must not break ordinary delivery."""
+        assert store.deliver(tmp_path, msg()).parent.name == "new"
+
+
 class TestOverTheSocket:
     @pytest.fixture
     def running(self, deployment):
+        (deployment["cfg"].credentials_path).write_text("secret")
+        (deployment["cfg"].credentials_path).chmod(0o600)
         srv = serve(deployment["broker"])
         time.sleep(0.15)
         yield deployment

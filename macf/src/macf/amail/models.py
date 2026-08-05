@@ -23,6 +23,29 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+#: Longest a single header value may be. Not a correctness limit — a blast
+#: radius one. An unbounded subject becomes an unbounded line in every reader.
+_MAX_HEADER = 998  # RFC 5322 line-length ceiling
+
+
+def _hdr(value: Any) -> str:
+    """Make a value safe to interpolate into a header line.
+
+    Strips CR and LF, which are the header/body delimiters — a value containing
+    either can forge headers and terminate the header block early. Tabs and other
+    control characters are folded to spaces so a value cannot smuggle structure
+    past a naive parser. Truncated to the RFC line ceiling.
+
+    Applied at SERIALIZATION rather than on assignment, deliberately: the in-memory
+    object may legitimately hold whatever a sender typed, and it is only when that
+    value is written into a line-delimited format that the delimiter matters.
+    """
+    s = "" if value is None else str(value)
+    s = s.replace("\r", " ").replace("\n", " ")
+    s = "".join(" " if (ord(c) < 32 or ord(c) == 127) else c for c in s)
+    return s[:_MAX_HEADER]
+
+
 def new_id(prefix: str) -> str:
     """A locally-generated identifier that needs no coordination to be unique.
 
@@ -85,17 +108,24 @@ class Message:
         Readable by an ordinary mail client, which is the point of storing in a
         Maildir at all. Transport headers are deliberately absent: they belong to
         the journey, not the message.
+
+        EVERY header value is passed through _hdr(). A newline inside any field
+        ends the header block early, so an attacker-chosen subject could inject
+        arbitrary headers and a blank line — making the rest of their text the
+        body a mail client renders, and orphaning the real one. Interpolating
+        untrusted values into a line-delimited format is the same class of bug as
+        SQL injection, and the fix is the same: neutralise the delimiter.
         """
         headers = [
-            f"Message-ID: {self.message_id}",
-            f"Thread-ID: {self.thread_id}",
-            f"Date: {self.date}",
-            f"From: {self.sender}",
-            f"To: {', '.join(self.to)}",
-            f"Subject: {self.subject}",
+            f"Message-ID: {_hdr(self.message_id)}",
+            f"Thread-ID: {_hdr(self.thread_id)}",
+            f"Date: {_hdr(self.date)}",
+            f"From: {_hdr(self.sender)}",
+            f"To: {_hdr(', '.join(self.to))}",
+            f"Subject: {_hdr(self.subject)}",
         ]
         if self.parent:
-            headers.append(f"In-Reply-To: {self.parent}")
+            headers.append(f"In-Reply-To: {_hdr(self.parent)}")
         return "\n".join(headers) + "\n\n" + self.body + "\n"
 
     @classmethod

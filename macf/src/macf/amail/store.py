@@ -67,8 +67,20 @@ def deliver(home: Path, message: Message) -> Path:
     d = ensure_maildir(home)
     name = _unique_name()
     tmp = d / "tmp" / name
-    tmp.write_text(message.serialize())
-    tmp.chmod(0o600)
+    # O_EXCL|O_NOFOLLOW: refuse to follow a symlink or clobber an existing file.
+    # The Maildir is agent-owned but written by the broker, so a hostile agent
+    # could pre-plant a symlink at a predictable tmp path and redirect a
+    # broker-uid write. O_CREAT alone would happily follow it.
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(message.serialize())
+    except BaseException:
+        try:
+            os.unlink(str(tmp))
+        except OSError:
+            pass
+        raise
     final = d / "new" / name
     os.rename(tmp, final)  # atomic within the filesystem; readers see all or nothing
     return final
@@ -120,9 +132,16 @@ def quarantine(home: Path, message: Message, reason: str) -> Path:
     unexpected envelope sender. Quarantine keeps the evidence and keeps the
     decision reversible.
     """
+    from .models import _hdr
+
     q = maildir_for(home) / "quarantine"
     q.mkdir(mode=0o700, parents=True, exist_ok=True)
     p = q / _unique_name()
-    p.write_text(f"X-Amail-Quarantine-Reason: {reason}\n" + message.serialize())
-    p.chmod(0o600)
+    # The reason is derived from the message's own claimed sender, which is
+    # attacker-controlled — so it gets the same header sanitisation as any other
+    # interpolated value. Quarantined mail is the LAST place to relax that: it is
+    # hostile by assumption, and a reader inspecting it is the intended victim.
+    fd = os.open(str(p), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(f"X-Amail-Quarantine-Reason: {_hdr(reason)}\n" + message.serialize())
     return p
