@@ -32,6 +32,7 @@ import socketserver
 import stat
 import struct
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -123,6 +124,32 @@ class Broker:
 
     def submit(self, sender: str, message: Message) -> Dict[str, Any]:
         """Enforce, then deliver. The only way mail leaves an agent."""
+        # The ENVELOPE sender was authenticated by the caller; the MESSAGE's own
+        # From: header was not. Leaving it free lets an agent authenticate
+        # honestly, send to a permitted contact, and have the message claim to be
+        # from a third party — so the recipient's reply is addressed to someone
+        # the original sender was never allowed to reach. Content escapes the
+        # contact list by way of an innocent intermediary, and the audit log,
+        # which records the envelope, shows nothing wrong.
+        expected = self.config.address_for(sender)
+        if message.sender and message.sender.strip().lower() != expected.lower():
+            reason = (f"message From '{message.sender}' does not match the "
+                      f"authenticated sender '{expected}'")
+            if self.audit:
+                self.audit.refused(sender=sender, recipients=message.to,
+                                   reason=reason, message_id=message.message_id)
+            return {"ok": False, "refused": [reason], "message_id": message.message_id}
+        message.sender = expected
+
+        if not message.to:
+            # A message with no recipients previously returned ok with no audit
+            # record at all — a submission that happened and left no trace.
+            reason = "no recipients"
+            if self.audit:
+                self.audit.refused(sender=sender, recipients=[], reason=reason,
+                                   message_id=message.message_id)
+            return {"ok": False, "refused": [reason], "message_id": message.message_id}
+
         refusals = self._check(sender, message.to)
         if refusals:
             if self.audit:
@@ -201,8 +228,10 @@ class Broker:
         """
         try:
             raw = conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED,
-                                  struct.calcsize("3i"))
-            _pid, uid, _gid = struct.unpack("3i", raw)
+                                  struct.calcsize("3I"))
+            # ucred fields are unsigned; reading them signed turns a high uid
+            # negative. It failed closed, but a lookup should not depend on that.
+            _pid, uid, _gid = struct.unpack("3I", raw)
         except (OSError, AttributeError, struct.error) as e:
             raise PermissionError(
                 f"cannot determine peer credentials ({e}); refusing to accept a "
@@ -232,6 +261,20 @@ class Broker:
                 "or other. The security property depends on agents being unable to "
                 "read it. Refusing to start; chmod 600 and retry."
             )
+        # The contact list is re-read on every decision, so an agent that can
+        # WRITE it grants itself any recipient instantly — the allowlist would
+        # become advisory in the same way an agent-side check is. Guarding the
+        # credential while leaving the policy file writable protects the key to a
+        # door and leaves the wall down.
+        cp = self.config.contacts_path
+        if cp and Path(cp).exists():
+            mode = Path(cp).stat().st_mode
+            if mode & (stat.S_IWGRP | stat.S_IWOTH):
+                raise PermissionError(
+                    f"contact list {cp} is writable by group or other. It is "
+                    "re-read per decision, so anyone who can write it can grant "
+                    "themselves any recipient. Refusing to start; chmod 644 or 600."
+                )
 
     def credential_readable_by_others(self) -> bool:
         """True if any non-owner can read the credential file.
@@ -275,12 +318,25 @@ class _Handler(socketserver.StreamRequestHandler):
             # by the kernel about the connected process and cannot be forged by it.
             sender = broker.identify(self.connection)
 
-            raw = self.rfile.readline(MAX_REQUEST_BYTES + 1)
+            # A TOTAL deadline, not a per-recv one. socket timeout resets on
+            # every byte received, so a one-byte-per-second trickle holds a
+            # thread forever while never exceeding it. Availability is a security
+            # property when one process can starve every other agent's mail.
+            deadline = time.monotonic() + CONNECTION_TIMEOUT
+            self.connection.settimeout(CONNECTION_TIMEOUT)
+            raw = b""
+            while not raw.endswith(b"\n"):
+                if time.monotonic() > deadline:
+                    raise TimeoutError(
+                        f"request not completed within {CONNECTION_TIMEOUT}s")
+                chunk = self.connection.recv(65536)
+                if not chunk:
+                    break
+                raw += chunk
+                if len(raw) > MAX_REQUEST_BYTES:
+                    raise ValueError(f"request exceeds {MAX_REQUEST_BYTES} bytes")
             if not raw:
                 return
-            if len(raw) > MAX_REQUEST_BYTES:
-                raise ValueError(f"request exceeds {MAX_REQUEST_BYTES} bytes")
-
             req = json.loads(raw.decode("utf-8"))
             claimed = req.get("sender")
             if claimed is not None and claimed != sender:

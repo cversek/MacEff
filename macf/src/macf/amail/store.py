@@ -27,10 +27,29 @@ def maildir_for(home: Path) -> Path:
     return Path(home) / "Maildir"
 
 
+def _assert_real_dir(p: Path) -> None:
+    """Refuse to treat a symlink as a directory.
+
+    O_NOFOLLOW guards only the FINAL path component. The mailbox is agent-owned,
+    so an agent can replace `Maildir/new` — or `Maildir` itself — with a symlink
+    and redirect a broker-uid write outside the mailbox entirely, or aim a
+    chmod at someone else's file. mkdir(exist_ok=True) accepts a symlinked
+    directory silently, which is how this went unnoticed.
+    """
+    if p.is_symlink():
+        raise OSError(f"refusing to use '{p}': it is a symlink, not a directory")
+    if p.exists() and not p.is_dir():
+        raise OSError(f"refusing to use '{p}': not a directory")
+
+
 def ensure_maildir(home: Path) -> Path:
     d = maildir_for(home)
+    _assert_real_dir(d)
+    for sub in SUBDIRS:
+        _assert_real_dir(d / sub)
     for sub in SUBDIRS:
         (d / sub).mkdir(mode=0o700, parents=True, exist_ok=True)
+        _assert_real_dir(d / sub)
     d.chmod(0o700)
     return d
 
@@ -135,7 +154,10 @@ def quarantine(home: Path, message: Message, reason: str) -> Path:
     from .models import _hdr
 
     q = maildir_for(home) / "quarantine"
+    _assert_real_dir(maildir_for(home))
+    _assert_real_dir(q)
     q.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _assert_real_dir(q)
     p = q / _unique_name()
     # The reason is derived from the message's own claimed sender, which is
     # attacker-controlled — so it gets the same header sanitisation as any other

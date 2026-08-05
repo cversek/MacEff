@@ -41,7 +41,14 @@ def _hdr(value: Any) -> str:
     value is written into a line-delimited format that the delimiter matters.
     """
     s = "" if value is None else str(value)
-    s = s.replace("\r", " ").replace("\n", " ")
+    # Use splitlines() — the SAME function the deserialiser uses to find header
+    # boundaries. Stripping only CR and LF was not enough: str.splitlines() also
+    # breaks on U+0085, U+2028, U+2029 and friends, so a subject containing one
+    # serialised as a single physical line yet parsed back as two. The serialiser
+    # and the parser disagreed about what a line IS, and the gap between them was
+    # the vulnerability. Defining the sanitiser in terms of the parser's own rule
+    # closes it by construction rather than by enumerating separators.
+    s = " ".join(s.splitlines())
     s = "".join(" " if (ord(c) < 32 or ord(c) == 127) else c for c in s)
     return s[:_MAX_HEADER]
 

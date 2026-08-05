@@ -38,6 +38,10 @@ def deployment(tmp_path):
         "alpha": [f"beta@{DOMAIN}"],
         "beta": [f"alpha@{DOMAIN}"],
     }))
+    # Explicit, because the ambient umask writes 0664 here and the broker
+    # correctly refuses to start on a group-writable policy file. The check found
+    # a real group-writable contact list the first time it ran — on this fixture.
+    contacts.chmod(0o644)
     cfg = BrokerConfig(
         domain=DOMAIN, agent_homes=homes, contacts_path=contacts,
         audit_path=tmp_path / "audit.jsonl", socket_path=tmp_path / "b.sock",
@@ -121,7 +125,11 @@ class TestContactRestriction:
         deployment["cfg"].agent_homes["stranger"] = deployment["tmp"] / "stranger"
         (deployment["tmp"] / "stranger").mkdir()
         monkeypatch.setattr(deployment["cfg"], "domain", "elsewhere.test")
-        r = deployment["broker"].submit("alpha", msg(to="stranger@elsewhere.test"))
+        # The sender-authenticity check (round-2 F1) is a SEPARATE control and
+        # would refuse first once the domain moved. Satisfy it so this control
+        # isolates the contact check, which is what it exists to prove.
+        r = deployment["broker"].submit(
+            "alpha", msg(to="stranger@elsewhere.test", sender="alpha@elsewhere.test"))
         assert r["ok"] is True, "with the check removed the message must go through"
         assert len(store.read_all(deployment["tmp"] / "stranger")) == 1
 
@@ -565,7 +573,10 @@ class TestResourceLimits:
             resp = c.recv(65536).decode()
         finally:
             c.close()
-        assert "exceeds" in resp or "error" in resp
+        # Round-2 audit: the previous assertion allowed `or "error" in resp`,
+        # which a JSONDecodeError satisfies — so it passed with the size cap
+        # removed. Assert the SPECIFIC message only the cap can produce.
+        assert "exceeds" in resp, f"size cap did not fire; got: {resp[:200]}"
 
     def test_broker_still_serves_after_an_oversized_request(self, running):
         """One abusive client must not stop the broker serving everyone else."""
@@ -589,19 +600,131 @@ class TestSymlinkResistance:
     broker-written, so a hostile agent could pre-plant a symlink at a predictable
     tmp path and redirect a broker-uid write."""
 
-    def test_delivery_refuses_to_follow_a_planted_symlink(self, tmp_path, monkeypatch):
-        target = tmp_path / "victim"
-        target.write_text("original")
-        store.ensure_maildir(tmp_path)
-        monkeypatch.setattr(store, "_unique_name", lambda: "predictable")
-        (tmp_path / "Maildir" / "tmp" / "predictable").symlink_to(target)
-        with pytest.raises(OSError):
+    def test_delivery_passes_O_NOFOLLOW(self, tmp_path, monkeypatch):
+        """Round-2 audit: the previous version of this test was VACUOUS.
+
+        It planted a symlink and asserted OSError — but O_EXCL alone raises
+        EEXIST on an existing symlink, so the test passed with O_NOFOLLOW
+        removed. It proved O_EXCL, not the flag it was named for. Since both
+        flags produce an error on the same input, no black-box test can tell them
+        apart; assert the flag is actually requested.
+        """
+        seen = {}
+        real_open = os.open
+
+        def spy(path, flags, *a, **k):
+            seen["flags"] = flags
+            return real_open(path, flags, *a, **k)
+
+        monkeypatch.setattr(store.os, "open", spy)
+        store.deliver(tmp_path, msg())
+        assert seen["flags"] & os.O_NOFOLLOW, "O_NOFOLLOW was not requested"
+        assert seen["flags"] & os.O_EXCL, "O_EXCL was not requested"
+
+    def test_symlinked_maildir_subdir_is_refused(self, tmp_path):
+        """O_NOFOLLOW guards only the FINAL component. A symlinked `new/` would
+        redirect a broker-uid write outside the mailbox entirely."""
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (tmp_path / "Maildir").mkdir()
+        (tmp_path / "Maildir" / "new").symlink_to(outside)
+        with pytest.raises(OSError, match="symlink"):
             store.deliver(tmp_path, msg())
-        assert target.read_text() == "original", "symlink target was overwritten"
+
+    def test_symlinked_maildir_root_is_refused(self, tmp_path):
+        outside = tmp_path / "elsewhere"
+        outside.mkdir()
+        (tmp_path / "Maildir").symlink_to(outside)
+        with pytest.raises(OSError, match="symlink"):
+            store.deliver(tmp_path, msg())
 
     def test_normal_delivery_still_works(self, tmp_path):
         """Negative control: the hardening must not break ordinary delivery."""
         assert store.deliver(tmp_path, msg()).parent.name == "new"
+
+
+class TestMessageSenderAuthenticity:
+    """Round-2 audit, HIGH: only the ENVELOPE sender was authenticated.
+
+    An agent could authenticate honestly, send to a permitted contact, and have
+    the message claim to be From: a third party. The recipient's reply then goes
+    to that third party — content reaching an address the original sender was
+    never allowed to use, laundered through an innocent intermediary. The audit
+    log records the envelope, so it shows nothing wrong.
+    """
+
+    def test_forged_message_from_is_refused(self, deployment):
+        m = Message(sender="charlie@elsewhere.test", to=[f"beta@{DOMAIN}"],
+                    subject="s", body="b")
+        r = deployment["broker"].submit("alpha", m)
+        assert r["ok"] is False
+        assert "does not match the authenticated sender" in r["refused"][0]
+
+    def test_forged_message_delivers_nothing(self, deployment):
+        m = Message(sender="charlie@elsewhere.test", to=[f"beta@{DOMAIN}"],
+                    subject="s", body="b")
+        deployment["broker"].submit("alpha", m)
+        assert store.read_all(deployment["homes"]["beta"]) == []
+
+    def test_a_reply_cannot_be_aimed_at_a_third_party(self, deployment):
+        """The actual harm: what the recipient would reply TO."""
+        deployment["broker"].submit("alpha", msg())
+        got = store.read_all(deployment["homes"]["beta"])[0]
+        assert got.reply(sender=f"beta@{DOMAIN}", body="ack").to == [f"alpha@{DOMAIN}"]
+
+    def test_forgery_is_audited(self, deployment):
+        m = Message(sender="charlie@elsewhere.test", to=[f"beta@{DOMAIN}"], subject="s", body="b")
+        deployment["broker"].submit("alpha", m)
+        assert any("does not match" in r.get("reason", "")
+                   for r in deployment["broker"].audit.refusals())
+
+    def test_empty_recipient_list_is_refused_and_audited(self, deployment):
+        """Previously returned ok with ZERO audit records — a submission that
+        happened and left no trace."""
+        m = Message(sender=f"alpha@{DOMAIN}", to=[], subject="s", body="b")
+        r = deployment["broker"].submit("alpha", m)
+        assert r["ok"] is False
+        assert len(list(deployment["broker"].audit.records())) == 1
+
+
+class TestUnicodeLineSeparators:
+    """Round-2 audit: the sanitiser stripped CR/LF, but deserialize() uses
+    splitlines(), which ALSO breaks on U+0085, U+2028 and U+2029. Serialiser and
+    parser disagreed about what a line is, and the gap was the vulnerability."""
+
+    @pytest.mark.parametrize("sep,name", [
+        ("\u2028", "LINE SEPARATOR"), ("\u2029", "PARAGRAPH SEPARATOR"),
+        ("\u0085", "NEL"), ("\x0b", "VT"), ("\x0c", "FF"),
+    ])
+    def test_separator_cannot_forge_a_header_through_round_trip(self, tmp_path, sep, name):
+        hostile = f"benign{sep}From: operator@example.test"
+        store.deliver(tmp_path, msg(subject=hostile))
+        got = store.read_all(tmp_path)[0]
+        assert got.sender == f"alpha@{DOMAIN}", f"{name} forged the From header"
+
+    def test_separator_cannot_orphan_the_body(self, tmp_path):
+        store.deliver(tmp_path, msg(subject="x\u2028\u2028attacker", body="real body"))
+        assert store.read_all(tmp_path)[0].body == "real body"
+
+
+class TestContactListCustody:
+    """Round-2 audit: the credential was guarded, the POLICY FILE was not. It is
+    re-read per decision, so an agent that can write it grants itself any
+    recipient instantly — protecting the key while leaving the wall down."""
+
+    def test_broker_refuses_to_start_with_a_writable_contact_list(self, deployment):
+        deployment["cfg"].credentials_path.write_text("s")
+        deployment["cfg"].credentials_path.chmod(0o600)
+        deployment["contacts"].chmod(0o666)
+        with pytest.raises(PermissionError, match="writable by group"):
+            serve(deployment["broker"])
+
+    def test_broker_starts_with_a_read_only_contact_list(self, deployment):
+        """Negative control: same path, safe mode, must start."""
+        deployment["cfg"].credentials_path.write_text("s")
+        deployment["cfg"].credentials_path.chmod(0o600)
+        deployment["contacts"].chmod(0o644)
+        serve(deployment["broker"]).shutdown()
 
 
 class TestOverTheSocket:
