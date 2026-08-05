@@ -80,7 +80,7 @@ class TestFlavorSchema:
         assert spec.personality == "agents/y.md"
 
     def test_vanilla_without_personality_is_valid(self):
-        spec = AgentSpec(username="nokirby_vanilla_01", flavor="vanilla")
+        spec = AgentSpec(username="owner_b_vanilla_01", flavor="vanilla")
         assert spec.is_vanilla is True
         assert spec.personality is None
 
@@ -89,7 +89,7 @@ class TestFlavorSchema:
         never installed — the config reporting one thing, the home showing another."""
         with pytest.raises(ValidationError, match="meaningless for"):
             AgentSpec(
-                username="nokirby_vanilla_01",
+                username="owner_b_vanilla_01",
                 flavor="vanilla",
                 personality="agents/n.md",
             )
@@ -119,21 +119,21 @@ class TestSshKeysSchema:
 
     def test_blank_entry_rejected(self):
         with pytest.raises(ValidationError, match="non-empty"):
-            AgentSpec(username="pa_x", personality="p.md", ssh_keys=["cversek", "  "])
+            AgentSpec(username="pa_x", personality="p.md", ssh_keys=["key_a", "  "])
 
     def test_multiple_keys_preserved_in_order(self):
         spec = AgentSpec(
-            username="cversek_maceff_01",
+            username="owner_a_maceff_01",
             personality="p.md",
-            ssh_keys=["cversek", "nokirby"],
+            ssh_keys=["key_a", "key_b"],
         )
-        assert spec.ssh_keys == ["cversek", "nokirby"]
+        assert spec.ssh_keys == ["key_a", "key_b"]
 
     def test_admin_ssh_keys_declarable_on_defaults(self):
         """Admin access is configuration like any other account, not a hardcoded
         username in a provisioning script."""
-        defaults = DefaultsConfig(admin_ssh_keys=["cversek"])
-        assert defaults.admin_ssh_keys == ["cversek"]
+        defaults = DefaultsConfig(admin_ssh_keys=["key_a"])
+        assert defaults.admin_ssh_keys == ["key_a"]
 
 
 # ---------------------------------------------------------------------------
@@ -145,8 +145,8 @@ class TestSshKeysSchema:
 def keys_dir(tmp_path, start_module, monkeypatch):
     d = tmp_path / "keys"
     d.mkdir()
-    (d / "cversek.pub").write_text("ssh-ed25519 AAAAcversek craig@host\n")
-    (d / "nokirby.pub").write_text("ssh-ed25519 AAAAnokirby nick@host\n")
+    (d / "key_a.pub").write_text("ssh-ed25519 AAAAkeya user-a@example.invalid\n")
+    (d / "key_b.pub").write_text("ssh-ed25519 AAAAkeyb user-b@example.invalid\n")
     (d / "pa_legacy.pub").write_text("ssh-ed25519 AAAAlegacy legacy@host\n")
     monkeypatch.setattr(start_module, "KEYS_DIR", d)
     return d
@@ -154,10 +154,10 @@ def keys_dir(tmp_path, start_module, monkeypatch):
 
 class TestKeyResolution:
     def test_named_keys_resolve_in_order(self, start_module, keys_dir):
-        keys = start_module.resolve_ssh_keys("u", ["cversek", "nokirby"])
+        keys = start_module.resolve_ssh_keys("u", ["key_a", "key_b"])
         assert keys == [
-            "ssh-ed25519 AAAAcversek craig@host",
-            "ssh-ed25519 AAAAnokirby nick@host",
+            "ssh-ed25519 AAAAkeya user-a@example.invalid",
+            "ssh-ed25519 AAAAkeyb user-b@example.invalid",
         ]
 
     def test_literal_key_passes_through(self, start_module, keys_dir):
@@ -166,7 +166,7 @@ class TestKeyResolution:
 
     def test_named_and_literal_can_mix(self, start_module, keys_dir):
         literal = "ecdsa-sha2-nistp256 AAAAecdsa e@host"
-        keys = start_module.resolve_ssh_keys("u", ["cversek", literal])
+        keys = start_module.resolve_ssh_keys("u", ["key_a", literal])
         assert len(keys) == 2
         assert keys[1] == literal
 
@@ -174,7 +174,7 @@ class TestKeyResolution:
         """Skipping it would produce an account that looks provisioned and cannot
         be logged into — discovered only when authentication fails."""
         with pytest.raises(FileNotFoundError, match="could not be resolved"):
-            start_module.resolve_ssh_keys("u", ["cversek", "absent_collaborator"])
+            start_module.resolve_ssh_keys("u", ["key_a", "absent_key"])
 
     def test_none_falls_back_to_legacy_single_file(self, start_module, keys_dir):
         """Backward compatibility: deployments that never declared ssh_keys keep
@@ -194,7 +194,7 @@ class TestKeyResolution:
 @pytest.fixture
 def clean_home(tmp_path):
     """A home containing only what a vanilla account is allowed to have."""
-    home = tmp_path / "nokirby_vanilla_01"
+    home = tmp_path / "owner_b_vanilla_01"
     (home / ".ssh").mkdir(parents=True)
     (home / ".ssh" / "authorized_keys").write_text("ssh-ed25519 AAAA n@h\n")
     for sub in ("cur", "new", "tmp"):
@@ -327,23 +327,23 @@ class TestBackwardCompatibility:
         both flavors side by side."""
         config = AgentsConfig(
             agents={
-                "cversek_maceff": {
-                    "username": "cversek_maceff_01",
+                "owner_a_maceff": {
+                    "username": "owner_a_maceff_01",
                     "personality": "agents/researcher.md",
-                    "ssh_keys": ["cversek"],
+                    "ssh_keys": ["key_a"],
                 },
-                "nokirby_vanilla": {
-                    "username": "nokirby_vanilla_01",
+                "owner_b_vanilla": {
+                    "username": "owner_b_vanilla_01",
                     "flavor": "vanilla",
-                    "ssh_keys": ["nokirby", "cversek"],
+                    "ssh_keys": ["key_b", "key_a"],
                 },
             },
             subagents={},
-            defaults={"admin_ssh_keys": ["cversek"]},
+            defaults={"admin_ssh_keys": ["key_a"]},
         )
-        assert config.agents["cversek_maceff"].is_vanilla is False
-        assert config.agents["nokirby_vanilla"].is_vanilla is True
-        assert len(config.agents["nokirby_vanilla"].ssh_keys) == 2
+        assert config.agents["owner_a_maceff"].is_vanilla is False
+        assert config.agents["owner_b_vanilla"].is_vanilla is True
+        assert len(config.agents["owner_b_vanilla"].ssh_keys) == 2
 
 
 # ---------------------------------------------------------------------------
