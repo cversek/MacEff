@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -60,6 +61,51 @@ class AuditLog:
         self._lock_path = self.path.with_name(self.path.name + ".lock")
 
     @contextmanager
+    def _open_lockfile(self) -> Iterator[Any]:
+        """Open the lockfile, refusing anything that is not a regular file.
+
+        THE LOCKFILE IS AN ATTACK SURFACE, and round 8 demonstrated three ways
+        to use it. `open(path, "a")` on a path an agent controls will happily
+        open whatever is there:
+
+        - a **FIFO** with no reader blocks forever *while the shared threading
+          lock is held*, so every other handler thread's audit write blocks
+          behind it — and since every submission audits, one `mkfifo` silences
+          all mail on the host, permanently.
+        - a **directory** raises IsADirectoryError on every submission.
+        - a **symlink** aims a broker-uid create wherever the agent chooses.
+
+        O_NOFOLLOW refuses the symlink, O_NONBLOCK turns the FIFO into an
+        immediate ENXIO instead of a hang, and the S_ISREG check refuses the
+        directory and anything else exotic with a message that names the file.
+
+        Failing here fails the audit write, which fails the submission. That is
+        correct and deliberate: the record is mandatory, so no audit means no
+        send. Refusing loudly beats both wedging and logging nothing.
+        """
+        fd = os.open(self._lock_path,
+                     os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                raise OSError(
+                    f"refusing to use '{self._lock_path}' as an audit lock: it is "
+                    "not a regular file. Something replaced it, and taking a lock "
+                    "on it could hang the broker or redirect a write.")
+            try:
+                os.fchmod(fd, 0o600)
+            except OSError:
+                pass
+            f = os.fdopen(fd, "a")
+        except BaseException:
+            os.close(fd)
+            raise
+        try:
+            yield f
+        finally:
+            f.close()
+
+    @contextmanager
     def _exclusive(self) -> Iterator[None]:
         """Serialise rotate-then-append against every other writer.
 
@@ -83,11 +129,7 @@ class AuditLog:
             if fcntl is None:  # pragma: no cover - non-POSIX
                 yield
                 return
-            with open(self._lock_path, "a") as lf:
-                try:
-                    os.fchmod(lf.fileno(), 0o600)
-                except OSError:
-                    pass
+            with self._open_lockfile() as lf:
                 fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
                 try:
                     yield

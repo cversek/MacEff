@@ -1556,3 +1556,314 @@ class TestCliRobustness:
             assert submit("alpha", msg(), deployment["cfg"].socket_path)["ok"] is True
         finally:
             srv.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Round 8: the round-7 fixes, and three mutants that survived its sweep
+# ---------------------------------------------------------------------------
+
+
+class TestAuditLockfileIsNotAnAttackSurface:
+    """Round 8: `open(lock_path, "a")` opens whatever is at that path.
+
+    A FIFO with no reader blocks forever WHILE THE SHARED THREADING LOCK IS
+    HELD, so every other handler thread's audit write queues behind it — and
+    since every submission audits, one mkfifo silences all mail on the host,
+    permanently. A directory raises on every submission. A symlink aims a
+    broker-uid create wherever the agent chooses.
+    """
+
+    def test_fifo_at_the_lock_path_is_refused_not_hung(self, tmp_path):
+        import threading as t_
+
+        os.mkfifo(tmp_path / "audit.jsonl.lock")
+        log = AuditLog(tmp_path / "audit.jsonl")
+        done = t_.Event()
+        error = []
+
+        def attempt():
+            try:
+                log.refused(sender="alpha", recipients=["x@y.test"], reason="r")
+            except OSError as e:
+                error.append(e)
+            finally:
+                done.set()
+
+        t_.Thread(target=attempt, daemon=True).start()
+        assert done.wait(timeout=5), "audit write hung on a planted FIFO"
+        assert error, "a FIFO at the lock path was accepted"
+
+    def test_directory_at_the_lock_path_is_refused_with_a_named_reason(self, tmp_path):
+        (tmp_path / "audit.jsonl.lock").mkdir()
+        log = AuditLog(tmp_path / "audit.jsonl")
+        with pytest.raises(OSError):
+            log.refused(sender="alpha", recipients=["x@y.test"], reason="r")
+
+    def test_symlink_at_the_lock_path_is_refused(self, tmp_path):
+        target = tmp_path / "elsewhere"
+        target.mkdir()
+        (tmp_path / "audit.jsonl.lock").symlink_to(target / "planted")
+        log = AuditLog(tmp_path / "audit.jsonl")
+        with pytest.raises(OSError):
+            log.refused(sender="alpha", recipients=["x@y.test"], reason="r")
+        assert list(target.iterdir()) == [], "a broker-uid write escaped the audit dir"
+
+    def test_character_device_at_the_lock_path_is_refused(self, tmp_path):
+        """The case only the S_ISREG check can catch.
+
+        The FIFO and directory tests above pass with S_ISREG removed — the open
+        FLAGS refuse those on their own (ENXIO and EISDIR), so those two tests
+        prove the flags and say nothing about the check. The mutation sweep
+        caught that: deleting S_ISREG left them green.
+
+        A character device opens cleanly under exactly these flags, and flock on
+        it succeeds, so the broker would take a lock on a device and carry on
+        believing it held one. That is the only branch left where S_ISREG is
+        load-bearing, so it is the branch the test has to use.
+        """
+        log = AuditLog(tmp_path / "audit.jsonl")
+        log._lock_path = Path("/dev/null")
+        with pytest.raises(OSError, match="not a regular file"):
+            log.refused(sender="alpha", recipients=["x@y.test"], reason="r")
+
+    def test_a_normal_lockfile_still_works(self, tmp_path):
+        """A guard that refuses the ordinary case protects nothing."""
+        log = AuditLog(tmp_path / "audit.jsonl")
+        log.refused(sender="alpha", recipients=["x@y.test"], reason="ordinary")
+        assert log.refusals()[0]["reason"] == "ordinary"
+
+
+class TestBothAuditLocksArePinned:
+    """Round 8's sweep found the two audit locks each SURVIVED removal alone —
+    they are redundant for the single-process case the suite exercised, so
+    neither was individually pinned and flock's whole reason for existing
+    (cross-process serialisation) had no test at all.
+
+    Behaviour cannot distinguish them in one process, so assert each mechanism
+    where it is the only one that can act.
+    """
+
+    def test_threading_lock_serialises_when_flock_is_unavailable(self, tmp_path, monkeypatch):
+        """The non-POSIX path, which is exactly where flock cannot help."""
+        import threading as t_
+        from macf.amail import audit as amod
+
+        monkeypatch.setattr(amod, "fcntl", None)
+        log = AuditLog(tmp_path / "audit.jsonl", max_bytes=900)
+        seen_lock, inside, high = t_.Lock(), [], [0]
+        real_write = log._write
+
+        def traced(record):
+            with seen_lock:
+                inside.append(1)
+                high[0] = max(high[0], len(inside))
+            time.sleep(0.003)
+            try:
+                return real_write(record)
+            finally:
+                with seen_lock:
+                    inside.pop()
+
+        log._write = traced
+        threads = [t_.Thread(target=lambda: [
+            log.refused(sender="a", recipients=["x@y.test"], reason=f"r{i}")
+            for i in range(10)]) for _ in range(6)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+        assert high[0] == 1, "without flock, the threading lock must still serialise"
+
+    def test_flock_is_taken_exclusively_around_the_critical_section(self, tmp_path, monkeypatch):
+        """Cross-process serialisation cannot be observed from inside one
+        process, and round 8 could not induce cross-process loss even with the
+        locks removed. So assert the ARGUMENTS: an exclusive flock is taken and
+        released on the lockfile's own descriptor."""
+        from macf.amail import audit as amod
+
+        calls = []
+        real_flock = amod.fcntl.flock
+
+        def spy(fd, op):
+            calls.append(op)
+            return real_flock(fd, op)
+
+        monkeypatch.setattr(amod.fcntl, "flock", spy)
+        log = AuditLog(tmp_path / "audit.jsonl")
+        log.refused(sender="alpha", recipients=["x@y.test"], reason="r")
+        assert amod.fcntl.LOCK_EX in calls, "no exclusive inter-process lock was taken"
+        assert amod.fcntl.LOCK_UN in calls, "the inter-process lock was never released"
+
+    def test_two_processes_do_not_tear_the_log(self, tmp_path):
+        """The end-to-end claim the flock exists to support."""
+        import subprocess as sp
+        import sys
+
+        script = tmp_path / "w.py"
+        script.write_text(
+            "import sys\n"
+            f"sys.path.insert(0, {str(Path(__file__).parent.parent / 'src')!r})\n"
+            "from macf.amail import AuditLog\n"
+            f"log = AuditLog({str(tmp_path / 'audit.jsonl')!r}, max_bytes=4000)\n"
+            "for i in range(300):\n"
+            "    log.refused(sender='a', recipients=['x@y.test'], reason=f'{sys.argv[1]}-{i}')\n")
+        procs = [sp.Popen([sys.executable, str(script), str(n)]) for n in range(4)]
+        for p in procs:
+            assert p.wait(timeout=120) == 0
+        for f in (tmp_path / "audit.jsonl.1", tmp_path / "audit.jsonl"):
+            if f.exists():
+                for line in f.read_text().splitlines():
+                    json.loads(line)  # raises if two processes interleaved a write
+
+
+class TestCustodyCoversEveryConfigObject:
+    """Round 8: round 7 guarded the directories holding the credential and the
+    contact list and left out the one holding the AUDIT LOG — which the spec
+    makes mandatory and whose integrity is explicitly in scope. It also never
+    checked any file's OWNER, so a contact list owned by an agent at 0644 passed
+    while its owner could rewrite it at will.
+
+    Seventh consecutive round in which the finding was 'the fix was applied
+    where it was demonstrated'.
+    """
+
+    @pytest.fixture
+    def tight(self, deployment, tmp_path):
+        d = tmp_path / "cfgdir"
+        d.mkdir()
+        d.chmod(0o755)
+        contacts, cred, audit = d / "contacts.json", d / "cred", d / "audit.jsonl"
+        contacts.write_text(json.dumps({"alpha": []}))
+        contacts.chmod(0o644)
+        cred.write_text("secret")
+        cred.chmod(0o600)
+        deployment["cfg"].contacts_path = contacts
+        deployment["cfg"].credentials_path = cred
+        deployment["cfg"].audit_path = audit
+        return deployment
+
+    def test_baseline_tight_config_starts(self, tight):
+        tight["broker"].assert_credential_custody()
+
+    def test_world_writable_audit_directory_is_refused(self, tight, tmp_path):
+        adir = tmp_path / "auditdir"
+        adir.mkdir()
+        adir.chmod(0o777)
+        tight["cfg"].audit_path = adir / "audit.jsonl"
+        with pytest.raises(PermissionError, match="audit log"):
+            tight["broker"].assert_credential_custody()
+
+    def test_file_owned_by_another_uid_is_refused(self, tight, monkeypatch):
+        """Round 8 could not demonstrate this without a second uid, so it was
+        reported as HYPOTHESIZED. Stubbing getuid tests the branch without
+        needing root — and the branch it pins had NO test at all, which is why
+        the corresponding mutant survived their sweep."""
+        monkeypatch.setattr(os, "getuid", lambda: os.stat(tight["cfg"].contacts_path).st_uid + 1)
+        with pytest.raises(PermissionError) as e:
+            tight["broker"].assert_credential_custody()
+        # THE FILE branch, not the directory one. Stubbing getuid makes BOTH
+        # branches fire, and both messages contain "owned by uid" — so the
+        # obvious assertion passed with the file check deleted, satisfied by its
+        # sibling. The mutation sweep caught it. Pin which guard spoke.
+        assert "directory holding" not in str(e.value), \
+            "the directory check raised; the file-owner check is unproven"
+        assert "is owned by uid" in str(e.value)
+
+    def test_directory_owned_by_another_uid_is_refused(self, tight, monkeypatch):
+        """The mutant that survived round 8's sweep: the dir-owner branch was
+        live and unpinned."""
+        real_stat = os.stat
+        cfgdir = Path(tight["cfg"].contacts_path).parent
+
+        class FakeStat:
+            def __init__(self, s, uid):
+                self._s, self.st_uid = s, uid
+                self.st_mode = s.st_mode
+
+        def fake_stat(p, *a, **k):
+            s = real_stat(p, *a, **k)
+            if Path(p) == cfgdir:
+                return FakeStat(s, s.st_uid + 1)
+            return s
+
+        monkeypatch.setattr(Path, "stat", lambda self, *a, **k: fake_stat(self, *a, **k))
+        with pytest.raises(PermissionError, match="owned by uid"):
+            tight["broker"].assert_credential_custody()
+
+
+class TestInboundAuthorizesBeforeScanning:
+    """Round 8: the visibility checks each deserialised the recipient's whole
+    mailbox, and both ran BEFORE the contact decision. An unlisted sender whose
+    message was bound for quarantine still paid 2 x O(mailbox) per message —
+    4000 deserialisations against a 2000-message mailbox — and the cost rises
+    with the traffic the attacker has already sent.
+    """
+
+    def test_quarantined_mail_does_not_scan_the_mailbox(self, deployment, monkeypatch):
+        deployment["broker"].submit("alpha", msg())
+        from macf.amail import store as smod
+
+        calls = []
+        real = smod.read_all
+        monkeypatch.setattr(smod, "read_all",
+                            lambda *a, **k: (calls.append(1), real(*a, **k))[1])
+        m = msg(sender="stranger@elsewhere.test", to=[f"beta@{DOMAIN}"])
+        m.parent, m.thread_id = "msg-1-aaaaaaaaaaaa", "thr-1-aaaaaaaaaaaa"
+        r = deployment["broker"].accept_inbound(m, f"beta@{DOMAIN}")
+        assert r["decision"] == "quarantined"
+        assert calls == [], "an unauthorized sender still forced a mailbox scan"
+
+    def test_delivered_mail_scans_at_most_once(self, deployment, monkeypatch):
+        deployment["broker"].submit("alpha", msg())
+        from macf.amail import store as smod
+
+        calls = []
+        real = smod.read_all
+        monkeypatch.setattr(smod, "read_all",
+                            lambda *a, **k: (calls.append(1), real(*a, **k))[1])
+        m = msg(sender=f"alpha@{DOMAIN}", to=[f"beta@{DOMAIN}"])
+        m.parent, m.thread_id = "msg-1-aaaaaaaaaaaa", "thr-1-aaaaaaaaaaaa"
+        deployment["broker"].accept_inbound(m, f"beta@{DOMAIN}")
+        assert len(calls) <= 1, f"{len(calls)} full mailbox scans for one message"
+
+    def test_quarantined_mail_is_not_threaded_against_a_real_conversation(self, deployment):
+        deployment["broker"].submit("alpha", msg())
+        existing = store.read_all(deployment["homes"]["beta"])[0].thread_id
+        m = msg(sender="stranger@elsewhere.test", to=[f"beta@{DOMAIN}"])
+        m.thread_id = existing
+        deployment["broker"].accept_inbound(m, f"beta@{DOMAIN}")
+        q = list((deployment["homes"]["beta"] / "Maildir" / "quarantine").iterdir())
+        assert q and existing not in q[0].read_text()
+
+
+class TestInvisibleCharactersAreEscaped:
+    """Round 8: escaping the bidi overrides by enumeration left LRM/RLM, every
+    zero-width character, the word joiner, the soft hyphen, and the Unicode tag
+    block reaching the terminal — the tag block can smuggle entirely invisible
+    text into a rendered sender label.
+
+    Enumerating members of a category gives a list that is right the day it is
+    written. Naming the category gives one that stays right.
+    """
+
+    @pytest.mark.parametrize("cp,name", [
+        (0x200E, "LEFT-TO-RIGHT MARK"), (0x200F, "RIGHT-TO-LEFT MARK"),
+        (0x200B, "ZERO WIDTH SPACE"), (0x200D, "ZERO WIDTH JOINER"),
+        (0x2060, "WORD JOINER"), (0x00AD, "SOFT HYPHEN"),
+        (0x2062, "INVISIBLE TIMES"), (0xFEFF, "ZERO WIDTH NO-BREAK SPACE"),
+        (0xE0041, "TAG LATIN CAPITAL LETTER A"), (0x202E, "RIGHT-TO-LEFT OVERRIDE"),
+    ])
+    def test_format_characters_do_not_reach_the_terminal(self, cp, name):
+        from macf import cli
+
+        out = cli._term_safe(f"before{chr(cp)}after")
+        assert chr(cp) not in out, f"{name} (U+{cp:04X}) reached the terminal"
+        assert f"\\u{cp:04x}" in out or f"\\x{cp:02x}" in out
+
+    def test_ordinary_unicode_prose_is_untouched(self):
+        """Escaping legitimate text would make the renderer useless for anyone
+        not writing in ASCII."""
+        from macf import cli
+
+        for text in ("Grüße — naïve café", "日本語のメール", "Ω≈ç√∫˜µ", "emoji 🎉 ok"):
+            assert cli._term_safe(text) == text

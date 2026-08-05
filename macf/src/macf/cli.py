@@ -1,6 +1,6 @@
 # PYTHON_ARGCOMPLETE_OK
 # tools/src/maceff/cli.py
-import argparse, json, os, re, subprocess, sys, glob, platform, socket
+import argparse, json, os, re, subprocess, sys, glob, platform, socket, unicodedata
 from pathlib import Path
 from datetime import datetime, timezone
 try:
@@ -8206,8 +8206,7 @@ def _amail_config() -> dict:
 #:
 #: Written as escapes, not as the characters themselves: a literal bidi override
 #: inside this source file would reorder the very line that defines it.
-_TERM_UNSAFE = re.compile(
-    "[\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u202a-\\u202e\\u2066-\\u2069]")
+_TERM_UNSAFE = re.compile("[\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f]")
 
 
 def _escape_codepoint(ch: str) -> str:
@@ -8236,7 +8235,27 @@ def _term_safe(value: object) -> str:
     message contained control characters, since that is itself informative.
     """
     s = "" if value is None else str(value)
-    return _TERM_UNSAFE.sub(lambda m: _escape_codepoint(m.group()), s)
+    # Fast path in C for the overwhelmingly common case: plain ASCII with no
+    # control characters. Everything else is inspected one code point at a time,
+    # which a 256 KiB body can afford once, at read time, on a human's request.
+    if s.isascii() and not _TERM_UNSAFE.search(s):
+        return s
+    out = []
+    for ch in s:
+        # Cf is the CATEGORY, not a hand-kept list. The first version enumerated
+        # the bidi overrides and isolates and shipped — and round 8 found it
+        # still passed LRM/RLM (which are bidi controls too), every zero-width
+        # character, the word joiner, the soft hyphen, and the Unicode tag block,
+        # which can smuggle entirely invisible text into a rendered sender label.
+        # Enumerating members of a category is how you get a list that is right
+        # on the day it is written; naming the category is how you get one that
+        # stays right.
+        if _TERM_UNSAFE.match(ch) or (not ch.isascii()
+                                      and unicodedata.category(ch) == "Cf"):
+            out.append(_escape_codepoint(ch))
+        else:
+            out.append(ch)
+    return "".join(out)
 
 
 def cmd_amail_send(args: argparse.Namespace) -> int:

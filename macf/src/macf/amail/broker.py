@@ -305,8 +305,7 @@ class Broker:
         whom it claims, and message bodies remain data rather than instructions.
         """
         from .store import quarantine
-        from .store import find as store_find
-        from .store import thread as store_thread
+        from .store import read_all as store_read_all
         agent = self.config.agent_for(recipient)
         if not agent:
             raise DeliveryError(f"'{recipient}' is not a local mailbox")
@@ -323,6 +322,30 @@ class Broker:
         remote_sender = message.sender
         message.message_id = new_id("msg")
         message.date = _now_iso()
+        # AUTHORIZE FIRST, THEN DO THE EXPENSIVE WORK.
+        #
+        # The visibility checks below each scan and deserialise the recipient's
+        # whole mailbox. Running them before the contact decision made an
+        # UNLISTED sender — whose message is bound for quarantine and will never
+        # be threaded at all — pay 2 x O(mailbox) per message, measured at 4000
+        # deserialisations against a 2000-message mailbox. The victim's mailbox
+        # grows as mail lands, so the cost per hostile message rises with the
+        # traffic the attacker has already sent. Nothing that only matters for
+        # DELIVERED mail may run before we know the mail will be delivered.
+        permitted = self.contacts.permits(agent, message.sender) if self.contacts else False
+        if not permitted:
+            # Identifiers are dropped rather than preserved: quarantined mail is
+            # hostile by assumption, and a reader inspecting it should not find
+            # it threaded against a real conversation.
+            message.parent, message.thread_id = None, new_id("thr")
+            reason = f"sender '{message.sender}' is not in the contact list for '{agent}'"
+            quarantine(home, message, reason)
+            if self.audit:
+                self.audit.inbound(sender=message.sender, recipient=recipient,
+                                   message_id=message.message_id,
+                                   decision="quarantined", reason=reason)
+            return {"ok": True, "decision": "quarantined", "reason": reason}
+
         # SHAPE IS NOT VISIBILITY, and the outbound path already knows that.
         #
         # Checking that `parent` merely LOOKS like an identifier let a remote
@@ -333,9 +356,14 @@ class Broker:
         # only the regex. Same laundering an earlier round closed on the submit
         # path, still open on its twin — which is the asymmetry that keeps
         # recurring, so it is now closed on both.
+        #
+        # ONE scan, not two. store_find() and store_thread() each deserialise the
+        # entire mailbox, so asking both questions separately doubled the cost of
+        # every delivered message for no additional guarantee.
+        existing = store_read_all(home) if (message.parent or message.thread_id) else []
         if message.parent is not None:
-            if not _ID_RE.match(message.parent or "") or \
-                    store_find(home, message.parent) is None:
+            visible = any(m.message_id == message.parent for m in existing)
+            if not _ID_RE.match(message.parent or "") or not visible:
                 message.parent = None
         if message.thread_id and not _THR_RE.match(message.thread_id):
             message.thread_id = new_id("thr")
@@ -343,26 +371,17 @@ class Broker:
             # A well-formed thread_id with no visible parent is an assertion of
             # membership in a conversation this sender has shown no part of. It
             # gets its own thread rather than the one it named.
-            if store_thread(home, message.thread_id):
+            if any(m.thread_id == message.thread_id for m in existing):
                 message.thread_id = new_id("thr")
         message.subject = (message.subject or "")[:MAX_SUBJECT]
         message.body = (message.body or "")[:MAX_BODY]
         message.sender = remote_sender
 
-        permitted = self.contacts.permits(agent, message.sender) if self.contacts else False
-        if permitted:
-            deliver(home, message)
-            if self.audit:
-                self.audit.inbound(sender=message.sender, recipient=recipient,
-                                   message_id=message.message_id, decision="delivered")
-            return {"ok": True, "decision": "delivered"}
-        reason = f"sender '{message.sender}' is not in the contact list for '{agent}'"
-        quarantine(home, message, reason)
+        deliver(home, message)
         if self.audit:
             self.audit.inbound(sender=message.sender, recipient=recipient,
-                               message_id=message.message_id,
-                               decision="quarantined", reason=reason)
-        return {"ok": True, "decision": "quarantined", "reason": reason}
+                               message_id=message.message_id, decision="delivered")
+        return {"ok": True, "decision": "delivered"}
 
     # -------------------------------------------------------------- credentials
 
@@ -434,8 +453,39 @@ class Broker:
         # swap end to end — refused before, delivered after, custody check green
         # throughout. A guard that inspects an object the attacker never has to
         # touch does not merely miss the attack, it certifies against it.
+        # THE FILE'S OWNER, NOT ONLY ITS MODE.
+        #
+        # The mode check asks "can group or other write this?" and never asks
+        # who owns it. A contact list OWNED BY AN AGENT at mode 0644 passes —
+        # the owner needs no group or other write bit to rewrite their own file,
+        # and the list is re-read per decision, so that is a self-grant of any
+        # recipient. Round 7 fixed file-versus-directory and round 8 found the
+        # same asymmetry one level shallower, which is the pattern this campaign
+        # keeps producing: the fix was applied where it was demonstrated.
         for label, target in (("credential", self.config.credentials_path),
                               ("contact list", self.config.contacts_path)):
+            if not target or not Path(target).exists():
+                continue
+            owner = Path(target).stat().st_uid
+            if owner != os.getuid():
+                raise PermissionError(
+                    f"the {label} ({target}) is owned by uid {owner}, not by the "
+                    f"broker (uid {os.getuid()}). Its owner can rewrite it at any "
+                    "time regardless of its mode. Refusing to start."
+                )
+
+        # THE AUDIT DIRECTORY TOO.
+        #
+        # Round 7 guarded the directories holding the credential and the contact
+        # list, and left out the one holding the audit log — which the spec makes
+        # mandatory and whose integrity is explicitly in scope. An agent able to
+        # write it can delete the record outright, or plant a FIFO at the lock
+        # path and wedge every submission on the host. Guarding two of the three
+        # config directories is the sibling-blindness this campaign has now found
+        # in seven consecutive rounds.
+        for label, target in (("credential", self.config.credentials_path),
+                              ("contact list", self.config.contacts_path),
+                              ("audit log", self.config.audit_path)):
             if not target:
                 continue
             parent = Path(target).parent
