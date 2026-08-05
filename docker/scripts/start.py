@@ -633,6 +633,37 @@ def configure_claude_settings(
     log(f"  Claude prefs: {merged_prefs.model_dump()}")
 
 
+def resolve_ca_config(
+    agent_spec: AgentSpec,
+    defaults_config: Optional[Dict],
+) -> Optional[ConsciousnessArtifactsConfig]:
+    """Resolve the effective consciousness-artifacts config for an agent.
+
+    Per-agent spec wins; otherwise fall back to the deployment defaults.
+
+    The fallback needs coercion. `defaults_config` arrives as a plain dict —
+    main() calls model_dump() on the defaults — so the nested value is a dict too,
+    while every caller expects a model and reaches for .private / .public. This is
+    the one point where the type actually changes, so it is the one place to fix it.
+
+    That fallback went unexercised for a long time: the only deployment declared
+    consciousness_artifacts on every agent, so the documented "used if not
+    specified per-agent" path never ran and its type error never surfaced.
+    """
+    if agent_spec.consciousness_artifacts is not None:
+        return agent_spec.consciousness_artifacts
+
+    if not defaults_config:
+        return None
+
+    default_ca = defaults_config.get('consciousness_artifacts')
+    if default_ca is None:
+        return None
+    if isinstance(default_ca, dict):
+        return ConsciousnessArtifactsConfig(**default_ca)
+    return default_ca
+
+
 def create_agent_tree(username: str, agent_spec: AgentSpec, defaults_config: Optional[Dict]) -> None:
     """Create agent directory structure with consciousness artifacts."""
     home = Path(f'/home/{username}')
@@ -648,12 +679,17 @@ def create_agent_tree(username: str, agent_spec: AgentSpec, defaults_config: Opt
     public = agent / 'public'
 
     # Determine parent directory permissions based on immutable_structure flag
-    ca_config = agent_spec.consciousness_artifacts
-    if ca_config is None and defaults_config:
-        ca_config = defaults_config.get('consciousness_artifacts')
+    ca_config = resolve_ca_config(agent_spec, defaults_config)
 
-    # Check immutable_structure flag (defaults to True for governance)
-    immutable = getattr(ca_config, 'immutable_structure', True) if ca_config else True
+    # Check immutable_structure flag (defaults to True for governance).
+    #
+    # getattr with a default is deliberately NOT used here. Against a dict it
+    # returns the default silently, so a deployment setting immutable_structure:
+    # false would have been overridden to true with no error — a wrong answer on a
+    # permissions flag, which is worse than an AttributeError that at least
+    # announces itself. resolve_ca_config guarantees a model or None, so plain
+    # attribute access is correct and raises loudly if that ever stops holding.
+    immutable = ca_config.immutable_structure if ca_config else True
 
     # Private: owner-only (other PAs cannot read)
     # Public: group-readable via agents_all (other PAs can read)
