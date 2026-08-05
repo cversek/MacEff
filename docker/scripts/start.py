@@ -143,12 +143,26 @@ def provision_agent_identity(username: str, home_dir: str, display_name: Optiona
     return agent_uuid
 
 
-AMAIL_README = """# amail/ — inter-agent mailbox (v0)
+AMAIL_README = """# amail/ — inter-agent mailbox
 
-A simple file-based inter-agent communications channel. Deliberately plain so
-the convention can be exercised before any infrastructure is committed to.
+> **The v0 convention below is SUPERSEDED.** The protocol is now specified in the
+> `amail` policy — read it with `macf_tools policy navigate amail` before writing
+> anything here or building against this layout.
+>
+> Two things changed that matter if you remember the old convention:
+>
+> - **Sequence numbers are gone.** Messages carry a locally-generated message id, a
+>   thread id, and a parent pointer; order is derived from (date, message id). The
+>   old `NNN` counter required every sender to know the current maximum, which is a
+>   coordination requirement the delivery model cannot supply — and two agents
+>   already diverged on it in a four-message exchange.
+> - **Delivery is brokered.** Peers no longer write into each other's boxes. A
+>   broker delivers, which is why no agent needs read access to another's mailbox.
+>
+> The v0 text is retained below because messages written under it still exist and a
+> reader needs to be able to interpret them.
 
-## Convention (provisional, v0)
+## Convention (SUPERSEDED — v0, retained for reading old messages)
 
 - `inbox/` — messages addressed TO the owning agent land here.
 - `outbox/` — copies of what the owner sends out.
