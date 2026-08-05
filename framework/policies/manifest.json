@@ -1046,7 +1046,7 @@
     "types": {
       "observations": {
         "name": "observations",
-        "emoji": "🔬",
+        "emoji": "\ud83d\udd2c",
         "description": "Technical discoveries and insights",
         "discovery_keys": [
           "observation",
@@ -1059,7 +1059,7 @@
       },
       "experiments": {
         "name": "experiments",
-        "emoji": "🧪",
+        "emoji": "\ud83e\uddea",
         "description": "Controlled testing and validation",
         "discovery_keys": [
           "experiment",
@@ -1073,7 +1073,7 @@
       },
       "reports": {
         "name": "reports",
-        "emoji": "📊",
+        "emoji": "\ud83d\udcca",
         "description": "Project completion summaries",
         "discovery_keys": [
           "report",
@@ -1087,7 +1087,7 @@
       },
       "reflections": {
         "name": "reflections",
-        "emoji": "💭",
+        "emoji": "\ud83d\udcad",
         "description": "Philosophical growth synthesis",
         "discovery_keys": [
           "reflection",
@@ -1101,7 +1101,7 @@
       },
       "checkpoints": {
         "name": "checkpoints",
-        "emoji": "🔖",
+        "emoji": "\ud83d\udd16",
         "description": "Strategic state preservation",
         "discovery_keys": [
           "checkpoint",
@@ -1113,7 +1113,7 @@
       },
       "roadmaps": {
         "name": "roadmaps",
-        "emoji": "🗺️",
+        "emoji": "\ud83d\uddfa\ufe0f",
         "description": "Multi-phase planning documents",
         "discovery_keys": [
           "roadmap",
@@ -1131,7 +1131,7 @@
       },
       "emotions": {
         "name": "emotions",
-        "emoji": "❤️",
+        "emoji": "\u2764\ufe0f",
         "description": "Emotional expression and processing",
         "discovery_keys": [
           "emotional",
@@ -1145,7 +1145,7 @@
       },
       "learnings": {
         "name": "learnings",
-        "emoji": "📚",
+        "emoji": "\ud83d\udcda",
         "description": "Accumulated wisdom and lessons",
         "discovery_keys": [
           "learning",
@@ -1218,6 +1218,12 @@
       "base/consciousness/roadmaps_drafting#archive-then-collapse",
       "base/development/task_management#archive-protocol"
     ],
+    "attested": [
+      "amail#inbound-trust-classification"
+    ],
+    "authorship": [
+      "amail#authorship-signing"
+    ],
     "backup": [
       "base/operations/agent_backup"
     ],
@@ -1281,6 +1287,13 @@
     "discovery": [
       "base/consciousness/observations"
     ],
+    "dkim": [
+      "amail#authorship-signing",
+      "amail#what-the-internet-proves"
+    ],
+    "dmarc": [
+      "amail#what-the-internet-proves"
+    ],
     "docker": [
       "tech/docker/container_operations"
     ],
@@ -1337,6 +1350,9 @@
     ],
     "journey": [
       "base/consciousness/emotional_expression"
+    ],
+    "key_rotation": [
+      "amail#algorithm-and-rotation"
     ],
     "layer_aware": [
       "base/development/debugging_and_validation"
@@ -1452,6 +1468,12 @@
       "base/consciousness/roadmaps_drafting",
       "base/consciousness/roadmaps_following"
     ],
+    "signature": [
+      "amail#authorship-signing"
+    ],
+    "signing": [
+      "amail#authorship-signing"
+    ],
     "skepticism": [
       "base/philosophy/empiricism"
     ],
@@ -1463,6 +1485,12 @@
     ],
     "specialist": [
       "delegation_guidelines#specialist-capabilities"
+    ],
+    "spf": [
+      "amail#what-the-internet-proves"
+    ],
+    "spoofing": [
+      "amail#what-the-internet-proves"
     ],
     "stakeholder": [
       "base/consciousness/reports"
@@ -1498,6 +1526,9 @@
     ],
     "transplant": [
       "base/operations/agent_backup"
+    ],
+    "trust_classification": [
+      "amail#inbound-trust-classification"
     ],
     "validation": [
       "base/development/debugging_and_validation"

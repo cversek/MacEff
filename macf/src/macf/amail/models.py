@@ -80,6 +80,14 @@ class Message:
     thread_id: str = ""
     parent: Optional[str] = None
     date: str = field(default_factory=_now_iso)
+    #: Detached authorship signature over the canonical payload (v1.1). Supplied
+    #: by the sender, so it is a CLAIM — it proves nothing until verified against
+    #: the correspondent's declared public key, and `trust` records the result.
+    signature: Optional[str] = None
+    #: What the broker established about this message's origin (v1.1). MINTED:
+    #: the broker sets it and a sender can never influence it. Absent means the
+    #: message has not passed through a broker, which is itself information.
+    trust: Optional[str] = None
 
     def __post_init__(self) -> None:
         if isinstance(self.to, str):
@@ -133,6 +141,15 @@ class Message:
         ]
         if self.parent:
             headers.append(f"In-Reply-To: {_hdr(self.parent)}")
+        if self.signature:
+            headers.append(f"X-Amail-Signature: {_hdr(self.signature)}")
+        if self.trust:
+            # Written by the broker, from broker-held state. A sender cannot put
+            # this here: serialize() emits a fixed header set from dataclass
+            # fields, and `trust` is minted rather than passed through. The
+            # header exists so an ordinary mail client — which has no access to
+            # the stored metadata — can still see what was established.
+            headers.append(f"X-Amail-Trust: {_hdr(self.trust)}")
         return "\n".join(headers) + "\n\n" + self.body + "\n"
 
     @classmethod
@@ -151,6 +168,8 @@ class Message:
             thread_id=h.get("thread-id", ""),
             parent=h.get("in-reply-to") or None,
             date=h.get("date", ""),
+            signature=h.get("x-amail-signature") or None,
+            trust=h.get("x-amail-trust") or None,
         )
 
     def sort_key(self):

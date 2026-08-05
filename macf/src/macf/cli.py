@@ -8184,6 +8184,14 @@ def _amail_config() -> dict:
     cfg.setdefault("domain", os.environ.get("MACF_AMAIL_DOMAIN", ""))
     cfg.setdefault("socket", os.environ.get("MACF_AMAIL_SOCKET", "/run/amail/broker.sock"))
     cfg.setdefault("agent", os.environ.get("MACEFF_AGENT_NAME", ""))
+    # The agent's OWN private signing key. It lives in the agent's home, not the
+    # broker's: a signing key proves authorship and reaches nothing, so holding
+    # one does not give a compromised agent any reach it did not have. Keeping it
+    # out of the broker is what lets a signature mean something to a party that
+    # does not trust the broker.
+    cfg.setdefault("signing_key", os.environ.get(
+        "MACF_AMAIL_SIGNING_KEY",
+        str(Path(home) / ".maceff" / "amail_signing_key.pem") if home else ""))
     for k in ("domain", "socket", "agent"):
         if os.environ.get(f"MACF_AMAIL_{k.upper()}"):
             cfg[k] = os.environ[f"MACF_AMAIL_{k.upper()}"]
@@ -8258,6 +8266,72 @@ def _term_safe(value: object) -> str:
     return "".join(out)
 
 
+#: Rendered trust labels. Deliberately NOT derived from anything in the message
+#: body — see _trust_badge.
+_TRUST_BADGES = {
+    "attested": "✅ [signed by this correspondent]",
+    "domain_auth": "🔶 [domain authenticated — sender NOT proven]",
+    "unverified": "❔ [unverified origin]",
+    "suspect": "🚨 [SUSPECT — authentication failed]",
+    None: "❔ [no classification recorded]",
+}
+
+
+def _trust_badge(message) -> str:
+    """The trust label, rendered FROM STORED METADATA and never from the body.
+
+    THIS IS THE RULE THAT MAKES THE LABEL WORTH ANYTHING. An attacker's most
+    direct answer to a trust banner is to type one into their message. If the
+    renderer took its label from message content, a forged badge would appear
+    beside the real one, in the same style, with the same words — and the label
+    would raise confidence in exactly the messages it exists to lower it for.
+
+    So the badge comes from `message.trust`, which the broker mints and a sender
+    can never set, and the body is separately neutralised by _term_safe() so it
+    cannot redraw the badge that was already printed.
+
+    An unrecognised value renders as unrecognised rather than falling through to
+    something reassuring. A classification this build does not understand is not
+    a reason for confidence.
+    """
+    value = getattr(message, "trust", None)
+    return _TRUST_BADGES.get(value, f"❔ [unrecognised classification: {_term_safe(value)}]")
+
+
+def cmd_amail_keygen(args: argparse.Namespace) -> int:
+    """Generate this agent's authorship signing key and print its public half."""
+    from macf.amail import SigningError, generate_keypair
+
+    cfg = _amail_config()
+    target = Path(args.path) if args.path else Path(cfg.get("signing_key") or "")
+    if not str(target):
+        print("❌ cannot determine where to write the key; pass --path")
+        return 1
+    if target.exists():
+        # Never silently replace one: overwriting invalidates every signature
+        # this correspondent has already published, and doing it by accident is
+        # indistinguishable from doing it maliciously.
+        print(f"❌ a signing key already exists at {target}.")
+        print("   Refusing to overwrite it — that would invalidate every signature")
+        print("   you have published. Move it aside deliberately if you mean to rotate.")
+        return 1
+    try:
+        public = generate_keypair(target)
+    except (SigningError, OSError) as e:
+        print(f"❌ could not generate a signing key: {e}")
+        return 1
+    print(f"✅ signing key written to {target} (mode 600)")
+    print("\nGive your correspondents this public key so they can verify you:\n")
+    print(f"    {public}\n")
+    print("In their contact list, as an entry for your address:")
+    print(f'    {{"address": "{cfg.get("agent","<you>")}@{cfg.get("domain","<domain>")}", '
+          f'"key": "{public}"}}')
+    print("\nKeep the private key where it is. It proves authorship and reaches")
+    print("nothing — the broker never holds it, which is what lets your signature")
+    print("mean something to someone who does not trust the broker.")
+    return 0
+
+
 def cmd_amail_send(args: argparse.Namespace) -> int:
     """Submit a message to the broker.
 
@@ -8300,6 +8374,26 @@ def cmd_amail_send(args: argparse.Namespace) -> int:
             return 1
         msg = parent.reply(sender=msg.sender, body=body, subject=args.subject)
         msg.to = list(args.to) or msg.to
+
+    # SIGN BEFORE SUBMITTING, if this agent has a key.
+    #
+    # Signing here rather than in the broker is the whole point: the broker holds
+    # no private key, so it cannot forge this agent's mail, and a recipient who
+    # distrusts the broker can still establish authorship. Absence of a key is
+    # not an error — an agent whose correspondents have not asked for signatures
+    # has nothing to prove — but a key that exists and CANNOT BE USED is, because
+    # sending unsigned when the correspondent expects signed is exactly the shape
+    # of an impersonation.
+    keypath = Path(cfg["signing_key"]) if cfg.get("signing_key") else None
+    if keypath and keypath.exists():
+        from macf.amail import SigningError, load_private_key, sign
+        try:
+            msg.signature = sign(msg, load_private_key(keypath))
+        except SigningError as e:
+            print(f"❌ cannot sign with {keypath}: {e}")
+            print("   Refusing to send unsigned: a correspondent who has your key "
+                  "treats unsigned mail as suspect.")
+            return 1
 
     try:
         result = submit(cfg["agent"], msg, Path(cfg["socket"]))
@@ -8346,7 +8440,7 @@ def cmd_amail_list(args: argparse.Namespace) -> int:
         print("(no messages)")
         return 0
     for m in msgs:
-        print(f"{_term_safe(m.date)}  {_term_safe(m.sender)}")
+        print(f"{_term_safe(m.date)}  {_term_safe(m.sender)}  {_trust_badge(m)}")
         print(f"    {_term_safe(m.subject)}")
         print(f"    id={_term_safe(m.message_id)} thread={_term_safe(m.thread_id)}"
               + (f" reply-to={_term_safe(m.parent)}" if m.parent else ""))
@@ -8369,9 +8463,11 @@ def cmd_amail_read(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(m.to_dict(), indent=2))
         return 0
-    # --json emits the message unmodified because it is consumed by a program,
-    # not a terminal. The human-facing render is the one that must not hand
-    # control characters to the emulator.
+    # The badge is printed from stored metadata BEFORE the message, and the
+    # message body is neutralised so it cannot redraw what was already shown.
+    # Both halves are needed: a label the body can forge is decorative, and a
+    # label the body can erase is worse.
+    print(_trust_badge(m))
     print(_term_safe(m.serialize()))
     return 0
 
@@ -10107,6 +10203,12 @@ def _build_parser() -> argparse.ArgumentParser:
     amail_read.add_argument("message_id", help="message id (see `amail list`)")
     amail_read.add_argument("--json", action="store_true", help="machine-readable output")
     amail_read.set_defaults(func=cmd_amail_read)
+
+    amail_keygen = amail_sub.add_parser(
+        "keygen", help="generate this agent's authorship signing key")
+    amail_keygen.add_argument("--path", help="where to write the private key "
+                                            "(default: ~/.maceff/amail_signing_key.pem)")
+    amail_keygen.set_defaults(func=cmd_amail_keygen)
 
     amail_status = amail_sub.add_parser("status", help="is amail usable? what is missing?")
     amail_status.add_argument("--json", action="store_true", help="machine-readable output")

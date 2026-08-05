@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, List, Optional
+
+from .crypto import SigningError, parse_public_key
+from typing import Dict, List, Optional, Tuple
 
 
 class ContactListError(ValueError):
@@ -36,6 +38,9 @@ class ContactBook:
         self.path = Path(path)
 
     def _load(self) -> Dict[str, List[str]]:
+        return self._load_full()[0]
+
+    def _load_full(self) -> Tuple[Dict[str, List[str]], Dict[Tuple[str, str], List[str]]]:
         if not self.path.exists():
             # Fail closed. An absent contact list is not an empty restriction;
             # it means the deployment is not configured, and sending under that
@@ -52,6 +57,7 @@ class ContactBook:
             raise ContactListError("contact list must be an object of agent -> [addresses]")
 
         book: Dict[str, List[str]] = {}
+        keys: Dict[Tuple[str, str], List[str]] = {}
         for agent, entries in raw.items():
             if not isinstance(entries, list):
                 raise ContactListError(f"contacts for '{agent}' must be a list")
@@ -68,16 +74,54 @@ class ContactBook:
                         )
                     if "address" not in e:
                         raise ContactListError(f"contact entry for '{agent}' has no address")
-                    addrs.append(str(e["address"]).strip().lower())
+                    addr = str(e["address"]).strip().lower()
+                    addrs.append(addr)
+                    declared = e.get("key") or e.get("keys")
+                    if declared is not None:
+                        if isinstance(declared, str):
+                            declared = [declared]
+                        if not isinstance(declared, list) or not declared:
+                            raise ContactListError(
+                                f"contact key for '{addr}' must be a string or a "
+                                "non-empty list of strings")
+                        for k in declared:
+                            if not isinstance(k, str):
+                                raise ContactListError(
+                                    f"contact key for '{addr}' must be a string")
+                            # Parsed at LOAD, not at first use. A malformed key
+                            # discovered while classifying a message would leave
+                            # the classifier deciding what to do about broken
+                            # configuration, in the middle of a security
+                            # decision. Refusing here means a deployment learns
+                            # its config is wrong when it writes it.
+                            try:
+                                parse_public_key(k)
+                            except SigningError as ex:
+                                raise ContactListError(
+                                    f"contact key for '{addr}' is unusable: {ex}"
+                                ) from ex
+                        keys[(agent, addr)] = list(declared)
                 elif isinstance(e, str):
                     addrs.append(e.strip().lower())
                 else:
                     raise ContactListError(f"contact entry for '{agent}' must be a string or object")
             book[agent] = addrs
-        return book
+        return book, keys
 
     def contacts_for(self, agent: str) -> List[str]:
         return self._load().get(agent, [])
+
+    def keys_for(self, agent: str, correspondent: str) -> List[str]:
+        """Public keys this agent has declared for that correspondent.
+
+        Empty means "no key declared", which is a different fact from "the key
+        did not verify" and the classifier treats them differently. Keyed by
+        (agent, address) rather than by address alone: two agents may know the
+        same correspondent under different keys, and merging them would let one
+        agent's contact list decide what another agent is willing to believe.
+        """
+        _, keys = self._load_full()
+        return keys.get((agent, (correspondent or "").strip().lower()), [])
 
     def permits(self, agent: str, recipient: str) -> bool:
         """True when `agent` may send to `recipient`.

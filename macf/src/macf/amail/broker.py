@@ -41,6 +41,8 @@ from typing import Any, Dict, List, Optional
 from .audit import AuditLog
 from .contacts import ContactBook, ContactListError
 from .models import Message, new_id, _now_iso
+from .trust import TrustClass, LOCAL_SUBMISSION
+from .crypto import verify
 from .store import deliver, ensure_maildir
 
 DEFAULT_SOCKET = "/run/amail/broker.sock"
@@ -56,6 +58,26 @@ _THR_RE = re.compile(r"^thr-\d+-[0-9a-f]{12}$")
 MAX_SUBJECT = 998
 MAX_BODY = 1 << 18      # 256 KiB
 MAX_RECIPIENTS = 64     # ContactBook is consulted per recipient
+#: An Ed25519 signature is 64 bytes, ~88 base64 characters. Generous for future
+#: algorithms, small enough that the field cannot become a covert channel
+#: wearing a cryptographic name.
+#:
+#: It must also be BELOW the 998-character header ceiling _hdr() applies. Set at
+#: 1024 it was unreachable — every oversize signature was already truncated by
+#: the header cap, so this bound enforced nothing and its test passed by way of
+#: a mechanism it was not written to check. A limit that a sibling always
+#: reaches first is not a limit; it is a comment.
+MAX_SIGNATURE = 512
+
+#: Headers a sender may NOT assert about authentication. RFC 8601 §5 requires an
+#: ADMD to strip incoming Authentication-Results bearing its own authserv-id,
+#: because otherwise a sender forges one and readers draw false conclusions.
+#: This list is broader: amail evaluates at its own boundary and never consumes
+#: any upstream verdict, so every one of these is an inbound claim to discard.
+STRIPPED_INBOUND_HEADERS = (
+    "authentication-results", "arc-authentication-results", "arc-message-signature",
+    "arc-seal", "x-amail-trust",
+)
 
 
 def peer_uid(conn: socket.socket) -> int:
@@ -74,10 +96,10 @@ def peer_uid(conn: socket.socket) -> int:
 #: The trust classification, as data rather than prose. canonicalize() asserts
 #: its union covers every Message field, so a field added later fails loudly
 #: instead of silently defaulting to trusted.
-MINTED = frozenset({"message_id", "date"})
+MINTED = frozenset({"message_id", "date", "trust"})
 CHECKED = frozenset({"sender"})
 BOUND = frozenset({"thread_id", "parent"})
-PASSED = frozenset({"subject", "body", "to"})
+PASSED = frozenset({"subject", "body", "to", "signature"})
 _CLASSIFIED_FIELDS = MINTED | CHECKED | BOUND | PASSED
 
 
@@ -212,6 +234,23 @@ class Broker:
         # store.find(), splice threads, and collide audit records.
         message.message_id = new_id("msg")
         message.date = _now_iso()
+        # `trust` is MINTED and never accepted, which is what makes the label
+        # worth anything. A submitter that could set it would write "attested"
+        # onto its own forgery, and every reader downstream would believe it.
+        # Local submission earns ATTESTED because SO_PEERCRED established who
+        # sent this before the message was accepted — that is a stronger proof
+        # of authorship than a signature, not a courtesy.
+        message.trust = LOCAL_SUBMISSION.value
+
+        # PASSED — `signature` is the sender's own claim about its own message
+        # and is carried unchanged. It is PASSED rather than CHECKED on purpose:
+        # the broker cannot verify an outbound signature (it holds no private
+        # key, by design) and the recipient is the party who must. Its size is
+        # bounded because an unbounded "signature" is an unbounded channel
+        # wearing a cryptographic name — the same defect round 3 found in the
+        # identifier fields.
+        if message.signature is not None:
+            message.signature = str(message.signature)[:MAX_SIGNATURE]
 
         # BOUND — identifiers must look like identifiers. Free text here is a
         # ~2 KB channel wearing an id's name.
@@ -297,6 +336,48 @@ class Broker:
 
     # ------------------------------------------------------------------- inbound
 
+    def classify_inbound(self, message: Message, agent: str,
+                         domain_authenticated: bool = False) -> TrustClass:
+        """What has actually been established about where this came from.
+
+        `domain_authenticated` is supplied by the receiving MTA boundary — OUR
+        boundary, never a header in the message. An Authentication-Results
+        header is ordinary text that anything able to send mail can write, so
+        consuming one would be taking identity from the payload: the exact
+        defect five audit rounds removed from the local socket, reappearing one
+        surface over. The parameter is a fact the caller established, not a
+        claim the message made.
+
+        Ordering matters. A verified signature outranks domain authentication
+        because it proves the CORRESPONDENT and domain authentication proves
+        only the DOMAIN — and the message that reads as a trusted human over an
+        attacker-controlled address passes DMARC cleanly, because the attacker's
+        domain genuinely is the attacker's domain.
+        """
+        keys = self.contacts.keys_for(agent, message.sender) if self.contacts else []
+        if message.signature and keys:
+            if verify(message, message.signature, keys):
+                return TrustClass.ATTESTED
+            # A signature that fails is not the same as no signature. Someone
+            # went to the trouble of attaching one and it did not check out.
+            # Collapsing this into UNVERIFIED discards the only evidence that
+            # separates "we could not tell" from "we looked, and it did not add
+            # up" — and the second is the one worth waking someone for.
+            return TrustClass.SUSPECT
+        if message.signature and not keys:
+            # Signed by a correspondent who has declared no key. Nothing can be
+            # concluded, so nothing is: this is not SUSPECT (no check failed)
+            # and it is certainly not ATTESTED.
+            return TrustClass.DOMAIN_AUTH if domain_authenticated else TrustClass.UNVERIFIED
+        if keys and not message.signature:
+            # A correspondent who publishes a key and then sends unsigned mail
+            # is the shape of an impersonation: the attacker has the address but
+            # not the key, so the cheapest move is to simply omit the signature
+            # and hope nobody checks. Declaring a key is a commitment to using
+            # one, and mail that breaks the commitment is worth flagging.
+            return TrustClass.SUSPECT
+        return TrustClass.DOMAIN_AUTH if domain_authenticated else TrustClass.UNVERIFIED
+
     def accept_inbound(self, message: Message, recipient: str) -> Dict[str, Any]:
         """Deliver inbound mail, or quarantine it when the sender is unlisted.
 
@@ -322,6 +403,15 @@ class Broker:
         remote_sender = message.sender
         message.message_id = new_id("msg")
         message.date = _now_iso()
+
+        # CLASSIFY BEFORE ANYTHING ELSE READS THE MESSAGE.
+        #
+        # The signature must be checked against the sender AS RECEIVED, before
+        # any field the signature covers is rewritten — subject and body are
+        # truncated below, and a truncated body legitimately fails verification.
+        # Classifying afterwards would compare a signature against text the
+        # sender never wrote and report SUSPECT for our own edit.
+        message.trust = self.classify_inbound(message, agent).value
         # AUTHORIZE FIRST, THEN DO THE EXPENSIVE WORK.
         #
         # The visibility checks below each scan and deserialise the recipient's
