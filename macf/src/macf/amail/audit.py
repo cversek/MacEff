@@ -13,6 +13,7 @@ refused" from "refusal logging is broken".
 """
 from __future__ import annotations
 
+import errno
 import json
 import os
 import stat
@@ -55,10 +56,50 @@ class AuditLog:
         self.path = Path(path)
         self.max_bytes = max_bytes
         self._lock = threading.Lock()
+        #: A DESCRIPTOR HELD IN RESERVE, closed to make room when the process
+        #: runs out and reopened afterwards.
+        #:
+        #: Round 10 measured the failure this prevents, and it is worse than the
+        #: "a record is lost" it was first reported as. Under concurrency the fd
+        #: budget is shared: one thread's delivery consumes the descriptors
+        #: another thread's post-delivery audit write needs. The realised state
+        #: was ~20 messages per run SITTING IN THE RECIPIENT'S MAILBOX, complete
+        #: and readable, with no audit record, while the submitter was told the
+        #: message was NOT sent. A retry then delivers twice with no trace of
+        #: either. That is the log disagreeing with reality in the worst
+        #: direction, on exactly the incident §3.3 exists to reconstruct.
+        #:
+        #: Sequentially it could not happen — delivery needs more descriptors
+        #: than the audit write, so any budget permitting one permits the other.
+        #: That is why it survived every non-concurrent test.
+        self._spare_fd: Optional[int] = None
         #: Never renamed, so it identifies the same inode across a rotation. Held
         #: on the log file itself, the inter-process lock would be released to a
         #: second process the instant the rename happened — which is the window.
         self._lock_path = self.path.with_name(self.path.name + ".lock")
+        self._reserve_spare()
+
+    def _reserve_spare(self) -> None:
+        if self._spare_fd is not None:
+            return
+        try:
+            self._spare_fd = os.open(os.devnull, os.O_RDONLY)
+        except OSError:
+            self._spare_fd = None
+
+    @contextmanager
+    def _spare_released(self) -> Iterator[bool]:
+        """Give back the reserved descriptor for the duration of a retry."""
+        fd, self._spare_fd = self._spare_fd, None
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        try:
+            yield fd is not None
+        finally:
+            self._reserve_spare()
 
     @contextmanager
     def _open_lockfile(self) -> Iterator[Any]:
@@ -163,9 +204,23 @@ class AuditLog:
         # The lock spans BOTH operations. Locking them separately would leave
         # exactly the window it is meant to close: the loss happens between the
         # rename and the marker write, not inside either one.
-        with self._exclusive():
-            self._rotate_if_needed()
-            self._write(record)
+        try:
+            with self._exclusive():
+                self._rotate_if_needed()
+                self._write(record)
+        except OSError as e:
+            # OUT OF DESCRIPTORS IS NOT A REASON TO LOSE THE RECORD. Give the
+            # reserved one back and try once more. If that still fails the
+            # exception propagates, which fails the submission — correct, since
+            # a delivery nobody can account for is worse than a refused one.
+            if e.errno not in (errno.EMFILE, errno.ENFILE):
+                raise
+            with self._spare_released() as had_spare:
+                if not had_spare:
+                    raise
+                with self._exclusive():
+                    self._rotate_if_needed()
+                    self._write(record)
 
     def _write(self, record: Dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -183,7 +238,7 @@ class AuditLog:
             pass
 
     def allowed(self, *, sender: str, recipients: List[str], message_id: str,
-                rung: str, trust: Optional[str] = None,
+                rung: str, trust: Optional[Any] = None,
                 authorship: Optional[str] = None) -> None:
         """`trust` is what a READER of the message can establish; `authorship` is
         what the BROKER established at submission.
@@ -225,10 +280,19 @@ class AuditLog:
             rec["trust"] = trust
         self._append(rec)
 
-    def error(self, *, context: str, detail: str) -> None:
+    def error(self, *, context: str, detail: str, sender: Optional[str] = None) -> None:
         """Operational failures belong here too — an outage with no trace is the
-        exact gap this log exists to close."""
-        self._append({"decision": "error", "context": context, "detail": detail})
+        exact gap this log exists to close.
+
+        `sender` is the kernel-established identity where one was determined.
+        A refusal record that does not say WHO was refused is a record an
+        investigator cannot use, and §3.3 lists the sending identity as a
+        minimum rather than an extra.
+        """
+        rec = {"decision": "error", "context": context, "detail": detail}
+        if sender:
+            rec["sender"] = sender
+        self._append(rec)
 
     def records(self) -> Iterator[Dict[str, Any]]:
         if not self.path.exists():

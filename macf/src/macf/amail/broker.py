@@ -36,7 +36,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .audit import AuditLog
 from .contacts import ContactBook, ContactListError
@@ -68,6 +68,12 @@ MAX_RECIPIENTS = 64     # ContactBook is consulted per recipient
 #: a mechanism it was not written to check. A limit that a sibling always
 #: reaches first is not a limit; it is a comment.
 MAX_SIGNATURE = 512
+
+#: Longest the JOINED recipient list may be. serialize() writes `To:` as a
+#: single header value, so a longer list is silently shortened on the way to
+#: disk — and the canonical signing form, modelling that same truncation,
+#: collided for any two lists sharing this prefix.
+_MAX_TO_HEADER = 998
 
 #: Headers a sender may NOT assert about authentication. RFC 8601 §5 requires an
 #: ADMD to strip incoming Authentication-Results bearing its own authserv-id,
@@ -188,15 +194,28 @@ class Broker:
     def _rung(self, recipient: str) -> str:
         return "local" if self.config.agent_for(recipient) else "relay"
 
-    def _deliver_one(self, recipient: str, message: Message) -> str:
+    def _deliver_one(self, recipient: str, message: Message) -> Tuple[str, str]:
+        """Deliver to one recipient. Returns (rung, classification).
+
+        THE CLASSIFICATION IS RETURNED, not left on the message. It used to be
+        written to the shared Message and read back after the loop, so the
+        single audit record carried whatever the LAST delivery happened to leave
+        there — and the submitter chose which verdict got recorded by ordering
+        the `to` list. A compromised agent suppressed its own SUSPECT from the
+        broker-owned record by appending one allowlisted keyless recipient.
+
+        Returning it means a caller cannot read a stale value, because there is
+        no shared value to go stale.
+        """
         agent = self.config.agent_for(recipient)
         if agent:
             # Classified against THIS recipient's contact book, immediately
             # before the write. Two recipients may declare different keys for
             # the same sender, so the answer is per mailbox, not per message.
-            message.trust = self.classify_inbound(message, agent).value
+            trust = self.classify_inbound(message, agent).value
+            message.trust = trust
             deliver(self.config.agent_homes[agent], message)
-            return "local"
+            return "local", trust
         raise DeliveryError(
             f"no transport for '{recipient}': rung 1 (local) does not apply and "
             "remote delivery is not configured. Refusing to report success for a "
@@ -250,9 +269,27 @@ class Broker:
 
         # CHECKED
         expected = self.config.address_for(sender)
-        if message.sender and message.sender.strip().lower() != expected.lower():
+        if message.sender and message.sender.strip() != expected:
+            # BYTE-IDENTICAL, not case-insensitively equal.
+            #
+            # This used to accept a case variant and then REWRITE the field to
+            # the broker's spelling — and `sender` is signature-covered, so the
+            # signature had committed to the old bytes. The realised effect was
+            # authorship denial through configuration: MACF_AMAIL_DOMAIN set to
+            # `Example.Test` against a broker configured `example.test` made
+            # every message that agent sent arrive SUSPECT at every
+            # correspondent holding its key, while the CLI printed "delivered".
+            # No error anywhere.
+            #
+            # Refusing turns a silent, permanent, invisible failure into one
+            # loud message at the first send. The spec excludes message_id and
+            # date from signature coverage precisely BECAUSE the broker rewrites
+            # them; the same reasoning had not been applied to the field the
+            # broker was also quietly rewriting.
             reasons.append(f"message From '{message.sender}' does not match the "
-                           f"authenticated sender '{expected}'")
+                           f"authenticated sender '{expected}' exactly. The From "
+                           "field is covered by the signature, so the broker "
+                           "cannot correct it without invalidating authorship.")
         message.sender = expected
 
         # MINTED — a submitter-chosen message_id can shadow another message in
@@ -324,6 +361,20 @@ class Broker:
             reasons.append(f"body exceeds {MAX_BODY} characters")
         if len(message.to) > MAX_RECIPIENTS:
             reasons.append(f"more than {MAX_RECIPIENTS} recipients")
+        # By JOINED LENGTH too, and by comma. serialize() writes `To:` as ONE
+        # header value capped at 998, so a longer list silently loses its tail
+        # on the way to disk, and an address containing a comma splits into two
+        # different addresses when read back. Either makes the stored recipients
+        # differ from the signed ones — and `to` is signature-covered, so the
+        # broker must refuse rather than correct, for the same reason it now
+        # refuses a case-variant `sender` instead of rewriting it.
+        if len(", ".join(message.to or [])) > _MAX_TO_HEADER:
+            reasons.append(
+                f"recipient list exceeds {_MAX_TO_HEADER} characters when joined; "
+                "it would be silently shortened in storage")
+        if any("," in (a or "") for a in (message.to or [])):
+            reasons.append("a recipient address contains a comma, which is the "
+                           "recipient separator and would split it in storage")
 
         return reasons
 
@@ -359,7 +410,8 @@ class Broker:
         delivered, failures = [], []
         for r in message.to:
             try:
-                delivered.append({"recipient": r, "rung": self._deliver_one(r, message)})
+                rung, trust = self._deliver_one(r, message)
+                delivered.append({"recipient": r, "rung": rung, "trust": trust})
             except Exception as e:  # noqa: BLE001
                 # Catch EVERYTHING, not just DeliveryError. An OSError escaping
                 # here skipped the audit block below, so mail already delivered to
@@ -374,7 +426,12 @@ class Broker:
                 self.audit.allowed(sender=sender, recipients=[d["recipient"] for d in delivered],
                                    message_id=message.message_id,
                                    rung=",".join(sorted({d["rung"] for d in delivered})),
-                                   trust=message.trust,
+                                   # PER RECIPIENT, because one value cannot be
+                                   # correct for a delivery where recipients
+                                   # classify differently — and reading a single
+                                   # shared value let the submitter choose which
+                                   # verdict was recorded, by list order.
+                                   trust={d["recipient"]: d["trust"] for d in delivered},
                                    # What the KERNEL established. No reader of the
                                    # stored message can re-derive it, so it has
                                    # nowhere to live but a broker-owned record.
@@ -391,6 +448,44 @@ class Broker:
         }
 
     # ------------------------------------------------------------------- inbound
+
+    def _bound_fields(self, message: Message) -> List[str]:
+        """Apply every blast-radius bound. Returns the fields actually edited.
+
+        Called BEFORE classification on the inbound path, so the label always
+        describes the bytes that get stored rather than the bytes that arrived.
+
+        The recipient bound is by JOINED LENGTH as well as by count, and that is
+        not fussiness. `serialize()` writes `To:` as one header value through
+        _hdr(), which truncates at 998 — so a list longer than that silently
+        lost its tail on the way to disk, and the canonical signing form,
+        modelling the same truncation, produced BYTE-IDENTICAL payloads for any
+        two recipient lists sharing a 998-character prefix. One captured
+        signature covered a message addressed elsewhere. MAX_RECIPIENTS alone
+        did not prevent it: 64 ordinary addresses join to well over 998
+        characters. Bounding the joined length here means the stored `To:` is
+        never silently shortened, so the collision cannot arise.
+        """
+        edited: List[str] = []
+        if len(message.subject or "") > MAX_SUBJECT:
+            message.subject = (message.subject or "")[:MAX_SUBJECT]
+            edited.append("subject")
+        if len(message.body or "") > MAX_BODY:
+            message.body = (message.body or "")[:MAX_BODY]
+            edited.append("body")
+        if message.signature is not None and len(str(message.signature)) > MAX_SIGNATURE:
+            message.signature = str(message.signature)[:MAX_SIGNATURE]
+            edited.append("signature")
+        to = list(message.to or [])
+        if len(to) > MAX_RECIPIENTS:
+            to, = (to[:MAX_RECIPIENTS],)
+            edited.append("to")
+        while to and len(", ".join(to)) > _MAX_TO_HEADER:
+            to.pop()
+            if "to" not in edited:
+                edited.append("to")
+        message.to = to
+        return edited
 
     def classify_inbound(self, message: Message, agent: str,
                          domain_authenticated: bool = False) -> TrustClass:
@@ -471,13 +566,30 @@ class Broker:
         message.message_id = new_id("msg")
         message.date = _now_iso()
 
-        # CLASSIFY BEFORE ANYTHING ELSE READS THE MESSAGE.
+        # BOUND EVERY SIGNATURE-COVERED FIELD *BEFORE* THE LABEL IS MINTED.
         #
-        # The signature must be checked against the sender AS RECEIVED, before
-        # any field the signature covers is rewritten — subject and body are
-        # truncated below, and a truncated body legitimately fails verification.
-        # Classifying afterwards would compare a signature against text the
-        # sender never wrote and report SUSPECT for our own edit.
+        # This ordering is the whole finding, and the comment that used to sit
+        # here argued for the opposite with a reason that sounded right:
+        # "classify against the message AS RECEIVED, because a truncated body
+        # legitimately fails verification and classifying afterwards would
+        # report SUSPECT for our own edit."
+        #
+        # It produced a lie. The label was minted over the received content and
+        # the STORED content was then truncated, so a message could read
+        # `attested` while the bytes on disk did not verify — 5 of 10 realistic
+        # inputs, including a body one byte over the cap and any send to 65
+        # recipients. A reader saw a correspondent's verified badge over a
+        # prefix of what they wrote, with any trailing retraction removed.
+        #
+        # The error was preferring OUR feelings about the sender to the reader's
+        # ability to check. If we edit the message, the signature no longer
+        # covers what we stored, and the honest label is the one that says so.
+        # Truncation is now recorded in the audit trail, so an investigator can
+        # still tell "the sender lied" from "we edited it".
+        #
+        # The invariant this establishes, which is what the tests assert:
+        #     verify(deserialize(stored_bytes)) == (stored.trust == ATTESTED)
+        truncated = self._bound_fields(message)
         message.trust = self.classify_inbound(message, agent).value
         # AUTHORIZE FIRST, THEN DO THE EXPENSIVE WORK.
         #
@@ -531,25 +643,18 @@ class Broker:
             # gets its own thread rather than the one it named.
             if any(m.thread_id == message.thread_id for m in existing):
                 message.thread_id = new_id("thr")
-        message.subject = (message.subject or "")[:MAX_SUBJECT]
-        message.body = (message.body or "")[:MAX_BODY]
-        # THE SAME BOUNDS AS THE SUBMIT PATH. They were applied only where they
-        # had been demonstrated, on the path where the message comes from a
-        # LOCAL agent — and left off the twin, where the message is hostile by
-        # assumption. A remote sender therefore got 998 attacker-chosen
-        # characters stored under a header named X-Amail-Signature, which is the
-        # "unbounded channel wearing a cryptographic name" the bound exists to
-        # close, still open one path over.
-        if message.signature is not None:
-            message.signature = str(message.signature)[:MAX_SIGNATURE]
-        message.to = list(message.to or [])[:MAX_RECIPIENTS]
         message.sender = remote_sender
 
         deliver(home, message)
         if self.audit:
             self.audit.inbound(sender=message.sender, recipient=recipient,
                                message_id=message.message_id, decision="delivered",
-                               trust=message.trust)
+                               trust=message.trust,
+                               # So an investigator can tell "the sender lied"
+                               # apart from "we edited it and the signature
+                               # stopped covering what we stored".
+                               reason=(f"broker truncated: {','.join(truncated)}"
+                                       if truncated else None))
         return {"ok": True, "decision": "delivered"}
 
     # -------------------------------------------------------------- credentials
@@ -756,7 +861,15 @@ class _Handler(socketserver.StreamRequestHandler):
             # request stops serving every agent; answer with the error instead.
             resp = {"ok": False, "error": f"{type(e).__name__}: {e}"}
             if broker.audit:
-                broker.audit.error(context="request", detail=f"{type(e).__name__}: {e}")
+                # NAME THE SUBMITTER. §3.3 requires every submission record carry
+                # the sending identity; an unhandled-exception refusal wrote one
+                # with no sender and no recipients at all. The kernel-established
+                # identity is in scope right here and was simply not written —
+                # so the one record an investigator would reach for was the one
+                # that said nothing about who.
+                broker.audit.error(context="request",
+                                   detail=f"{type(e).__name__}: {e}",
+                                   sender=sender if "sender" in dir() else None)
         try:
             self.wfile.write((json.dumps(resp) + "\n").encode("utf-8"))
         except OSError as e:
@@ -811,11 +924,17 @@ class _Server(socketserver.ThreadingUnixStreamServer):
         with self._meter_lock:
             if len(self._inflight) >= MAX_CONCURRENT_CONNECTIONS:
                 return False
-            if uid is not None and self._per_uid.get(uid, 0) >= MAX_CONNECTIONS_PER_UID:
+            # `None` gets a bucket like everyone else. The comment used to claim
+            # unidentifiable peers were "metered as one anonymous bucket rather
+            # than waved through" — they were metered as SIXTY-FOUR, because the
+            # per-uid bound was skipped entirely for None and only the global cap
+            # applied. Anonymous peers could therefore fill every slot and lock
+            # out every real agent. They will be refused by identify() anyway,
+            # so the bound costs nothing legitimate.
+            if self._per_uid.get(uid, 0) >= MAX_CONNECTIONS_PER_UID:
                 return False
             self._inflight[request] = uid
-            if uid is not None:
-                self._per_uid[uid] = self._per_uid.get(uid, 0) + 1
+            self._per_uid[uid] = self._per_uid.get(uid, 0) + 1
             return True
 
     def _release(self, request: Any) -> None:
@@ -823,12 +942,11 @@ class _Server(socketserver.ThreadingUnixStreamServer):
             if request not in self._inflight:
                 return
             uid = self._inflight.pop(request)
-            if uid is not None:
-                remaining = self._per_uid.get(uid, 0) - 1
-                if remaining > 0:
-                    self._per_uid[uid] = remaining
-                else:
-                    self._per_uid.pop(uid, None)
+            remaining = self._per_uid.get(uid, 0) - 1
+            if remaining > 0:
+                self._per_uid[uid] = remaining
+            else:
+                self._per_uid.pop(uid, None)
 
     def _audit_overload(self, uid: Optional[int]) -> None:
         now = time.monotonic()

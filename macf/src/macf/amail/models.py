@@ -144,9 +144,24 @@ class Message:
             # through .strip().
             "sender": _hdr(self.sender).strip(),
             "subject": _hdr(self.subject or "").strip(),
-            # `To:` is joined, written through _hdr() as ONE header value, then
-            # split on commas and stripped per element.
-            "to": [a.strip() for a in _hdr(", ".join(self.to)).split(",") if a.strip()],
+            # `To:` is canonicalised PER ELEMENT, not by modelling the joined
+            # header.
+            #
+            # Modelling the join was the faithful-looking choice and it created a
+            # collision: `_hdr()` truncates at 998, so any two recipient lists
+            # sharing that prefix produced BYTE-IDENTICAL signing payloads, and
+            # one captured signature covered a message addressed somewhere else.
+            # MAX_RECIPIENTS did not prevent it — 64 ordinary addresses join to
+            # well over 998 characters.
+            #
+            # Element-wise gives the same answer as the round trip for every
+            # list the broker will store, because the broker refuses a joined
+            # list longer than the header can hold (an address containing a
+            # comma is refused for the same reason: it would split into two on
+            # the way back). It differs only for lists that can never reach
+            # storage — and there it differs by NOT colliding, which is the
+            # point.
+            "to": [x for x in (_hdr(a).strip() for a in self.to) if x],
             # The body gains a trailing newline on write and loses all of them
             # on read.
             "body": (self.body or "").rstrip("\n"),

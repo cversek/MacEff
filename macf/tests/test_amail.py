@@ -2341,6 +2341,74 @@ class TestStoredMessagesStayVerifiable:
         again = Message.deserialize(m.serialize())
         assert m.canonical_for_signing() == again.canonical_for_signing(), label
 
+    # THE FIX NORMALISES FOUR FIELDS AND THIS CLASS TESTED TWO.
+    #
+    # A mutation sweep made canonical `sender` and canonical `to` sign the
+    # in-memory values instead, and both mutants SURVIVED — no test varied
+    # either field across the round trip. I repaired the two fields the audit
+    # showed me and left their siblings uncovered, which is the exact pattern
+    # nine rounds of this campaign have been about. And the live defect
+    # (recipients silently dropped past the 998-character header cap) was in one
+    # of the two I had not tested.
+    SENDER_CASES = [
+        ("sender with padding", "  beta@example.test  "),
+        ("sender with a tab", "beta@example.test\t"),
+        ("sender with a trailing newline", "beta@example.test\n"),
+        ("ordinary sender", f"beta@{DOMAIN}"),
+    ]
+
+    @pytest.mark.parametrize("label,sender", SENDER_CASES)
+    def test_sender_is_a_fixed_point_of_the_round_trip(self, label, sender):
+        m = msg(sender=sender)
+        assert (m.canonical_for_signing()
+                == Message.deserialize(m.serialize()).canonical_for_signing()), label
+
+    TO_CASES = [
+        ("recipients with padding", ["  a@x.test ", " b@x.test"]),
+        ("a recipient with a tab", ["a@x.test\t", "b@x.test"]),
+        ("many short recipients", [f"r{i}@x.test" for i in range(40)]),
+        ("one recipient", ["only@x.test"]),
+        ("recipients with display-name-ish text", ["a@x.test", "b@x.test"]),
+    ]
+
+    @pytest.mark.parametrize("label,to", TO_CASES)
+    def test_recipients_are_a_fixed_point_of_the_round_trip(self, label, to):
+        m = msg(to=to)
+        assert (m.canonical_for_signing()
+                == Message.deserialize(m.serialize()).canonical_for_signing()), label
+
+    def test_submit_refuses_a_recipient_list_that_storage_would_shorten(self, deployment):
+        """Defence in depth for the collision above, and untested until the sweep
+        said so. The canonical form no longer collides — but the STORED `To:`
+        header would still silently lose its tail, so a reader of an attested
+        message could not see who else received it."""
+        m = msg(to=[f"recipient-with-a-long-name-{i}@example.test" for i in range(40)])
+        r = deployment["broker"].submit("alpha", m)
+        assert r["ok"] is False
+        assert any("silently shortened" in x for x in r["refused"]), r
+
+    def test_submit_refuses_a_recipient_containing_a_comma(self, deployment):
+        """A comma is the recipient separator, so such an address splits into two
+        different addresses when read back — the stored recipients would differ
+        from the signed ones."""
+        r = deployment["broker"].submit("alpha", msg(to=[f"a,b@{DOMAIN}"]))
+        assert r["ok"] is False
+        assert any("comma" in x for x in r["refused"]), r
+
+    def test_two_recipient_lists_sharing_a_long_prefix_do_not_collide(self):
+        """Round 10: the canonical `to` ran through ONE _hdr() call capped at
+        998, so any two lists sharing that prefix produced byte-identical
+        signing payloads — one captured signature covering a message addressed
+        somewhere else. MAX_RECIPIENTS did not prevent it; 64 ordinary addresses
+        join to well over 998 characters."""
+        from macf.amail.crypto import signing_payload
+        pad = [f"padding-recipient-number-{i}@example.test" for i in range(60)]
+        a = msg(to=pad + ["victim@example.test"])
+        b = msg(to=pad + ["attacker-chosen@example.test"])
+        assert a.to != b.to
+        assert signing_payload(a) != signing_payload(b), \
+            "two different recipient lists produced one signing payload"
+
     def test_the_payload_itself_is_identical_across_the_round_trip(self):
         """Assert the bytes, not just the verdict — a payload that differed while
         both happened to verify would be luck, not a fixed point."""
@@ -2393,12 +2461,25 @@ class TestInboundHeaderStrippingIsWired:
     CONTENTS, which is a source-data assertion; the 'end-to-end' test passed with
     the strip list emptied and failed only when trust-minting was removed."""
 
-    def test_the_stripper_has_a_production_call_site(self):
-        """An empty grep outside tests is itself the finding."""
-        import inspect
+    def test_the_stripper_is_invoked_on_the_inbound_path(self, deployment, monkeypatch):
+        """ASSERT THE CALL, NOT THE SOURCE TEXT.
+
+        The previous version of this test did inspect.getsource() and asserted a
+        substring — so it passed if the call sat inside `if False:`, in a
+        comment, or in dead code. Round 9 criticised exactly that shape in the
+        test this one replaced, and I wrote the same defect into the
+        replacement. A spy on the function is the behavioural equivalent and
+        cannot be satisfied by text.
+        """
         from macf.amail import broker as bmod
-        src = inspect.getsource(bmod.Broker.accept_inbound)
-        assert "strip_inbound_headers(" in src
+
+        called = []
+        real = bmod.strip_inbound_headers
+        monkeypatch.setattr(bmod, "strip_inbound_headers",
+                            lambda m: (called.append(m), real(m))[1])
+        deployment["broker"].accept_inbound(
+            msg(sender=f"alpha@{DOMAIN}", to=[f"beta@{DOMAIN}"]), f"beta@{DOMAIN}")
+        assert called, "accept_inbound did not invoke the stripper"
 
     def test_stripping_actually_clears_an_asserted_verdict(self):
         """Behaviour, not the constant. A message carrying its own trust claim
@@ -2465,21 +2546,103 @@ class TestAlgorithmCannotComeFromTheMessage:
         assert _json.loads(signing_payload(m))["alg"] == ALGORITHM
 
 
-class TestClassificationPrecedesTruncation:
-    def test_a_long_body_is_classified_before_it_is_truncated(self, keyed):
-        """Mutation survivor M35: the ordering the code defends in a seven-line
-        comment had no test. Classifying after truncation would compare a
-        signature against text the sender never wrote and report SUSPECT for our
-        own edit."""
+class TestTruncationPrecedesClassification:
+    """THIS CLASS REPLACES ONE THAT ASSERTED THE BUG AS THE REQUIREMENT.
+
+    The previous version asserted `stored.trust == "attested"` AND
+    `len(stored.body) <= MAX_BODY` for an oversize body — which is precisely the
+    lying state: a label saying a signature was verified, over bytes the
+    signature does not cover. It was green, and it contradicted
+    TestStoredMessagesStayVerifiable three classes above it in this same file.
+
+    The comment it was written to defend argued that classifying the message AS
+    RECEIVED avoided reporting SUSPECT for our own edit. That reasoning preferred
+    our feelings about the sender to the reader's ability to check. If the broker
+    edits a message, the signature no longer covers what was stored, and the
+    honest label is the one that says so.
+
+    The invariant, asserted rather than a case list:
+
+        verify(deserialize(stored_bytes)) == (stored.trust == ATTESTED)
+    """
+
+    TRUNCATING_CASES = [
+        ("body one byte over the cap", "s", None),
+        ("body well over the cap", "s", None),
+        ("65 recipients", "s", None),
+        ("150 recipients", "s", None),
+        ("subject over the ceiling with a CRLF", None, "b"),
+    ]
+
+    def _oversize(self, kind):
         from macf.amail import broker as bmod
-        m = msg(sender=f"beta@{DOMAIN}", to=[f"alpha@{DOMAIN}"],
-                body="x" * (bmod.MAX_BODY + 5000))
+        m = msg(sender=f"beta@{DOMAIN}", to=[f"alpha@{DOMAIN}"])
+        if kind == "body one byte over the cap":
+            m.body = "x" * (bmod.MAX_BODY + 1)
+        elif kind == "body well over the cap":
+            m.body = "x" * (bmod.MAX_BODY + 20000)
+        elif kind == "65 recipients":
+            m.to = [f"r{i}@x.test" for i in range(64)] + [f"alpha@{DOMAIN}"]
+        elif kind == "150 recipients":
+            m.to = [f"r{i}@x.test" for i in range(149)] + [f"alpha@{DOMAIN}"]
+        elif kind == "subject over the ceiling with a CRLF":
+            # ~1.1 KB is enough: _hdr() folds CRLF (2 chars) to one space while
+            # MAX_SUBJECT slices the RAW string, so the two cuts land at
+            # different offsets.
+            m.subject = ("a\r\n" * 40) + "b" * 1000
+        return m
+
+    @pytest.mark.parametrize("kind", [c[0] for c in TRUNCATING_CASES])
+    def test_the_label_never_claims_more_than_the_stored_bytes_support(self, keyed, kind):
+        m = self._oversize(kind)
+        m.signature = sign(m, load_private_key(keyed["beta_key"]))
+        assert verify(m, m.signature, [keyed["beta_pub"]]), f"{kind}: unsigned in memory"
+
+        keyed["broker"].accept_inbound(m, f"alpha@{DOMAIN}")
+        raw = next((keyed["homes"]["alpha"] / "Maildir" / "new").iterdir()).read_text()
+        stored = Message.deserialize(raw)
+        verifies = verify(stored, stored.signature, [keyed["beta_pub"]])
+        claims_signed = stored.trust == TrustClass.ATTESTED.value
+        assert verifies == claims_signed, (
+            f"{kind}: stored trust={stored.trust!r} but at-rest verification="
+            f"{verifies}. The badge and the bytes disagree.")
+
+    def test_a_message_within_every_bound_is_untouched_and_attested(self, keyed):
+        """The bounds must not fire on ordinary mail, or the class above passes
+        by refusing everything."""
+        m = msg(sender=f"beta@{DOMAIN}", to=[f"alpha@{DOMAIN}"], body="ordinary\n")
         m.signature = sign(m, load_private_key(keyed["beta_key"]))
         keyed["broker"].accept_inbound(m, f"alpha@{DOMAIN}")
         stored = store.read_all(keyed["homes"]["alpha"])[0]
-        assert stored.trust == TrustClass.ATTESTED.value, \
-            "an oversize body was classified after our own truncation"
-        assert len(stored.body) <= bmod.MAX_BODY
+        assert stored.trust == TrustClass.ATTESTED.value
+        assert stored.body == "ordinary"
+
+    def test_truncation_is_recorded_so_suspect_is_explainable(self, keyed):
+        """An investigator must be able to tell 'the sender lied' from 'we edited
+        it and the signature stopped covering what we stored'."""
+        from macf.amail import broker as bmod
+        m = msg(sender=f"beta@{DOMAIN}", to=[f"alpha@{DOMAIN}"],
+                body="x" * (bmod.MAX_BODY + 10))
+        m.signature = sign(m, load_private_key(keyed["beta_key"]))
+        keyed["broker"].accept_inbound(m, f"alpha@{DOMAIN}")
+        rec = [r for r in keyed["broker"].audit.records()
+               if r.get("direction") == "inbound"][0]
+        assert "truncated" in (rec.get("reason") or ""), rec
+        assert "body" in rec["reason"]
+
+    def test_a_long_recipient_list_is_never_silently_shortened_on_disk(self, keyed):
+        """The stored To: header must contain exactly the recipients the label
+        was computed over — otherwise a reader of an attested message cannot see
+        who else received it."""
+        m = msg(sender=f"beta@{DOMAIN}",
+                to=[f"recipient-with-a-long-name-{i}@example.test" for i in range(40)]
+                   + [f"alpha@{DOMAIN}"])
+        m.signature = sign(m, load_private_key(keyed["beta_key"]))
+        keyed["broker"].accept_inbound(m, f"alpha@{DOMAIN}")
+        raw = next((keyed["homes"]["alpha"] / "Maildir" / "new").iterdir()).read_text()
+        stored = Message.deserialize(raw)
+        assert stored.to == Message.deserialize(raw).to
+        assert len(", ".join(stored.to)) <= 998
 
 
 class TestHeaderValuesAreStrippedOnRead:
@@ -2564,3 +2727,217 @@ class TestContactCacheRespectsEdits:
         for _ in range(50):
             book.permits("alpha", f"beta@{DOMAIN}")
         assert parses == [], "an unchanged contact list was re-parsed per check"
+
+
+class TestAuditRecordsEveryRecipientsVerdict:
+    """Round 10: classification was per-recipient in storage but the single
+    audit record read `message.trust` AFTER the loop — whatever the last
+    delivery left on the shared object. The submitter chose which verdict was
+    recorded by ordering the `to` list, and could suppress its own SUSPECT from
+    the broker-owned record by appending one allowlisted keyless recipient."""
+
+    @pytest.fixture
+    def three(self, deployment, tmp_path):
+        homes = deployment["homes"]
+        homes["gamma"] = tmp_path / "gamma"
+        homes["gamma"].mkdir(parents=True, exist_ok=True)
+        deployment["cfg"].agent_homes = homes
+        key = generate_keypair(tmp_path / "alpha.pem")
+        deployment["contacts"].write_text(json.dumps({
+            "alpha": [f"beta@{DOMAIN}", f"gamma@{DOMAIN}"],
+            "beta": [{"address": f"alpha@{DOMAIN}", "key": key}],   # beta knows the key
+            "gamma": [f"alpha@{DOMAIN}"],                            # gamma does not
+        }))
+        deployment["contacts"].chmod(0o644)
+        deployment["alpha_key"] = tmp_path / "alpha.pem"
+        return deployment
+
+    def _verdicts(self, dep):
+        rec = [r for r in dep["broker"].audit.records() if r.get("decision") == "allowed"][-1]
+        tr = rec["trust"]
+        return tr if isinstance(tr, dict) else {"__single__": tr}
+
+    def test_both_recipients_verdicts_are_recorded(self, three):
+        m = msg(to=[f"beta@{DOMAIN}", f"gamma@{DOMAIN}"], body="signed")
+        m.signature = sign(m, load_private_key(three["alpha_key"]))
+        three["broker"].submit("alpha", m)
+        got = self._verdicts(three)
+        assert got.get(f"beta@{DOMAIN}") == TrustClass.ATTESTED.value
+        assert got.get(f"gamma@{DOMAIN}") == TrustClass.UNVERIFIED.value
+
+    def test_list_order_cannot_change_what_is_recorded(self, three):
+        """The attack: reverse the list and the same delivery logged the other
+        verdict."""
+        m1 = msg(to=[f"beta@{DOMAIN}", f"gamma@{DOMAIN}"], body="one")
+        m1.signature = sign(m1, load_private_key(three["alpha_key"]))
+        three["broker"].submit("alpha", m1)
+        forward = self._verdicts(three)
+
+        m2 = msg(to=[f"gamma@{DOMAIN}", f"beta@{DOMAIN}"], body="two")
+        m2.signature = sign(m2, load_private_key(three["alpha_key"]))
+        three["broker"].submit("alpha", m2)
+        reverse = self._verdicts(three)
+        assert forward == reverse, "the submitter changed the audit verdict by list order"
+
+    def test_a_suspect_verdict_cannot_be_suppressed_by_adding_a_recipient(self, three, tmp_path):
+        """The sharpened attack: a compromised agent attaches a signature that
+        does not verify, then appends one keyless recipient so the record reads
+        UNVERIFIED instead of SUSPECT."""
+        generate_keypair(tmp_path / "eve.pem")
+        m = msg(to=[f"beta@{DOMAIN}", f"gamma@{DOMAIN}"], body="forged")
+        m.signature = sign(m, load_private_key(tmp_path / "eve.pem"))
+        three["broker"].submit("alpha", m)
+        got = self._verdicts(three)
+        assert TrustClass.SUSPECT.value in got.values(), \
+            f"the SUSPECT verdict was suppressed from the broker-owned record: {got}"
+
+
+class TestSenderMustMatchExactly:
+    def test_a_case_variant_sender_is_refused_not_rewritten(self, deployment):
+        """Round 10: canonicalize accepted a case variant and then REWROTE the
+        field — which the signature had committed to. A config typo made every
+        message arrive SUSPECT at every correspondent while the CLI printed
+        delivered. Authorship denial through configuration, entirely silent."""
+        m = msg(sender=f"ALPHA@{DOMAIN.upper()}")
+        r = deployment["broker"].submit("alpha", m)
+        assert r["ok"] is False
+        assert any("exactly" in x for x in r["refused"]), r
+
+    def test_an_exact_sender_is_accepted(self, deployment):
+        assert deployment["broker"].submit("alpha", msg())["ok"] is True
+
+
+class TestAuditSurvivesDescriptorPressure:
+    def test_a_reserved_descriptor_is_held(self, tmp_path):
+        log = AuditLog(tmp_path / "a.jsonl")
+        assert log._spare_fd is not None, "no descriptor reserved for the audit write"
+
+    def test_the_record_still_lands_when_descriptors_run_out(self, tmp_path, monkeypatch):
+        """Round 10 measured mail DELIVERED AND ON DISK with no audit record,
+        while the submitter was told it was not sent. The reserved descriptor is
+        released and the write retried rather than lost."""
+        import errno as _errno
+        log = AuditLog(tmp_path / "a.jsonl")
+        real_open = os.open
+        state = {"fail": True}
+
+        def flaky(path, flags, *a, **k):
+            if state["fail"] and str(path).endswith(".lock"):
+                state["fail"] = False           # fail once, as exhaustion would
+                raise OSError(_errno.EMFILE, "Too many open files")
+            return real_open(path, flags, *a, **k)
+
+        monkeypatch.setattr(os, "open", flaky)
+        log.refused(sender="alpha", recipients=["x@y.test"], reason="under pressure")
+        assert log.refusals(), "the record was lost when descriptors ran out"
+        assert log._spare_fd is not None, "the reserve was not re-established"
+
+    def test_an_unrelated_oserror_is_not_retried(self, tmp_path, monkeypatch):
+        """Only descriptor exhaustion earns the reserve.
+
+        Asserting "it still raises" was VACUOUS: with the errno check deleted the
+        retry runs and raises the same error again, so the exception arrives
+        either way and the test could not tell the implementations apart. The
+        mutation sweep caught it. Count the ATTEMPTS instead — that is the thing
+        the errno check actually decides.
+        """
+        log = AuditLog(tmp_path / "a.jsonl")
+        real_open, attempts = os.open, []
+
+        def broken(path, flags, *a, **k):
+            if str(path).endswith(".lock"):
+                attempts.append(1)
+                raise OSError(13, "Permission denied")
+            return real_open(path, flags, *a, **k)
+
+        monkeypatch.setattr(os, "open", broken)
+        with pytest.raises(OSError):
+            log.refused(sender="alpha", recipients=["x@y.test"], reason="r")
+        assert len(attempts) == 1, (
+            f"a non-EMFILE error was retried {len(attempts)} times; the reserved "
+            "descriptor exists for exhaustion, not for masking real failures")
+
+    def test_descriptor_exhaustion_IS_retried(self, tmp_path, monkeypatch):
+        """The positive half, so the test above cannot pass by never retrying."""
+        import errno as _errno
+        log = AuditLog(tmp_path / "a.jsonl")
+        real_open, attempts = os.open, []
+
+        def flaky(path, flags, *a, **k):
+            if str(path).endswith(".lock"):
+                attempts.append(1)
+                if len(attempts) == 1:
+                    raise OSError(_errno.EMFILE, "Too many open files")
+            return real_open(path, flags, *a, **k)
+
+        monkeypatch.setattr(os, "open", flaky)
+        log.refused(sender="alpha", recipients=["x@y.test"], reason="r")
+        assert len(attempts) == 2, "exhaustion was not retried"
+
+
+class TestRefusalRecordsNameTheSubmitter:
+    def test_an_unhandled_exception_record_carries_the_sender(self, deployment):
+        """§3.3 lists the sending identity as a MINIMUM. An unhandled-exception
+        refusal wrote a record with no sender and no recipients at all — the one
+        record an investigator would reach for said nothing about who."""
+        import socket as s_
+        deployment["cfg"].credentials_path.write_text("secret")
+        deployment["cfg"].credentials_path.chmod(0o600)
+        srv = serve(deployment["broker"])
+        time.sleep(0.15)
+        try:
+            c = s_.socket(s_.AF_UNIX, s_.SOCK_STREAM)
+            c.connect(str(deployment["cfg"].socket_path))
+            c.sendall(json.dumps({"message": {"sender": f"alpha@{DOMAIN}", "to": None,
+                                              "subject": "s", "body": "b"}}).encode() + b"\n")
+            c.recv(4096)
+            c.close()
+            time.sleep(0.2)
+            errs = [r for r in deployment["broker"].audit.records()
+                    if r.get("decision") == "error"]
+            assert errs, "no record at all for a failed submission"
+            assert errs[-1].get("sender") == "alpha", errs[-1]
+        finally:
+            srv.shutdown()
+
+
+class TestAnonymousPeersAreMeteredToo:
+    def test_the_none_bucket_is_bounded_like_any_other(self, deployment):
+        """Round 10: the per-uid bound was skipped entirely for an
+        unidentifiable peer, so `None` got the full global cap — sixty-four
+        anonymous slots, enough to lock out every real agent. The comment
+        claimed one bucket."""
+        from macf.amail import broker as bmod
+
+        srv = bmod._Server.__new__(bmod._Server)
+        srv._meter_lock = bmod.threading.Lock()
+        srv._inflight, srv._per_uid, srv._overload_audited = {}, {}, {}
+        granted = sum(1 for i in range(bmod.MAX_CONCURRENT_CONNECTIONS)
+                      if srv._acquire(f"req{i}", None))
+        assert granted <= bmod.MAX_CONNECTIONS_PER_UID, (
+            f"{granted} anonymous connections granted; the per-uid cap is "
+            f"{bmod.MAX_CONNECTIONS_PER_UID}")
+
+    def test_an_identified_agent_is_not_starved_by_anonymous_peers(self, deployment):
+        from macf.amail import broker as bmod
+
+        srv = bmod._Server.__new__(bmod._Server)
+        srv._meter_lock = bmod.threading.Lock()
+        srv._inflight, srv._per_uid, srv._overload_audited = {}, {}, {}
+        for i in range(bmod.MAX_CONCURRENT_CONNECTIONS):
+            srv._acquire(f"anon{i}", None)
+        assert srv._acquire("real", 1234) is True, \
+            "anonymous peers locked out an identified agent"
+
+
+class TestCanonicalizeDestroysASubmittedTrustClaim:
+    def test_canonicalize_itself_clears_the_claim(self, deployment):
+        """The `message.trust = None` line in canonicalize() was flagged as a
+        DEAD STORE: every path overwrites it in _deliver_one(), so a mutant that
+        minted ATTESTED there was an equivalent mutant. Testing canonicalize
+        directly makes the line observable, which is the difference between a
+        defensive assignment and decoration."""
+        m = msg()
+        m.trust = "attested"
+        deployment["broker"].canonicalize("alpha", m, None)
+        assert m.trust is None, "canonicalize did not destroy the submitted claim"
