@@ -104,13 +104,22 @@ def signing_payload(message: Any) -> bytes:
     re-delivered and will still verify. That is replay, not forgery — the
     content is genuinely from that correspondent — and it is recorded as
     undefended in the threat model rather than papered over here.
+
+    THE PAYLOAD IS BUILT FROM THE MESSAGE'S CANONICAL STORED FORM, not from the
+    in-memory object. Signing the in-memory values produced signatures that
+    verified once, at ingress, and failed forever afterwards — because the
+    storage round trip rewrites the body's trailing newlines, strips header
+    whitespace, and passes the subject through _hdr(). Message.canonical_for_
+    signing() mirrors those transformations exactly and lives beside them, so
+    the two cannot drift.
     """
+    c = message.canonical_for_signing()
     return json.dumps({
         "alg": ALGORITHM,
-        "sender": message.sender,
-        "to": list(message.to),
-        "subject": message.subject or "",
-        "body_sha256": hashlib.sha256((message.body or "").encode("utf-8")).hexdigest(),
+        "sender": c["sender"],
+        "to": c["to"],
+        "subject": c["subject"],
+        "body_sha256": hashlib.sha256(c["body"].encode("utf-8")).hexdigest(),
     }, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
@@ -130,6 +139,20 @@ def load_private_key(path: Path) -> Ed25519PrivateKey:
         raise SigningError(
             f"signing key {p} is readable by group or other. Anyone who can read "
             "it can sign as this agent. Refusing to use it; chmod 600 and retry."
+        )
+    # WRITABLE, not only readable. The docstring's own argument covers this case
+    # and the check did not: a private key another uid can WRITE is one they
+    # authored, hence one they know. The realised capability is authorship
+    # DENIAL rather than forgery — substitute a valid key and every message this
+    # agent sends becomes SUSPECT at every correspondent holding the declared
+    # public key, silently, while the CLI reports success. Same
+    # guard-checks-the-wrong-attribute shape two earlier rounds found on the
+    # broker's credential and contact list.
+    if mode & (stat.S_IWGRP | stat.S_IWOTH):
+        raise SigningError(
+            f"signing key {p} is writable by group or other. Anyone who can "
+            "replace it can silently make every message you send unverifiable. "
+            "Refusing to use it; chmod 600 and retry."
         )
     if p.stat().st_uid != os.getuid():
         raise SigningError(
@@ -209,13 +232,24 @@ def verify(message: Any, signature: str, public_keys: List[str]) -> bool:
     an expected input here, not an exceptional one — this function's whole job
     is to be handed them.
     """
-    if not signature or not public_keys:
-        return False
+    # NO EMPTY-INPUT FAST PATH. There used to be one, and a mutation sweep
+    # showed deleting it changed nothing: an empty signature fails base64
+    # decoding into InvalidSignature, and an empty key list makes the loop
+    # below a no-op. It read like a guard and enforced nothing, which is the
+    # one thing this module must not contain.
     try:
         raw = _unb64(signature)
     except Exception:  # noqa: BLE001
         return False
-    payload = signing_payload(message)
+    try:
+        # INSIDE the try. This function documents that a forged input is an
+        # expected argument rather than an exceptional one, and then built the
+        # payload outside the guard — so a hostile message SHAPE (a `to` of
+        # None, a non-string body, a lone surrogate) raised straight through the
+        # promise not to raise.
+        payload = signing_payload(message)
+    except Exception:  # noqa: BLE001 - an unrepresentable message verifies as nothing
+        return False
     for declared in public_keys:
         try:
             parse_public_key(declared).verify(raw, payload)

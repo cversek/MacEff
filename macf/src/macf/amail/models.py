@@ -109,6 +109,49 @@ class Message:
             parent=self.message_id,
         )
 
+    def canonical_for_signing(self) -> Dict[str, Any]:
+        """The message AS IT WILL BE STORED, for anything that must survive a round trip.
+
+        THIS EXISTS BECAUSE SIGNING THE IN-MEMORY OBJECT WAS A LIE. The signature
+        covered `sender`, `to`, `subject` and a hash of `body`, and the storage
+        round trip rewrites three of those four:
+
+          - serialize() appends a newline to the body and deserialize() rstrips
+            them, so EVERY trailing newline is destroyed — and a body read from a
+            file, which is what `--body-file` does, ends in one essentially always.
+          - deserialize() strips each header value, so leading and trailing
+            whitespace in the subject or sender is destroyed.
+          - _hdr() folds line separators and control characters to spaces and
+            truncates at 998, so a tab, a U+2028, or a long subject is rewritten.
+
+        Seven of ten realistic inputs verified in memory, delivered, and then
+        FAILED to verify from storage — while their stored label still read
+        "attested". The spec promised that a stored message stays verifiable by
+        anyone holding the correspondent's key; for most real mail it did not.
+
+        The fix is the same inversion _hdr() already uses for line boundaries:
+        stop describing the transformation and DEFER TO IT. Sign what the parser
+        will produce, not what the caller happened to hold. Every step below
+        mirrors an exact operation in serialize()/deserialize(), and each is
+        idempotent, so canonicalising twice equals canonicalising once and
+        sign(m) == sign(deserialize(serialize(m))) holds by construction.
+
+        If serialize() or deserialize() changes, this MUST change with it. The
+        property test asserts the equality rather than trusting this comment.
+        """
+        return {
+            # `From:` and `Subject:` are written through _hdr() and read back
+            # through .strip().
+            "sender": _hdr(self.sender).strip(),
+            "subject": _hdr(self.subject or "").strip(),
+            # `To:` is joined, written through _hdr() as ONE header value, then
+            # split on commas and stripped per element.
+            "to": [a.strip() for a in _hdr(", ".join(self.to)).split(",") if a.strip()],
+            # The body gains a trailing newline on write and loses all of them
+            # on read.
+            "body": (self.body or "").rstrip("\n"),
+        }
+
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 

@@ -80,6 +80,27 @@ STRIPPED_INBOUND_HEADERS = (
 )
 
 
+def strip_inbound_headers(message: Message) -> List[str]:
+    """Discard every upstream authentication claim carried by an inbound message.
+
+    An Authentication-Results header is ordinary text; anything able to send mail
+    can write one. RFC 8601 §5 requires an ADMD to strip incoming ones bearing
+    its own authserv-id for exactly that reason, and amail goes further: it
+    consumes no upstream verdict at all, so every header in the list is an
+    inbound claim to drop rather than to evaluate.
+
+    Returns the names it actually cleared, so a caller can record that a sender
+    tried — an attempt to assert a verdict is itself worth knowing about.
+    """
+    cleared: List[str] = []
+    for name in STRIPPED_INBOUND_HEADERS:
+        attr = name.replace("x-amail-", "").replace("-", "_")
+        if getattr(message, attr, None) is not None:
+            setattr(message, attr, None)
+            cleared.append(name)
+    return cleared
+
+
 def peer_uid(conn: socket.socket) -> int:
     """The uid the kernel recorded for the connected process.
 
@@ -170,6 +191,10 @@ class Broker:
     def _deliver_one(self, recipient: str, message: Message) -> str:
         agent = self.config.agent_for(recipient)
         if agent:
+            # Classified against THIS recipient's contact book, immediately
+            # before the write. Two recipients may declare different keys for
+            # the same sender, so the answer is per mailbox, not per message.
+            message.trust = self.classify_inbound(message, agent).value
             deliver(self.config.agent_homes[agent], message)
             return "local"
         raise DeliveryError(
@@ -237,10 +262,36 @@ class Broker:
         # `trust` is MINTED and never accepted, which is what makes the label
         # worth anything. A submitter that could set it would write "attested"
         # onto its own forgery, and every reader downstream would believe it.
-        # Local submission earns ATTESTED because SO_PEERCRED established who
-        # sent this before the message was accepted — that is a stronger proof
-        # of authorship than a signature, not a courtesy.
-        message.trust = LOCAL_SUBMISSION.value
+        #
+        # IT IS CLASSIFIED BY THE SAME CLASSIFIER AS INBOUND MAIL, and getting
+        # this wrong was the worst defect in v1.1. The local path used to mint
+        # ATTESTED unconditionally, on the argument that SO_PEERCRED proves
+        # authorship more strongly than a signature does. That argument is true
+        # about AUTHORSHIP and it is not what the label says: the badge reads
+        # "signed by this correspondent", and it was being shown for messages
+        # with no signature at all, and for messages carrying a signature that
+        # demonstrably did not verify.
+        #
+        # Two consequences made it indefensible. The spec's promise that a
+        # compromised agent stripping its own signature makes its own mail
+        # unverified — self-harm, not attack — was FALSE, because that agent
+        # still delivered mail labelled as signed to every correspondent on the
+        # host. And the two v1.1 mechanisms disagreed on identical bytes:
+        # classify_inbound() said SUSPECT where canonicalize() said ATTESTED.
+        #
+        # So the classifier runs on both paths and ATTESTED means one thing
+        # everywhere: a signature verified against a key the recipient declared.
+        # The kernel-established fact is not discarded — it goes to the audit
+        # log, which is broker-owned, rather than into a label whose whole job is
+        # to tell a READER what they themselves could re-check.
+        #
+        # Set to None HERE, and minted per recipient in _deliver_one(). The
+        # classification depends on whose contact book is asked — two recipients
+        # may declare different keys for the same sender, so one value on a
+        # shared message object cannot be correct for both. What canonicalize()
+        # owns is destroying the submitter's claim; what delivery owns is
+        # replacing it with the answer for that mailbox.
+        message.trust = None
 
         # PASSED — `signature` is the sender's own claim about its own message
         # and is carried unchanged. It is PASSED rather than CHECKED on purpose:
@@ -322,7 +373,12 @@ class Broker:
             if delivered:
                 self.audit.allowed(sender=sender, recipients=[d["recipient"] for d in delivered],
                                    message_id=message.message_id,
-                                   rung=",".join(sorted({d["rung"] for d in delivered})))
+                                   rung=",".join(sorted({d["rung"] for d in delivered})),
+                                   trust=message.trust,
+                                   # What the KERNEL established. No reader of the
+                                   # stored message can re-derive it, so it has
+                                   # nowhere to live but a broker-owned record.
+                                   authorship=f"so_peercred:{sender}")
             for f in failures:
                 self.audit.error(context="delivery", detail=f"{f['recipient']}: {f['error']}")
 
@@ -400,6 +456,17 @@ class Broker:
         # remote-chosen message_id then satisfied the outbound "parent must be
         # visible" check. The inversion was applied to one path and not its twin,
         # which is the same sibling-blindness the earlier rounds kept finding.
+        # STRIP UPSTREAM AUTHENTICATION CLAIMS AT INGRESS.
+        #
+        # The spec makes this a MUST and it previously had ZERO call sites: the
+        # constant was defined, a policy requirement was written around it, and
+        # nothing invoked it. Today the guarantee happened to hold by
+        # construction, because Message has no field for these headers — but a
+        # property of the current data model is not a control, and §5.3 already
+        # permits an implementation to retain transport headers for forensics.
+        # The moment one does, the requirement is silently absent.
+        strip_inbound_headers(message)
+
         remote_sender = message.sender
         message.message_id = new_id("msg")
         message.date = _now_iso()
@@ -433,7 +500,8 @@ class Broker:
             if self.audit:
                 self.audit.inbound(sender=message.sender, recipient=recipient,
                                    message_id=message.message_id,
-                                   decision="quarantined", reason=reason)
+                                   decision="quarantined", reason=reason,
+                                   trust=message.trust)
             return {"ok": True, "decision": "quarantined", "reason": reason}
 
         # SHAPE IS NOT VISIBILITY, and the outbound path already knows that.
@@ -465,12 +533,23 @@ class Broker:
                 message.thread_id = new_id("thr")
         message.subject = (message.subject or "")[:MAX_SUBJECT]
         message.body = (message.body or "")[:MAX_BODY]
+        # THE SAME BOUNDS AS THE SUBMIT PATH. They were applied only where they
+        # had been demonstrated, on the path where the message comes from a
+        # LOCAL agent — and left off the twin, where the message is hostile by
+        # assumption. A remote sender therefore got 998 attacker-chosen
+        # characters stored under a header named X-Amail-Signature, which is the
+        # "unbounded channel wearing a cryptographic name" the bound exists to
+        # close, still open one path over.
+        if message.signature is not None:
+            message.signature = str(message.signature)[:MAX_SIGNATURE]
+        message.to = list(message.to or [])[:MAX_RECIPIENTS]
         message.sender = remote_sender
 
         deliver(home, message)
         if self.audit:
             self.audit.inbound(sender=message.sender, recipient=recipient,
-                               message_id=message.message_id, decision="delivered")
+                               message_id=message.message_id, decision="delivered",
+                               trust=message.trust)
         return {"ok": True, "decision": "delivered"}
 
     # -------------------------------------------------------------- credentials
@@ -781,6 +860,24 @@ class _Server(socketserver.ThreadingUnixStreamServer):
             uid = None
         if not self._acquire(request, uid):
             self._audit_overload(uid)
+            # SAY WHY. The spec requires an agent be able to tell that its
+            # message was refused AND why; an overload used to close the socket
+            # silently, and the client's generic handler then reported "a
+            # submission over the broker's size limit is the usual cause" —
+            # which is false, and sends whoever is debugging it to the wrong
+            # place. Best-effort and non-blocking: this runs on the accept
+            # thread, so it must never wait on a peer that has stopped reading.
+            try:
+                request.setblocking(False)
+                request.sendall((json.dumps({
+                    "ok": False,
+                    "error": (f"broker at capacity: no more than "
+                              f"{MAX_CONNECTIONS_PER_UID} concurrent connections "
+                              f"per agent ({MAX_CONCURRENT_CONNECTIONS} total). "
+                              "The message was NOT sent. Retry."),
+                }) + "\n").encode("utf-8"))
+            except OSError:
+                pass
             self.shutdown_request(request)
             return
         super().process_request(request, client_address)

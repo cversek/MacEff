@@ -36,11 +36,38 @@ class ContactBook:
 
     def __init__(self, path: Path):
         self.path = Path(path)
+        self._cache: Optional[Tuple[Tuple[int, int, int], Any]] = None
 
     def _load(self) -> Dict[str, List[str]]:
         return self._load_full()[0]
 
     def _load_full(self) -> Tuple[Dict[str, List[str]], Dict[Tuple[str, str], List[str]]]:
+        """Parsed fresh whenever the FILE changes, not once per process.
+
+        v1.1 moved Ed25519 key parsing inside this function, which is re-entered
+        once or twice per recipient — so cost became O(recipients x keys in the
+        whole deployment), and the REFUSAL path, the one an attacker can trigger
+        at will, was the more expensive of the two. That inverts the rule an
+        earlier round established: authorisation must precede the expensive work.
+
+        The cache key is (inode, mtime_ns, size), so an edit takes effect
+        immediately and the policy's "changes take effect without a rebuild"
+        still holds. Caching on process start would break it; caching on
+        identity does not.
+        """
+        try:
+            st = self.path.stat()
+            stamp = (st.st_ino, st.st_mtime_ns, st.st_size)
+        except OSError:
+            stamp = None
+        if stamp is not None and self._cache is not None and self._cache[0] == stamp:
+            return self._cache[1]
+        parsed = self._parse()
+        if stamp is not None:
+            self._cache = (stamp, parsed)
+        return parsed
+
+    def _parse(self) -> Tuple[Dict[str, List[str]], Dict[Tuple[str, str], List[str]]]:
         if not self.path.exists():
             # Fail closed. An absent contact list is not an empty restriction;
             # it means the deployment is not configured, and sending under that
@@ -76,11 +103,20 @@ class ContactBook:
                         raise ContactListError(f"contact entry for '{agent}' has no address")
                     addr = str(e["address"]).strip().lower()
                     addrs.append(addr)
-                    declared = e.get("key") or e.get("keys")
-                    if declared is not None:
+                    # `in`, not `or`. `e.get("key") or e.get("keys")` collapses
+                    # every falsy value — "", null, 0, false, [] — to None, so a
+                    # contact that DECLARED a key silently became keyless and the
+                    # explicit "must be a non-empty list" guard below was
+                    # unreachable. That downgrades SUSPECT to UNVERIFIED for that
+                    # correspondent by configuration rather than by evidence,
+                    # which is the one direction this module must never move in.
+                    has_key = "key" in e or "keys" in e
+                    declared = e.get("key", e.get("keys"))
+                    if has_key:
                         if isinstance(declared, str):
                             declared = [declared]
-                        if not isinstance(declared, list) or not declared:
+                        if not isinstance(declared, list) or not declared or \
+                                not all(isinstance(x, str) and x.strip() for x in declared):
                             raise ContactListError(
                                 f"contact key for '{addr}' must be a string or a "
                                 "non-empty list of strings")

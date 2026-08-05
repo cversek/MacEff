@@ -1145,19 +1145,41 @@ class TestConnectionMetering:
                 c.connect(str(deployment["cfg"].socket_path))
                 held.append(c)
             time.sleep(0.4)
-            # Refused connections are closed by the server without a reply. A
-            # still-metered connection stays open, so counting live ones measures
-            # the cap directly.
-            live = 0
+            # A refused connection now receives an explicit capacity refusal and
+            # is then closed; a metered one stays silent and open. Distinguish
+            # them by what arrives, not by whether anything arrives — the first
+            # version of this test counted "the socket had bytes" as "still
+            # holding a slot", so it broke the moment refusals started being
+            # explained, which is the behaviour the spec requires.
+            live, refused, explained = 0, 0, 0
             for c in held:
-                c.settimeout(0.2)
+                c.settimeout(0.3)
                 try:
-                    live += 0 if c.recv(1) == b"" else 1
+                    data = c.recv(4096)
                 except (TimeoutError, OSError):
-                    live += 1  # still open, still holding a slot
+                    live += 1          # silent and open: holding a slot
+                    continue
+                if not data:
+                    refused += 1       # closed with no reply
+                elif b"capacity" in data:
+                    refused += 1
+                    explained += 1     # closed WITH a reason, which is the requirement
+                else:
+                    live += 1
             assert live <= bmod.MAX_CONNECTIONS_PER_UID, (
                 f"{live} connections held simultaneously by one uid, cap is "
                 f"{bmod.MAX_CONNECTIONS_PER_UID}")
+            assert refused >= 6, (
+                f"only {refused} of the 6 excess connections were refused; the "
+                "cap is not being applied")
+            # AND THE REASON ARRIVES. Counting "closed with no reply" and
+            # "closed with a reason" together as refused made this test pass
+            # with the explanation deleted — the cap was proven and the spec's
+            # actual requirement, that an agent can tell WHY, was not. The
+            # mutation sweep caught it.
+            assert explained >= 1, (
+                "connections were refused silently; §3.2 requires an agent be "
+                "able to tell that its message was refused AND why")
         finally:
             for c in held:
                 try:
@@ -2074,19 +2096,72 @@ class TestTrustIsMintedNotAccepted:
     """The label is worth nothing if a sender can set it."""
 
     def test_a_submitted_trust_claim_is_overwritten(self, deployment):
+        """A sender's claim is destroyed and replaced by the classifier's answer.
+
+        This test used to assert that local submission yields ATTESTED, and it
+        passed — which is how the worst defect in v1.1 stayed green. The local
+        path minted ATTESTED unconditionally without checking any signature, and
+        the CLI rendered that as "signed by this correspondent" for messages with
+        no signature at all. The test asserted the bug.
+
+        The property actually worth guarding is that the SENDER'S CLAIM DOES NOT
+        SURVIVE. An unsigned message claiming to be attested must come back as
+        whatever the classifier concluded, which for unsigned mail from a
+        correspondent with no declared key is UNVERIFIED.
+        """
         m = msg()
         m.trust = "attested"  # a lie, submitted by the sender
         deployment["broker"].submit("alpha", m)
         stored = store.read_all(deployment["homes"]["beta"])[0]
-        # Local submission IS attested — but because SO_PEERCRED established the
-        # sender, not because the sender said so. Prove the claim was not merely
-        # honoured by trying one that could never be legitimate.
+        assert stored.trust == TrustClass.UNVERIFIED.value, \
+            "an unsigned message was labelled with the sender's own claim"
+
         m2 = msg(body="second")
         m2.trust = "definitely-trustworthy"
         deployment["broker"].submit("alpha", m2)
         got = [x for x in store.read_all(deployment["homes"]["beta"]) if x.body == "second"][0]
-        assert got.trust == TrustClass.ATTESTED.value
-        assert stored.trust == TrustClass.ATTESTED.value
+        assert got.trust == TrustClass.UNVERIFIED.value
+
+    def test_local_delivery_is_classified_by_the_same_classifier_as_inbound(self, keyed):
+        """The two v1.1 mechanisms must not disagree on identical bytes.
+
+        Round 9 found `classify_inbound()` returning SUSPECT for a message that
+        `canonicalize()` had already labelled ATTESTED — the same message, the
+        same contact book, two different answers, and the reader shown the
+        flattering one.
+        """
+        # beta declares a key for alpha, and alpha sends unsigned.
+        keyed["contacts"].write_text(json.dumps({
+            "alpha": [f"beta@{DOMAIN}"],
+            "beta": [{"address": f"alpha@{DOMAIN}", "key": keyed["beta_pub"]}],
+        }))
+        keyed["contacts"].chmod(0o644)
+        keyed["broker"].submit("alpha", msg(body="unsigned but keyed"))
+        stored = [x for x in store.read_all(keyed["homes"]["beta"])
+                  if x.body == "unsigned but keyed"][0]
+        assert stored.trust == TrustClass.SUSPECT.value, \
+            "a declared key went unused and the message still claimed to be signed"
+        # And the two mechanisms now agree.
+        assert keyed["broker"].classify_inbound(stored, "beta").value == stored.trust
+
+    def test_stripping_a_signature_is_self_harm_as_the_spec_claims(self, keyed):
+        """§9.2 says a compromised agent stripping its own signature makes its
+        own mail unverified. That was FALSE — the stripped message still arrived
+        labelled as signed. It has to be true, or the sentence comes out."""
+        keyed["contacts"].write_text(json.dumps({
+            "alpha": [f"beta@{DOMAIN}"],
+            "beta": [{"address": f"alpha@{DOMAIN}", "key": keyed["beta_pub"]}],
+        }))
+        keyed["contacts"].chmod(0o644)
+        signed = msg(body="signed")
+        signed.signature = sign(signed, load_private_key(keyed["beta_key"]))
+        stripped = msg(body="stripped")
+        stripped.signature = None
+        keyed["broker"].submit("alpha", signed)
+        keyed["broker"].submit("alpha", stripped)
+        got = {x.body: x.trust for x in store.read_all(keyed["homes"]["beta"])}
+        assert got["signed"] == TrustClass.ATTESTED.value
+        assert got["stripped"] == TrustClass.SUSPECT.value
 
     def test_an_inbound_trust_claim_is_overwritten(self, deployment):
         m = msg(sender="stranger@elsewhere.test", to=[f"beta@{DOMAIN}"])
@@ -2212,3 +2287,280 @@ class TestInboundAuthenticationHeadersAreNeverTrusted:
         deployment["broker"].accept_inbound(m, f"beta@{DOMAIN}")
         q = next((deployment["homes"]["beta"] / "Maildir" / "quarantine").iterdir())
         assert "X-Amail-Trust: attested" not in q.read_text()
+
+
+# ---------------------------------------------------------------------------
+# Round 9: the spec claims, tested AS CLAIMS
+# ---------------------------------------------------------------------------
+
+
+class TestStoredMessagesStayVerifiable:
+    """§9.3 promises a stored message remains verifiable by anyone holding the
+    correspondent's public key. Round 9 found that false for 7 of 10 realistic
+    inputs, because the signature covered the in-memory object while the storage
+    round trip rewrites three of the four covered fields.
+
+    The old test used body="durable", subject="s" — the one input shape in the
+    set that survives. It asserted the property while exercising the only case
+    that could not fail.
+    """
+
+    CASES = [
+        ("clean control", "s", "plain body"),
+        ("body ends in a newline", "s", "from a file\n"),
+        ("body ends in two newlines", "s", "markdown\n\n"),
+        ("body is only newlines", "s", "\n\n\n"),
+        ("subject with a leading space", "  padded", "b"),
+        ("subject with a trailing space", "padded  ", "b"),
+        ("subject containing a TAB", "before\tafter", "b"),
+        ("subject with U+2028", "before after", "b"),
+        ("subject over the 998 ceiling", "x" * 1200, "b"),
+        ("subject with a CR", "before\rafter", "b"),
+        ("empty body", "s", ""),
+        ("unicode subject and body", "re: café", "éèê\n"),
+    ]
+
+    @pytest.mark.parametrize("label,subject,body", CASES)
+    def test_signature_survives_the_storage_round_trip(self, keyed, label, subject, body):
+        m = msg(sender=f"beta@{DOMAIN}", to=[f"alpha@{DOMAIN}"], subject=subject, body=body)
+        m.signature = sign(m, load_private_key(keyed["beta_key"]))
+        assert verify(m, m.signature, [keyed["beta_pub"]]), f"{label}: unsigned in memory"
+
+        keyed["broker"].accept_inbound(m, f"alpha@{DOMAIN}")
+        raw = next((keyed["homes"]["alpha"] / "Maildir" / "new").iterdir()).read_text()
+        stored = Message.deserialize(raw)
+        assert verify(stored, stored.signature, [keyed["beta_pub"]]), (
+            f"{label}: verified in memory, UNVERIFIABLE once stored — the exact "
+            f"failure §9.3 promises cannot happen")
+
+    @pytest.mark.parametrize("label,subject,body", CASES)
+    def test_canonical_form_is_a_fixed_point_of_the_round_trip(self, label, subject, body):
+        """The property that makes the above true BY CONSTRUCTION rather than by
+        luck: canonicalising a message equals canonicalising its round trip."""
+        m = msg(subject=subject, body=body)
+        again = Message.deserialize(m.serialize())
+        assert m.canonical_for_signing() == again.canonical_for_signing(), label
+
+    def test_the_payload_itself_is_identical_across_the_round_trip(self):
+        """Assert the bytes, not just the verdict — a payload that differed while
+        both happened to verify would be luck, not a fixed point."""
+        from macf.amail.crypto import signing_payload
+        m = msg(subject="tab\there  ", body="ends with newline\n\n")
+        assert signing_payload(m) == signing_payload(Message.deserialize(m.serialize()))
+
+
+class TestClassificationReachesTheAuditLog:
+    """§6.5: 'Classification MUST be recorded in the audit log alongside the
+    delivery decision.' Round 9 found no audit record carried it, and no test
+    asserted one did. The header in the mailbox is not a substitute: that file
+    lives in the recipient's own home, mode 700, rewritable by exactly the party
+    an investigation would be about."""
+
+    def test_outbound_delivery_records_the_classification(self, deployment):
+        deployment["broker"].submit("alpha", msg())
+        allowed = [r for r in deployment["broker"].audit.records()
+                   if r.get("decision") == "allowed"]
+        assert allowed and "trust" in allowed[0], "the verdict is not in the audit log"
+
+    def test_outbound_delivery_records_the_kernel_established_authorship(self, deployment):
+        """The one fact a reader of the stored message can never re-derive, so
+        the audit log is the only place it can live."""
+        deployment["broker"].submit("alpha", msg())
+        allowed = [r for r in deployment["broker"].audit.records()
+                   if r.get("decision") == "allowed"][0]
+        assert allowed.get("authorship", "").startswith("so_peercred:")
+
+    def test_inbound_delivery_records_the_classification(self, keyed):
+        m = msg(sender=f"beta@{DOMAIN}", to=[f"alpha@{DOMAIN}"])
+        m.signature = sign(m, load_private_key(keyed["beta_key"]))
+        keyed["broker"].accept_inbound(m, f"alpha@{DOMAIN}")
+        rec = [r for r in keyed["broker"].audit.records()
+               if r.get("direction") == "inbound"][0]
+        assert rec.get("trust") == TrustClass.ATTESTED.value
+
+    def test_quarantine_records_the_classification_too(self, deployment):
+        m = msg(sender="stranger@elsewhere.test", to=[f"beta@{DOMAIN}"])
+        deployment["broker"].accept_inbound(m, f"beta@{DOMAIN}")
+        rec = [r for r in deployment["broker"].audit.records()
+               if r.get("decision") == "quarantined"][0]
+        assert "trust" in rec
+
+
+class TestInboundHeaderStrippingIsWired:
+    """§6.4 makes stripping a MUST. Round 9 found STRIPPED_INBOUND_HEADERS had
+    ZERO call sites — the constant existed, the policy required it, and nothing
+    invoked it. The test named for the requirement asserted on the constant's
+    CONTENTS, which is a source-data assertion; the 'end-to-end' test passed with
+    the strip list emptied and failed only when trust-minting was removed."""
+
+    def test_the_stripper_has_a_production_call_site(self):
+        """An empty grep outside tests is itself the finding."""
+        import inspect
+        from macf.amail import broker as bmod
+        src = inspect.getsource(bmod.Broker.accept_inbound)
+        assert "strip_inbound_headers(" in src
+
+    def test_stripping_actually_clears_an_asserted_verdict(self):
+        """Behaviour, not the constant. A message carrying its own trust claim
+        has it cleared by the stripper alone, independently of re-minting."""
+        from macf.amail.broker import strip_inbound_headers
+        m = msg()
+        m.trust = "attested"
+        cleared = strip_inbound_headers(m)
+        assert m.trust is None
+        assert "x-amail-trust" in cleared
+
+    def test_the_stripper_reports_what_a_sender_tried_to_assert(self):
+        """An attempt to assert a verdict is worth knowing about."""
+        from macf.amail.broker import strip_inbound_headers
+        assert strip_inbound_headers(msg()) == []
+
+
+class TestSigningKeyCustody:
+    # WRITE-WITHOUT-READ only. 0o660 is readable too, so the READ check fires
+    # first and the test would pass with the new guard deleted — satisfied by a
+    # sibling, which is the exact vacuity this suite keeps catching. These three
+    # modes are refusable by nothing else.
+    @pytest.mark.parametrize("mode", [0o620, 0o622, 0o602])
+    def test_a_group_or_world_writable_private_key_is_refused(self, tmp_path, mode):
+        """Round 9: the check asked who could READ the key and never who could
+        WRITE it. A key another uid can write is one they authored, hence one
+        they know — realised as authorship DENIAL, silently, while the CLI
+        reports success."""
+        generate_keypair(tmp_path / "k.pem")
+        (tmp_path / "k.pem").chmod(mode)
+        with pytest.raises(SigningError, match="writable by group or other"):
+            load_private_key(tmp_path / "k.pem")
+
+    def test_a_key_owned_by_another_uid_is_refused(self, tmp_path, monkeypatch):
+        """Mutation survivor M08: this branch existed and nothing tested it."""
+        generate_keypair(tmp_path / "k.pem")
+        monkeypatch.setattr(os, "getuid", lambda: os.stat(tmp_path / "k.pem").st_uid + 1)
+        with pytest.raises(SigningError, match="owned by uid"):
+            load_private_key(tmp_path / "k.pem")
+
+    def test_a_non_ed25519_private_key_is_refused(self, tmp_path):
+        """Mutation survivor M09: the private-key half of the one-algorithm rule."""
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        p = tmp_path / "rsa.pem"
+        p.write_bytes(key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption()))
+        p.chmod(0o600)
+        with pytest.raises(SigningError, match="not Ed25519"):
+            load_private_key(p)
+
+
+class TestAlgorithmCannotComeFromTheMessage:
+    def test_the_payload_algorithm_is_constant_not_message_derived(self):
+        """Mutation survivor M06: §9.4's 'never chosen by the message' was tested
+        only on the key-parsing side. The payload side was unguarded."""
+        import json as _json
+        from macf.amail.crypto import ALGORITHM, signing_payload
+        m = msg()
+        m.alg = "none"  # a field a future Message might grow
+        assert _json.loads(signing_payload(m))["alg"] == ALGORITHM
+
+
+class TestClassificationPrecedesTruncation:
+    def test_a_long_body_is_classified_before_it_is_truncated(self, keyed):
+        """Mutation survivor M35: the ordering the code defends in a seven-line
+        comment had no test. Classifying after truncation would compare a
+        signature against text the sender never wrote and report SUSPECT for our
+        own edit."""
+        from macf.amail import broker as bmod
+        m = msg(sender=f"beta@{DOMAIN}", to=[f"alpha@{DOMAIN}"],
+                body="x" * (bmod.MAX_BODY + 5000))
+        m.signature = sign(m, load_private_key(keyed["beta_key"]))
+        keyed["broker"].accept_inbound(m, f"alpha@{DOMAIN}")
+        stored = store.read_all(keyed["homes"]["alpha"])[0]
+        assert stored.trust == TrustClass.ATTESTED.value, \
+            "an oversize body was classified after our own truncation"
+        assert len(stored.body) <= bmod.MAX_BODY
+
+
+class TestHeaderValuesAreStrippedOnRead:
+    def test_deserialize_strips_header_whitespace(self):
+        """Mutation survivor M33: untested, and one of the three normalisations
+        behind the at-rest verification failure."""
+        m = msg(subject="  padded  ")
+        assert Message.deserialize(m.serialize()).subject == "padded"
+
+
+class TestInboundBoundsMatchTheSubmitPath:
+    def test_an_inbound_signature_is_bounded(self, deployment):
+        """Round 9: MAX_SIGNATURE was applied on the submit path and not on the
+        twin, where the message is hostile by assumption."""
+        from macf.amail import broker as bmod
+        m = msg(sender=f"alpha@{DOMAIN}", to=[f"beta@{DOMAIN}"])
+        m.signature = "A" * 50_000
+        deployment["broker"].accept_inbound(m, f"beta@{DOMAIN}")
+        stored = store.read_all(deployment["homes"]["beta"])[0]
+        assert len(stored.signature or "") <= bmod.MAX_SIGNATURE
+
+    def test_an_inbound_recipient_list_is_bounded(self, deployment):
+        from macf.amail import broker as bmod
+        m = msg(sender=f"alpha@{DOMAIN}", to=[f"r{i}@x.test" for i in range(500)])
+        m.to.append(f"beta@{DOMAIN}")
+        deployment["broker"].accept_inbound(m, f"beta@{DOMAIN}")
+        stored = store.read_all(deployment["homes"]["beta"])[0]
+        assert len(stored.to) <= bmod.MAX_RECIPIENTS
+
+
+class TestFalsyContactKeysAreRefused:
+    @pytest.mark.parametrize("value", ['""', "null", "0", "false", "[]"])
+    def test_a_falsy_declared_key_is_not_silently_dropped(self, deployment, value):
+        """Round 9: `e.get("key") or e.get("keys")` collapsed every falsy value
+        to None, so a contact that DECLARED a key silently became keyless — which
+        downgrades SUSPECT to UNVERIFIED by configuration rather than evidence."""
+        deployment["contacts"].write_text(
+            '{"alpha": [{"address": "beta@%s", "key": %s}]}' % (DOMAIN, value))
+        deployment["contacts"].chmod(0o644)
+        with pytest.raises(ContactListError):
+            deployment["broker"].contacts.contacts_for("alpha")
+
+
+class TestVerifyNeverRaises:
+    @pytest.mark.parametrize("mutate", [
+        lambda m: setattr(m, "to", None),
+        lambda m: setattr(m, "body", {"not": "a string"}),
+        lambda m: setattr(m, "body", "lone surrogate \ud800"),
+        lambda m: setattr(m, "subject", {1, 2, 3}),
+        lambda m: setattr(m, "sender", None),
+    ])
+    def test_a_hostile_message_shape_returns_false_rather_than_raising(self, mutate, tmp_path):
+        """verify() documents that forged inputs are its expected argument, then
+        built the payload OUTSIDE the guard — so a hostile SHAPE raised straight
+        through the promise not to raise."""
+        key = generate_keypair(tmp_path / "k.pem")
+        m = msg()
+        sig = sign(m, load_private_key(tmp_path / "k.pem"))
+        mutate(m)
+        assert verify(m, sig, [key]) is False
+
+
+class TestContactCacheRespectsEdits:
+    def test_an_edited_contact_list_takes_effect_without_a_restart(self, deployment):
+        """The cache is keyed on file identity, so the policy's 'changes take
+        effect without a rebuild' still holds. Caching on process start would
+        break it; caching on identity does not."""
+        book = deployment["broker"].contacts
+        assert book.permits("alpha", f"beta@{DOMAIN}") is True
+        time.sleep(0.01)
+        deployment["contacts"].write_text(json.dumps({"alpha": [], "beta": []}))
+        deployment["contacts"].chmod(0o644)
+        assert book.permits("alpha", f"beta@{DOMAIN}") is False, \
+            "a contact-list edit did not take effect"
+
+    def test_repeated_checks_do_not_reparse_an_unchanged_file(self, deployment, monkeypatch):
+        book = deployment["broker"].contacts
+        book.contacts_for("alpha")
+        parses = []
+        real = book._parse
+        monkeypatch.setattr(book, "_parse", lambda: (parses.append(1), real())[1])
+        for _ in range(50):
+            book.permits("alpha", f"beta@{DOMAIN}")
+        assert parses == [], "an unchanged contact list was re-parsed per check"

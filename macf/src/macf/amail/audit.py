@@ -182,11 +182,28 @@ class AuditLog:
         except OSError:
             pass
 
-    def allowed(self, *, sender: str, recipients: List[str], message_id: str, rung: str) -> None:
-        self._append({
+    def allowed(self, *, sender: str, recipients: List[str], message_id: str,
+                rung: str, trust: Optional[str] = None,
+                authorship: Optional[str] = None) -> None:
+        """`trust` is what a READER of the message can establish; `authorship` is
+        what the BROKER established at submission.
+
+        Both are recorded because they answer different questions and the second
+        has nowhere else to live. The classification travels with the message in
+        a header — but that header sits in the recipient's own mailbox, mode 700,
+        rewritable by exactly the party an investigation would be about. The
+        audit log is the one broker-owned record, so if the verdict is not here
+        it is not anywhere an investigator can trust.
+        """
+        rec = {
             "decision": "allowed", "direction": "outbound", "sender": sender,
             "recipients": recipients, "message_id": message_id, "rung": rung,
-        })
+        }
+        if trust:
+            rec["trust"] = trust
+        if authorship:
+            rec["authorship"] = authorship
+        self._append(rec)
 
     def refused(self, *, sender: str, recipients: List[str], reason: str,
                 message_id: Optional[str] = None) -> None:
@@ -196,13 +213,16 @@ class AuditLog:
         })
 
     def inbound(self, *, sender: str, recipient: str, message_id: str,
-                decision: str, reason: Optional[str] = None) -> None:
+                decision: str, reason: Optional[str] = None,
+                trust: Optional[str] = None) -> None:
         rec = {
             "decision": decision, "direction": "inbound", "sender": sender,
             "recipients": [recipient], "message_id": message_id,
         }
         if reason:
             rec["reason"] = reason
+        if trust:
+            rec["trust"] = trust
         self._append(rec)
 
     def error(self, *, context: str, detail: str) -> None:

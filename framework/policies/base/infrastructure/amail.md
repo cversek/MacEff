@@ -493,13 +493,38 @@ let it reach an unlisted recipient, and does not let it sign as anyone else — 
 forged signature fails against that correspondent's public key, and the broker
 refuses a sender that disagrees with the kernel long before it gets that far. A
 compromised agent can strip its own signature, which makes its own mail
-unverified: self-harm, not attack.
+`SUSPECT` at every correspondent that has declared a key for it: self-harm, not
+attack.
+
+**This requires that locally-submitted mail be classified by the same classifier
+as inbound mail.** A v1.1 implementation minted `ATTESTED` unconditionally for
+local submissions — on the defensible argument that peer credentials prove
+authorship more strongly than a signature does — and thereby made the sentence
+above false: a stripped signature still arrived labelled as signed, as did a
+signature that demonstrably did not verify. Kernel-established authorship is a
+real fact and belongs in the audit record, which is broker-owned. It MUST NOT be
+reported through a label whose entire purpose is to tell a reader what that
+reader could re-check for themselves.
 
 What this buys over broker-held keys: a signature proves authorship **even to a
 party that does not trust the broker**. A broker holding private keys could
 forge any agent's mail, and §7.2 already concedes a compromised broker is
 undefended. This narrows that concession for authorship specifically, which is
 the one place it is cheap to narrow.
+
+**Two kinds of signing key exist and their custody rules are opposite.** They
+share a name, which makes conflating them easy and expensive:
+
+| key | signs | custody |
+|---|---|---|
+| domain key (e.g. DKIM) | **for the domain** — anything holding it signs as every agent | broker's drawer, readable by no agent |
+| authorship key (§9) | **as one correspondent** | that correspondent's own home |
+
+A domain key in an agent's home is a forgery key for the entire namespace. Where
+a hosted relay generates and holds the domain key, none exists on the
+deployment's side and the question does not arise — but it returns the moment an
+operator signs for themselves, so the rule is recorded here rather than left in
+whichever conversation happened to notice it.
 
 A key declared for a correspondent MUST be scoped to the agent whose contact
 list declares it. Two agents may know the same correspondent under different
@@ -526,6 +551,20 @@ That would make the broker the sole and unrepeatable verifier, which is the
 thing end-to-end signing exists to avoid. The payload therefore covers what the
 message **is**, not what it was called in transit, and a stored message remains
 verifiable by anyone holding the correspondent's public key.
+
+**The signature MUST be computed over the message's canonical STORED form, not
+over an in-memory object.** This is not an optimisation. A v1.1 implementation
+that signed the in-memory values produced signatures that verified once, at
+ingress, and never again — storage rewrites the body's trailing newlines, strips
+header whitespace, and folds control characters. Seven of ten realistic inputs
+became unverifiable the moment they were stored, while their recorded label
+still read `ATTESTED`, and the most common real send — a body read from a file,
+which ends in a newline — was among the broken cases.
+
+An implementation MUST therefore guarantee `sign(m) == sign(deserialize(
+serialize(m)))`, and SHOULD assert it as a property over adversarial inputs.
+The failure is invisible at the only moment anyone would look, because the
+ingress check runs on the pre-storage object and passes.
 
 The cost is stated rather than hidden: a captured message can be re-delivered
 and will still verify. That is replay, not forgery, and it appears in §7.2.
