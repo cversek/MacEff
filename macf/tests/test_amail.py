@@ -1273,3 +1273,286 @@ class TestCliSurface:
 
         text = "Hi,\n\tHere is a note — with unicode, tabs and newlines.\n"
         assert cli._term_safe(text) == text
+
+
+# ---------------------------------------------------------------------------
+# Round 7: the round-6 fixes themselves, and the surfaces round 6 did not reach
+# ---------------------------------------------------------------------------
+
+
+class TestAuditRotationIsConcurrencySafe:
+    """Round 7 found the round-6 rotation fix DESTROYED the evidence it existed
+    to preserve.
+
+    Two threads both see size >= ceiling. The first renames the full log to .1
+    and writes a one-line marker; the second renames THAT one-line file over .1,
+    and the whole generation is gone. Measured at 7 lossy runs in 60 under
+    ordinary concurrency, worst case 42 of 50 records lost — with no attacker,
+    because the broker is multi-threaded by design.
+
+    The round-6 tests covered rotation functionally and not one of them ran it
+    concurrently, which is exactly how the defect shipped inside a fix.
+    """
+
+    def test_no_records_are_lost_under_concurrent_writers(self, tmp_path):
+        import threading as t_
+
+        # 240 records at ~170 B = ~40.8 kB. A ceiling of 25 kB means EXACTLY one
+        # rotation fires and no generation is ever deleted, so any missing record
+        # is the race and not bounded retention doing its job. Measured rather
+        # than guessed: the first version of this test used a ceiling that
+        # legitimately rotated six times, and would have reported the correct
+        # implementation as lossy.
+        log = AuditLog(tmp_path / "audit.jsonl", max_bytes=25000)
+        total, writers = 240, 8
+
+        def write(base):
+            for i in range(total // writers):
+                log.refused(sender="alpha", recipients=["x@y.test"],
+                            reason=f"r-{base}-{i}")
+
+        threads = [t_.Thread(target=write, args=(w,)) for w in range(writers)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+
+        seen = set()
+        for p in (tmp_path / "audit.jsonl.1", tmp_path / "audit.jsonl"):
+            if p.exists():
+                for line in p.read_text().splitlines():
+                    try:
+                        r = json.loads(line)
+                    except ValueError:
+                        continue
+                    if r.get("decision") == "refused":
+                        seen.add(r["reason"])
+        # Bounded retention may legitimately rotate the OLDEST generation away.
+        # This load stays under two generations, so a correctly serialised
+        # implementation drops nothing at all.
+        assert len(seen) == total, (
+            f"{total - len(seen)} of {total} refusal records lost to the "
+            f"rotation race")
+
+    def test_rotation_count_matches_the_bytes_written(self, tmp_path):
+        """Unserialised rotation also produced TWO markers for one rotation's
+        worth of bytes, so the markers themselves misreported."""
+        import threading as t_
+
+        log = AuditLog(tmp_path / "audit.jsonl", max_bytes=25000)
+
+        def write():
+            for i in range(30):
+                log.refused(sender="alpha", recipients=["x@y.test"], reason=f"r{i}")
+
+        threads = [t_.Thread(target=write) for _ in range(8)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+
+        markers = sum(1 for p in (tmp_path / "audit.jsonl.1", tmp_path / "audit.jsonl")
+                      if p.exists()
+                      for line in p.read_text().splitlines()
+                      if '"rotated"' in line)
+        assert markers <= 1, f"{markers} rotation markers for one rotation of bytes"
+
+    def test_rotate_and_append_are_mutually_exclusive(self, tmp_path):
+        """The MECHANISM, asserted directly, because the emergent data loss is
+        probabilistic and a probabilistic test is barely better than no test.
+
+        The auditor measured the loss at 7 runs in 60 — so a suite asserting
+        "no records were lost" would pass ~88% of the time against the BROKEN
+        implementation, and a green run would mean nothing. For a race fix,
+        black-box assertions cannot distinguish the implementations; assert the
+        property the fix actually establishes, which is that no two writers are
+        ever inside rotate-then-append at the same time.
+        """
+        import threading as t_
+
+        log = AuditLog(tmp_path / "audit.jsonl", max_bytes=900)
+        seen_lock = t_.Lock()
+        inside, high_water = [], [0]
+        real_write = log._write
+
+        def traced(record):
+            with seen_lock:
+                inside.append(1)
+                high_water[0] = max(high_water[0], len(inside))
+            # Long enough that an unserialised implementation MUST overlap.
+            time.sleep(0.003)
+            try:
+                return real_write(record)
+            finally:
+                with seen_lock:
+                    inside.pop()
+
+        log._write = traced
+        threads = [t_.Thread(target=lambda: [
+            log.refused(sender="alpha", recipients=["x@y.test"], reason=f"r{i}")
+            for i in range(12)]) for _ in range(8)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+        assert high_water[0] == 1, (
+            f"{high_water[0]} writers were inside the rotate/append section at "
+            f"once; rotation and the record it writes are not serialised")
+
+    def test_lines_are_never_interleaved_under_concurrency(self, tmp_path):
+        """Every line must still parse. A log that cannot be read is not a log."""
+        import threading as t_
+
+        log = AuditLog(tmp_path / "audit.jsonl", max_bytes=0)  # no rotation
+        threads = [t_.Thread(target=lambda: [
+            log.refused(sender="alpha", recipients=["x@y.test"], reason="x" * 200)
+            for _ in range(25)]) for _ in range(8)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+        lines = (tmp_path / "audit.jsonl").read_text().splitlines()
+        assert len(lines) == 200
+        for line in lines:
+            json.loads(line)  # raises if a partial write interleaved
+
+
+class TestConfigDirectoryCustody:
+    """Round 7: the custody check validated the contact FILE's mode and not the
+    directory holding it. Replacing a file needs write permission on the
+    directory, not on the file — so an agent could os.replace() a contact list
+    granting itself every recipient while the original sat at a blameless 0644
+    and the check reported green throughout.
+
+    A guard that inspects an object the attacker never has to touch does not
+    merely miss the attack; it certifies against it.
+    """
+
+    def test_group_writable_config_directory_is_refused(self, deployment, tmp_path):
+        cfgdir = tmp_path / "cfg"
+        cfgdir.mkdir()
+        contacts = cfgdir / "contacts.json"
+        contacts.write_text(json.dumps({"alpha": []}))
+        contacts.chmod(0o644)
+        cfgdir.chmod(0o775)  # group-writable: anyone in the group can swap the file
+        deployment["cfg"].contacts_path = contacts
+        with pytest.raises(PermissionError, match="directory"):
+            deployment["broker"].assert_credential_custody()
+
+    def test_world_writable_config_directory_is_refused(self, deployment, tmp_path):
+        cfgdir = tmp_path / "cfg2"
+        cfgdir.mkdir()
+        contacts = cfgdir / "contacts.json"
+        contacts.write_text(json.dumps({"alpha": []}))
+        contacts.chmod(0o644)
+        cfgdir.chmod(0o777)
+        deployment["cfg"].contacts_path = contacts
+        with pytest.raises(PermissionError, match="directory"):
+            deployment["broker"].assert_credential_custody()
+
+    def test_a_correctly_provisioned_directory_still_starts(self, deployment, tmp_path):
+        """A check that refuses correct deployments gets disabled within a week."""
+        cfgdir = tmp_path / "cfg3"
+        cfgdir.mkdir()
+        cfgdir.chmod(0o755)
+        contacts = cfgdir / "contacts.json"
+        contacts.write_text(json.dumps({"alpha": []}))
+        contacts.chmod(0o644)
+        cred = cfgdir / "smarthost.cred"
+        cred.write_text("secret")
+        cred.chmod(0o600)
+        deployment["cfg"].contacts_path = contacts
+        deployment["cfg"].credentials_path = cred
+        deployment["broker"].assert_credential_custody()  # must not raise
+
+
+class TestInboundIdentifierVisibility:
+    """Round 7: inbound validated identifier SHAPE but not VISIBILITY, while the
+    outbound path required both. A remote sender could graft a message onto a
+    conversation it was never part of, inheriting the apparent standing of the
+    exchange above it — the same laundering an earlier round closed on the
+    submit path, left open on its twin.
+    """
+
+    def test_unseen_parent_is_dropped(self, deployment):
+        from macf.amail import new_id
+        from macf.amail.broker import _ID_RE
+
+        m = msg(sender=f"beta@{DOMAIN}", to=[f"alpha@{DOMAIN}"])
+        # A GENUINELY well-formed id that was simply never delivered here.
+        #
+        # The first version of this test used a hand-written 'msg-deadbeef…',
+        # which does not match _ID_RE — so the shape check nulled it and the
+        # visibility check was never reached. The test asserted the right
+        # outcome produced by the wrong mechanism, and the mutation sweep caught
+        # it: removing the visibility check left the test passing.
+        m.parent = new_id("msg")
+        assert _ID_RE.match(m.parent), "the test value must pass the shape check"
+        deployment["broker"].accept_inbound(m, f"alpha@{DOMAIN}")
+        assert store.read_all(deployment["homes"]["alpha"])[0].parent is None
+
+    def test_a_real_visible_parent_is_kept(self, deployment):
+        """Dropping every parent would 'fix' this by breaking threading."""
+        first = deployment["broker"].submit("alpha", msg())
+        seen = store.read_all(deployment["homes"]["beta"])[0]
+        # The sender must be one BETA permits, or the message is quarantined and
+        # the parent question never arises — which is what the first version of
+        # this test actually measured.
+        m = msg(sender=f"alpha@{DOMAIN}", to=[f"beta@{DOMAIN}"])
+        m.parent = seen.message_id
+        deployment["broker"].accept_inbound(m, f"beta@{DOMAIN}")
+        delivered = [x for x in store.read_all(deployment["homes"]["beta"])
+                     if x.parent is not None]
+        assert delivered and delivered[0].parent == seen.message_id
+        assert first["ok"] is True
+
+    def test_asserted_thread_id_cannot_join_an_existing_thread(self, deployment):
+        deployment["broker"].submit("alpha", msg())
+        existing = store.read_all(deployment["homes"]["beta"])[0].thread_id
+        m = msg(sender=f"alpha@{DOMAIN}", to=[f"beta@{DOMAIN}"])
+        m.thread_id, m.parent = existing, None
+        deployment["broker"].accept_inbound(m, f"beta@{DOMAIN}")
+        grafted = [x for x in store.read_all(deployment["homes"]["beta"])
+                   if x.body == "b" and x.thread_id == existing]
+        assert len(grafted) == 1, "an asserted thread_id joined an existing thread"
+
+
+class TestCliRobustness:
+    """Round 7: --body-file raised uncaught UnicodeDecodeError on binary input,
+    and an oversize body surfaced BrokenPipeError — reporting a transport crash
+    for the size guard working correctly."""
+
+    def test_bidi_controls_are_neutralised(self):
+        """Trojan-source: these drive no cursor and forge no escape sequence,
+        they reorder how the text RENDERS. The point of the function is that a
+        reader can trust what the screen says."""
+        from macf import cli
+
+        hostile = "transfer to ‮reversed‬ account"
+        out = cli._term_safe(hostile)
+        assert "‮" not in out and "‬" not in out
+        assert "\\u202e" in out, "escaped form should stay visible"
+
+    def test_escape_of_a_high_codepoint_is_unambiguous(self):
+        """\\x202e reads as \\x20 followed by '2e'. An ambiguous escape is itself
+        a small forgery."""
+        from macf import cli
+
+        assert "\\u202e" in cli._term_safe("‮")
+        assert "\\x1b" in cli._term_safe("\x1b")
+
+    def test_oversize_body_reports_a_refusal_not_a_broken_pipe(self, deployment):
+        from macf.amail import BrokerUnavailable
+
+        deployment["cfg"].credentials_path.write_text("secret")
+        deployment["cfg"].credentials_path.chmod(0o600)
+        srv = serve(deployment["broker"])
+        time.sleep(0.15)
+        try:
+            big = msg(body="A" * (3 << 20))
+            with pytest.raises(BrokerUnavailable, match="closed the connection"):
+                submit("alpha", big, deployment["cfg"].socket_path)
+            # And the broker is still serving everyone else.
+            assert submit("alpha", msg(), deployment["cfg"].socket_path)["ok"] is True
+        finally:
+            srv.shutdown()

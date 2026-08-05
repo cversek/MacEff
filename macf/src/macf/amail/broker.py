@@ -305,6 +305,8 @@ class Broker:
         whom it claims, and message bodies remain data rather than instructions.
         """
         from .store import quarantine
+        from .store import find as store_find
+        from .store import thread as store_thread
         agent = self.config.agent_for(recipient)
         if not agent:
             raise DeliveryError(f"'{recipient}' is not a local mailbox")
@@ -321,10 +323,28 @@ class Broker:
         remote_sender = message.sender
         message.message_id = new_id("msg")
         message.date = _now_iso()
-        if message.parent is not None and not _ID_RE.match(message.parent or ""):
-            message.parent = None
+        # SHAPE IS NOT VISIBILITY, and the outbound path already knows that.
+        #
+        # Checking that `parent` merely LOOKS like an identifier let a remote
+        # sender graft a message onto a conversation it was never part of: the
+        # reader's client threads it under that parent, so it inherits the
+        # apparent standing of the exchange above it. Outbound requires the
+        # parent to be visible in the recipient's own mailbox; inbound checked
+        # only the regex. Same laundering an earlier round closed on the submit
+        # path, still open on its twin — which is the asymmetry that keeps
+        # recurring, so it is now closed on both.
+        if message.parent is not None:
+            if not _ID_RE.match(message.parent or "") or \
+                    store_find(home, message.parent) is None:
+                message.parent = None
         if message.thread_id and not _THR_RE.match(message.thread_id):
             message.thread_id = new_id("thr")
+        elif message.thread_id and message.parent is None:
+            # A well-formed thread_id with no visible parent is an assertion of
+            # membership in a conversation this sender has shown no part of. It
+            # gets its own thread rather than the one it named.
+            if store_thread(home, message.thread_id):
+                message.thread_id = new_id("thr")
         message.subject = (message.subject or "")[:MAX_SUBJECT]
         message.body = (message.body or "")[:MAX_BODY]
         message.sender = remote_sender
@@ -402,6 +422,39 @@ class Broker:
                     f"contact list {cp} is writable by group or other. It is "
                     "re-read per decision, so anyone who can write it can grant "
                     "themselves any recipient. Refusing to start; chmod 644 or 600."
+                )
+
+        # THE DIRECTORY, NOT ONLY THE FILE.
+        #
+        # Checking the file's mode validates the wrong object. Replacing a file
+        # needs write permission on the DIRECTORY, not on the file: an agent who
+        # can write the containing directory calls os.replace() and swaps in a
+        # contact list granting itself every recipient, while the original file
+        # sat at a blameless 0644 and passed this check. Round 7 demonstrated the
+        # swap end to end — refused before, delivered after, custody check green
+        # throughout. A guard that inspects an object the attacker never has to
+        # touch does not merely miss the attack, it certifies against it.
+        for label, target in (("credential", self.config.credentials_path),
+                              ("contact list", self.config.contacts_path)):
+            if not target:
+                continue
+            parent = Path(target).parent
+            if not parent.exists():
+                continue
+            st = parent.stat()
+            if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+                raise PermissionError(
+                    f"the directory holding the {label} ({parent}) is writable by "
+                    "group or other. Anyone who can write that directory can "
+                    "replace the file inside it regardless of the file's own mode. "
+                    "Refusing to start; chmod 755 the directory."
+                )
+            if st.st_uid != os.getuid():
+                raise PermissionError(
+                    f"the directory holding the {label} ({parent}) is owned by uid "
+                    f"{st.st_uid}, not by the broker (uid {os.getuid()}). Its owner "
+                    "can replace the file at any time. Refusing to start; move the "
+                    "configuration into a broker-owned directory."
                 )
 
     def credential_readable_by_others(self) -> bool:

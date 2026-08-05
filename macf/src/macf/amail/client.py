@@ -43,13 +43,24 @@ def submit(sender: str, message: Message, socket_path: Path,
         ) from e
     try:
         payload = json.dumps({"sender": sender, "message": message.to_dict()}) + "\n"
-        s.sendall(payload.encode("utf-8"))
-        buf = b""
-        while not buf.endswith(b"\n"):
-            chunk = s.recv(65536)
-            if not chunk:
-                break
-            buf += chunk
+        try:
+            s.sendall(payload.encode("utf-8"))
+            buf = b""
+            while not buf.endswith(b"\n"):
+                chunk = s.recv(65536)
+                if not chunk:
+                    break
+                buf += chunk
+        except OSError as e:
+            # The broker closing the connection mid-write is a REFUSAL — an
+            # oversize submission is the ordinary cause. Letting BrokenPipeError
+            # escape reported a transport crash for what was the size guard
+            # working correctly, and the two need to be told apart.
+            raise BrokerUnavailable(
+                f"the broker closed the connection while the message was being "
+                f"sent ({e}). The message was NOT sent. A submission over the "
+                f"broker's size limit is the usual cause."
+            ) from e
     finally:
         s.close()
     if not buf.strip():

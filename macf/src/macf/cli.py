@@ -8191,10 +8191,34 @@ def _amail_config() -> dict:
     return cfg
 
 
-#: Control characters that must never reach a terminal verbatim: C0 except tab
-#: and newline, DEL, and the C1 block. ESC is the one that matters — it opens
-#: the sequences that reposition the cursor, recolour, or clear the screen.
-_TERM_UNSAFE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+#: Control characters that must never reach a terminal verbatim.
+#:
+#: C0 except tab and newline, DEL, and the C1 block: ESC is the one that
+#: matters, since it opens the sequences that reposition the cursor, recolour,
+#: or clear the screen.
+#:
+#: Plus the Unicode bidirectional overrides and isolates (U+202A–U+202E,
+#: U+2066–U+2069). These drive no cursor and forge no escape sequence, so the
+#: first version passed them — but they reorder how text RENDERS, which is the
+#: Trojan-source technique, and the whole reason this function exists is that a
+#: reader must be able to trust what the screen says. Reordering the display is
+#: a quieter way of achieving what cursor control achieves loudly.
+#:
+#: Written as escapes, not as the characters themselves: a literal bidi override
+#: inside this source file would reorder the very line that defines it.
+_TERM_UNSAFE = re.compile(
+    "[\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u202a-\\u202e\\u2066-\\u2069]")
+
+
+def _escape_codepoint(ch: str) -> str:
+    """\\xNN for a byte-range code point, \\uNNNN above it.
+
+    Formatting U+202E as \\x202e would be ambiguous — it reads as \\x20 followed
+    by the literal text '2e'. The escape has to be unambiguous or the rendering
+    is itself a small forgery.
+    """
+    n = ord(ch)
+    return f"\\x{n:02x}" if n <= 0xFF else f"\\u{n:04x}"
 
 
 def _term_safe(value: object) -> str:
@@ -8212,7 +8236,7 @@ def _term_safe(value: object) -> str:
     message contained control characters, since that is itself informative.
     """
     s = "" if value is None else str(value)
-    return _TERM_UNSAFE.sub(lambda m: f"\\x{ord(m.group()):02x}", s)
+    return _TERM_UNSAFE.sub(lambda m: _escape_codepoint(m.group()), s)
 
 
 def cmd_amail_send(args: argparse.Namespace) -> int:
@@ -8237,6 +8261,11 @@ def cmd_amail_send(args: argparse.Namespace) -> int:
             body = Path(args.body_file).read_text()
         except OSError as e:
             print(f"❌ cannot read --body-file: {e}")
+            return 1
+        except UnicodeDecodeError:
+            # A mail body is text. Saying so beats a traceback whose top frame is
+            # a codec the operator never invoked.
+            print(f"❌ --body-file {args.body_file} is not valid UTF-8 text.")
             return 1
     if body is None:
         print("❌ nothing to send: pass --body or --body-file")
