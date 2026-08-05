@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import socketserver
 import stat
@@ -39,10 +40,22 @@ from typing import Any, Dict, List, Optional
 
 from .audit import AuditLog
 from .contacts import ContactBook, ContactListError
-from .models import Message
+from .models import Message, new_id, _now_iso
 from .store import deliver, ensure_maildir
 
 DEFAULT_SOCKET = "/run/amail/broker.sock"
+
+#: Shapes the broker itself mints. Anything claiming to be an identifier must
+#: look like one — otherwise the field is a kilobyte-scale channel wearing an
+#: identifier's name.
+_ID_RE = re.compile(r"^msg-\d+-[0-9a-f]{12}$")
+_THR_RE = re.compile(r"^thr-\d+-[0-9a-f]{12}$")
+
+#: Bounds on genuinely submitter-owned fields. Not correctness limits — blast
+#: radius limits.
+MAX_SUBJECT = 998
+MAX_BODY = 1 << 18      # 256 KiB
+MAX_RECIPIENTS = 64     # ContactBook is consulted per recipient
 
 
 class DeliveryError(RuntimeError):
@@ -122,24 +135,81 @@ class Broker:
 
     # -------------------------------------------------------------------- submit
 
-    def submit(self, sender: str, message: Message) -> Dict[str, Any]:
-        """Enforce, then deliver. The only way mail leaves an agent."""
-        # The ENVELOPE sender was authenticated by the caller; the MESSAGE's own
-        # From: header was not. Leaving it free lets an agent authenticate
-        # honestly, send to a permitted contact, and have the message claim to be
-        # from a third party — so the recipient's reply is addressed to someone
-        # the original sender was never allowed to reach. Content escapes the
-        # contact list by way of an innocent intermediary, and the audit log,
-        # which records the envelope, shows nothing wrong.
+    def canonicalize(self, sender: str, message: Message, home: Optional[Path]) -> List[str]:
+        """Rebuild every field the submitter does not own. Returns refusal reasons.
+
+        THIS EXISTS BECAUSE FIXING FIELDS ONE AT A TIME DOES NOT CONVERGE. Three
+        audit rounds each found a different submitter-controlled field on the same
+        path — the envelope sender, then the From header, then subject/thread_id/
+        parent/message_id/date — and each fix addressed the field it was shown
+        while leaving its siblings alone.
+
+        So the model is inverted, the way _hdr() was inverted to defer to the
+        parser's own definition of a line. Enumerate what the broker MINTS and
+        what it VALIDATES; everything not in those two sets is hostile by
+        construction. A field added to Message later is untrusted by default
+        rather than trusted until an auditor notices it.
+
+            MINTED  message_id, date        - always replaced, never accepted
+            CHECKED sender                  - must equal the authenticated identity
+            BOUND   thread_id, parent       - must be broker-shaped, and parent
+                                              must name a message this sender can
+                                              actually see
+            PASSED  subject, body, to       - genuinely the submitter's, bounded
+
+        On the residual: a permitted correspondent can still quote hostile text
+        into a message it is allowed to send. That is inherent to correspondence
+        and cannot be removed without breaking replies. What is removed is the
+        several-kilobyte covert channel in fields that are supposed to be
+        identifiers.
+        """
+        reasons: List[str] = []
+
+        # CHECKED
         expected = self.config.address_for(sender)
         if message.sender and message.sender.strip().lower() != expected.lower():
-            reason = (f"message From '{message.sender}' does not match the "
-                      f"authenticated sender '{expected}'")
+            reasons.append(f"message From '{message.sender}' does not match the "
+                           f"authenticated sender '{expected}'")
+        message.sender = expected
+
+        # MINTED — a submitter-chosen message_id can shadow another message in
+        # store.find(), splice threads, and collide audit records.
+        message.message_id = new_id("msg")
+        message.date = _now_iso()
+
+        # BOUND — identifiers must look like identifiers. Free text here is a
+        # ~2 KB channel wearing an id's name.
+        if message.parent is not None:
+            if not _ID_RE.match(message.parent or ""):
+                reasons.append("parent is not a valid message identifier")
+            elif home is not None:
+                from .store import find as _find
+                if _find(home, message.parent) is None:
+                    reasons.append(
+                        "parent names a message this sender cannot see; a reply "
+                        "must continue a thread the sender actually received")
+        if message.thread_id and not _THR_RE.match(message.thread_id):
+            reasons.append("thread_id is not a valid thread identifier")
+
+        # PASSED, but bounded.
+        if len(message.subject or "") > MAX_SUBJECT:
+            reasons.append(f"subject exceeds {MAX_SUBJECT} characters")
+        if len(message.body or "") > MAX_BODY:
+            reasons.append(f"body exceeds {MAX_BODY} characters")
+        if len(message.to) > MAX_RECIPIENTS:
+            reasons.append(f"more than {MAX_RECIPIENTS} recipients")
+
+        return reasons
+
+    def submit(self, sender: str, message: Message) -> Dict[str, Any]:
+        """Enforce, then deliver. The only way mail leaves an agent."""
+        sender_home = self.config.agent_homes.get(sender)
+        bad = self.canonicalize(sender, message, sender_home)
+        if bad:
             if self.audit:
                 self.audit.refused(sender=sender, recipients=message.to,
-                                   reason=reason, message_id=message.message_id)
-            return {"ok": False, "refused": [reason], "message_id": message.message_id}
-        message.sender = expected
+                                   reason="; ".join(bad), message_id=message.message_id)
+            return {"ok": False, "refused": bad, "message_id": message.message_id}
 
         if not message.to:
             # A message with no recipients previously returned ok with no audit
@@ -164,8 +234,14 @@ class Broker:
         for r in message.to:
             try:
                 delivered.append({"recipient": r, "rung": self._deliver_one(r, message)})
-            except DeliveryError as e:
-                failures.append({"recipient": r, "error": str(e)})
+            except Exception as e:  # noqa: BLE001
+                # Catch EVERYTHING, not just DeliveryError. An OSError escaping
+                # here skipped the audit block below, so mail already delivered to
+                # earlier recipients left NO RECORD while the sender was told the
+                # send failed. Disk-full alone triggered it. The audit block must
+                # be unreachable-proof: whatever happens, what was delivered gets
+                # written down.
+                failures.append({"recipient": r, "error": f"{type(e).__name__}: {e}"})
 
         if self.audit:
             if delivered:

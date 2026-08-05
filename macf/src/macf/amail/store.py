@@ -85,24 +85,38 @@ def deliver(home: Path, message: Message) -> Path:
     """
     d = ensure_maildir(home)
     name = _unique_name()
-    tmp = d / "tmp" / name
-    # O_EXCL|O_NOFOLLOW: refuse to follow a symlink or clobber an existing file.
-    # The Maildir is agent-owned but written by the broker, so a hostile agent
-    # could pre-plant a symlink at a predictable tmp path and redirect a
-    # broker-uid write. O_CREAT alone would happily follow it.
-    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+
+    # DIRECTORY FILE DESCRIPTORS, not paths.
+    #
+    # Checking a directory by name and then opening by name is a check, not a
+    # constraint: the name can be swapped between the two, and an audit won the
+    # race in about 15k attempts. O_NOFOLLOW only ever guarded the final
+    # component. Resolving each directory ONCE to a descriptor and doing every
+    # subsequent operation relative to it removes the window — the fd refers to
+    # the inode that was verified, and renaming the name afterwards cannot
+    # redirect it.
+    tmp_fd = os.open(str(d / "tmp"), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(message.serialize())
-    except BaseException:
+        new_fd = os.open(str(d / "new"), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
-            os.unlink(str(tmp))
-        except OSError:
-            pass
-        raise
-    final = d / "new" / name
-    os.rename(tmp, final)  # atomic within the filesystem; readers see all or nothing
-    return final
+            fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                         0o600, dir_fd=tmp_fd)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(message.serialize())
+            except BaseException:
+                try:
+                    os.unlink(name, dir_fd=tmp_fd)
+                except OSError:
+                    pass
+                raise
+            # Atomic, and both endpoints are the verified inodes.
+            os.rename(name, name, src_dir_fd=tmp_fd, dst_dir_fd=new_fd)
+        finally:
+            os.close(new_fd)
+    finally:
+        os.close(tmp_fd)
+    return d / "new" / name
 
 
 def read_all(home: Path, include_seen: bool = True) -> List[Message]:

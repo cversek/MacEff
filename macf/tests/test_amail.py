@@ -727,6 +727,137 @@ class TestContactListCustody:
         serve(deployment["broker"]).shutdown()
 
 
+class TestCanonicalisation:
+    """Round-3 audit. Three rounds each found a DIFFERENT submitter-controlled
+    field on the same path — envelope sender, then From, then subject/thread_id/
+    parent/message_id/date. Fixing fields one at a time does not converge, so the
+    model is inverted: the broker enumerates what it mints and what it validates,
+    and everything else is hostile by construction.
+
+    Includes the four mutants round 3 found surviving. All four were round-2
+    mechanisms, and the most telling is the first: deleting the canonicalisation
+    half of round-2's fix was noticed by ZERO tests, because every test submitted
+    a correct sender. The suite covered the refusal half and not the assignment.
+    """
+
+    def test_sender_is_ASSIGNED_not_merely_checked(self, deployment):
+        """MUTANT SURVIVOR: deleting `message.sender = expected` passed every
+        test. Refusing a wrong sender and canonicalising a right one are two
+        mechanisms; the suite only exercised the first."""
+        m = Message(sender="", to=[f"beta@{DOMAIN}"], subject="s", body="b")
+        deployment["broker"].submit("alpha", m)
+        assert m.sender == f"alpha@{DOMAIN}"
+        assert store.read_all(deployment["homes"]["beta"])[0].sender == f"alpha@{DOMAIN}"
+
+    def test_message_id_is_reminted(self, deployment):
+        """A submitter-chosen id can shadow another message in find(), splice a
+        thread, and collide audit records."""
+        m = Message(sender=f"alpha@{DOMAIN}", to=[f"beta@{DOMAIN}"],
+                    subject="s", body="b", message_id="msg-1-aaaaaaaaaaaa")
+        deployment["broker"].submit("alpha", m)
+        assert m.message_id != "msg-1-aaaaaaaaaaaa"
+
+    def test_date_is_reminted(self, deployment):
+        m = Message(sender=f"alpha@{DOMAIN}", to=[f"beta@{DOMAIN}"], subject="s",
+                    body="b", date="1999-01-01T00:00:00+00:00")
+        deployment["broker"].submit("alpha", m)
+        assert not m.date.startswith("1999")
+
+    @pytest.mark.parametrize("field,value", [
+        ("thread_id", "x" * 900), ("parent", "y" * 900),
+        ("thread_id", "not-an-id"), ("parent", "msg-nope"),
+    ])
+    def test_identifier_fields_must_look_like_identifiers(self, deployment, field, value):
+        """The laundering channel: ~1 KB of free text per field, in fields whose
+        whole purpose is to be short structured ids, inherited by replies and
+        carried across a contact boundary."""
+        m = Message(sender=f"alpha@{DOMAIN}", to=[f"beta@{DOMAIN}"], subject="s", body="b")
+        setattr(m, field, value)
+        r = deployment["broker"].submit("alpha", m)
+        assert r["ok"] is False
+        assert "identifier" in " ".join(r["refused"])
+
+    def test_parent_must_name_a_message_the_sender_can_see(self, deployment):
+        m = Message(sender=f"alpha@{DOMAIN}", to=[f"beta@{DOMAIN}"], subject="s",
+                    body="b", parent="msg-1700000000-abcdefabcdef")
+        r = deployment["broker"].submit("alpha", m)
+        assert r["ok"] is False
+        assert "cannot see" in " ".join(r["refused"])
+
+    def test_a_genuine_reply_still_works(self, deployment):
+        """Negative control: the bounds must not break ordinary correspondence."""
+        deployment["broker"].submit("alpha", msg())
+        got = store.read_all(deployment["homes"]["beta"])[0]
+        rep = got.reply(sender=f"beta@{DOMAIN}", body="ack")
+        assert deployment["broker"].submit("beta", rep)["ok"] is True
+
+    @pytest.mark.parametrize("field,size", [("subject", 2000), ("body", (1 << 18) + 10)])
+    def test_oversized_fields_are_refused(self, deployment, field, size):
+        m = msg()
+        setattr(m, field, "z" * size)
+        assert deployment["broker"].submit("alpha", m)["ok"] is False
+
+
+class TestAuditCompleteness:
+    """Round-3 F2: submit() caught only DeliveryError, so any other exception
+    escaped BEFORE the audit block — mail already delivered to earlier recipients
+    left no record at all, while the sender was told the send failed. Disk-full
+    alone triggered it."""
+
+    def test_delivery_is_audited_even_when_a_later_recipient_throws(self, deployment, monkeypatch):
+        deployment["contacts"].write_text(json.dumps({
+            "alpha": [f"beta@{DOMAIN}", f"gamma@{DOMAIN}"], "beta": [f"alpha@{DOMAIN}"]}))
+        deployment["contacts"].chmod(0o644)
+        deployment["cfg"].agent_homes["gamma"] = deployment["tmp"] / "gamma"
+        (deployment["tmp"] / "gamma").mkdir()
+
+        real = store.deliver
+        def boom(home, message):
+            if home.name == "gamma":
+                raise OSError(28, "No space left on device")
+            return real(home, message)
+        monkeypatch.setattr("macf.amail.broker.deliver", boom)
+
+        r = deployment["broker"].submit("alpha", msg(to=[f"beta@{DOMAIN}", f"gamma@{DOMAIN}"]))
+        assert len(store.read_all(deployment["homes"]["beta"])) == 1, "beta got the mail"
+        allowed = [x for x in deployment["broker"].audit.records() if x["decision"] == "allowed"]
+        assert allowed, "delivered mail left NO audit record"
+        assert f"beta@{DOMAIN}" in allowed[0]["recipients"]
+
+
+class TestRoundTwoMechanismsHaveCoverage:
+    """Round 3 mutation-tested and found four survivors, all round-2 mechanisms.
+    Two shipped with no test at all. These close that."""
+
+    def test_ucred_is_read_unsigned(self):
+        """A high uid read signed goes negative. It failed closed, but a lookup
+        should not depend on that."""
+        import inspect
+        from macf.amail import broker as b
+        assert '"3I"' in inspect.getsource(b.Broker.identify), "ucred read as signed"
+
+    def test_total_deadline_is_used_not_per_recv(self):
+        """The socket timeout resets on every byte, so a trickle holds a thread
+        forever without exceeding it."""
+        import inspect
+        from macf.amail import broker as b
+        src = inspect.getsource(b._Handler.handle)
+        assert "monotonic" in src and "deadline" in src
+
+    def test_socket_is_group_and_world_writable(self, deployment):
+        """The 0o666 mode is a deliberate design claim — submission is not
+        authority — and nothing asserted it. If it silently became 0600 the
+        design would still 'work' here, because every test shares one uid."""
+        deployment["cfg"].credentials_path.write_text("s")
+        deployment["cfg"].credentials_path.chmod(0o600)
+        srv = serve(deployment["broker"])
+        try:
+            mode = deployment["cfg"].socket_path.stat().st_mode & 0o777
+            assert mode == 0o666, f"socket mode is {oct(mode)}, not 0o666"
+        finally:
+            srv.shutdown()
+
+
 class TestOverTheSocket:
     @pytest.fixture
     def running(self, deployment):
