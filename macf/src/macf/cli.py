@@ -8158,6 +8158,180 @@ def _check_port_available(port: int, host: str = "127.0.0.1") -> tuple:
     return False, None
 
 
+def _amail_config() -> dict:
+    """Resolve amail settings: agent address and broker socket.
+
+    Environment wins over the config file so a test or a one-off can retarget
+    without editing agent state.
+    """
+    from macf.utils.paths import find_agent_home
+    cfg = {}
+    home = find_agent_home()
+    if home:
+        p = Path(home) / ".maceff" / "amail.json"
+        if p.exists():
+            try:
+                cfg = json.loads(p.read_text())
+            except (OSError, ValueError):
+                cfg = {}
+    cfg.setdefault("domain", os.environ.get("MACF_AMAIL_DOMAIN", ""))
+    cfg.setdefault("socket", os.environ.get("MACF_AMAIL_SOCKET", "/run/amail/broker.sock"))
+    cfg.setdefault("agent", os.environ.get("MACEFF_AGENT_NAME", ""))
+    for k in ("domain", "socket", "agent"):
+        if os.environ.get(f"MACF_AMAIL_{k.upper()}"):
+            cfg[k] = os.environ[f"MACF_AMAIL_{k.upper()}"]
+    cfg["home"] = str(home) if home else ""
+    return cfg
+
+
+def cmd_amail_send(args: argparse.Namespace) -> int:
+    """Submit a message to the broker.
+
+    The broker decides whether it may be sent. This command never delivers
+    directly and never falls back to another transport when the broker is
+    unreachable — that would route around the only thing enforcing the contact
+    list.
+    """
+    from macf.amail import Message, submit, BrokerUnavailable
+
+    cfg = _amail_config()
+    if not cfg["agent"] or not cfg["domain"]:
+        print("❌ amail is not configured: need an agent name and a mail domain.")
+        print("   Set MACF_AMAIL_DOMAIN / MACEFF_AGENT_NAME, or write ~/.maceff/amail.json")
+        return 1
+
+    body = args.body
+    if args.body_file:
+        try:
+            body = Path(args.body_file).read_text()
+        except OSError as e:
+            print(f"❌ cannot read --body-file: {e}")
+            return 1
+    if body is None:
+        print("❌ nothing to send: pass --body or --body-file")
+        return 1
+
+    msg = Message(sender=f"{cfg['agent']}@{cfg['domain']}", to=list(args.to),
+                  subject=args.subject or "", body=body)
+    if args.reply_to:
+        from macf.amail import store
+        parent = store.find(Path(cfg["home"]), args.reply_to) if cfg["home"] else None
+        if parent is None:
+            print(f"❌ no message '{args.reply_to}' in this mailbox to reply to")
+            return 1
+        msg = parent.reply(sender=msg.sender, body=body, subject=args.subject)
+        msg.to = list(args.to) or msg.to
+
+    try:
+        result = submit(cfg["agent"], msg, Path(cfg["socket"]))
+    except BrokerUnavailable as e:
+        print(f"❌ {e}")
+        return 1
+
+    if args.json:
+        print(json.dumps(result, indent=2))
+        return 0 if result.get("ok") else 1
+
+    if not result.get("ok"):
+        # Refusals are surfaced, never swallowed. An agent that cannot tell a
+        # message was refused learns to believe mail was delivered.
+        for r in result.get("refused", []):
+            print(f"🚫 refused: {r}")
+        for f in result.get("failures", []):
+            print(f"❌ {f['recipient']}: {f['error']}")
+        if result.get("error"):
+            print(f"❌ {result['error']}")
+        return 1
+    for d in result.get("delivered", []):
+        print(f"✅ delivered to {d['recipient']} (rung: {d['rung']})")
+    print(f"   message-id: {result['message_id']}")
+    print(f"   thread-id:  {result['thread_id']}")
+    return 0
+
+
+def cmd_amail_list(args: argparse.Namespace) -> int:
+    """List messages in this agent's mailbox."""
+    from macf.amail import store
+
+    cfg = _amail_config()
+    if not cfg["home"]:
+        print("❌ cannot locate agent home")
+        return 1
+    msgs = store.read_all(Path(cfg["home"]))
+    if args.thread:
+        msgs = [m for m in msgs if m.thread_id == args.thread]
+    if args.json:
+        print(json.dumps([m.to_dict() for m in msgs], indent=2))
+        return 0
+    if not msgs:
+        print("(no messages)")
+        return 0
+    for m in msgs:
+        print(f"{m.date}  {m.sender}")
+        print(f"    {m.subject}")
+        print(f"    id={m.message_id} thread={m.thread_id}" + (f" reply-to={m.parent}" if m.parent else ""))
+    print(f"\n{len(msgs)} message(s)")
+    return 0
+
+
+def cmd_amail_read(args: argparse.Namespace) -> int:
+    """Print one message in full."""
+    from macf.amail import store
+
+    cfg = _amail_config()
+    if not cfg["home"]:
+        print("❌ cannot locate agent home")
+        return 1
+    m = store.find(Path(cfg["home"]), args.message_id)
+    if m is None:
+        print(f"❌ no message '{args.message_id}'")
+        return 1
+    if args.json:
+        print(json.dumps(m.to_dict(), indent=2))
+        return 0
+    print(m.serialize())
+    return 0
+
+
+def cmd_amail_status(args: argparse.Namespace) -> int:
+    """Report whether amail is usable, and say precisely what is missing if not."""
+    import socket as _socket
+    from macf.amail import store
+
+    cfg = _amail_config()
+    sock = Path(cfg["socket"])
+    reachable = False
+    if sock.exists():
+        try:
+            s = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+            s.settimeout(2.0)
+            s.connect(str(sock))
+            s.close()
+            reachable = True
+        except OSError:
+            reachable = False
+    box = store.maildir_for(Path(cfg["home"])) if cfg["home"] else None
+    count = len(store.read_all(Path(cfg["home"]))) if cfg["home"] else 0
+    info = {
+        "agent": cfg["agent"] or None,
+        "address": f"{cfg['agent']}@{cfg['domain']}" if cfg["agent"] and cfg["domain"] else None,
+        "socket": str(sock),
+        "broker_reachable": reachable,
+        "maildir": str(box) if box else None,
+        "messages": count,
+    }
+    if args.json:
+        print(json.dumps(info, indent=2))
+        return 0 if reachable else 1
+    print(f"address:  {info['address'] or '(unconfigured)'}")
+    print(f"maildir:  {info['maildir'] or '(unknown)'}  [{count} message(s)]")
+    print(f"broker:   {'✅ reachable' if reachable else '❌ unreachable'} at {sock}")
+    if not reachable:
+        print("\n   Mail cannot be sent without the broker. There is no fallback")
+        print("   transport by design — the broker is what enforces the contact list.")
+    return 0 if reachable else 1
+
+
 def cmd_proxy_start(args: argparse.Namespace) -> int:
     """Start the API proxy."""
     try:
@@ -9812,6 +9986,49 @@ def _build_parser() -> argparse.ArgumentParser:
     scope_check_parser.set_defaults(func=cmd_task_scope_check)
 
     # Proxy commands
+    # --- amail: agent mail (see `macf_tools policy navigate amail`) ---
+    amail_parser = sub.add_parser("amail", help="agent mail: send and read correspondence")
+    amail_sub = amail_parser.add_subparsers(dest="amail_cmd")
+
+    amail_send = amail_sub.add_parser(
+        "send", help="submit a message to the broker",
+        description=(
+            "Submit a message. The BROKER decides whether it may be sent — this "
+            "command holds no credential and performs no delivery. A refusal is "
+            "reported, never swallowed."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  macf_tools amail send --to peer@example.org --subject 'status' --body 'done'\n"
+            "  macf_tools amail send --to peer@example.org --body-file report.md\n"
+            "  macf_tools amail send --to peer@example.org --reply-to msg-123 --body 'ack'\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    amail_send.add_argument("--to", action="append", required=True, metavar="ADDRESS",
+                            help="recipient (repeat for several)")
+    amail_send.add_argument("--subject", help="subject line")
+    amail_send.add_argument("--body", help="message body")
+    amail_send.add_argument("--body-file", help="read the body from a file")
+    amail_send.add_argument("--reply-to", metavar="MESSAGE_ID",
+                            help="reply, joining that message's thread")
+    amail_send.add_argument("--json", action="store_true", help="machine-readable result")
+    amail_send.set_defaults(func=cmd_amail_send)
+
+    amail_list = amail_sub.add_parser("list", help="list messages in this mailbox")
+    amail_list.add_argument("--thread", metavar="THREAD_ID", help="only this thread")
+    amail_list.add_argument("--json", action="store_true", help="machine-readable output")
+    amail_list.set_defaults(func=cmd_amail_list)
+
+    amail_read = amail_sub.add_parser("read", help="print one message in full")
+    amail_read.add_argument("message_id", help="message id (see `amail list`)")
+    amail_read.add_argument("--json", action="store_true", help="machine-readable output")
+    amail_read.set_defaults(func=cmd_amail_read)
+
+    amail_status = amail_sub.add_parser("status", help="is amail usable? what is missing?")
+    amail_status.add_argument("--json", action="store_true", help="machine-readable output")
+    amail_status.set_defaults(func=cmd_amail_status)
+
     proxy_parser = sub.add_parser("proxy", help="API proxy for CC call interception")
     proxy_sub = proxy_parser.add_subparsers(dest="proxy_cmd")
 
