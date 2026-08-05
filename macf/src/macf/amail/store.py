@@ -42,6 +42,20 @@ def _assert_real_dir(p: Path) -> None:
         raise OSError(f"refusing to use '{p}': not a directory")
 
 
+def _open_dir(name: str, dir_fd: Optional[int] = None) -> int:
+    """Open a directory as a descriptor, refusing a symlink at that component.
+
+    Every subsequent operation is done relative to the returned descriptor, so
+    the inode verified here is the inode written to. Opening by name and then
+    writing by name is a check, not a constraint — the name can be swapped in
+    between. Round 6 won exactly that race against the quarantine path in 47
+    iterations while the same attack against the descriptor-based delivery path
+    failed 0-for-200k, which is the difference this helper exists to make
+    uniform.
+    """
+    return os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dir_fd)
+
+
 def ensure_maildir(home: Path) -> Path:
     d = maildir_for(home)
     _assert_real_dir(d)
@@ -95,27 +109,35 @@ def deliver(home: Path, message: Message) -> Path:
     # subsequent operation relative to it removes the window — the fd refers to
     # the inode that was verified, and renaming the name afterwards cannot
     # redirect it.
-    tmp_fd = os.open(str(d / "tmp"), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    # Anchored at the Maildir itself, then tmp/ and new/ RELATIVE to that
+    # descriptor. Opening "…/Maildir/tmp" by full path leaves the `Maildir`
+    # component resolvable by name after it was checked; anchoring removes that
+    # window too, so no component of the path is trusted twice.
+    md_fd = _open_dir(str(d))
     try:
-        new_fd = os.open(str(d / "new"), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        tmp_fd = _open_dir("tmp", dir_fd=md_fd)
         try:
-            fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                         0o600, dir_fd=tmp_fd)
+            new_fd = _open_dir("new", dir_fd=md_fd)
             try:
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    f.write(message.serialize())
-            except BaseException:
+                fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             0o600, dir_fd=tmp_fd)
                 try:
-                    os.unlink(name, dir_fd=tmp_fd)
-                except OSError:
-                    pass
-                raise
-            # Atomic, and both endpoints are the verified inodes.
-            os.rename(name, name, src_dir_fd=tmp_fd, dst_dir_fd=new_fd)
+                    with os.fdopen(fd, "w", encoding="utf-8") as f:
+                        f.write(message.serialize())
+                except BaseException:
+                    try:
+                        os.unlink(name, dir_fd=tmp_fd)
+                    except OSError:
+                        pass
+                    raise
+                # Atomic, and both endpoints are the verified inodes.
+                os.rename(name, name, src_dir_fd=tmp_fd, dst_dir_fd=new_fd)
+            finally:
+                os.close(new_fd)
         finally:
-            os.close(new_fd)
+            os.close(tmp_fd)
     finally:
-        os.close(tmp_fd)
+        os.close(md_fd)
     return d / "new" / name
 
 
@@ -167,17 +189,42 @@ def quarantine(home: Path, message: Message, reason: str) -> Path:
     """
     from .models import _hdr
 
-    q = maildir_for(home) / "quarantine"
-    _assert_real_dir(maildir_for(home))
+    d = maildir_for(home)
+    q = d / "quarantine"
+    _assert_real_dir(d)
     _assert_real_dir(q)
     q.mkdir(mode=0o700, parents=True, exist_ok=True)
     _assert_real_dir(q)
-    p = q / _unique_name()
-    # The reason is derived from the message's own claimed sender, which is
-    # attacker-controlled — so it gets the same header sanitisation as any other
-    # interpolated value. Quarantined mail is the LAST place to relax that: it is
-    # hostile by assumption, and a reader inspecting it is the intended victim.
-    fd = os.open(str(p), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write(f"X-Amail-Quarantine-Reason: {_hdr(reason)}\n" + message.serialize())
-    return p
+    name = _unique_name()
+
+    # DIRECTORY FILE DESCRIPTORS, for the same reason delivery uses them.
+    #
+    # This path previously did _assert_real_dir() and then os.open(str(q / name)).
+    # O_NOFOLLOW guards only the FINAL component, so `Maildir` and `quarantine`
+    # were re-resolved by name after being checked, and round 6 won that race in
+    # 47 iterations — coercing a broker-uid write to an arbitrary broker-writable
+    # location, which turns quarantine into delivery and defeats §6.1 outright.
+    #
+    # The guards above are kept: they refuse a symlink that is ALREADY in place
+    # with a message naming it, which the descriptors alone would report only as
+    # a bare ELOOP. Belt and braces, cheap, and the error text is the difference
+    # between a diagnosable refusal and a puzzling one.
+    md_fd = _open_dir(str(d))
+    try:
+        q_fd = _open_dir("quarantine", dir_fd=md_fd)
+        try:
+            # The reason is derived from the message's own claimed sender, which is
+            # attacker-controlled — so it gets the same header sanitisation as any
+            # other interpolated value. Quarantined mail is the LAST place to relax
+            # that: it is hostile by assumption, and a reader inspecting it is the
+            # intended victim.
+            fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                         0o600, dir_fd=q_fd)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(f"X-Amail-Quarantine-Reason: {_hdr(reason)}\n"
+                        + message.serialize())
+        finally:
+            os.close(q_fd)
+    finally:
+        os.close(md_fd)
+    return q / name

@@ -1,6 +1,6 @@
 # PYTHON_ARGCOMPLETE_OK
 # tools/src/maceff/cli.py
-import argparse, json, os, subprocess, sys, glob, platform, socket
+import argparse, json, os, re, subprocess, sys, glob, platform, socket
 from pathlib import Path
 from datetime import datetime, timezone
 try:
@@ -8174,6 +8174,13 @@ def _amail_config() -> dict:
                 cfg = json.loads(p.read_text())
             except (OSError, ValueError):
                 cfg = {}
+            # json.loads succeeds on any JSON value, not just an object. A file
+            # containing `[]`, `"x"`, `7`, `null` or `true` parses fine and then
+            # has no .setdefault, crashing every amail subcommand with an
+            # AttributeError traceback. Fail-closed either way — but a clean
+            # "not configured" message is diagnosable and a traceback is not.
+            if not isinstance(cfg, dict):
+                cfg = {}
     cfg.setdefault("domain", os.environ.get("MACF_AMAIL_DOMAIN", ""))
     cfg.setdefault("socket", os.environ.get("MACF_AMAIL_SOCKET", "/run/amail/broker.sock"))
     cfg.setdefault("agent", os.environ.get("MACEFF_AGENT_NAME", ""))
@@ -8182,6 +8189,30 @@ def _amail_config() -> dict:
             cfg[k] = os.environ[f"MACF_AMAIL_{k.upper()}"]
     cfg["home"] = str(home) if home else ""
     return cfg
+
+
+#: Control characters that must never reach a terminal verbatim: C0 except tab
+#: and newline, DEL, and the C1 block. ESC is the one that matters — it opens
+#: the sequences that reposition the cursor, recolour, or clear the screen.
+_TERM_UNSAFE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def _term_safe(value: object) -> str:
+    """Render untrusted message content without handing the terminal control.
+
+    Message bodies come from a correspondent and are printed to the operator's
+    terminal. An escape sequence in a body can overwrite what was already
+    displayed — including the trust labelling above it — so a message could
+    claim to be from someone it is not by simply redrawing the screen. Headers
+    are already sanitised by _hdr() at serialisation; the body deliberately is
+    not, because a body may legitimately contain anything. That makes the
+    RENDERER the correct place to neutralise it.
+
+    Escaped rather than stripped: the reader should be able to see that the
+    message contained control characters, since that is itself informative.
+    """
+    s = "" if value is None else str(value)
+    return _TERM_UNSAFE.sub(lambda m: f"\\x{ord(m.group()):02x}", s)
 
 
 def cmd_amail_send(args: argparse.Namespace) -> int:
@@ -8267,9 +8298,10 @@ def cmd_amail_list(args: argparse.Namespace) -> int:
         print("(no messages)")
         return 0
     for m in msgs:
-        print(f"{m.date}  {m.sender}")
-        print(f"    {m.subject}")
-        print(f"    id={m.message_id} thread={m.thread_id}" + (f" reply-to={m.parent}" if m.parent else ""))
+        print(f"{_term_safe(m.date)}  {_term_safe(m.sender)}")
+        print(f"    {_term_safe(m.subject)}")
+        print(f"    id={_term_safe(m.message_id)} thread={_term_safe(m.thread_id)}"
+              + (f" reply-to={_term_safe(m.parent)}" if m.parent else ""))
     print(f"\n{len(msgs)} message(s)")
     return 0
 
@@ -8289,7 +8321,10 @@ def cmd_amail_read(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(m.to_dict(), indent=2))
         return 0
-    print(m.serialize())
+    # --json emits the message unmodified because it is consumed by a program,
+    # not a terminal. The human-facing render is the one that must not hand
+    # control characters to the emulator.
+    print(_term_safe(m.serialize()))
     return 0
 
 

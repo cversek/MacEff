@@ -648,7 +648,12 @@ class TestSymlinkResistance:
         dir_opens = [o for o in opens if o[1] & os.O_DIRECTORY]
         assert len(dir_opens) >= 2, "directories were not opened as descriptors"
         assert all(o[1] & os.O_NOFOLLOW for o in dir_opens), "dir open lacked O_NOFOLLOW"
-        rel = [o for o in opens if o[2] is not None]
+        # Separated from the directory opens, which are ALSO dir_fd-relative now
+        # that tmp/ and new/ are resolved against the Maildir descriptor rather
+        # than by full path. Lumping them together made "all relative opens carry
+        # O_EXCL" fail against a stronger implementation — the assertion meant
+        # the MESSAGE open, so it should say so.
+        rel = [o for o in opens if o[2] is not None and not (o[1] & os.O_DIRECTORY)]
         assert rel, "message not opened relative to a dir_fd"
         # The message open needs O_NOFOLLOW too. Asserting it only on the
         # DIRECTORY opens left a mutant alive: strip the flag from the message
@@ -656,6 +661,12 @@ class TestSymlinkResistance:
         # is the point of running one before trusting a test rather than after.
         assert all(o[1] & os.O_NOFOLLOW for o in rel), "message open lacked O_NOFOLLOW"
         assert all(o[1] & os.O_EXCL for o in rel), "message open lacked O_EXCL"
+        # No component may be trusted twice: only the Maildir itself is opened by
+        # a full path, and tmp/ and new/ are resolved relative to that descriptor.
+        # A path-based re-resolution of either would reopen the window that
+        # O_NOFOLLOW cannot close, because it guards the final component only.
+        assert sum(1 for o in dir_opens if o[2] is None) == 1, \
+            "more than one directory was resolved by path, leaving a TOCTOU window"
         assert renames and "src_dir_fd" in renames[0] and "dst_dir_fd" in renames[0], \
             "rename was path-based, leaving the race open"
 
@@ -1024,3 +1035,241 @@ class TestOverTheSocket:
         c.recv(4096)
         c.close()
         assert submit("alpha", msg(), running["cfg"].socket_path)["ok"] is True
+
+
+# ---------------------------------------------------------------------------
+# Round 6: the surfaces rounds 1-5 never looked at
+# ---------------------------------------------------------------------------
+
+
+class TestQuarantineIsHardenedLikeDelivery:
+    """Round 6 found the quarantine path was the un-hardened sibling of delivery.
+
+    Delivery was rewritten to use directory descriptors and resisted a symlink
+    race 0-for-200k. Quarantine still did check-then-open by path, and the same
+    attack won in 47 iterations — coercing a broker-uid write to an arbitrary
+    location, which turns quarantine into delivery and defeats policy §6.1.
+
+    Neither guard was tested. Both are now, because the reason this recurred is
+    that fixing the instance you were shown does not fix the class.
+    """
+
+    def test_symlinked_quarantine_dir_is_refused(self, tmp_path):
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (tmp_path / "Maildir").mkdir()
+        (tmp_path / "Maildir" / "quarantine").symlink_to(outside)
+        with pytest.raises(OSError, match="symlink"):
+            store.quarantine(tmp_path, msg(), "unlisted sender")
+        assert list(outside.iterdir()) == [], "write escaped the mailbox"
+
+    def test_symlinked_maildir_is_refused_on_the_quarantine_path(self, tmp_path):
+        """The parent component, not just the final one — the component the race
+        actually swapped."""
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (tmp_path / "Maildir").symlink_to(outside)
+        with pytest.raises(OSError, match="symlink"):
+            store.quarantine(tmp_path, msg(), "unlisted sender")
+
+    def test_quarantine_uses_directory_descriptors_not_paths(self, tmp_path, monkeypatch):
+        """A path-based and a descriptor-based implementation agree on every
+        non-racing input, so black-box assertions cannot tell them apart. Assert
+        the arguments actually passed.
+        """
+        store.ensure_maildir(tmp_path)
+        opens = []
+        real_open = os.open
+
+        def spy_open(path, flags, *a, **k):
+            opens.append((path, flags, k.get("dir_fd")))
+            return real_open(path, flags, *a, **k)
+
+        monkeypatch.setattr(store.os, "open", spy_open)
+        store.quarantine(tmp_path, msg(), "unlisted sender")
+
+        dir_opens = [o for o in opens if o[1] & os.O_DIRECTORY]
+        assert len(dir_opens) >= 2, "quarantine did not open directories as descriptors"
+        assert all(o[1] & os.O_NOFOLLOW for o in dir_opens), "dir open lacked O_NOFOLLOW"
+        assert sum(1 for o in dir_opens if o[2] is None) == 1, \
+            "more than one directory resolved by path, leaving a TOCTOU window"
+        written = [o for o in opens if o[2] is not None and not (o[1] & os.O_DIRECTORY)]
+        assert written, "quarantined message was not written relative to a dir_fd"
+        assert all(o[1] & os.O_NOFOLLOW and o[1] & os.O_EXCL for o in written)
+
+    def test_quarantined_mail_still_lands_and_is_readable(self, tmp_path):
+        """Hardening that broke the feature would pass every test above."""
+        p = store.quarantine(tmp_path, msg(subject="hostile"), "unlisted sender")
+        assert p.exists() and p.parent.name == "quarantine"
+        assert "hostile" in p.read_text()
+        assert "X-Amail-Quarantine-Reason: unlisted sender" in p.read_text()
+
+
+class TestConnectionMetering:
+    """Round 6 drove the broker from 20 MB to 996 MB RSS with 500 held
+    connections from ONE uid. The broker is the only path mail can leave any
+    agent, so one compromised agent could silence every other agent on the host
+    — availability as a security property, which the read loop's own comment
+    already argued for and the server did not implement.
+    """
+
+    def test_per_uid_cap_is_lower_than_the_total(self):
+        """A total cap alone lets one agent occupy every slot. The per-uid bound
+        is the one that keeps other agents served."""
+        from macf.amail import broker as bmod
+        assert bmod.MAX_CONNECTIONS_PER_UID < bmod.MAX_CONCURRENT_CONNECTIONS
+
+    def test_broker_refuses_connections_beyond_the_per_uid_cap(self, deployment):
+        """The flood, at small scale: hold connections open without completing a
+        request and confirm the broker stops accepting them from this uid."""
+        import socket as s_
+        from macf.amail import broker as bmod
+
+        deployment["cfg"].credentials_path.write_text("secret")
+        deployment["cfg"].credentials_path.chmod(0o600)
+        srv = serve(deployment["broker"])
+        time.sleep(0.15)
+        held = []
+        try:
+            for _ in range(bmod.MAX_CONNECTIONS_PER_UID + 6):
+                c = s_.socket(s_.AF_UNIX, s_.SOCK_STREAM)
+                c.connect(str(deployment["cfg"].socket_path))
+                held.append(c)
+            time.sleep(0.4)
+            # Refused connections are closed by the server without a reply. A
+            # still-metered connection stays open, so counting live ones measures
+            # the cap directly.
+            live = 0
+            for c in held:
+                c.settimeout(0.2)
+                try:
+                    live += 0 if c.recv(1) == b"" else 1
+                except (TimeoutError, OSError):
+                    live += 1  # still open, still holding a slot
+            assert live <= bmod.MAX_CONNECTIONS_PER_UID, (
+                f"{live} connections held simultaneously by one uid, cap is "
+                f"{bmod.MAX_CONNECTIONS_PER_UID}")
+        finally:
+            for c in held:
+                try:
+                    c.close()
+                except OSError:
+                    pass
+            srv.shutdown()
+
+    def test_slots_are_released_so_the_broker_recovers(self, deployment):
+        """A cap that never releases is an outage with extra steps. Fill it,
+        drop the connections, and confirm a legitimate submission still works.
+        """
+        import socket as s_
+        from macf.amail import broker as bmod
+
+        deployment["cfg"].credentials_path.write_text("secret")
+        deployment["cfg"].credentials_path.chmod(0o600)
+        srv = serve(deployment["broker"])
+        time.sleep(0.15)
+        try:
+            held = []
+            for _ in range(bmod.MAX_CONNECTIONS_PER_UID + 4):
+                c = s_.socket(s_.AF_UNIX, s_.SOCK_STREAM)
+                c.connect(str(deployment["cfg"].socket_path))
+                held.append(c)
+            time.sleep(0.3)
+            for c in held:
+                c.close()
+            time.sleep(0.5)
+            assert submit("alpha", msg(), deployment["cfg"].socket_path)["ok"] is True
+        finally:
+            srv.shutdown()
+
+    def test_overload_refusals_are_audited_but_rate_limited(self, deployment):
+        """Recorded, because a refusal nobody can see is indistinguishable from
+        an outage. Rate-limited, because otherwise the record of the flood is a
+        second flood against the same shared disk.
+        """
+        from macf.amail import broker as bmod
+
+        srv = bmod._Server.__new__(bmod._Server)
+        srv._meter_lock = bmod.threading.Lock()
+        srv._inflight, srv._per_uid, srv._overload_audited = {}, {}, {}
+        srv.broker = deployment["broker"]
+        for _ in range(50):
+            srv._audit_overload(1234)
+        entries = [r for r in deployment["broker"].audit.records()
+                   if r.get("context") == "overload"]
+        assert len(entries) == 1, f"50 refusals produced {len(entries)} audit records"
+        assert "1234" in entries[0]["detail"]
+
+
+class TestAuditLogIsBounded:
+    """~280 bytes per refused submission, produced at will by any agent, on a
+    volume shared by every account on the host. Unbounded 'append-only' does not
+    preserve the record — a full disk stops the broker and its logging alike.
+    """
+
+    def test_log_rotates_at_the_ceiling(self, tmp_path):
+        log = AuditLog(tmp_path / "audit.jsonl", max_bytes=4096)
+        for i in range(400):
+            log.refused(sender="alpha", recipients=["x@y.test"], reason=f"r{i}")
+        assert (tmp_path / "audit.jsonl.1").exists(), "log never rotated"
+        assert (tmp_path / "audit.jsonl").stat().st_size < 4096 * 2
+
+    def test_rotation_is_recorded_so_truncation_is_visible(self, tmp_path):
+        """'Nothing was refused before this point' and 'the evidence was rotated
+        away' must not look the same to a reader."""
+        log = AuditLog(tmp_path / "audit.jsonl", max_bytes=2048)
+        for i in range(300):
+            log.refused(sender="alpha", recipients=["x@y.test"], reason=f"r{i}")
+        assert any(r.get("decision") == "rotated" for r in log.records()), \
+            "rotation left no trace, so silent truncation reads as silence"
+
+    def test_default_is_bounded(self, tmp_path):
+        """A default of unbounded would mean the fix only applies where someone
+        remembered to ask for it."""
+        assert AuditLog(tmp_path / "a.jsonl").max_bytes > 0
+
+    def test_refusals_are_still_recorded_verbatim(self, tmp_path):
+        """Bounding must not quietly become sampling."""
+        log = AuditLog(tmp_path / "audit.jsonl")
+        log.refused(sender="alpha", recipients=["x@y.test"], reason="not a contact")
+        assert log.refusals()[0]["reason"] == "not a contact"
+
+
+class TestCliSurface:
+    """The CLI had zero tests. Whatever it did with untrusted input, nothing
+    had ever checked."""
+
+    def test_config_survives_every_json_shape(self, tmp_path, monkeypatch):
+        """json.loads succeeds on any JSON value, not just an object. Each of
+        these crashed every amail subcommand with an AttributeError."""
+        from macf import cli
+
+        home = tmp_path / "home"
+        (home / ".maceff").mkdir(parents=True)
+        monkeypatch.setattr("macf.utils.paths.find_agent_home", lambda: home)
+        for payload in ("[]", '"x"', "7", "null", "true", "{ not json", '{"agent":"a"}'):
+            (home / ".maceff" / "amail.json").write_text(payload)
+            cfg = cli._amail_config()
+            assert isinstance(cfg, dict)
+            assert {"domain", "socket", "agent", "home"} <= set(cfg)
+
+    def test_terminal_control_characters_are_neutralised(self):
+        """A body is attacker-controlled and is printed to the operator's
+        terminal. An escape sequence there can redraw what was already shown —
+        including any trust labelling above it — so a message could claim an
+        identity by overwriting the screen rather than by forging a header.
+        """
+        from macf import cli
+
+        hostile = "innocent\x1b[2J\x1b[1;1Hfrom: someone-else\x07"
+        rendered = cli._term_safe(hostile)
+        assert "\x1b" not in rendered and "\x07" not in rendered
+        assert "\\x1b" in rendered, "escaped form should remain visible to the reader"
+        assert "innocent" in rendered, "legitimate text must survive"
+
+    def test_ordinary_text_is_untouched(self):
+        """A neutraliser that mangles normal mail would be reverted within a day."""
+        from macf import cli
+
+        text = "Hi,\n\tHere is a note — with unicode, tabs and newlines.\n"
+        assert cli._term_safe(text) == text

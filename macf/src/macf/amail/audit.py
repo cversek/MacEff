@@ -20,11 +20,61 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
 
+#: Rotate once the live log reaches this size, keeping one previous generation.
+#: Total on-disk cost is therefore bounded at roughly twice this.
+MAX_AUDIT_BYTES = 32 << 20  # 32 MiB
+
+
 class AuditLog:
-    def __init__(self, path: Path):
+    """Append-only, with ONE deliberate compromise: bounded retention.
+
+    Unbounded is the honest reading of "append-only", and it is also an
+    availability attack. Every refusal is written by the broker, and any agent
+    can produce refusals at will — round 6 measured ~280 bytes per refused
+    submission with no cap on the total, on a volume shared by every account on
+    the host. A log that fills the shared disk stops the broker, stops the other
+    agents, and stops its own logging, so unbounded growth does not even
+    preserve the record it was protecting.
+
+    So: rotate at a ceiling, keep one previous generation, and — this is the
+    part that keeps it honest — write a record saying rotation happened. A
+    reader can then tell "nothing was refused before this point" apart from
+    "the earlier evidence was rotated away", which is exactly the distinction
+    this module's docstring says a log exists to preserve.
+    """
+
+    def __init__(self, path: Path, max_bytes: int = MAX_AUDIT_BYTES):
         self.path = Path(path)
+        self.max_bytes = max_bytes
+
+    def _rotate_if_needed(self) -> None:
+        if self.max_bytes <= 0:
+            return
+        try:
+            size = self.path.stat().st_size
+        except OSError:
+            return
+        if size < self.max_bytes:
+            return
+        previous = self.path.with_name(self.path.name + ".1")
+        try:
+            os.replace(self.path, previous)
+        except OSError:
+            # Rotation failing must not stop the log from recording. Growing
+            # past the ceiling is worse than the alternative of dropping records.
+            return
+        self._write({
+            "decision": "rotated", "context": "audit",
+            "detail": (f"log reached {size} bytes; previous generation moved to "
+                       f"{previous.name}. Records before this line are in that "
+                       f"file, and the generation before it is gone."),
+        })
 
     def _append(self, record: Dict[str, Any]) -> None:
+        self._rotate_if_needed()
+        self._write(record)
+
+    def _write(self, record: Dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         record["ts"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
         line = json.dumps(record, sort_keys=True) + "\n"

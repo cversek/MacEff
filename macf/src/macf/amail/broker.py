@@ -57,6 +57,20 @@ MAX_SUBJECT = 998
 MAX_BODY = 1 << 18      # 256 KiB
 MAX_RECIPIENTS = 64     # ContactBook is consulted per recipient
 
+
+def peer_uid(conn: socket.socket) -> int:
+    """The uid the kernel recorded for the connected process.
+
+    One implementation, used both to authenticate a submission and to meter
+    connections, so the two can never disagree about who is calling.
+    """
+    raw = conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED,
+                          struct.calcsize("3I"))
+    # ucred fields are unsigned; reading them signed turns a high uid negative.
+    # It failed closed, but a lookup should not depend on that.
+    _pid, uid, _gid = struct.unpack("3I", raw)
+    return uid
+
 #: The trust classification, as data rather than prose. canonicalize() asserts
 #: its union covers every Message field, so a field added later fails loudly
 #: instead of silently defaulting to trusted.
@@ -345,11 +359,7 @@ class Broker:
         somebody's contact list.
         """
         try:
-            raw = conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED,
-                                  struct.calcsize("3I"))
-            # ucred fields are unsigned; reading them signed turns a high uid
-            # negative. It failed closed, but a lookup should not depend on that.
-            _pid, uid, _gid = struct.unpack("3I", raw)
+            uid = peer_uid(conn)
         except (OSError, AttributeError, struct.error) as e:
             raise PermissionError(
                 f"cannot determine peer credentials ({e}); refusing to accept a "
@@ -485,9 +495,110 @@ class _Handler(socketserver.StreamRequestHandler):
                 broker.audit.error(context="response", detail=str(e))
 
 
+#: Total connections served at once. Beyond this the broker refuses immediately
+#: rather than spawning another thread.
+MAX_CONCURRENT_CONNECTIONS = 64
+
+#: In-flight connections permitted to a single uid. This is the bound that
+#: matters: the total cap alone lets ONE agent occupy every slot and starve
+#: every other agent, which is the same "availability is a security property"
+#: argument the read loop already makes about slow trickles.
+MAX_CONNECTIONS_PER_UID = 8
+
+#: Overload refusals are audited at most this often per uid. Without the
+#: interval, the record of the flood becomes a second flood — an attacker who
+#: cannot exhaust memory would exhaust the disk through the log instead.
+OVERLOAD_AUDIT_INTERVAL = 60.0
+
+
 class _Server(socketserver.ThreadingUnixStreamServer):
+    """Concurrency-metered threading server.
+
+    ThreadingMixIn spawns one unbounded thread per accepted connection. With a
+    world-writable socket that is a denial-of-service primitive available to any
+    agent that can reach it: round 6 drove the broker from 20 MB to 996 MB RSS
+    with 500 held connections from a SINGLE uid, and the broker is the only path
+    mail can leave any agent, so killing it silences the whole host.
+
+    Metering happens in process_request, which runs on the accept thread BEFORE
+    a worker exists — refusing an over-quota connection therefore costs no
+    thread and no buffer.
+    """
+
     allow_reuse_address = True
     daemon_threads = True
+
+    def __init__(self, *args, **kwargs):
+        self._meter_lock = threading.Lock()
+        self._inflight: Dict[Any, Optional[int]] = {}
+        self._per_uid: Dict[int, int] = {}
+        self._overload_audited: Dict[Optional[int], float] = {}
+        super().__init__(*args, **kwargs)
+
+    def _acquire(self, request: Any, uid: Optional[int]) -> bool:
+        with self._meter_lock:
+            if len(self._inflight) >= MAX_CONCURRENT_CONNECTIONS:
+                return False
+            if uid is not None and self._per_uid.get(uid, 0) >= MAX_CONNECTIONS_PER_UID:
+                return False
+            self._inflight[request] = uid
+            if uid is not None:
+                self._per_uid[uid] = self._per_uid.get(uid, 0) + 1
+            return True
+
+    def _release(self, request: Any) -> None:
+        with self._meter_lock:
+            if request not in self._inflight:
+                return
+            uid = self._inflight.pop(request)
+            if uid is not None:
+                remaining = self._per_uid.get(uid, 0) - 1
+                if remaining > 0:
+                    self._per_uid[uid] = remaining
+                else:
+                    self._per_uid.pop(uid, None)
+
+    def _audit_overload(self, uid: Optional[int]) -> None:
+        now = time.monotonic()
+        with self._meter_lock:
+            if now - self._overload_audited.get(uid, 0.0) < OVERLOAD_AUDIT_INTERVAL:
+                return
+            self._overload_audited[uid] = now
+            depth = len(self._inflight)
+            per_uid = self._per_uid.get(uid, 0) if uid is not None else 0
+        broker = getattr(self, "broker", None)
+        if broker is not None and broker.audit:
+            # Recorded, because a refusal nobody can see is indistinguishable
+            # from an outage — the exact gap the audit log exists to close.
+            broker.audit.error(
+                context="overload",
+                detail=(f"connection refused: uid={uid} in-flight={depth} "
+                        f"uid-in-flight={per_uid} "
+                        f"limits=({MAX_CONCURRENT_CONNECTIONS},{MAX_CONNECTIONS_PER_UID}); "
+                        f"further refusals for this uid suppressed for "
+                        f"{OVERLOAD_AUDIT_INTERVAL:.0f}s"))
+
+    def process_request(self, request, client_address):  # type: ignore[override]
+        try:
+            uid: Optional[int] = peer_uid(request)
+        except (OSError, AttributeError, struct.error):
+            # Unidentifiable peers are metered as one anonymous bucket rather
+            # than waved through: identify() will refuse them anyway, but not
+            # before a thread exists to do the refusing.
+            uid = None
+        if not self._acquire(request, uid):
+            self._audit_overload(uid)
+            self.shutdown_request(request)
+            return
+        super().process_request(request, client_address)
+
+    def shutdown_request(self, request):  # type: ignore[override]
+        # Called exactly once per accepted connection on every path — after the
+        # handler thread finishes, and directly when the connection was refused
+        # above. Releasing here rather than in the handler keeps the count
+        # correct even when handle() raises.
+        self._release(request)
+        super().shutdown_request(request)
 
 
 def serve(broker: Broker) -> _Server:
