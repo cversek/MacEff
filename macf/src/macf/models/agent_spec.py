@@ -142,6 +142,65 @@ class ConsciousnessArtifactsConfig(BaseModel):
     )
 
 
+class EgressPolicy(BaseModel):
+    """Outbound network restrictions applied to an agent's own uid.
+
+    A restriction on what an agent may REACH cannot be enforced by the component
+    the agent is supposed to reach, because nothing compels the agent to use it.
+    An allowlist held by a mail broker is defeated not by a flaw in the broker but
+    by the agent opening its own socket. Enforcement therefore lives in network
+    policy, keyed on the kernel identity the agent cannot forge, and is applied by
+    provisioning — outside the principal being restricted.
+
+    Declaring this is opt-in per deployment: a config with no ``egress`` block
+    anywhere behaves exactly as before. Within a deployment that declares it,
+    the polarity is deny-by-default — an agent inherits ``defaults.egress`` unless
+    it overrides, so an account added later is covered rather than silently exempt.
+    Exemption must be written explicitly, which makes it visible in config review.
+    """
+
+    deny_tcp_ports: List[int] = Field(
+        default_factory=list,
+        description=(
+            "Outbound TCP destination ports this agent's uid may not reach, over "
+            "every address family. Typically the mail transport ports [25, 465, 587]. "
+            "An empty list is a deliberate exemption, not an oversight — say so in a "
+            "comment next to it."
+        )
+    )
+
+    @field_validator('deny_tcp_ports', mode='before')
+    @classmethod
+    def validate_ports(cls, v: Any) -> Any:
+        """Reject port values that cannot name a real destination.
+
+        A wrong port here fails OPEN — the rule lands on a port nothing uses while
+        the intended port stays reachable, and every log says the policy applied.
+        So this refuses rather than letting provisioning report success for a
+        restriction that restricts nothing.
+
+        Runs in ``before`` mode deliberately. Pydantic's lax coercion would
+        otherwise turn ``True`` into ``1`` before an ``after`` validator could see
+        it, and YAML spells booleans ``on``/``yes``/``true`` — so a stray
+        ``deny_tcp_ports: [on]`` would install a live-looking rule for port 1.
+        Seeing the raw value is the only way to catch that.
+        """
+        if not isinstance(v, list):
+            raise ValueError(f"deny_tcp_ports must be a list, got {type(v).__name__}")
+        for port in v:
+            # bool before int: bool IS an int subclass, so the order matters.
+            if isinstance(port, bool) or not isinstance(port, int):
+                raise ValueError(
+                    f"deny_tcp_ports entries must be plain integers, got {port!r} "
+                    f"({type(port).__name__}). Quote nothing and spell ports as numbers."
+                )
+            if not (1 <= port <= 65535):
+                raise ValueError(f"deny_tcp_ports entry out of range 1-65535: {port}")
+        if len(set(v)) != len(v):
+            raise ValueError(f"deny_tcp_ports contains duplicates: {v}")
+        return v
+
+
 class AgentSpec(BaseModel):
     """Specification for a Primary Agent (PA)."""
 
@@ -184,6 +243,16 @@ class AgentSpec(BaseModel):
             "collaborator. When omitted, provisioning falls back to the legacy "
             "single-file lookup (/keys/{username}.pub) so existing deployments are "
             "unaffected."
+        )
+    )
+
+    egress: Optional[EgressPolicy] = Field(
+        default=None,
+        description=(
+            "Outbound network restrictions for this agent's uid. When omitted, the "
+            "agent inherits defaults.egress; when defaults declares none either, no "
+            "rules are installed and behaviour is unchanged from before this field "
+            "existed. Declare an empty deny list to exempt an agent explicitly."
         )
     )
 
@@ -309,6 +378,19 @@ class DefaultsConfig(BaseModel):
     claude_config: Optional[ClaudeCodeConfig] = Field(
         default=None,
         description="Default Claude Code settings for all agents"
+    )
+
+    egress: Optional[EgressPolicy] = Field(
+        default=None,
+        description=(
+            "Default outbound network restrictions, inherited by every agent that "
+            "does not declare its own. Declaring this here is how a deployment opts "
+            "in: absent, no rules are installed anywhere and behaviour is unchanged. "
+            "Present, every agent is covered unless it overrides — including agents "
+            "added later, which is the point. Enforcement requires the container to "
+            "carry NET_ADMIN and to have iptables available; provisioning FAILS "
+            "rather than proceeding if a declared restriction cannot be installed."
+        )
     )
 
     admin_ssh_keys: Optional[List[str]] = Field(

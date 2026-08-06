@@ -1521,6 +1521,176 @@ fi
         tz_bridge.chmod(0o644)
 
 
+# Egress rules live in a dedicated chain rather than appended to OUTPUT directly,
+# so re-running startup is idempotent (flush + rebuild) and cannot disturb rules
+# put there by anything else.
+EGRESS_CHAIN = 'MACEFF_EGRESS'
+
+# Both binaries ship in the same distro package. Requiring both is therefore cheap,
+# and skipping the v6 table because "this container has no IPv6 today" is exactly
+# the false-PASS that certifies an unprotected host — the address family a
+# container has is not a property of the config that restricts it.
+EGRESS_BINARIES = ('iptables', 'ip6tables')
+
+
+def resolve_egress_policies(agents_config: AgentsConfig) -> Dict[str, List[int]]:
+    """Resolve the effective deny list for every agent.
+
+    An agent's own ``egress`` wins; otherwise it inherits ``defaults.egress``.
+    Absent both, the agent is unrestricted and does not appear in the result.
+
+    Inheritance is what makes this safe over time: an account added to a
+    deployment that declares defaults is covered without anyone remembering to
+    cover it. Exemption requires writing an empty list, which shows up in review.
+    """
+    default_ports: List[int] = []
+    if agents_config.defaults and agents_config.defaults.egress:
+        default_ports = list(agents_config.defaults.egress.deny_tcp_ports)
+
+    policies: Dict[str, List[int]] = {}
+    for agent_spec in agents_config.agents.values():
+        if agent_spec.egress is not None:
+            ports = list(agent_spec.egress.deny_tcp_ports)
+        else:
+            ports = list(default_ports)
+        if ports:
+            policies[agent_spec.username] = sorted(set(ports))
+    return policies
+
+
+def apply_egress_policy(agents_config: AgentsConfig) -> None:
+    """Install per-uid outbound restrictions, or fail provisioning trying.
+
+    A restriction the agent could lift is documentation, so enforcement is keyed
+    on the kernel identity — ``-m owner --uid-owner`` matches the uid that owns
+    the socket, which an unprivileged process cannot spoof.
+
+    This function is deliberately loud. If a policy is declared and cannot be
+    installed, it raises. The alternative — logging a warning and provisioning
+    agents anyway — produces a deployment that documents a control it does not
+    have, which is strictly worse than having no control, because it is believed.
+    """
+    policies = resolve_egress_policies(agents_config)
+
+    if not policies:
+        log("Egress policy: none declared, no rules installed")
+        return
+
+    log(f"Egress policy: {len(policies)} agent(s) restricted, enforcing before sshd")
+
+    # Capability check by ATTEMPT, not by inspecting anything that merely reports
+    # capability. A missing binary and a missing NET_ADMIN both surface here.
+    for binary in EGRESS_BINARIES:
+        if shutil.which(binary) is None:
+            raise RuntimeError(
+                f"Egress policy declared but '{binary}' is not installed in this image. "
+                f"Install the iptables package, or remove the egress declaration from "
+                f"agents.yaml. Provisioning refuses to continue: agents would run "
+                f"believing a restriction that is not present."
+            )
+        probe = subprocess.run([binary, '-L', 'OUTPUT', '-n'],
+                               capture_output=True, text=True)
+        if probe.returncode != 0:
+            raise RuntimeError(
+                f"Egress policy declared but '{binary}' cannot read the ruleset "
+                f"(exit {probe.returncode}): {probe.stderr.strip()}\n"
+                f"The container almost certainly lacks NET_ADMIN. Add "
+                f"'cap_add: [NET_ADMIN]' to the compose service, or remove the egress "
+                f"declaration. Provisioning refuses to continue."
+            )
+
+    # Map usernames to uids up front so a bad account fails before any rule lands.
+    uids: Dict[str, int] = {}
+    for username in policies:
+        try:
+            uid = pwd.getpwnam(username).pw_uid
+        except KeyError:
+            raise RuntimeError(
+                f"Egress policy declared for '{username}' but that account does not "
+                f"exist. Rules must be installed against a real uid."
+            )
+        # An agent sharing an identity with the operator cannot be filtered without
+        # filtering the operator — the rule is not merely ineffective, it is
+        # inexpressible. Refuse rather than install something misleading.
+        if uid < 1000:
+            raise RuntimeError(
+                f"Egress policy declared for '{username}' (uid {uid}), which is a "
+                f"system or privileged account. Owner-matched filtering requires the "
+                f"agent to hold its own unprivileged uid."
+            )
+        uids[username] = uid
+
+    duplicates = {u: n for n, u in uids.items() if list(uids.values()).count(u) > 1}
+    if duplicates:
+        raise RuntimeError(
+            f"Egress policy cannot be enforced: accounts share uids {duplicates}. "
+            f"A rule matching one would silently match the other."
+        )
+
+    for binary in EGRESS_BINARIES:
+        # Idempotent rebuild: create the chain if absent, flush it if present, and
+        # ensure exactly one jump to it from OUTPUT.
+        subprocess.run([binary, '-N', EGRESS_CHAIN], capture_output=True)
+        flush = subprocess.run([binary, '-F', EGRESS_CHAIN], capture_output=True, text=True)
+        if flush.returncode != 0:
+            raise RuntimeError(
+                f"Egress policy: could not flush {EGRESS_CHAIN} via {binary}: "
+                f"{flush.stderr.strip()}"
+            )
+
+        linked = subprocess.run([binary, '-C', 'OUTPUT', '-j', EGRESS_CHAIN],
+                                capture_output=True)
+        if linked.returncode != 0:
+            link = subprocess.run([binary, '-I', 'OUTPUT', '1', '-j', EGRESS_CHAIN],
+                                  capture_output=True, text=True)
+            if link.returncode != 0:
+                raise RuntimeError(
+                    f"Egress policy: could not hook {EGRESS_CHAIN} into OUTPUT via "
+                    f"{binary}: {link.stderr.strip()}"
+                )
+
+        for username, ports in sorted(policies.items()):
+            uid = uids[username]
+            port_spec = ','.join(str(p) for p in ports)
+            # REJECT rather than DROP: the agent gets an immediate refusal instead
+            # of a hang. We are not hiding the rule — a compromised agent learning
+            # the port is blocked is not a loss, whereas a caller that blocks for
+            # 30s is indistinguishable from a network problem in every log we keep.
+            add = subprocess.run(
+                [binary, '-A', EGRESS_CHAIN,
+                 '-p', 'tcp', '-m', 'multiport', '--dports', port_spec,
+                 '-m', 'owner', '--uid-owner', str(uid),
+                 '-j', 'REJECT'],
+                capture_output=True, text=True
+            )
+            if add.returncode != 0:
+                raise RuntimeError(
+                    f"Egress policy: could not install rule for {username} "
+                    f"(uid {uid}, ports {port_spec}) via {binary}: {add.stderr.strip()}"
+                )
+
+    # Read the rules back. Reporting what we asked for is not evidence of what is
+    # installed; these must be two separate observations or they are one variable.
+    for binary in EGRESS_BINARIES:
+        listed = subprocess.run([binary, '-S', EGRESS_CHAIN],
+                                capture_output=True, text=True)
+        if listed.returncode != 0:
+            raise RuntimeError(
+                f"Egress policy: installed rules but cannot read {EGRESS_CHAIN} back "
+                f"via {binary}: {listed.stderr.strip()}"
+            )
+        for username, ports in sorted(policies.items()):
+            marker = f"--uid-owner {uids[username]} "
+            if marker not in listed.stdout:
+                raise RuntimeError(
+                    f"Egress policy: rule for {username} (uid {uids[username]}) is "
+                    f"absent from {binary} {EGRESS_CHAIN} after installation. "
+                    f"Chain reads:\n{listed.stdout}"
+                )
+            log(f"Egress rule active [{binary}]: {username} "
+                f"(uid {uids[username]}) denied tcp/{','.join(str(p) for p in ports)}")
+
+
 def main() -> int:
     """
     Container startup entry point.
@@ -1646,6 +1816,14 @@ def main() -> int:
                     if sa_def.exists() and sa_def.stat().st_size == 0:
                         log(f"WARNING: {sa_def} is empty - delegation to '{sa_name}' will fail. "
                             f"Check that framework/subagents/{sa_name}.md exists.")
+
+        # Enforce egress policy the moment every agent uid exists and BEFORE any
+        # code runs as one. initialize_agents() below invokes `su - <agent>`, and
+        # sshd starts later still; both are points at which an unrestricted agent
+        # could act. Raising here aborts startup, which is the intended behaviour:
+        # a container that cannot enforce a declared restriction must not offer
+        # accounts that believe they are restricted.
+        apply_egress_policy(agents_config)
 
         # Create project workspaces
         if projects_config:
