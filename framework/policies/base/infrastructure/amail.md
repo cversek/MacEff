@@ -4,7 +4,7 @@
 **Type**: Infrastructure (opt-in)
 **Scope**: All agents (PA and SA), and the broker that serves them
 **Status**: ACTIVE — specification. No implementation is authorized by this document.
-**Version**: 1.0
+**Version**: 1.0.1
 **Supersedes**: the provisional `amail/v0` convention shipped in agent mailbox READMEs
 
 ---
@@ -62,6 +62,9 @@ becomes tractable once the address stops encoding how the message travels.
 **7 Threat Model**
 - What does this design actually defend against?
 - What does it explicitly NOT defend against?
+- Why is credential custody insufficient without egress policy?
+- Why must a deployment decision rest on blast radius rather than on intent?
+- What does this document assume about its own completeness?
 
 **8 Resolved and Deferred Questions**
 - Which previously open questions does this specification settle?
@@ -168,7 +171,56 @@ documentation, not a control.
 The property this specification is built to provide:
 
 > A fully compromised agent still cannot send mail to an address outside its contact
-> list, because it has never held a credential that reaches the internet.
+> list, **because the broker is the only path off the host that reaches a mail
+> transport, and that is enforced by network egress policy rather than by this
+> protocol.**
+
+### 3.1.1 The correction that produced that wording
+
+Version 1.0 stated the property as: *"…because it has never held a credential that
+reaches the internet."* **That was false, and the premise rather than the
+implementation was wrong.**
+
+Delivery to a public mail exchanger on port 25 requires no credential. That is not
+a misconfiguration; it is how internet mail is designed. Measured 2026-08-05 from
+inside a deployment container, as an ordinary agent uid — not root, not an
+administrator:
+
+```
+connect  gmail-smtp-in.l.google.com:25   ->  220 mx.google.com ESMTP
+EHLO                                     ->  250, and the receiver echoed our
+                                             public address back
+MAIL FROM:<...>                          ->  250 2.1.0 OK
+RCPT TO:<...>                            ->  recipient validation reached
+```
+
+A non-existent recipient was used deliberately, so nothing was delivered. A real
+one would have been accepted.
+
+The broker was not defeated. **It was irrelevant, because nothing required the
+agent to use it.** In that deployment the broker was not even running, and the
+result was unchanged.
+
+So an implementation MUST NOT treat credential custody as sufficient. **Custody
+determines what an agent can do WITH the broker; egress policy determines whether
+it must use the broker at all.** A deployment that omits the second has this
+specification's central guarantee in name only.
+
+### 3.1.2 What a deployment MUST do
+
+- Outbound TCP to mail transport ports — at minimum 25, 465 and 587 — MUST be
+  denied to every agent identity, over **every address family**. A rule applied to
+  IPv4 alone leaves a path an agent resolves its way around.
+- The denial MUST be verified by attempting a connection from an agent identity
+  and observing it fail. A rule that is present and does not work reads identically
+  to no rule at all, and only the attempt distinguishes them.
+- That verification MUST include a positive control proving ordinary egress still
+  works. A host with no network passes every negative test perfectly, and a green
+  result on a disconnected host is the most confident wrong answer available.
+- Agent identities MUST be separable from the operator's own. Owner-matched
+  filtering requires an owner to match; where an agent runs under a human's uid the
+  rule cannot be expressed at all, and identity separation is a prerequisite rather
+  than a detail.
 
 ### 3.2 Credential custody and submission
 
@@ -340,8 +392,10 @@ wherever the reader hopes.
 
 ### 7.1 Defended
 
-- **A compromised agent cannot reach an unlisted recipient.** It holds no transport
-  credential, so the restriction survives arbitrary code execution as that agent.
+- **A compromised agent cannot reach an unlisted recipient — WHERE §3.1.2's egress
+  policy is enforced and verified.** Credential custody alone does not provide this
+  and v1.0 wrongly claimed it did. Without egress filtering the restriction is not
+  weakened; it is absent, because the agent need never speak to the broker.
 - **Silent failure is detectable.** Every decision is logged, refusals included.
 - **Provider loss does not destroy correspondence.** The authoritative store is local.
 - **Topology change does not invalidate identity.** Addresses survive moves.
@@ -361,6 +415,48 @@ wherever the reader hopes.
   prefers them.
 - **Authorship.** Nothing in v1 proves which agent composed a message.
 - **Recipient-side compromise.** Out of scope entirely.
+- **A deployment without egress filtering.** Stated separately from the rest of this
+  list because it is not a residual risk but a missing precondition: on such a
+  deployment the recipient restriction does not hold at all. See §3.1.1.
+- **An agent's other network access.** The allowlist bounds the recipient set of
+  MAIL. An agent with general internet access has simpler exfiltration paths than
+  SMTP, and this protocol has never claimed otherwise (§4.3). Removing mail egress
+  is not a data-loss control and MUST NOT be presented as one.
+
+### 7.3 Intent is not the variable
+
+A deployment decision about which agents get mail addresses SHOULD NOT rest on
+trusting a particular agent's intentions, and an argument of the form "that agent
+is well-behaved" is not a security argument here.
+
+**The broker exists for the compromised-by-input case.** An agent is not assumed
+hostile because of what it wants; it is assumed hostile because its inputs are
+attacker-controlled and it acts on them. Intent is not the variable being
+controlled for, so intent cannot be the thing that varies the control.
+
+What legitimately differentiates one agent from another is **blast radius**: the
+files, credentials and permissions reachable from its identity if its inputs turn
+against it. An agent that runs under a human's uid inherits that human's entire
+reachable surface, which is a reason to grant it less regardless of how it behaves.
+
+This matters most precisely where the temptation is strongest. **Inbound mail from
+strangers is the most attacker-controlled input an agent can be given**, so an
+agent's mail address is exactly the capability that should be granted on blast
+radius rather than on good conduct.
+
+### 7.4 On the completeness of this threat model
+
+The bypass in §3.1.1 was not found by review of this protocol or its
+implementation. Eleven independent adversarial audits preceded it, found around
+forty defects, and missed this one — because every brief asked whether a
+compromised agent could **misuse the broker**, and none asked whether it needed the
+broker at all.
+
+The lesson is recorded here rather than in a commit message because it generalises
+past this specification: **a rigorous process operating inside a frame cannot see
+the frame.** An implementer SHOULD assume this document has a comparable blind spot
+somewhere, and SHOULD prefer a reviewer who did not write it and was not briefed by
+whoever did.
 
 ---
 
