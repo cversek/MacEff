@@ -145,6 +145,14 @@ class ConsciousnessArtifactsConfig(BaseModel):
 class EgressPolicy(BaseModel):
     """Outbound network restrictions applied to an agent's own uid.
 
+    **Policy**: ``capability_boundaries.md`` — read it before changing this.
+    Consult it for why enforcement cannot live in the component being reached, what
+    a deployment must do before a declaration means anything, and what an agent
+    should do on meeting a boundary. This class is that policy's first concrete
+    instance; the policy is where the reasoning lives, and an agent that hits one of
+    these rules discovers the reason through ``macf_tools policy``, not by reading
+    this source.
+
     A restriction on what an agent may REACH cannot be enforced by the component
     the agent is supposed to reach, because nothing compels the agent to use it.
     An allowlist held by a mail broker is defeated not by a flaw in the broker but
@@ -252,7 +260,9 @@ class AgentSpec(BaseModel):
             "Outbound network restrictions for this agent's uid. When omitted, the "
             "agent inherits defaults.egress; when defaults declares none either, no "
             "rules are installed and behaviour is unchanged from before this field "
-            "existed. Declare an empty deny list to exempt an agent explicitly."
+            "existed. Declare an empty deny list to exempt an agent explicitly. "
+            "See the capability_boundaries policy for what a deployment must do "
+            "before this declaration means anything, and how to verify it holds."
         )
     )
 
@@ -388,7 +398,9 @@ class DefaultsConfig(BaseModel):
             "in: absent, no rules are installed anywhere and behaviour is unchanged. "
             "Present, every agent is covered unless it overrides — including agents "
             "added later, which is the point. Enforcement requires the container to "
-            "carry NET_ADMIN and to have iptables available; provisioning FAILS "
+            "carry NET_ADMIN and to have iptables available (capability_boundaries "
+            "policy explains why enforcement must abort rather than warn); "
+            "provisioning FAILS "
             "rather than proceeding if a declared restriction cannot be installed."
         )
     )

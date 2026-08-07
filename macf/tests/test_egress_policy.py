@@ -360,3 +360,108 @@ class TestEgressEnforcementSucceeds:
 
         flushes = [c for c in invocations if len(c) > 1 and c[1] == "-F"]
         assert len(flushes) == 2, "chain flushed once per address family before rebuild"
+
+
+class TestRefusalsNamePolicy:
+    """A refusal must tell the reader where the reasoning lives.
+
+    A boundary that refuses without a discoverable reason produces the behaviour it
+    exists to prevent: the reader concludes the tooling is broken, or works around
+    it. So every refusal carries a policy pointer.
+
+    The pointer must be a `macf_tools policy navigate` command, never a section
+    number and never an inline restatement of what the policy prescribes. A remedy
+    copied into an error string is duplicated policy — it drifts, and the drift is
+    invisible because nobody diffs an error message against a document. These tests
+    guard the discipline, not merely the presence of a URL-ish string.
+    """
+
+    @staticmethod
+    def _refusals(start_module, monkeypatch):
+        """Every distinct refusal path, as (label, raised message)."""
+        import re as _re
+        out = []
+        cfg = _config({"a1": {}}, defaults={"egress": {"deny_tcp_ports": [25]}})
+
+        def grab(label, setup):
+            mp = pytest.MonkeyPatch()
+            try:
+                setup(mp)
+                start_module.apply_egress_policy(cfg if label != "shared uid" else
+                    _config({"a1": {}, "a2": {}}, defaults={"egress": {"deny_tcp_ports": [25]}}))
+            except RuntimeError as e:
+                out.append((label, str(e)))
+            finally:
+                mp.undo()
+
+        ok_run = lambda *a, **k: SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        grab("missing binary", lambda mp: mp.setattr(start_module.shutil, "which", lambda _n: None))
+
+        def _no_priv(mp):
+            mp.setattr(start_module.shutil, "which", lambda n: f"/sbin/{n}")
+            mp.setattr(start_module.subprocess, "run",
+                       lambda *a, **k: SimpleNamespace(returncode=3, stdout="", stderr="denied"))
+        grab("no NET_ADMIN", _no_priv)
+
+        def _nouser(mp):
+            mp.setattr(start_module.shutil, "which", lambda n: f"/sbin/{n}")
+            mp.setattr(start_module.subprocess, "run", ok_run)
+            def _raise(_n): raise KeyError(_n)
+            mp.setattr(start_module.pwd, "getpwnam", _raise)
+        grab("unknown account", _nouser)
+
+        def _priv_uid(mp):
+            mp.setattr(start_module.shutil, "which", lambda n: f"/sbin/{n}")
+            mp.setattr(start_module.subprocess, "run", ok_run)
+            mp.setattr(start_module.pwd, "getpwnam", lambda n: SimpleNamespace(pw_uid=0))
+        grab("privileged uid", _priv_uid)
+
+        def _shared(mp):
+            mp.setattr(start_module.shutil, "which", lambda n: f"/sbin/{n}")
+            mp.setattr(start_module.subprocess, "run", ok_run)
+            mp.setattr(start_module.pwd, "getpwnam", lambda n: SimpleNamespace(pw_uid=1002))
+        grab("shared uid", _shared)
+
+        def _absent(mp):
+            mp.setattr(start_module.shutil, "which", lambda n: f"/sbin/{n}")
+            mp.setattr(start_module.pwd, "getpwnam", lambda n: SimpleNamespace(pw_uid=1002))
+            def _run(cmd, *a, **k):
+                if len(cmd) > 1 and cmd[1] == "-S":
+                    return SimpleNamespace(returncode=0, stdout="-N MACEFF_EGRESS\n", stderr="")
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+            mp.setattr(start_module.subprocess, "run", _run)
+        grab("rule absent on readback", _absent)
+
+        return out
+
+    def test_every_refusal_names_the_policy(self, start_module, monkeypatch):
+        """No refusal may leave the reader without somewhere to go."""
+        refusals = self._refusals(start_module, monkeypatch)
+        assert len(refusals) == 6, f"expected 6 refusal paths, got {[l for l, _ in refusals]}"
+        for label, msg in refusals:
+            assert "macf_tools policy navigate capability_boundaries" in msg, (
+                f"refusal {label!r} does not name the policy that explains it"
+            )
+
+    def test_pointers_are_timeless(self, start_module, monkeypatch):
+        """No section numbers. A reference to a section breaks when the policy
+        reorganizes, and the break is silent — the text still reads plausibly while
+        pointing at whatever now occupies that number."""
+        import re
+        section_ref = re.compile(r"§\s*\d|section\s+\d+(\.\d+)*", re.IGNORECASE)
+        for label, msg in self._refusals(start_module, monkeypatch):
+            hit = section_ref.search(msg)
+            assert hit is None, (
+                f"refusal {label!r} pins a section ({hit.group(0)!r}); "
+                f"use a navigate command and concept hints instead"
+            )
+
+    def test_pointer_offers_concept_hints(self, start_module, monkeypatch):
+        """A bare command leaves the reader to guess which of ~10 CEP sections
+        applies. Hints are what let them choose without us prescribing."""
+        _, msg = self._refusals(start_module, monkeypatch)[0]
+        assert "Related:" in msg
+        assert len([h for h in ("enforcement placement", "identity separation",
+                                "declared-but-unenforceable", "verification by attempt")
+                    if h in msg]) >= 3
