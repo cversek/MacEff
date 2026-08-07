@@ -98,6 +98,14 @@ macf_tools policy read roadmaps_drafting
 21. What should phases specify?
 22. What is explicitly FORBIDDEN in phase descriptions?
 
+**Policy Engagement Protocol on Phases (MANDATORY)**:
+23. What does the policy require a phase to declare about the policies its executor must engage?
+24. How does the policy say required reading follows from the WORK TYPE, rather than being re-derived per phase?
+25. What distinction does the policy draw between policies a phase READS and policies it WRITES?
+26. When does the policy say a phase carries no PEP at all?
+
+Extract the work-type mapping from the policy rather than reproducing it here — it is expected to grow, and a copy in this command would drift from it. The point of the mapping is that an executor picking a phase up cold, with no memory of the drafting conversation, does not begin work without reading something they needed.
+
 ### Step 4: Exploration (ENCOURAGED if requirements murky)
 
 **If scope is unclear or requirements ambiguous**, use Task tool with Explore subagent to investigate:

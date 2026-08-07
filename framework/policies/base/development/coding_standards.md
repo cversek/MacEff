@@ -49,12 +49,22 @@ Applies to all code written within MacEff framework projects.
 - What is dynamic discovery?
 - What discovery priority should I use?
 
+**6 Import Placement Anti-patterns**
+- Where do imports belong, and what breaks when they are placed elsewhere?
+- When is a deferred import justified?
+
 **7 Derived State Discipline**
 - What is the derived-state drift pattern?
 - Why does a stale record mislead worse than a missing one?
 - What are the two permitted repairs?
 - What question should a reviewer ask of a cached value?
 - Why does automation raise the stakes on unreconciled state?
+
+**8 Search Before You Write**
+- What must I do before adding a function to a module?
+- How do I search for an existing helper whose NAME I do not know?
+- What do I do when I find a near-duplicate rather than an exact one?
+- Why does consolidating require comparing implementations rather than picking one?
 
 ---
 
