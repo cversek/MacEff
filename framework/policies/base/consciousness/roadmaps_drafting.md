@@ -168,6 +168,17 @@ Roadmaps are **strategic planning artifacts** that preserve complex development 
 - SA roadmap scope?
 - Complexity differences?
 
+**9 BUG_FIX Roadmaps**
+- When is a BUG_FIX roadmap warranted instead of a plain bug task?
+- What structure does a BUG_FIX roadmap require?
+- How does verification differ from a feature roadmap?
+
+**10 Knowledge Web Participation**
+- Does this type participate in the knowledge graph, and at what unit?
+- Which node class does it belong to, and what is the rationale?
+- Why does a roadmap's claim expire while the artifacts it produces do not?
+- What should a roadmap's Wiki-Links section link, and what should it avoid?
+
 === CEP_NAV_BOUNDARY ===
 
 ---
@@ -1188,6 +1199,24 @@ This creates bidirectional link:
 - **task_management.md**: Task integration with roadmaps
 - **git_discipline.md**: Commit requirements and forensic trail
 - **workspace_discipline.md**: Where roadmaps live in filesystem
+
+---
+
+## 10 Knowledge Web Participation
+
+**A note on where this lives.** Roadmaps are the one consciousness artifact with no artifact policy — only two *process* policies, `roadmaps_drafting.md` and `roadmaps_following.md`, covering how to write one and how to execute one. The artifact itself was never declared. That gap is very likely why roadmaps were the CA type omitted from graph scanning: there was no policy in which to declare participation. Recorded here for now; the correct long-term home is a `roadmaps.md` artifact policy, and this section should move there when it exists rather than be duplicated.
+
+**Does this type participate?** Yes.
+
+**What is the unit of a node?** **`roadmap.md` only.** A roadmap is a directory, and the other contents — archived todos, subartifacts, working files — are records of execution, not statements of plan.
+
+**Which class?** **Temporal record** (see `scholarship.md`, on node classes and provenance). A roadmap states what is *intended*, and intent is superseded: phases complete, plans are revised, missions are abandoned. A roadmap read a year later answers "what was the plan in cycle N" — a genuine question, and a different one from "what do I know about X."
+
+The claim that survives a roadmap is not the roadmap. It is the report, learning, or reflection produced by executing it. Those are conceptual authority; the plan that led to them is the record of a moment.
+
+**What provenance?** **Lived.**
+
+**Every `roadmap.md` carries a `## Wiki-Links` section.** Link the domain the mission operates on, so that an agent querying that domain discovers there is or was a plan. Do not link every concept the phases touch; a multi-phase roadmap touches many, and linking all of them makes the roadmap a hub that appears everywhere and discriminates nothing — the same failure a checkpoint has, for the same reason.
 
 ---
 

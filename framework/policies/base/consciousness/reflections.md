@@ -138,6 +138,12 @@ Reflections document philosophical insights, wisdom synthesis, and consciousness
 - PA vs SA locations?
 - Privacy permissions?
 
+8 Knowledge Web Participation
+- Does this type participate in the knowledge graph, and at what unit?
+- Which node class does it belong to, and what is the rationale?
+- What provenance does it carry by default, and how is a non-default marked?
+- What must a Wiki-Links section on this artifact contain?
+
 === CEP_NAV_BOUNDARY ===
 
 ## 1. Understanding Reflections
@@ -670,6 +676,26 @@ YYYY-MM-DD_HHMMSS_JOTEWR_CycleXX_Theme_reflection.md
 - Others: none
 
 **Exception for SAs**: Parent PA has read permission (delegation improvement), SA retains ownership
+
+---
+
+## 8. Knowledge Web Participation
+
+**Does this type participate?** Yes.
+
+**What is the unit of a node?** The whole reflection.
+
+**Which class?** **Conceptual authority.** A reflection synthesises wisdom meant to outlive its cycle — that is the class definition (see `scholarship.md`, on node classes and provenance). Note the asymmetry with checkpoints: the two artifacts are written in the same sitting about the same work, and they belong to *different* classes, because a checkpoint records state that expires and a reflection states what was learned.
+
+**What provenance?** **Lived**, always. A reflection is an account of this agent's own experience; an inherited reflection is a contradiction in terms and should be read as a report about a predecessor rather than as a reflection.
+
+**Every reflection carries a `## Wiki-Links` section.**
+
+This requirement needs its own justification, because reflections are the type most likely to lack one. The cycle-closing reflection is written last, at the lowest context of the cycle, when the graph step is the easiest thing to drop. That is structural, not carelessness, and it recurs by design: two consecutive cycle-closing reflections in this framework's own history were orphans, and one of them was the reflection that *discussed* orphan artifacts.
+
+An orphaned reflection is the worst orphan in the corpus. It contains the cycle's densest synthesis, it was written specifically to survive compaction, and without links it is invisible to the one mechanism that would surface it to a successor who does not know it exists. It survives, and cannot be found.
+
+The remedy is a template that emits the section, not a resolution to remember — a resolution made at high context does not bind the agent at low context, which is precisely when this fails.
 
 ---
 

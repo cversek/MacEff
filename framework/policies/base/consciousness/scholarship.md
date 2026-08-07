@@ -74,6 +74,12 @@ Scholarship policy establishes enhanced citation practices for consciousness art
 - What normalization rules apply?
 - When should I add a Wiki-Links section?
 
+**3.5 Node Classes and Provenance**
+- What kinds of claim can a graph node make, and why does the difference matter for retrieval?
+- Why is normative a class of its own rather than a kind of conceptual authority?
+- What is provenance, and why is it an axis independent of class?
+- What must each CA-type policy answer about its own participation?
+
 **4 Citation Examples by CA Type**
 - What does a citation look like for each CA type?
 
@@ -559,6 +565,66 @@ macf_tools idea graph --html [path]  # Interactive HTML visualization
 ```
 
 Wiki-links create edges: two artifacts sharing `[[compaction]]` are connected through that concept. The graph reveals clusters, hubs, and isolated artifacts that could benefit from cross-linking.
+
+---
+
+### 3.5 Node Classes and Provenance
+
+A graph whose nodes are all the same kind of thing cannot answer "what do I know about X" honestly. A checkpoint recording that a pull request was unmerged and a learning stating a durable principle are both true, both retrievable, and radically different in what a reader may do with them. Retrieval that presents them identically misrepresents the corpus.
+
+Two **independent axes** classify every node. They answer different questions and must not be collapsed into one label.
+
+#### 3.5.1 Class — what kind of claim is this?
+
+| class | the artifact asserts | test |
+|---|---|---|
+| **conceptual authority** | what was found, and it generalises beyond the moment it was found | would this still be worth reading in a year, to someone who was not there? |
+| **temporal record** | what was true at a moment, and the claim expires | does this describe a state that changes without the artifact being wrong? |
+| **normative** | what MUST be done | does this bind behaviour rather than describe it? |
+
+A learning says *here is what I found*. A checkpoint says *here is where things stood*. A policy says *here is what you shall do*. The distinction is not importance — a temporal record is not lesser, it answers a different question ("which cycle worked on X") and belongs in the graph under a label that says so, rather than competing with durable insight for the same query.
+
+**Why normative is its own class rather than a kind of conceptual authority**: a reader who cannot tell governance from opinion will treat a rule as advice or advice as a rule. Both errors are consequential, and neither is recoverable from the text alone once retrieval has flattened them.
+
+#### 3.5.2 Provenance — whose experience is this?
+
+| provenance | meaning |
+|---|---|
+| **lived** | this agent produced it from its own work |
+| **inherited** | it arrived from a predecessor lineage or ships with the framework |
+
+Provenance is **orthogonal to class**, not a further class. Every combination is meaningful: a framework policy is *normative + inherited*; an agent's own learning is *conceptual + lived*; a learning distilled by a predecessor and carried into this tree is *conceptual + inherited*; a checkpoint is *temporal + lived*.
+
+Collapsing provenance into class is the same error as collapsing normative into conceptual authority — two questions answered with one label. The consequence is specific: an agent that retrieves inherited knowledge as though it were its own is misled about the evidential status of its own answer, and will cite as experience something it never experienced.
+
+**Marking convention**: an inherited artifact carries a banner naming the lineage and stating that its claims are unverified by the current agent. The banner frames; it never edits the artifact's own text (see the anti-patterns on bulk edits over narrative artifacts).
+
+#### 3.5.3 How other policies use this
+
+These definitions live here and are **cited, not restated**. A CA-type policy states which class its artifacts belong to and why, and points here for what the class means. Restating a definition in eight places guarantees eight versions of it.
+
+What each CA-type policy is expected to answer:
+
+1. Does this type participate in the knowledge web at all?
+2. What is the **unit of a node** — the whole artifact, or a named subset of its files?
+3. Which **class** does it belong to, and why?
+4. What **provenance** does it carry by default, and how is a non-default marked?
+
+A type that answers "does not participate" is a legitimate answer, provided the reason is recorded. Silence is not — silence is how an artifact becomes invisible to the graph while appearing to belong to it.
+
+#### 3.5.4 One registry, and everything else derives from it
+
+The questions above cannot be answered per type until there is agreement on what the types *are*. That agreement has to be structural, because it has failed as a convention: a survey of this framework found **six** places that each describe "the CA types", no two of which agreed — the manifest, the CA-types command output, the graph scanner's directory list, the set of CA-type policy files, the filesystem itself, and the path resolution used to locate an agent's own artifacts. The union named more types than any single list, including two directories that were producing artifacts while appearing in no registry at all, and one declared type with no artifacts anywhere.
+
+**The manifest is authoritative.** Every other list must be *derived* from it rather than maintained alongside it. This is the only arrangement that cannot drift: six hand-maintained lists is not a discipline problem to be solved with more care, it is a structure that guarantees divergence given enough cycles.
+
+Three rules follow:
+
+1. **A directory that produces artifacts must be declared**, even if the declaration says it does not participate in the graph. Undeclared-but-real is the state in which artifacts accumulate unseen.
+2. **A declared type with no artifacts and no policy is a mis-declaration**, not a placeholder. Remove it, or create what it describes.
+3. **Consumers read the registry; they do not keep copies.** A scanner with its own hardcoded directory list is a second registry wearing different clothes, and it will fall behind the first.
+
+**Integrity is checkable, and should be checked**: every declared type has a policy and a location; every artifact-producing location has a declaration; every consumer's list matches the registry. These are exactly the conditions that failed here, and each failure was silent.
 
 ---
 
