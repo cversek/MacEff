@@ -44,28 +44,18 @@ def _make_slug(title: str) -> str:
     return slug[:60]  # cap length
 
 
-def _normalize_wiki_links(raw: List[str]) -> List[str]:
-    """Normalize wiki-link tokens to canonical lowercase_underscored form.
+from .concepts import extract_wiki_concepts, normalize_concept, normalize_concepts  # noqa: F401
 
-    Accepts inputs like ``"Foo Bar"``, ``"[[foo_bar]]"``, or already-canonical
-    ``"foo_bar"`` and returns ``"foo_bar"``. Strips ``[[ ]]`` wrappers (callers
-    sometimes paste in the markdown form). Lowercases, collapses whitespace
-    into underscores, drops anything outside ``[a-z0-9_-]``, drops empties,
-    and dedups while preserving first-seen order.
+
+def _normalize_wiki_links(raw: List[str]) -> List[str]:
+    """Backwards-compatible alias for the canonical concept normalizer.
+
+    Retained so existing call sites keep working; the implementation lives in
+    ``macf.concepts`` because concepts belong to no single CA type. Note the
+    behaviour change this alias inherits: hyphens now normalize to underscores
+    rather than surviving, per the scholarship policy's spelling rule.
     """
-    seen = set()
-    out: List[str] = []
-    for token in raw or []:
-        if not token:
-            continue
-        t = token.strip().strip("[]").strip().lower()
-        t = re.sub(r'\s+', '_', t)
-        t = re.sub(r'[^a-z0-9_\-]', '', t)
-        if not t or t in seen:
-            continue
-        seen.add(t)
-        out.append(t)
-    return out
+    return normalize_concepts(raw)
 
 
 def create_idea(
@@ -445,18 +435,7 @@ def build_knowledge_graph(scan_dirs: Optional[List[Path]] = None) -> Dict[str, A
                 content = md_file.read_text(errors='replace')
             except OSError:
                 continue
-            # Two-tier wiki-link extraction: prefer the explicit ## Wiki-Links
-            # section (canonical convention in learnings). Fall back to any
-            # [[concept]] occurrences elsewhere in the document so CAs that
-            # don't follow the explicit-section convention (most CCPs,
-            # JOTEWRs, experiment artifacts) still produce edges.
-            concepts = []
-            wl_match = re_mod.search(r'## Wiki-Links\s*\n(.+?)(?:\n##|\Z)', content, re_mod.DOTALL)
-            if wl_match:
-                concepts = re_mod.findall(r'\[\[(.+?)\]\]', wl_match.group(1))
-            if not concepts:
-                # Fallback: scan whole document for [[...]] references
-                concepts = re_mod.findall(r'\[\[(.+?)\]\]', content)
+            concepts = extract_wiki_concepts(content)
             if not concepts:
                 continue
             # Create a node ID for this CA. For nested CAs (experiments),

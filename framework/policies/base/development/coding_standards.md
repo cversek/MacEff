@@ -309,6 +309,31 @@ The check was against the wrong authority. **Idempotence must be defined against
 
 ---
 
+## 8 Search Before You Write
+
+**Before adding a function, search the repository for one that already does the same or a similar job.** This is the heart of DRY, and it is a *search* obligation rather than a *memory* obligation — you cannot recall a helper you have never read.
+
+The search is cheap and the failure is not. A duplicate does not announce itself: both copies work, tests pass, and the divergence only surfaces later when one is fixed and the other is not.
+
+**How to search — by behaviour, not by the name you were about to use.** The existing function almost certainly has a different name; that is *why* it was missed. Search for what it would *do*:
+
+- the distinctive operation (`strip`, `normalize`, `resolve`, `parse`) rather than your intended identifier
+- the domain noun in any spelling, including plurals and abbreviations
+- a distinctive literal, regex fragment, or constant the function would have to contain
+- the module you would expect to own it, read top to bottom
+
+Search the **whole repository**, not the module you are editing. Related helpers are frequently one directory away — and, more often than is comfortable, in the same file above your cursor.
+
+**When you find one:**
+
+- **Identical behaviour** → import it. Do not copy it.
+- **Nearly identical** → extend the existing one, or extract the common core. Two near-copies is the worst outcome: it costs a maintenance burden and buys nothing.
+- **Correct-but-elsewhere** → if the behaviour belongs to neither module in particular, that is a signal it wants its own module. Concepts, identifiers, paths and time are the usual suspects — cross-cutting vocabulary that ends up parked inside whichever consumer needed it first.
+
+**When you consolidate, compare the implementations before choosing one.** Near-duplicates usually disagree somewhere, and the disagreement is where a bug lives. Take the union of correct behaviours rather than defaulting to the older or the newer implementation. In practice one of them has usually drifted from a rule stated elsewhere, and the drift is invisible until the two are placed side by side.
+
+**Anti-pattern — Confident Rewrite**: writing a helper because the need is obvious and the implementation is short. Brevity is exactly what makes duplication attractive and exactly why it recurs; a four-line function is easier to rewrite than to find, which is how a codebase accumulates six spellings of the same idea.
+
 ## Language-Specific Implementation
 
 This policy defines the philosophy. Implementation patterns are language-specific:

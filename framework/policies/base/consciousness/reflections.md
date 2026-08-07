@@ -697,6 +697,19 @@ An orphaned reflection is the worst orphan in the corpus. It contains the cycle'
 
 The remedy is a template that emits the section, not a resolution to remember — a resolution made at high context does not bind the agent at low context, which is precisely when this fails.
 
+### Reflections link inline as well as in the section
+
+A reflection is **expansion**, not summary. Unlike a learning, which states one insight, a reflection develops a conceptual narrative across pages of prose. Tagging that with a trailing list of concepts describes the document; it does not connect the *thinking*.
+
+So concepts should be used **liberally inside the prose itself**, written as `[[concept]]` at the moment the passage is about them. This does two things a trailing section cannot:
+
+- It binds **passages** to concepts rather than binding the whole artifact. A reflection touching eight concepts across twelve pages is, at document granularity, weakly about all eight; at passage granularity it is strongly about each one somewhere specific.
+- It makes the reflective register and the conceptual register reinforce each other. Naming the concept where the thought happens ties that passage into the wider web instead of leaving the connection to be reconstructed later from a list.
+
+The trailing `## Wiki-Links` section remains **required**, and keeps its own job: it is the artifact's canonical summary — what this reflection is *about*, taken as a whole. Inline links are additive, not a substitute.
+
+**Known dependency, stated so this is not followed into a penalty.** Extraction currently treats the whole-document scan as a *fallback* rather than a union: when a `## Wiki-Links` section is present and non-empty, inline concepts elsewhere in the document are discarded. Measured on a test document, three inline concepts were dropped in favour of two section concepts. Until extraction unions both sources, a reflection that follows this section will have its inline work counted only if the summary section is absent — which is the opposite of the intended incentive. Write inline links anyway: the guidance is correct, and the artifacts written now become correct retroactively the moment the parser unions the two.
+
 ---
 
 ## Integration with Policy System

@@ -380,7 +380,9 @@ Before saving, the artifact MUST carry a `## Wiki-Links` section. This is what c
 
 **What to link**: consult the reflections policy on **knowledge web participation** for what this artifact type should link and what it should avoid. Link the concepts the synthesis is ABOUT. Note why this step is written into the command rather than left to judgement: the cycle-closing reflection is produced last, at the lowest context of the cycle, which is precisely when the graph step gets dropped. Two consecutive cycle-closing reflections in this framework's history were orphans, and one of them discussed orphan artifacts.
 
-**How to choose**: query the graph before inventing a concept — `macf_tools knowledge query <concept>` — so you connect to vocabulary the corpus already uses instead of coining a near-duplicate that connects to nothing. Two to five concepts.
+**Use concepts INLINE as well.** A JOTEWR is expansion, not summary. Write `[[concept]]` inside the prose at the moment a passage is about it, liberally — this binds *passages* to the web rather than tagging the whole file, and lets the reflective register and the conceptual register reinforce each other. The trailing section keeps its own job as the artifact's canonical summary; inline links are additive, not a substitute. See the reflections policy on this, including the extraction dependency it names.
+
+**How to choose**: query the graph before inventing a concept — `macf_tools knowledge query <concept>` — so you connect to vocabulary the corpus already uses instead of coining a near-duplicate that connects to nothing. Two to five concepts in the summary section; inline usage is unbounded.
 
 **Do not emit an empty heading.** A `## Wiki-Links` section with no links is worse than its absence: it satisfies a checker while leaving the artifact exactly as unreachable.
 
