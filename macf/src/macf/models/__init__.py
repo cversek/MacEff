@@ -11,6 +11,7 @@ from .agent_spec import (
     AgentsConfig,
     ConsciousnessArtifactsConfig,
     DefaultsConfig,
+    EgressPolicy,
 )
 from .project_spec import (
     ProjectSpec,
@@ -26,6 +27,7 @@ __all__ = [
     'AgentsConfig',
     'ConsciousnessArtifactsConfig',
     'DefaultsConfig',
+    'EgressPolicy',
     # Project models
     'ProjectSpec',
     'ProjectsConfig',

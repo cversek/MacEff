@@ -1221,11 +1221,18 @@
     "backup": [
       "base/operations/agent_backup"
     ],
+    "blast_radius": [
+      "base/infrastructure/amail",
+      "base/infrastructure/capability_boundaries"
+    ],
     "branch": [
       "base/development/git_discipline"
     ],
     "breakthrough": [
       "base/consciousness/observations"
+    ],
+    "capability_boundary": [
+      "base/infrastructure/capability_boundaries"
     ],
     "ccp": [
       "base/consciousness/checkpoints"
@@ -1287,6 +1294,9 @@
     "dual_trace": [
       "base/consciousness/emotional_expression"
     ],
+    "egress": [
+      "base/infrastructure/capability_boundaries"
+    ],
     "email": [
       "amail"
     ],
@@ -1324,12 +1334,19 @@
     "git": [
       "base/development/git_discipline"
     ],
+    "hardening": [
+      "base/infrastructure/capability_boundaries",
+      "tech/docker/container_operations"
+    ],
     "hypothesis": [
       "base/consciousness/experiments"
     ],
     "identity": [
       "base/development/git_discipline",
       "core_principles"
+    ],
+    "identity_separation": [
+      "base/infrastructure/capability_boundaries"
     ],
     "jotewr": [
       "base/consciousness/reflections",
@@ -1397,6 +1414,10 @@
     ],
     "portable": [
       "base/meta/path_portability"
+    ],
+    "positive_control": [
+      "base/development/debugging_and_validation",
+      "base/infrastructure/capability_boundaries"
     ],
     "production_path": [
       "base/development/debugging_and_validation"
@@ -1556,6 +1577,39 @@
           "daemon",
           "index",
           "cache"
+        ]
+      },
+      {
+        "name": "capability_boundaries",
+        "short_name": "CAPBOUND",
+        "path": "base/infrastructure/capability_boundaries.md",
+        "CEP_triggers": [
+          "I was refused reaching something — is the network broken or is this deliberate?",
+          "What should an agent do when it meets a capability boundary, and what must it not do?",
+          "Why can't the service being reached just enforce its own allowlist?",
+          "What three different failures does one capability boundary prevent?",
+          "How does a deployment declare what an agent may not reach?",
+          "Why must provisioning abort rather than warn when a boundary cannot be enforced?",
+          "Why is identity separation a prerequisite rather than hardening?",
+          "How do I prove a capability boundary actually holds?",
+          "Why is reading the rule not evidence that it binds?",
+          "Why does a destination that stopped responding return INCONCLUSIVE rather than PASS?"
+        ],
+        "keywords": [
+          "capability",
+          "boundary",
+          "boundaries",
+          "egress",
+          "network",
+          "restriction",
+          "uid",
+          "identity_separation",
+          "blast_radius",
+          "positive_control",
+          "negative_control",
+          "hardening",
+          "reach",
+          "enforcement"
         ]
       }
     ]
