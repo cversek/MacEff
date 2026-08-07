@@ -944,7 +944,19 @@ The failure is easy to fall into precisely because the *work* is correct. A dire
 
 **Tell**: you are about to describe work in a report or a message, and the task it belongs to is not `in_progress`.
 
-### 6.6 Type-Specific Completion Gates
+### 6.6 Resuming an Interrupted Task
+
+**When you jump back to a task you had already started, start it again.** Verify the outcome: the task tree's recency marker (👈) should move back to that task.
+
+This is the companion to §6.5. That section keeps the tree honest about work that was never tracked; this one keeps it honest about *where work is happening now*.
+
+Interleaved work is the normal case, not the exception — a directive arrives, a phase is set down and picked back up, an investigation detours through three tasks. The recency marker exists to answer "where did work last happen", and after any interleaving it answers correctly only if resumption is recorded. Otherwise the tree points at whatever was touched last, which after a detour is reliably the wrong thing, and a successor orienting from it starts in the wrong place.
+
+**Verify rather than assume.** The instruction specifies an observable outcome — the marker moves — and checking it is part of doing it. This matters more than it sounds: the behaviour was originally a no-op that warned "already in_progress" and changed nothing, so an agent following this rule without checking would have believed it complied while the tree stayed wrong. A directive that names an outcome is asking for the outcome, not the gesture.
+
+**A same-cycle resumption is a light event.** It refreshes the stamp and records that work resumed. It does not require the read-history ritual that a *stale* resume does — work last touched in an earlier cycle carries its own heavier protocol, because the context that made it legible is gone.
+
+### 6.7 Type-Specific Completion Gates
 
 Certain task types have completion requirements beyond the standard `--report`. When `task complete` is invoked on a gated type without meeting requirements, the system **redirects the agent to read the relevant policy section** rather than encoding the full policy in the error message. This ensures agents engage with the nuanced requirements in the policy itself.
 

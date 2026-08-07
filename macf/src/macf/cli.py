@@ -6617,11 +6617,32 @@ def cmd_task_start(args: argparse.Namespace) -> int:
     breadcrumb = get_breadcrumb()
 
     if task.status == "in_progress":
-        # Already active. A same-cycle re-start is a no-op, but a stale resume
-        # (last worked an earlier cycle) still bumps the stamp + prompts the
-        # read-notes-and-narrate ritual -- the case task start otherwise misses.
+        # Already active. Both a same-cycle re-start and a stale resume are
+        # legitimate RESUMPTIONS and both refresh the recency stamp; they differ
+        # only in ceremony. A stale resume (last worked an earlier cycle) also
+        # prompts the read-notes-and-narrate ritual, which same-cycle work does
+        # not need because the history is still in context.
+        #
+        # Re-starting used to warn and return without touching anything, which
+        # made resumption invisible: an agent returning to a task it had put
+        # down could not move the tree's focus marker back to it, so the tree
+        # kept asserting that work was happening wherever it LAST happened
+        # rather than where it IS happening. Interleaved work made that reliably
+        # wrong. Resuming is an event, not a mistake.
         if not stale:
-            print(f"⚠️  Task #{task_id} is already in_progress")
+            if task.mtmd:
+                from .task.models import MacfTaskUpdate
+                import copy
+                new_mtmd = copy.deepcopy(task.mtmd)
+                new_mtmd.updates.append(MacfTaskUpdate(
+                    breadcrumb=breadcrumb,
+                    description="Task resumed via CLI (same-cycle)",
+                    agent="PA"))
+                update_task_file(task_id, {"description": task.description_with_updated_mtmd(new_mtmd)})
+            append_event("task_resumed", {
+                "task_id": str(task_id), "from_cycle": None, "breadcrumb": breadcrumb})
+            print(f"▶️  Task #{task_id} resumed (was already in_progress)")
+            print(f"   Breadcrumb: {breadcrumb}")
             return 0
         last_cycle, last_ts, cur_cycle = stale
         if task.mtmd:
@@ -8780,6 +8801,24 @@ def cmd_knowledge_gaps(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_knowledge_doctor(args: argparse.Namespace) -> int:
+    """Report what the knowledge web cannot report about itself.
+
+    Exits non-zero when acute findings exist, so a caller can gate on it — but
+    note that gating is deliberately NOT the intended default use. See the
+    policy on when running this is worth doing.
+    """
+    from .diagnostics import Severity, format_diagnosis
+    from .knowledge_doctor import examine
+
+    dx = examine()
+    if getattr(args, "json_output", False):
+        print(json.dumps(dx.to_dict(), indent=2, default=str))
+    else:
+        print(format_diagnosis(dx))
+    return 1 if dx.counts().get(Severity.ACUTE, 0) else 0
+
+
 def cmd_knowledge_viz(args: argparse.Namespace) -> int:
     """Generate interactive HTML knowledge graph visualization."""
     from .ideas import generate_graph_html
@@ -10113,6 +10152,13 @@ def _build_parser() -> argparse.ArgumentParser:
     kg_gaps = knowledge_sub.add_parser("gaps", help="detect missing wiki-links")
     kg_gaps.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")
     kg_gaps.set_defaults(func=cmd_knowledge_gaps)
+
+    kg_doctor = knowledge_sub.add_parser(
+        "doctor",
+        help="report orphans, drift, singletons and registry gaps the graph cannot see")
+    kg_doctor.add_argument("--json", dest="json_output", action="store_true",
+                           help="machine-readable output")
+    kg_doctor.set_defaults(func=cmd_knowledge_doctor)
 
     kg_viz = knowledge_sub.add_parser("viz", help="generate interactive HTML visualization")
     kg_viz.add_argument("output", nargs="?", default="", help="output path (default: /tmp/macf_knowledge_graph.html)")
