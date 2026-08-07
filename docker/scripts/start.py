@@ -1532,6 +1532,26 @@ EGRESS_CHAIN = 'MACEFF_EGRESS'
 # container has is not a property of the config that restricts it.
 EGRESS_BINARIES = ('iptables', 'ip6tables')
 
+# Every refusal below NAMES the policy rather than restating it.
+#
+# A remedy copied into an error string is duplicated policy: it drifts, and the
+# drift is invisible because nobody diffs an error message against a document. A
+# navigate command cannot drift — it resolves to whatever the policy currently
+# says. So these messages carry the diagnosis (which is ours to state) and a
+# pointer (which is the policy's to answer), never an inline prescription and
+# never a section number.
+#
+# The concept hints are deliberate: they are what lets a reader choose a section
+# from the CEP guide without us pinning one. A hint is a pointer; a prescription
+# is a copy.
+POLICY_POINTER = (
+    "\n\nWhy this refuses rather than warns, and what a deployment must do:\n"
+    "    macf_tools policy navigate capability_boundaries\n"
+    "    macf_tools policy navigate container_operations\n"
+    "Related: enforcement placement, identity separation as prerequisite, "
+    "declared-but-unenforceable, verification by attempt."
+)
+
 
 def resolve_egress_policies(agents_config: AgentsConfig) -> Dict[str, List[int]]:
     """Resolve the effective deny list for every agent.
@@ -1584,9 +1604,8 @@ def apply_egress_policy(agents_config: AgentsConfig) -> None:
         if shutil.which(binary) is None:
             raise RuntimeError(
                 f"Egress policy declared but '{binary}' is not installed in this image. "
-                f"Install the iptables package, or remove the egress declaration from "
-                f"agents.yaml. Provisioning refuses to continue: agents would run "
-                f"believing a restriction that is not present."
+                f"Provisioning refuses to continue: agents would otherwise run believing "
+                f"a restriction that is not present." + POLICY_POINTER
             )
         probe = subprocess.run([binary, '-L', 'OUTPUT', '-n'],
                                capture_output=True, text=True)
@@ -1594,9 +1613,8 @@ def apply_egress_policy(agents_config: AgentsConfig) -> None:
             raise RuntimeError(
                 f"Egress policy declared but '{binary}' cannot read the ruleset "
                 f"(exit {probe.returncode}): {probe.stderr.strip()}\n"
-                f"The container almost certainly lacks NET_ADMIN. Add "
-                f"'cap_add: [NET_ADMIN]' to the compose service, or remove the egress "
-                f"declaration. Provisioning refuses to continue."
+                f"The container almost certainly lacks NET_ADMIN. Provisioning "
+                f"refuses to continue." + POLICY_POINTER
             )
 
     # Map usernames to uids up front so a bad account fails before any rule lands.
@@ -1607,7 +1625,7 @@ def apply_egress_policy(agents_config: AgentsConfig) -> None:
         except KeyError:
             raise RuntimeError(
                 f"Egress policy declared for '{username}' but that account does not "
-                f"exist. Rules must be installed against a real uid."
+                f"exist. Rules must be installed against a real uid." + POLICY_POINTER
             )
         # An agent sharing an identity with the operator cannot be filtered without
         # filtering the operator — the rule is not merely ineffective, it is
@@ -1616,7 +1634,7 @@ def apply_egress_policy(agents_config: AgentsConfig) -> None:
             raise RuntimeError(
                 f"Egress policy declared for '{username}' (uid {uid}), which is a "
                 f"system or privileged account. Owner-matched filtering requires the "
-                f"agent to hold its own unprivileged uid."
+                f"agent to hold its own unprivileged uid." + POLICY_POINTER
             )
         uids[username] = uid
 
@@ -1624,7 +1642,7 @@ def apply_egress_policy(agents_config: AgentsConfig) -> None:
     if duplicates:
         raise RuntimeError(
             f"Egress policy cannot be enforced: accounts share uids {duplicates}. "
-            f"A rule matching one would silently match the other."
+            f"A rule matching one would silently match the other." + POLICY_POINTER
         )
 
     for binary in EGRESS_BINARIES:
@@ -1685,7 +1703,7 @@ def apply_egress_policy(agents_config: AgentsConfig) -> None:
                 raise RuntimeError(
                     f"Egress policy: rule for {username} (uid {uids[username]}) is "
                     f"absent from {binary} {EGRESS_CHAIN} after installation. "
-                    f"Chain reads:\n{listed.stdout}"
+                    f"Chain reads:\n{listed.stdout}" + POLICY_POINTER
                 )
             log(f"Egress rule active [{binary}]: {username} "
                 f"(uid {uids[username]}) denied tcp/{','.join(str(p) for p in ports)}")
