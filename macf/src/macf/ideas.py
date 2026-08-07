@@ -11,7 +11,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional, Tuple
 
 
 def _get_ideas_dir() -> Path:
@@ -388,6 +388,60 @@ def build_idea_graph() -> Dict[str, Any]:
     }
 
 
+#: How each consciousness-artifact type participates in the knowledge graph.
+#:
+#: ``dirs``       where its artifacts live, relative to ``agent/``
+#: ``unit``       ``"all"`` for every markdown file, or a set of stems when the
+#:                type is a DIRECTORY whose other files are evidence rather than
+#:                concept-bearing units
+#: ``node_class`` what kind of claim its nodes make — defined once in the
+#:                scholarship policy on node classes and provenance, cited here
+#:
+#: This replaces a hardcoded directory list with a single declaration, but it is
+#: still a SECOND registry. The manifest is authoritative and this should be
+#: derived from it. Six hand-maintained lists of the CA types is what produced
+#: the drift this table is part of correcting; a seventh that merely agrees
+#: today just resets the clock.
+CA_PARTICIPATION: Dict[str, Dict[str, Any]] = {
+    "learnings":    {"dirs": ["private/learnings"],
+                     "unit": "all", "node_class": "conceptual_authority"},
+    "reflections":  {"dirs": ["private/reflections"],
+                     "unit": "all", "node_class": "conceptual_authority"},
+    "observations": {"dirs": ["public/observations"],
+                     "unit": "all", "node_class": "conceptual_authority"},
+    "reports":      {"dirs": ["public/reports"],
+                     "unit": "all", "node_class": "conceptual_authority"},
+    # Protocol and analysis carry the claims; data/, artifacts/ and
+    # quick_tests/ hold the evidence those claims cite.
+    "experiments":  {"dirs": ["public/experiments"],
+                     "unit": {"protocol", "analysis"},
+                     "node_class": "conceptual_authority"},
+    # Checkpoints appear in both trees; which is canonical is unresolved, so
+    # both are scanned rather than silently preferring one.
+    "checkpoints":  {"dirs": ["private/checkpoints", "public/checkpoints"],
+                     "unit": "all", "node_class": "temporal_record"},
+    # The plan is the node; archived todos and subartifacts are execution
+    # records. Previously not scanned at all.
+    "roadmaps":     {"dirs": ["public/roadmaps"],
+                     "unit": {"roadmap"}, "node_class": "temporal_record"},
+}
+
+
+def _ca_type_for_dir(scan_dir: Path) -> Tuple[str, Dict[str, Any]]:
+    """Resolve a scanned directory to its CA type and participation spec.
+
+    Falls back to the directory name for callers passing an explicit
+    ``scan_dirs`` outside the table, so tests and ad-hoc scans keep working.
+    """
+    posix = scan_dir.as_posix()
+    for ca_type, spec in CA_PARTICIPATION.items():
+        for rel in spec["dirs"]:
+            if posix.endswith(rel):
+                return ca_type, spec
+    return scan_dir.name, {"dirs": [], "unit": "all",
+                           "node_class": "conceptual_authority"}
+
+
 def build_knowledge_graph(scan_dirs: Optional[List[Path]] = None) -> Dict[str, Any]:
     """Build cross-CA knowledge graph: ideas + learnings + observations via wiki-links.
 
@@ -403,22 +457,13 @@ def build_knowledge_graph(scan_dirs: Optional[List[Path]] = None) -> Dict[str, A
     wiki_index = defaultdict(set, {k: set(v) for k, v in graph["wiki_index"].items()})
     ca_nodes = {}  # non-idea CA nodes: {node_id: {type, title, path}}
 
-    # Scan additional CA directories for wiki-links. Extends beyond
-    # learnings/observations to cover the full Consciousness Artifact corpus
-    # (closes GH issue #73).
     if scan_dirs is None:
         try:
             from .utils.paths import find_agent_home
             agent_home = find_agent_home()
             if agent_home:
-                scan_dirs = [
-                    agent_home / "agent" / "private" / "learnings",
-                    agent_home / "agent" / "private" / "checkpoints",
-                    agent_home / "agent" / "private" / "reflections",
-                    agent_home / "agent" / "public" / "observations",
-                    agent_home / "agent" / "public" / "experiments",
-                    agent_home / "agent" / "public" / "reports",
-                ]
+                scan_dirs = [agent_home / "agent" / rel for spec in CA_PARTICIPATION.values()
+                             for rel in spec["dirs"]]
         except (OSError, ImportError) as e:
             print(f"⚠️ MACF: knowledge graph scan dirs failed: {e}", file=sys.stderr)
             scan_dirs = []
@@ -426,10 +471,18 @@ def build_knowledge_graph(scan_dirs: Optional[List[Path]] = None) -> Dict[str, A
     for scan_dir in (scan_dirs or []):
         if not scan_dir.exists():
             continue
-        ca_type = scan_dir.name  # "learnings", "checkpoints", "reflections", etc.
+        ca_type, spec = _ca_type_for_dir(scan_dir)
+        unit = spec.get("unit", "all")
+        node_class = spec.get("node_class", "conceptual_authority")
         # Recursive walk so experiments/<dated>/ subfolders are picked up.
         for md_file in sorted(scan_dir.rglob("*.md")):
             if md_file.name == "INDEX.md":
+                continue
+            # Unit of node: some CA types are directories whose other files are
+            # EVIDENCE rather than concept-bearing units. An experiment's
+            # per-arm data is addressed by the analysis that cites it, not by a
+            # concept query; counting it makes evidence outnumber conclusions.
+            if unit != "all" and md_file.stem not in unit:
                 continue
             try:
                 content = md_file.read_text(errors='replace')
@@ -448,7 +501,8 @@ def build_knowledge_graph(scan_dirs: Optional[List[Path]] = None) -> Dict[str, A
             # Extract title from first heading
             title_match = re_mod.search(r'^#\s+(.+)', content, re_mod.MULTILINE)
             title = title_match.group(1)[:50] if title_match else md_file.stem[:50]
-            ca_nodes[node_id] = {"type": ca_type, "title": title, "path": str(md_file)}
+            ca_nodes[node_id] = {"type": ca_type, "title": title,
+                                 "path": str(md_file), "node_class": node_class}
             for concept in concepts:
                 wiki_index[concept].add(node_id)
 
@@ -758,6 +812,9 @@ def query_knowledge_graph(term: str, kg: Optional[Dict[str, Any]] = None) -> Dic
                 "title": idea.get("title", ""), "type": "idea",
                 "status": idea.get("status", ""), "category": idea.get("category", ""),
                 "degree": len(edges.get(node_id, set())),
+                # An idea is prospective, but its claim is meant to outlive the
+                # moment; status carries the proposal-versus-finding weighting.
+                "node_class": "conceptual_authority",
             }
         elif node_id in ca_nodes:
             info = ca_nodes[node_id]
@@ -766,6 +823,7 @@ def query_knowledge_graph(term: str, kg: Optional[Dict[str, Any]] = None) -> Dic
                 "title": info.get("title", ""), "type": info.get("type", "ca"),
                 "status": "", "category": info.get("type", ""),
                 "degree": len(edges.get(node_id, set())),
+                "node_class": info.get("node_class", "conceptual_authority"),
             }
         return None
 

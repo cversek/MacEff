@@ -8747,6 +8747,19 @@ def cmd_knowledge_query(args: argparse.Namespace) -> int:
     from .ideas import query_knowledge_graph, format_query_result
 
     result = query_knowledge_graph(args.term)
+
+    # Filter by node class. A checkpoint's claims expire and a learning's do
+    # not; a query asking "what do I know about X" wants durable insight, while
+    # "which cycle touched X" wants the temporal record. Returning both
+    # unlabelled dilutes the first with the second, and the dilution worsens
+    # every cycle. See the scholarship policy on node classes and provenance.
+    node_class = getattr(args, "node_class", None)
+    if node_class:
+        for key in ("nodes", "neighbors"):
+            if key in result:
+                result[key] = [n for n in result[key]
+                               if n.get("node_class") == node_class]
+        result["filtered_by_class"] = node_class
     if getattr(args, "json_output", False):
         print(json.dumps(result, indent=2, default=str))
     else:
@@ -10089,6 +10102,12 @@ def _build_parser() -> argparse.ArgumentParser:
     kg_query = knowledge_sub.add_parser("query", help="query subgraph by concept, node ID, or keyword")
     kg_query.add_argument("term", help="concept name, node ID (#007), or keyword")
     kg_query.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")
+    kg_query.add_argument(
+        "--class", dest="node_class",
+        choices=["conceptual_authority", "temporal_record", "normative"],
+        help="restrict to one node class: conceptual_authority (durable claims), "
+             "temporal_record (claims that expire), normative (rules). "
+             "Default returns all classes, each labelled.")
     kg_query.set_defaults(func=cmd_knowledge_query)
 
     kg_gaps = knowledge_sub.add_parser("gaps", help="detect missing wiki-links")
