@@ -34,7 +34,18 @@ def _participating_files(agent_home: Path, participation: Dict[str, Dict[str, An
     """Yield (ca_type, spec, path) for every file the graph should contain."""
     for ca_type, spec in participation.items():
         for rel in spec["dirs"]:
-            d = agent_home / "agent" / rel
+            # Framework-rooted types live outside the agent tree. Resolving them
+            # against agent_home was silently catastrophic: dirs=[""] became
+            # agent_home/"agent"/"" — the WHOLE agent tree — so every artifact
+            # was examined a second time and mislabelled with this type.
+            if spec.get("root") == "framework":
+                from .utils.manifest import get_framework_policies_path
+                base = get_framework_policies_path()
+                if not base:
+                    continue
+                d = base / rel if rel else base
+            else:
+                d = agent_home / "agent" / rel
             if not d.exists():
                 continue
             unit = spec.get("unit", "all")
