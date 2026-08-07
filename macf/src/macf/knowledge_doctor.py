@@ -73,11 +73,6 @@ def examine(agent_home: Optional[Path] = None,
             continue
         if extract_wiki_concepts(content):
             continue
-        # Opt-in types: not participating is a valid state, not an orphan.
-        # Reporting them would bury the real findings under the majority that
-        # simply have not opted in.
-        if spec.get("opt_in"):
-            continue
         orphans_by_type.setdefault(ca_type, []).append(path)
         # Distinguish "never linked" from "wrote links that do not count".
         # The second is a different mistake and deserves a different remedy.

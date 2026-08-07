@@ -441,13 +441,7 @@ CA_PARTICIPATION: Dict[str, Dict[str, Any]] = {
     # boundary; the direction is safe (public policy read into a private graph)
     # and the reverse is forbidden — a policy must never link a concept that
     # resolves only in some agent's private tree.
-    # opt_in: absence of links is a VALID STATE for this type, not a defect.
-    # Doctors must not report a non-participating policy as an orphan — opting
-    # in is a positive act, so not having opted in is silence rather than
-    # breakage. Without this flag the doctor flags every unopted policy and
-    # buries the real findings, which is the "checker that flags everything"
-    # failure its own policy warns about.
-    "policies":     {"dirs": [""], "root": "framework", "opt_in": True,
+    "policies":     {"dirs": [""], "root": "framework",
                      "unit": "all", "node_class": "normative"},
 }
 
