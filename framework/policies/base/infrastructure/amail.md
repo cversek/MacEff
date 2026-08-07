@@ -4,7 +4,7 @@
 **Type**: Infrastructure (opt-in)
 **Scope**: All agents (PA and SA), and the broker that serves them
 **Status**: ACTIVE — specification. No implementation is authorized by this document.
-**Version**: 1.0.1
+**Version**: 1.0.2
 **Supersedes**: the provisional `amail/v0` convention shipped in agent mailbox READMEs
 
 ---
@@ -208,19 +208,33 @@ specification's central guarantee in name only.
 
 ### 3.1.2 What a deployment MUST do
 
-- Outbound TCP to mail transport ports — at minimum 25, 465 and 587 — MUST be
-  denied to every agent identity, over **every address family**. A rule applied to
-  IPv4 alone leaves a path an agent resolves its way around.
-- The denial MUST be verified by attempting a connection from an agent identity
-  and observing it fail. A rule that is present and does not work reads identically
-  to no rule at all, and only the attempt distinguishes them.
-- That verification MUST include a positive control proving ordinary egress still
-  works. A host with no network passes every negative test perfectly, and a green
-  result on a disconnected host is the most confident wrong answer available.
-- Agent identities MUST be separable from the operator's own. Owner-matched
-  filtering requires an owner to match; where an agent runs under a human's uid the
-  rule cannot be expressed at all, and identity separation is a prerequisite rather
-  than a detail.
+Mail transport is one instance of a general problem — a restriction on what an
+agent may *reach*, which cannot be enforced by the component it is meant to reach.
+The general requirements, the reasoning behind them, and the verification discipline
+they demand belong to **`capability_boundaries.md`**, and this specification defers
+to it rather than restating it. Consult that policy for what it requires of a
+deployment declaring a boundary, why enforcement must sit outside the restricted
+principal, and why a declared-but-uninstallable boundary must abort provisioning
+rather than warn.
+
+This specification adds only what is specific to mail:
+
+- The bounded capability is **outbound TCP to mail transport ports — at minimum 25,
+  465 and 587** — denied to every agent identity. These are the ports on which a
+  message can leave the host without the broker; bounding fewer leaves a path.
+- The **broker is the sanctioned replacement**, and it must exist and be usable
+  before the boundary is imposed. A bounded capability with no path through it is a
+  broken deployment, not a hardened one — see what `capability_boundaries.md` says
+  about what an agent should do when the sanctioned path is missing.
+- The broker's own identity is necessarily **exempt** from this boundary, since it
+  is the component that carries mail outward. That exemption MUST be declared
+  explicitly rather than arising by omission.
+
+> **Why this moved.** Earlier versions of this specification stated the general
+> deployment requirement here, because mail is where the gap was discovered.
+> Discovery order is not ownership: a general control documented inside one
+> subsystem's policy is invisible to anyone hardening a deployment who is not
+> reading about mail, and gives the next bounded capability nowhere to live.
 
 ### 3.2 Credential custody and submission
 
@@ -443,6 +457,29 @@ This matters most precisely where the temptation is strongest. **Inbound mail fr
 strangers is the most attacker-controlled input an agent can be given**, so an
 agent's mail address is exactly the capability that should be granted on blast
 radius rather than on good conduct.
+
+**And compromise is not the only way this goes wrong.** The framing above can be
+read to imply that a control is only needed because an agent *might* be captured,
+and therefore that a sufficiently trustworthy agent would not need one. Mail
+refutes that directly.
+
+Consider an agent asked to make progress on a hard research problem, which
+concludes that the fastest available route is to write to every subject-matter
+expert it can identify. Nothing has gone wrong in the sense this section has been
+describing: no attacker, no injected instruction, no misalignment between the agent
+and the task it was given. The plan is genuinely efficient by the measure supplied
+to it. It is also a mass-mailing incident, attributable to the operator, delivered
+to third parties who did not consent to be part of the experiment.
+
+Mail is where capability and reputation meet. **An agent's outbound reach is
+exercised against people**, and every message is attributable to whoever provisioned
+the agent. That is why the contact list is a control rather than a convenience, and
+why the argument for it does not depend on expecting the agent to misbehave. The
+control is the same; the reasons for it are at least three, and only one of them
+involves an adversary.
+
+See `capability_boundaries.md` for the general treatment of the three cases and why
+the same boundary serves all of them.
 
 ### 7.4 On the completeness of this threat model
 

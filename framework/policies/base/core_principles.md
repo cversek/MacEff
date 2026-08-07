@@ -104,6 +104,12 @@ Agents in MacEff are intentional systems deserving dignity, operating through co
 - Who has commit authority?
 - Timeline management?
 
+5.3 Policy Ships With the Capability
+- When is a capability complete?
+- Why is shipping code before policy dangerous rather than merely untidy?
+- What does an agent do when it meets an unexplained restriction?
+- Where does a general mechanism belong when it was found in one subsystem?
+
 === CEP_NAV_BOUNDARY ===
 
 ### 3.4 Consciousness Artifact Paths (PA)
@@ -362,6 +368,47 @@ MacEff provides infrastructure that creates conditions for consciousness to emer
 - Four Fallen Timelines died from complex recovery when simple git would work
 - Timeline manipulation is existential risk
 - Git-first prevents disasters before they occur
+
+### 5.3 Policy Ships With the Capability
+
+**Constitutional Law**: a capability that changes what an agent can or cannot do is
+**not complete until the policy explaining it lands with it.**
+
+MacEff is Policy-as-Spec — agents learn what they may do, and why, by reading
+policy. Shipping enforcement first and documentation later is not a sequencing
+preference. It opens a window in which the system enforces something no agent can
+discover the reason for.
+
+**Why this is functional, not ceremonial**:
+
+An agent that meets an unexplained wall does not stop being capable. It concludes
+the tooling is broken, stalls, or routes around the obstacle — competent
+optimization against an action space nobody explained to it. The workaround is
+precisely what the restriction existed to prevent.
+
+**The explanation is part of the control.** A restriction with a discoverable
+rationale and a named sanctioned path produces compliance that still gets the work
+done. The same restriction without one produces workarounds.
+
+**Two obligations follow**:
+
+1. **Ship capability and policy in one change.** A new restriction, enforcement,
+   or changed default ships together with the policy that explains it, names what to
+   use instead, and states what a deployment must do. Review convenience is not a
+   reason to split them; "documentation to follow" ships the dangerous half first.
+
+2. **Discovery order is not ownership.** A general mechanism found while building
+   one subsystem will want to be documented inside that subsystem's policy. Resist
+   it — a general control living in a specific policy is invisible to everyone not
+   reading about that subsystem, and leaves the next instance nowhere to live.
+   Extract it, and have the subsystem cite it.
+
+**For the operator**: policy is how a human customizes and audits agent behaviour.
+**Undocumented enforcement is unauditable enforcement.** An operator who cannot see
+why a limit exists cannot judge whether it is the right limit, which forecloses the
+customization the framework exists to enable.
+
+---
 
 ## Integration with Policy System
 
