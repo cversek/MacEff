@@ -428,16 +428,22 @@ chmod 1777 sandbox-home sandbox-shared_workspace
 ```
 
 ### 3) Provide SSH public keys for in-container users
-Put **public** keys (only `*.pub`) into `keys/`:
+Put **your own** public keys into `keys/`:
 - `keys/admin.pub` → grants SSH to the `admin` user (port 2222)
 - `keys/maceff_user001.pub` → grants SSH to the default PA (`maceff_user001`)
 
-If you don’t have them yet:
+The repository ships **no** keys. It cannot: provisioning installs whatever
+`.pub` files it finds here as `authorized_keys`, so a key committed upstream
+would be an access grant to `admin` — a passwordless sudoer — on every machine
+that cloned it. `keys/` is therefore gitignored in full, public halves included.
+See `keys/README.md`.
+
+Generate them if you don’t have them yet:
 ```bash
 mkdir -p keys
 ssh-keygen -t ed25519 -f keys/admin -N ''
 ssh-keygen -t ed25519 -f keys/maceff_user001 -N ''
-# commit only the .pub files; keep private keys out of git
+# both halves stay local — nothing in keys/ is committed
 ```
 
 ### 4) Build the images
