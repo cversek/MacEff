@@ -1,4 +1,19 @@
-# ignore everything in this dir by default
+# Ignore everything in this directory, including public keys.
+#
+# This used to read `*` followed by `!*.pub`, on the reasoning that public halves
+# are not secrets and are convenient to share. Both halves of that are true and
+# it was still wrong, for a reason that has nothing to do with cryptography:
+# provisioning INSTALLS whatever `.pub` files it finds here as authorized_keys.
+#
+# So a committed public key is not documentation — it is an access grant that
+# ships with the repository. Three of them did, and two belonged to the same
+# workstation. Anyone who cloned this repo and ran `docker compose up` got a
+# container whose passwordless-sudo `admin` account, and whose default agent
+# account, both trusted a key held by someone else entirely.
+#
+# Nothing in here is tracked now. Put your own keys here and they stay local,
+# which is the behaviour the setup instructions always described.
 *
-# keep only public keys
-!*.pub
+!.gitignore
+!.gitkeep
+!README.md
