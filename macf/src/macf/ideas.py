@@ -424,6 +424,25 @@ CA_PARTICIPATION: Dict[str, Dict[str, Any]] = {
     # records. Previously not scanned at all.
     "roadmaps":     {"dirs": ["public/roadmaps"],
                      "unit": {"roadmap"}, "node_class": "temporal_record"},
+    # Framework policies are NORMATIVE nodes: they state what must be done,
+    # rather than what was found (conceptual authority) or what was true at a
+    # moment (temporal record). They are also INHERITED — shipped with the
+    # framework rather than produced by this agent — which is why the shared
+    # vocabulary they carry is the same for every deployment.
+    #
+    # Participation is OPT-IN and costs nothing to enforce: extraction returns
+    # no concepts for a policy without a Wiki-Links section, and a node with no
+    # concepts is never created. So a policy joins the graph by declaring
+    # links, and the opt-in stays observable while hub domination is still
+    # cheap to reverse.
+    #
+    # root="framework" because policies live in the MacEff installation, not in
+    # the agent tree. This is the one participating type that crosses that
+    # boundary; the direction is safe (public policy read into a private graph)
+    # and the reverse is forbidden — a policy must never link a concept that
+    # resolves only in some agent's private tree.
+    "policies":     {"dirs": [""], "root": "framework",
+                     "unit": "all", "node_class": "normative"},
 }
 
 
@@ -435,8 +454,14 @@ def _ca_type_for_dir(scan_dir: Path) -> Tuple[str, Dict[str, Any]]:
     """
     posix = scan_dir.as_posix()
     for ca_type, spec in CA_PARTICIPATION.items():
+        if spec.get("root") == "framework":
+            # Framework-rooted types are identified by the directory they live
+            # in rather than by a relative suffix under agent/.
+            if posix.endswith("/policies") or "/framework/policies" in posix:
+                return ca_type, spec
+            continue
         for rel in spec["dirs"]:
-            if posix.endswith(rel):
+            if rel and posix.endswith(rel):
                 return ca_type, spec
     return scan_dir.name, {"dirs": [], "unit": "all",
                            "node_class": "conceptual_authority"}
@@ -462,8 +487,16 @@ def build_knowledge_graph(scan_dirs: Optional[List[Path]] = None) -> Dict[str, A
             from .utils.paths import find_agent_home
             agent_home = find_agent_home()
             if agent_home:
-                scan_dirs = [agent_home / "agent" / rel for spec in CA_PARTICIPATION.values()
-                             for rel in spec["dirs"]]
+                scan_dirs = []
+                for spec in CA_PARTICIPATION.values():
+                    if spec.get("root") == "framework":
+                        from .utils.manifest import get_framework_policies_path
+                        pol = get_framework_policies_path()
+                        if pol:
+                            scan_dirs.extend(pol / rel if rel else pol
+                                             for rel in spec["dirs"])
+                        continue
+                    scan_dirs.extend(agent_home / "agent" / rel for rel in spec["dirs"])
         except (OSError, ImportError) as e:
             print(f"⚠️ MACF: knowledge graph scan dirs failed: {e}", file=sys.stderr)
             scan_dirs = []

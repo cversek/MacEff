@@ -340,3 +340,15 @@ This policy evolves through:
 - Cross-agent comparison of evidence presentation quality
 
 **Principle**: The best validation evidence is the evidence that makes the reviewer say "I don't need to check this myself — I can see it works."
+
+---
+
+## Wiki-Links
+
+<!-- NORMATIVE node (see scholarship on node classes and provenance): this artifact
+     states what MUST be done, not what was found or what was true at a moment. It is
+     also INHERITED — it ships with the framework rather than being produced by any one
+     agent, which is what makes the vocabulary below shared across deployments.
+     Link what this policy GOVERNS, never what it merely mentions. -->
+
+[[verification]] [[coverage]] [[methodology]]

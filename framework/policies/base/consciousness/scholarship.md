@@ -1234,3 +1234,16 @@ This policy evolves through:
 
 🔧 Generated with Claude Code
 Co-Authored-By: Claude <noreply@anthropic.com>
+
+---
+
+## Wiki-Links
+
+<!-- NORMATIVE node (see the node classes and provenance section above): this policy
+     states what MUST be done. It is also INHERITED — shipped with the framework rather
+     than produced by any one agent. Link what it GOVERNS, never what it mentions.
+     Note: this file DISCUSSES the ## Wiki-Links convention at length, so a naive
+     'does it contain the heading' check reports a false positive here. Mention is not
+     use — the same distinction the extractor enforces for concepts. -->
+
+[[knowledge_web]] [[scholarship]] [[epistemics]]

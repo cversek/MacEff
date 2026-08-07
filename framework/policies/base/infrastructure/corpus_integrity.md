@@ -177,3 +177,15 @@ A finding names an artifact a reader has to find. When a corpus nests artifacts 
 ## Evolution & Feedback
 
 This policy was written alongside the first doctor in the family. It generalises from one instrument and should be expected to be wrong in places only a second and third will reveal. If a new doctor finds the vocabulary does not fit its corpus, that is evidence about the vocabulary rather than about the corpus — say so.
+
+---
+
+## Wiki-Links
+
+<!-- NORMATIVE node (see scholarship on node classes and provenance): this artifact
+     states what MUST be done, not what was found or what was true at a moment. It is
+     also INHERITED — it ships with the framework rather than being produced by any one
+     agent, which is what makes the vocabulary below shared across deployments.
+     Link what this policy GOVERNS, never what it merely mentions. -->
+
+[[silent_failure]] [[verification]] [[knowledge_web]]
