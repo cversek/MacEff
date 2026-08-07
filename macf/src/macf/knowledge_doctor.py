@@ -120,7 +120,15 @@ def examine(agent_home: Optional[Path] = None,
             content = path.read_text(errors="replace")
         except OSError:
             continue
-        for raw in _RAW_LINK.findall(content):
+        # Strip mentions before looking for drift, exactly as extraction does.
+        # Scanning raw content made this check internally inconsistent with the
+        # extractor: a concept quoted inside backticks while DOCUMENTING the
+        # notation was reported as a misspelling to correct. An artifact that
+        # explains the convention would be told to stop explaining it.
+        prose = re.sub(r"```.*?```", " ", content, flags=re.DOTALL)
+        prose = re.sub(r"~~~.*?~~~", " ", prose, flags=re.DOTALL)
+        prose = re.sub(r"`[^`\n]*`", " ", prose)
+        for raw in _RAW_LINK.findall(prose):
             canon = normalize_concept(raw)
             if canon and raw.strip() != canon:
                 drift.setdefault(canon, set()).add(raw.strip())
