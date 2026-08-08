@@ -376,6 +376,68 @@ def find_live_supervisor_by_name(name: str, exclude_pid: int = 0) -> dict | None
     return max(matches, key=lambda d: d.get("created", 0))
 
 
+def _find_own_supervisor() -> dict | None:
+    """Find the RUNNING supervisor whose child is *this* session.
+
+    tmux sessions are named with the CC session id as a suffix
+    (see ``launch_in_terminal``), so an agent can locate its own supervisor by
+    matching the current session id against each registry entry's
+    ``tmux_session``. Returns the most recently created match, or None when the
+    session is unsupervised / not tmux-backed.
+    """
+    import os
+    sid = os.environ.get("CLAUDE_CODE_SESSION_ID") or _latest_session_id()
+    if not sid or not REGISTRY_DIR.exists():
+        return None
+    short = sid.split("-")[0]
+    matches = []
+    for entry in REGISTRY_DIR.glob("*.json"):
+        if entry.name == "supervisor_crash.log":
+            continue
+        try:
+            data = json.loads(entry.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        if not _is_alive(data.get("supervisor_pid", 0)):
+            continue
+        ts = data.get("tmux_session") or ""
+        if sid in ts or (short and short in ts):
+            matches.append(data)
+    if not matches:
+        return None
+    return max(matches, key=lambda d: d.get("created", 0))
+
+
+def send_slash_to_self(command: str, target: str = "") -> int:
+    """Queue a slash command (e.g. ``/compact``) into this agent's own live CC
+    pane via the tmux side channel.
+
+    The client parses slash commands only from its own TTY input, so there is
+    no in-process way to invoke ``/compact``; the supported path is to type it
+    into the pane. Typed mid-turn it simply queues and fires when the current
+    turn yields — which is exactly the intended use (an operator, away from the
+    keyboard, directing the agent to compact itself).
+
+    *command* is given without the leading slash (``"compact"`` → ``/compact``);
+    a leading slash is tolerated. *target* optionally names the supervisor
+    directly (``auto-restart`` name/pid) when self-resolution is not wanted.
+    Returns 0 on success; non-zero with a diagnostic on any failure, and never
+    raises into the caller.
+    """
+    cmd = "/" + command.lstrip("/")
+    if target:
+        return send_keys(target, [cmd], enter=True)
+    data = _find_own_supervisor()
+    if not data:
+        print("[inject] Could not find a running supervisor for this session. "
+              "This session may be unsupervised or not tmux-backed. "
+              "Pass an explicit --target <name|pid> (see `auto-restart list`).",
+              file=sys.stderr)
+        return 1
+    return send_keys(data.get("name") or str(data.get("supervisor_pid")),
+                     [cmd], enter=True)
+
+
 def send_keys(target: str, keys: list, enter: bool = True) -> int:
     """Inject literal text (plus an optional Enter) into a supervised session's
     tmux pane - the side channel for driving the live CC client (e.g. a real
