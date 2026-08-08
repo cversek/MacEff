@@ -235,3 +235,13 @@ agent/subagents/DevOpsEng/public/delegation_trails/2025-10-21_112620_Phase1B1_Py
 
 - Based on python-aerobotics `DEVELOPMENT_PROTOCOLS.md` Section 12 (Workspace Discipline)
 - Based on python-aerobotics `DEVELOPMENT_PROTOCOLS.md` Section 1d (Dependency Management)
+
+---
+
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — where
+     development artifacts live and how they stay traceable. -->
+
+[[methodology]] [[filesystem]] [[delegation]]
