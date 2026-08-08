@@ -500,15 +500,19 @@ def render_child(p: HarnessParams) -> str:
 # session on relaunch and both are handled below.
 SESS="${{MACEFF_TMUX_SESSION:-{p.agent}}}"
 MACF={p.macf_tools}
-(
-  # 1. The client can park at the workspace-trust prompt. Enter is a no-op on an
-  #    empty input, so this is safe when no prompt is showing.
-  sleep 18; tmux send-keys -t "=$SESS" Enter 2>/dev/null
-  # The re-orientation prompt is no longer typed in here. It is passed to the
-  # client as its initial prompt below, which is both earlier and unconditional
-  # -- send-keys had to guess when the client was ready, and a resume that never
-  # started could not be rescued by typing into it.
-) &
+# NO BLIND KEYSTROKES ON LAUNCH. A timed `sleep 18; send-keys Enter` used to
+# live here to clear the workspace-trust prompt, justified as "Enter is a no-op
+# on an empty input". That justification only holds if the thing on screen is
+# the prompt we expect. The client's startup dialogs are not stable across
+# versions, and an unattended Enter does not accept a known prompt -- it accepts
+# WHATEVER is focused, including a resume dialog whose default is to summarize
+# rather than continue as-is. Silently discarding the session's own context is
+# not a recoverable mistake, and nothing would record that a choice was made.
+#
+# Operator directive: a menu that a human has not seen is a menu a machine must
+# not answer. First launch is the operator's to select. If a trust prompt blocks
+# an unattended restart, the fix is to grant trust beforehand -- state that
+# survives restarts -- not to guess at the keyboard.
 
 # Continuity is the DEFAULT. `-c` resumes the prior conversation; starting a new
 # one must be a deliberate act, because an unattended restart that silently
@@ -519,15 +523,31 @@ MACF={p.macf_tools}
 # line -- the session comes up, the terminal looks right, and the agent is
 # simply unreachable from outside. It has happened here: a resume that dropped
 # --channels took the inbound link down with nothing to see.
-# Tee, not redirect: the pane stays live for whoever is attached AND the output
-# survives the pane for whoever is not. `exec` keeps this process replaced by
-# the client, so the supervisor still waits on the client itself and not on a
-# wrapper -- a pipeline here would make the supervisor watch `tee` instead, and
-# a client that died would look alive.
+# LOG THE PANE FROM OUTSIDE THE CHILD. `tmux pipe-pane` copies what the pane
+# renders to a file without touching any of the client's descriptors, so the
+# client keeps the terminal tmux gave it.
+#
+# The previous form, `exec > >(tee -a "$LOG") 2>&1`, was a redirection, and it
+# replaced the client's stdout with a PIPE. That matters more than it looks:
+# a terminal is not a cosmetic property, it is what an interactive client
+# inspects to decide whether to BE interactive. Deprived of one it can render
+# a single turn and exit 0 -- whereupon the supervisor, behaving exactly as
+# designed, restarts it. The result is a restart loop in which no layer is
+# misbehaving and no error is logged anywhere, which is why it survived a
+# night of reading logs that all said things were fine.
+#
+# The diagnostic caused the fault it was added to diagnose. Measured, not
+# reasoned: in a tmux pane `[ -t 1 ]` is true, and after that exec it is false
+# (tests/test_harness_runtime.py).
+#
+# pipe-pane is also strictly better as logging: it captures what the pane
+# actually showed, including anything written straight to the terminal, which
+# a stdout redirect never sees. `-o` toggles off any prior pipe first so a
+# restart does not stack writers onto one file.
 LOG="{p.log_path}"
 mkdir -p "$(dirname "$LOG")"
 {{ echo; echo "=== $(date -Is) starting: claude -c{channels} ==="; }} >> "$LOG"
-exec > >(tee -a "$LOG") 2>&1
+tmux pipe-pane -o -t "=$SESS" "cat >> '$LOG'" 2>/dev/null || true
 
 # A RESUME MUST CARRY A PROMPT. `claude -c` with no prompt can refuse to resume
 # outright -- "No deferred tool marker found in the resumed session ... Provide a

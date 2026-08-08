@@ -491,16 +491,45 @@ class TestAFailedLaunchStaysReadable:
     def test_the_child_keeps_its_own_log(self):
         child = render_child(SYNTH)
         assert str(SYNTH.log_path) in child
-        assert "tee -a" in child
+        assert "pipe-pane" in child
 
-    def test_the_child_tees_rather_than_redirects(self):
-        """Redirecting would blank the pane for an attached human; a pipeline
-        would make the supervisor wait on `tee` instead of the client, so a
-        dead client would look alive."""
+    def test_the_child_logs_without_touching_the_clients_descriptors(self):
+        """This test previously asserted the DEFECT as a requirement.
+
+        It demanded `exec > >(tee -a ...)`, reasoning that a plain redirect
+        would blank the pane and a `| tee` pipeline would make the supervisor
+        wait on tee instead of the client. Both halves of that were true, and
+        the conclusion was still wrong: process substitution avoids the
+        pipeline but still replaces the client's stdout with a PIPE, and an
+        interactive client deprived of a terminal can render one turn and exit
+        0 -- producing a restart loop with no error in any log.
+
+        The deeper mistake is the shape of the old assertion. Pinning a literal
+        line of shell pins an IMPLEMENTATION; the property that actually
+        matters -- the client still has a terminal -- is not visible in the
+        source at all. It is measured in tests/test_harness_runtime.py, which
+        runs the wrapper in a real pane and asks the client what it received.
+        Keep this test negative and thin; the positive claim lives there.
+        """
         child = _code_only(render_child(SYNTH))
-        assert "exec > >(tee -a" in child
         assert "exec claude" in child
+        assert "exec >" not in child, (
+            "the wrapper must not redirect the client's stdout; log the pane "
+            "from outside with tmux pipe-pane"
+        )
         assert "| tee" not in child, "a pipeline would hide the client's exit from the supervisor"
+        assert "pipe-pane" in child
+
+    def test_no_blind_keystrokes_are_sent_on_launch(self):
+        """An unattended Enter accepts whatever is focused, not the prompt we
+        had in mind. Startup dialogs are not stable across client versions, and
+        a resume dialog defaulting to 'summarize' would silently discard the
+        session's context with nothing recording that a choice was made."""
+        child = _code_only(render_child(SYNTH))
+        assert "send-keys" not in child, (
+            "first launch is the operator's to answer; a menu a human has not "
+            "seen is a menu a machine must not answer"
+        )
 
     def test_the_launcher_says_where_the_log_is(self):
         assert str(SYNTH.log_path) in render_start(SYNTH)
