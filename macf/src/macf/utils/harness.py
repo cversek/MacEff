@@ -536,6 +536,12 @@ exec > >(tee -a "$LOG") 2>&1
 # succeed. Measured A/B on one conversation, same minute: without a prompt, exit
 # 1 every time; with one, the client came up.
 #
+# ARGUMENT ORDER IS LOAD-BEARING. `--channels` is VARIADIC: it keeps consuming
+# following words, so a prompt placed after it is parsed as another channel and
+# the client dies with "--channels entries must be tagged: <your prompt>". The
+# prompt therefore goes first and the variadic flag goes LAST, where the only
+# thing it can consume is its own values. Reproduced both ways before choosing.
+#
 # It also replaces a timing hack. The re-orientation used to be typed in by
 # send-keys ~30s after launch, which meant guessing when the client was ready
 # and defeating paste-detection with a double Enter. Passing it as the initial
@@ -547,7 +553,7 @@ else
   PROMPT="Session resumed by the harness. Summarize where things stand and await instructions."
 fi
 
-exec claude -c{channels} "$@" "$PROMPT"
+exec claude -c "$PROMPT" "$@"{channels}
 """
 
 

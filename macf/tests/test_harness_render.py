@@ -304,7 +304,7 @@ class TestChildEntrypoint:
         (line,) = [l for l in render_child(p).splitlines() if l.startswith("exec claude")]
         # "$PROMPT" trails deliberately — a resume with no prompt can be refused
         # outright; see TestAResumeCarriesAPrompt.
-        assert line == 'exec claude -c --channels plugin:a@x,plugin:b@y "$@" "$PROMPT"'
+        assert line == 'exec claude -c "$PROMPT" "$@" --channels plugin:a@x,plugin:b@y'
 
 
 needs_tmux = pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux not available")
@@ -518,7 +518,21 @@ class TestAResumeCarriesAPrompt:
 
     def test_the_client_is_given_an_initial_prompt(self):
         (line,) = [l for l in render_child(SYNTH).splitlines() if l.startswith("exec claude")]
-        assert line.endswith('"$PROMPT"'), "a resume with no prompt can be refused outright"
+        assert '"$PROMPT"' in line, "a resume with no prompt can be refused outright"
+
+    def test_the_prompt_does_not_follow_a_variadic_flag(self):
+        """`--channels` keeps consuming following words. A prompt placed after it
+        is parsed as another channel and the client dies with "--channels entries
+        must be tagged: <your prompt>" — which is what happened, in a restart
+        loop, on a live host. The variadic flag must come last, where the only
+        thing left to consume is its own values."""
+        from dataclasses import replace
+        p = replace(SYNTH, channels=("plugin:a@x",))
+        (line,) = [l for l in render_child(p).splitlines() if l.startswith("exec claude")]
+        assert line.index('"$PROMPT"') < line.index("--channels"), \
+            "the prompt must precede the variadic flag"
+        assert line.rstrip().endswith("plugin:a@x"), \
+            "--channels must be last so nothing follows it to be swallowed"
 
     def test_the_prompt_is_never_empty(self):
         """An empty string would satisfy the shell and not the client."""
