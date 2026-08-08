@@ -93,6 +93,19 @@ class HarnessParams:
         return self.functions_path or (self.home / ".maceff" / f"harness_functions_{self.agent}.bash")
 
     @property
+    def settings_path(self) -> Path:
+        """Where the install-time choices are remembered.
+
+        Channels and the shell prefix cannot be re-derived from the environment,
+        so without this a later ``install --check`` renders DIFFERENT artifacts
+        and reports drift that does not exist — and a ``--force`` reinstall run
+        on that false report would silently strip the channel, taking the agent
+        off the air with nothing to see. The generator can only be authoritative
+        about what it can reproduce.
+        """
+        return self.home / ".maceff" / f"harness_{self.agent}.json"
+
+    @property
     def prefix(self) -> str:
         """Short handle for the generated shell functions.
 
@@ -178,6 +191,34 @@ def resolve_agent(explicit: Optional[str] = None,
     if len(units) > 1:
         return units, "ambiguous"
     return "agent", "default"
+
+
+def load_settings(p: HarnessParams) -> HarnessParams:
+    """Re-apply the choices recorded at install time.
+
+    Explicit flags win; this only fills what was not given, so a check run with
+    no flags reproduces the installed artifacts instead of inventing new ones.
+    """
+    import json
+    from dataclasses import replace
+    try:
+        data = json.loads(p.settings_path.read_text())
+    except (OSError, ValueError):
+        return p
+    return replace(
+        p,
+        channels=p.channels or tuple(data.get("channels") or ()),
+        shell_prefix=p.shell_prefix or data.get("shell_prefix"),
+    )
+
+
+def save_settings(p: HarnessParams) -> None:
+    """Record what cannot be re-derived, so the generator stays authoritative."""
+    import json
+    p.settings_path.parent.mkdir(parents=True, exist_ok=True)
+    p.settings_path.write_text(json.dumps(
+        {"agent": p.agent, "channels": list(p.channels), "shell_prefix": p.shell_prefix},
+        indent=2) + "\n")
 
 
 def default_params(agent: Optional[str] = None, home: Optional[Path] = None) -> HarnessParams:

@@ -427,6 +427,43 @@ class TestStartScriptBehaviour:
             proc.kill(); proc.wait()
 
 
+class TestInstallChoicesSurviveForTheNextCheck:
+    """Channels and the shell prefix cannot be re-derived from the environment.
+
+    If they are not recorded, a later flagless `install --check` renders
+    DIFFERENT artifacts and reports drift that does not exist — and the natural
+    response to that report, `--force`, would strip the channel and take the
+    agent off the air with nothing to see. Observed on a live host before this
+    was added.
+    """
+
+    def _p(self, tmp_path, **kw):
+        from dataclasses import replace
+        return replace(SYNTH, home=tmp_path, **kw)
+
+    def test_a_flagless_render_reproduces_what_was_installed(self, tmp_path):
+        from macf.utils.harness import load_settings, save_settings
+        installed = self._p(tmp_path, channels=("plugin:tg@x",), shell_prefix="short")
+        save_settings(installed)
+        assert load_settings(self._p(tmp_path)) == installed
+
+    def test_explicit_flags_still_win_over_the_record(self, tmp_path):
+        from macf.utils.harness import load_settings, save_settings
+        save_settings(self._p(tmp_path, channels=("old:one",), shell_prefix="old"))
+        got = load_settings(self._p(tmp_path, channels=("new:one",), shell_prefix="new"))
+        assert got.channels == ("new:one",) and got.shell_prefix == "new"
+
+    def test_a_missing_or_corrupt_record_is_not_fatal(self, tmp_path):
+        """A first install has no record, and a truncated one must not stop the
+        harness from being reinstallable."""
+        from macf.utils.harness import load_settings
+        assert load_settings(self._p(tmp_path)).channels == ()
+        p = self._p(tmp_path)
+        p.settings_path.parent.mkdir(parents=True, exist_ok=True)
+        p.settings_path.write_text("{not json")
+        assert load_settings(p).channels == ()
+
+
 class TestStopTargetsTheSupervisor:
     def test_exec_stop_disables_the_supervisor_rather_than_killing_the_child(self):
         """Killing the child just makes the supervisor restart it, so a stop

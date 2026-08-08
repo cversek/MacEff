@@ -1435,8 +1435,13 @@ def _harness_params(args: argparse.Namespace):
     channels = tuple(getattr(args, "channel", None) or ())
     prefix = getattr(args, "shell_prefix", None)
     if channels or prefix:
-        p = replace(p, channels=channels or p.channels, shell_prefix=prefix or p.shell_prefix)
-    return p
+        p = replace(p, channels=channels, shell_prefix=prefix)
+    # Fill anything not given from what the last install recorded. Without this
+    # a flagless `install --check` renders different artifacts and reports drift
+    # that is not there — and acting on that report with --force would strip the
+    # channel silently.
+    from .utils.harness import load_settings
+    return load_settings(p)
 
 
 def cmd_harness_generate(args: argparse.Namespace) -> int:
@@ -1499,6 +1504,7 @@ def cmd_harness_install(args: argparse.Namespace) -> int:
         render_start,
         render_tmux_conf,
         render_unit,
+        save_settings,
     )
 
     try:
@@ -1543,6 +1549,8 @@ def cmd_harness_install(args: argparse.Namespace) -> int:
                 path.chmod(path.stat().st_mode | _stat.S_IXUSR)
             print(f"   ✓ {path}")
 
+        save_settings(p)
+        print(f"   ✓ {p.settings_path}")
         print(f"\n✅ Harness installed for agent '{p.agent}'")
         print(f"   systemctl --user daemon-reload && systemctl --user enable --now {p.unit_name}")
         # "=" is not decoration: tmux matches targets by PREFIX, so advice
