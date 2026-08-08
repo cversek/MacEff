@@ -605,26 +605,24 @@ These definitions live here and are **cited, not restated**. A CA-type policy st
 
 What each CA-type policy is expected to answer:
 
-1. Does this type participate in the knowledge web at all?
-2. What is the **unit of a node** — the whole artifact, or a named subset of its files?
-3. Which **class** does it belong to, and why?
-4. What **provenance** does it carry by default, and how is a non-default marked?
+1. What is the **unit of a node** — the whole artifact, or a named subset of its files?
+2. Which **class** does it belong to, and why?
+3. What **provenance** does it carry by default, and how is a non-default marked?
+4. What should this type's **Wiki-Links contain** — what does an artifact of this type link, and what must it never link?
 
-A type that answers "does not participate" is a legitimate answer, provided the reason is recorded. Silence is not — silence is how an artifact becomes invisible to the graph while appearing to belong to it.
+Participation itself is not on the list, because it is not a per-type decision (see the next section): every artifact-producing location participates, and an individual artifact joins the web by carrying links. What a type's policy defines is how its nodes are *interpreted*, and the scanner executes those definitions rather than owning its own.
 
-#### 3.5.4 One registry, and everything else derives from it
+#### 3.5.4 No participation registry: policy defines, code executes
 
-The questions above cannot be answered per type until there is agreement on what the types *are*. That agreement has to be structural, because it has failed as a convention: a survey of this framework found **six** places that each describe "the CA types", no two of which agreed — the manifest, the CA-types command output, the graph scanner's directory list, the set of CA-type policy files, the filesystem itself, and the path resolution used to locate an agent's own artifacts. The union named more types than any single list, including two directories that were producing artifacts while appearing in no registry at all, and one declared type with no artifacts anywhere.
+There is **no registry of participating types**, and none may be introduced. The lesson behind this rule was earned twice. First, a survey of this framework found **six** places that each described "the CA types", no two of which agreed — the manifest, the CA-types command output, the graph scanner's directory list, the set of CA-type policy files, the filesystem itself, and the path resolution used to locate an agent's own artifacts. The union named more types than any single list, including two directories that were producing artifacts while appearing in no registry at all. Second, the first attempted fix — one authoritative declaration table — immediately began accreting deployment-specific entries into framework code and gatekeeping decisions no list should own. A better registry does not fix registration; abolishing registration does.
 
-**The manifest is authoritative.** Every other list must be *derived* from it rather than maintained alongside it. This is the only arrangement that cannot drift: six hand-maintained lists is not a discipline problem to be solved with more care, it is a structure that guarantees divergence given enough cycles.
+**Participation is emergent and universal.** Every artifact-producing location under the agent tree participates, discovered from the filesystem rather than declared; the framework policies participate the same way. An individual artifact joins the web by carrying `[[links]]` — writing them *is* the act of joining, and a file without concepts simply never becomes a node. The undeclared-but-real state in which artifacts accumulate unseen is thereby **inexpressible rather than checked-for**: a directory cannot be missing from a list that does not exist.
 
 Three rules follow:
 
-1. **A directory that produces artifacts must be declared**, even if the declaration says it does not participate in the graph. Undeclared-but-real is the state in which artifacts accumulate unseen.
-2. **A declared type with no artifacts and no policy is a mis-declaration**, not a placeholder. Remove it, or create what it describes.
-3. **Consumers read the registry; they do not keep copies.** A scanner with its own hardcoded directory list is a second registry wearing different clothes, and it will fall behind the first.
-
-**Integrity is checkable, and should be checked**: every declared type has a policy and a location; every artifact-producing location has a declaration; every consumer's list matches the registry. These are exactly the conditions that failed here, and each failure was silent.
+1. **Policy defines, code executes.** Unit-of-node and node class are defined in each CA-type policy's knowledge-web participation section; the scanner carries only derivation rules that apply those definitions, each citing the policy that owns it. A distinction whose definition lives only in code is a registry wearing different clothes.
+2. **One walk.** The web builder and any doctor examine the same files through the same traversal. A checker with its own copy of the walk will drift from the thing it checks, and the drift will be silent.
+3. **Linkless is visible, not excluded.** A location whose artifacts carry no links participates and shows as orphaned. That census is honest noise, curable by annotation — never by de-registering the location, which is the old failure restated.
 
 ---
 
