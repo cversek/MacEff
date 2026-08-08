@@ -443,6 +443,20 @@ CA_PARTICIPATION: Dict[str, Dict[str, Any]] = {
     # resolves only in some agent's private tree.
     "policies":     {"dirs": [""], "root": "framework",
                      "unit": "all", "node_class": "normative"},
+    # Declared-but-not-participating locations. The scholarship registry rule
+    # is "declare it — participating or explicitly not": these directories
+    # produce real artifacts, so the undeclared-directory check must know
+    # them, but they are deliberately outside the graph and the reason is
+    # recorded here rather than left to be re-derived.
+    "amail":        {"dirs": ["public/amail"], "participates": False,
+                     "reason": "transport copies of correspondence; canonical "
+                               "artifacts attached to a bundle participate from "
+                               "their home locations, so linking the copies "
+                               "would double-count them"},
+    "sprints":      {"dirs": ["public/sprints"], "participates": False,
+                     "reason": "sprint logs are execution records; the claims "
+                               "live in the roadmap and the task store, as "
+                               "with archived todos"},
 }
 
 
@@ -489,6 +503,8 @@ def build_knowledge_graph(scan_dirs: Optional[List[Path]] = None) -> Dict[str, A
             if agent_home:
                 scan_dirs = []
                 for spec in CA_PARTICIPATION.values():
+                    if spec.get("participates", True) is False:
+                        continue
                     if spec.get("root") == "framework":
                         from .utils.manifest import get_framework_policies_path
                         pol = get_framework_policies_path()

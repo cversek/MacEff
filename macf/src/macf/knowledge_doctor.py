@@ -33,6 +33,11 @@ _RAW_LINK = re.compile(r"\[\[([^\]]+)\]\]")
 def _participating_files(agent_home: Path, participation: Dict[str, Dict[str, Any]]):
     """Yield (ca_type, spec, path) for every file the graph should contain."""
     for ca_type, spec in participation.items():
+        # Declared-but-not-participating entries exist so the registry check
+        # knows the location is deliberate; their files are not graph members
+        # and must not be examined as such.
+        if spec.get("participates", True) is False:
+            continue
         for rel in spec["dirs"]:
             # Framework-rooted types live outside the agent tree. Resolving them
             # against agent_home was silently catastrophic: dirs=[""] became
@@ -203,7 +208,8 @@ def examine(agent_home: Optional[Path] = None,
 
     chart = Chart(
         corpus="knowledge web",
-        scope=sorted(CA_PARTICIPATION.keys()),
+        scope=sorted(t for t, s in CA_PARTICIPATION.items()
+                     if s.get("participates", True) is not False),
         vitals={
             "files_examined": examined,
             "nodes": stats.get("total_nodes", 0),
