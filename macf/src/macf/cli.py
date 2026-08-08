@@ -1631,9 +1631,16 @@ def cmd_harness_attach(args: argparse.Namespace) -> int:
                   file=sys.stderr)
             return 1
 
+        # -CC hands the session to iTerm2 as native windows. It matters more
+        # than it looks: the client owns the alternate screen, so under a plain
+        # attach there is no tmux-level scrollback at all -- control mode is
+        # what restores native scrollback, selection and find on macOS.
+        cmd = ["tmux"]
+        if getattr(args, "control", False):
+            cmd.append("-CC")
+        cmd += ["attach", "-t", target]
         # -d evicts other clients: two clients of different geometries is the
         # cause of the fragmented redraws. Read-only observers skip it.
-        cmd = ["tmux", "attach", "-t", target]
         cmd.append("-r" if getattr(args, "read_only", False) else "-d")
         os.execvp("tmux", cmd)
     except Exception as e:
@@ -9247,6 +9254,8 @@ def _build_parser() -> argparse.ArgumentParser:
     harness_attach = harness_sub.add_parser(
         "attach", help="attach this terminal to the agent's supervised session")
     harness_attach.add_argument("--agent", help="agent slug (default: resolved from identity)")
+    harness_attach.add_argument("--control", action="store_true",
+                                help="attach in tmux control mode (-CC), for iTerm2 on macOS")
     harness_attach.add_argument("--read-only", action="store_true",
                                 help="observe without evicting other clients or taking the keyboard")
     harness_attach.set_defaults(func=cmd_harness_attach)
