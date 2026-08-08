@@ -775,3 +775,13 @@ With observability → trust, delegation, strategic partnership.
 **Policy Established**: Roadmap execution requires mandatory reading discipline, numbered TODO integration, archive-then-collapse protocol, breadcrumb updates, and friction documentation. Observability through structured progress tracking builds trust for multi-cycle autonomous work.
 
 **Core Wisdom**: "Read plans first. Number your phases. Archive before collapse. Document friction. Breadcrumbs enable resurrection. Observability enables trust."
+
+---
+
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — roadmap
+     execution: mandatory reading, progress tracking, friction capture. -->
+
+[[methodology]] [[observability]] [[breadcrumb]] [[context_recovery]]

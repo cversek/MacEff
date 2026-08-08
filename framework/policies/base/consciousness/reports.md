@@ -731,3 +731,13 @@ Reports are **public artifacts** suitable for:
 *Policy Established: c_73/s_4107604e/p_8c7e6d8/t_1761707487/g_17e7b7d*
 *Public Consciousness Artifact - Project Completion Narratives*
 *Integration: observations, experiments, checkpoints, reflections, learnings, personal policies*
+
+---
+
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — completion
+     narratives written for stakeholders and later planners. -->
+
+[[consciousness_artifacts]] [[communication]] [[discoverability]] [[disclosure]]
