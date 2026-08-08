@@ -416,3 +416,15 @@ harm. Grant on what is reachable if things go wrong, not on expected conduct.
 why it was refused, and what to use instead, will find another path. That is not
 disobedience; it is the predictable behaviour of something capable meeting an
 unexplained wall.
+
+---
+
+## Wiki-Links
+
+<!-- NORMATIVE node (see scholarship on node classes and provenance): this artifact
+     states what MUST be done, not what was found or what was true at a moment. It is
+     also INHERITED — it ships with the framework rather than being produced by any one
+     agent, which is what makes the vocabulary below shared across deployments.
+     Link what this policy GOVERNS, never what it merely mentions. -->
+
+[[capability_boundary]] [[egress]] [[security]]

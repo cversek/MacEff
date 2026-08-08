@@ -39,12 +39,18 @@ def test_normalize_drops_empties():
 
 
 def test_normalize_drops_disallowed_chars():
-    """Non-[a-z0-9_-] chars are stripped (not replaced)."""
+    """Non-[a-z0-9_] chars are stripped (not replaced); hyphens fold to underscores first."""
     assert _normalize_wiki_links(["foo!bar@baz"]) == ["foobarbaz"]
 
 
-def test_normalize_preserves_underscores_and_hyphens():
-    assert _normalize_wiki_links(["foo_bar", "foo-bar"]) == ["foo_bar", "foo-bar"]
+def test_normalize_folds_hyphens_into_underscores():
+    """Hyphenated spellings are drift to merge, not distinct concepts.
+
+    The scholarship policy spells multi-word concepts with underscores, so
+    ``foo-bar`` normalizes to ``foo_bar`` and dedups against it.
+    """
+    assert _normalize_wiki_links(["foo-bar"]) == ["foo_bar"]
+    assert _normalize_wiki_links(["foo_bar", "foo-bar"]) == ["foo_bar"]
 
 
 def test_normalize_empty_and_none_input():

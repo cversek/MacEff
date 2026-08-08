@@ -168,6 +168,23 @@ Roadmaps are **strategic planning artifacts** that preserve complex development 
 - SA roadmap scope?
 - Complexity differences?
 
+**9 BUG_FIX Roadmaps**
+- When is a BUG_FIX roadmap warranted instead of a plain bug task?
+- What structure does a BUG_FIX roadmap require?
+- How does verification differ from a feature roadmap?
+
+**10 Knowledge Web Participation**
+- Does this type participate in the knowledge graph, and at what unit?
+- Which node class does it belong to, and what is the rationale?
+- Why does a roadmap's claim expire while the artifacts it produces do not?
+- What should a roadmap's Wiki-Links section link, and what should it avoid?
+
+**11 Policy Engagement Protocol (PEP) on Phases**
+- What must a phase declare about the policies its executor needs?
+- How does required reading follow from the work type rather than being re-derived per phase?
+- When does a phase carry no PEP at all?
+- Why does this requirement live in policy rather than in the drafting skill?
+
 === CEP_NAV_BOUNDARY ===
 
 ---
@@ -1191,6 +1208,75 @@ This creates bidirectional link:
 
 ---
 
+## 10 Knowledge Web Participation
+
+**A note on where this lives.** Roadmaps are the one consciousness artifact with no artifact policy — only two *process* policies, `roadmaps_drafting.md` and `roadmaps_following.md`, covering how to write one and how to execute one. The artifact itself was never declared. That gap is very likely why roadmaps were the CA type omitted from graph scanning: there was no policy in which to declare participation. Recorded here for now; the correct long-term home is a `roadmaps.md` artifact policy, and this section should move there when it exists rather than be duplicated.
+
+**Does this type participate?** Yes.
+
+**What is the unit of a node?** **`roadmap.md` only.** A roadmap is a directory, and the other contents — archived todos, subartifacts, working files — are records of execution, not statements of plan.
+
+**Which class?** **Temporal record** (see `scholarship.md`, on node classes and provenance). A roadmap states what is *intended*, and intent is superseded: phases complete, plans are revised, missions are abandoned. A roadmap read a year later answers "what was the plan in cycle N" — a genuine question, and a different one from "what do I know about X."
+
+The claim that survives a roadmap is not the roadmap. It is the report, learning, or reflection produced by executing it. Those are conceptual authority; the plan that led to them is the record of a moment.
+
+**What provenance?** **Lived.**
+
+**Every `roadmap.md` carries a `## Wiki-Links` section.** Link the domain the mission operates on, so that an agent querying that domain discovers there is or was a plan. Do not link every concept the phases touch; a multi-phase roadmap touches many, and linking all of them makes the roadmap a hub that appears everywhere and discriminates nothing — the same failure a checkpoint has, for the same reason.
+
+---
+
 **Policy Established**: Roadmaps as hierarchical planning infrastructure with folder-based organization, measurable completion criteria, and git-tracked evolution. Create roadmaps early for complex multi-phase work to preserve strategic intent across compaction boundaries.
 
 **Core Wisdom**: "Plan with folder structure. Number your phases. Measure your criteria. Commit before revising. Templates accelerate drafting."
+
+---
+
+## 11 Policy Engagement Protocol (PEP) on Phases
+
+**Every phase declares the policies its executor must engage before starting.** The roadmap is the artifact an executor reads before doing anything else, which makes it the only reliable place to attach a reading requirement. A policy that is not delivered at the moment it binds is inert, however well written.
+
+This exists because pull-based discovery fails silently where the demand goes unrecognised. An agent about to add a short helper function does not feel it is doing something a standard governs — it feels like writing four obvious lines. The moment a standard is most load-bearing is exactly the moment nothing prompts you to look for it.
+
+### 11.1 What a PEP declares
+
+A PEP block on a phase names:
+
+- **READS** — policies the executor must engage *before* starting the work.
+- **WRITES** — policies this phase will amend. Amending is not the same as citing, and a phase that changes MANDATORY-tier policy should be visibly different from one that merely follows it.
+- **Questions** — the timeless questions the executor should be able to answer before acting, phrased by content rather than by section number.
+
+### 11.2 Required reading follows from the work type
+
+Do not re-derive the list per phase. A phase declares what *kind* of work it is, and the reading follows:
+
+| work type | READS, at minimum |
+|---|---|
+| writes or modifies code | base coding standards, **plus** the language-specific standards for the language being written |
+| runs an experiment | empiricism, experiments |
+| authors or amends policy | policy writing, plus each policy in WRITES |
+| authors a skill or command | skills writing, slash command writing |
+| publishes outside the agent's own tree | public voice |
+| changes what an agent may do | capability boundaries, and the policy that ships with the capability |
+
+The table is a floor, not a ceiling. A phase adds whatever else its specifics demand, and novel additions are how the table grows.
+
+**Language-specific standards are additive, not alternative.** Base standards state the discipline; the language policy states how it is expressed. A phase writing Python engages both.
+
+### 11.3 Scope — a PEP is not ceremony
+
+**A phase that requires no policy engagement carries no PEP.** Applying the block uniformly is how it becomes something authors paste and executors skim, and a requirement that is skimmed is worse than absent because it looks like coverage.
+
+The test is whether an executor picking the phase up cold, with no memory of the drafting conversation, would otherwise start work without reading something they needed.
+
+### 11.4 Why this is stated here rather than in the drafting skill
+
+The skill asks the policy what a phase requires; the policy answers. Encoding the requirement in tooling would duplicate governance into a second place, which is the drift this framework repeatedly corrects — and it would put the rule where policy readers cannot find it.
+
+### 11.5 The failure that motivated this
+
+Recorded because the case is more persuasive than the rule.
+
+An agent spent a session writing code under a roadmap whose phases carried no PEP. It never opened the coding standards — nothing prompted it to. It then added a normalization helper to a module that already contained one, 350 lines above, under a different name. The duplicate was caught by the operator; not by the agent, not by a test.
+
+The instructive part is what would **not** have prevented it: the DRY rule *in* the coding standards. It would have sat unread in a file the agent had no reason to open. The rule was correct and undelivered, and undelivered is indistinguishable from absent.

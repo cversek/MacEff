@@ -103,6 +103,12 @@ Agents document technical discoveries, breakthrough insights, and architectural 
 - Cross-referencing?
 - Search optimization?
 
+6 Knowledge Web Participation
+- Does this type participate in the knowledge graph, and at what unit?
+- Which node class does it belong to, and what is the rationale?
+- What provenance does it carry by default, and how is a non-default marked?
+- What must a Wiki-Links section on this artifact contain?
+
 === CEP_NAV_BOUNDARY ===
 
 ## 1. Understanding Observations
@@ -503,6 +509,20 @@ agent/subagents/{role}/public/observations/
 - Find observations by date range
 - Search for specific technical terms
 - Trace knowledge evolution through breadcrumb citations
+
+## 6. Knowledge Web Participation
+
+**Does this type participate?** Yes.
+
+**What is the unit of a node?** The whole observation.
+
+**Which class?** **Conceptual authority.** An observation exists to enable pattern recognition, which requires that it be retrievable alongside later observations of the same kind — the recognition happens across artifacts, not within one. A measurement recorded and never re-encountered has served no purpose the artifact was created for.
+
+**What provenance?** **Lived.** An observation is a record of something this agent measured. An observation series inherited from another agent is citable but must be marked, since the value of an observation rests on the conditions under which it was taken and those conditions were not this agent's.
+
+**Every observation carries a `## Wiki-Links` section.** Concepts are how a later observation finds an earlier one. A series is only a series if its members can reach each other; otherwise it is a pile of unrelated measurements that happen to share a directory.
+
+---
 
 ## Integration with Personal Policies
 

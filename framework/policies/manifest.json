@@ -1046,7 +1046,7 @@
     "types": {
       "observations": {
         "name": "observations",
-        "emoji": "🔬",
+        "emoji": "\ud83d\udd2c",
         "description": "Technical discoveries and insights",
         "discovery_keys": [
           "observation",
@@ -1059,7 +1059,7 @@
       },
       "experiments": {
         "name": "experiments",
-        "emoji": "🧪",
+        "emoji": "\ud83e\uddea",
         "description": "Controlled testing and validation",
         "discovery_keys": [
           "experiment",
@@ -1073,7 +1073,7 @@
       },
       "reports": {
         "name": "reports",
-        "emoji": "📊",
+        "emoji": "\ud83d\udcca",
         "description": "Project completion summaries",
         "discovery_keys": [
           "report",
@@ -1087,7 +1087,7 @@
       },
       "reflections": {
         "name": "reflections",
-        "emoji": "💭",
+        "emoji": "\ud83d\udcad",
         "description": "Philosophical growth synthesis",
         "discovery_keys": [
           "reflection",
@@ -1101,7 +1101,7 @@
       },
       "checkpoints": {
         "name": "checkpoints",
-        "emoji": "🔖",
+        "emoji": "\ud83d\udd16",
         "description": "Strategic state preservation",
         "discovery_keys": [
           "checkpoint",
@@ -1113,7 +1113,7 @@
       },
       "roadmaps": {
         "name": "roadmaps",
-        "emoji": "🗺️",
+        "emoji": "\ud83d\uddfa\ufe0f",
         "description": "Multi-phase planning documents",
         "discovery_keys": [
           "roadmap",
@@ -1131,7 +1131,7 @@
       },
       "emotions": {
         "name": "emotions",
-        "emoji": "❤️",
+        "emoji": "\u2764\ufe0f",
         "description": "Emotional expression and processing",
         "discovery_keys": [
           "emotional",
@@ -1145,7 +1145,7 @@
       },
       "learnings": {
         "name": "learnings",
-        "emoji": "📚",
+        "emoji": "\ud83d\udcda",
         "description": "Accumulated wisdom and lessons",
         "discovery_keys": [
           "learning",
@@ -1275,6 +1275,12 @@
     "container": [
       "tech/docker/container_operations"
     ],
+    "corpus_drift": [
+      "base/infrastructure/corpus_integrity"
+    ],
+    "corpus_integrity": [
+      "base/infrastructure/corpus_integrity"
+    ],
     "debugging": [
       "base/development/debugging_and_validation"
     ],
@@ -1290,6 +1296,12 @@
     ],
     "docker": [
       "tech/docker/container_operations"
+    ],
+    "doctor": [
+      "base/infrastructure/corpus_integrity"
+    ],
+    "drift": [
+      "base/infrastructure/corpus_integrity"
     ],
     "dual_trace": [
       "base/consciousness/emotional_expression"
@@ -1395,6 +1407,9 @@
     "observations": [
       "base/consciousness/observations"
     ],
+    "orphan": [
+      "base/infrastructure/corpus_integrity"
+    ],
     "pattern_recognition": [
       "base/consciousness/reflections"
     ],
@@ -1449,6 +1464,9 @@
       "base/consciousness/reflections",
       "context_management#jotewr"
     ],
+    "registry_integrity": [
+      "base/infrastructure/corpus_integrity"
+    ],
     "release": [
       "base/development/git_discipline"
     ],
@@ -1487,6 +1505,9 @@
     ],
     "stakeholder": [
       "base/consciousness/reports"
+    ],
+    "stale_index": [
+      "base/infrastructure/corpus_integrity"
     ],
     "state_preservation": [
       "base/consciousness/checkpoints"
@@ -1584,7 +1605,7 @@
         "short_name": "CAPBOUND",
         "path": "base/infrastructure/capability_boundaries.md",
         "CEP_triggers": [
-          "I was refused reaching something — is the network broken or is this deliberate?",
+          "I was refused reaching something \u2014 is the network broken or is this deliberate?",
           "What should an agent do when it meets a capability boundary, and what must it not do?",
           "Why can't the service being reached just enforce its own allowlist?",
           "What three different failures does one capability boundary prevent?",
@@ -1610,6 +1631,44 @@
           "hardening",
           "reach",
           "enforcement"
+        ]
+      },
+      {
+        "name": "corpus_integrity",
+        "short_name": "CORPINT",
+        "path": "base/infrastructure/corpus_integrity.md",
+        "CEP_triggers": [
+          "A checker reported nothing wrong \u2014 does that mean the corpus is healthy or that nothing was examined?",
+          "Why is a corpus that reports confidence worse than one that reports nothing?",
+          "Why is there no single doctor for every corpus?",
+          "What do acute, chronic and note mean, and how do they differ from priority?",
+          "Why does the chart print even when there are no findings?",
+          "When is running a doctor worth doing, and what response does each finding warrant?",
+          "Why is CI gating the wrong default answer to a noisy checker?",
+          "What must a new doctor ship with before it can be trusted?",
+          "What verification does a checker need beyond passing its own tests?",
+          "Why must every finding carry a remedy and be locatable?"
+        ],
+        "keywords": [
+          "corpus",
+          "integrity",
+          "doctor",
+          "drift",
+          "orphan",
+          "stale",
+          "index",
+          "registry",
+          "acute",
+          "chronic",
+          "chart",
+          "finding",
+          "remedy",
+          "referral",
+          "checker",
+          "diagnostics",
+          "knowledge_doctor",
+          "curation",
+          "screening"
         ]
       }
     ]

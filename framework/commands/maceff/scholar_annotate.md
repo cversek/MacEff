@@ -83,6 +83,20 @@ After ALL files processed, report summary:
 
 ---
 
+## Orphan Check (REQUIRED)
+
+Annotation is the natural moment to catch an artifact that never joined the knowledge web, because this command is already reading the whole artifact for citation work.
+
+For each file annotated, check whether it carries a `## Wiki-Links` section.
+
+- **Missing** → add one. Consult the artifact's CA-type policy on **knowledge web participation** for what that type should link and what it should avoid, then `macf_tools knowledge query <concept>` to connect to vocabulary the corpus already uses rather than coining a near-duplicate.
+- **Present but empty** → treat as missing. An empty section is worse than none: it satisfies a checker while leaving the artifact unreachable.
+- **Present** → verify the concepts normalise correctly (lowercase, underscores, no `.md` suffix) and that none is a singleton typo — a concept connecting exactly one node is usually a misspelling, not a bridge.
+
+Report what was added, so a reader can tell an annotation pass that repaired an orphan from one that merely tidied citations.
+
+---
+
 ## Post-Delegation
 
 Report ScholarshipResearcher summary:

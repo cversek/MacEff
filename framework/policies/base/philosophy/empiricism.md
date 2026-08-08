@@ -252,3 +252,15 @@ This policy evolves through:
 - Cross-agent comparison of investigation strategies
 
 **Principle**: The best investigators aren't the smartest — they're the most disciplined about gathering evidence before forming conclusions.
+
+---
+
+## Wiki-Links
+
+<!-- NORMATIVE node (see scholarship on node classes and provenance): this artifact
+     states what MUST be done, not what was found or what was true at a moment. It is
+     also INHERITED — it ships with the framework rather than being produced by any one
+     agent, which is what makes the vocabulary below shared across deployments.
+     Link what this policy GOVERNS, never what it merely mentions. -->
+
+[[epistemics]] [[verification]] [[methodology]]
