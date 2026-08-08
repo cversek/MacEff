@@ -375,6 +375,27 @@ class TestStartScriptBehaviour:
             f'{{"supervisor_pid": {proc.pid}, "name": "{name}", "status": "running"}}')
         return proc
 
+    def test_the_sandbox_env_carries_no_TMUX(self, sandbox):
+        """Blast-radius guard, and the most important test in this class.
+
+        This fixture tears down with `tmux kill-server`. That is only survivable
+        because the env selects a private server, and it selects one ONLY while
+        $TMUX is absent -- an inherited $TMUX silently overrides TMUX_TMPDIR and
+        points every client at the host's server. Restoring the natural
+        `{**os.environ, ...}` spelling would make this class destroy the live
+        agent harness again, with a green suite in CI to say it was fine.
+
+        Asserted on the env rather than by running the destructive path, so the
+        guard costs nothing and cannot itself be the thing that goes wrong.
+        """
+        _script, _reg, env = sandbox
+        assert "TMUX" not in env, (
+            "the sandbox env inherited $TMUX; tmux will ignore TMUX_TMPDIR, this "
+            "fixture's kill-server will run against the host, and every session "
+            "on it -- including a live agent harness -- will be destroyed"
+        )
+        assert env.get("TMUX_TMPDIR"), "the private socket dir must still be set"
+
     def test_creates_a_session_when_nothing_holds_the_name(self, sandbox):
         script, _reg, env = sandbox
         r = self._run(script, env)
