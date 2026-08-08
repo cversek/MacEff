@@ -1408,5 +1408,15 @@ This guide evolves through:
 
 ---
 
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — pytest
+     expression of the universal testing discipline. -->
+
+[[testing]] [[verification]] [[methodology]]
+
+---
+
 🔧 Generated with Claude Code
 Co-Authored-By: Claude <noreply@anthropic.com>
