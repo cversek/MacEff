@@ -1427,8 +1427,16 @@ def cmd_statusline(args: argparse.Namespace) -> int:
 
 
 def _harness_params(args: argparse.Namespace):
+    from dataclasses import replace
     from .utils.harness import default_params
-    return default_params(agent=getattr(args, "agent", None), home=getattr(args, "home", None))
+    p = default_params(agent=getattr(args, "agent", None), home=getattr(args, "home", None))
+    # Channels are declared, never inferred. They are the agent's inbound link
+    # when nobody is attached, and a default would be a guess about reachability.
+    channels = tuple(getattr(args, "channel", None) or ())
+    prefix = getattr(args, "shell_prefix", None)
+    if channels or prefix:
+        p = replace(p, channels=channels or p.channels, shell_prefix=prefix or p.shell_prefix)
+    return p
 
 
 def cmd_harness_generate(args: argparse.Namespace) -> int:
@@ -1439,7 +1447,13 @@ def cmd_harness_generate(args: argparse.Namespace) -> int:
     anywhere — the hand-edited predecessor drifted precisely because there was
     nothing to diff against.
     """
-    from .utils.harness import render_unit, render_child, render_tmux_conf
+    from .utils.harness import (
+        render_child,
+        render_launch_functions,
+        render_start,
+        render_tmux_conf,
+        render_unit,
+    )
 
     try:
         p = _harness_params(args)
@@ -1447,10 +1461,18 @@ def cmd_harness_generate(args: argparse.Namespace) -> int:
         what = getattr(args, "what", "unit")
         if what in ("unit", "all"):
             print(render_unit(p, attach_proxy=attach), end="")
+        if what in ("start", "all"):
+            if what == "all":
+                print(f"\n# ===== {p.start} =====")
+            print(render_start(p, attach_proxy=attach), end="")
         if what in ("child", "all"):
             if what == "all":
                 print(f"\n# ===== {p.child_path} =====")
             print(render_child(p), end="")
+        if what in ("functions", "all"):
+            if what == "all":
+                print(f"\n# ===== {p.functions} =====")
+            print(render_launch_functions(p), end="")
         if what in ("tmux", "all"):
             if what == "all":
                 print(f"\n# ===== {p.home}/.tmux-{p.agent}.conf =====")
@@ -1471,7 +1493,13 @@ def cmd_harness_install(args: argparse.Namespace) -> int:
     """
     from pathlib import Path
     import stat as _stat
-    from .utils.harness import render_unit, render_child, render_tmux_conf
+    from .utils.harness import (
+        render_child,
+        render_launch_functions,
+        render_start,
+        render_tmux_conf,
+        render_unit,
+    )
 
     try:
         p = _harness_params(args)
@@ -1479,7 +1507,9 @@ def cmd_harness_install(args: argparse.Namespace) -> int:
         unit_dir = Path.home() / ".config" / "systemd" / "user"
         targets = [
             (unit_dir / p.unit_name, render_unit(p, attach_proxy=attach), False),
+            (Path(p.start), render_start(p, attach_proxy=attach), True),
             (Path(p.child_path), render_child(p), True),
+            (Path(p.functions), render_launch_functions(p), False),
             (p.home / f".tmux-{p.agent}.conf", render_tmux_conf(p), False),
         ]
 
@@ -1515,7 +1545,9 @@ def cmd_harness_install(args: argparse.Namespace) -> int:
 
         print(f"\n✅ Harness installed for agent '{p.agent}'")
         print(f"   systemctl --user daemon-reload && systemctl --user enable --now {p.unit_name}")
-        print(f"   attach:  tmux attach -t {p.agent}")
+        # "=" is not decoration: tmux matches targets by PREFIX, so advice
+        # without it teaches the loose form that caused GH #209.
+        print(f"   attach:  tmux attach -t ={p.agent}   (or: maceff_{p.prefix}_harness_launch)")
         print(f"   status:  macf_tools harness status --agent {p.agent}")
         print(f"   stop:    systemctl --user stop {p.unit_name}   (stops the supervisor, not the child)")
         return 0
@@ -1525,22 +1557,69 @@ def cmd_harness_install(args: argparse.Namespace) -> int:
 
 
 def cmd_harness_status(args: argparse.Namespace) -> int:
-    """Report unit state, session presence and proxy attachment."""
+    """Report unit state, session presence and proxy attachment.
+
+    Every negative line names the agent it checked, and a defaulted name says
+    so. This command once printed a confident ABSENT for a harness that was
+    running under a different name, and came within one step of telling the
+    operator his harness did not exist — an instrument answering about
+    something it never looked at.
+    """
     from pathlib import Path
+    from .utils.harness import resolve_agent
+    from .utils.identity import calling_card_from_identifier
 
     try:
+        agent, source = resolve_agent(getattr(args, "agent", None))
+        if source == "ambiguous":
+            print("agent:   AMBIGUOUS — several harnesses are installed here:")
+            for a in agent:
+                print(f"           {a}  ({calling_card_from_identifier(a)})")
+            print("\nPick one with --agent; this command will not choose for you.",
+                  file=sys.stderr)
+            return 1
+
         p = _harness_params(args)
         unit_path = Path.home() / ".config" / "systemd" / "user" / p.unit_name
-        print(f"agent:   {p.agent}")
-        print(f"unit:    {unit_path} {'(present)' if unit_path.exists() else '(ABSENT)'}")
+        card = calling_card_from_identifier(p.agent)
+        if source == "default":
+            # The line that was missing. A default reported as a resolution is
+            # how "no harness for the name I guessed" reads as "no harness".
+            print(f"agent:   {p.agent}  (DEFAULT — not resolved from the "
+                  f"environment, config or any installed unit)")
+        else:
+            print(f"agent:   {p.agent}  ({card}, via {source})")
+        print(f"unit:    {unit_path} "
+              f"{'(present)' if unit_path.exists() else f'(ABSENT for agent {p.agent})'}")
 
         active = subprocess.run(["systemctl", "--user", "is-active", p.unit_name],
                                 capture_output=True, text=True).stdout.strip()
         print(f"active:  {active or 'unknown'}")
 
-        has_session = subprocess.run(["tmux", "has-session", "-t", p.agent],
+        # "=" forces an EXACT session match. Without it tmux resolves a target
+        # by prefix, so `-t thm` happily matches a session called
+        # "thm-stale-ssh" -- which is precisely the name someone gives the
+        # imposter while moving it out of the way, so the workaround for the
+        # name collision silently did not resolve the collision.
+        has_session = subprocess.run(["tmux", "has-session", "-t", f"={p.agent}"],
                                      capture_output=True).returncode == 0
-        print(f"session: {'up' if has_session else 'absent'} (tmux -t {p.agent})")
+        print(f"session: {'up' if has_session else f'absent for {p.agent}'} "
+              f"(tmux -t ={p.agent})")
+
+        # Presence is not ownership. A session under this name may be anyone's
+        # — that is how the harness stayed down for days while every surface
+        # said "session: up".
+        if has_session:
+            sup = subprocess.run(
+                ["bash", "-c",
+                 f'for f in {p.registry}/*.json; do [ -e "$f" ] || continue; '
+                 f'grep -q \'"name": "{p.agent}"\' "$f" || continue; '
+                 f'grep -q \'"status": "running"\' "$f" || continue; '
+                 f'pid=${{f##*/}}; pid=${{pid%.json}}; kill -0 "$pid" 2>/dev/null || continue; '
+                 f'ps -o args= -p "$pid" | grep -q "macf\\.supervisor" || continue; '
+                 f'echo "$pid"; break; done'],
+                capture_output=True, text=True).stdout.strip()
+            print(f"owner:   {'macf supervisor pid ' + sup if sup else 'NOT this harness — the name is held by something else'}")
 
         probe = subprocess.run(
             ["curl", "-s", "--max-time", "2", "-o", "/dev/null",
@@ -9053,8 +9132,13 @@ def _build_parser() -> argparse.ArgumentParser:
     harness_generate.add_argument("--home", help="agent home directory")
     harness_generate.add_argument("--no-proxy", action="store_true",
                                   help="render without proxy attachment")
-    harness_generate.add_argument("--what", choices=["unit", "child", "tmux", "all"], default="unit",
-                                  help="which artifact to render (default: unit)")
+    harness_generate.add_argument("--channel", action="append", metavar="PLUGIN",
+                                 help="channel plugin the client must load; repeatable")
+    harness_generate.add_argument("--shell-prefix", metavar="NAME",
+                                 help="short handle for the generated shell functions (default: the moniker half of the Calling Card)")
+    harness_generate.add_argument(
+        "--what", choices=["unit", "start", "child", "functions", "tmux", "all"], default="unit",
+        help="which artifact to render (default: unit)")
     harness_generate.set_defaults(func=cmd_harness_generate)
 
     harness_install = harness_sub.add_parser("install", help="write harness artifacts into place")
@@ -9062,6 +9146,10 @@ def _build_parser() -> argparse.ArgumentParser:
     harness_install.add_argument("--home", help="agent home directory")
     harness_install.add_argument("--no-proxy", action="store_true",
                                  help="install without proxy attachment")
+    harness_install.add_argument("--channel", action="append", metavar="PLUGIN",
+                                 help="channel plugin the client must load; repeatable")
+    harness_install.add_argument("--shell-prefix", metavar="NAME",
+                                 help="short handle for the generated shell functions (default: the moniker half of the Calling Card)")
     harness_install.add_argument("--check", action="store_true",
                                  help="report drift against what would be rendered; write nothing")
     harness_install.add_argument("--force", action="store_true",
