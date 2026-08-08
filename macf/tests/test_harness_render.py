@@ -335,8 +335,31 @@ class TestStartScriptBehaviour:
         script = tmp_path / "start"
         script.write_text(render_start(p, attach_proxy=False))
         script.chmod(0o755)
-        env = {**os.environ, "TMUX_TMPDIR": str(sock)}
+        # TMUX MUST BE STRIPPED, not merely overridden by TMUX_TMPDIR.
+        #
+        # A tmux client that inherits $TMUX attaches to THAT server and ignores
+        # TMUX_TMPDIR entirely. Every process inside a tmux pane has $TMUX set,
+        # so `{**os.environ, "TMUX_TMPDIR": ...}` isolates only when the suite
+        # is run from OUTSIDE tmux. Run from inside one -- which is how an agent
+        # runs it, and never how CI does -- the sandbox silently operated on the
+        # host's default server, and this fixture's teardown `kill-server`
+        # destroyed every session on it.
+        #
+        # That is not hypothetical: it killed the live agent harness on this
+        # host. Measured afterwards -- with $TMUX inherited, a sandbox session
+        # appears in the DEFAULT server's list; with $TMUX removed, it appears
+        # only in the private one and the default survives the kill-server.
+        #
+        # The property that makes this dangerous is that it is invisible in the
+        # environment where tests are normally run. A green suite in CI says
+        # nothing about the blast radius in the environment that matters.
+        env = {k: v for k, v in os.environ.items() if k != "TMUX"}
+        env["TMUX_TMPDIR"] = str(sock)
         yield script, reg, env
+        # Belt and braces: target the private socket explicitly as well, so a
+        # future edit that reintroduces $TMUX cannot turn this into kill-server
+        # on the host. This teardown is the destructive one; it should be the
+        # most defensive line in the file.
         subprocess.run(["tmux", "kill-server"], env=env, capture_output=True)
 
     def _run(self, script, env):

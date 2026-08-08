@@ -93,6 +93,7 @@ class Probe:
         self.bin = tmp_path / "bin"
         self.bin.mkdir(exist_ok=True)
         self.macf_tools = tmp_path / "macf_tools"
+        self.pane_marker = "PANE-MARKER-" + uuid.uuid4().hex[:8]
 
     def install_client(self, mode="stay", lifetime=0.5, exit_code=0):
         """A fake client that records the world it was handed, then behaves.
@@ -117,6 +118,12 @@ class Probe:
             f"with open({str(self.reports)!r}, 'a') as fh:\n"
             "    fh.write(json.dumps(rec) + '\\n')\n"
             "    fh.flush()\n"
+            # Print to the PANE as well. The log test needs the client to
+            # render something: driving the pane with send-keys and relying on
+            # tty echo tests the terminal's line discipline, not whether the
+            # CLIENT's output reaches the log, which is the property that
+            # matters. A real client is never silent.
+            f"print({self.pane_marker!r}, flush=True)\n"
             f"mode, lifetime, code = {mode!r}, {lifetime!r}, {exit_code!r}\n"
             "if mode == 'stay':\n"
             "    time.sleep(3600)\n"
@@ -237,6 +244,62 @@ class TestTheClientKeepsTheTerminalItWasGiven:
             "correctly treats as a clean exit and restarts -- a loop in which "
             "no layer is misbehaving."
         )
+
+
+class TestTheLogIsStillWritten:
+    """Replacing a redirect with `pipe-pane` swapped a mechanism that certainly
+    logged for one that might not.
+
+    `tmux pipe-pane` fails quietly when its target does not resolve, and the
+    wrapper appends `|| true` so a failure cannot take the session down. Both
+    are correct choices and together they mean a broken pipe-pane is INVISIBLE:
+    the client comes up, the pane looks right, and the log is simply empty.
+    That is the same shape as the defect this whole tier exists for -- and the
+    log is the only diagnostic surface for it, so losing it silently would cost
+    the next investigation everything it cost this one.
+
+    Removing an instrument is a change to the system; it needs its own test.
+    """
+
+    def test_pane_output_reaches_the_log(self, probe):
+        probe.install_client(mode="stay")
+        wrapper = probe.render_wrapper()
+        log = probe.dir / ".maceff" / f"harness_{probe.session}.log"
+        probe.start_pane(str(wrapper))
+        probe.wait_for_records(1)
+
+        # The client prints a unique marker to the pane. Assert on THAT rather
+        # than on echoed keystrokes: send-keys plus tty echo would exercise the
+        # terminal's line discipline, while the property under test is whether
+        # the CLIENT's own output reaches the log.
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            if log.exists() and probe.pane_marker in log.read_text(errors="replace"):
+                return
+            time.sleep(0.25)
+
+        contents = log.read_text(errors="replace") if log.exists() else "<no file>"
+        pytest.fail(
+            f"the client's output never reached {log}. pipe-pane fails quietly "
+            f"and a log holding only the start banner looks exactly like a "
+            f"working one.\n--- log contents ---\n{contents}"
+        )
+
+    def test_the_start_banner_is_recorded(self, probe):
+        """Every launch appends a timestamped marker. The start SEQUENCE is what
+        makes a restart loop legible, so this line is not decoration -- it is
+        the primary evidence, and it was what finally distinguished a real loop
+        (five starts in twenty-six seconds) from three isolated restarts."""
+        probe.install_client(mode="stay")
+        probe.start_pane(str(probe.render_wrapper()))
+        probe.wait_for_records(1)
+        log = probe.dir / ".maceff" / f"harness_{probe.session}.log"
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            if log.exists() and "starting:" in log.read_text(errors="replace"):
+                return
+            time.sleep(0.25)
+        pytest.fail("no start marker was written; a loop would leave no trace")
 
 
 class TestARestartLoopIsVisibleAsASequence:

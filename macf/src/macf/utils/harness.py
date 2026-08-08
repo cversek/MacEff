@@ -547,7 +547,22 @@ MACF={p.macf_tools}
 LOG="{p.log_path}"
 mkdir -p "$(dirname "$LOG")"
 {{ echo; echo "=== $(date -Is) starting: claude -c{channels} ==="; }} >> "$LOG"
-tmux pipe-pane -o -t "=$SESS" "cat >> '$LOG'" 2>/dev/null || true
+# NO -t: pipe-pane takes a PANE target, and `=name` is exact-match syntax for a
+# SESSION. `pipe-pane -t "=$SESS"` therefore fails with "can't find pane" every
+# single time -- which the first version of this line hid behind
+# `2>/dev/null || true`, producing a log containing start markers and nothing
+# else. Run from inside the pane, pipe-pane defaults to $TMUX_PANE, which is
+# both correct and unambiguous: no name resolution, so no prefix-match hazard.
+#
+# The failure is reported INTO the log rather than swallowed. A diagnostic that
+# can fail silently is the thing being diagnosed here; if the pipe does not
+# attach, whoever reads this file later must learn that from the file.
+if [ -n "$TMUX_PANE" ]; then
+  tmux pipe-pane -o "cat >> '$LOG'" \
+    || echo "=== pipe-pane FAILED: pane output is NOT captured below ===" >> "$LOG"
+else
+  echo "=== not running inside tmux: pane output is NOT captured below ===" >> "$LOG"
+fi
 
 # A RESUME MUST CARRY A PROMPT. `claude -c` with no prompt can refuse to resume
 # outright -- "No deferred tool marker found in the resumed session ... Provide a
