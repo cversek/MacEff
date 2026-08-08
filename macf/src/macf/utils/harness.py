@@ -118,6 +118,16 @@ class HarnessParams:
         return (head if sep else self.agent).lower()
 
     @property
+    def log_path(self) -> Path:
+        """Where the child's own output is kept.
+
+        The pane is not a log. It scrolls, it dies with the session, and it is
+        unreadable from a phone. Three launch failures in one evening printed
+        their explanation into a pane that vanished before anyone could read it.
+        """
+        return self.home / ".maceff" / f"harness_{self.agent}.log"
+
+    @property
     def registry(self) -> Path:
         """Where the supervisor writes its per-process registry.
 
@@ -147,9 +157,14 @@ def installed_agents(unit_dir: Optional[Path] = None) -> list:
     unit_dir = unit_dir or (Path.home() / ".config" / "systemd" / "user")
     if not unit_dir.is_dir():
         return []
+    # The watchdog unit shares the prefix but is not an agent. Without this it
+    # would enumerate as an agent literally named "<agent>-watch", which then
+    # makes resolution "ambiguous" and stops every harness command that resolves
+    # by enumeration -- an installed helper breaking the thing it helps.
     return sorted(
         f.name[len("cc-harness-"):-len(".service")]
         for f in unit_dir.glob("cc-harness-*.service")
+        if not f.name.endswith("-watch.service")
     )
 
 
@@ -381,9 +396,17 @@ BASE=""
 # command runs under the tmux SERVER, which may have been created days earlier
 # by an unrelated login (verified 2026-08-07: an exported probe variable did
 # not arrive, and the server in question predated the shell by nine days).
-tmux new-session -d -s "$SESSION" \\
-  "MACF_CONTEXT_WINDOW={p.context_window} TERM={p.term} $BASE{p.python} -m macf.supervisor _run_loop --name $AGENT --delay 5 --tmux-session $SESSION -- {p.child_path}"
+tmux new-session -d -s "$SESSION" "MACF_CONTEXT_WINDOW={p.context_window} TERM={p.term} $BASE{p.python} -m macf.supervisor _run_loop --name $AGENT --delay 5 --tmux-session $SESSION -- {p.child_path}" \\; set-option -t "=$SESSION" remain-on-exit on
+# ^ remain-on-exit is chained into the SAME tmux invocation, not run after it.
+# Without this a pane whose command dies immediately can take the session with
+# it before a second `tmux` process gets to set the option -- so the one case
+# the option exists for, a launch that fails instantly, is the case it would
+# most often miss. Keeping a dead pane readable is why this is here at all: the
+# same failure showed up three times in one evening as nothing but "[exited]"
+# and a shell prompt, the explanation printed and discarded each time.
+
 echo "[harness] started session '$SESSION'"
+echo "[harness] child log: {p.log_path}"
 """
 
 
@@ -481,17 +504,10 @@ MACF={p.macf_tools}
   # 1. The client can park at the workspace-trust prompt. Enter is a no-op on an
   #    empty input, so this is safe when no prompt is showing.
   sleep 18; tmux send-keys -t "=$SESS" Enter 2>/dev/null
-  sleep 12
-  # 2. SessionStart:resume hands the turn back to the user. With nobody attached
-  #    an autonomous session would idle at the prompt forever, so if persistent
-  #    AUTO_MODE is active, type a re-orientation prompt and submit it.
-  if "$MACF" mode get 2>/dev/null | grep -q AUTO_MODE; then
-    tmux send-keys -t "=$SESS" "AUTO_MODE RESUME: session restarted (SessionStart:resume returned the turn with nobody attached). Re-orient via the task tree and continue authorized scoped work." 2>/dev/null
-    # Paste-detection debounces an Enter that follows a fast text burst: settle,
-    # then Enter twice. The second is a no-op if the first already submitted.
-    sleep 3; tmux send-keys -t "=$SESS" Enter 2>/dev/null
-    sleep 2; tmux send-keys -t "=$SESS" Enter 2>/dev/null
-  fi
+  # The re-orientation prompt is no longer typed in here. It is passed to the
+  # client as its initial prompt below, which is both earlier and unconditional
+  # -- send-keys had to guess when the client was ready, and a resume that never
+  # started could not be rescued by typing into it.
 ) &
 
 # Continuity is the DEFAULT. `-c` resumes the prior conversation; starting a new
@@ -503,8 +519,96 @@ MACF={p.macf_tools}
 # line -- the session comes up, the terminal looks right, and the agent is
 # simply unreachable from outside. It has happened here: a resume that dropped
 # --channels took the inbound link down with nothing to see.
-exec claude -c{channels} "$@"
+# Tee, not redirect: the pane stays live for whoever is attached AND the output
+# survives the pane for whoever is not. `exec` keeps this process replaced by
+# the client, so the supervisor still waits on the client itself and not on a
+# wrapper -- a pipeline here would make the supervisor watch `tee` instead, and
+# a client that died would look alive.
+LOG="{p.log_path}"
+mkdir -p "$(dirname "$LOG")"
+{{ echo; echo "=== $(date -Is) starting: claude -c{channels} ==="; }} >> "$LOG"
+exec > >(tee -a "$LOG") 2>&1
+
+# A RESUME MUST CARRY A PROMPT. `claude -c` with no prompt can refuse to resume
+# outright -- "No deferred tool marker found in the resumed session ... Provide a
+# prompt to continue the conversation" -- and then exit 1. The supervisor does
+# exactly what it should with that: it retries, forever, a command that cannot
+# succeed. Measured A/B on one conversation, same minute: without a prompt, exit
+# 1 every time; with one, the client came up.
+#
+# It also replaces a timing hack. The re-orientation used to be typed in by
+# send-keys ~30s after launch, which meant guessing when the client was ready
+# and defeating paste-detection with a double Enter. Passing it as the initial
+# prompt is not a workaround for that -- it is the thing send-keys was
+# approximating, done at the only moment that cannot race.
+if "$MACF" mode get 2>/dev/null | grep -q AUTO_MODE; then
+  PROMPT="AUTO_MODE RESUME: this session restarted. Re-orient via the task tree and continue authorized scoped work."
+else
+  PROMPT="Session resumed by the harness. Summarize where things stand and await instructions."
+fi
+
+exec claude -c{channels} "$@" "$PROMPT"
 """
+
+
+def render_watchdog(p: HarnessParams) -> tuple:
+    """Render a periodic health check that resurrects a dead session.
+
+    The harness has a single point of failure that is easy to miss because the
+    diagram hides it: **the supervisor is a child of the tmux server.** It
+    restarts the client in place, which is what it is for, but if the tmux
+    server itself dies the supervisor dies with it — and the main unit is
+    ``oneshot`` with ``RemainAfterExit=yes``, so systemd neither notices nor
+    acts. Supervision nested inside the thing whose death it should survive
+    survives nothing. Observed: the session went away, two registry entries were
+    left still claiming "running" because the cleanup never ran, and the harness
+    stayed down until a human typed the launcher.
+
+    The repair is cheap because the start script is already idempotent and
+    already refuses to touch a name it does not own: run it on a timer. When the
+    harness is healthy this costs one registry read and one ``has-session``;
+    when it is gone, it comes back without anyone noticing it left.
+
+    Returned as (service, timer) and installed only on request — a machine that
+    resurrects an agent unattended is a decision for the operator, not a default.
+    """
+    service = f"""# MacEff harness watchdog — generated, do not hand-edit.
+# Regenerate with: macf_tools harness generate --agent {p.agent} --what watchdog
+#
+# Runs the SAME idempotent start script the boot unit runs. It exits 0 when the
+# harness is already up and refuses (3) when the session name is held by
+# something else, so a timer cannot start a second client or steal a name.
+[Unit]
+Description=Ensure the {p.agent} harness session exists
+After=cc-harness-{p.agent}.service
+
+[Service]
+Type=oneshot
+WorkingDirectory={p.home}
+Environment=PATH={p.env_path}
+ExecStart={p.start}
+# 3 means "a session by this name exists and is not ours" — a state a human
+# must resolve. Reporting it as failure is correct; retrying would not help.
+SuccessExitStatus=0
+"""
+    timer = f"""# MacEff harness watchdog timer — generated, do not hand-edit.
+# Regenerate with: macf_tools harness generate --agent {p.agent} --what watchdog
+[Unit]
+Description=Periodically ensure the {p.agent} harness session exists
+
+[Timer]
+# First check shortly after boot, then steadily. A minute is well under the
+# time it takes anyone to notice an agent has gone quiet, and the check is
+# cheap enough that frequency is not the cost.
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Unit=cc-harness-{p.agent}-watch.service
+
+[Install]
+WantedBy=timers.target
+"""
+    return service, timer
 
 
 def render_launch_functions(p: HarnessParams) -> str:

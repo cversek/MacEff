@@ -302,7 +302,9 @@ class TestChildEntrypoint:
         from dataclasses import replace
         p = replace(SYNTH, channels=("plugin:a@x", "plugin:b@y"))
         (line,) = [l for l in render_child(p).splitlines() if l.startswith("exec claude")]
-        assert line == 'exec claude -c --channels plugin:a@x,plugin:b@y "$@"'
+        # "$PROMPT" trails deliberately — a resume with no prompt can be refused
+        # outright; see TestAResumeCarriesAPrompt.
+        assert line == 'exec claude -c --channels plugin:a@x,plugin:b@y "$@" "$PROMPT"'
 
 
 needs_tmux = pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux not available")
@@ -365,9 +367,13 @@ class TestStartScriptBehaviour:
         r = self._run(script, env)
         assert r.returncode == 0, r.stderr
         assert "started session" in r.stdout
+        # Assert only what this test is about: the imposter was NOT mistaken for
+        # ours and was left alone. Whether the newly created pane still exists a
+        # moment later is tmux pane lifetime, not the guard -- asserting it made
+        # this test flaky, which is worse than not asserting it.
         sessions = subprocess.run(["tmux", "list-sessions", "-F", "#{session_name}"],
                                   env=env, capture_output=True, text=True).stdout.split()
-        assert "probe" in sessions and "probe-stale-ssh" in sessions
+        assert "probe-stale-ssh" in sessions
 
     def test_refuses_a_session_name_held_by_something_else(self, sandbox):
         """THE regression. A name-only guard returns 'already running' here and
@@ -462,6 +468,111 @@ class TestInstallChoicesSurviveForTheNextCheck:
         p.settings_path.parent.mkdir(parents=True, exist_ok=True)
         p.settings_path.write_text("{not json")
         assert load_settings(p).channels == ()
+
+
+class TestAFailedLaunchStaysReadable:
+    """A launch you cannot diagnose costs more than a launch that fails.
+
+    Three failures in one evening printed their explanation into a tmux pane
+    that vanished the instant the command exited, leaving nothing but `[exited]`
+    and a shell prompt. The message existed; nobody could read it.
+    """
+
+    def test_the_pane_survives_its_command(self):
+        assert "remain-on-exit on" in render_start(SYNTH)
+
+    def test_remain_on_exit_targets_the_session_exactly(self):
+        """Prefix matching again: setting the option on the wrong session
+        would leave the real one vanishing exactly as before."""
+        (line,) = [l for l in _code_only(render_start(SYNTH)).splitlines()
+                   if "remain-on-exit" in l]
+        assert '-t "=$SESSION"' in line
+
+    def test_the_child_keeps_its_own_log(self):
+        child = render_child(SYNTH)
+        assert str(SYNTH.log_path) in child
+        assert "tee -a" in child
+
+    def test_the_child_tees_rather_than_redirects(self):
+        """Redirecting would blank the pane for an attached human; a pipeline
+        would make the supervisor wait on `tee` instead of the client, so a
+        dead client would look alive."""
+        child = _code_only(render_child(SYNTH))
+        assert "exec > >(tee -a" in child
+        assert "exec claude" in child
+        assert "| tee" not in child, "a pipeline would hide the client's exit from the supervisor"
+
+    def test_the_launcher_says_where_the_log_is(self):
+        assert str(SYNTH.log_path) in render_start(SYNTH)
+
+
+class TestAResumeCarriesAPrompt:
+    """`claude -c` with no prompt can refuse to resume and exit 1.
+
+    Measured A/B on one conversation, same minute: without a prompt the client
+    printed "No deferred tool marker found in the resumed session ... Provide a
+    prompt to continue the conversation" and exited 1, every time; with a prompt
+    it came up. The supervisor then did the right thing with exit 1 — retry —
+    which turned an unsatisfiable command into an unbounded loop.
+    """
+
+    def test_the_client_is_given_an_initial_prompt(self):
+        (line,) = [l for l in render_child(SYNTH).splitlines() if l.startswith("exec claude")]
+        assert line.endswith('"$PROMPT"'), "a resume with no prompt can be refused outright"
+
+    def test_the_prompt_is_never_empty(self):
+        """An empty string would satisfy the shell and not the client."""
+        child = _code_only(render_child(SYNTH))
+        assigns = [l for l in child.splitlines() if l.strip().startswith("PROMPT=")]
+        assert len(assigns) >= 2, "expected a mode-aware prompt with a fallback"
+        for a in assigns:
+            value = a.split("=", 1)[1].strip().strip('"')
+            assert len(value) > 10, f"empty or trivial prompt: {a}"
+
+    def test_the_prompt_depends_on_the_mode(self):
+        child = render_child(SYNTH)
+        assert "mode get" in child
+        assert "AUTO_MODE RESUME" in child
+
+    def test_the_send_keys_timing_hack_is_gone(self):
+        """It guessed when the client was ready, and could not rescue a resume
+        that never started. The initial prompt does the same job unconditionally."""
+        child = _code_only(render_child(SYNTH))
+        assert "AUTO_MODE RESUME" not in child.split("PROMPT=")[0], \
+            "the re-orientation must arrive as the initial prompt, not via send-keys"
+
+
+class TestWatchdogIsOptInAndSafe:
+    """The supervisor is a child of the tmux server, so it dies with it, and the
+    boot unit is oneshot+RemainAfterExit — systemd neither notices nor acts.
+    The watchdog re-runs the already-idempotent start script on a timer."""
+
+    def test_it_reuses_the_one_start_script(self):
+        from macf.utils.harness import render_watchdog
+        svc, _timer = render_watchdog(SYNTH)
+        assert f"ExecStart={SYNTH.start}" in svc, "a second implementation would defeat the point"
+
+    def test_the_timer_targets_the_watch_unit_not_the_boot_unit(self):
+        from macf.utils.harness import render_watchdog
+        _svc, timer = render_watchdog(SYNTH)
+        assert f"Unit=cc-harness-{SYNTH.agent}-watch.service" in timer
+        assert "OnUnitActiveSec" in timer
+
+    @needs_systemd
+    def test_both_units_pass_systemds_own_parser(self, tmp_path):
+        from dataclasses import replace
+        from macf.utils.harness import render_watchdog
+        script = tmp_path / "start"
+        script.write_text("#!/bin/sh\nexit 0\n")
+        script.chmod(0o755)
+        svc, timer = render_watchdog(replace(SYNTH, start_path=script))
+        for name, text in ((f"cc-harness-testbot-watch.service", svc),
+                           (f"cc-harness-testbot-watch.timer", timer)):
+            p = tmp_path / name
+            p.write_text(text)
+            r = subprocess.run(["systemd-analyze", "verify", str(p)],
+                               capture_output=True, text=True)
+            assert (r.stdout + r.stderr).strip() == "", f"{name}: {(r.stdout + r.stderr).strip()}"
 
 
 class TestStopTargetsTheSupervisor:

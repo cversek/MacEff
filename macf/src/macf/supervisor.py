@@ -275,6 +275,48 @@ def _tmux_wrap(tmux_session: str, cmd: list) -> list:
             _shell_command_string(cmd)]
 
 
+def _is_supervisor_process(pid: int) -> bool:
+    """Is this pid still a supervisor, or something that inherited the number?
+
+    Separate and module-level for the same reason ``_is_alive`` is: the process
+    table is not a thing a test should have to own. Both are the seam where
+    "what the registry says" meets "what is actually true".
+    """
+    try:
+        args = subprocess.run(["ps", "-o", "args=", "-p", str(pid)],
+                              capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return "macf.supervisor" in args
+
+
+def is_live_supervisor(data: dict) -> bool:
+    """Does this registry entry describe a supervisor that is actually running?
+
+    Three conditions, and each excludes a state that has been observed on a
+    live host:
+
+    * ``status == "running"`` — entries persist after the process ends, so the
+      file existing proves nothing. Seven stale entries sat in one registry,
+      one of them still claiming a supervisor that had exited nine days earlier.
+    * the pid is alive — an entry can outlive its process by any amount.
+    * the pid is still a supervisor — pids are recycled, and an entry pointing
+      at whatever inherited the number is worse than no entry at all.
+
+    Deliberately NOT ``pgrep -f 'macf.supervisor --name X'``: when tmux starts a
+    server it keeps the command it was asked to run in its own argv, so that
+    matches the tmux server and reports a live supervisor for as long as the
+    server lives. The registry is keyed by the supervisor's own pid, which is
+    what makes the process check meaningful.
+    """
+    if data.get("status") != "running":
+        return False
+    pid = data.get("supervisor_pid", 0)
+    if not pid or not _is_alive(pid):
+        return False
+    return _is_supervisor_process(pid)
+
+
 def _find_supervisor(target: str) -> dict | None:
     """Find a RUNNING supervisor registry entry by supervisor PID or by name.
     On multiple name matches, returns the most recently created."""
@@ -288,9 +330,9 @@ def _find_supervisor(target: str) -> dict | None:
             data = json.loads(entry.read_text())
         except (json.JSONDecodeError, OSError):
             continue
-        sup_pid = data.get("supervisor_pid", 0)
-        if not _is_alive(sup_pid):
+        if not is_live_supervisor(data):
             continue
+        sup_pid = data.get("supervisor_pid", 0)
         if target == str(sup_pid) or target == data.get("name"):
             matches.append(data)
     if not matches:

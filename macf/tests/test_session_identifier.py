@@ -154,3 +154,21 @@ class TestInstalledAgents:
 
     def test_a_missing_unit_directory_is_empty_not_an_error(self, tmp_path):
         assert installed_agents(tmp_path / "nope") == []
+
+
+class TestWatchdogUnitsAreNotAgents:
+    """The watchdog shares the unit-name prefix but is not an agent. Counting it
+    would make resolution ambiguous and break every command that resolves by
+    enumeration — an installed helper disabling the thing it helps."""
+
+    def test_a_watchdog_unit_is_not_enumerated_as_an_agent(self, tmp_path):
+        (tmp_path / "cc-harness-Real_abc123.service").write_text("")
+        (tmp_path / "cc-harness-Real_abc123-watch.service").write_text("")
+        assert installed_agents(tmp_path) == ["Real_abc123"]
+
+    def test_resolution_stays_unambiguous_with_a_watchdog_installed(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("MACEFF_AGENT_NAME", raising=False)
+        monkeypatch.setattr("macf.utils.identity.get_agent_identity", lambda: "x@unknown")
+        (tmp_path / "cc-harness-Real_abc123.service").write_text("")
+        (tmp_path / "cc-harness-Real_abc123-watch.service").write_text("")
+        assert resolve_agent(unit_dir=tmp_path) == ("Real_abc123", "the only installed unit")
