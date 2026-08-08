@@ -980,5 +980,15 @@ This policy evolves through:
 
 ---
 
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — CLI
+     interface design, error feedback, and full-disclosure output. -->
+
+[[tooling]] [[communication]] [[discoverability]] [[observability]]
+
+---
+
 🔧 Generated with Claude Code
 Co-Authored-By: Claude <noreply@anthropic.com>

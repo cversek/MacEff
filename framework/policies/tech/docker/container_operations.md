@@ -533,3 +533,13 @@ This policy evolves based on operational experience. Discovered improvements or 
 - Document friction points in `friction_points/friction_points.md`
 - Reference this policy in DevOpsEng specialization work
 - Update as MacEff deployment patterns mature
+
+---
+
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — container
+     build, volume, runtime, and deployment discipline. -->
+
+[[containers]] [[deployment]] [[container_deployment]] [[security]] [[portability]]
