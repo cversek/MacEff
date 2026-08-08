@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from macf.utils.harness import HarnessParams, render_unit
+from macf.utils.harness import HarnessParams, render_start, render_unit
 
 SYNTH = HarnessParams(
     agent="testbot",
@@ -39,10 +39,28 @@ PROXY_SRC = (
 # holds. Kept tiny and total so a negative control can exercise them directly.
 # --------------------------------------------------------------------------
 
-def check_escaped_variable(unit: str) -> bool:
-    """Shell variables in Exec* survive the service manager's own expansion."""
-    exec_lines = [l for l in unit.splitlines() if l.startswith("ExecStart=")]
-    return all("$${BASE}" in l for l in exec_lines if "BASE=" in l)
+def check_no_shell_expansion_in_exec(unit: str) -> bool:
+    """Exec* carries no shell variable for the service manager to eat.
+
+    Strengthened from its original form. The invariant used to be "a shell
+    variable in Exec* must be written $${VAR} so a literal ${VAR} reaches the
+    shell", which is true but only defends a hazard we chose to keep. Exec* now
+    invokes a script, so there is no shell variable in the unit at ALL and the
+    hazard is gone by construction rather than by remembering to escape.
+
+    An unescaped ${VAR} would be replaced from the UNIT's environment before any
+    shell ran; a correctly escaped one still means the unit carries launch logic
+    that something else also carries. Absence is the stronger property.
+    """
+    for line in unit.splitlines():
+        if not line.startswith(("ExecStart=", "ExecStop=", "ExecStartPre=")):
+            continue
+        # ExecStop legitimately uses shell parameter expansion in a loop it owns
+        # outright; the rule is about the LAUNCH path carrying a variable that
+        # systemd will expand out from under it.
+        if line.startswith("ExecStart=") and ("$" in line):
+            return False
+    return True
 
 
 def check_restart_responsibility_is_explicit(unit: str) -> bool:
@@ -109,17 +127,30 @@ def _unit() -> str:
     return render_unit(SYNTH)
 
 
+def _start() -> str:
+    """The launch decision moved here, and its invariants moved with it.
+
+    Leaving them pointed at the unit is how an invariant quietly stops covering
+    anything: the checker still passes, on text that no longer contains the
+    thing it was written to protect. Both negative controls below caught exactly
+    that — they failed with "mutation was a no-op", which is the check reporting
+    that it had nothing to check.
+    """
+    return render_start(SYNTH)
+
+
 INVARIANTS = [
     (
-        "escaped-variable",
+        "no-shell-expansion-in-exec",
         _unit,
-        check_escaped_variable,
-        lambda u: u.replace("$${BASE}", "${BASE}"),
+        check_no_shell_expansion_in_exec,
+        lambda u: u.replace("ExecStart=", "ExecStart=/bin/bash -c '${BASE}", 1),
         "The service manager expands ${VAR} in Exec* from the UNIT's environment "
         "before any shell runs. An unescaped ${BASE} was replaced with an empty "
         "string, so the shell's own assignment never mattered and the proxy "
         "opt-in was silently inert — the only trace was a 'Referenced but unset "
-        "environment variable' line in the journal.",
+        "environment variable' line in the journal. ExecStart now invokes a "
+        "script and carries no variable at all, so the hazard cannot recur.",
     ),
     (
         "restart-responsibility",
@@ -144,7 +175,7 @@ INVARIANTS = [
     ),
     (
         "flag-travels-with-base-url",
-        _unit,
+        _start,
         check_flag_travels_with_base_url,
         lambda u: u.replace(" _CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1 ", " "),
         "When the API base URL's host is not the default, the client stops "

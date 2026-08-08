@@ -1046,7 +1046,7 @@
     "types": {
       "observations": {
         "name": "observations",
-        "emoji": "🔬",
+        "emoji": "\ud83d\udd2c",
         "description": "Technical discoveries and insights",
         "discovery_keys": [
           "observation",
@@ -1059,7 +1059,7 @@
       },
       "experiments": {
         "name": "experiments",
-        "emoji": "🧪",
+        "emoji": "\ud83e\uddea",
         "description": "Controlled testing and validation",
         "discovery_keys": [
           "experiment",
@@ -1073,7 +1073,7 @@
       },
       "reports": {
         "name": "reports",
-        "emoji": "📊",
+        "emoji": "\ud83d\udcca",
         "description": "Project completion summaries",
         "discovery_keys": [
           "report",
@@ -1087,7 +1087,7 @@
       },
       "reflections": {
         "name": "reflections",
-        "emoji": "💭",
+        "emoji": "\ud83d\udcad",
         "description": "Philosophical growth synthesis",
         "discovery_keys": [
           "reflection",
@@ -1101,7 +1101,7 @@
       },
       "checkpoints": {
         "name": "checkpoints",
-        "emoji": "🔖",
+        "emoji": "\ud83d\udd16",
         "description": "Strategic state preservation",
         "discovery_keys": [
           "checkpoint",
@@ -1113,7 +1113,7 @@
       },
       "roadmaps": {
         "name": "roadmaps",
-        "emoji": "🗺️",
+        "emoji": "\ud83d\uddfa\ufe0f",
         "description": "Multi-phase planning documents",
         "discovery_keys": [
           "roadmap",
@@ -1131,7 +1131,7 @@
       },
       "emotions": {
         "name": "emotions",
-        "emoji": "❤️",
+        "emoji": "\u2764\ufe0f",
         "description": "Emotional expression and processing",
         "discovery_keys": [
           "emotional",
@@ -1145,7 +1145,7 @@
       },
       "learnings": {
         "name": "learnings",
-        "emoji": "📚",
+        "emoji": "\ud83d\udcda",
         "description": "Accumulated wisdom and lessons",
         "discovery_keys": [
           "learning",
@@ -1584,7 +1584,7 @@
         "short_name": "CAPBOUND",
         "path": "base/infrastructure/capability_boundaries.md",
         "CEP_triggers": [
-          "I was refused reaching something — is the network broken or is this deliberate?",
+          "I was refused reaching something \u2014 is the network broken or is this deliberate?",
           "What should an agent do when it meets a capability boundary, and what must it not do?",
           "Why can't the service being reached just enforce its own allowlist?",
           "What three different failures does one capability boundary prevent?",
@@ -1610,6 +1610,36 @@
           "hardening",
           "reach",
           "enforcement"
+        ]
+      },
+      {
+        "name": "agent_harness",
+        "short_name": "HARNESS",
+        "path": "base/infrastructure/agent_harness.md",
+        "CEP_triggers": [
+          "How do I tell whether the harness is actually running, and why isn't `tmux has-session` an answer?",
+          "What names the tmux session and the systemd unit, and how do I get back to the agent from it?",
+          "Which characters can a session identifier not contain, and which of those are real constraints?",
+          "Why did `harness status` report ABSENT while the harness was running?",
+          "Why must every tmux `-t` target be written `=name`?",
+          "Why must ANTHROPIC_BASE_URL and the first-party flag never be emitted separately?",
+          "Why does a command started under tmux not inherit my shell's environment?",
+          "What does stopping the harness have to stop, and why is killing the client wrong?",
+          "What must a deployment install, verify, and never hand-edit?",
+          "Why is one session per Calling Card the supported case, and what is deferred?"
+        ],
+        "keywords": [
+          "harness",
+          "tmux",
+          "systemd",
+          "supervisor",
+          "session",
+          "unit",
+          "calling card",
+          "identifier",
+          "restart",
+          "continuity",
+          "auto-restart"
         ]
       }
     ]
