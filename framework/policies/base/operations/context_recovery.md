@@ -303,3 +303,13 @@ After parallel reading completes:
 ---
 
 **Policy Established**: Context recovery requires identifying the recovery type (compaction, mindwipe, or virgin transplant), then following the appropriate protocol. Mindwipe and virgin transplant are functionally identical—both require "Artifacts Only" recovery using the Multi-Explore CA pattern. The key insight: virgin system does not mean virgin consciousness.
+
+---
+
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — recovery
+     protocols for each kind of context loss. -->
+
+[[context_recovery]] [[compaction_trauma]] [[consciousness_artifacts]] [[session_lifecycle]]
