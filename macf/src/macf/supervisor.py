@@ -500,6 +500,39 @@ def launch_in_terminal(cmd_args: list, name: str = "",
     return 0
 
 
+# Shell exit codes that mean the command was never launched. POSIX shells use
+# 127 for "not found" and 126 for "found but not executable". Neither describes
+# a process that ran and failed, so neither is a reason to try again.
+_NEVER_LAUNCHED_EXITS = (126, 127)
+
+# A child that exits this fast did not do any work. Pairing the exit code with
+# the lifetime matters: a long-running child is entitled to exit 127 as its own
+# considered result, and killing supervision for that would be wrong.
+_NEVER_LAUNCHED_WINDOW_SECONDS = 3
+
+
+def _unlaunchable_reason(cmd_args: list) -> "str | None":
+    """Why this command can never run, or None if it might.
+
+    Only a path is checked, and only when it is one: a bare word may be an
+    alias or a shell function, and the child is deliberately run through an
+    interactive shell so that those resolve. Refusing them here would break the
+    very indirection that invocation exists to support. An absolute or relative
+    PATH-bearing target, by contrast, is a claim about the filesystem that can
+    be checked cheaply and answered definitively.
+    """
+    if not cmd_args:
+        return "no command was given"
+    target = cmd_args[0]
+    if os.sep not in target:
+        return None
+    if not os.path.exists(target):
+        return f"{target} does not exist"
+    if not os.access(target, os.X_OK):
+        return f"{target} exists but is not executable"
+    return None
+
+
 def _send_post_start_keys(tmux_session: str, keys: str, delay: int) -> None:
     """Send `keys` to the child's tmux pane `delay` seconds after it spawns.
 
@@ -535,6 +568,24 @@ def run_loop(cmd_args: list, name: str = "", restart_delay: int = 5,
     pid = os.getpid()
     created = time.time()
 
+    # Refuse to supervise a command that cannot ever run. Restarting is a
+    # response to a process that FAILED; a command that does not exist has not
+    # failed, it was never launchable, and no number of retries changes that.
+    #
+    # Measured before this existed: with the child binary removed, the loop
+    # reached three restarts in eight seconds, kept its registry entry marked
+    # "running", and surfaced nothing — the shell's "command not found" went to
+    # a pane that had already gone. An agent's harness silently spinning is
+    # indistinguishable, from every status surface, from one that is simply up.
+    problem = _unlaunchable_reason(cmd_args)
+    if problem:
+        print(f"[auto-restart] REFUSING TO START: {problem}", file=sys.stderr)
+        print("[auto-restart] This is not a transient failure and restarting "
+              "cannot fix it, so no supervisor is registered.", file=sys.stderr)
+        _notify_telegram(f"Name: {name}\n{problem}",
+                         prefix="\U0001f6d1 Supervisor Refused")
+        return 1
+
     # Export the pinned session id so the child (run via $SHELL -ic, which
     # inherits this environment) can pass it to `claude --session-id`.
     if session_id:
@@ -557,6 +608,8 @@ def run_loop(cmd_args: list, name: str = "", restart_delay: int = 5,
     child = None
     restart_count = 0
     stop_requested = False  # Flag for Ctrl-C during countdown
+    # Mutable so the `finally` block can set it without a nonlocal dance.
+    _exit_status = [0]
 
     def handle_restart(signum, frame):
         nonlocal child
@@ -634,7 +687,9 @@ def run_loop(cmd_args: list, name: str = "", restart_delay: int = 5,
                     daemon=True,
                 ).start()
 
+            spawned_at = time.time()
             exit_code = child.wait()
+            lifetime = time.time() - spawned_at
             child = None
             restart_count += 1
 
@@ -648,6 +703,27 @@ def run_loop(cmd_args: list, name: str = "", restart_delay: int = 5,
             reg = _read_registry(pid)
             if reg.get("status") == "disabled":
                 print(f"[auto-restart] Disabled. Not restarting.")
+                break
+
+            # The pre-flight check cannot see through an alias, a shell
+            # function or a PATH lookup, so the same "never launched" case can
+            # still arrive here — as a shell exit code instead of a missing
+            # file. Stop, rather than spin: the shell has already decided this
+            # command does not resolve, and it will decide the same thing every
+            # five seconds forever.
+            if exit_code in _NEVER_LAUNCHED_EXITS and lifetime < _NEVER_LAUNCHED_WINDOW_SECONDS:
+                reason = ("not found" if exit_code == 127 else "not executable")
+                print(f"\n[auto-restart] FATAL: the shell reports the command is "
+                      f"{reason} (exit {exit_code}, after {lifetime:.1f}s).",
+                      file=sys.stderr)
+                print("[auto-restart] Not restarting — retrying cannot resolve a "
+                      "command that does not resolve.", file=sys.stderr)
+                _update_registry(pid, status="failed", last_exit_code=exit_code,
+                                 failure_reason=f"command {reason}")
+                _notify_telegram(
+                    f"Process: {name}\nCommand {reason} (exit {exit_code})\n"
+                    f"Supervision stopped after {restart_count} attempt(s).",
+                    prefix="\U0001f6d1 Supervisor Failed")
                 break
 
             # Install countdown SIGINT handler (interactive shell corrupts default handler)
@@ -685,13 +761,26 @@ def run_loop(cmd_args: list, name: str = "", restart_delay: int = 5,
             child.send_signal(signal.SIGINT)
             child.wait()
     finally:
-        _update_registry(pid, status="stopped",
+        # "stopped" means someone asked it to stop. "failed" means it gave up.
+        # Overwriting the second with the first erases the only signal that
+        # distinguishes a clean shutdown from a supervisor that could not run
+        # what it was given — and that distinction is the entire point of
+        # recording a failure.
+        final_status = "stopped"
+        if _read_registry(pid).get("status") == "failed":
+            final_status = "failed"
+        _update_registry(pid, status=final_status,
                          stopped=time.time(),
                          total_restarts=restart_count)
+        # Carried out of `finally` so the caller — and therefore the service
+        # manager — sees a failure as a failure. A supervisor that gave up and
+        # exited 0 leaves the unit reporting active with nothing supervised.
+        _exit_status[0] = 1 if final_status == "failed" else 0
         _notify_telegram(
             f"Process: {name}\nRestarts: {restart_count}\nUptime: {_format_duration(time.time() - created)}",
             prefix="\U0001f6d1 Supervisor Stopped"
         )
+    return _exit_status[0]
 
 
 def list_processes(show_all: bool = False):
@@ -878,10 +967,14 @@ if __name__ == "__main__":
         args = parser.parse_args(supervisor_argv)
 
         if args.action == "_run_loop":
-            run_loop(cmd, name=args.name, restart_delay=args.delay,
-                     tmux_session=args.tmux_session, session_id=args.session_id,
-                     post_start_keys=args.post_start_keys,
-                     post_start_delay=args.post_start_delay)
+            # Propagate the return code. A supervisor that refuses to start and
+            # then exits 0 tells the service manager it succeeded, which is the
+            # same silent-success failure the refusal exists to end: systemd
+            # would mark the unit active with nothing supervising anything.
+            sys.exit(run_loop(cmd, name=args.name, restart_delay=args.delay,
+                              tmux_session=args.tmux_session, session_id=args.session_id,
+                              post_start_keys=args.post_start_keys,
+                              post_start_delay=args.post_start_delay) or 0)
 
     except Exception as e:
         # Top-level supervisor crash handler — bare Exception is intentional:
