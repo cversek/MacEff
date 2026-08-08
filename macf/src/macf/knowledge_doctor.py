@@ -30,46 +30,14 @@ __all__ = ["examine"]
 _RAW_LINK = re.compile(r"\[\[([^\]]+)\]\]")
 
 
-def _participating_files(agent_home: Path, participation: Dict[str, Dict[str, Any]]):
-    """Yield (ca_type, spec, path) for every file the graph should contain."""
-    for ca_type, spec in participation.items():
-        # Declared-but-not-participating entries exist so the registry check
-        # knows the location is deliberate; their files are not graph members
-        # and must not be examined as such.
-        if spec.get("participates", True) is False:
-            continue
-        for rel in spec["dirs"]:
-            # Framework-rooted types live outside the agent tree. Resolving them
-            # against agent_home was silently catastrophic: dirs=[""] became
-            # agent_home/"agent"/"" — the WHOLE agent tree — so every artifact
-            # was examined a second time and mislabelled with this type.
-            if spec.get("root") == "framework":
-                from .utils.manifest import get_framework_policies_path
-                base = get_framework_policies_path()
-                if not base:
-                    continue
-                d = base / rel if rel else base
-            else:
-                d = agent_home / "agent" / rel
-            if not d.exists():
-                continue
-            unit = spec.get("unit", "all")
-            for f in sorted(d.rglob("*.md")):
-                if f.name == "INDEX.md":
-                    continue
-                if unit != "all" and f.stem not in unit:
-                    continue
-                yield ca_type, spec, f
-
-
 def examine(agent_home: Optional[Path] = None,
             kg: Optional[Dict[str, Any]] = None) -> Diagnosis:
     """Examine the knowledge web and report what it cannot report about itself."""
-    from .ideas import CA_PARTICIPATION, build_knowledge_graph
+    from .knowledge_web import build_knowledge_web, iter_web_files
     from .utils.paths import find_agent_home
 
     agent_home = agent_home or find_agent_home()
-    kg = kg or build_knowledge_graph()
+    kg = kg or build_knowledge_web()
     findings: List[Finding] = []
 
     ca_nodes = kg.get("ca_nodes", {})
@@ -81,7 +49,9 @@ def examine(agent_home: Optional[Path] = None,
     examined = 0
     orphans_by_type: Dict[str, List[Path]] = {}
     mention_only: List[Path] = []
-    for ca_type, spec, path in _participating_files(agent_home, CA_PARTICIPATION):
+    scope_types = set()
+    for ca_type, _root, path in iter_web_files(agent_home):
+        scope_types.add(ca_type)
         examined += 1
         try:
             content = path.read_text(errors="replace")
@@ -120,7 +90,7 @@ def examine(agent_home: Optional[Path] = None,
 
     # ---- normalization drift in source text --------------------------------
     drift: Dict[str, set] = {}
-    for _ca_type, _spec, path in _participating_files(agent_home, CA_PARTICIPATION):
+    for _ca_type, _root, path in iter_web_files(agent_home):
         try:
             content = path.read_text(errors="replace")
         except OSError:
@@ -160,40 +130,6 @@ def examine(agent_home: Optional[Path] = None,
                         "exists, or accept it as a genuinely new concept"),
             ))
 
-    # ---- registry integrity ------------------------------------------------
-    # From the scholarship policy on registry authority: every artifact-producing
-    # location must be declared, and every declared location must exist.
-    declared_dirs = {rel for spec in CA_PARTICIPATION.values() for rel in spec["dirs"]}
-    for rel in sorted(declared_dirs):
-        if not (agent_home / "agent" / rel).exists():
-            findings.append(Finding(
-                check="registry integrity",
-                severity=Severity.NOTE,
-                subject=rel,
-                detail="declared as a participating location but does not exist",
-                remedy="remove the declaration, or create the location it describes",
-            ))
-    for base in ("private", "public"):
-        root = agent_home / "agent" / base
-        if not root.exists():
-            continue
-        for d in sorted(p for p in root.iterdir() if p.is_dir()):
-            rel = f"{base}/{d.name}"
-            if rel in declared_dirs:
-                continue
-            produces = any(True for _ in d.rglob("*.md"))
-            if produces:
-                findings.append(Finding(
-                    check="registry integrity",
-                    severity=Severity.ACUTE,
-                    subject=rel,
-                    detail="produces artifacts but is declared in no registry",
-                    remedy=("declare it — participating or explicitly not. "
-                            "Undeclared-but-real is the state in which artifacts "
-                            "accumulate unseen"),
-                    referral="manifest / CA type registry",
-                ))
-
     # ---- class coverage ----------------------------------------------------
     unclassed = [nid for nid, info in ca_nodes.items() if not info.get("node_class")]
     for nid in sorted(unclassed):
@@ -203,13 +139,12 @@ def examine(agent_home: Optional[Path] = None,
             subject=str(nid),
             detail="node carries no class, so a query cannot tell durable insight "
                    "from expired state",
-            remedy="declare the type's class in CA_PARTICIPATION and in its policy",
+            remedy="state the type's class in its CA-type policy; the web derives it from there",
         ))
 
     chart = Chart(
         corpus="knowledge web",
-        scope=sorted(t for t, s in CA_PARTICIPATION.items()
-                     if s.get("participates", True) is not False),
+        scope=sorted(scope_types),
         vitals={
             "files_examined": examined,
             "nodes": stats.get("total_nodes", 0),

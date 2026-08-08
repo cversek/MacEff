@@ -8725,7 +8725,8 @@ def cmd_idea_archive(args: argparse.Namespace) -> int:
 
 def cmd_idea_graph(args: argparse.Namespace) -> int:
     """Show ideas-only knowledge graph (wiki-links and relations between ideas)."""
-    from .ideas import build_idea_graph, format_graph_tree, format_graph_cluster
+    from .ideas import build_idea_graph, format_graph_cluster
+    from .knowledge_web import format_web_tree
 
     graph = build_idea_graph()
     if not graph["ideas"]:
@@ -8741,7 +8742,7 @@ def cmd_idea_graph(args: argparse.Namespace) -> int:
         return 0
 
     if getattr(args, "tree", False):
-        print(format_graph_tree(graph))
+        print(format_web_tree(graph))
     else:
         print(format_graph_cluster(graph))
     return 0
@@ -8749,25 +8750,25 @@ def cmd_idea_graph(args: argparse.Namespace) -> int:
 
 def cmd_knowledge_graph(args: argparse.Namespace) -> int:
     """Show cross-CA knowledge graph (ideas + learnings + checkpoints + reflections + observations + experiments + reports)."""
-    from .ideas import (build_knowledge_graph, format_graph_cluster_cross_ca,
-                        format_graph_tree)
+    from .knowledge_web import (build_knowledge_web, format_web_cluster_cross_ca,
+                                format_web_tree)
 
-    kg = build_knowledge_graph()
+    kg = build_knowledge_web()
     stats = kg["stats"]
 
     if getattr(args, "json_output", False):
         print(json.dumps(stats, indent=2))
         return 0
 
-    print(format_graph_cluster_cross_ca(kg))
+    print(format_web_cluster_cross_ca(kg))
     return 0
 
 
 def cmd_knowledge_query(args: argparse.Namespace) -> int:
     """Query knowledge graph by concept, node ID, or keyword."""
-    from .ideas import query_knowledge_graph, format_query_result
+    from .knowledge_web import query_knowledge_web, format_query_result
 
-    result = query_knowledge_graph(args.term)
+    result = query_knowledge_web(args.term)
 
     # Filter by node class. A checkpoint's claims expire and a learning's do
     # not; a query asking "what do I know about X" wants durable insight, while
@@ -8790,10 +8791,10 @@ def cmd_knowledge_query(args: argparse.Namespace) -> int:
 
 def cmd_knowledge_gaps(args: argparse.Namespace) -> int:
     """Detect missing wiki-links in the knowledge graph."""
-    from .ideas import detect_graph_gaps, format_gap_report, build_knowledge_graph
+    from .knowledge_web import detect_web_gaps, format_gap_report, build_knowledge_web
 
-    kg = build_knowledge_graph()
-    gaps = detect_graph_gaps(kg)
+    kg = build_knowledge_web()
+    gaps = detect_web_gaps(kg)
     if getattr(args, "json_output", False):
         print(json.dumps(gaps, indent=2))
     else:
@@ -8821,10 +8822,10 @@ def cmd_knowledge_doctor(args: argparse.Namespace) -> int:
 
 def cmd_knowledge_viz(args: argparse.Namespace) -> int:
     """Generate interactive HTML knowledge graph visualization."""
-    from .ideas import generate_graph_html
+    from .knowledge_web import generate_web_html
 
     output = getattr(args, "output", "") or "/tmp/macf_knowledge_graph.html"
-    path = generate_graph_html(output)
+    path = generate_web_html(output)
     print(f"📊 Knowledge graph written to: {path}")
     print(f"   Open in browser: file://{path}")
     return 0
