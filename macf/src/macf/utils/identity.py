@@ -83,6 +83,86 @@ def get_agent_identity() -> str:
     return f"{display_name}@{uuid_prefix}"
 
 
+# Characters that cannot survive a round trip through the session and service
+# managers, established by measurement on 2026-08-07 (tmux 3.6, systemd 257)
+# rather than from documentation:
+#
+#   tmux     '.' and ':' are accepted by ``new-session`` and then SILENTLY
+#            rewritten to '_'. The session is created, the command reports
+#            success, and the name you asked for no longer addresses anything.
+#            That is the worst available failure: it does not announce itself,
+#            and every later `-t` lookup simply misses.
+#   systemd  ':' breaks unit processing ("Couldn't process aliases").
+#
+# '@' is NOT in this set on the evidence: a concrete unit file named
+# ``cc-harness-Name@abc123.service`` enables, symlinks into default.target.wants,
+# starts, and reports is-active, and tmux keeps it verbatim. It is substituted
+# anyway, by CONVENTION — '@' is how systemd spells a template instance, and a
+# concrete unit wearing that shape invites both human and tooling confusion.
+# Recording the distinction matters: this is a style choice we could revisit,
+# not a constraint we discovered, and an earlier write-up of this work asserted
+# the opposite ("@ → _ is correct for systemd") without having measured it.
+_UNSAFE_IN_IDENTIFIER = ".:/@ \t"
+
+_IDENTIFIER_SEPARATOR = "_"
+
+
+def session_identifier(calling_card: Optional[str] = None) -> str:
+    """Map a Calling Card to a session/service identifier.
+
+    The harness names a tmux session, a systemd unit and a supervisor instance.
+    Before this existed those carried a nickname that appeared nowhere else in
+    the framework, so an operator holding the Calling Card could not derive the
+    session name and a tool holding the session name could not recover the
+    Calling Card. The identifier is now a pure function of identity.
+
+    ``TheHarborMaster@ee5cd8`` becomes ``TheHarborMaster_ee5cd8``.
+
+    Collisions are possible in principle — two Calling Cards differing only in a
+    substituted character map to one identifier — and are not resolved here.
+    They are made harmless downstream instead: the harness resolver refuses to
+    pick between multiple matching units rather than guessing, which is the same
+    rule that keeps a defaulted name from being reported as a resolved one. The
+    six-hex-character suffix comes from a UUID, so a real collision requires two
+    agents whose monikers differ only by punctuation *and* whose UUIDs share a
+    prefix.
+    """
+    card = (calling_card or get_agent_identity()).strip()
+    out = []
+    for ch in card:
+        if ch in _UNSAFE_IN_IDENTIFIER:
+            out.append(_IDENTIFIER_SEPARATOR)
+        elif ch.isalnum() or ch in "_-":
+            out.append(ch)
+        else:
+            # Anything else is unproven rather than known-bad. Substituting is
+            # the conservative move; passing it through would make the failure
+            # someone else's, in a tmux lookup that just quietly misses.
+            out.append(_IDENTIFIER_SEPARATOR)
+    # Collapse runs so "A..B" and "A_B" do not become distinguishable only by
+    # underscore count, which no human would notice in a session list.
+    ident = ""
+    for ch in out:
+        if ch == _IDENTIFIER_SEPARATOR and ident.endswith(_IDENTIFIER_SEPARATOR):
+            continue
+        ident += ch
+    return ident.strip(_IDENTIFIER_SEPARATOR)
+
+
+def calling_card_from_identifier(identifier: str) -> str:
+    """Recover the Calling Card from a session identifier.
+
+    Reversible by convention, not by escaping: a Calling Card is
+    ``Moniker@uuidprefix``, so the LAST separator is the one that was an '@'.
+    Splitting on the last one keeps monikers that legitimately contain '_'.
+
+    This direction is what lets ``harness status`` name the agent behind a
+    session it found, instead of reporting on an identifier nobody can trace.
+    """
+    head, sep, tail = identifier.rpartition(_IDENTIFIER_SEPARATOR)
+    return f"{head}@{tail}" if sep else identifier
+
+
 def _get_config_identity_name() -> Optional[str]:
     """Read display name from .maceff/config.json agent_identity block.
 
