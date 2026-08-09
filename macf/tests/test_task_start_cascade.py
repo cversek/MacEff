@@ -42,3 +42,16 @@ def test_no_cascade_when_ancestor_already_started(store):
 
     started = _cli(store, "task", "start", "2")
     assert "Cascade-started" not in started.stdout, started.stdout
+
+
+def test_sprint_auto_start_cascades_pending_parent(store):
+    """#156: the cascade lives in the shared start chokepoint (_run_task_start), so
+    creating a SPRINT under a pending parent auto-starts (cascades) the parent — the
+    cascade is no longer confined to the explicit `task start` command. Proven to
+    fail before the fix (the sprint auto-start bypassed the CLI-only cascade)."""
+    _cli(store, "task", "create", "task", "Parent umbrella", "--plan", "parent")
+    created = _cli(store, "task", "create", "sprint", "Child sprint",
+                   "--parent", "1", "--children", "A", "B")
+    assert "Auto-started in SPRINT mode" in created.stdout, created.stdout
+    # Ground truth: the pending parent is now in_progress via the chokepoint cascade.
+    assert "in_progress" in _cli(store, "task", "get", "1").stdout
