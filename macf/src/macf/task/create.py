@@ -1657,8 +1657,16 @@ def _play_log_skeleton(title: str, goal: str, chain: List[str],
 # Internal helpers for auto-start chain
 # ---------------------------------------------------------------------------
 
-def _run_task_start(task_id: int, session_uuid: Optional[str] = None) -> bool:
+def _run_task_start(task_id: int, session_uuid: Optional[str] = None,
+                    cascade: bool = True, _cascaded: Optional[List[int]] = None) -> bool:
     """Start a task programmatically (mirrors cmd_task_start logic).
+
+    Cascades upstream by default: starting any task starts its pending ancestors
+    too, so the tree never shows work underway on a branch whose parents still read
+    'pending'. Because the cascade lives in this shared chokepoint, EVERY start path
+    inherits it — explicit ``task start``, sprint/play_time auto-start, and this
+    function's own recursion — not only the CLI command. Pass ``_cascaded`` a list
+    to collect the ancestor IDs that were started (for reporting).
 
     Returns True on success, False on failure.
     """
@@ -1698,6 +1706,24 @@ def _run_task_start(task_id: int, session_uuid: Optional[str] = None) -> bool:
         "breadcrumb": breadcrumb,
         "plan_ca_ref": plan_ca_ref,
     })
+
+    if _cascaded is not None:
+        _cascaded.append(int(task_id))
+
+    # Cascade upstream through the shared chokepoint (terminates at the root
+    # sentinel or the first already-in_progress ancestor, whose call returns early).
+    if cascade and task.mtmd:
+        parent_id = getattr(task.mtmd, "parent_id", None)
+        if parent_id and str(parent_id).lstrip("#") not in ("000", "0", ""):
+            try:
+                pid_int = int(str(parent_id).lstrip("#"))
+            except (ValueError, TypeError):
+                pid_int = None
+            if pid_int is not None:
+                parent = reader.read_task(pid_int)
+                if parent and parent.status == "pending":
+                    _run_task_start(pid_int, session_uuid=session_uuid,
+                                    cascade=True, _cascaded=_cascaded)
     return True
 
 
