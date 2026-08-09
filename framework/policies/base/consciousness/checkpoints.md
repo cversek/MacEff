@@ -200,6 +200,12 @@ Checkpoints are the **primary defense** against compaction-induced amnesia, serv
 - Format: YYYY-MM-DD_HHMMSS_Task_Description.md
 - Example: 2025-10-28_143000_Testing_Phase1A_Complete.md
 
+**8 Knowledge Web Participation**
+- Does this type participate in the knowledge graph, and at what unit?
+- Which node class does it belong to, and what is the rationale?
+- What provenance does it carry by default, and how is a non-default marked?
+- What must a Wiki-Links section on this artifact contain?
+
 === CEP_NAV_BOUNDARY ===
 
 ---
@@ -932,6 +938,24 @@ Validated that hookSpecificOutput.additionalContext works for injecting structur
 ## See Also
 
 - `meta/policy_writing.md` (External References) - How external tools (like `/maceff_ccp` command) should reference this policy's preparation steps and format requirements
+
+---
+
+## 8. Knowledge Web Participation
+
+**Does this type participate?** Yes — but as a different kind of node than a learning or a reflection, and the difference is the point of this section.
+
+**What is the unit of a node?** The whole checkpoint.
+
+**Which class?** **Temporal record** (see `scholarship.md`, on node classes and provenance).
+
+**Why this is the counter-intuitive call, recorded so it can be argued with rather than inherited as an oversight.** A checkpoint's claims *expire*. "The pull request is unmerged" was true for a day. That is not a defect — it is what a checkpoint is for, and it is why the class exists. A checkpoint answers *which cycle worked on X, and what was the state then*, which is a real and frequently-needed question. It should compete for that question, not for *what do I know about X*, where its expired state would dilute durable insight in every result and the dilution worsens with every cycle.
+
+The alternative was to exclude checkpoints from the graph entirely and serve the archaeological question through breadcrumb and temporal indexing, which already exist. That remains a defensible position and is the cheapest thing to revisit if the temporal-record class proves not to earn its complexity. It was rejected because concept-mediated retrieval answers "which cycle touched this idea" better than a date range does, when the asker knows the idea but not the date — which is the normal case after compaction.
+
+**What provenance?** **Lived**, always. A checkpoint is a first-person account of operational state.
+
+**Wiki-links on a checkpoint are domain tags, not claims.** Link what the cycle *worked on*, so the checkpoint is findable by domain. Do not link concepts the checkpoint merely mentions in passing; a checkpoint touches everything the cycle touched, and linking all of it makes the checkpoint a hub that appears in every query while discriminating nothing.
 
 ---
 

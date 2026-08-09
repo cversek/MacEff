@@ -1275,6 +1275,12 @@
     "container": [
       "tech/docker/container_operations"
     ],
+    "corpus_drift": [
+      "base/infrastructure/corpus_integrity"
+    ],
+    "corpus_integrity": [
+      "base/infrastructure/corpus_integrity"
+    ],
     "debugging": [
       "base/development/debugging_and_validation"
     ],
@@ -1290,6 +1296,12 @@
     ],
     "docker": [
       "tech/docker/container_operations"
+    ],
+    "doctor": [
+      "base/infrastructure/corpus_integrity"
+    ],
+    "drift": [
+      "base/infrastructure/corpus_integrity"
     ],
     "dual_trace": [
       "base/consciousness/emotional_expression"
@@ -1395,6 +1407,9 @@
     "observations": [
       "base/consciousness/observations"
     ],
+    "orphan": [
+      "base/infrastructure/corpus_integrity"
+    ],
     "pattern_recognition": [
       "base/consciousness/reflections"
     ],
@@ -1449,6 +1464,9 @@
       "base/consciousness/reflections",
       "context_management#jotewr"
     ],
+    "registry_integrity": [
+      "base/infrastructure/corpus_integrity"
+    ],
     "release": [
       "base/development/git_discipline"
     ],
@@ -1487,6 +1505,9 @@
     ],
     "stakeholder": [
       "base/consciousness/reports"
+    ],
+    "stale_index": [
+      "base/infrastructure/corpus_integrity"
     ],
     "state_preservation": [
       "base/consciousness/checkpoints"
@@ -1640,6 +1661,44 @@
           "restart",
           "continuity",
           "auto-restart"
+        ]
+      },
+      {
+        "name": "corpus_integrity",
+        "short_name": "CORPINT",
+        "path": "base/infrastructure/corpus_integrity.md",
+        "CEP_triggers": [
+          "A checker reported nothing wrong \u2014 does that mean the corpus is healthy or that nothing was examined?",
+          "Why is a corpus that reports confidence worse than one that reports nothing?",
+          "Why is there no single doctor for every corpus?",
+          "What do acute, chronic and note mean, and how do they differ from priority?",
+          "Why does the chart print even when there are no findings?",
+          "When is running a doctor worth doing, and what response does each finding warrant?",
+          "Why is CI gating the wrong default answer to a noisy checker?",
+          "What must a new doctor ship with before it can be trusted?",
+          "What verification does a checker need beyond passing its own tests?",
+          "Why must every finding carry a remedy and be locatable?"
+        ],
+        "keywords": [
+          "corpus",
+          "integrity",
+          "doctor",
+          "drift",
+          "orphan",
+          "stale",
+          "index",
+          "registry",
+          "acute",
+          "chronic",
+          "chart",
+          "finding",
+          "remedy",
+          "referral",
+          "checker",
+          "diagnostics",
+          "knowledge_doctor",
+          "curation",
+          "screening"
         ]
       }
     ]

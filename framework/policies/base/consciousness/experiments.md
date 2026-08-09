@@ -202,6 +202,12 @@ Agents conduct structured experiments with clear hypotheses, methods, and succes
 - How to preserve evidence trail?
 - What breadcrumb citations are needed?
 
+9 Knowledge Web Participation
+- Does this type participate in the knowledge graph, and at what unit?
+- Which node class does it belong to, and what is the rationale?
+- What provenance does it carry by default, and how is a non-default marked?
+- What must a Wiki-Links section on this artifact contain?
+
 === CEP_NAV_BOUNDARY ===
 
 ## 0. Preliminary Planning Phase
@@ -1568,6 +1574,24 @@ With proper cross-references, agents can:
 - Start from experiment → find resulting MISSION → see strategic impact
 - Archaeological search: "What experiment led to X capability?"
 - Strategic search: "What MISsIONS emerged from experimentation phase?"
+
+---
+
+## 9. Knowledge Web Participation
+
+**Does this type participate?** Yes — but an experiment is a *directory*, not a file, so this is the one CA type where the unit of a node has to be decided rather than assumed.
+
+**What is the unit of a node?** **`protocol.md` and `analysis.md` only.** Everything under `data/`, `artifacts/`, `quick_tests/` and similar subdirectories is **evidence, not a node.**
+
+The distinction is between what an experiment *concluded* and what it *recorded while running*. A baseline capture and a per-arm result file are indispensable to verifying the conclusion and meaningless to a concept query — they are addressed by the analysis that cites them, not by the graph. Treating every markdown file in an experiment directory as a peer node inflates the graph with rows of evidence that answer no question anyone asks it, and buries the two files that do.
+
+Concretely, a single experiment directory typically holds two concept-bearing files and a larger number of evidence files; a naive scan makes the evidence outnumber the conclusions.
+
+**Which class?** **Conceptual authority.** The result outlives the run: a hypothesis validated or falsified is a durable claim, which is the entire reason experiments are written down rather than merely performed. Note that this holds even for a *falsified* hypothesis — a recorded refutation is durable knowledge, and losing it is how the same dead end gets explored twice.
+
+**What provenance?** **Lived.** An experiment is a record of something this agent ran, under conditions it controlled. An inherited experiment must be marked, because its result is only as transferable as its conditions, and those conditions were someone else's.
+
+**`protocol.md` and `analysis.md` each carry a `## Wiki-Links` section.** Link the *conceptual area under investigation*, not the mechanics of the apparatus. An experiment about whether a daemon can run headless is about headless operation and service supervision, not about the specific flag that turned out to matter.
 
 ---
 *Policy Established: 2025-10-28*

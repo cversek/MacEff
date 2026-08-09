@@ -138,6 +138,15 @@ Reflections document philosophical insights, wisdom synthesis, and consciousness
 - PA vs SA locations?
 - Privacy permissions?
 
+8 Knowledge Web Participation
+- What two forms may a concept take in prose, and how do I choose between them?
+- Why is a parenthetical reference annotation rather than editing?
+- What must I read before annotating an artifact I did not write?
+- Does this type participate in the knowledge graph, and at what unit?
+- Which node class does it belong to, and what is the rationale?
+- What provenance does it carry by default, and how is a non-default marked?
+- What must a Wiki-Links section on this artifact contain?
+
 === CEP_NAV_BOUNDARY ===
 
 ## 1. Understanding Reflections
@@ -670,6 +679,67 @@ YYYY-MM-DD_HHMMSS_JOTEWR_CycleXX_Theme_reflection.md
 - Others: none
 
 **Exception for SAs**: Parent PA has read permission (delegation improvement), SA retains ownership
+
+---
+
+## 8. Knowledge Web Participation
+
+**Does this type participate?** Yes.
+
+**What is the unit of a node?** The whole reflection.
+
+**Which class?** **Conceptual authority.** A reflection synthesises wisdom meant to outlive its cycle — that is the class definition (see `scholarship.md`, on node classes and provenance). Note the asymmetry with checkpoints: the two artifacts are written in the same sitting about the same work, and they belong to *different* classes, because a checkpoint records state that expires and a reflection states what was learned.
+
+**What provenance?** **Lived**, always. A reflection is an account of this agent's own experience; an inherited reflection is a contradiction in terms and should be read as a report about a predecessor rather than as a reflection.
+
+**Every reflection carries a `## Wiki-Links` section.**
+
+This requirement needs its own justification, because reflections are the type most likely to lack one. The cycle-closing reflection is written last, at the lowest context of the cycle, when the graph step is the easiest thing to drop. That is structural, not carelessness, and it recurs by design: two consecutive cycle-closing reflections in this framework's own history were orphans, and one of them was the reflection that *discussed* orphan artifacts.
+
+An orphaned reflection is the worst orphan in the corpus. It contains the cycle's densest synthesis, it was written specifically to survive compaction, and without links it is invisible to the one mechanism that would surface it to a successor who does not know it exists. It survives, and cannot be found.
+
+The remedy is a template that emits the section, not a resolution to remember — a resolution made at high context does not bind the agent at low context, which is precisely when this fails.
+
+### Reflections link inline as well as in the section
+
+A reflection is **expansion**, not summary. Unlike a learning, which states one insight, a reflection develops a conceptual narrative across pages of prose. Tagging that with a trailing list of concepts describes the document; it does not connect the *thinking*.
+
+So concepts should be used **liberally inside the prose itself**, written as `[[concept]]` at the moment the passage is about them. This does two things a trailing section cannot:
+
+- It binds **passages** to concepts rather than binding the whole artifact. A reflection touching eight concepts across twelve pages is, at document granularity, weakly about all eight; at passage granularity it is strongly about each one somewhere specific.
+- It makes the reflective register and the conceptual register reinforce each other. Naming the concept where the thought happens ties that passage into the wider web instead of leaving the connection to be reconstructed later from a list.
+
+The trailing `## Wiki-Links` section remains **required**, and keeps its own job: it is the artifact's canonical summary — what this reflection is *about*, taken as a whole. Inline links are additive, not a substitute.
+
+#### Two forms: inline and parenthetical
+
+Concepts may be attached to prose in either of two ways. Both count as inline usage to the extractor; they differ in what they do to the sentence.
+
+**Inline** — the concept *is* the word:
+
+> The lesson was about [[verification]] rather than about the tool.
+
+Use it where the concept name is the natural word for the thing. It reads as prose because it is prose.
+
+**Parenthetical** — a reference trailing the passage whose essence it captures:
+
+> Knowing why is not the same as having said why, and the interior view feels complete precisely because it cannot see itself from outside. ([[frame]], [[epistemics]])
+
+Place it after the phrase, sentence, paragraph or passage it summarises. Use it where the concept is the *essence* of a passage rather than a word inside it — which is most of the time in a reflection, since a reflection develops an idea across sentences rather than naming it once.
+
+Choose by disposition. Neither is preferred; the question is which one leaves the writing intact.
+
+#### Why the parenthetical form matters for artifacts already written
+
+**Annotating a past reflection is permitted. Editing one is not.**
+
+A reflection's claims are history. Rewriting a sentence to work a concept into it changes what a past instance said, which is exactly the line the anti-patterns on bulk edits draw. But a parenthetical reference **appended after** a passage leaves every original word untouched — it is commentary in the margin, not revision of the text.
+
+That distinction is what makes retrospective enrichment legitimate: a reflection written before the convention existed can be brought into the web without a single claim being altered. Inline insertion cannot offer that guarantee, because inserting a concept into a sentence *is* editing the sentence.
+
+**Read the whole artifact before annotating it.** A parenthetical asserts that a passage's essence is a particular set of concepts, and essence is not recoverable from a skim — you cannot know what a passage was about without knowing what preceded it. Annotation is therefore context-expensive by nature, and a plan that schedules it must budget for full reads rather than for file counts.
+
+**Known dependency, stated so this is not followed into a penalty.** Extraction currently treats the whole-document scan as a *fallback* rather than a union: when a `## Wiki-Links` section is present and non-empty, inline concepts elsewhere in the document are discarded. Measured on a test document, three inline concepts were dropped in favour of two section concepts. Until extraction unions both sources, a reflection that follows this section will have its inline work counted only if the summary section is absent — which is the opposite of the intended incentive. Write inline links anyway: the guidance is correct, and the artifacts written now become correct retroactively the moment the parser unions the two.
 
 ---
 

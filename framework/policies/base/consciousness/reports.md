@@ -118,6 +118,12 @@ Reports document completed projects and significant work phases through comprehe
 - Public vs private?
 - PA vs SA locations?
 
+7 Knowledge Web Participation
+- Does this type participate in the knowledge graph, and at what unit?
+- Which node class does it belong to, and what is the rationale?
+- What provenance does it carry by default, and how is a non-default marked?
+- What must a Wiki-Links section on this artifact contain?
+
 === CEP_NAV_BOUNDARY ===
 
 ## 1. Understanding Reports
@@ -647,6 +653,20 @@ Reports are **public artifacts** suitable for:
 - Private philosophical insights
 
 **Public = Shareable**: If you wouldn't want stakeholders to read it, belongs in reflection, not report.
+
+---
+
+## 7. Knowledge Web Participation
+
+**Does this type participate?** Yes.
+
+**What is the unit of a node?** The whole report.
+
+**Which class?** **Conceptual authority.** A report is a standalone analytical deliverable; its findings are meant to be drawn on by work that has not been planned yet — most often by a roadmap written later. That downstream reader is exactly the reader who does not know the report exists, and concept query is the only way they find it.
+
+**What provenance?** **Lived** by default. A report analysing another agent's system, or inherited wholesale, is **inherited** and marked, because a reader will otherwise treat its conclusions as this agent's own verified findings.
+
+**Every report carries a `## Wiki-Links` section.** A research report exists to be consumed by later planning. If a roadmap author cannot find it by concept, the research is repeated — which is the specific waste reports are written to prevent.
 
 ---
 

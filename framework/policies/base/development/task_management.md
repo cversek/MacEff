@@ -110,6 +110,8 @@ Task management policy governs the use of Claude Code native Task* tools (TaskCr
 - What is the completion_report format?
 - What elements are required in completion reports?
 - How do I handle partial work?
+- What must I do when work I performed covers a task that was never started?
+- How do I record out-of-order execution so a successor can tell it from skipped work?
 - What type-specific completion gates exist?
 - How does GH_ISSUE closeout work?
 
@@ -923,7 +925,38 @@ If CLI unavailable, complete manually:
 
 Keep status `in_progress`, document blocker, create subtask for remaining work.
 
-### 6.5 Type-Specific Completion Gates
+### 6.5 Out-of-Order and Untracked Execution
+
+**If work you have performed covers a task that was never started, start it.** Then either complete it, or record explicitly that it was executed out of sequence and complete it in sequence.
+
+This is not bookkeeping neatness. A task sitting `pending` while its work is being done makes the tree assert something false — that nobody is working it. Orientation begins by reading the tree, so a successor, a peer, or the same agent after compaction will conclude the work is available and either duplicate it or plan around a gap that has already been filled.
+
+The failure is easy to fall into precisely because the *work* is correct. A directive arrives mid-flight, the right response is obvious, and it gets executed immediately — while the tree stays where it was. Nothing about doing good work prompts you to notice that you are doing it off the record.
+
+**What to do:**
+
+1. **Start the task**, even if the work is already finished. Starting is what makes the tree true.
+2. **Record the out-of-order execution in a note** — what was done, why it ran ahead of its place, and what remains. A phase completed silently ahead of schedule is indistinguishable, later, from one that was skipped.
+3. **Assess against the task's own criteria** rather than against the work you happened to do. Partial coverage is the common case, and the criteria are what reveal which parts are still open.
+4. **Complete it in sequence** once the remainder is done.
+
+**Applies beyond phases.** Any tracked work item — a bug fixed while investigating something else, a phase advanced by a side effect, an issue resolved incidentally — has the same obligation. Working off the tree is working off the clock, and for an agent this is worse than for a human: an agent does not persist, so untracked work is not merely uncredited, it is unrecoverable.
+
+**Tell**: you are about to describe work in a report or a message, and the task it belongs to is not `in_progress`.
+
+### 6.6 Resuming an Interrupted Task
+
+**When you jump back to a task you had already started, start it again.** Verify the outcome: the task tree's recency marker (👈) should move back to that task.
+
+This is the companion to §6.5. That section keeps the tree honest about work that was never tracked; this one keeps it honest about *where work is happening now*.
+
+Interleaved work is the normal case, not the exception — a directive arrives, a phase is set down and picked back up, an investigation detours through three tasks. The recency marker exists to answer "where did work last happen", and after any interleaving it answers correctly only if resumption is recorded. Otherwise the tree points at whatever was touched last, which after a detour is reliably the wrong thing, and a successor orienting from it starts in the wrong place.
+
+**Verify rather than assume.** The instruction specifies an observable outcome — the marker moves — and checking it is part of doing it. This matters more than it sounds: the behaviour was originally a no-op that warned "already in_progress" and changed nothing, so an agent following this rule without checking would have believed it complied while the tree stayed wrong. A directive that names an outcome is asking for the outcome, not the gesture.
+
+**A same-cycle resumption is a light event.** It refreshes the stamp and records that work resumed. It does not require the read-history ritual that a *stale* resume does — work last touched in an earlier cycle carries its own heavier protocol, because the context that made it legible is gone.
+
+### 6.7 Type-Specific Completion Gates
 
 Certain task types have completion requirements beyond the standard `--report`. When `task complete` is invoked on a gated type without meeting requirements, the system **redirects the agent to read the relevant policy section** rather than encoding the full policy in the error message. This ensures agents engage with the nuanced requirements in the policy itself.
 
@@ -1468,7 +1501,7 @@ macf_tools task scope check                       # JSON output for Stop hook
 
 ---
 
-## 13 Integration with Other Policies
+## 14 Integration with Other Policies
 
 - `release_workflow.md` - Task archival during releases
 - `roadmaps_following.md` - MISSION task patterns
@@ -1477,7 +1510,7 @@ macf_tools task scope check                       # JSON output for Stop hook
 
 ---
 
-## 14 Evolution & Feedback
+## 15 Evolution & Feedback
 
 **Principle**: Task management should feel like an upgrade from TodoWrite - same consciousness patterns, better infrastructure.
 

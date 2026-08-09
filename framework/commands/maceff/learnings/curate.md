@@ -113,6 +113,18 @@ grep -ri "topic_keyword" agent/private/learnings/
 
 ---
 
+## Wiki-Links Section (REQUIRED)
+
+Before saving, the artifact MUST carry a `## Wiki-Links` section. This is what connects it to the knowledge web. Without it the artifact is an **orphan**: present on disk, reachable only by someone who already knows it exists, and invisible to the concept query a successor would actually use to find it.
+
+**What to link**: consult the learnings policy on **knowledge web participation** for what this artifact type should link and what it should avoid. One insight per learning, so link the concepts that insight bears on. If the learning was inherited rather than lived, the provenance banner is required as well — see the same policy section.
+
+**How to choose**: query the graph before inventing a concept — `macf_tools knowledge query <concept>` — so you connect to vocabulary the corpus already uses instead of coining a near-duplicate that connects to nothing. Two to five concepts.
+
+**Do not emit an empty heading.** A `## Wiki-Links` section with no links is worse than its absence: it satisfies a checker while leaving the artifact exactly as unreachable.
+
+---
+
 ## Critical Constraints
 
 - Full breadcrumbs enable forensic archaeology
