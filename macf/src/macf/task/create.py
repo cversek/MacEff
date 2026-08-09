@@ -1114,6 +1114,54 @@ def create_bug(
     )
 
 
+def _gh_view_json(view_args: List[str], fields: List[str], *, timeout: int = 15) -> Dict[str, Any]:
+    """Run ``gh <view_args> --json <fields>`` and degrade across gh versions.
+
+    Current ``gh`` rejects the WHOLE call with ``Unknown JSON field: X`` when any
+    single requested field is unsupported (version-compat drift). That made a
+    drifted optional field — e.g. ``closingIssuesReferences`` on an older gh —
+    fatal, so GH_PR/GH_ISSUE tasks could not be created at all
+    (cversek/MacEff#123). Rather than hard-fail over an optional field, drop the
+    field gh names and retry. Callers read fields with ``.get(...)`` defaults, so
+    a dropped field degrades gracefully instead of taking the whole task down.
+
+    Args:
+        view_args: the gh command up to (not including) ``--json``, e.g.
+            ``["gh", "pr", "view", "213", "--repo", "owner/repo"]``.
+        fields: requested JSON field names, richest-first.
+        timeout: per-invocation subprocess timeout in seconds.
+
+    Returns:
+        Parsed JSON object from gh.
+
+    Raises:
+        ValueError: on a gh failure that is not a droppable unknown-field error,
+            or if every requested field was unsupported.
+    """
+    import subprocess as _subprocess
+    import json as _json
+    import re as _re
+
+    remaining = list(fields)
+    dropped: List[str] = []
+    while remaining:
+        result = _subprocess.run(
+            view_args + ["--json", ",".join(remaining)],
+            capture_output=True, text=True, timeout=timeout,
+        )
+        if result.returncode == 0:
+            return _json.loads(result.stdout)
+        m = _re.search(r"Unknown JSON field:\s*[\"']?(\w+)", result.stderr or "")
+        if not m or m.group(1) not in remaining:
+            raise ValueError(f"gh view failed: {result.stderr.strip()}")
+        dropped.append(m.group(1))
+        remaining.remove(m.group(1))
+    raise ValueError(
+        "gh view failed: this gh version supports none of the requested fields "
+        f"(dropped: {', '.join(dropped)})"
+    )
+
+
 def create_gh_issue(
     issue_url: str,
     parent_id: Optional[str] = None,
@@ -1143,18 +1191,11 @@ def create_gh_issue(
                          f"Expected: https://github.com/owner/repo/issues/N")
     owner, repo, issue_number = url_match.group(1), url_match.group(2), int(url_match.group(3))
 
-    # Fetch issue metadata via gh CLI
-    gh_result = _subprocess.run(
-        ["gh", "issue", "view", str(issue_number),
-         "--repo", f"{owner}/{repo}",
-         "--json", "title,labels,state,url"],
-        capture_output=True, text=True, timeout=15
+    # Fetch issue metadata via gh CLI (resilient to gh-version field drift, #123)
+    gh_data = _gh_view_json(
+        ["gh", "issue", "view", str(issue_number), "--repo", f"{owner}/{repo}"],
+        ["title", "labels", "state", "url"],
     )
-    if gh_result.returncode != 0:
-        raise ValueError(f"gh issue view failed: {gh_result.stderr.strip()}")
-
-    import json as _json
-    gh_data = _json.loads(gh_result.stdout)
     title = gh_data["title"]
     labels = [label["name"] for label in gh_data.get("labels", [])]
     state = gh_data.get("state", "OPEN")
@@ -1239,19 +1280,14 @@ def create_gh_pr(
                          f"Expected: https://github.com/owner/repo/pull/N")
     owner, repo, pr_number = url_match.group(1), url_match.group(2), int(url_match.group(3))
 
-    # Fetch PR metadata via gh CLI. `mergeable` is intentionally NOT fetched or
-    # gated on — it is a lazy/stale field; the merge operation is ground truth.
-    gh_result = _subprocess.run(
-        ["gh", "pr", "view", str(pr_number),
-         "--repo", f"{owner}/{repo}",
-         "--json", "title,labels,state,url,headRefName,baseRefName,isDraft,"
-                   "reviewDecision,closingIssuesReferences,body"],
-        capture_output=True, text=True, timeout=15
+    # Fetch PR metadata via gh CLI, resilient to gh-version field drift (#123).
+    # `mergeable` is intentionally NOT fetched or gated on — it is a lazy/stale
+    # field; the merge operation is ground truth.
+    gh_data = _gh_view_json(
+        ["gh", "pr", "view", str(pr_number), "--repo", f"{owner}/{repo}"],
+        ["title", "labels", "state", "url", "headRefName", "baseRefName",
+         "isDraft", "reviewDecision", "closingIssuesReferences", "body"],
     )
-    if gh_result.returncode != 0:
-        raise ValueError(f"gh pr view failed: {gh_result.stderr.strip()}")
-
-    gh_data = _json.loads(gh_result.stdout)
     title = gh_data["title"]
     labels = [label["name"] for label in gh_data.get("labels", [])]
     state = gh_data.get("state", "OPEN")
