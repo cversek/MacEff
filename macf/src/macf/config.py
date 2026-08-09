@@ -179,19 +179,28 @@ class ConsciousnessConfig:
         """
         Get path to checkpoints directory.
 
+        Checkpoints (CCPs) are written under agent/private/ — that is where the
+        CCP command writes and where the corpus actually lives. Reporting the
+        public path (#116) pointed agents looking for their own consciousness
+        artifacts at a near-empty directory, so this resolves to the real
+        write location.
+
         Returns:
-            Path to agent/public/checkpoints/ directory.
+            Path to agent/private/checkpoints/ directory.
         """
-        return self.get_public_path() / "checkpoints"
+        return self.get_private_path() / "checkpoints"
 
     def get_reflections_path(self) -> Path:
         """
         Get path to reflections directory.
 
+        Reflections (JOTEWRs) are written under agent/private/, like checkpoints;
+        see get_checkpoints_path (#116).
+
         Returns:
-            Path to agent/public/reflections/ directory.
+            Path to agent/private/reflections/ directory.
         """
-        return self.get_public_path() / "reflections"
+        return self.get_private_path() / "reflections"
 
     @property
     def agent_id(self) -> str:
