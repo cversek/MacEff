@@ -8223,6 +8223,29 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
         except (ImportError, OSError, KeyError) as e:
             print(f"⚠️ MACF: scoped task completion check failed for #{task_id} (non-blocking): {e}", file=sys.stderr)
 
+        # Completing a scope OWNER (SPRINT / PLAY_TIME) must release its scoped
+        # members from the gate. complete_scoped_task above only marks the
+        # owner itself inactive; without this, the owner's pending children stay
+        # 'active' forever — `remaining` never reaches 0, the auto-clear never
+        # fires, and the Stop-hook scope gate nags long after the sprint is done.
+        # This runs in the shared success path, so it covers force-completion too:
+        # a force-completed sprint releases its children (they return to the tree
+        # at their real status; they are not fake-completed).
+        if task_type in ("SPRINT", "PLAY_TIME"):
+            try:
+                from .task.scope import get_scope_check, clear_scope
+                if get_scope_check().get("active_count", 0) > 0:
+                    clr = clear_scope()
+                    if clr.get("success"):
+                        swept = len(set(
+                            clr.get("active_removed", [])
+                            + clr.get("inactive_removed", [])
+                            + clr.get("orphans_swept", [])
+                        ))
+                        print(f"   🧹 Scope owner completed — released {swept} task(s) from the scope gate")
+            except (ImportError, OSError, KeyError) as e:
+                print(f"⚠️ MACF: scope release on owner completion failed for #{task_id} (non-blocking): {e}", file=sys.stderr)
+
         print(f"✅ Task #{task_id} marked complete")
         print(f"   Breadcrumb: {breadcrumb}")
         print(f"   Report: {args.report[:80]}{'...' if len(args.report) > 80 else ''}")
