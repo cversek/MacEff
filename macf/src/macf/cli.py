@@ -7405,7 +7405,25 @@ def cmd_task_scope_pause(args: argparse.Namespace) -> int:
         print("     'Multi-cycle implementation work — design draft delivered, awaits user sign-off'")
         return 1
 
-    raw_ids = [tid.lstrip('#') for tid in args.task_ids]
+    # --all: pause every currently-ACTIVE scoped task. This is the non-hanging,
+    # reversible, audited full-gate quiet — the USER_REMOTE-safe alternative to the
+    # destructive `scope clear` (which is denied while remote). Pause keeps the
+    # tasks in scope and reversible via `scope unpause`.
+    if getattr(args, "all", False):
+        if args.task_ids:
+            print("❌ Pass task IDs OR --all, not both.")
+            return 1
+        from .task.scope import get_active_scope
+        raw_ids = [str(t["id"]) for t in get_active_scope() if t.get("status") == "active"]
+        if not raw_ids:
+            print("✅ No active scoped tasks to pause.")
+            return 0
+    elif not args.task_ids:
+        print("❌ Provide task IDs, or --all to pause every active scoped task.")
+        return 1
+    else:
+        raw_ids = [tid.lstrip('#') for tid in args.task_ids]
+
     result = pause_scoped_tasks(
         raw_ids,
         justification=args.justification.strip(),
@@ -10099,7 +10117,8 @@ def _build_parser() -> argparse.ArgumentParser:
     scope_sub = scope_parser.add_subparsers(dest="scope_cmd")
 
     scope_pause_parser = scope_sub.add_parser("pause", help="pause active scoped tasks with mandatory justification (BUG #1067)")
-    scope_pause_parser.add_argument("task_ids", nargs="+", help="task IDs to pause (e.g., #1043 #1044)")
+    scope_pause_parser.add_argument("task_ids", nargs="*", help="task IDs to pause (e.g., #1043 #1044); omit when using --all")
+    scope_pause_parser.add_argument("--all", action="store_true", help="pause ALL currently-active scoped tasks — the non-hanging, reversible full-gate quiet safe under USER_REMOTE")
     scope_pause_parser.add_argument("--justification", "-j", required=True,
                                     help="REQUIRED — structural reason recorded in task note + event log")
     scope_pause_parser.set_defaults(func=cmd_task_scope_pause)

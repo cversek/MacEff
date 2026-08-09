@@ -93,3 +93,13 @@ def test_restore_if_active_restores_when_deny_installed(tmp_path):
     # Stash cleared — a subsequent prompt is a clean no-op.
     assert not _load(tmp_path).get("_macf_user_remote_denied")
     assert restore_user_remote_deny_if_active(project_root=tmp_path) is None
+
+
+def test_incremental_scope_primitives_stay_non_hanging():
+    """The non-hanging USER_REMOTE housekeeping path must stay non-hanging: the
+    incremental scope primitives are NOT Ask-listed (so they aren't denied while
+    remote), while the destructive `scope clear` IS (correctly guarded)."""
+    joined = " ".join(_AUTO_MODE_ASK)
+    assert "scope clear" in joined, "scope clear must stay Ask-listed/guarded"
+    for safe in ("scope remove", "scope pause", "scope add", "scope unpause"):
+        assert safe not in joined, f"'{safe}' must not be Ask-listed — it is the non-hanging path"
