@@ -154,6 +154,56 @@ DEFAULT_DETECTORS: List[Detector] = [
 
 
 # ============================================================================
+# Channel forwarding (#093) — mirror the live exchange to the remote channel
+# ============================================================================
+
+def _entry_text(content) -> str:
+    """Best-effort plain text from a transcript message `content` (str or blocks)."""
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = [b.get("text", "") for b in content
+                 if isinstance(b, dict) and b.get("type") == "text"]
+        return "\n".join(p for p in parts if p).strip()
+    return ""
+
+
+def extract_forwardable(entry: dict):
+    """Classify a transcript entry as a ``(prefix, text)`` to mirror to the channel,
+    or ``None``.
+
+    Forwards the agent's narrative (assistant text) and CLI-typed user messages so a
+    *remote* operator sees the full exchange, not only turn-finals + tool events.
+    Deliberately skips: tool results, meta/compaction entries, and **channel-origin**
+    user messages (the operator already sees those on the channel — forwarding them
+    would echo their own words back). Pure and side-effect-free, so it is unit-tested
+    without the daemon or the network.
+    """
+    etype = entry.get("type")
+    msg = entry.get("message") or {}
+    content = msg.get("content")
+
+    if etype == "assistant":
+        text = _entry_text(content)
+        return ("💬", text) if text else None
+
+    if etype == "user":
+        if entry.get("isMeta") or entry.get("isCompactSummary") or "toolUseResult" in entry:
+            return None
+        origin = entry.get("origin")
+        if isinstance(origin, dict) and origin.get("kind") == "channel":
+            return None  # already visible on the channel; do not echo it back
+        if isinstance(content, list) and any(
+            isinstance(b, dict) and b.get("type") == "tool_result" for b in content
+        ):
+            return None
+        text = _entry_text(content)
+        return ("👤 CLI", text) if text else None
+
+    return None
+
+
+# ============================================================================
 # PID File Management
 # ============================================================================
 
@@ -265,6 +315,11 @@ class TranscriptMonitor:
         self.events_emitted = 0
         self.last_file_size = 0
 
+        # Channel forwarding: USER_REMOTE state, re-checked at most every 5s so a
+        # per-line mode read does not thrash the event log on a busy transcript.
+        self._fwd_checked_at = 0.0
+        self._fwd_cached = False
+
     def add_detector(self, detector: Detector) -> "TranscriptMonitor":
         """Register an additional detector. Returns self for chaining."""
         self.detectors.append(detector)
@@ -290,6 +345,35 @@ class TranscriptMonitor:
                     self.events_emitted += 1
             except (OSError, ValueError, TypeError) as e:
                 print(f"⚠️ TM: detector error: {e}", file=sys.stderr)
+
+        # Channel forwarding (#093): when the operator is remote, mirror the agent's
+        # narrative and CLI-typed user messages to the channel so they see the full
+        # exchange — not only turn-finals + tool events. Gated on USER_REMOTE (no
+        # noise when present), reuses the shared telegram module, best-effort.
+        try:
+            if self._forward_to_channel_enabled():
+                fwd = extract_forwardable(entry)
+                if fwd:
+                    prefix, text = fwd
+                    from ..channels.telegram import send_telegram_notification
+                    send_telegram_notification(text[:1500], prefix=prefix)
+        except Exception as e:
+            print(f"⚠️ TM: channel forward failed (non-blocking): {e}", file=sys.stderr)
+
+    def _forward_to_channel_enabled(self) -> bool:
+        """True iff USER_REMOTE is active — the only mode where mirroring the live
+        exchange to the channel is wanted. Cached for 5s to bound event-log reads."""
+        now = time.time()
+        if now - self._fwd_checked_at < 5.0:
+            return self._fwd_cached
+        self._fwd_checked_at = now
+        try:
+            from ..modes.detection import _detect_user_remote
+            from ..utils import get_current_session_id
+            self._fwd_cached = bool(_detect_user_remote(get_current_session_id()))
+        except Exception:
+            self._fwd_cached = False
+        return self._fwd_cached
 
     def _detect_rewind(self, current_size: int) -> None:
         """Check if JSONL was truncated (context rewind)."""
