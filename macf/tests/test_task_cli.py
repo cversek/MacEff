@@ -3,8 +3,10 @@ Integration tests for task CLI commands.
 
 Tests the task management commands introduced in v0.4.0:
 - task create (mission, experiment, phase, bug, deleg, task)
-- task archive/restore
 - task grant-update/grant-delete
+
+(The archive/restore/archived trio was retired — its deprecation is
+covered by test_task_archive_deprecated.py.)
 
 Uses subprocess to invoke macf_tools CLI as real integration tests.
 
@@ -255,136 +257,6 @@ class TestTaskCreateDelegCommand:
 
         # Should fail - deleg requires plan
         assert result.returncode != 0
-
-
-class TestTaskArchiveCommand:
-    """Test macf_tools task archive command."""
-
-    def test_archive_nonexistent_task_fails(self, isolated_task_env):
-        """Test archiving a nonexistent task fails gracefully."""
-        result = subprocess.run(
-            ['macf_tools', 'task', 'archive', '999'],
-            capture_output=True, text=True, env=isolated_task_env['env']
-        )
-
-        assert result.returncode != 0
-        assert 'not found' in result.stdout.lower() or 'not found' in result.stderr.lower()
-
-    def test_archive_existing_task(self, isolated_task_env):
-        """Test archiving an existing task."""
-        # Create a task first
-        create_result = subprocess.run(
-            ['macf_tools', 'task', 'create', 'task', 'Task to Archive', '--plan', 'Archive test'],
-            capture_output=True, text=True, env=isolated_task_env['env']
-        )
-        assert create_result.returncode == 0
-
-        # Archive it (assuming it gets ID 1)
-        result = subprocess.run(
-            ['macf_tools', 'task', 'archive', '1'],
-            capture_output=True, text=True, env=isolated_task_env['env']
-        )
-
-        assert result.returncode == 0
-        assert 'archived' in result.stdout.lower()
-
-    def test_archive_with_no_cascade(self, isolated_task_env):
-        """Test archive --no-cascade flag."""
-        # Create a parent task
-        parent_result = subprocess.run(
-            ['macf_tools', 'task', 'create', 'task', 'Parent', '--plan', 'Parent test'],
-            capture_output=True, text=True, env=isolated_task_env['env']
-        )
-        assert parent_result.returncode == 0
-
-        # Archive with --no-cascade
-        result = subprocess.run(
-            ['macf_tools', 'task', 'archive', '1', '--no-cascade'],
-            capture_output=True, text=True, env=isolated_task_env['env']
-        )
-
-        # Should succeed
-        assert result.returncode == 0
-
-
-class TestTaskRestoreCommand:
-    """Test macf_tools task restore command."""
-
-    def test_restore_requires_archive_path(self, isolated_task_env):
-        """Test restore command with missing archive."""
-        result = subprocess.run(
-            ['macf_tools', 'task', 'restore', 'nonexistent.json'],
-            capture_output=True, text=True, env=isolated_task_env['env']
-        )
-
-        # Should fail or report not found
-        assert result.returncode != 0 or 'not found' in result.stdout.lower()
-
-    def test_restore_json_output(self, isolated_task_env):
-        """Test restore --json flag format."""
-        # Create and archive a task first
-        create_result = subprocess.run(
-            ['macf_tools', 'task', 'create', 'task', 'Test Restore', '--plan', 'Restore test'],
-            capture_output=True, text=True, env=isolated_task_env['env']
-        )
-        assert create_result.returncode == 0
-
-        archive_result = subprocess.run(
-            ['macf_tools', 'task', 'archive', '1'],
-            capture_output=True, text=True, env=isolated_task_env['env']
-        )
-        assert archive_result.returncode == 0
-
-        # Try to restore with --json (may fail if archive path is complex)
-        result = subprocess.run(
-            ['macf_tools', 'task', 'restore', '1', '--json'],
-            capture_output=True, text=True, env=isolated_task_env['env']
-        )
-
-        # If successful, should be valid JSON
-        if result.returncode == 0:
-            restored_data = json.loads(result.stdout)
-            assert isinstance(restored_data, dict)
-
-
-class TestTaskArchivedListCommand:
-    """Test macf_tools task archived list command."""
-
-    def test_archived_list_empty(self, isolated_task_env):
-        """Test archived list with no archived tasks."""
-        result = subprocess.run(
-            ['macf_tools', 'task', 'archived', 'list'],
-            capture_output=True, text=True, env=isolated_task_env['env']
-        )
-
-        assert result.returncode == 0
-        # Should handle empty list gracefully
-        assert 'No archived tasks' in result.stdout or 'archive' in result.stdout.lower()
-
-    def test_archived_list_shows_archived_tasks(self, isolated_task_env):
-        """Test archived list shows archived tasks."""
-        # Create and archive a task
-        create_result = subprocess.run(
-            ['macf_tools', 'task', 'create', 'task', 'To Archive', '--plan', 'Archive list test'],
-            capture_output=True, text=True, env=isolated_task_env['env']
-        )
-        assert create_result.returncode == 0
-
-        archive_result = subprocess.run(
-            ['macf_tools', 'task', 'archive', '1'],
-            capture_output=True, text=True, env=isolated_task_env['env']
-        )
-        assert archive_result.returncode == 0
-
-        # List archived tasks
-        result = subprocess.run(
-            ['macf_tools', 'task', 'archived', 'list'],
-            capture_output=True, text=True, env=isolated_task_env['env']
-        )
-
-        assert result.returncode == 0
-        # Should show at least one archived task
-        assert 'archive' in result.stdout.lower()
 
 
 class TestTaskGrantUpdateCommand:
