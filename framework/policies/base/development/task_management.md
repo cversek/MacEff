@@ -708,6 +708,15 @@ parent_id: 68
 
 **Priority**: MTMD `parent_id` takes precedence if both present.
 
+**Root and the zero forms**: `#000` is the reserved tree root and the default
+parent when `--parent` is omitted. Every zero-equivalent spelling — `0`, `00`,
+`#0`, an empty value — normalizes to `000` at creation. This is deliberate: the
+tree is rendered by walking children down from `000`, so a parent stored as bare
+`"0"` (`!= "000"`) would drop the task out of the tree while creation still
+reported success. Normalizing makes that orphan-by-zero unrepresentable rather
+than merely warned about (GH #208). Non-zero IDs are kept unpadded (`5`, not
+`005`) so they match their stored task ID.
+
 ---
 
 ## 4 Dual Dependency System

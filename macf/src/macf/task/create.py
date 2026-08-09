@@ -102,6 +102,50 @@ ANSI_STRIKE_OFF = "\033[29m"
 SENTINEL_TASK_ID = "000"
 
 
+def normalize_parent_id(parent_id: Optional[Any]) -> str:
+    """Canonicalize a parent task ID, closing the zero-orphan bug (GH #208).
+
+    ``#000`` is the tree root and the default parent when none is given. The
+    task tree is rendered by walking children down from ``"000"``, so a task
+    whose stored ``parent_id`` is any *other* spelling of zero (``"0"``, ``"00"``,
+    ``0``) is silently dropped out of the tree: the walk never reaches it, yet
+    creation still reports success. The string path was the exploitable case —
+    ``"0"`` is truthy, so ``parent_id if parent_id else SENTINEL_TASK_ID`` kept
+    it verbatim, whereas the integer ``0`` used by sprint/play_time is falsy and
+    already collapsed to the sentinel.
+
+    We fix this *structurally* rather than by refusal: every zero-equivalent
+    spelling normalizes to the one canonical root ``"000"``, so an orphaned-by-
+    zero task can no longer be represented at all. The system already treats
+    integer ``0`` as root internally; this makes the string surface agree.
+
+    Args:
+        parent_id: Raw parent id from CLI/API — may carry a leading ``#``,
+            be an int, ``None``, or empty. Non-zero ids are kept as their bare
+            digit string (ids are stored unpadded except the ``"000"`` root).
+
+    Returns:
+        Canonical parent id string: ``"000"`` for any zero-equivalent/empty
+        input, otherwise the stripped digit string.
+
+    Raises:
+        ValueError: If a non-empty value is not a digit string.
+    """
+    if parent_id is None:
+        return SENTINEL_TASK_ID
+    cleaned = str(parent_id).strip().lstrip("#").strip()
+    if not cleaned:
+        return SENTINEL_TASK_ID
+    if not cleaned.isdigit():
+        raise ValueError(
+            f"parent ID must be a digit string (e.g. '000', '42') or omitted; "
+            f"got {parent_id!r}"
+        )
+    if int(cleaned) == 0:
+        return SENTINEL_TASK_ID
+    return cleaned
+
+
 def _compose_type_part(task_type: str, plan_ca_ref: Optional[str] = None,
                        custom: Optional[dict] = None) -> str:
     """The type-marker segment of a composed subject (e.g. '🐛 BUG:', '🔧', '📋').
@@ -664,7 +708,7 @@ def create_mission(
     roadmap_file.write_text(roadmap_content)
 
     # Default parent_id to sentinel if not specified
-    effective_parent_id = parent_id if parent_id else SENTINEL_TASK_ID
+    effective_parent_id = normalize_parent_id(parent_id)
 
     # Create MTMD with title for recomposition
     mtmd = MacfTaskMetaData(
@@ -778,7 +822,7 @@ def create_experiment(
     protocol_file.write_text(protocol_content)
 
     # Default parent_id to sentinel if not specified
-    effective_parent_id = parent_id if parent_id else SENTINEL_TASK_ID
+    effective_parent_id = normalize_parent_id(parent_id)
 
     # Create MTMD with title for recomposition
     mtmd = MacfTaskMetaData(
@@ -894,7 +938,7 @@ def create_detour(
     roadmap_file.write_text(roadmap_content)
 
     # Default parent_id to sentinel if not specified
-    effective_parent_id = parent_id if parent_id else SENTINEL_TASK_ID
+    effective_parent_id = normalize_parent_id(parent_id)
 
     # Create MTMD with title for recomposition
     mtmd = MacfTaskMetaData(
@@ -962,6 +1006,10 @@ def create_phase(
     # Get next task ID
     task_id = _get_next_task_id()
 
+    # Normalize the (required) parent id so a zero-spelling can't orphan the
+    # phase out of the tree (GH #208).
+    effective_parent_id = normalize_parent_id(parent_id)
+
     # Create MTMD with parent_id, title, and plan (XOR)
     mtmd = MacfTaskMetaData(
         version="1.0",
@@ -970,7 +1018,7 @@ def create_phase(
         created_by="PA",
         task_type="PHASE",
         title=title,
-        parent_id=parent_id,
+        parent_id=effective_parent_id,
         plan=plan,
         plan_ca_ref=plan_ca_ref
     )
@@ -981,7 +1029,7 @@ def create_phase(
     # Compose subject with proper ANSI nesting
     # PHASE uses 📋 if has subplan, - if not
     subject = compose_subject(str(task_id), "PHASE", title,
-                              parent_id=str(parent_id), plan_ca_ref=plan_ca_ref)
+                              parent_id=effective_parent_id, plan_ca_ref=plan_ca_ref)
 
     # Create task file
     _create_task_file(task_id, subject, description, blocked_by=blocked_by)
@@ -1035,7 +1083,7 @@ def create_bug(
     task_id = _get_next_task_id()
 
     # Default parent_id to sentinel if not specified
-    effective_parent_id = parent_id if parent_id else SENTINEL_TASK_ID
+    effective_parent_id = normalize_parent_id(parent_id)
 
     # Create MTMD with title and fix tracking
     mtmd = MacfTaskMetaData(
@@ -1119,7 +1167,7 @@ def create_gh_issue(
     cycle = parsed['cycle'] if parsed else 1
 
     task_id = _get_next_task_id()
-    effective_parent_id = parent_id if parent_id else SENTINEL_TASK_ID
+    effective_parent_id = normalize_parent_id(parent_id)
 
     # GitHub metadata stored in custom fields
     custom = {
@@ -1227,7 +1275,7 @@ def create_gh_pr(
     cycle = parsed['cycle'] if parsed else 1
 
     task_id = _get_next_task_id()
-    effective_parent_id = parent_id if parent_id else SENTINEL_TASK_ID
+    effective_parent_id = normalize_parent_id(parent_id)
 
     # PR metadata + declared review lifecycle stored in custom fields
     custom = {
@@ -1316,7 +1364,7 @@ def create_deleg(
     task_id = _get_next_task_id()
 
     # Default parent_id to sentinel if not specified
-    effective_parent_id = parent_id if parent_id else SENTINEL_TASK_ID
+    effective_parent_id = normalize_parent_id(parent_id)
 
     # Create MTMD
     mtmd = MacfTaskMetaData(
@@ -1381,7 +1429,7 @@ def create_task(
     task_id = _get_next_task_id()
 
     # Default parent_id to sentinel if not specified
-    effective_parent_id = parent_id if parent_id else SENTINEL_TASK_ID
+    effective_parent_id = normalize_parent_id(parent_id)
 
     # Create MTMD with title and task_type
     mtmd = MacfTaskMetaData(
@@ -1852,7 +1900,7 @@ def create_sprint(
     ).to_dict()
 
     # Parent ID: 0 means sentinel
-    effective_parent_id = str(parent_id) if parent_id else SENTINEL_TASK_ID
+    effective_parent_id = normalize_parent_id(parent_id)
 
     mtmd = MacfTaskMetaData(
         version="1.0",
@@ -2088,7 +2136,7 @@ def create_play_time(
         closure_invoked=False,
     ).to_dict()
 
-    effective_parent_id = str(parent_id) if parent_id else SENTINEL_TASK_ID
+    effective_parent_id = normalize_parent_id(parent_id)
 
     mtmd = MacfTaskMetaData(
         version="1.0",
