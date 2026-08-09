@@ -82,7 +82,7 @@ The medical register is used **only where it clarifies**. Terms that add ceremon
 
 | severity | meaning |
 |---|---|
-| **acute** | Something is wrong **now** and will mislead a reader who trusts it. A registry claiming a type that does not exist; an index reporting coverage it does not have. These produce confident wrong answers. |
+| **acute** | Something is wrong **now** and will mislead a reader who trusts it. An index reporting coverage it does not have; a node carrying no class, so retrieval cannot tell durable insight from expired state. These produce confident wrong answers. |
 | **chronic** | Accumulating degradation. Nothing breaks today; the corpus becomes less trustworthy each cycle. Orphaned artifacts are canonical — each is survivable, the trend is not. |
 | **note** | An observation with no implied action. |
 
@@ -102,7 +102,7 @@ If a remedy cannot be stated, the check is not ready to ship.
 
 ### 3.4 Referral
 
-When a finding is real but its remedy lives in another corpus, the doctor **refers** rather than reaching across. A knowledge-web doctor that discovers an undeclared artifact directory reports it and names the registry that owns the fix; it does not edit the manifest.
+When a finding is real but its remedy lives in another corpus, the doctor **refers** rather than reaching across. A knowledge-web doctor that finds a node whose class its CA-type policy never defined reports it and names the policy that owns the fix; it does not amend the policy itself.
 
 ---
 
@@ -157,7 +157,7 @@ A finding names an artifact a reader has to find. When a corpus nests artifacts 
 
 ## Integration with Other Policies
 
-- `scholarship.md` — node classes, provenance, and registry authority for the knowledge web
+- `scholarship.md` — node classes, provenance, and emergent participation in the knowledge web
 - `core_principles.md` — Policy Ships With the Capability
 - `debugging_and_validation.md` — evidence standards a doctor's own verification must meet
 - `learnings.md` — the index a learnings doctor would examine

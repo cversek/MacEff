@@ -1,4 +1,4 @@
-"""Tests for build_knowledge_graph() — cross-CA wiki-link indexing.
+"""Tests for build_knowledge_web() — cross-CA wiki-link indexing.
 
 Closes GH issue #73 (macf_tools knowledge cross-CA graph only indexed ideas).
 The expanded indexer now picks up learnings, checkpoints, reflections,
@@ -12,7 +12,7 @@ import json
 import pytest
 from pathlib import Path
 
-from macf.ideas import build_knowledge_graph
+from macf.knowledge_web import build_knowledge_web
 
 
 def _write(path: Path, text: str) -> None:
@@ -41,7 +41,7 @@ class TestBuildKnowledgeGraphCrossCA:
             "# Learning One\n\n## Wiki-Links\n[[concept-A]] [[concept-B]]\n",
         )
         scan_dirs = [fake_agent_root / "agent" / "private" / "learnings"]
-        kg = build_knowledge_graph(scan_dirs=scan_dirs)
+        kg = build_knowledge_web(scan_dirs=scan_dirs)
         assert "learnings:l1" in kg["ca_nodes"]
         assert kg["ca_nodes"]["learnings:l1"]["title"] == "Learning One"
 
@@ -56,7 +56,7 @@ class TestBuildKnowledgeGraphCrossCA:
             ),
         )
         scan_dirs = [fake_agent_root / "agent" / "private" / "checkpoints"]
-        kg = build_knowledge_graph(scan_dirs=scan_dirs)
+        kg = build_knowledge_web(scan_dirs=scan_dirs)
         assert "checkpoints:cp1" in kg["ca_nodes"]
 
     def test_indexes_recursive_experiment_subfolders(self, fake_agent_root):
@@ -64,7 +64,7 @@ class TestBuildKnowledgeGraphCrossCA:
         exp_dir = fake_agent_root / "agent" / "public" / "experiments" / "2026-05-01_my_experiment"
         _write(exp_dir / "protocol.md", "# Protocol\n\n[[concept-A]]\n")
         scan_dirs = [fake_agent_root / "agent" / "public" / "experiments"]
-        kg = build_knowledge_graph(scan_dirs=scan_dirs)
+        kg = build_knowledge_web(scan_dirs=scan_dirs)
         # Node id includes the dated parent folder for disambiguation
         assert "experiments:2026-05-01_my_experiment/protocol" in kg["ca_nodes"]
 
@@ -75,7 +75,7 @@ class TestBuildKnowledgeGraphCrossCA:
             "# Learnings INDEX\n\n[[concept-A]]\n",
         )
         scan_dirs = [fake_agent_root / "agent" / "private" / "learnings"]
-        kg = build_knowledge_graph(scan_dirs=scan_dirs)
+        kg = build_knowledge_web(scan_dirs=scan_dirs)
         assert "learnings:INDEX" not in kg["ca_nodes"]
 
     def test_files_without_wiki_links_are_omitted(self, fake_agent_root):
@@ -85,7 +85,7 @@ class TestBuildKnowledgeGraphCrossCA:
             "# Plain Learning\n\nNo wiki-link references in this document.\n",
         )
         scan_dirs = [fake_agent_root / "agent" / "private" / "learnings"]
-        kg = build_knowledge_graph(scan_dirs=scan_dirs)
+        kg = build_knowledge_web(scan_dirs=scan_dirs)
         assert "learnings:no_links" not in kg["ca_nodes"]
 
     def test_cross_ca_edges_via_shared_concept(self, fake_agent_root):
@@ -102,7 +102,7 @@ class TestBuildKnowledgeGraphCrossCA:
             fake_agent_root / "agent" / "private" / "learnings",
             fake_agent_root / "agent" / "private" / "checkpoints",
         ]
-        kg = build_knowledge_graph(scan_dirs=scan_dirs)
+        kg = build_knowledge_web(scan_dirs=scan_dirs)
         assert "learnings:lA" in kg["ca_nodes"]
         assert "checkpoints:cpA" in kg["ca_nodes"]
         # Edges are bidirectional via the wiki-index
@@ -165,7 +165,7 @@ class TestIdeaGraphWikiLinks:
 
     def test_idea_to_learning_bridge_via_shared_concept(self, fake_agent_root, monkeypatch):
         """Idea with bare 'augerlink' bridges to learning with `[[augerlink]]`."""
-        from macf.ideas import build_knowledge_graph
+        from macf.knowledge_web import build_knowledge_web
         from macf.utils import paths as paths_mod
         monkeypatch.setattr(paths_mod, "find_agent_home", lambda: fake_agent_root)
         self._write_idea(fake_agent_root, 3, ["augerlink"])
@@ -173,7 +173,7 @@ class TestIdeaGraphWikiLinks:
             fake_agent_root / "agent" / "private" / "learnings" / "lA.md",
             "# Learning A\n\n[[augerlink]]\n",
         )
-        kg = build_knowledge_graph(scan_dirs=[
+        kg = build_knowledge_web(scan_dirs=[
             fake_agent_root / "agent" / "private" / "learnings",
         ])
         # The idea (int key 3) and the learning (str key 'learnings:lA') are
@@ -222,7 +222,7 @@ class TestGapDetectionExcludesArchived:
         }))
 
     def test_archived_idea_generates_no_gap_suggestion(self, fake_agent_root, monkeypatch):
-        from macf.ideas import build_knowledge_graph, detect_graph_gaps
+        from macf.knowledge_web import build_knowledge_web, detect_web_gaps
         from macf.utils import paths as paths_mod
         monkeypatch.setattr(paths_mod, "find_agent_home", lambda: fake_agent_root)
         # Idea 1 establishes the concept; ideas 2 and 3 share a suggestible
@@ -230,7 +230,7 @@ class TestGapDetectionExcludesArchived:
         self._write_idea(fake_agent_root, 1, "anchor", "captured", ["sonar_gate"])
         self._write_idea(fake_agent_root, 2, "Sonar gate improvements", "captured", [])
         self._write_idea(fake_agent_root, 3, "Sonar gate improvements", "archived", [])
-        gaps = detect_graph_gaps(build_knowledge_graph())
+        gaps = detect_web_gaps(build_knowledge_web())
         suggested_ids = {g["node_id"] for g in gaps if g["suggested_concept"] == "sonar_gate"}
         assert "2" in suggested_ids
         assert "3" not in suggested_ids
