@@ -478,6 +478,71 @@ def toggle_auto_mode_ask_permissions(enable_auto: bool, project_root: Optional[P
         return None
 
 
+# Tools that BLOCK on the CLI and therefore hang an unattended session while the
+# operator is remote. AskUserQuestion does not render on a remote channel; the
+# Ask-list commands raise a CLI permission prompt. Denied (not asked) under
+# USER_REMOTE so an attempt is refused immediately instead of stranding the
+# session (#143).
+_USER_REMOTE_EXTRA_DENY = ["AskUserQuestion"]
+
+
+def toggle_user_remote_deny_permissions(enable_remote: bool, project_root: Optional[Path] = None) -> Optional[dict]:
+    """Deny CLI-blocking tools while USER_REMOTE is active; restore on exit (#143).
+
+    While the operator is reachable only remotely, a permission PROMPT hangs the
+    unattended CLI. Moving the Ask-list commands (and AskUserQuestion) into the
+    deny list makes an attempt fail immediately — the agent routes around it —
+    instead of stranding the session until someone physically returns. On exit
+    (USER_PRESENT, or an auto-clear when the operator returns to the CLI) the
+    entries are restored to whichever list they came from.
+
+    Permission changes load at CC startup, so full enforcement takes effect on
+    the next restart; until then the USER_REMOTE switch message and mode_system
+    policy are the binding guidance.
+
+    Returns dict with 'denied' (entries moved into deny) and 'restored' (entries
+    moved back out), or None on error.
+    """
+    try:
+        settings, settings_path = _read_settings(project_root)
+        permissions = settings.setdefault('permissions', {})
+        ask_list = permissions.setdefault('ask', [])
+        deny_list = permissions.setdefault('deny', [])
+        stash = settings.setdefault('_macf_user_remote_denied', {})
+
+        targets = list(_AUTO_MODE_ASK) + _USER_REMOTE_EXTRA_DENY
+        denied = []
+        restored = []
+
+        if enable_remote:
+            for entry in targets:
+                # Record where the entry lived so exit can restore it faithfully.
+                was_in_ask = entry in ask_list
+                if was_in_ask:
+                    ask_list.remove(entry)
+                if entry not in deny_list:
+                    deny_list.append(entry)
+                    denied.append(entry)
+                stash[entry] = {"from_ask": was_in_ask}
+        else:
+            for entry in targets:
+                if entry in deny_list:
+                    deny_list.remove(entry)
+                    restored.append(entry)
+                info = stash.pop(entry, None)
+                if info and info.get("from_ask") and entry not in ask_list:
+                    ask_list.append(entry)
+            if not stash:
+                settings.pop('_macf_user_remote_denied', None)
+
+        if denied or restored:
+            _write_settings(settings, settings_path)
+        return {"denied": denied, "restored": restored}
+    except (OSError, json.JSONDecodeError, TypeError, KeyError) as e:
+        print(f"⚠️ MACF: Settings write failed (toggle_user_remote_deny): {e}", file=sys.stderr)
+        return None
+
+
 def toggle_write_ask_for_auto_mode(enable_auto: bool, project_root: Optional[Path] = None) -> bool:
     """
     Toggle Write tool between 'ask' and implicit bypass for AUTO_MODE.
