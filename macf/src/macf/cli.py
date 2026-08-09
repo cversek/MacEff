@@ -6908,22 +6908,18 @@ def cmd_task_start(args: argparse.Namespace) -> int:
     # ancestor chain and start any pending ancestor, reporting each so the
     # resumption is visible rather than silent.
     cascaded = []
-    if task.mtmd and getattr(task.mtmd, "parent_id", None):
+    if task.mtmd and getattr(task.mtmd, "parent_id", None) and str(task.mtmd.parent_id).lstrip("#") != "000":
         from .task.create import _run_task_start
-        seen = {str(task_id)}
-        parent_id = task.mtmd.parent_id
-        while parent_id and str(parent_id) not in seen and str(parent_id) != "000":
-            seen.add(str(parent_id))
-            try:
-                pid_int = int(str(parent_id).lstrip("#"))
-            except (ValueError, TypeError):
-                break
-            ancestor = reader.read_task(pid_int)
-            if not ancestor:
-                break
-            if ancestor.status == "pending" and _run_task_start(pid_int):
-                cascaded.append(pid_int)
-            parent_id = ancestor.mtmd.parent_id if ancestor.mtmd else None
+        try:
+            _pid = int(str(task.mtmd.parent_id).lstrip("#"))
+        except (ValueError, TypeError):
+            _pid = None
+        if _pid is not None:
+            ancestor = reader.read_task(_pid)
+            if ancestor and ancestor.status == "pending":
+                # _run_task_start now cascades the full ancestor chain through the
+                # shared chokepoint; collect the started ancestors for the report.
+                _run_task_start(_pid, _cascaded=cascaded)
 
     print(f"✅ Task #{task_id} started")
     print(f"   Breadcrumb: {breadcrumb}")
@@ -7976,6 +7972,30 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
     if task.status == "completed":
         print(f"⚠️  Task #{task_id} is already completed")
         return 1
+
+    # Guard: completing a parent while its children are still open puts a done
+    # parent over unfinished work — an inconsistency the tree reader can't trust.
+    # In AUTO_MODE (or with --force) warn and proceed; otherwise refuse and point
+    # at the fix. Mirror of cascade-start, which guards the start direction.
+    _open_children = [
+        (t.id, t.status) for t in reader.read_all_tasks()
+        if t.mtmd and str(getattr(t.mtmd, "parent_id", "") or "").lstrip("#") == str(task_id)
+        and t.status in ("pending", "in_progress")
+    ]
+    if _open_children:
+        try:
+            from .modes import detect_auto_mode
+            _auto, _ = detect_auto_mode(get_current_session_id())
+        except Exception:
+            _auto = False
+        _listing = ", ".join(f"#{cid}({st})" for cid, st in _open_children[:8])
+        print(f"⚠️  Task #{task_id} has {len(_open_children)} incomplete child task(s): {_listing}")
+        if _auto or getattr(args, "force", False):
+            print("   Completing anyway (AUTO_MODE / --force) — those children remain open.")
+        else:
+            print("   A parent completing over open children misrepresents the tree.")
+            print("   Complete, reparent, or pause the children first — or re-run with --force.")
+            return 1
 
     # Type-specific completion gate: GH_ISSUE
     task_type = getattr(task.mtmd, 'task_type', None) if task.mtmd else None
