@@ -10,8 +10,19 @@ import time
 from pathlib import Path
 from typing import Optional
 
-import lancedb
-from sentence_transformers import SentenceTransformer
+# Optional heavy deps are guarded so the module imports even when they are
+# absent — matching base_indexer/policy_indexer. Previously `import lancedb` at
+# module scope was unconditional, so importing this module (and therefore the
+# whole hybrid_search package, via __init__) failed whenever lancedb was missing,
+# which is exactly the graceful-degradation case the package claims to support
+# (GH #123's sibling, GH #75). Using the components without the deps raises a
+# clear error in __init__ instead.
+try:
+    import lancedb
+    from sentence_transformers import SentenceTransformer
+    DEPS_AVAILABLE = True
+except ImportError:
+    DEPS_AVAILABLE = False
 
 from .models import MatchedQuestion
 
@@ -26,16 +37,25 @@ class PolicySearch:
         Args:
             db_path: Path to LanceDB directory
             model_name: SentenceTransformer model name (lazy loaded)
+
+        Raises:
+            ImportError: if the optional search dependencies are not installed.
         """
+        if not DEPS_AVAILABLE:
+            raise ImportError(
+                "Optional dependencies not available. Install with: "
+                "pip install lancedb sentence-transformers"
+            )
+
         self.db_path = db_path
         self.model_name = model_name
-        self._model: Optional[SentenceTransformer] = None
+        self._model: Optional["SentenceTransformer"] = None
         self._db = None
         self._documents_table = None
         self._questions_table = None
 
     @property
-    def model(self) -> SentenceTransformer:
+    def model(self) -> "SentenceTransformer":
         """Lazy load embedding model."""
         if self._model is None:
             self._model = SentenceTransformer(self.model_name)
