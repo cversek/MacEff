@@ -40,10 +40,10 @@ class KnowledgeGraphViz:
 
     Usage::
 
-        from macf.ideas import build_knowledge_graph
+        from macf.knowledge_web import build_knowledge_web
         from macf.viz import KnowledgeGraphViz
 
-        kg = build_knowledge_graph()
+        kg = build_knowledge_web()
         viz = KnowledgeGraphViz(kg)
         viz.render("/tmp/knowledge_graph.html")
         # or: html_str = viz.to_html()
