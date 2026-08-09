@@ -38,6 +38,24 @@ def mock_dependencies():
         }
 
 
+def test_ensures_transcript_monitor_started_when_down(mock_dependencies):
+    """SessionStart auto-starts the Transcript Monitor when it isn't running (#144)."""
+    from macf.hooks.handle_session_start import run
+    with patch('macf.transcript_monitor.daemon.is_running', return_value=False), \
+         patch('macf.transcript_monitor.daemon.start_daemon') as m_start:
+        run("")
+    m_start.assert_called_once()
+
+
+def test_does_not_restart_running_transcript_monitor(mock_dependencies):
+    """If the Transcript Monitor is already up, SessionStart must not start a second (#144)."""
+    from macf.hooks.handle_session_start import run
+    with patch('macf.transcript_monitor.daemon.is_running', return_value=True), \
+         patch('macf.transcript_monitor.daemon.start_daemon') as m_start:
+        run("")
+    m_start.assert_not_called()
+
+
 def test_no_compaction_detected(mock_dependencies):
     """Test hook returns temporal awareness message when no compaction detected."""
     from macf.hooks.handle_session_start import run
