@@ -3322,6 +3322,10 @@ def cmd_mode_set_work(args: argparse.Namespace) -> int:
     info = WORK_MODES[mode]
     append_event("work_mode_change", {"mode": mode})
     print(f"✅ Work mode set: {info['emoji']} {mode}")
+    from .modes.transition_messages import transition_reinforcement
+    _reinforce = transition_reinforcement(mode)
+    if _reinforce:
+        print(f"   {_reinforce}")
 
     # PLAY_TIME transition recording
     try:
@@ -3656,6 +3660,10 @@ def cmd_mode_set(args: argparse.Namespace) -> int:
 
         if success:
             print(f"✅ {message}")
+            from .modes.transition_messages import transition_reinforcement
+            _reinforce = transition_reinforcement(mode)
+            if _reinforce:
+                print(f"   {_reinforce}")
 
             from .utils.claude_settings import (
                 set_autocompact_enabled, set_permission_mode,
