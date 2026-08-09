@@ -4260,12 +4260,15 @@ def cmd_task_list(args: argparse.Namespace) -> int:
             key=lambda t: str(t.id).zfill(10),
         )
 
-    # Load scope state from MTMD scope_status field on tasks (same source as cmd_task_tree).
-    # Without this, format_task's scope indicator block raises NameError (gh-48).
-    scope_state = {}
-    for t in tasks:
-        if t.mtmd and getattr(t.mtmd, 'scope_status', None):
-            scope_state[t.id] = t.mtmd.scope_status
+    # Scope markers are sourced from the EVENT LOG — the single source of truth the
+    # gate uses — not the per-task MTMD scope_status field. That field is a
+    # denormalized cache duplicated across task stores and drifts both ways: markers
+    # vanish where it is unwritten (the event log has the task), and zombie orphans
+    # persist where it is stale (the event log dropped it). get_scope_state() replays
+    # scope events and is store-independent, so the tree always agrees with
+    # `scope check` / `scope show`.
+    from .task.scope import get_scope_state
+    scope_state = get_scope_state()
 
     def format_task(t: MacfTask, indent: int = 0) -> str:
         prefix = "  " * indent
@@ -4291,10 +4294,12 @@ def cmd_task_list(args: argparse.Namespace) -> int:
             status_icon = "◻"
             line = f"{prefix}{status_icon} {_dim_task_ids(subject_with_live_parent(t))}"
 
-        # Scope indicator (👀 for active, ✅ for completed/inactive)
+        # Scope indicator (👀 active, ⏸️ paused, ✅ inactive/completed)
         if scope_state and t.id in scope_state:
             if scope_state[t.id] == "active":
                 line += " 👀"
+            elif scope_state[t.id] == "paused":
+                line += " ⏸️"
             elif scope_state[t.id] == "inactive":
                 line += " ✅"
 
@@ -4472,11 +4477,11 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
         reader = TaskReader()
         all_tasks = reader.read_all_tasks()
 
-        # Load scope state from MTMD scope_status field on tasks
-        scope_state = {}
-        for t in all_tasks:
-            if t.mtmd and getattr(t.mtmd, 'scope_status', None):
-                scope_state[t.id] = t.mtmd.scope_status
+        # Scope markers sourced from the event log (single source of truth), not the
+        # per-task MTMD scope_status field which drifts across stores. See the note
+        # at the other render site.
+        from .task.scope import get_scope_state
+        scope_state = get_scope_state()
 
         # Archive filtering (default: hide archived)
         def is_archived(task):
@@ -4789,6 +4794,8 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
             if scope_state and task.id in scope_state:
                 if scope_state[task.id] == "active":
                     text += " 👀"
+                elif scope_state[task.id] == "paused":
+                    text += " ⏸️"
 
             text += recency_marker(task)
 

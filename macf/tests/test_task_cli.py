@@ -259,6 +259,37 @@ class TestTaskCreateDelegCommand:
         assert result.returncode != 0
 
 
+class TestTreeScopeMarkersFromEventLog:
+    """The tree's scope markers come from the event-sourced scope state, not the
+    drift-prone per-task MTMD scope_status field."""
+
+    def test_active_from_events_shows_marker_even_when_mtmd_absent(self, isolated_task_env):
+        """The discriminating case: a task active in the EVENT LOG but with no MTMD
+        scope_status must still show 👀. Fails against the old MTMD-sourced render."""
+        import re
+        env = isolated_task_env['env']
+        tid = str(json.loads(subprocess.run(
+            ['macf_tools', 'task', 'create', 'task', 'Scoped', '--plan', 'p', '--json'],
+            capture_output=True, text=True, env=env).stdout)['task_id'])
+
+        # Scope it (writes both the scope_activated event and the MTMD field)...
+        subprocess.run(['macf_tools', 'task', 'scope', 'set', tid],
+                       capture_output=True, text=True, env=env)
+        # ...then force the store drift: strip scope_status from the task file so
+        # ONLY the event log knows the task is scoped.
+        tf = isolated_task_env['session_dir'] / f"{tid}.json"
+        data = json.loads(tf.read_text())
+        data['description'] = re.sub(r'\n?scope_status:[^\n]*', '', data.get('description', ''))
+        tf.write_text(json.dumps(data))
+        assert 'scope_status' not in tf.read_text(), "precondition: MTMD scope_status stripped"
+
+        tree = subprocess.run(['macf_tools', 'task', 'tree'],
+                              capture_output=True, text=True, env=env)
+        # 👀 is produced ONLY by the scope marker (not by any note), so this is a
+        # clean signal that the marker was sourced from the event log.
+        assert '👀' in tree.stdout, "event-active task must show 👀 despite absent MTMD scope_status"
+
+
 class TestTaskGrantUpdateCommand:
     """Test macf_tools task grant-update command."""
 
@@ -983,20 +1014,33 @@ class TestTaskListCommand:
         assert 'Test task 100' in result.stdout
 
     def test_task_list_shows_scope_indicator_for_active_scope(self, isolated_task_env):
-        """Positive test: active scope shows 👀 indicator (the feature gh-48's bug gated)."""
-        self._write_task(isolated_task_env['session_dir'], 101, scope_status='active')
-        result = subprocess.run(
-            ['macf_tools', 'task', 'list'],
-            capture_output=True, text=True, env=isolated_task_env['env'])
+        """Positive test: a task active in the event-sourced scope shows 👀.
+
+        Scope is established through the event log (`scope set`) — the single source
+        of truth the list now reads — not by writing the MTMD scope_status field."""
+        env = isolated_task_env['env']
+        self._write_task(isolated_task_env['session_dir'], 101)
+        subprocess.run(['macf_tools', 'task', 'scope', 'set', '101'],
+                       capture_output=True, text=True, env=env)
+        result = subprocess.run(['macf_tools', 'task', 'list'],
+                                capture_output=True, text=True, env=env)
         assert result.returncode == 0, f'stderr: {result.stderr}'
         assert '👀' in result.stdout
 
     def test_task_list_shows_scope_indicator_for_inactive_scope(self, isolated_task_env):
-        """Inactive scope shows ✅ indicator."""
-        self._write_task(isolated_task_env['session_dir'], 102, scope_status='inactive')
-        result = subprocess.run(
-            ['macf_tools', 'task', 'list'],
-            capture_output=True, text=True, env=isolated_task_env['env'])
+        """A task completed while scoped shows ✅ (inactive) — event-sourced.
+
+        Two tasks are scoped and one completed; the other stays active so the scope
+        is not auto-cleared, leaving the completed one as inactive-in-scope."""
+        env = isolated_task_env['env']
+        self._write_task(isolated_task_env['session_dir'], 102)
+        self._write_task(isolated_task_env['session_dir'], 103)
+        subprocess.run(['macf_tools', 'task', 'scope', 'set', '102', '103'],
+                       capture_output=True, text=True, env=env)
+        subprocess.run(['macf_tools', 'task', 'complete', '102', '--report', 'done'],
+                       capture_output=True, text=True, env=env)
+        result = subprocess.run(['macf_tools', 'task', 'list', '--all'],
+                                capture_output=True, text=True, env=env)
         assert result.returncode == 0, f'stderr: {result.stderr}'
         assert '✅' in result.stdout
 
