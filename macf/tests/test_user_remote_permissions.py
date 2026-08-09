@@ -10,6 +10,7 @@ import json
 
 from macf.utils.claude_settings import (
     toggle_user_remote_deny_permissions,
+    restore_user_remote_deny_if_active,
     _AUTO_MODE_ASK,
     _USER_REMOTE_EXTRA_DENY,
 )
@@ -60,3 +61,45 @@ def test_ask_user_question_is_always_denied_under_remote(tmp_path):
     _seed(tmp_path, {"permissions": {"ask": [], "allow": [], "deny": []}})
     toggle_user_remote_deny_permissions(True, project_root=tmp_path)
     assert "AskUserQuestion" in _load(tmp_path)["permissions"]["deny"]
+
+
+# --- auto-restore on CLI activity (the returning operator) --------------------
+
+def test_restore_if_active_is_noop_when_nothing_denied(tmp_path):
+    """No deny stash → returns None and writes nothing (the common per-prompt path)."""
+    seed = {"permissions": {"ask": list(_AUTO_MODE_ASK), "allow": [], "deny": []}}
+    _seed(tmp_path, seed)
+    res = restore_user_remote_deny_if_active(project_root=tmp_path)
+    assert res is None
+    # Settings unchanged — the Ask-list is still the Ask-list.
+    assert _load(tmp_path) == seed
+
+
+def test_restore_if_active_restores_when_deny_installed(tmp_path):
+    """With a deny installed, a CLI prompt restores the tools to their prior lists."""
+    _seed(tmp_path, {"permissions": {"ask": list(_AUTO_MODE_ASK), "allow": [], "deny": []}})
+    toggle_user_remote_deny_permissions(True, project_root=tmp_path)
+    # Sanity: deny is installed and the stash exists.
+    assert "AskUserQuestion" in _load(tmp_path)["permissions"]["deny"]
+    assert _load(tmp_path).get("_macf_user_remote_denied")
+
+    res = restore_user_remote_deny_if_active(project_root=tmp_path)
+    assert res is not None and res["restored"], "should report the restored entries"
+    perms = _load(tmp_path)["permissions"]
+    for entry in _AUTO_MODE_ASK:
+        assert entry in perms["ask"], f"{entry} not restored to ask"
+        assert entry not in perms["deny"]
+    assert "AskUserQuestion" not in perms["deny"]
+    # Stash cleared — a subsequent prompt is a clean no-op.
+    assert not _load(tmp_path).get("_macf_user_remote_denied")
+    assert restore_user_remote_deny_if_active(project_root=tmp_path) is None
+
+
+def test_incremental_scope_primitives_stay_non_hanging():
+    """The non-hanging USER_REMOTE housekeeping path must stay non-hanging: the
+    incremental scope primitives are NOT Ask-listed (so they aren't denied while
+    remote), while the destructive `scope clear` IS (correctly guarded)."""
+    joined = " ".join(_AUTO_MODE_ASK)
+    assert "scope clear" in joined, "scope clear must stay Ask-listed/guarded"
+    for safe in ("scope remove", "scope pause", "scope add", "scope unpause"):
+        assert safe not in joined, f"'{safe}' must not be Ask-listed — it is the non-hanging path"

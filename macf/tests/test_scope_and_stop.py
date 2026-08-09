@@ -229,6 +229,44 @@ class TestScopePausePrimitives:
         assert check["total"] == 3
 
 
+class TestScopePauseAll:
+    """`scope pause --all` — the non-hanging, reversible full-gate quiet for USER_REMOTE."""
+
+    def test_pause_all_pauses_every_active(self, isolated_events):
+        from types import SimpleNamespace
+        from macf.task.scope import set_scope, get_scope_check
+        from macf.cli import cmd_task_scope_pause
+        set_scope(["1", "2", "3"])
+        rc = cmd_task_scope_pause(SimpleNamespace(task_ids=[], all=True,
+                                                  justification="remote: quiet the whole gate"))
+        assert rc == 0
+        check = get_scope_check()
+        assert check["active_count"] == 0
+        assert check["paused_count"] == 3
+
+    def test_pause_all_rejects_ids_and_all_together(self, isolated_events):
+        from types import SimpleNamespace
+        from macf.task.scope import set_scope
+        from macf.cli import cmd_task_scope_pause
+        set_scope(["1"])
+        rc = cmd_task_scope_pause(SimpleNamespace(task_ids=["1"], all=True, justification="x"))
+        assert rc == 1
+
+    def test_pause_all_on_empty_scope_is_clean_noop(self, isolated_events):
+        from types import SimpleNamespace
+        from macf.cli import cmd_task_scope_pause
+        rc = cmd_task_scope_pause(SimpleNamespace(task_ids=[], all=True, justification="x"))
+        assert rc == 0
+
+    def test_pause_all_still_requires_justification(self, isolated_events):
+        from types import SimpleNamespace
+        from macf.task.scope import set_scope
+        from macf.cli import cmd_task_scope_pause
+        set_scope(["1"])
+        rc = cmd_task_scope_pause(SimpleNamespace(task_ids=[], all=True, justification=""))
+        assert rc == 1  # justification is mandatory even for --all
+
+
 class TestScopeAddRemovePrimitives:
     """Test scope add/remove (incremental edits, no replace)."""
 

@@ -229,6 +229,27 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # agree with the event that produced them (#181).
         record_user_activity_from_payload(prompt)
 
+        # USER_REMOTE auto-restore: a CLI prompt means the operator is back at the
+        # keyboard, which auto-clears USER_REMOTE (detection derives that from the
+        # activity just recorded). Restore the deny'd permissions here too —
+        # otherwise the tools USER_REMOTE walled off stay denied until an explicit
+        # `mode set USER_PRESENT`, stranding the returned operator. No-op when
+        # nothing is denied; full permission enforcement reloads on the next restart.
+        try:
+            from macf.utils.claude_settings import restore_user_remote_deny_if_active
+            _ur_restored = restore_user_remote_deny_if_active()
+            if _ur_restored and _ur_restored.get("restored"):
+                from macf.agent_events_log import append_event
+                append_event("mode_change", {
+                    "mode": "USER_REMOTE",
+                    "enabled": False,
+                    "source": "auto_restore_on_cli_activity",
+                })
+        except Exception as e:
+            emit_warning(Warning(source="user_prompt_submit",
+                                 kind="user_remote_auto_restore_failed",
+                                 detail=str(e)))
+
         # Start Development Drive tracking with current UUID and prompt preview
         # Note: start_dev_drv() emits dev_drv_started event internally
         start_dev_drv(session_id, prompt_uuid=current_prompt_uuid, prompt_preview=prompt_preview)
