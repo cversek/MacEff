@@ -66,6 +66,24 @@ def test_dev_drv_start_tracking(mock_dependencies):
     assert result["continue"] is True
 
 
+def test_full_prompt_captured_not_truncated(mock_dependencies):
+    """dev_drv_started must capture the FULL prompt, not the first 200 chars (#119).
+
+    Truncation silently biased any analysis of operator prompt content — 35% of
+    prompts hit the 200-char cap exactly and lost everything said after it.
+    """
+    import json
+    from macf.hooks.handle_user_prompt_submit import run
+
+    long_prompt = "abcdefghij" * 50  # 500 chars, well past the old 200 cap
+    run(json.dumps({"session_id": "s1", "prompt": long_prompt}))
+
+    mock_dependencies['start_drv'].assert_called_once()
+    captured = mock_dependencies['start_drv'].call_args.kwargs.get('prompt_preview')
+    assert captured == long_prompt, "prompt was truncated; full content is required"
+    assert len(captured) == 500
+
+
 def test_temporal_awareness_included(mock_dependencies):
     """Test output includes temporal awareness context."""
     from macf.hooks.handle_user_prompt_submit import run

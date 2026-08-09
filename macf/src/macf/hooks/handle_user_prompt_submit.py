@@ -215,9 +215,14 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         from macf.utils.session import get_last_user_prompt_uuid
         current_prompt_uuid = get_last_user_prompt_uuid(session_id)
 
-        # Extract prompt preview for forensic recovery (first 200 chars)
+        # Capture the FULL operator prompt for forensic recovery and prompt-content
+        # analysis (#119). This was truncated to the first 200 chars, which silently
+        # biased any analysis of prompt content — 35% of prompts hit the cap exactly,
+        # so anything said mid-message was invisible and unrecoverable once logged.
+        # Follow-up (idea): store a transcript pointer rather than inlining full text,
+        # per 'Index Metadata, Not Content' — the transcript already holds the text.
         prompt = hook_input.get('prompt', '') if hook_input else ''
-        prompt_preview = prompt[:200] if prompt else None
+        prompt_preview = prompt if prompt else None
 
         # Record activity from the payload in hand before anything derives
         # staleness from the event log, so this render and the ones after it
