@@ -1,10 +1,10 @@
 # Autonomous Operation Policy
 
-**Version**: 1.1
+**Version**: 1.2
 **Tier**: CORE
 **Category**: Operations
 **Status**: ACTIVE
-**Updated**: 2025-12-11
+**Updated**: 2026-08-09
 
 ---
 
@@ -41,6 +41,12 @@ Applies to all Primary Agents (PA) and Subagents (SA) capable of extended autono
 - What is the CLI token requirement?
 - Why two-factor authorization?
 - What does the agent do when authorization is missing?
+
+**3.2 Restartability Resolution (Capability-Drift Guard)**
+- What capability does AUTO_MODE presume but not verify?
+- Which measured observable resolves supervision, and which two must NOT be used?
+- How does behaviour branch on supervised vs unsupervised?
+- When is self-restart permitted vs a self-kill?
 
 **4 Mode-Specific Recovery Behavior**
 - How does MANUAL_MODE recovery work?
@@ -282,6 +288,50 @@ This command performs all settings changes atomically:
 **Step 3 - Session Restart**: The agent reminds the user to restart the session. CC does not re-read permission settings mid-session. Without restart, `Write` and other tool permissions retain their pre-switch state.
 
 **Verification**: After restart, `macf_tools mode get --json` should show `enabled: true`.
+
+### 3.2 Restartability Resolution After Activation (Capability-Drift Guard)
+
+AUTO_MODE presumes a capability it does not verify: that the session is
+**restartable and resumable**. Multi-cycle work surviving compaction (§2), the
+Step-3 restart that loads permissions (§3.1), a self-restart to reload settings, and
+harness-resume after a crash *all* assume a **supervisor** is watching. An
+**unsupervised** session that activates AUTO_MODE carries a silent capability
+mismatch: it behaves as if a crash will be recovered when, for it, a crash is
+**death**.
+
+**Before relying on any restart/resume behaviour, the agent MUST resolve its
+supervision state — from a *measured* observable, never from a name or a status
+line:**
+
+- **USE** the supervisor-registry resolution (`macf_tools env`): a registry entry
+  with `status=running`, cross-checked with a live-pid probe *and* the process's own
+  arguments. This is the observable that provably flips across the supervised and
+  unsupervised states.
+- **DO NOT** branch on an environment variable whose name merely *suggests* the
+  answer. `CLAUDE_CODE_CHILD_SESSION` is set in the supervised *interactive* session
+  as well as in any child, so it carries zero bits about supervision or fork-role —
+  the exact mistake an observable's name invites. An observable set identically in
+  both states you must separate is not a discriminator.
+- **DO NOT** trust the service-manager unit status. It can report `active (exited)`
+  while the supervisor is dead: a *reported* value is not an *enforced* one.
+
+**Branch on the result:**
+
+| Resolved state | Restart/resume assumptions | Self-restart | On crash |
+|---|---|---|---|
+| **Supervised** — the registry resolves a live supervisor for this agent | hold | **Permitted**: ride the supervisor's restart path (it rejoins, it does not fork) | the harness relaunches and the AUTO_MODE resume returns the turn |
+| **Unsupervised** — no live supervisor resolves | **do not hold** | **Forbidden**: a self-restart is a self-kill with no relaunch | the session is gone — no resume, no recovery |
+
+In the **unsupervised** case the agent MUST: (a) surface the state to the operator
+plainly, ideally announced at SessionStart rather than waiting to be asked; (b)
+never self-issue the §3.1 Step-3 restart — hand the operator a one-liner instead;
+(c) treat any interruption as terminal, so extended unattended autonomy is hazardous
+and should be declined or bounded until supervision exists.
+
+Observing supervision is **proprioception** and is always permitted; *driving* the
+restart is a separate, grant-gated write action. Self-restart under supervision is a
+real, safe capability; self-restart without it is the "never kill your own runtime"
+failure — the two arms of this one branch.
 
 ---
 
