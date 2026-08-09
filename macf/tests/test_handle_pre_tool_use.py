@@ -75,6 +75,26 @@ def test_bash_command_tracking(mock_dependencies, hook_stdin_bash_tool):
     assert "very long command that exceeds forty characters and needs truncation" not in context
 
 
+def test_skill_invocation_names_the_skill_in_channel_notification(mock_dependencies):
+    """The channel notification for a Skill invocation must name the skill —
+    'Skill' alone is near-useless in a channel timeline. The tool-use hook's
+    Telegram notification must carry Skill(<name>), not the bare tool name."""
+    import json
+    from macf.hooks.handle_pre_tool_use import run
+
+    stdin = json.dumps({
+        "tool_name": "Skill",
+        "tool_input": {"skill": "maceff-sprint", "args": "close out the mode system"},
+        "session_id": "test-session-123",
+    })
+    with patch("macf.channels.telegram.send_telegram_notification") as mock_send:
+        run(stdin)
+
+    assert mock_send.called, "a Skill invocation should notify the channel"
+    sent_text = mock_send.call_args.args[0] if mock_send.call_args.args else mock_send.call_args.kwargs.get("text", "")
+    assert "Skill(maceff-sprint)" in sent_text, "channel notification must name the skill, not just 'Skill'"
+
+
 def test_minimal_timestamp_included(mock_dependencies, hook_stdin_read_tool):
     """Test output starts with MACF tag and minimal timestamp."""
     from macf.hooks.handle_pre_tool_use import run

@@ -543,6 +543,30 @@ def toggle_user_remote_deny_permissions(enable_remote: bool, project_root: Optio
         return None
 
 
+def restore_user_remote_deny_if_active(project_root: Optional[Path] = None) -> Optional[dict]:
+    """Restore USER_REMOTE-deny'd permissions iff a deny is currently installed.
+
+    A CLI prompt means the operator is back at the keyboard, which auto-clears
+    USER_REMOTE in detection — but the deny'd tools stay walled off until an
+    explicit ``mode set USER_PRESENT``. The UserPromptSubmit hook calls this so
+    the returned operator can immediately use the tools USER_REMOTE hid, without
+    a manual mode switch.
+
+    Cheap to call on every prompt: it does a single settings read and returns
+    ``None`` (no write) unless the ``_macf_user_remote_denied`` stash is present.
+    When a stash exists it delegates to ``toggle_user_remote_deny_permissions``
+    and returns its result dict.
+    """
+    try:
+        settings, _ = _read_settings(project_root)
+        if not settings.get('_macf_user_remote_denied'):
+            return None  # nothing denied — the common path, no write attempted
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"⚠️ MACF: settings read failed (restore_user_remote_deny_if_active): {e}", file=sys.stderr)
+        return None
+    return toggle_user_remote_deny_permissions(False, project_root=project_root)
+
+
 def toggle_write_ask_for_auto_mode(enable_auto: bool, project_root: Optional[Path] = None) -> bool:
     """
     Toggle Write tool between 'ask' and implicit bypass for AUTO_MODE.
