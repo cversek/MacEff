@@ -6895,8 +6895,35 @@ def cmd_task_start(args: argparse.Namespace) -> int:
                 })
                 injected_policies.append(policy_name)
 
+    # Cascade upstream (#115 / GH#212): a phase in_progress under an ancestor
+    # still 'pending' makes the tree misreport where work stands — orientation
+    # reads the MISSION as "nobody is working this", the wrong direction. Walk the
+    # ancestor chain and start any pending ancestor, reporting each so the
+    # resumption is visible rather than silent.
+    cascaded = []
+    if task.mtmd and getattr(task.mtmd, "parent_id", None):
+        from .task.create import _run_task_start
+        seen = {str(task_id)}
+        parent_id = task.mtmd.parent_id
+        while parent_id and str(parent_id) not in seen and str(parent_id) != "000":
+            seen.add(str(parent_id))
+            try:
+                pid_int = int(str(parent_id).lstrip("#"))
+            except (ValueError, TypeError):
+                break
+            ancestor = reader.read_task(pid_int)
+            if not ancestor:
+                break
+            if ancestor.status == "pending" and _run_task_start(pid_int):
+                cascaded.append(pid_int)
+            parent_id = ancestor.mtmd.parent_id if ancestor.mtmd else None
+
     print(f"✅ Task #{task_id} started")
     print(f"   Breadcrumb: {breadcrumb}")
+    if cascaded:
+        print(f"   ⬆️  Cascade-started {len(cascaded)} pending ancestor(s): "
+              + ", ".join(f"#{c}" for c in cascaded))
+        print("      (a phase cannot truly be underway while an ancestor reads 'pending')")
     if injected_policies:
         print(f"   Auto-injected policies: {injected_policies}")
     if stale:
