@@ -63,10 +63,17 @@ def test_tmux_wrap_passes_single_shell_string():
 def _seed_registry(tmp_path, monkeypatch, entries):
     monkeypatch.setattr(sup, "REGISTRY_DIR", tmp_path)
     for data in entries:
+        data = {"status": "running", **data}
         (tmp_path / f"{data['supervisor_pid']}.json").write_text(json.dumps(data))
     # treat every seeded supervisor pid as alive unless overridden
     alive = {e["supervisor_pid"] for e in entries if e.get("_alive", True)}
     monkeypatch.setattr(sup, "_is_alive", lambda pid: pid in alive)
+    # A registry entry describes a live supervisor only if it SAYS it is
+    # running, its pid is alive, AND that pid is still a supervisor. The first
+    # and third were added after a stopped entry with a recycled pid could be
+    # matched; seeding them here keeps the fixture modelling a live supervisor
+    # rather than a file that merely exists.
+    monkeypatch.setattr(sup, "_is_supervisor_process", lambda pid: pid in alive)
 
 
 def test_find_supervisor_by_name(tmp_path, monkeypatch):
