@@ -1142,6 +1142,10 @@ def _gh_view_json(view_args: List[str], fields: List[str], *, timeout: int = 15)
     import json as _json
     import re as _re
 
+    # Preserve the specific command in error text ("gh pr view failed",
+    # "gh issue view failed") that callers and tests rely on.
+    label = " ".join(view_args[:3]) if len(view_args) >= 3 else "gh view"
+
     remaining = list(fields)
     dropped: List[str] = []
     while remaining:
@@ -1153,11 +1157,11 @@ def _gh_view_json(view_args: List[str], fields: List[str], *, timeout: int = 15)
             return _json.loads(result.stdout)
         m = _re.search(r"Unknown JSON field:\s*[\"']?(\w+)", result.stderr or "")
         if not m or m.group(1) not in remaining:
-            raise ValueError(f"gh view failed: {result.stderr.strip()}")
+            raise ValueError(f"{label} failed: {result.stderr.strip()}")
         dropped.append(m.group(1))
         remaining.remove(m.group(1))
     raise ValueError(
-        "gh view failed: this gh version supports none of the requested fields "
+        f"{label} failed: this gh version supports none of the requested fields "
         f"(dropped: {', '.join(dropped)})"
     )
 
