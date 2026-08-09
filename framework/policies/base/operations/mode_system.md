@@ -123,12 +123,13 @@ Layer 3: Recommender          → at gate points, suggests next skill
 
 ## 2. Operational Mode Definitions
 
-Four operational modes, independently triggered, simultaneously active:
+Five operational modes, independently triggered, simultaneously active:
 
 | Mode | Emoji | Trigger Type | Description |
 |------|-------|-------------|-------------|
 | **AUTO_MODE** | 🤖 | Event-based | Agent operating autonomously with user authorization |
 | **USER_IDLE** | 😴 | Computed | User hasn't sent a message within idle timeout |
+| **USER_REMOTE** | 📡 | Event + computed clear | User reachable only via a remote channel; CLI unattended |
 | **QUIET_MODE** | 🔕 | Event or auto | Don't disturb — suppress notifications, defer questions |
 | **LOW_CONTEXT** | 🪫 | Computed | Context left is at or below threshold |
 
@@ -144,6 +145,24 @@ Four operational modes, independently triggered, simultaneously active:
 - **Activity sources (v2+)**: JSONL `queue-operation` enqueue entries (sub-turn precision)
 - **Default timeout**: 10 minutes (`MACF_USER_IDLE_TIMEOUT_MINS`)
 - **Deactivation**: Automatic when user sends next message
+
+### USER_REMOTE 📡
+- **Trigger**: Explicit `macf_tools mode set USER_REMOTE` — the operator declares they have stepped away from the CLI and are reachable **only** through a remote channel (Telegram).
+- **Meaning**: The user is *present and responsive*, but the **CLI is unattended**. This is the opposite failure surface from USER_IDLE: the hazard is not that the agent stops, but that it **blocks on a tool needing CLI input nobody is there to give** — a permission prompt, or an `AskUserQuestion` that never renders on the remote channel — and hangs the whole session until the operator physically returns.
+- **Deactivation**: **Automatic, the instant the operator sends a message from the CLI** — a `user_activity_detected` event with `source == "direct"`. A message from Telegram (`source == "channel"`) does **not** clear it: the operator is still remote. The Transcript Monitor already records this direct-vs-channel distinction (`detect_user_activity`), so the discriminator is a read, not a new signal.
+- **Forbidden while active** (each blocks on the absent CLI):
+  - `AskUserQuestion` — its prompt does not propagate to Telegram, so a remote operator can never answer it. Ask in a Telegram `reply`, or in the turn-final message (which the Stop hook forwards to the channel), instead.
+  - Every **Ask-list** command (`git push`, `gh pr create`, `gh pr merge`, `gh issue create/close`, `git reset --hard`, `rm -r`, docker teardown, …) — each raises a CLI permission prompt. Accumulate commits locally and **hold pushes/PRs** until USER_REMOTE clears.
+- **Enforcement (Ask → Deny)**: activation flips those Ask-list entries to **Deny** and adds `AskUserQuestion` to the deny list, so an attempt returns an *immediate denial the agent can route around* rather than a silent hang; deactivation restores them. Permission changes load at CC startup, so full enforcement takes effect on the **next restart** — until then, the switch message and this policy are the binding guidance. Denial-not-prompt is the safety property: a hung session with a remote operator can only be cleared by their physical return.
+- **Allowed**: the Telegram `reply` tool (the operator's live channel — unlike QUIET_MODE, USER_REMOTE does **not** silence Telegram), plus all local work — reads, edits, tests, `git commit`, `macf_tools`.
+- **vs USER_IDLE / QUIET_MODE**: USER_IDLE = user gone, whereabouts unknown, keep working and assume closeout responsibility. QUIET_MODE = do not disturb on *any* channel. USER_REMOTE = user *here, on Telegram* — talk to them there, but never touch a tool that waits on the empty CLI.
+
+**Switch message** (printed on activation, and the contract an agent must honor):
+
+> 📡 USER_REMOTE active. The operator is reachable ONLY via Telegram; the CLI is unattended. Do NOT use tools that block on CLI input — they will hang the session:
+> • AskUserQuestion (does not reach Telegram) → ask via Telegram reply or your turn-final message.
+> • Ask-list commands (git push, gh pr create/merge, gh issue create/close, git reset --hard, rm -r, docker teardown) → hold them; accumulate commits locally.
+> Communicate via the Telegram reply tool. Clears the instant you send a message from the CLI.
 
 ### QUIET_MODE 🔕
 - **Trigger**: Explicit event OR auto-triggered alongside USER_IDLE (configurable)
