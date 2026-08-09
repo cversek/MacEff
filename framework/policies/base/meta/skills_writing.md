@@ -691,5 +691,15 @@ Skill points to policy → Policy updates → Skill reads updated policy → Aut
 
 ---
 
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — skill
+     authoring as policy pointers with timeless extractive questions. -->
+
+[[policy_as_api]] [[tooling]] [[methodology]]
+
+---
+
 🔧 Generated with Claude Code
 Co-Authored-By: Claude <noreply@anthropic.com>

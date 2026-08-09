@@ -626,3 +626,13 @@ Document the mechanism when you find it. A suppression lever discovered and not 
 - **Notification spam in QUIET_MODE**: Sending messages when QUIET_MODE is active. Silence is respectful.
 - **Ignoring LOW_CONTEXT**: Continuing normal work at CL5 without closeout. LOW_CONTEXT is urgency.
 - **Fighting the recommender**: Always picking the highest-probability skill. The Monte Carlo "spice" exists to encourage exploration.
+
+---
+
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — the mode
+     set, the Markov recommender, the dashboard, and nag design. -->
+
+[[modes]] [[autonomy]] [[observability]] [[supervision]]

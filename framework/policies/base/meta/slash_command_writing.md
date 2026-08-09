@@ -962,5 +962,15 @@ Using answers from policy reading:
 
 ---
 
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — slash
+     command authoring as policy-pointing workflow wrappers. -->
+
+[[policy_as_api]] [[tooling]] [[methodology]]
+
+---
+
 🔧 Generated with Claude Code
 Co-Authored-By: Claude <noreply@anthropic.com>

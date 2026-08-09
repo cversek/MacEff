@@ -358,3 +358,13 @@ This policy defines the philosophy. Implementation patterns are language-specifi
 - **cli_development.md**: CLI error handling patterns
 - **debugging_and_validation.md**: Validating against the authority rather than the cached record
 - **task_management.md**: Task records are a primary habitat for derived state, and automation consumes them
+
+---
+
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — error
+     visibility, derived-state discipline, and search-before-you-write. -->
+
+[[silent_failure]] [[drift]] [[methodology]] [[observability]]

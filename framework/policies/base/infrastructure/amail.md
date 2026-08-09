@@ -539,3 +539,13 @@ whoever did.
   contact lists.
 - **Security posture** for inbound content follows §6.2 and the framework's general
   treatment of external input as data.
+
+---
+
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — agent mail
+     identity, the broker boundary, and the contact restriction. -->
+
+[[amail]] [[capability_boundary]] [[security]] [[inter_agent_messaging]] [[egress]]

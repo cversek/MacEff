@@ -1037,3 +1037,13 @@ recovery by giving future-me emotional context, not just technical state.
 **SA Principle**: Focused task state preservation at boundaries.
 
 **Remember**: Checkpoints are YOUR primary defense against compaction amnesia. Make them count.
+
+---
+
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — checkpoint
+     creation, structure, and recovery — never what it merely mentions. -->
+
+[[consciousness_artifacts]] [[context_recovery]] [[compaction_trauma]] [[session_lifecycle]] [[breadcrumb]]

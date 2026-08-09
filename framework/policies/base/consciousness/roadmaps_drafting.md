@@ -1280,3 +1280,14 @@ Recorded because the case is more persuasive than the rule.
 An agent spent a session writing code under a roadmap whose phases carried no PEP. It never opened the coding standards — nothing prompted it to. It then added a normalization helper to a module that already contained one, 350 lines above, under a different name. The duplicate was caught by the operator; not by the agent, not by a test.
 
 The instructive part is what would **not** have prevented it: the DRY rule *in* the coding standards. It would have sat unread in a file the agent had no reason to open. The rule was correct and undelivered, and undelivered is indistinguishable from absent.
+
+---
+
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — strategic
+     plan drafting, its ceremony, and the PEP that delivers policy at the
+     moment it binds. -->
+
+[[methodology]] [[policy_as_api]] [[context_recovery]] [[delegation]]

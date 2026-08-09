@@ -345,3 +345,13 @@ Report:
 - `mode_system.md` — work mode definitions, Markov transition matrix, gate point mechanics
 - `autonomous_sprint.md` — sibling policy for workload-defined autonomous work (🏃 SPRINT)
 - `task_management.md` — PLAY_TIME task type schema, scope lifecycle
+
+---
+
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — time-bounded
+     autonomous play with mode rotation. -->
+
+[[autonomy]] [[modes]] [[methodology]]

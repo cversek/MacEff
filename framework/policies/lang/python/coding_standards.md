@@ -287,3 +287,13 @@ except FileNotFoundError as e:
 - **base/development/coding_standards.md**: Philosophy and principles
 - **base/development/testing.md**: Testing error visibility
 - **base/development/cli_development.md**: CLI patterns
+
+---
+
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — Python
+     expression of the error-visibility discipline. -->
+
+[[silent_failure]] [[methodology]] [[tooling]]

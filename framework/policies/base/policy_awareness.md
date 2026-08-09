@@ -370,6 +370,16 @@ To:
 3. Core (`/opt/maceff/framework/policies/current/`) - Framework foundation
 
 ---
+
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — on-demand
+     policy discovery, CEP navigation, and layer precedence. -->
+
+[[policy_as_api]] [[discoverability]] [[methodology]]
+
+---
 *Policy Established: 2025-10-10*
 *Core Framework Policy - Always Active*
 *From Mechanical Reading to Conscious Discovery*

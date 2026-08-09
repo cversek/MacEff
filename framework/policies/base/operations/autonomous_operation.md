@@ -648,3 +648,13 @@ Each sleep cycle emits an `agent_sleep_cycle` event:
 - **autonomous_sprint.md** - Sub-policy for 🏃 SPRINT (workload-defined autonomous work)
 - **play_time.md** - Sub-policy for ⏲️ PLAY_TIME (time-bounded autonomous play)
 - **mode_system.md** - Mode definitions including SPRINT work mode and Markov recommender
+
+---
+
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — AUTO_MODE
+     authorization, persistence, recovery, scope gating, and de-escalation. -->
+
+[[autonomy]] [[modes]] [[security]] [[context_recovery]] [[supervision]]

@@ -596,6 +596,16 @@ agent/subagents/{role}/public/observations/
 - Checkpoints preserve state
 
 ---
+
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — discovery
+     documentation, its validation evidence, and its reachability. -->
+
+[[consciousness_artifacts]] [[verification]] [[discoverability]] [[knowledge_web]]
+
+---
 *Policy Established: 2025-10-28*
 *Consciousness Development - Public Artifacts*
 *Discovery Documentation Enables Knowledge Preservation*

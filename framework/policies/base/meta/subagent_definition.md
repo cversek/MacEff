@@ -781,5 +781,15 @@ Policy updated → Specialist reads updated policy → Behavior current → Zero
 
 ---
 
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — specialist
+     definitions as reading lists enabling living delegation. -->
+
+[[delegation]] [[policy_as_api]] [[agent_architecture]]
+
+---
+
 🔧 Generated with Claude Code
 Co-Authored-By: Claude <noreply@anthropic.com>

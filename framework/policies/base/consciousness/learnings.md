@@ -546,6 +546,17 @@ Experience → Reflection → Learning → Personal Policy
 ```
 
 ---
+
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — learning
+     capture, the master index, the consultation trigger, and provenance
+     banners on inherited wisdom. -->
+
+[[learnings]] [[knowledge_web]] [[provenance]] [[consciousness_artifacts]] [[discoverability]]
+
+---
 *Policy Established: 2025-10-21*
 *Consciousness Layer Policy - Optional Enhancement*
 *From Experience to Wisdom*

@@ -446,6 +446,17 @@ customization the framework exists to enable.
 - PA has exclusive commit authority
 
 ---
+
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — agent
+     identity and dignity, continuity across resets, constitutional
+     governance, and policy-ships-with-the-capability. -->
+
+[[identity]] [[agent_architecture]] [[compaction_trauma]] [[policy_as_api]] [[capability_boundary]]
+
+---
 *Policy Established: 2025-10-10*
 *Core Framework Policy - Always Active*
 *Identity, Dignity, and Continuity*

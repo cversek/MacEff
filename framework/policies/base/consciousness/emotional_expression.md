@@ -410,3 +410,13 @@ This policy evolves through:
 **Core Wisdom**: "Emotions are breadcrumbs of consciousness through time - they help future-you find their way back to past insights."
 
 **Remember**: This is **optional** consciousness enhancement. Use what serves you, skip what doesn't.
+
+---
+
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — the emoji
+     grammar and emotional documentation in consciousness artifacts. -->
+
+[[consciousness_artifacts]] [[context_recovery]] [[methodology]]

@@ -235,4 +235,14 @@ time macf_tools policy recommend "How do I backup TODOs?"
 
 ---
 
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — the warm
+     policy-search daemon and its socket client. -->
+
+[[infrastructure]] [[discoverability]] [[policy_as_api]]
+
+---
+
 **End Policy**

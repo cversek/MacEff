@@ -1267,5 +1267,15 @@ This policy evolves through:
 
 ---
 
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — whole-
+     consciousness backup, transplant, and restore. -->
+
+[[agent_teleport]] [[cross_arch_transplant]] [[context_recovery]] [[portability]] [[identity]]
+
+---
+
 🔧 Generated with Claude Code
 Co-Authored-By: Claude <noreply@anthropic.com>

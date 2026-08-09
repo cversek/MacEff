@@ -660,5 +660,15 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 
 ---
 
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — policy
+     authoring: CEP structure, sanitization, timeless external references. -->
+
+[[policy_as_api]] [[methodology]] [[discoverability]] [[portability]]
+
+---
+
 🔧 Generated with Claude Code
 Co-Authored-By: Claude <noreply@anthropic.com>

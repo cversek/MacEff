@@ -353,3 +353,13 @@ Permission absence isn't restriction - it's structural governance. What you cann
 **The Fractal**: Same governance pattern (prevent arbitrary variation, enforce stable convention) applies at CA types, nested folders, citation formats - just at different scopes.
 
 **Why This Matters**: Can't govern at one layer and declare victory. Fragmentation finds new layers. Must think systematically about structure, organization, and reference.
+
+---
+
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — the CA
+     directory structure and its fragmentation-resistant invariants. -->
+
+[[consciousness_artifacts]] [[discoverability]] [[breadcrumb]] [[policy_as_api]]
