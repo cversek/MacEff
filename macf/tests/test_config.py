@@ -399,3 +399,22 @@ def temp_config_file(tmp_path):
 def temp_dir(tmp_path):
     """Provide temporary directory for testing."""
     return tmp_path
+
+
+class TestConsciousnessArtifactPaths:
+    """checkpoints/reflections paths must point where the artifacts are written (#116)."""
+
+    def test_checkpoints_path_resolves_under_private(self):
+        config = ConsciousnessConfig(agent_name="test-agent")
+        path = config.get_checkpoints_path()
+        # Artifacts are written under agent/private/, not public.
+        assert path == config.get_private_path() / "checkpoints"
+        assert path.parent.name == "private"
+        assert "public" not in path.parts
+
+    def test_reflections_path_resolves_under_private(self):
+        config = ConsciousnessConfig(agent_name="test-agent")
+        path = config.get_reflections_path()
+        assert path == config.get_private_path() / "reflections"
+        assert path.parent.name == "private"
+        assert "public" not in path.parts
