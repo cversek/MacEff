@@ -391,6 +391,17 @@ def cmd_env(args: argparse.Namespace) -> int:
         }
     }
 
+    # Supervision diagnostics. Every fact below was derivable before this
+    # existed, and every one of them was derived by hand -- repeatedly, in one
+    # evening, by the person who had just written the harness -- from $TMUX, ps
+    # ancestry walks and greps of the supervisor registry. Two came out wrong.
+    try:
+        from macf.utils.supervision import diagnose
+        data["supervision"] = diagnose()
+    except Exception as e:
+        # Never let a diagnostic break the command it is reporting on.
+        data["supervision"] = {"error": f"{type(e).__name__}: {e}"}
+
     # Output format
     if getattr(args, 'json', False):
         # Convert tuple to dict for JSON serialization
@@ -404,6 +415,15 @@ def cmd_env(args: argparse.Namespace) -> int:
 
         print("Agent ID")
         print(f"  {data['identity']['agent_id']}")
+        print()
+
+        print("Supervision")
+        sup = data.get("supervision") or {}
+        if "error" in sup:
+            print(f"  (unavailable: {sup['error']})")
+        else:
+            from macf.utils.supervision import format_diagnosis
+            print(format_diagnosis(sup))
         print()
 
         print("Versions")
@@ -1427,8 +1447,21 @@ def cmd_statusline(args: argparse.Namespace) -> int:
 
 
 def _harness_params(args: argparse.Namespace):
+    from dataclasses import replace
     from .utils.harness import default_params
-    return default_params(agent=getattr(args, "agent", None), home=getattr(args, "home", None))
+    p = default_params(agent=getattr(args, "agent", None), home=getattr(args, "home", None))
+    # Channels are declared, never inferred. They are the agent's inbound link
+    # when nobody is attached, and a default would be a guess about reachability.
+    channels = tuple(getattr(args, "channel", None) or ())
+    prefix = getattr(args, "shell_prefix", None)
+    if channels or prefix:
+        p = replace(p, channels=channels, shell_prefix=prefix)
+    # Fill anything not given from what the last install recorded. Without this
+    # a flagless `install --check` renders different artifacts and reports drift
+    # that is not there — and acting on that report with --force would strip the
+    # channel silently.
+    from .utils.harness import load_settings
+    return load_settings(p)
 
 
 def cmd_harness_generate(args: argparse.Namespace) -> int:
@@ -1439,18 +1472,40 @@ def cmd_harness_generate(args: argparse.Namespace) -> int:
     anywhere — the hand-edited predecessor drifted precisely because there was
     nothing to diff against.
     """
-    from .utils.harness import render_unit, render_child, render_tmux_conf
+    from .utils.harness import (
+        render_child,
+        render_launch_functions,
+        render_start,
+        render_tmux_conf,
+        render_unit,
+        render_watchdog,
+    )
 
     try:
         p = _harness_params(args)
         attach = not getattr(args, "no_proxy", False)
         what = getattr(args, "what", "unit")
+        if what == "watchdog":
+            svc, tmr = render_watchdog(p)
+            print(f"# ===== cc-harness-{p.agent}-watch.service =====")
+            print(svc, end="")
+            print(f"\n# ===== cc-harness-{p.agent}-watch.timer =====")
+            print(tmr, end="")
+            return 0
         if what in ("unit", "all"):
             print(render_unit(p, attach_proxy=attach), end="")
+        if what in ("start", "all"):
+            if what == "all":
+                print(f"\n# ===== {p.start} =====")
+            print(render_start(p, attach_proxy=attach), end="")
         if what in ("child", "all"):
             if what == "all":
                 print(f"\n# ===== {p.child_path} =====")
             print(render_child(p), end="")
+        if what in ("functions", "all"):
+            if what == "all":
+                print(f"\n# ===== {p.functions} =====")
+            print(render_launch_functions(p), end="")
         if what in ("tmux", "all"):
             if what == "all":
                 print(f"\n# ===== {p.home}/.tmux-{p.agent}.conf =====")
@@ -1471,7 +1526,14 @@ def cmd_harness_install(args: argparse.Namespace) -> int:
     """
     from pathlib import Path
     import stat as _stat
-    from .utils.harness import render_unit, render_child, render_tmux_conf
+    from .utils.harness import (
+        render_child,
+        render_launch_functions,
+        render_start,
+        render_tmux_conf,
+        render_unit,
+        save_settings,
+    )
 
     try:
         p = _harness_params(args)
@@ -1479,9 +1541,17 @@ def cmd_harness_install(args: argparse.Namespace) -> int:
         unit_dir = Path.home() / ".config" / "systemd" / "user"
         targets = [
             (unit_dir / p.unit_name, render_unit(p, attach_proxy=attach), False),
+            (Path(p.start), render_start(p, attach_proxy=attach), True),
             (Path(p.child_path), render_child(p), True),
+            (Path(p.functions), render_launch_functions(p), False),
             (p.home / f".tmux-{p.agent}.conf", render_tmux_conf(p), False),
         ]
+        if getattr(args, "watchdog", False):
+            svc, tmr = render_watchdog(p)
+            targets += [
+                (unit_dir / f"cc-harness-{p.agent}-watch.service", svc, False),
+                (unit_dir / f"cc-harness-{p.agent}-watch.timer", tmr, False),
+            ]
 
         if getattr(args, "check", False):
             drift = 0
@@ -1513,9 +1583,13 @@ def cmd_harness_install(args: argparse.Namespace) -> int:
                 path.chmod(path.stat().st_mode | _stat.S_IXUSR)
             print(f"   ✓ {path}")
 
+        save_settings(p)
+        print(f"   ✓ {p.settings_path}")
         print(f"\n✅ Harness installed for agent '{p.agent}'")
         print(f"   systemctl --user daemon-reload && systemctl --user enable --now {p.unit_name}")
-        print(f"   attach:  tmux attach -t {p.agent}")
+        # "=" is not decoration: tmux matches targets by PREFIX, so advice
+        # without it teaches the loose form that caused GH #209.
+        print(f"   attach:  tmux attach -t ={p.agent}   (or: maceff_{p.prefix}_harness_launch)")
         print(f"   status:  macf_tools harness status --agent {p.agent}")
         print(f"   stop:    systemctl --user stop {p.unit_name}   (stops the supervisor, not the child)")
         return 0
@@ -1524,23 +1598,120 @@ def cmd_harness_install(args: argparse.Namespace) -> int:
         return 1
 
 
-def cmd_harness_status(args: argparse.Namespace) -> int:
-    """Report unit state, session presence and proxy attachment."""
-    from pathlib import Path
+def cmd_harness_attach(args: argparse.Namespace) -> int:
+    """Attach this terminal to the agent's supervised session.
+
+    Exists so that no remote shell has to hardcode a session name. A helper on
+    another machine held the OLD name after the session was renamed, and broke
+    with "no sessions" -- a fourth hand-maintained copy of harness knowledge, on
+    a host the generator cannot reach. `ssh host -t macf_tools harness attach`
+    resolves the name where the name is defined, so a rename cannot strand it.
+    """
+    from .utils.harness import resolve_agent
+    from .utils.identity import calling_card_from_identifier
 
     try:
+        agent, source = resolve_agent(getattr(args, "agent", None))
+        if source == "ambiguous":
+            print("Several harnesses are installed here; name one with --agent:",
+                  file=sys.stderr)
+            for a in agent:
+                print(f"   {a}  ({calling_card_from_identifier(a)})", file=sys.stderr)
+            return 1
+
+        # "=" forces an exact match; tmux resolves targets by prefix, so a bare
+        # name would happily attach to "<agent>-stale-ssh".
+        target = f"={agent}"
+        if subprocess.run(["tmux", "has-session", "-t", target],
+                          capture_output=True).returncode != 0:
+            print(f"No tmux session '{agent}' on this host.", file=sys.stderr)
+            print(f"   start it:  {'maceff_' + agent.rpartition('_')[0].lower() + '_harness_launch'}",
+                  file=sys.stderr)
+            print(f"   or:        systemctl --user start cc-harness-{agent}.service",
+                  file=sys.stderr)
+            return 1
+
+        # -CC hands the session to iTerm2 as native windows. It matters more
+        # than it looks: the client owns the alternate screen, so under a plain
+        # attach there is no tmux-level scrollback at all -- control mode is
+        # what restores native scrollback, selection and find on macOS.
+        cmd = ["tmux"]
+        if getattr(args, "control", False):
+            cmd.append("-CC")
+        cmd += ["attach", "-t", target]
+        # -d evicts other clients: two clients of different geometries is the
+        # cause of the fragmented redraws. Read-only observers skip it.
+        cmd.append("-r" if getattr(args, "read_only", False) else "-d")
+        os.execvp("tmux", cmd)
+    except Exception as e:
+        print(f"Error attaching to harness: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_harness_status(args: argparse.Namespace) -> int:
+    """Report unit state, session presence and proxy attachment.
+
+    Every negative line names the agent it checked, and a defaulted name says
+    so. This command once printed a confident ABSENT for a harness that was
+    running under a different name, and came within one step of telling the
+    operator his harness did not exist — an instrument answering about
+    something it never looked at.
+    """
+    from pathlib import Path
+    from .utils.harness import resolve_agent
+    from .utils.identity import calling_card_from_identifier
+
+    try:
+        agent, source = resolve_agent(getattr(args, "agent", None))
+        if source == "ambiguous":
+            print("agent:   AMBIGUOUS — several harnesses are installed here:")
+            for a in agent:
+                print(f"           {a}  ({calling_card_from_identifier(a)})")
+            print("\nPick one with --agent; this command will not choose for you.",
+                  file=sys.stderr)
+            return 1
+
         p = _harness_params(args)
         unit_path = Path.home() / ".config" / "systemd" / "user" / p.unit_name
-        print(f"agent:   {p.agent}")
-        print(f"unit:    {unit_path} {'(present)' if unit_path.exists() else '(ABSENT)'}")
+        card = calling_card_from_identifier(p.agent)
+        if source == "default":
+            # The line that was missing. A default reported as a resolution is
+            # how "no harness for the name I guessed" reads as "no harness".
+            print(f"agent:   {p.agent}  (DEFAULT — not resolved from the "
+                  f"environment, config or any installed unit)")
+        else:
+            print(f"agent:   {p.agent}  ({card}, via {source})")
+        print(f"unit:    {unit_path} "
+              f"{'(present)' if unit_path.exists() else f'(ABSENT for agent {p.agent})'}")
 
         active = subprocess.run(["systemctl", "--user", "is-active", p.unit_name],
                                 capture_output=True, text=True).stdout.strip()
         print(f"active:  {active or 'unknown'}")
 
-        has_session = subprocess.run(["tmux", "has-session", "-t", p.agent],
+        # "=" forces an EXACT session match. Without it tmux resolves a target
+        # by prefix, so `-t thm` happily matches a session called
+        # "thm-stale-ssh" -- which is precisely the name someone gives the
+        # imposter while moving it out of the way, so the workaround for the
+        # name collision silently did not resolve the collision.
+        has_session = subprocess.run(["tmux", "has-session", "-t", f"={p.agent}"],
                                      capture_output=True).returncode == 0
-        print(f"session: {'up' if has_session else 'absent'} (tmux -t {p.agent})")
+        print(f"session: {'up' if has_session else f'absent for {p.agent}'} "
+              f"(tmux -t ={p.agent})")
+
+        # Presence is not ownership. A session under this name may be anyone's
+        # — that is how the harness stayed down for days while every surface
+        # said "session: up".
+        if has_session:
+            sup = subprocess.run(
+                ["bash", "-c",
+                 f'for f in {p.registry}/*.json; do [ -e "$f" ] || continue; '
+                 f'grep -q \'"name": "{p.agent}"\' "$f" || continue; '
+                 f'grep -q \'"status": "running"\' "$f" || continue; '
+                 f'pid=${{f##*/}}; pid=${{pid%.json}}; kill -0 "$pid" 2>/dev/null || continue; '
+                 f'ps -o args= -p "$pid" | grep -q "macf\\.supervisor" || continue; '
+                 f'echo "$pid"; break; done'],
+                capture_output=True, text=True).stdout.strip()
+            print(f"owner:   {'macf supervisor pid ' + sup if sup else 'NOT this harness — the name is held by something else'}")
 
         probe = subprocess.run(
             ["curl", "-s", "--max-time", "2", "-o", "/dev/null",
@@ -9106,8 +9277,13 @@ def _build_parser() -> argparse.ArgumentParser:
     harness_generate.add_argument("--home", help="agent home directory")
     harness_generate.add_argument("--no-proxy", action="store_true",
                                   help="render without proxy attachment")
-    harness_generate.add_argument("--what", choices=["unit", "child", "tmux", "all"], default="unit",
-                                  help="which artifact to render (default: unit)")
+    harness_generate.add_argument("--channel", action="append", metavar="PLUGIN",
+                                 help="channel plugin the client must load; repeatable")
+    harness_generate.add_argument("--shell-prefix", metavar="NAME",
+                                 help="short handle for the generated shell functions (default: the moniker half of the Calling Card)")
+    harness_generate.add_argument(
+        "--what", choices=["unit", "start", "child", "functions", "tmux", "watchdog", "all"], default="unit",
+        help="which artifact to render (default: unit)")
     harness_generate.set_defaults(func=cmd_harness_generate)
 
     harness_install = harness_sub.add_parser("install", help="write harness artifacts into place")
@@ -9115,11 +9291,27 @@ def _build_parser() -> argparse.ArgumentParser:
     harness_install.add_argument("--home", help="agent home directory")
     harness_install.add_argument("--no-proxy", action="store_true",
                                  help="install without proxy attachment")
+    harness_install.add_argument("--channel", action="append", metavar="PLUGIN",
+                                 help="channel plugin the client must load; repeatable")
+    harness_install.add_argument("--shell-prefix", metavar="NAME",
+                                 help="short handle for the generated shell functions (default: the moniker half of the Calling Card)")
+    harness_install.add_argument("--watchdog", action="store_true",
+                                 help="also install a timer that restarts the session if the "
+                                      "tmux server dies (the supervisor dies with it)")
     harness_install.add_argument("--check", action="store_true",
                                  help="report drift against what would be rendered; write nothing")
     harness_install.add_argument("--force", action="store_true",
                                  help="overwrite an existing unit that differs")
     harness_install.set_defaults(func=cmd_harness_install)
+
+    harness_attach = harness_sub.add_parser(
+        "attach", help="attach this terminal to the agent's supervised session")
+    harness_attach.add_argument("--agent", help="agent slug (default: resolved from identity)")
+    harness_attach.add_argument("--control", action="store_true",
+                                help="attach in tmux control mode (-CC), for iTerm2 on macOS")
+    harness_attach.add_argument("--read-only", action="store_true",
+                                help="observe without evicting other clients or taking the keyboard")
+    harness_attach.set_defaults(func=cmd_harness_attach)
 
     harness_status = harness_sub.add_parser("status", help="show harness unit and session state")
     harness_status.add_argument("--agent", help="agent slug")
