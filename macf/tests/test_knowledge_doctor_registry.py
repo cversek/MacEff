@@ -74,3 +74,37 @@ def test_doctor_has_no_registry_check(tmp_path):
     _mk(tmp_path, "public/whatever/thing.md")
     diagnosis = examine(agent_home=tmp_path, kg=EMPTY_KG)
     assert not [f for f in diagnosis.findings if f.check == "registry integrity"]
+
+
+def test_doctor_does_not_flag_a_file_with_wiki_links(tmp_path):
+    """Restore control — the mirror of the orphan test (#125).
+
+    Orphan detection is content-based (a file with any extractable wiki-concept
+    is skipped), so a genuinely-linked artifact must stay silent. Plant → named
+    without links has its own test; this is plant → silent WITH links.
+    """
+    _mk(tmp_path, "private/learnings/2026-01-01_000000_linked_learning.md",
+        "# a linked learning\n\n## Wiki-Links\n[[testing]] [[knowledge_web]]\n")
+    diagnosis = examine(agent_home=tmp_path, kg=EMPTY_KG)
+    orphans = [f for f in diagnosis.findings if f.check == "orphans"]
+    assert not any("linked_learning" in f.subject for f in orphans)
+
+
+def test_doctor_scope_reflects_discovered_types(tmp_path):
+    """Scope is the thing that changed and shipped a bug once (examined 159->305,
+    orphans 77->165) — assert it DIRECTLY, distinct from any findings assertion.
+
+    The doctor's reported scope must be exactly the CA types discovered on disk.
+    A checker whose scope can change needs a scope test, not only a findings test.
+    """
+    _mk(tmp_path, "private/learnings/2026-01-01_x_learning.md")
+    _mk(tmp_path, "public/checkpoints/2026-01-01_x_ccp.md")
+    diagnosis = examine(agent_home=tmp_path, kg=EMPTY_KG)
+    scope = set(diagnosis.chart.scope)
+    # Agent-tree types discovered from disk:
+    assert {"learnings", "checkpoints"} <= scope
+    # Framework-rooted policies are ALWAYS in scope — this IS the Phase-7 scope
+    # addition whose silent change shipped a bug (files_examined 159->305,
+    # orphans 77->165). Pinning it means the next scope change cannot pass
+    # unnoticed, which is the whole point of a scope test distinct from findings.
+    assert "policies" in scope
