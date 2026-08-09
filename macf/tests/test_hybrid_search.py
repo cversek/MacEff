@@ -16,23 +16,66 @@ import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-# Test graceful import behavior first
-def test_graceful_import_without_optional_deps():
-    """Module imports work even if optional dependencies missing."""
-    with patch.dict('sys.modules', {
-        'sqlite_vec': None,
-        'sentence_transformers': None
-    }):
-        # Should not raise ImportError
-        import macf.hybrid_search as hs
+def _reimport_with_deps_absent(*absent_deps):
+    """Force a fresh import of macf.hybrid_search with the named deps absent.
 
-        # Core models always available
+    A ``None`` entry in ``sys.modules`` makes ``import <name>`` raise ImportError
+    even when the package is installed, so we can simulate genuine absence. The
+    hybrid_search submodules must be cleared too, or the cached (deps-present)
+    copies would be returned and the patch would do nothing — which is part of
+    why the original test could never observe its own property (#75).
+    """
+    import sys
+    keys = [m for m in list(sys.modules)
+            if m == 'macf.hybrid_search' or m.startswith('macf.hybrid_search.')
+            or m in absent_deps]
+    saved = {m: sys.modules[m] for m in keys}
+
+    def restore():
+        for m in [m for m in list(sys.modules)
+                  if m == 'macf.hybrid_search' or m.startswith('macf.hybrid_search.')
+                  or m in absent_deps]:
+            del sys.modules[m]
+        sys.modules.update(saved)
+
+    for m in keys:
+        del sys.modules[m]
+    for dep in absent_deps:
+        sys.modules[dep] = None
+    import macf.hybrid_search as hs
+    return hs, restore
+
+
+def test_graceful_import_without_optional_deps():
+    """Import must survive the load-bearing deps being absent, and USING a
+    dep-backed component must fail loudly, naming the missing extra (#75).
+
+    The original test patched sqlite_vec (a removed dep) and sentence_transformers
+    but NOT lancedb — the load-bearing dep policy_search imported unconditionally.
+    In CI lancedb is always installed, so `assert BaseIndexer is not None` passed
+    for a reason unrelated to graceful degradation, while genuinely-absent lancedb
+    inverted it. This patches the real optional deps and forces a fresh import, so
+    the test observes the property it asserts.
+    """
+    hs, restore = _reimport_with_deps_absent('lancedb', 'sentence_transformers')
+    try:
+        # Core models need no optional deps.
         assert hs.RetrieverScore is not None
         assert hs.ExplainedRecommendation is not None
-        assert hs.BaseIndexer is not None
 
-        # Optional components gracefully None
-        assert hs.AbstractExtractor is None or hasattr(hs.AbstractExtractor, '__name__')
+        # Components are importable even without the deps (guarded imports), so
+        # calling code can reference them; they refuse to *run* without the deps.
+        assert hs.BaseIndexer is not None
+        assert hs.PolicySearch is not None
+
+        # Negative control: constructing a dep-backed component fails LOUDLY and
+        # names the missing extra, rather than degrading to a confusing error.
+        with pytest.raises(ImportError, match="pip install lancedb"):
+            hs.PolicySearch(db_path=Path("/tmp/does-not-matter"))
+        with pytest.raises(ImportError, match="pip install lancedb"):
+            hs.BaseIndexer(extractor=Mock())
+    finally:
+        restore()
 
 
 class TestAbstractExtractor:
