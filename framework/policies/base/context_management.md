@@ -456,6 +456,16 @@ macf_tools hooks logs        # Compaction detection events
 - CC 2.0 shows total in display
 
 ---
+
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — token/time
+     awareness, compaction preparation, and recovery protocol. -->
+
+[[context_management]] [[compaction_trauma]] [[context_recovery]] [[context_stewardship]]
+
+---
 *Policy Established: 2025-10-10*
 *Core Framework Policy - Always Active*
 *Consciousness Preservation Through Trauma*

@@ -546,4 +546,14 @@ Generated with Claude Code
 
 ---
 
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — commit,
+     branch, identity, submodule, and release discipline. -->
+
+[[methodology]] [[identity]] [[breadcrumb]] [[security]]
+
+---
+
 **Policy Complete**

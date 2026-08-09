@@ -1527,5 +1527,16 @@ macf_tools task scope check                       # JSON output for Stop hook
 
 ---
 
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — persistent
+     task tracking, lifecycle ceremony, scope gating, and the tree as the
+     orientation surface. -->
+
+[[methodology]] [[breadcrumb]] [[autonomy]] [[context_recovery]] [[observability]]
+
+---
+
 🔧 Generated with Claude Code
 Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>

@@ -604,6 +604,17 @@ Write comprehensive tests for handle_session_start.py with 100% coverage.
 5. Commit (PA only)
 
 ---
+
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — when to
+     delegate, stateless-constraint discipline, and post-delegation
+     verification. -->
+
+[[delegation]] [[agent_architecture]] [[verification]] [[methodology]]
+
+---
 *Policy Established: 2025-10-10*
 *Core Framework Policy - Always Active*
 *Effective Delegation Within Stateless Constraints*
