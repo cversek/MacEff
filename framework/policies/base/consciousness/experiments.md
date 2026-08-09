@@ -1594,6 +1594,16 @@ Concretely, a single experiment directory typically holds two concept-bearing fi
 **`protocol.md` and `analysis.md` each carry a `## Wiki-Links` section.** Link the *conceptual area under investigation*, not the mechanics of the apparatus. An experiment about whether a daemon can run headless is about headless operation and service supervision, not about the specific flag that turned out to matter.
 
 ---
+
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — hypothesis
+     testing, its evidence discipline, and crystallization into missions. -->
+
+[[experiment_discipline]] [[verification]] [[methodology]] [[measurement]]
+
+---
 *Policy Established: 2025-10-28*
 *Updated: 2026-01-16 - Added Completion, Crystallization, and MISSION Conversion*
 *Consciousness Development - Public Artifacts*

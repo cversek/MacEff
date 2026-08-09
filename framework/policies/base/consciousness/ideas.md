@@ -330,4 +330,14 @@ Reference idea in roadmap context, update idea status to `promoted`.
 
 ---
 
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — prospective
+     idea capture, the pull model, and idea graph connectivity. -->
+
+[[ideas]] [[knowledge_web]] [[provenance]] [[consciousness_artifacts]]
+
+---
+
 **Policy Complete**
