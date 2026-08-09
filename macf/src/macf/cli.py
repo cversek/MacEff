@@ -6546,107 +6546,88 @@ def cmd_task_create_play_time(args: argparse.Namespace) -> int:
 
 
 def cmd_task_archive(args: argparse.Namespace) -> int:
-    """Archive a task (and children by default) to disk."""
-    from .task.archive import archive_task
+    """DEPRECATED: task archive no longer performs meaningful archiving.
 
-    # Parse task ID
-    try:
-        task_id = _parse_task_id_arg(args.task_id)
-    except ValueError:
-        print(f"❌ Invalid task ID: {args.task_id}")
-        return 1
-
-    cascade = not args.no_cascade
-
-    result = archive_task(task_id, cascade=cascade)
-
-    if not result.success:
-        print(f"❌ Archive failed: {result.error}")
-        return 1
-
-    if args.json_output:
+    The operator retired this command (2026-08-06): it printed a ✅ success line
+    while writing nothing — a report of a state change that did not happen, the
+    exact failure mode to avoid. Rather than repair an unwanted feature it now
+    fails closed with a pointer to the supported alternative. Kept as a stub (not
+    removed) so the subcommand still resolves and explains itself rather than
+    vanishing from under existing muscle memory.
+    """
+    if getattr(args, "json_output", False):
         import json
-        output = {
-            "success": True,
-            "task_id": result.task_id,
-            "archive_path": result.archive_path,
-            "children_archived": result.children_archived,
-        }
-        print(json.dumps(output, indent=2))
+        print(json.dumps({
+            "success": False,
+            "deprecated": True,
+            "message": "task archive is deprecated; it performed no archiving. "
+                       "Use `task hide-completed` to declutter.",
+        }, indent=2))
     else:
-        print(f"✅ Archived task #{result.task_id}")
-        print(f"   📦 Archive: {result.archive_path}")
-        if result.children_archived:
-            print(f"   📦 Children archived: {len(result.children_archived)} tasks")
-            for child_id in result.children_archived[:5]:
-                print(f"      - #{child_id}")
-            if len(result.children_archived) > 5:
-                print(f"      ... and {len(result.children_archived) - 5} more")
-
-    return 0
+        print("⚠️  `task archive` is DEPRECATED and performs no archiving.")
+        print("    It used to print a success checkmark while writing nothing — a")
+        print("    false report of a state change. To declutter the task tree, use:")
+        print("        macf_tools task hide-completed")
+    # Fail closed: never exit 0, so nothing can read this as a successful archive.
+    return 2
 
 
 def cmd_task_restore(args: argparse.Namespace) -> int:
-    """Restore a task from archive."""
-    from .task.archive import restore_task
+    """DEPRECATED: the archive/restore/archived trio is retired.
 
-    result = restore_task(args.archive_path_or_id)
-
-    if not result.success:
-        if result.task_json:
-            # PermissionError fallback: output task JSON for manual TaskCreate
-            print(f"⚠️ MACF: {result.error}")
-            print(f"   Original ID: #{result.old_id}")
-            print(f"\nTask JSON for TaskCreate:")
-            print(result.task_json)
-            return 2  # Distinct exit code: recoverable via TaskCreate
-        print(f"❌ Restore failed: {result.error}")
-        return 1
-
-    if args.json_output:
+    `task restore` restored a task from an archive produced by `task archive` —
+    which is itself deprecated for reporting success while archiving nothing.
+    With no supported way to produce an archive, restore has no real input, so it
+    is retired alongside archive rather than left as a path into dead machinery.
+    Kept as a self-explaining stub (not removed) so the subcommand still resolves
+    and points at the supported alternative instead of vanishing.
+    """
+    if getattr(args, "json_output", False):
         import json
-        output = {
-            "success": True,
-            "old_id": result.old_id,
-            "new_id": result.new_id,
-        }
-        print(json.dumps(output, indent=2))
+        print(json.dumps({
+            "success": False,
+            "deprecated": True,
+            "message": "task restore is deprecated; the archive subsystem it "
+                       "depended on performed no real archiving. Use "
+                       "`task hide-completed` / `task unhide-all` to manage tree clutter.",
+        }, indent=2))
     else:
-        print(f"✅ Restored task")
-        print(f"   📦 Original ID: #{result.old_id}")
-        print(f"   🆕 New ID: #{result.new_id}")
-        print()
-        print(f"View with: macf_tools task get #{result.new_id}")
-
-    return 0
+        print("⚠️  `task restore` is DEPRECATED — the archive/restore/archived")
+        print("    trio is retired. `task archive` reported success while writing")
+        print("    nothing, so there is no supported archive to restore from. To")
+        print("    manage task-tree clutter, use:")
+        print("        macf_tools task hide-completed")
+        print("        macf_tools task unhide-all")
+    # Fail closed: never exit 0, so nothing reads this as a successful restore.
+    return 2
 
 
 def cmd_task_archived_list(args: argparse.Namespace) -> int:
-    """List archived tasks."""
-    from .task.archive import list_archived_tasks
+    """DEPRECATED: the archive/restore/archived trio is retired.
 
-    archives = list_archived_tasks()
-
-    if not archives:
-        print("No archived tasks found.")
-        return 0
-
-    if args.json_output:
+    `task archived` listed archives produced by `task archive` — which is
+    deprecated for reporting success while archiving nothing. With no supported
+    way to produce an archive, this list is definitionally empty, so it is retired
+    alongside archive rather than left implying a working archive store. Kept as a
+    self-explaining stub (not removed) so the subcommand still resolves.
+    """
+    if getattr(args, "json_output", False):
         import json
-        print(json.dumps(archives, indent=2))
+        print(json.dumps({
+            "success": False,
+            "deprecated": True,
+            "message": "task archived is deprecated; the archive subsystem "
+                       "produced no real archives. Use `task hide-completed` / "
+                       "`task unhide-all` to manage tree clutter.",
+        }, indent=2))
     else:
-        print(f"📦 Archived Tasks ({len(archives)} total)")
-        print("-" * 60)
-        for arch in archives:
-            archived_at = arch.get("archived_at", "unknown")
-            if archived_at and archived_at != "unknown":
-                # Format datetime
-                archived_at = archived_at[:19].replace("T", " ")
-            print(f"#{arch['id']:>4} | {archived_at} | {arch['subject'][:40]}")
-        print()
-        print("Restore with: macf_tools task restore <id_or_path>")
-
-    return 0
+        print("⚠️  `task archived` is DEPRECATED — the archive/restore/archived")
+        print("    trio is retired. `task archive` produced no real archives, so this")
+        print("    list has nothing to show. To manage task-tree clutter, use:")
+        print("        macf_tools task hide-completed")
+        print("        macf_tools task unhide-all")
+    # Fail closed: never exit 0, so nothing reads this as an authoritative listing.
+    return 2
 
 
 def cmd_task_hide_completed(args: argparse.Namespace) -> int:
@@ -9918,7 +9899,7 @@ def _build_parser() -> argparse.ArgumentParser:
     task_create_play_time_parser.set_defaults(func=cmd_task_create_play_time)
 
     # task archive
-    task_archive_parser = task_sub.add_parser("archive", help="archive task to disk")
+    task_archive_parser = task_sub.add_parser("archive", help="(DEPRECATED — no-op; use `task hide-completed`)")
     task_archive_parser.add_argument("task_id", help="task ID to archive (e.g., #67 or 67)")
     task_archive_parser.add_argument("--no-cascade", dest="no_cascade", action="store_true",
                                      help="archive only this task, not children (default: cascade)")

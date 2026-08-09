@@ -777,7 +777,7 @@ The agent ALWAYS has visibility into CA refs via enhanced `task list` display.
 macf_tools task start #67     # → in_progress (records started_breadcrumb)
 macf_tools task pause #67     # → pending (for temporary pause)
 macf_tools task complete #67  # → completed (mandatory --report)
-macf_tools task archive #67   # → archived (with cascade)
+# task archive is RETIRED — use `task hide-completed` to declutter; see §7
 ```
 
 **Why Lifecycle Commands**: Status transitions are **consciousness events**, not raw data mutations. Each transition:
@@ -1063,42 +1063,37 @@ The gate pattern generalizes to any task type. Each gate redirects to its own po
 
 ---
 
-## 7 Archive Protocol
+## 7 Archive Protocol — RETIRED
 
-### 7.1 Multi-Repo Archive Structure
+**The `task archive` / `task restore` / `task archived` trio is retired.** All
+three fail closed (exit `2`) and print a deprecation notice; none performs
+archiving, restoring, or listing.
 
-For multi-repo development, archive directory reflects repository context:
+**Why it was retired.** `task archive` printed a ✅ success line while archiving
+nothing — the task stayed live. A subcommand that reports success for an
+operation it did not perform is the exact failure mode this policy exists to
+prevent, so rather than repair an unwanted feature it was failed closed. `restore`
+(restored *from* an archive) and `archived` (listed archives) were both premised on
+`archive` producing real archives; with no supported way to produce one, they were
+retired in the same move rather than left as paths into dead machinery. The
+subcommands still *resolve* (they were kept as self-explaining stubs, not removed)
+so existing muscle memory meets an explanation instead of an "invalid choice"
+error.
 
-```
-agent/public/task_archives/
-├── MacEff/
-│   └── v0.4.0/
-│       ├── archive.md
-│       └── task_files/
-└── AnotherRepo/
-    └── v1.0.0/
-        ├── archive.md
-        └── task_files/
-```
-
-### 7.2 Cross-Repo Tasks
-
-Tasks spanning multiple repos document all repos in MTMD:
-```yaml
-repo: MacEff              # Primary repo
-related_repos:
-  - AnotherRepo
-```
-
-### 7.3 Cascade Behavior
-
-Cascade archiving is **default behavior** - archiving a parent archives all children:
+**Use instead — to declutter the task tree:**
 
 ```bash
-macf_tools task archive #67    # Archives #67 and all descendants
+macf_tools task hide-completed   # dot-prefix completed task files (hidden from CC scanner)
+macf_tools task unhide-all       # reverse it
 ```
 
-No `--cascade` flag needed. Use `--no-cascade` to archive single task.
+Hiding is reversible, writes nothing it cannot undo, and never claims a state
+change it did not make — the property the archive command violated.
+
+**Durable history** does not depend on archiving: with the **home store**
+(`task_store.mode: "home"`, §0.1) task files are project-scoped and survive
+fork/rewind/compaction in place, so there is nothing an archive step needs to
+rescue.
 
 ---
 
@@ -1235,7 +1230,7 @@ macf_tools task metadata add #67 label "v0.4.0"          # Add metadata tags
 macf_tools task start #67              # pending → in_progress
 macf_tools task pause #67              # in_progress → pending
 macf_tools task complete #67 --report "..." # → completed (report mandatory)
-macf_tools task archive #67            # → archived (cascade default)
+# task archive is RETIRED — use `task hide-completed`; see §7
 ```
 
 **Why Lifecycle Commands**:
@@ -1247,7 +1242,7 @@ Status transitions are **consciousness events**, not raw data mutations. Each li
 | `task start` | → `in_progress` | `started_breadcrumb` | Marks when work began |
 | `task pause` | → `pending` | Update entry added | Correction only (see below) |
 | `task complete` | → `completed` | `completion_breadcrumb` | Requires `--report` |
-| `task archive` | → `archived` | Update entry added | Cascades to children |
+| ~~`task archive`~~ | RETIRED | — | Fails closed; use `task hide-completed` (§7) |
 
 **`task pause` — Corrections Only**:
 
