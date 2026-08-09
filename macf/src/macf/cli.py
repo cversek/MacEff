@@ -3530,10 +3530,45 @@ def cmd_mode_set(args: argparse.Namespace) -> int:
         mode = args.mode.upper()
         auth_token = getattr(args, 'auth_token', None)
 
+        # USER_REMOTE / USER_PRESENT: an orthogonal presence mode, not part of the
+        # AUTO/MANUAL operational toggle. Handle up front and return. It emits the
+        # mode_change event detection reads; the mode auto-clears when the operator's
+        # next CLI message lands (see modes.detection._detect_user_remote). v1 is
+        # advisory — this switch message plus mode_system.md are the binding
+        # guidance; the Ask->Deny permission enforcement is a follow-up.
+        if mode in ("USER_REMOTE", "USER_PRESENT"):
+            from .agent_events_log import append_event
+            if mode == "USER_PRESENT":
+                append_event("mode_change", {"mode": "USER_REMOTE", "enabled": False})
+                from .utils.claude_settings import toggle_user_remote_deny_permissions
+                restored = toggle_user_remote_deny_permissions(False)
+                print("✅ USER_REMOTE cleared — operator present at the CLI.")
+                if restored and restored.get("restored"):
+                    print(f"   Restored {len(restored['restored'])} CLI-blocking permission(s) (restart to load).")
+                return 0
+            append_event("mode_change", {"mode": "USER_REMOTE", "enabled": True})
+            print("📡 USER_REMOTE active. The operator is reachable ONLY via a remote")
+            print("   channel (Telegram); the CLI is unattended. Do NOT use tools that")
+            print("   block on CLI input — they hang the session until someone returns:")
+            print("   • AskUserQuestion — does not reach Telegram. Ask via the Telegram")
+            print("     reply tool, or your turn-final message (the Stop hook forwards it).")
+            print("   • Ask-list commands (git push, gh pr create/merge, gh issue")
+            print("     create/close, git reset --hard, rm -r, docker teardown) — each")
+            print("     prompts at the empty CLI. Commit locally; HOLD pushes/PRs.")
+            print("   Communicate via the Telegram reply tool. The dashboard indicator")
+            print("   clears when you return to the CLI; run `mode set USER_PRESENT`")
+            print("   (or restart) to restore the denied permissions.")
+            from .utils.claude_settings import toggle_user_remote_deny_permissions
+            denied = toggle_user_remote_deny_permissions(True)
+            if denied and denied.get("denied"):
+                print(f"   🚫 Denied {len(denied['denied'])} CLI-blocking tools (AskUserQuestion + "
+                      "Ask-list) — takes effect on next restart.")
+            return 0
+
         # Validate mode argument
         if mode not in ('AUTO_MODE', 'MANUAL_MODE'):
             print(f"Invalid mode: {mode}")
-            print("Valid modes: AUTO_MODE, MANUAL_MODE")
+            print("Valid modes: AUTO_MODE, MANUAL_MODE, USER_REMOTE, USER_PRESENT")
             return 1
 
         enabled = (mode == 'AUTO_MODE')

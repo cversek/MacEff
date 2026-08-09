@@ -29,6 +29,7 @@ from ..utils.cycles import detect_auto_mode
 OPERATIONAL_MODES = {
     "AUTO_MODE":   {"emoji": "🤖", "order": 1},
     "USER_IDLE":   {"emoji": "😴", "order": 2},
+    "USER_REMOTE": {"emoji": "📡", "order": 2},
     "QUIET_MODE":  {"emoji": "🔕", "order": 3},
     "LOW_CONTEXT": {"emoji": "🪫", "order": 4},
 }
@@ -130,6 +131,13 @@ def detect_active_modes(session_id: str, token_info: dict) -> Set[str]:
             modes.add("USER_IDLE")
     except (OSError, ValueError) as e:
         print(f"⚠️ MACF: USER_IDLE detection failed: {e}", file=sys.stderr)
+
+    # USER_REMOTE: explicitly set; auto-clears when the operator returns to the CLI.
+    try:
+        if _detect_user_remote(session_id):
+            modes.add("USER_REMOTE")
+    except (OSError, ValueError) as e:
+        print(f"⚠️ MACF: USER_REMOTE detection failed: {e}", file=sys.stderr)
 
     # QUIET_MODE: explicit event OR auto with USER_IDLE
     try:
@@ -530,8 +538,12 @@ def format_recommendation(
 # Internal Helpers
 # ============================================================================
 
-def _get_last_user_activity_timestamp(session_id: str) -> Optional[float]:
+def _get_last_user_activity_timestamp(session_id: str, sources: Optional[Set[str]] = None) -> Optional[float]:
     """Get epoch timestamp of last user activity from event log.
+
+    ``sources`` optionally restricts which activity origins count — e.g.
+    ``{"direct", "mid_turn_enqueue"}`` to consider only CLI-typed input (used by
+    USER_REMOTE's auto-clear, which must ignore ``"channel"`` Telegram activity).
 
     ONLY uses user_activity_detected events. Two producers write them: the
     Transcript Monitor (polling the transcript) and the UserPromptSubmit hook
@@ -552,6 +564,8 @@ def _get_last_user_activity_timestamp(session_id: str) -> Optional[float]:
     for event in read_events(limit=200, reverse=True):
         event_type = event.get("event", "")
         if event_type != "user_activity_detected":
+            continue
+        if sources is not None and event.get("data", {}).get("source") not in sources:
             continue
         ts = event.get("timestamp")
         if ts:
@@ -582,6 +596,56 @@ def _detect_quiet_mode_event(session_id: str) -> bool:
             if mode in ("AUTO_MODE", "MANUAL_MODE"):
                 return False
     return False
+
+
+def _parse_epoch(ts) -> Optional[float]:
+    """Coerce an event timestamp (epoch number or ISO string) to epoch seconds."""
+    if ts is None:
+        return None
+    try:
+        if isinstance(ts, (int, float)):
+            return float(ts)
+        if isinstance(ts, str):
+            from datetime import datetime
+            return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+    except (ValueError, TypeError):
+        return None
+    return None
+
+
+# CLI-typed activity origins: a normal prompt ("direct") and a mid-turn queued
+# message ("mid_turn_enqueue"). Both mean the operator is AT the CLI. A Telegram
+# message is "channel" and deliberately excluded — it does not prove presence at
+# the terminal, which is what USER_REMOTE is about.
+_CLI_ACTIVITY_SOURCES = {"direct", "mid_turn_enqueue"}
+
+
+def _detect_user_remote(session_id: str) -> bool:
+    """USER_REMOTE: explicitly set via mode_change, auto-cleared by CLI activity.
+
+    Active when the most recent USER_REMOTE ``mode_change`` is enabled AND no
+    CLI-typed user activity has arrived since it was set. A ``channel`` (Telegram)
+    message does NOT clear it — the operator is still remote. AUTO_MODE/
+    MANUAL_MODE mode_changes are ignored: USER_REMOTE is an orthogonal presence
+    axis, not part of the operational-mode toggle.
+    """
+    set_ts = None
+    for event in read_events(limit=100, reverse=True):
+        if event.get("event") != "mode_change":
+            continue
+        data = event.get("data", {})
+        if data.get("mode") != "USER_REMOTE":
+            continue
+        if not data.get("enabled", True):
+            return False  # most recent USER_REMOTE change disabled it
+        set_ts = _parse_epoch(event.get("timestamp"))
+        break
+    if set_ts is None:
+        return False
+    cli_ts = _get_last_user_activity_timestamp(session_id, sources=_CLI_ACTIVITY_SOURCES)
+    if cli_ts is not None and cli_ts > set_ts:
+        return False  # operator has returned to the CLI since going remote
+    return True
 
 
 def _get_current_work_mode() -> Optional[str]:
