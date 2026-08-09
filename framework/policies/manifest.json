@@ -1634,6 +1634,36 @@
         ]
       },
       {
+        "name": "agent_harness",
+        "short_name": "HARNESS",
+        "path": "base/infrastructure/agent_harness.md",
+        "CEP_triggers": [
+          "How do I tell whether the harness is actually running, and why isn't `tmux has-session` an answer?",
+          "What names the tmux session and the systemd unit, and how do I get back to the agent from it?",
+          "Which characters can a session identifier not contain, and which of those are real constraints?",
+          "Why did `harness status` report ABSENT while the harness was running?",
+          "Why must every tmux `-t` target be written `=name`?",
+          "Why must ANTHROPIC_BASE_URL and the first-party flag never be emitted separately?",
+          "Why does a command started under tmux not inherit my shell's environment?",
+          "What does stopping the harness have to stop, and why is killing the client wrong?",
+          "What must a deployment install, verify, and never hand-edit?",
+          "Why is one session per Calling Card the supported case, and what is deferred?"
+        ],
+        "keywords": [
+          "harness",
+          "tmux",
+          "systemd",
+          "supervisor",
+          "session",
+          "unit",
+          "calling card",
+          "identifier",
+          "restart",
+          "continuity",
+          "auto-restart"
+        ]
+      },
+      {
         "name": "corpus_integrity",
         "short_name": "CORPINT",
         "path": "base/infrastructure/corpus_integrity.md",
