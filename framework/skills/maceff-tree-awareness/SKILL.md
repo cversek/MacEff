@@ -68,6 +68,24 @@ tree -L 3 "${MACEFF_ROOT}/framework"
 
 **Purpose**: Policy files, subagent definitions, templates organization
 
+### 4. Work-Stack Awareness (what was I in the middle of?)
+
+The commands above restore awareness of the *repository* tree. A compaction also
+cost you the *work* stack — which frames were open, and which one attention had
+actually left. Restore that too:
+
+```bash
+macf_tools policy navigate task_management
+```
+
+Read the section that answers: **"What must I read to know which work frames are
+open and which one attention last left, and when is reading it required?"** —
+then do what it prescribes.
+
+**Purpose**: Repository-structure awareness keeps you from editing the wrong
+file; work-stack awareness keeps you from resuming the wrong task. Recovery is
+not complete until both are restored.
+
 ## After Running Commands
 
 **Report to user using this language:**

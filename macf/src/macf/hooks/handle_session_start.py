@@ -193,7 +193,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             })
             # Fall through to compaction recovery (skip migration check)
         elif source == 'resume':
-            # μC (microcompaction) resume — NOT a compaction, NOT a migration.
+            # Session resume — NOT a compaction, NOT a migration.
             # Same session continues. Skip all compaction/migration detection.
             # CRITICAL: Do NOT fall through to PHASE 3 JSONL scanning, which
             # would find stale compact_boundary markers from earlier real

@@ -23,11 +23,13 @@ Orient to a task domain using the knowledge graph before diving into work.
 ```bash
 macf_tools policy navigate scholarship
 macf_tools policy navigate learnings
+macf_tools policy navigate task_management
 ```
 
 Read the sections that answer:
 - (scholarship) "How do wiki-links create concept-mediated edges and what graph tooling exists?"
 - (learnings) "What is the Mandatory Consult Step -- when must I consult the learnings index for previously-encountered problems, where does the index live, and how does the cluster taxonomy trigger it?"
+- (task_management) "What must I read to know which work frames are open and which one attention last left, and when is reading it required?"
 
 ---
 
@@ -41,6 +43,15 @@ consultation trigger's cluster taxonomy in auto-loaded memory, and where a clust
 plausibly fits, open the learnings index and scan that cluster's activation hooks
 for a problem of the same class as this one. Reading a relevant prior learning
 before you start is the point of orienting; finding none is a valid, cheap outcome.
+
+### Step 0.5: Orient the Work Stack
+
+Starting new work is one of the moments the task management policy names for
+reading the work stack. Do what that policy section prescribes: read the stack
+before opening a new frame, so a frame you left open elsewhere is resolved or
+deliberately parked rather than silently buried under this one. Domain
+orientation (below) answers *"what do I know about X?"*; the stack answers
+*"what did I leave open?"* — both precede the first edit.
 
 ### Step 1: Identify Key Concepts
 
