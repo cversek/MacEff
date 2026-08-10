@@ -280,6 +280,35 @@ class AuditLog:
             rec["trust"] = trust
         self._append(rec)
 
+    def read(self, *, agent: str, operation: str,
+             message_id: Optional[str] = None, count: Optional[int] = None,
+             found: Optional[bool] = None) -> None:
+        """Record that a mailbox was READ, and by whom.
+
+        This exists because the argument for putting reads behind the broker was
+        that a read going around it leaves no audit record and answers to no
+        allowlist. Reads were then routed through the broker and still left no
+        record -- the authorisation half of the argument implemented, the
+        accountability half skipped. The gap was invisible in the test suite and
+        obvious the first time a real deployment's log was read: three submission
+        events and nothing at all for the reads that had just happened.
+
+        `direction` is "mailbox" rather than inbound/outbound: nothing crosses a
+        trust boundary here, which is exactly why this record is the only place
+        the access is visible at all.
+        """
+        rec: Dict[str, Any] = {
+            "decision": "read", "direction": "mailbox",
+            "sender": agent, "operation": operation,
+        }
+        if message_id is not None:
+            rec["message_id"] = message_id
+        if count is not None:
+            rec["count"] = count
+        if found is not None:
+            rec["found"] = found
+        self._append(rec)
+
     def error(self, *, context: str, detail: str, sender: Optional[str] = None) -> None:
         """Operational failures belong here too — an outage with no trace is the
         exact gap this log exists to close.

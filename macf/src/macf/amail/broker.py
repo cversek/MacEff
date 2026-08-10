@@ -680,6 +680,11 @@ class Broker:
 
         Fails closed on an unmapped agent, matching `identify`: a default here
         would hand a caller somebody else's mail.
+
+        The refusal IS audited, though not from here: it raises, and the request
+        handler records it with the kernel-established identity attached. Stated
+        because "successful reads are audited" would otherwise leave a reader
+        wondering whether the refusals silently are not.
         """
         home = self.config.agent_homes.get(agent)
         if home is None:
@@ -695,12 +700,20 @@ class Broker:
         msgs = _store_read_all(home)
         if thread:
             msgs = [m for m in msgs if m.thread_id == thread]
+        if self.audit:
+            self.audit.read(agent=agent, operation="list", count=len(msgs))
         return {"ok": True, "messages": [m.to_dict() for m in msgs]}
 
     def read_message(self, agent: str, message_id: str) -> Dict[str, Any]:
         """One message from the requesting agent's own mailbox."""
         home = self._own_mailbox(agent)
         msg = _store_find(home, message_id)
+        # Audited either way, and `found` is recorded: a miss is the interesting
+        # case, because a run of them is what fishing for another agent's
+        # message ids looks like from the log.
+        if self.audit:
+            self.audit.read(agent=agent, operation="read",
+                            message_id=message_id, found=msg is not None)
         if msg is None:
             # Not found and not-yours are the same answer on purpose: a
             # distinguishable "exists but not yours" turns the broker into an

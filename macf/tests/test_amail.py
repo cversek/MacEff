@@ -3055,3 +3055,54 @@ class TestStoreIsBrokerOwned:
                 f"Broker.{name} accepts a mailbox parameter; reads must be "
                 f"scoped by kernel identity alone"
             )
+
+
+class TestReadsAreAudited:
+    """Reads leave a record, because that was the argument for moving them.
+
+    The case for putting reads behind the broker was that a read going around it
+    leaves no audit trace and answers to no allowlist. Reads were duly routed
+    through the broker -- and still left no trace. The authorisation half shipped
+    and the accountability half did not, which the test suite could not see and
+    the first real deployment's log showed immediately.
+    """
+
+    def _entries(self, deployment):
+        return list(deployment["broker"].audit.records())
+
+    def test_list_writes_a_read_record_naming_the_agent(self, deployment):
+        broker = deployment["broker"]
+        store.deliver(deployment["homes"]["alpha"], msg(subject="one"))
+
+        broker.list_messages("alpha")
+
+        reads = [r for r in self._entries(deployment) if r.get("decision") == "read"]
+        assert len(reads) == 1, "a read that leaves no record is the defect"
+        assert reads[0]["sender"] == "alpha"
+        assert reads[0]["operation"] == "list"
+        assert reads[0]["count"] == 1
+
+    def test_read_records_a_miss_as_well_as_a_hit(self, deployment):
+        """A run of misses is what fishing for another agent's ids looks like,
+        so the miss is the case worth being able to see."""
+        broker = deployment["broker"]
+        m = msg(subject="beta only")
+        store.deliver(deployment["homes"]["beta"], m)
+
+        broker.read_message("alpha", m.message_id)   # a miss, from alpha's view
+
+        reads = [r for r in self._entries(deployment) if r.get("decision") == "read"]
+        assert len(reads) == 1
+        assert reads[0]["operation"] == "read"
+        assert reads[0]["found"] is False
+        assert reads[0]["sender"] == "alpha"
+
+    def test_the_record_distinguishes_a_read_from_a_submission(self, deployment):
+        """Direction is 'mailbox': nothing crosses a trust boundary on a read,
+        which is why the record is the only place the access is visible."""
+        broker = deployment["broker"]
+        broker.list_messages("alpha")
+
+        rec = [r for r in self._entries(deployment) if r.get("decision") == "read"][0]
+        assert rec["direction"] == "mailbox"
+        assert rec["ts"]
