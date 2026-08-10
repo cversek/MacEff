@@ -3106,3 +3106,92 @@ class TestReadsAreAudited:
         rec = [r for r in self._entries(deployment) if r.get("decision") == "read"][0]
         assert rec["direction"] == "mailbox"
         assert rec["ts"]
+
+
+class TestNoGuardWithoutACallSite:
+    """A control invoked by nothing is not a control.
+
+    This is mechanized rather than reviewed because the failure is invisible by
+    construction: the guard is present, correct, and covered by passing tests,
+    and the only thing missing is that production never calls it. That exact
+    shape has already cost this subsystem twice -- a terminal-safety escape wired
+    to the inbound render and never to the outbound one, and a credential-custody
+    check that was unit-tested for a cycle before anything invoked it.
+
+    The sweep asserts on CALL SITES, not on source text describing them.
+    """
+
+    #: Guards permitted to have no production caller, each with the condition
+    #: that retires the exemption. An entry here is a debt, not a dispensation:
+    #: when the named subsystem lands, the entry must be deleted and this test
+    #: will then require a real call site.
+    KNOWN_UNINTEGRATED = {
+        # The inbound delivery/quarantine path. Nothing calls it because there
+        # is no inbound path yet -- that is the Phase 5.3 transport decision and
+        # the Phase 6 round trip. It is ahead of its integration point rather
+        # than orphaned inside a finished system, which is a different fault
+        # from the two named above and must not be conflated with them.
+        # REMOVE THIS ENTRY when an inbound receiver hands messages to the
+        # broker; the test then demands the call site.
+        "accept_inbound",
+    }
+
+    GUARD_PREFIXES = ("assert_", "check_", "verify_", "validate_", "ensure_",
+                      "refuse", "sanit", "classify", "accept_")
+
+    def _guards(self):
+        import ast
+        from pathlib import Path
+        pkg = Path(__file__).resolve().parents[1] / "src" / "macf" / "amail"
+        out = {}
+        for f in sorted(pkg.glob("*.py")):
+            src = f.read_text()
+            for node in ast.walk(ast.parse(src)):
+                if isinstance(node, ast.FunctionDef) and \
+                        node.name.startswith(self.GUARD_PREFIXES):
+                    out[node.name] = f.name
+        return out
+
+    def _production_call_count(self, name):
+        import re
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[1] / "src" / "macf"
+        src = "\n".join(p.read_text() for p in root.rglob("*.py"))
+        # A call is `name(` not preceded by `def `. The lookbehind removes the
+        # definition, so no arithmetic correction is needed -- an earlier version
+        # of this sweep subtracted one anyway and reported every called guard as
+        # uncalled, which is the instrument-with-no-control failure again.
+        return len(re.findall(rf"(?<!def )\b{re.escape(name)}\s*\(", src))
+
+    def test_the_sweep_can_tell_the_two_cases_apart(self):
+        """Control on the instrument: a guard known to be called must read as
+        called, and a name that cannot exist must read as uncalled. Without this
+        the sweep could pass by measuring nothing."""
+        assert self._production_call_count("assert_credential_custody") >= 1, (
+            "known-called guard reads as uncalled; the sweep is broken"
+        )
+        assert self._production_call_count("__no_such_guard_anywhere") == 0
+
+    def test_every_guard_has_a_production_call_site(self):
+        offenders = {
+            name: fname for name, fname in self._guards().items()
+            if name not in self.KNOWN_UNINTEGRATED
+            and self._production_call_count(name) == 0
+        }
+        assert not offenders, (
+            f"guards with no production call site: {offenders}. "
+            f"A guard nothing calls is documentation. Either wire it to the path "
+            f"it protects, or add it to KNOWN_UNINTEGRATED with the condition "
+            f"that retires the exemption."
+        )
+
+    def test_exemptions_are_retired_once_they_gain_a_caller(self):
+        """The exemption list must not outlive its reason. When an entry gains a
+        production call site, the entry is stale and has to go -- otherwise the
+        list quietly becomes a permanent allowlist of unchecked controls."""
+        stale = [n for n in self.KNOWN_UNINTEGRATED
+                 if self._production_call_count(n) > 0]
+        assert not stale, (
+            f"these are now called in production and must be removed from "
+            f"KNOWN_UNINTEGRATED: {stale}"
+        )

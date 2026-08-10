@@ -535,6 +535,19 @@ class Broker:
         An allowlisted sender is an AUTHORIZATION fact, not an authenticity or
         safety one. Nothing here establishes that a message is genuinely from
         whom it claims, and message bodies remain data rather than instructions.
+
+        NOT YET INTEGRATED -- READ THIS BEFORE TRUSTING ITS TEST COVERAGE.
+        Nothing in production calls this. There is no inbound path yet: that is
+        the transport decision and the round trip, neither of which has run. Its
+        several dozen passing tests therefore establish that the classification
+        LOGIC behaves, and establish nothing whatever about it being reached,
+        ordered correctly against delivery, or fed real messages.
+
+        The hazard is the impression, not the code: a well-tested control reads
+        as a live one. Whoever builds the inbound receiver is the first person
+        who can make this true, and should treat the coverage as a starting
+        point rather than a warrant. The guard sweep in the test suite carries a
+        matching exemption that must be deleted at that moment.
         """
         from .store import quarantine
         from .store import read_all as store_read_all
