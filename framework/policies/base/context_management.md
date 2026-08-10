@@ -162,7 +162,7 @@ macf_tools hooks status      # Hook states with timestamps
 - Wind-down: CL20 (200k) → **CL4** (1M)
 - CCP trigger: CL5 (200k) → **CL1** (1M)
 - JOTEWR: CL2 (200k) → **CL0** (1M)
-- Use μC (Ctrl-D + `claude -c`) to extend cycles without compaction
+- Use a session resume (Ctrl-D + `claude -c`) to extend cycles without compaction
 
 **Communication Adaptation**:
 - **Normal** (<85%): Full explanations

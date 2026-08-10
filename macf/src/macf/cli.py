@@ -10405,7 +10405,7 @@ def _build_parser() -> argparse.ArgumentParser:
     ar_list.set_defaults(func=lambda args: _cmd_ar_list(args))
 
     # auto-restart restart
-    ar_restart = ar_sub.add_parser("restart", help="trigger restart (μC) for a supervised process")
+    ar_restart = ar_sub.add_parser("restart", help="trigger a session resume (restart) for a supervised process")
     ar_restart.add_argument("pid", type=int, help="supervisor PID")
     ar_restart.set_defaults(func=lambda args: _cmd_ar_restart(args))
 
