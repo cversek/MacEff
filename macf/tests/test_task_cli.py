@@ -1362,3 +1362,63 @@ class TestTaskTreeSuccinctProgressiveDisclosure:
         out = self._tree(isolated_task_env['env'])
         assert 'COMPLETED MIDDLE' in out
         assert 'ACTIVE GRANDCHILD' in out, f"active grandchild hidden by collapse:\n{out}"
+
+
+class TestTaskTraceCommand:
+    """`task trace` surfaces the frame an interrupt left behind."""
+
+    def _seed(self, session_dir, task_id, status, ts, parent='"000"', task_type="TASK"):
+        (session_dir / f"{task_id}.json").write_text(json.dumps({
+            "id": task_id,
+            "subject": f"  #{task_id} work item",
+            "status": status,
+            "description": (
+                '<macf_task_metadata version="1.0">\n'
+                f'task_type: {task_type}\n'
+                'created_by: PA\n'
+                f'parent_id: {parent}\n'
+                'updates:\n'
+                f'  - breadcrumb: s_t/c_1/g_abc1234/p_none/t_{ts}\n'
+                '    description: touched\n'
+                '</macf_task_metadata>\n'
+            ),
+        }))
+
+    def _run(self, env, *args):
+        return subprocess.run(
+            ["macf_tools", "task", "trace", *args],
+            capture_output=True, text=True, env=env,
+        )
+
+    def test_reports_no_open_frames_on_a_clean_tree(self, isolated_task_env):
+        self._seed(isolated_task_env['session_dir'], "000", "in_progress", 100,
+                   parent="null", task_type="SENTINEL")
+        self._seed(isolated_task_env['session_dir'], "1", "completed", 200)
+
+        result = self._run(isolated_task_env['env'])
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "nothing in progress" in result.stdout
+
+    def test_surfaces_an_abandoned_frame(self, isolated_task_env):
+        session = isolated_task_env['session_dir']
+        self._seed(session, "000", "in_progress", 100, parent="null", task_type="SENTINEL")
+        self._seed(session, "5", "in_progress", 200)   # left behind
+        self._seed(session, "6", "completed", 900)     # attention moved here
+
+        result = self._run(isolated_task_env['env'])
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "#5" in result.stdout
+        assert "abandoned" in result.stdout
+        assert "macf_tools task start 5" in result.stdout, "must name the remedy"
+
+    def test_path_flag_shows_the_order_attention_moved(self, isolated_task_env):
+        session = isolated_task_env['session_dir']
+        self._seed(session, "000", "in_progress", 100, parent="null", task_type="SENTINEL")
+        self._seed(session, "5", "completed", 200)
+        self._seed(session, "6", "completed", 300)
+
+        result = self._run(isolated_task_env['env'], "--path", "5")
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "Where attention has been" in result.stdout
+        assert result.stdout.index("#5") < result.stdout.index("#6"), \
+            "the path must render in the order the touches happened"

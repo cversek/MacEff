@@ -1,6 +1,6 @@
 # PYTHON_ARGCOMPLETE_OK
 # tools/src/maceff/cli.py
-import argparse, json, os, subprocess, sys, glob, platform, socket
+import argparse, json, os, subprocess, sys, glob, platform, socket, time
 from pathlib import Path
 from datetime import datetime, timezone
 try:
@@ -5461,6 +5461,70 @@ def cmd_task_reparent(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_task_trace(args: argparse.Namespace) -> int:
+    """Show where attention has been, and what it owes a return to.
+
+    The tree answers "what work exists". This answers "what was I in the middle
+    of" — which after an interrupt, a compaction, or a handoff is the question
+    that actually needs answering, and the one a tree of six open tasks cannot.
+    """
+    from .task import TaskReader
+    from .task.trace import visitation_trace, open_frames
+
+    tasks = TaskReader().read_all_tasks()
+    frames = open_frames(tasks)
+    path_n = getattr(args, "path", 0)
+
+    if getattr(args, "json", False):
+        print(json.dumps({
+            "frames": [vars(f) for f in frames],
+            "path": [vars(t) for t in visitation_trace(tasks)[-path_n:]] if path_n else [],
+        }, indent=2))
+        return 0
+
+    if path_n:
+        trace = visitation_trace(tasks)[-path_n:]
+        print(f"👣 Where attention has been — last {len(trace)} touch(es)\n")
+        previous = None
+        for touch in trace:
+            moved = "→" if touch.task_id != previous else " "
+            when = _rel_age_short(touch.timestamp)
+            print(f"  {moved} #{touch.task_id:<6} {when:>8}  {touch.description[:56]}")
+            previous = touch.task_id
+        print()
+
+    owed = [f for f in frames if f.state != "active"]
+    print(f"🧵 Open frames: {len(frames)} ({len(owed)} awaiting a return)")
+    if not frames:
+        print("   ✅ nothing in progress")
+        return 0
+
+    icon = {"active": "▶️ ", "parked": "⏸️ ", "abandoned": "⚠️ "}
+    for f in frames:
+        when = _rel_age_short(f.last_touch) if f.last_touch else "never"
+        print(f"   {icon.get(f.state, '  ')} #{f.task_id:<6} {f.state:<10} last touched {when}")
+        print(f"        {_strip_ansi(f.subject)[:96]}")
+        if f.blockers_open:
+            print(f"        ⏸  waiting on {', '.join('#' + b for b in f.blockers_open)}")
+        if f.parent_completed and f.state != "active":
+            print(f"        ⚠️  its parent is marked COMPLETE while this is still running")
+
+    if owed:
+        print(f"\n   Resume with:  macf_tools task start {owed[0].task_id}")
+    return 0
+
+
+def _rel_age_short(ts) -> str:
+    """Compact relative age, e.g. '3m', '5h', '12d'."""
+    if not ts:
+        return "?"
+    secs = max(0, int(time.time() - int(ts)))
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
+        if secs >= size:
+            return f"{secs // size}{unit}"
+    return f"{secs}s"
+
+
 def _doctor_check_subject_markers(tasks) -> "list[tuple[str, str, str]]":
     """Find tasks whose stored ``[^#N]`` marker disagrees with ``parent_id``.
 
@@ -7986,7 +8050,13 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
         try:
             from .modes import detect_auto_mode
             _auto, _ = detect_auto_mode(get_current_session_id())
-        except Exception:
+        except (ImportError, OSError, ValueError) as e:
+            # Not knowing the mode is survivable — the warning below still
+            # prints and the operator still decides. Swallowing the reason is
+            # not: it would hide a broken mode subsystem behind a completion
+            # that merely looks conservative.
+            print(f"⚠️ MACF: could not resolve mode for completion gate: {e}",
+                  file=sys.stderr)
             _auto = False
         _listing = ", ".join(f"#{cid}({st})" for cid, st in _open_children[:8])
         print(f"⚠️  Task #{task_id} has {len(_open_children)} incomplete child task(s): {_listing}")
@@ -10068,6 +10138,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help="proceed even if the target already holds files of the same name",
     )
     task_migrate_parser.set_defaults(func=cmd_task_migrate_store)
+
+    task_trace_parser = task_sub.add_parser(
+        "trace",
+        help="show where attention has been and what it owes a return to",
+    )
+    task_trace_parser.add_argument(
+        "--path", type=int, default=0, metavar="N",
+        help="also show the last N touches, in the order they happened",
+    )
+    task_trace_parser.add_argument("--json", action="store_true", help="output as JSON")
+    task_trace_parser.set_defaults(func=cmd_task_trace)
 
     task_doctor_parser = task_sub.add_parser(
         "doctor",
