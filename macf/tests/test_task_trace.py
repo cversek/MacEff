@@ -149,3 +149,40 @@ class TestContradictoryFrames:
             _Task("200", "in_progress", [_Update(900)], parent_id="197"),
         ]
         assert contradictory_frames(tasks) == []
+
+
+class TestMoveMarkerIsAPropertyOfTheTouch:
+    """The move marker must not be recomputed from display adjacency.
+
+    It says "attention arrived here from somewhere else", which is a fact about
+    the chronological sequence. Deriving it from whichever line sits above at
+    render time makes it a statement about the layout instead — and reversing
+    the output then inverts its meaning while it goes on looking authoritative.
+    """
+
+    def test_marks_only_the_touches_that_changed_task(self):
+        tasks = [
+            _Task("1", updates=[_Update(10), _Update(20)]),
+            _Task("2", updates=[_Update(30)]),
+        ]
+        trace = visitation_trace(tasks)
+        assert [(t.task_id, t.begins_dwell) for t in trace] == [
+            ("1", True), ("1", False), ("2", True)]
+
+    def test_the_marker_survives_reversal(self):
+        """The regression this class exists for.
+
+        Rendering newest-first must not change which touches are moves.
+        """
+        tasks = [
+            _Task("1", updates=[_Update(10)]),
+            _Task("2", updates=[_Update(20)]),
+            _Task("1", updates=[_Update(30)]),
+        ]
+        forward = [(t.task_id, t.begins_dwell) for t in visitation_trace(tasks)]
+        reversed_view = list(reversed(visitation_trace(tasks)))
+        assert [(t.task_id, t.begins_dwell) for t in reversed_view] == list(reversed(forward))
+
+    def test_the_first_touch_is_always_a_move(self):
+        tasks = [_Task("1", updates=[_Update(10)])]
+        assert visitation_trace(tasks)[0].begins_dwell is True

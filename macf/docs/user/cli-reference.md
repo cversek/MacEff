@@ -1439,6 +1439,53 @@ macf_tools task get 67
 macf_tools task get #67  # Leading # is optional
 ```
 
+### task trace
+
+Show where attention has been, and what it owes a return to.
+
+**Syntax:**
+```bash
+macf_tools task trace [--path N] [--full] [--json]
+```
+
+**Options:**
+- `--path N` - Also render the last N touches, newest first
+- `--full` - Show note text in full instead of trimming it to one line
+- `--json` - Output as JSON
+
+**Description:** `task tree` answers *what work exists*. This answers *what was I in the middle of* — the question that matters after an interruption, a context loss, or a handoff, and the one a list of open tasks cannot answer on its own.
+
+Open tasks are reported as **frames**, classified by whether a return is genuinely owed:
+
+| State | Meaning |
+|---|---|
+| `active` | Where attention is now. Not a debt. |
+| `parked` | Waiting on an unresolved blocker. Legitimately set down. |
+| `abandoned` | Unblocked, and attention went elsewhere without completing it. |
+
+A frame whose parent is already marked complete is flagged separately — a parent cannot honestly be complete while a task inside it is still running, and that contradiction needs no timestamps to detect.
+
+**Output:**
+```
+👣 Where attention has been — 4 most recent, newest first
+
+  → #1210         1m  Task started via CLI
+  → #1206        25m  Task completed via CLI
+    #1206        42m  DISCIPLINE LAPSE, caught during review: the entire wo…
+  → #1205         2h  Filed the delivery-notification design
+
+🧵 Open frames: 1 (1 awaiting a return)
+   ⚠️  #200    abandoned  last touched 165d
+        #200 [^#197] - Phase 3: ...
+        ⚠️  its parent is marked COMPLETE while this is still running
+
+   Resume with:  macf_tools task start 200
+```
+
+In the path, `→` marks a touch where attention arrived from a *different* task; an unmarked line is a continued dwell on the same one. A trimmed note ends in `…` so a clipped note cannot be mistaken for one that simply ended there.
+
+**Related:** `task tree`, `task doctor`, `task start`
+
 ### task tree
 
 Display task hierarchy as a visual tree with status indicators, notes, and metadata.
