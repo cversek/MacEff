@@ -114,9 +114,27 @@ Display current local time in ISO format.
 macf_tools time
 ```
 
-**Output:**
+**Output (stdout):**
 ```
 2025-11-27T21:17:57-05:00
+```
+
+**stdout carries exactly one ISO-8601 timestamp and nothing else.** It is a
+parsing contract, not merely a formatting habit — this is the kind of command
+other code reads.
+
+When the resolved agent root holds checkpoints, the gap since the most recent
+one is annotated **on stderr**:
+
+```
+Last CCP: 2025-11-27_143000_Phase_Complete_CCP.md (6h 12m ago)
+```
+
+An interactive caller sees both streams; a parser reading stdout sees only the
+timestamp. Redirect stderr to drop the annotation:
+
+```bash
+macf_tools time 2>/dev/null
 ```
 
 **Related:** `env`
