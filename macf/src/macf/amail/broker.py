@@ -43,7 +43,7 @@ from .contacts import ContactBook, ContactListError
 from .models import Message, new_id, _now_iso
 from .trust import TrustClass, LOCAL_SUBMISSION
 from .crypto import verify
-from .store import deliver, ensure_maildir
+from .store import deliver, ensure_maildir, read_all as _store_read_all, find as _store_find
 
 DEFAULT_SOCKET = "/run/amail/broker.sock"
 
@@ -659,6 +659,55 @@ class Broker:
 
     # -------------------------------------------------------------- credentials
 
+    # ---- reads -----------------------------------------------------------
+    #
+    # THE MAILBOX IS DERIVED FROM THE KERNEL IDENTITY, NEVER FROM THE REQUEST.
+    #
+    # Neither method below accepts a home, a path, or an agent name. That is the
+    # whole security content of putting reads behind the broker: if a read
+    # request could name the mailbox it wanted, an agent would read any peer's
+    # mail by asking for it, and the authorization layer would be decoration.
+    # The submission path already refuses a payload-claimed identity for exactly
+    # this reason (§ handle); reads inherit the same rule by construction,
+    # because there is no parameter through which to claim one.
+    #
+    # These exist so the CLI has a path that is not `import store`. A read that
+    # bypasses the broker leaves no audit trace and answers to no allowlist —
+    # the framework's own tooling was the first thing doing it.
+
+    def _own_mailbox(self, agent: str) -> Path:
+        """The requesting agent's own mailbox, or a refusal.
+
+        Fails closed on an unmapped agent, matching `identify`: a default here
+        would hand a caller somebody else's mail.
+        """
+        home = self.config.agent_homes.get(agent)
+        if home is None:
+            raise PermissionError(
+                f"'{agent}' has no provisioned mailbox; refusing the read. "
+                "Reaching the socket is not authorization."
+            )
+        return home
+
+    def list_messages(self, agent: str, thread: Optional[str] = None) -> Dict[str, Any]:
+        """Every message in the requesting agent's own mailbox."""
+        home = self._own_mailbox(agent)
+        msgs = _store_read_all(home)
+        if thread:
+            msgs = [m for m in msgs if m.thread_id == thread]
+        return {"ok": True, "messages": [m.to_dict() for m in msgs]}
+
+    def read_message(self, agent: str, message_id: str) -> Dict[str, Any]:
+        """One message from the requesting agent's own mailbox."""
+        home = self._own_mailbox(agent)
+        msg = _store_find(home, message_id)
+        if msg is None:
+            # Not found and not-yours are the same answer on purpose: a
+            # distinguishable "exists but not yours" turns the broker into an
+            # oracle for other agents' message ids.
+            return {"ok": False, "error": "no such message"}
+        return {"ok": True, "message": msg.to_dict()}
+
     def identify(self, conn: socket.socket) -> str:
         """Authenticate the connecting process from kernel-supplied credentials.
 
@@ -855,8 +904,28 @@ class _Handler(socketserver.StreamRequestHandler):
                 raise PermissionError(
                     f"submitted as '{claimed}' but the connecting process is '{sender}'")
 
-            msg = Message.from_dict(req["message"])
-            resp = broker.submit(sender, msg)
+            # OPERATION DISPATCH. `op` is absent in every client written before
+            # reads existed, and absent means "submit" — so the wire stays
+            # compatible with a client that only ever learned to send, and the
+            # submission path is unchanged for it.
+            #
+            # Note what the read operations do NOT take: a home, a path, or an
+            # agent name. `sender` here is the kernel-established identity, and
+            # it is the only thing that selects a mailbox.
+            op = req.get("op", "submit")
+            if op == "submit":
+                msg = Message.from_dict(req["message"])
+                resp = broker.submit(sender, msg)
+            elif op == "list":
+                resp = broker.list_messages(sender, thread=req.get("thread"))
+            elif op == "read":
+                resp = broker.read_message(sender, req["message_id"])
+            else:
+                # Named rather than ignored: a client asking for an operation
+                # this broker does not have is a version skew or an intention,
+                # and silently treating it as a submission would be worse than
+                # either.
+                raise ValueError(f"unknown operation '{op}'")
         except Exception as e:  # noqa: BLE001 - a broker that dies on one bad
             # request stops serving every agent; answer with the error instead.
             resp = {"ok": False, "error": f"{type(e).__name__}: {e}"}

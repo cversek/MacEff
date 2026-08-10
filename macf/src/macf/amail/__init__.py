@@ -51,7 +51,7 @@ from .crypto import (
     SigningError, generate_keypair, load_private_key, public_key_line, sign, verify,
 )
 from .broker import Broker, BrokerConfig, DeliveryError, serve
-from .client import submit, BrokerUnavailable
+from .client import submit, list_messages, read_message, BrokerUnavailable
 from . import store
 
 __all__ = [
@@ -62,6 +62,6 @@ __all__ = [
     "SigningError", "generate_keypair", "load_private_key", "public_key_line",
     "sign", "verify",
     "Broker", "BrokerConfig", "DeliveryError", "serve",
-    "submit", "BrokerUnavailable",
+    "submit", "list_messages", "read_message", "BrokerUnavailable",
     "store",
 ]

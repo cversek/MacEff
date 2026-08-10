@@ -8423,16 +8423,27 @@ def cmd_amail_send(args: argparse.Namespace) -> int:
 
 
 def cmd_amail_list(args: argparse.Namespace) -> int:
-    """List messages in this agent's mailbox."""
-    from macf.amail import store
+    """List messages in this agent's mailbox.
+
+    The read goes THROUGH the broker, not around it. Importing the store here
+    and calling `read_all(home)` — which is what this command used to do — reads
+    the mailbox with no audit record, no authorization, and a home taken from
+    local config rather than from kernel-established identity. That is the
+    bypass the broker exists to prevent, performed by the framework's own CLI.
+    """
+    from macf.amail import Message, BrokerUnavailable
+    from macf.amail.client import list_messages
 
     cfg = _amail_config()
-    if not cfg["home"]:
-        print("❌ cannot locate agent home")
+    try:
+        resp = list_messages(Path(cfg["socket"]), thread=args.thread)
+    except BrokerUnavailable as e:
+        print(f"❌ {e}")
         return 1
-    msgs = store.read_all(Path(cfg["home"]))
-    if args.thread:
-        msgs = [m for m in msgs if m.thread_id == args.thread]
+    if not resp.get("ok"):
+        print(f"❌ {resp.get('error', 'the broker refused the read')}")
+        return 1
+    msgs = [Message.from_dict(d) for d in resp.get("messages", [])]
     if args.json:
         print(json.dumps([m.to_dict() for m in msgs], indent=2))
         return 0
@@ -8449,17 +8460,23 @@ def cmd_amail_list(args: argparse.Namespace) -> int:
 
 
 def cmd_amail_read(args: argparse.Namespace) -> int:
-    """Print one message in full."""
-    from macf.amail import store
+    """Print one message in full, fetched through the broker.
+
+    See `cmd_amail_list` on why this does not import the store.
+    """
+    from macf.amail import Message, BrokerUnavailable
+    from macf.amail.client import read_message
 
     cfg = _amail_config()
-    if not cfg["home"]:
-        print("❌ cannot locate agent home")
+    try:
+        resp = read_message(args.message_id, Path(cfg["socket"]))
+    except BrokerUnavailable as e:
+        print(f"❌ {e}")
         return 1
-    m = store.find(Path(cfg["home"]), args.message_id)
-    if m is None:
-        print(f"❌ no message '{args.message_id}'")
+    if not resp.get("ok"):
+        print(f"❌ {resp.get('error', 'no such message')}")
         return 1
+    m = Message.from_dict(resp["message"])
     if args.json:
         print(json.dumps(m.to_dict(), indent=2))
         return 0
@@ -8490,7 +8507,21 @@ def cmd_amail_status(args: argparse.Namespace) -> int:
         except OSError:
             reachable = False
     box = store.maildir_for(Path(cfg["home"])) if cfg["home"] else None
-    count = len(store.read_all(Path(cfg["home"]))) if cfg["home"] else 0
+    # The COUNT comes through the broker, like every other read. Counting by
+    # `store.read_all(home)` is still reading the mailbox, and a diagnostic is
+    # not exempt from the property it is reporting on. When the broker is down
+    # the honest answer is that the count is unknown — because when the broker
+    # is down the mail genuinely is not readable, and a number here would be
+    # asserting otherwise.
+    count = None  # None means "not known", which is not the same as zero
+    if reachable:
+        try:
+            from macf.amail.client import list_messages as _list
+            _resp = _list(sock)
+            if _resp.get("ok"):
+                count = len(_resp.get("messages", []))
+        except Exception:
+            count = None
     info = {
         "agent": cfg["agent"] or None,
         "address": f"{cfg['agent']}@{cfg['domain']}" if cfg["agent"] and cfg["domain"] else None,
@@ -8502,8 +8533,9 @@ def cmd_amail_status(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(info, indent=2))
         return 0 if reachable else 1
+    _count_str = f"{count} message(s)" if count is not None else "count unavailable"
     print(f"address:  {info['address'] or '(unconfigured)'}")
-    print(f"maildir:  {info['maildir'] or '(unknown)'}  [{count} message(s)]")
+    print(f"maildir:  {info['maildir'] or '(unknown)'}  [{_count_str}]")
     print(f"broker:   {'✅ reachable' if reachable else '❌ unreachable'} at {sock}")
     if not reachable:
         print("\n   Mail cannot be sent without the broker. There is no fallback")

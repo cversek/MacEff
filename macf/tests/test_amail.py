@@ -2941,3 +2941,117 @@ class TestCanonicalizeDestroysASubmittedTrustClaim:
         m.trust = "attested"
         deployment["broker"].canonicalize("alpha", m, None)
         assert m.trust is None, "canonicalize did not destroy the submitted claim"
+
+
+# ---------------------------------------------------------------------------
+# The mirror of the skip-the-broker test: can the store be READ without it?
+#
+# The submission side has always had "can the broker be skipped". Reads had no
+# equivalent, and the answer was yes — trivially, via the framework's own CLI,
+# which imported the store and called read_all(home) with the home taken from
+# local config rather than from kernel-established identity. A read that goes
+# around the broker leaves no audit record and answers to no allowlist.
+#
+# These tests are behavioural on purpose. Asserting that a module does not
+# contain a particular import would pass while the bypass moved one file over.
+# The property is "with no broker, no mail is readable", so that is what is
+# measured: real mail is placed in the mailbox, the broker is made unreachable,
+# and the commands must fail rather than fall back to the files.
+# ---------------------------------------------------------------------------
+
+
+class TestStoreIsBrokerOwned:
+
+    def _cfg(self, monkeypatch, home, socket_path):
+        from macf import cli
+        monkeypatch.setattr(cli, "_amail_config", lambda: {
+            "agent": "alpha", "domain": DOMAIN,
+            "socket": str(socket_path), "home": str(home),
+        })
+        return cli
+
+    def test_list_does_not_fall_back_to_the_store_when_the_broker_is_down(
+            self, deployment, monkeypatch, capsys):
+        """Mail exists; the broker does not. The message must NOT be shown."""
+        from argparse import Namespace
+        home = deployment["homes"]["alpha"]
+        store.deliver(home, msg(subject="SUBJECT-THAT-MUST-NOT-LEAK"))
+        # It is genuinely there — otherwise this test would pass vacuously by
+        # finding nothing to leak.
+        assert len(store.read_all(home)) == 1
+
+        cli = self._cfg(monkeypatch, home, deployment["tmp"] / "absent.sock")
+        rc = cli.cmd_amail_list(Namespace(thread=None, json=False))
+
+        out = capsys.readouterr().out
+        assert rc == 1, "a read with no broker must fail, not succeed quietly"
+        assert "SUBJECT-THAT-MUST-NOT-LEAK" not in out
+
+    def test_read_does_not_fall_back_to_the_store_when_the_broker_is_down(
+            self, deployment, monkeypatch, capsys):
+        from argparse import Namespace
+        home = deployment["homes"]["alpha"]
+        m = msg(subject="ALSO-MUST-NOT-LEAK")
+        store.deliver(home, m)
+
+        cli = self._cfg(monkeypatch, home, deployment["tmp"] / "absent.sock")
+        rc = cli.cmd_amail_read(Namespace(message_id=m.message_id, json=False))
+
+        out = capsys.readouterr().out
+        assert rc == 1
+        assert "ALSO-MUST-NOT-LEAK" not in out
+
+    def test_status_reports_an_unknown_count_rather_than_reading_the_store(
+            self, deployment, monkeypatch, capsys):
+        """A diagnostic is not exempt from the property it reports on."""
+        from argparse import Namespace
+        home = deployment["homes"]["alpha"]
+        store.deliver(home, msg(subject="s"))
+
+        cli = self._cfg(monkeypatch, home, deployment["tmp"] / "absent.sock")
+        cli.cmd_amail_status(Namespace(json=False))
+
+        out = capsys.readouterr().out
+        assert "1 message(s)" not in out, "counted by reading the store directly"
+        assert "count unavailable" in out
+
+    def test_broker_reads_are_scoped_to_the_callers_own_mailbox(self, deployment):
+        """alpha asking for mail gets alpha's mail, never beta's."""
+        broker = deployment["broker"]
+        homes = deployment["homes"]
+        store.deliver(homes["beta"], msg(subject="BETAS-PRIVATE-MAIL"))
+        store.deliver(homes["alpha"], msg(subject="alphas own"))
+
+        resp = broker.list_messages("alpha")
+
+        assert resp["ok"]
+        subjects = [m["subject"] for m in resp["messages"]]
+        assert "alphas own" in subjects
+        assert "BETAS-PRIVATE-MAIL" not in subjects
+
+    def test_a_peers_message_reads_as_not_found_not_as_forbidden(self, deployment):
+        """Not-yours and not-there are the same answer, so the broker cannot be
+        used as an oracle for another agent's message ids."""
+        broker = deployment["broker"]
+        m = msg(subject="beta only")
+        store.deliver(deployment["homes"]["beta"], m)
+
+        resp = broker.read_message("alpha", m.message_id)
+
+        assert resp["ok"] is False
+        assert resp["error"] == "no such message"
+
+    def test_read_operations_accept_no_mailbox_parameter(self):
+        """The invariant is structural: there is no parameter through which a
+        caller could name a mailbox, so identity is the only thing that selects
+        one. If a future edit adds `home=` or `agent=`, this fails and forces
+        the conversation rather than letting the bypass in quietly."""
+        import inspect
+        from macf.amail import Broker
+
+        for name in ("list_messages", "read_message"):
+            params = set(inspect.signature(getattr(Broker, name)).parameters)
+            assert not (params & {"home", "path", "mailbox", "maildir"}), (
+                f"Broker.{name} accepts a mailbox parameter; reads must be "
+                f"scoped by kernel identity alone"
+            )

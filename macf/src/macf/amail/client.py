@@ -23,13 +23,14 @@ class BrokerUnavailable(RuntimeError):
     """The broker could not be reached. Never degrade to sending directly."""
 
 
-def submit(sender: str, message: Message, socket_path: Path,
-           timeout: float = 10.0) -> Dict[str, Any]:
-    """Hand a message to the broker and return its verdict.
+def _roundtrip(req: Dict[str, Any], socket_path: Path, timeout: float,
+               closed_hint: str) -> Dict[str, Any]:
+    """One request, one response, no fallback — shared by every operation.
 
-    On failure this raises rather than falling back to any other transport. A
-    client that "helpfully" delivers by another route when the broker is down
-    would route around the only thing enforcing the contact list.
+    Every call the client can make goes through this function, so the
+    no-fallback rule is stated once and cannot be forgotten by whichever
+    operation is added next. `closed_hint` names the likeliest cause when the
+    broker hangs up mid-write, which differs by operation.
     """
     path = str(socket_path)
     try:
@@ -42,7 +43,7 @@ def submit(sender: str, message: Message, socket_path: Path,
             "Mail is not sent. There is no fallback transport by design."
         ) from e
     try:
-        payload = json.dumps({"sender": sender, "message": message.to_dict()}) + "\n"
+        payload = json.dumps(req) + "\n"
         try:
             s.sendall(payload.encode("utf-8"))
             buf = b""
@@ -57,12 +58,50 @@ def submit(sender: str, message: Message, socket_path: Path,
             # escape reported a transport crash for what was the size guard
             # working correctly, and the two need to be told apart.
             raise BrokerUnavailable(
-                f"the broker closed the connection while the message was being "
-                f"sent ({e}). The message was NOT sent. A submission over the "
-                f"broker's size limit is the usual cause."
+                f"the broker closed the connection while the request was being "
+                f"sent ({e}). {closed_hint}"
             ) from e
     finally:
         s.close()
     if not buf.strip():
         raise BrokerUnavailable("broker closed the connection without answering")
     return json.loads(buf.decode("utf-8"))
+
+
+def submit(sender: str, message: Message, socket_path: Path,
+           timeout: float = 10.0) -> Dict[str, Any]:
+    """Hand a message to the broker and return its verdict.
+
+    On failure this raises rather than falling back to any other transport. A
+    client that "helpfully" delivers by another route when the broker is down
+    would route around the only thing enforcing the contact list.
+    """
+    return _roundtrip(
+        {"sender": sender, "message": message.to_dict()},
+        socket_path, timeout,
+        "The message was NOT sent. A submission over the broker's size limit "
+        "is the usual cause.",
+    )
+
+
+def list_messages(socket_path: Path, thread: Optional[str] = None,
+                  timeout: float = 10.0) -> Dict[str, Any]:
+    """The caller's own mailbox, as the broker sees it.
+
+    Note the absent parameter: there is no way to ask for a mailbox. Which one
+    is read follows from the kernel-supplied identity of this process, so this
+    function cannot be pointed at a peer's mail even by a caller that wants to.
+    """
+    req: Dict[str, Any] = {"op": "list"}
+    if thread:
+        req["thread"] = thread
+    return _roundtrip(req, socket_path, timeout,
+                      "No messages were listed.")
+
+
+def read_message(message_id: str, socket_path: Path,
+                 timeout: float = 10.0) -> Dict[str, Any]:
+    """One message from the caller's own mailbox, by id."""
+    return _roundtrip({"op": "read", "message_id": message_id},
+                      socket_path, timeout,
+                      "The message was not read.")
