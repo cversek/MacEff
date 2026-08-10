@@ -322,11 +322,9 @@ class TestStartScriptBehaviour:
     """
 
     @pytest.fixture
-    def sandbox(self, tmp_path):
+    def sandbox(self, tmp_path, tmux_sandbox_env):
         reg = tmp_path / "registry"
         reg.mkdir()
-        sock = tmp_path / "tmuxdir"
-        sock.mkdir()
         p = HarnessParams(
             agent="probe", home=tmp_path,
             python=Path("/bin/sleep"), macf_tools=Path("/bin/true"),
@@ -335,32 +333,15 @@ class TestStartScriptBehaviour:
         script = tmp_path / "start"
         script.write_text(render_start(p, attach_proxy=False))
         script.chmod(0o755)
-        # TMUX MUST BE STRIPPED, not merely overridden by TMUX_TMPDIR.
-        #
-        # A tmux client that inherits $TMUX attaches to THAT server and ignores
-        # TMUX_TMPDIR entirely. Every process inside a tmux pane has $TMUX set,
-        # so `{**os.environ, "TMUX_TMPDIR": ...}` isolates only when the suite
-        # is run from OUTSIDE tmux. Run from inside one -- which is how an agent
-        # runs it, and never how CI does -- the sandbox silently operated on the
-        # host's default server, and this fixture's teardown `kill-server`
-        # destroyed every session on it.
-        #
-        # That is not hypothetical: it killed the live agent harness on this
-        # host. Measured afterwards -- with $TMUX inherited, a sandbox session
-        # appears in the DEFAULT server's list; with $TMUX removed, it appears
-        # only in the private one and the default survives the kill-server.
-        #
-        # The property that makes this dangerous is that it is invisible in the
-        # environment where tests are normally run. A green suite in CI says
-        # nothing about the blast radius in the environment that matters.
-        env = {k: v for k, v in os.environ.items() if k != "TMUX"}
-        env["TMUX_TMPDIR"] = str(sock)
-        yield script, reg, env
-        # Belt and braces: target the private socket explicitly as well, so a
-        # future edit that reintroduces $TMUX cannot turn this into kill-server
-        # on the host. This teardown is the destructive one; it should be the
-        # most defensive line in the file.
-        subprocess.run(["tmux", "kill-server"], env=env, capture_output=True)
+        # The env, its private socket directory, and the destructive
+        # `kill-server` teardown all belong to the `tmux_sandbox_env` fixture in
+        # conftest. Read its docstring before changing anything about how tmux
+        # is reached from here: it carries the reasons for two non-obvious
+        # choices that were each paid for once -- $TMUX stripped (an inherited
+        # one made this fixture's teardown destroy the live agent harness on
+        # this host) and PATH inherited (a from-scratch env cannot find tmux
+        # under Homebrew, so the whole class crashed on macOS).
+        yield script, reg, tmux_sandbox_env
 
     def _run(self, script, env):
         return subprocess.run([str(script)], env=env, capture_output=True, text=True)
@@ -375,7 +356,7 @@ class TestStartScriptBehaviour:
             f'{{"supervisor_pid": {proc.pid}, "name": "{name}", "status": "running"}}')
         return proc
 
-    def test_the_sandbox_env_carries_no_TMUX(self, sandbox):
+    def test_the_sandbox_env_is_private_and_can_still_find_tmux(self, sandbox):
         """Blast-radius guard, and the most important test in this class.
 
         This fixture tears down with `tmux kill-server`. That is only survivable
@@ -384,6 +365,12 @@ class TestStartScriptBehaviour:
         points every client at the host's server. Restoring the natural
         `{**os.environ, ...}` spelling would make this class destroy the live
         agent harness again, with a green suite in CI to say it was fine.
+
+        The PATH half is the opposite mistake and was made next: an env built
+        from scratch is private but cannot find the tmux binary anywhere off the
+        POSIX fallback path, so the whole class crashed on macOS while CI stayed
+        green. Both halves are asserted here because a fix for either one alone
+        reintroduces the other.
 
         Asserted on the env rather than by running the destructive path, so the
         guard costs nothing and cannot itself be the thing that goes wrong.
@@ -395,6 +382,13 @@ class TestStartScriptBehaviour:
             "on it -- including a live agent harness -- will be destroyed"
         )
         assert env.get("TMUX_TMPDIR"), "the private socket dir must still be set"
+        assert env.get("PATH"), (
+            "the sandbox env carries no PATH; the subprocess will fall back to "
+            f"{os.confstr('CS_PATH')!r} and will not find tmux anywhere else -- "
+            "which is every Homebrew install"
+        )
+        # The socket-path length invariant is asserted in the fixture itself,
+        # where it covers every consumer rather than only this class.
 
     def test_creates_a_session_when_nothing_holds_the_name(self, sandbox):
         script, _reg, env = sandbox
