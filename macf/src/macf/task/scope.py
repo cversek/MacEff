@@ -34,27 +34,16 @@ from ..agent_events_log import append_event, read_events
 
 
 def _update_task_scope_status(task_id: str, scope_status: Optional[str]) -> bool:
-    """Update a task's MTMD scope_status field.
+    """RETIRED — no-op.
 
-    Args:
-        task_id: Task ID to update
-        scope_status: "active", "inactive", or None (clear)
-
-    Returns:
-        True if successful
+    Scope state is sourced exclusively from the event log (get_scope_state), the
+    single source of truth the gate, tree, and list all read. The per-task MTMD
+    scope_status field it used to write was a denormalized cache that drifted across
+    task stores; the field is gone. This stays as a no-op so the existing
+    scope-mutation call sites need no change (they still append the authoritative
+    events).
     """
-    import copy
-    from .reader import TaskReader, update_task_file
-
-    reader = TaskReader()
-    task = reader.read_task(task_id)
-    if not task or not task.mtmd:
-        return False
-
-    new_mtmd = copy.deepcopy(task.mtmd)
-    new_mtmd.scope_status = scope_status
-    new_description = task.description_with_updated_mtmd(new_mtmd)
-    return update_task_file(task_id, {"description": new_description})
+    return True
 
 
 def set_scope(task_ids: List[str], parent_expanded: bool = False,
@@ -257,15 +246,11 @@ def find_orphaned_scope_tasks() -> Dict[str, str]:
     Returns:
         Dict of {task_id: mtmd_scope_status} for statuses 'active'/'paused'.
     """
-    from .reader import TaskReader
-
-    event_scope = get_scope_state()
-    orphans: Dict[str, str] = {}
-    for task in TaskReader().read_all_tasks():
-        mtmd_status = task.mtmd.scope_status if task.mtmd else None
-        if mtmd_status in ("active", "paused") and str(task.id) not in event_scope:
-            orphans[str(task.id)] = mtmd_status
-    return orphans
+    # RETIRED: always empty. Orphans were tasks whose MTMD scope_status disagreed
+    # with the event log. With the scope_status field retired (scope is event-sourced
+    # only), that disagreement is structurally impossible — there are no orphans to
+    # find or heal. Kept as a stub so clear/pause/remove need no change.
+    return {}
 
 
 def pause_scoped_tasks(task_ids: List[str], justification: str, session_id: str = "") -> dict:
