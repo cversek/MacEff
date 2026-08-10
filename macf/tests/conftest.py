@@ -26,6 +26,8 @@ This fixture is module-local (not global) because:
 
 import json
 import os
+import subprocess
+import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -757,3 +759,69 @@ def mock_temporal_context_hook():
 def mock_minimal_timestamp_hook():
     """Return fixed minimal timestamp for high-frequency hooks."""
     return "12:45:30 AM"
+
+
+# A unix socket path is capped by `sockaddr_un.sun_path`: 104 bytes on the BSDs
+# and macOS, 108 on Linux. Nothing reports this as a length error -- the bind
+# simply fails, and tmux surfaces it as "error connecting to <path> (File name
+# too long)".
+SUN_PATH_MAX = 104 if sys.platform == "darwin" else 108
+
+
+@pytest.fixture
+def tmux_sandbox_env():
+    """An environment for driving tmux against a private, disposable server.
+
+    Three properties, all load-bearing, each one learned from a failure rather
+    than chosen up front:
+
+    - **$TMUX is stripped.** A tmux client that inherits $TMUX attaches to THAT
+      server and ignores TMUX_TMPDIR entirely. Every process inside a tmux pane
+      has $TMUX set -- which is how an agent runs this suite, and never how CI
+      runs it -- so a teardown `kill-server` reached the host's default server
+      and destroyed every session on it, including a live agent harness.
+
+    - **PATH is inherited.** An environment built from scratch carries no PATH,
+      and POSIX then falls back to a fixed `/usr/bin:/bin:/usr/sbin:/sbin`
+      (`os.confstr('CS_PATH')`). tmux is on that path under most Linux
+      packaging and is not under Homebrew, so a from-scratch env cannot find
+      the binary on macOS no matter what the developer's shell says.
+
+    - **The socket directory is short, and is deliberately not `tmp_path`.**
+      tmux appends `tmux-<uid>/default` to TMUX_TMPDIR, and macOS roots
+      `tmp_path` under `/private/var/folders/<2>/<26>/T/`, which overruns
+      SUN_PATH_MAX once pytest adds `pytest-of-<user>/pytest-<n>/<test>0/` --
+      142 bytes measured against a 104-byte cap. Linux's `/tmp/...` stays
+      under it.
+
+    The first two pull against each other, which is why both natural spellings
+    are wrong: `{**os.environ, ...}` keeps PATH but leaks $TMUX, and
+    `{"TMUX_TMPDIR": ...}` drops $TMUX but loses PATH.
+
+    Inheriting PATH also makes the `shutil.which("tmux")` skip guards on the
+    classes that use this fixture meaningful again. A guard is only worth
+    having if it queries the same thing the guarded operation will; while the
+    env was scrubbed, `which()` consulted the real PATH, found Homebrew's tmux,
+    declined to skip, and the subprocess then failed to find the same binary.
+    """
+    # macOS TMPDIR is too long to hold a socket, so ask for a short base
+    # explicitly rather than accepting the platform default.
+    base = "/tmp" if os.path.isdir("/tmp") else None
+    with tempfile.TemporaryDirectory(prefix="macf-tmux-", dir=base) as sock:
+        env = {k: v for k, v in os.environ.items() if k != "TMUX"}
+        env["TMUX_TMPDIR"] = sock
+
+        # Fail by name rather than by tmux's opaque "File name too long".
+        probe = os.path.join(sock, f"tmux-{os.getuid()}", "default")
+        assert len(probe) <= SUN_PATH_MAX, (
+            f"tmux socket path is {len(probe)} bytes, over the {SUN_PATH_MAX}-byte "
+            f"limit on this platform: {probe}"
+        )
+
+        yield env
+
+        # This teardown is the destructive one, and it is survivable only
+        # because the env above selects a private server. Target it explicitly
+        # so a future edit that reintroduces $TMUX cannot turn this line into
+        # kill-server against the host.
+        subprocess.run(["tmux", "kill-server"], env=env, capture_output=True)

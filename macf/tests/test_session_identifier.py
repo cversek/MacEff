@@ -68,9 +68,15 @@ class TestTheSubstitutionIsActuallyNecessary:
     and the originating issue shows how easily an unmeasured assertion about
     these tools turns out to be wrong."""
 
-    def _roundtrip(self, name, tmp_path):
-        """Create a session under `name`; report the name tmux actually stored."""
-        env = {"TMUX_TMPDIR": str(tmp_path)}
+    def _roundtrip(self, name, env):
+        """Create a session under `name`; report the name tmux actually stored.
+
+        `env` comes from the `tmux_sandbox_env` fixture, which selects a private
+        server without scrubbing PATH. Building it here as
+        `{"TMUX_TMPDIR": ...}` was the earlier spelling and left the subprocess
+        with no PATH at all, so tmux was unreachable wherever it lives outside
+        the POSIX fallback -- every Homebrew install, i.e. every macOS.
+        """
         subprocess.run(["tmux", "kill-server"], env=env, capture_output=True)
         subprocess.run(["tmux", "new-session", "-d", "-s", name, "sleep 5"],
                        env=env, capture_output=True)
@@ -82,22 +88,22 @@ class TestTheSubstitutionIsActuallyNecessary:
         return stored, addressable
 
     @pytest.mark.parametrize("bad", ["Name.suffix", "Name:suffix"])
-    def test_tmux_silently_rewrites_these_and_the_name_stops_addressing(self, bad, tmp_path):
+    def test_tmux_silently_rewrites_these_and_the_name_stops_addressing(self, bad, tmux_sandbox_env):
         """The failure mode that motivates substituting at all: new-session
         SUCCEEDS, and the name you asked for addresses nothing afterwards."""
-        stored, addressable = self._roundtrip(bad, tmp_path)
+        stored, addressable = self._roundtrip(bad, tmux_sandbox_env)
         assert stored != bad, "tmux accepted this verbatim — the rule may be stale"
         assert not addressable
 
-    def test_the_substituted_form_survives_and_addresses(self, tmp_path):
-        stored, addressable = self._roundtrip(IDENT, tmp_path)
+    def test_the_substituted_form_survives_and_addresses(self, tmux_sandbox_env):
+        stored, addressable = self._roundtrip(IDENT, tmux_sandbox_env)
         assert stored == IDENT
         assert addressable
 
-    def test_at_sign_is_a_convention_choice_not_a_tmux_constraint(self, tmp_path):
+    def test_at_sign_is_a_convention_choice_not_a_tmux_constraint(self, tmux_sandbox_env):
         """Recorded so the choice stays revisable: tmux keeps '@' verbatim, so
         substituting it is ours to reconsider, not a limit we ran into."""
-        stored, addressable = self._roundtrip(CARD, tmp_path)
+        stored, addressable = self._roundtrip(CARD, tmux_sandbox_env)
         assert stored == CARD
         assert addressable
 
