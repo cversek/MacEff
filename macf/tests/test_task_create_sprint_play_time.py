@@ -61,6 +61,20 @@ def mock_task_infra(tmp_path, monkeypatch):
     Patch the file-system and event-log side effects so tests run without a
     real CC task store, breadcrumb, or TM daemon.
 
+    These fakes give determinism -- fixed ids, a fixed breadcrumb, assertable
+    call records. They are NOT the isolation, and were mistaken for it once.
+
+    Patching named symbols covers the write paths you predicted. This set did
+    not cover the one the auto-start chain reaches, so it wrote to the real
+    store while every test passed, and a completed task in a live agent store
+    came back as in_progress with `s_test/c_1/g_abc/p_def/t_1000` in its update
+    history. Nobody noticed for months.
+
+    Isolation is at the boundary now, in conftest's autouse `isolated_task_store`
+    (plus a session guard that fails the run if the live store changes). An
+    environment variable has no escape path; a list of patched names has one for
+    every path not on the list.
+
     Returns a dict of mock handles for assertion.
     """
     # Task ID counter (start at 200 to avoid collisions with stub task IDs)

@@ -62,11 +62,20 @@ class TestHomeStoreIsGitignored:
         return home
 
     def _create_task(self, home, title, log):
+        # The backend under test is selected by the config.json written above,
+        # so the subprocess must not inherit a variable that selects a different
+        # one. `MACF_TASKS_DIR` is set for every test by conftest's
+        # `isolated_task_store`, and it forces the legacy per-session store --
+        # which would leave this class asserting about a home store that was
+        # never used. The isolation those variables provide is not needed here:
+        # `home` is already a tmp_path.
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("MACF_TASKS_DIR", "MACF_TASK_STORE_DIR")}
+        env["MACEFF_AGENT_HOME_DIR"] = str(home)
+        env["MACF_EVENTS_LOG_PATH"] = str(log)
         return subprocess.run(
             ["macf_tools", "task", "create", "task", title, "--plan", "smoke"],
-            capture_output=True, text=True,
-            env={**os.environ, "MACEFF_AGENT_HOME_DIR": str(home),
-                 "MACF_EVENTS_LOG_PATH": str(log)},
+            capture_output=True, text=True, env=env,
         )
 
     def test_store_is_ignored_after_first_task(self, tmp_path):
