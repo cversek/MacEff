@@ -1412,6 +1412,11 @@ class TestTaskTraceCommand:
         assert "macf_tools task start 5" in result.stdout, "must name the remedy"
 
     def test_path_flag_shows_the_order_attention_moved(self, isolated_task_env):
+        """Newest first — this asserted the opposite until the ordering changed.
+
+        Kept rather than deleted: it is the test that caught the change, and
+        it now pins the current contract instead of the previous one.
+        """
         session = isolated_task_env['session_dir']
         self._seed(session, "000", "in_progress", 100, parent="null", task_type="SENTINEL")
         self._seed(session, "5", "completed", 200)
@@ -1420,5 +1425,68 @@ class TestTaskTraceCommand:
         result = self._run(isolated_task_env['env'], "--path", "5")
         assert result.returncode == 0, result.stdout + result.stderr
         assert "Where attention has been" in result.stdout
-        assert result.stdout.index("#5") < result.stdout.index("#6"), \
-            "the path must render in the order the touches happened"
+        assert result.stdout.index("#6") < result.stdout.index("#5"), \
+            "the most recent touch must render first"
+
+
+class TestTaskTraceRendering:
+    """Newest-first, with truncation that admits it truncated."""
+
+    def _seed(self, session_dir, task_id, status, ts, note="touched", parent='"000"',
+              task_type="TASK"):
+        (session_dir / f"{task_id}.json").write_text(json.dumps({
+            "id": task_id,
+            "subject": f"  #{task_id} work item",
+            "status": status,
+            "description": (
+                '<macf_task_metadata version="1.0">\n'
+                f'task_type: {task_type}\n'
+                'created_by: PA\n'
+                f'parent_id: {parent}\n'
+                'updates:\n'
+                f'  - breadcrumb: s_t/c_1/g_abc1234/p_none/t_{ts}\n'
+                f'    description: {note}\n'
+                '</macf_task_metadata>\n'
+            ),
+        }))
+
+    def _run(self, env, *args):
+        return subprocess.run(["macf_tools", "task", "trace", *args],
+                              capture_output=True, text=True, env=env)
+
+    def test_path_renders_newest_first(self, isolated_task_env):
+        session = isolated_task_env['session_dir']
+        self._seed(session, "000", "in_progress", 100, parent="null", task_type="SENTINEL")
+        self._seed(session, "5", "completed", 200, note="older")
+        self._seed(session, "6", "completed", 300, note="newer")
+
+        out = self._run(isolated_task_env['env'], "--path", "5").stdout
+        assert out.index("#6") < out.index("#5"), "newest touch must render first"
+        assert "newest first" in out
+
+    def test_open_frames_stay_below_the_path(self, isolated_task_env):
+        """Follow-on instruction belongs at the end, where the eye lands last."""
+        session = isolated_task_env['session_dir']
+        self._seed(session, "000", "in_progress", 100, parent="null", task_type="SENTINEL")
+        self._seed(session, "5", "in_progress", 200)
+        self._seed(session, "6", "completed", 300)
+
+        out = self._run(isolated_task_env['env'], "--path", "5").stdout
+        assert out.index("Where attention has been") < out.index("Open frames")
+
+    def test_a_trimmed_note_says_so(self, isolated_task_env):
+        session = isolated_task_env['session_dir']
+        self._seed(session, "000", "in_progress", 100, parent="null", task_type="SENTINEL")
+        self._seed(session, "5", "completed", 200, note="x" * 200)
+
+        out = self._run(isolated_task_env['env'], "--path", "3").stdout
+        assert "…" in out, "a silently clipped note reads as a note that simply ended there"
+
+    def test_full_flag_does_not_trim(self, isolated_task_env):
+        session = isolated_task_env['session_dir']
+        self._seed(session, "000", "in_progress", 100, parent="null", task_type="SENTINEL")
+        self._seed(session, "5", "completed", 200, note="y" * 120)
+
+        out = self._run(isolated_task_env['env'], "--path", "3", "--full").stdout
+        assert "y" * 120 in out
+        assert "…" not in out

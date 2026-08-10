@@ -27,11 +27,22 @@ _CYCLE_RE = re.compile(r'/c_(\d+)')
 
 @dataclass
 class Touch:
-    """One recorded moment of attention on one task."""
+    """One recorded moment of attention on one task.
+
+    ``begins_dwell`` marks a touch that arrived from a *different* task — the
+    moment attention moved rather than stayed. It is computed here, in
+    chronological order, and carried on the record.
+
+    That placement is deliberate. Deriving it at render time from whichever
+    line happens to sit above would make it a statement about the display
+    rather than about what happened, and reversing the output would silently
+    invert its meaning while it went on looking authoritative.
+    """
     timestamp: int
     task_id: str
     cycle: Optional[int]
     description: str
+    begins_dwell: bool = False
 
 
 @dataclass
@@ -91,6 +102,11 @@ def visitation_trace(tasks) -> List[Touch]:
                 description=desc.replace("\n", " ").strip(),
             ))
     touches.sort(key=lambda t: t.timestamp)
+    # Mark the moves once, in the order they happened.
+    previous = None
+    for touch in touches:
+        touch.begins_dwell = touch.task_id != previous
+        previous = touch.task_id
     return touches
 
 

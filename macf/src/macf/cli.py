@@ -5478,19 +5478,23 @@ def cmd_task_trace(args: argparse.Namespace) -> int:
     if getattr(args, "json", False):
         print(json.dumps({
             "frames": [vars(f) for f in frames],
-            "path": [vars(t) for t in visitation_trace(tasks)[-path_n:]] if path_n else [],
+            "path": [vars(t) for t in reversed(visitation_trace(tasks)[-path_n:])] if path_n else [],
         }, indent=2))
         return 0
 
     if path_n:
+        # Newest first: the question this answers is a recency question, and the
+        # convention every other log-shaped tool sets. The move markers survive
+        # the reversal because they were computed chronologically and carried on
+        # each touch — reading them off display adjacency would invert them.
         trace = visitation_trace(tasks)[-path_n:]
-        print(f"👣 Where attention has been — last {len(trace)} touch(es)\n")
-        previous = None
-        for touch in trace:
-            moved = "→" if touch.task_id != previous else " "
+        full = getattr(args, "full", False)
+        print(f"👣 Where attention has been — {len(trace)} most recent, newest first\n")
+        for touch in reversed(trace):
+            moved = "→" if touch.begins_dwell else " "
             when = _rel_age_short(touch.timestamp)
-            print(f"  {moved} #{touch.task_id:<6} {when:>8}  {touch.description[:56]}")
-            previous = touch.task_id
+            note = touch.description if full else _ellipsize(touch.description, 56)
+            print(f"  {moved} #{touch.task_id:<6} {when:>8}  {note}")
         print()
 
     owed = [f for f in frames if f.state != "active"]
@@ -5512,6 +5516,19 @@ def cmd_task_trace(args: argparse.Namespace) -> int:
     if owed:
         print(f"\n   Resume with:  macf_tools task start {owed[0].task_id}")
     return 0
+
+
+def _ellipsize(text: str, width: int) -> str:
+    """Trim to `width`, marking the cut so a truncated note cannot read as whole.
+
+    A note silently clipped mid-sentence looks like a note that simply ended
+    there, which is the reading most likely to mislead whoever is reconstructing
+    what they were doing.
+    """
+    text = (text or "").strip()
+    if len(text) <= width:
+        return text
+    return text[:width - 1].rstrip() + "…"
 
 
 def _rel_age_short(ts) -> str:
@@ -10146,6 +10163,10 @@ def _build_parser() -> argparse.ArgumentParser:
     task_trace_parser.add_argument(
         "--path", type=int, default=0, metavar="N",
         help="also show the last N touches, in the order they happened",
+    )
+    task_trace_parser.add_argument(
+        "--full", action="store_true",
+        help="show note text in full instead of trimming it to one line",
     )
     task_trace_parser.add_argument("--json", action="store_true", help="output as JSON")
     task_trace_parser.set_defaults(func=cmd_task_trace)
