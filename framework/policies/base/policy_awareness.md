@@ -3,7 +3,7 @@
 ## Meta-Policy: Policy Classification
 - **Tier**: MANDATORY
 - **Category**: Framework Foundation
-- **Version**: 1.0.0
+- **Version**: 1.1.0
 - **Dependencies**: None (Bootstrap Policy)
 - **Authority**: MacEff Framework
 - **Status**: ACTIVE
@@ -54,6 +54,12 @@ You don't need to read everything. You need to recognize WHEN you need something
 - How do I engage with injected nav guides?
 - What core policies are always available?
 - What if the policy doesn't answer my question?
+
+2.5 When to Consult the Corpus (the pull obligation)
+- Discovery is pull, not push — so when am I expected to consult?
+- What are the recognised-demand moments?
+- Which commands are the on-demand path (keyword vs semantic)?
+- Why is there no per-prompt recommendation injection?
 
 3 CEP Navigation Guide Protocol
 - What's the reading protocol?
@@ -203,6 +209,57 @@ When you start a task via `macf_tools task start`, the Task System automatically
 
 **Participatory governance**: Policies exist to help you do excellent work. When they don't answer your question, that's valuable feedback — report the gap so the policy can evolve. You have both the obligation to follow policies and the right to improve them.
 
+### 2.5 When to Consult the Corpus (the pull obligation)
+
+Discovery in MacEff is **pull, not push**. The corpus is not fired into your
+context every turn; you reach for it when you recognise you need it. That makes
+*recognising the need* the discipline — and because the need is easy to skip
+past under momentum, this section names the moments the framework expects a
+consultation, so "nobody pushed it at me" is never a reason it was missed.
+
+**Recognised-demand moments — consult before proceeding:**
+
+- **Task and phase orientation.** Starting a task or a roadmap phase is the
+  canonical pull moment; `task start` already surfaces CEP nav guides (§2.4),
+  and you extend that with `policy read` for anything the guides point at.
+- **Before shipping a fix or a capability.** A change that alters what an agent
+  or operator may do is governed — read the policy that governs it before you
+  land it (this is the discipline behind *policy ships with the capability*).
+- **When a bug resists the first hypothesis.** A second failed attempt is a
+  signal to check whether a policy or learning already describes the class of
+  problem, rather than theorising further.
+- **On entering an unfamiliar domain.** Before working in a subsystem you have
+  not touched, orient in its governing policy and its learnings index.
+
+These are moments where *the demand is recognised*, which is exactly when pull
+works. Binding policy engagement to them is the pattern the framework uses
+everywhere; it does not need a per-turn injection to function.
+
+**The on-demand path (both layers stay available):**
+
+```bash
+macf_tools policy list                 # what exists
+macf_tools policy navigate <name>      # its CEP question-map (framing before content)
+macf_tools policy read <name>          # the policy itself
+macf_tools policy search <keyword>     # curated keyword search over the manifest — always available, no optional deps
+macf_tools policy recommend "<query>"  # semantic hybrid search — richer, requires the optional search index
+```
+
+`policy search` is the **always-available keyword fallback**; `policy recommend`
+is the **semantic** path and depends on the optional search index — when that
+index or its dependencies are absent it now says so at the point of use (with
+the install/build hint) rather than returning empty. A recommender you invoke
+when you want one is a tool; use it at the moments above.
+
+**Why no per-prompt recommendation injection (GH#211):** push floods, and what
+floods gets skimmed. An injection nobody reads still *looks* like policy
+awareness, which is worse than no injection at all — for the same reason an
+ignored gate is worse than no gate. A per-turn recommender also drew from a
+snapshot index that nothing rebuilds automatically, and on at least one host it
+had silently degraded to a no-op that nobody noticed *because* nothing depended
+on it. Retiring the push and investing in on-demand search that degrades loudly
+is the pull model applied to its own tooling.
+
 ## 3. CEP Navigation Guide Protocol
 
 ### 3.1 Mandatory Reading Protocol
@@ -312,7 +369,10 @@ cat /opt/maceff/framework/policies/current/manifest.json | jq '.mandatory_polici
 3. `context_management.md` (time/token awareness, compaction)
 4. `delegation_guidelines.md` (when/how to delegate)
 
-**Load On-Demand**: Everything else via CEP triggers
+**Load On-Demand**: Everything else via CEP triggers and the recognised-demand
+moments in §2.5 (task/phase orientation, before shipping a fix, when a bug
+resists the first hypothesis, entering an unfamiliar domain), using
+`macf_tools policy search`/`recommend`.
 
 ### 5.3 Navigation Commands
 
