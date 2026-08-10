@@ -995,6 +995,29 @@
           "recovery",
           "permission"
         ]
+      },
+      {
+        "name": "instruction_language",
+        "short_name": "IL",
+        "path": "base/operations/instruction_language.md",
+        "description": "Operator→agent instruction language: grammar vs vocabulary layering, per-pair namespacing, one-obligation-per-form",
+        "CEP_triggers": [
+          "What is IL (the operator instruction language)?",
+          "What is universal (grammar) versus per-pair (vocabulary)?",
+          "Why is the instruction vocabulary namespaced per pair?",
+          "Is there a universal core vocabulary?",
+          "Why must an IL form carry only one obligation?",
+          "How does a directive bundling two obligations fail?"
+        ],
+        "keywords": [
+          "instruction language",
+          "IL",
+          "directive",
+          "grammar",
+          "vocabulary",
+          "namespace",
+          "one obligation"
+        ]
       }
     ]
   },
