@@ -142,8 +142,25 @@ Task management policy governs the use of Claude Code native Task* tools (TaskCr
 **11 Migration from TodoWrite**
 - What changed between paradigms?
 
-**12 Future Experiments**
+**12 Task Scope System**
+- How is scope set and cleared?
+- What does the scope gate enforce?
+
+**13 Future Experiments**
 - What knowledge gaps need empirical validation?
+
+**14 Integration with Other Policies**
+- Which policies does task management depend on?
+
+**15 Evolution & Feedback**
+- How do I propose a change to this policy?
+
+**16 The Work Stack**
+- Why is a tree of open tasks not yet a stack?
+- What are push, pop, and pop-reconciled in this system?
+- Why must a frame be durable before it is interrupted?
+- What distinguishes a parked frame from an abandoned one?
+- How do I see what I was in the middle of?
 
 === CEP_NAV_BOUNDARY ===
 
@@ -1521,6 +1538,65 @@ macf_tools task scope check                       # JSON output for Stop hook
 **DRAFT → OFFICIAL Path**: Validate §12 experiments, refine CLI based on usage.
 
 ---
+
+## 16 The Work Stack
+
+Tasks are usually described as a record of work. They are also, read a certain way, a **stack** — and that reading is what makes them useful at the moment an agent is most likely to lose its place.
+
+### 16.1 A tree of open tasks is not yet a stack
+
+An agent returning from an interruption, a context loss, or a handoff asks one question: *what was I in the middle of?* A tree of six open tasks answers a different question. It reports six unfinished things without saying which one attention actually left and owes a return to.
+
+The missing element is **ordering**. A stack is not a set of frames; it is an ordered set with a discipline about which one you return to. The tree holds the frames. The order in which attention moved through them is what turns a pile into a stack.
+
+That ordering already exists: every task update carries a breadcrumb with a timestamp, so the sequence of touches is recorded. A tree's recency marker is the maximum over those timestamps — a single pointer derived from a full trace. The trace is not missing, only reduced away at display time.
+
+### 16.2 The operations, and where each already lives
+
+| Stack operation | Mechanism |
+|---|---|
+| **push** | starting a task, or noting on one — the durable write |
+| **frame contents** | the task plus its timestamped update stream |
+| **pop** | completing the task |
+| **pop, reconciled** | the resume protocol: work last touched in an earlier cycle requires re-reading its history before continuing |
+| **stack contents** | open frames, oldest first |
+| **the path taken** | the visitation trace |
+
+The fourth row is the one worth noticing. Resuming stale work does not restore a frame blindly — it reports the frame's age and requires reconciliation first, because the world may have moved while the work was set down. That is the correct semantics for a pop, and it is why §5's reading discipline is not ceremony.
+
+### 16.3 A frame must be durable *before* it is interrupted
+
+An interruption may end a turn without giving the agent an opportunity to write anything down. Whatever was held only in the agent's head at that moment is gone, and no amount of good intent at interrupt time recovers it — the agent is not running at interrupt time.
+
+**Therefore the push must have already happened.** This is the load-bearing reason for the note-as-you-go discipline in §5: a note written while the work is fresh is a frame that survives; a note deferred until the work is finished is a frame that never existed if the work is interrupted first. The agent that writes only at completion has a stack that is empty precisely when it is needed.
+
+### 16.4 Parked is not abandoned
+
+An in-progress task that attention has left is not automatically a dropped frame. A task waiting on an incomplete blocker was set down for a reason and is **parked** — surfacing it as a problem is a false alarm, and a detector that raises false alarms is muted within a week.
+
+The distinction:
+
+- **active** — where attention is now. Not a debt.
+- **parked** — waiting on an unresolved blocker. Legitimately set down.
+- **abandoned** — unblocked, and attention went elsewhere without completing it. This is the dropped frame.
+
+A second, purely structural check needs no timestamps at all: **a completed parent with an in-progress descendant is a contradiction.** A mission cannot honestly be complete while a phase inside it is still running. This catches the case where a whole branch was declared finished with one frame still open, and it is cheaper and more certain than any staleness heuristic.
+
+### 16.5 Seeing the stack
+
+```
+macf_tools task trace            # open frames, oldest first, classified
+macf_tools task trace --path 20  # the order attention moved, most recent last
+```
+
+Read it after any discontinuity — a recovered session, a handoff, a return from an interruption — and before declaring a branch of work finished.
+
+### 16.6 Why this is an obligation and not a convenience
+
+Where an operator directs an agent by interruption, the two parties hold different responsibilities. The operator is entitled to raise something the moment it is noticed and then move on; that is what makes correcting cheap enough to do at all. The cost of that arrangement is that **someone must hold the interrupted work, and it is not the operator.**
+
+An agent that services the newest instruction and silently drops the previous one has not merely forgotten a task. It has broken the contract that made interrupting safe — and the operator, having moved on by design, is the last party able to notice.
+
 
 ## Wiki-Links
 
