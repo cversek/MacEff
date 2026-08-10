@@ -514,7 +514,14 @@ def cmd_time(_: argparse.Namespace) -> int:
     current_time = _now_iso()
     print(current_time)
 
-    # Show gap since most recent CCP
+    # Show gap since most recent CCP.
+    #
+    # This goes to stderr, not stdout. `time` is documented as emitting a single
+    # ISO-8601 timestamp, which makes it the kind of command other code parses;
+    # a second line on stdout breaks every such consumer, and breaks them
+    # quietly, because the first line still parses for anything reading only one.
+    # Human-facing annotation belongs on stderr whenever stdout has a machine
+    # consumer, and an interactive caller still sees both streams.
     try:
         config = ConsciousnessConfig()
         checkpoints_path = config.get_checkpoints_path()
@@ -532,7 +539,8 @@ def cmd_time(_: argparse.Namespace) -> int:
                 delta = now - ccp_mtime
                 hours = int(delta.total_seconds() // 3600)
                 minutes = int((delta.total_seconds() % 3600) // 60)
-                print(f"Last CCP: {latest_ccp.name} ({hours}h {minutes}m ago)")
+                print(f"Last CCP: {latest_ccp.name} ({hours}h {minutes}m ago)",
+                      file=sys.stderr)
     except OSError as e:
         print(f"⚠️ MACF: CCP lookup failed: {e}", file=sys.stderr)
 
