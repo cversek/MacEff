@@ -8866,7 +8866,8 @@ def _cmd_ar_launch(args):
                               use_tmux=not getattr(args, 'no_tmux', False),
                               session_spec=getattr(args, 'session_id', None),
                               post_start_keys=getattr(args, 'post_start_keys', None),
-                              post_start_delay=getattr(args, 'post_start_delay', 18))
+                              post_start_delay=getattr(args, 'post_start_delay', 18),
+                              force=getattr(args, 'force', False))
 
 def _cmd_ar_list(args=None):
     from .supervisor import list_processes
@@ -10272,6 +10273,12 @@ def _build_parser() -> argparse.ArgumentParser:
                            help="terminal app (default: auto-detect)")
     ar_launch.add_argument("--no-tmux", action="store_true",
                            help="do not back the session with tmux (disables send-keys)")
+    ar_launch.add_argument("--force", action="store_true",
+                           help="override the singleton pre-flight: start even if a live "
+                                "supervisor already owns this --name. Without this, launching "
+                                "a second supervisor for a name that already has one is refused "
+                                "as a fork (GH#210); the sanctioned in-place restart is "
+                                "'auto-restart restart <pid>'.")
     ar_launch.add_argument("--post-start-keys", default=None, metavar="KEYS",
                            help="tmux keys to send after every child spawn (initial and each "
                                 "restart), e.g. 'Enter' to dismiss a workspace-trust dialog that "
