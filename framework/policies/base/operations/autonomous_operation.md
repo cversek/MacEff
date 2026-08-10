@@ -1,6 +1,6 @@
 # Autonomous Operation Policy
 
-**Version**: 1.2
+**Version**: 1.3
 **Tier**: CORE
 **Category**: Operations
 **Status**: ACTIVE
@@ -47,6 +47,8 @@ Applies to all Primary Agents (PA) and Subagents (SA) capable of extended autono
 - Which measured observable resolves supervision, and which two must NOT be used?
 - How does behaviour branch on supervised vs unsupervised?
 - When is self-restart permitted vs a self-kill?
+- What makes "it rejoins, it does not fork" true — how is the one-live-supervisor-per-calling-card guarantee enforced, where, and why there?
+- What is the difference between rejoin and fork, and what is the sanctioned rejoin command vs the deliberate-second-instance override?
 
 **4 Mode-Specific Recovery Behavior**
 - How does MANUAL_MODE recovery work?
@@ -332,6 +334,49 @@ Observing supervision is **proprioception** and is always permitted; *driving* t
 restart is a separate, grant-gated write action. Self-restart under supervision is a
 real, safe capability; self-restart without it is the "never kill your own runtime"
 failure — the two arms of this one branch.
+
+#### 3.2.1 The Singleton Guarantee: One Live Supervisor per Calling Card
+
+The supervised row above promises self-restart "rejoins, it does not fork." That
+promise is only as good as its enforcement. The failure it guards against is the
+**fork**: two live supervisors under one calling card, hence two clients writing one
+task store. It has been observed in the wild — a restart kick plus a relaunch minted
+*concurrent* instances instead of rejoining, and unattended twins worked the same
+branch as the attended session. Fork-**join** through the substrate held (the twins
+honoured directives they never heard, by reading the staged task notes; reconciliation
+afterward was mechanical). What did not exist was fork **prevention**.
+
+The two operations are not symmetric and must not be confused:
+
+- **Rejoin (safe, sanctioned)**: `macf_tools auto-restart restart <supervisor-pid>`
+  signals the *existing* supervisor to cycle its child in place. No new supervisor, no
+  new terminal, no new client — the conversation resumes in the same session. This is
+  the self-restart the §3.2 table permits under supervision.
+- **Fork (hazard)**: launching a *second* supervisor for a calling card that already
+  has a live one — via a manual launch, a service-manager unit, or a recovery script.
+  Every one of these is a fork mint if it is not guarded.
+
+**The guarantee, enforced:** a supervisor refuses to be *born* if a live supervisor
+already owns its name. The check lives at the single point every birth path converges
+on — not at any one launcher — because a launcher-level check leaves every *other*
+launch door (notably a service-manager unit invoking the supervisor module directly)
+unguarded, which is the same "rule at one call site" defect this framework names
+elsewhere. Liveness is decided by a **measured process probe** (registry entry marked
+running, *and* the pid alive, *and* the pid still a supervisor), never by the state
+file alone — the same evening that produced the fork also produced `running` entries
+for dead pids and dead entries for live ones. The refusal **names the live instance
+and the sanctioned rejoin command**, so an agent or operator who meets the wall is
+handed the path that gets the work done rather than an unexplained boundary.
+
+**The override:** a deliberate second instance (genuinely separate work) is available
+by passing `--force`, or simply by giving the new supervisor a distinct `--name` —
+distinct names are distinct services and never collide. The guard stops the
+*accidental* fork; it does not remove the operator's authority to run two on purpose.
+
+**Registry hygiene rides along:** listings and lookups apply the same measured
+liveness predicate, so a recycled pid — alive, but no longer a supervisor — is never
+reported as a running instance. A registry that cannot answer "who is alive" turns
+every recovery path into a guess, and a guess at this joint is a fork.
 
 ---
 
