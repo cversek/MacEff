@@ -825,6 +825,8 @@ Work put down for one or more cycles loses its live working context to compactio
 2. **Prints a resume banner** — which cycle the task was last worked, how long ago, and the current cycle.
 3. **Prompts the resume ritual** — read the full history (`task get #N`), re-read every note in the update stream plus any `plan_ca_ref` it references, and **narrate your understanding of where things stand and the next step to the user before executing.**
 
+**Orient the whole stack before the single task.** A stale resume means you were away, so the frame you are resuming may not be the only one attention left open. Read the work stack first (§16.5) — it answers which frames exist and which one you actually owe a return to, a question no single task's history can answer. The per-task ritual above is step two of an orientation that begins at the stack.
+
 A same-cycle re-start of an already-active task stays a plain no-op — no banner, no ritual.
 
 **Obligation**: when the banner fires, perform the ritual. Do not resume mechanically off the compaction summary alone. The narration is the evidence you re-oriented; skipping it is the stale-resume anti-pattern.
@@ -1585,11 +1587,25 @@ A second, purely structural check needs no timestamps at all: **a completed pare
 ### 16.5 Seeing the stack
 
 ```
-macf_tools task trace            # open frames, oldest first, classified
-macf_tools task trace --path 20  # the order attention moved, most recent last
+macf_tools task trace            # the open frames, classified (§16.4)
+macf_tools task trace --path N   # the order attention moved through them
 ```
 
-Read it after any discontinuity — a recovered session, a handoff, a return from an interruption — and before declaring a branch of work finished.
+Consult `--help` for the current flags and output form; this policy governs *when* the trace must be read and *what it is for*, not how it renders.
+
+**Run it after any discontinuity, and before declaring a branch of work finished.** This is a *procedure*, not a suggestion. Reading a single task's history tells you where *one* frame stands; the trace tells you which frames are open at all and which one attention actually left — the question `task get` cannot answer.
+
+**What counts as a discontinuity is lost context, not a restarted process.** The two are routinely confused, and the confusion runs in both directions — performing a recovery ritual that is not needed, or skipping one that is:
+
+| Event | Context | Read the stack? |
+|---|---|---|
+| Compaction | destroyed | **yes** |
+| Cleared session | destroyed | **yes** |
+| Work last touched in an earlier cycle (§5.3.1) | lost while set down | **yes** |
+| Handoff — a frame opened by someone else | never held | **yes** |
+| Session resume (the process restarts, the conversation continues) | **intact** | **no** |
+
+A session resume is a rejoin, not a rebirth: the supervisor restarts the client and the conversation continues, so the working context is exactly what it was. Treating it as a recovery wastes the ritual and teaches the agent to perform orientation as ceremony rather than as the response to a real loss.
 
 ### 16.6 Why this is an obligation and not a convenience
 

@@ -71,9 +71,11 @@ Do NOT proceed to Step 3 until the user has restarted and returned. Creating the
 ```bash
 macf_tools policy navigate autonomous_sprint
 macf_tools policy read autonomous_sprint
+macf_tools policy navigate task_management
 ```
 
 Extract requirements by answering:
+- (task_management) What must I read to know which work frames are open and which one attention last left, and when is reading it required? (Applies when the sprint's live context was actually lost — compaction, a cleared session, or scoped work last touched in an earlier cycle. A session resume does not qualify: the conversation continues, so the context is intact.)
 - What defines the scoped task set and how should it be declared?
 - How does the scope gate work at task completion?
 - What does mode-locking mean for the Markov recommender?
