@@ -299,6 +299,15 @@ def get_recommendations(prompt: str) -> tuple[str, list[dict]]:
 
         return formatted, explanations
 
+    except ImportError:
+        # Optional search deps (lancedb / sentence-transformers) are absent.
+        # An absent dependency is NOT "no matches" — swallowing it into an empty
+        # result is exactly the silent-inert failure GH#211 documents (the
+        # feature became a no-op and the absence was indistinguishable from it
+        # working). Propagate so the point of use — the `policy recommend` CLI —
+        # reports it loudly with the install hint rather than printing
+        # "No recommendations found" and exiting 0.
+        raise
     except Exception as e:
         print(f"⚠️ MACF: Search error: {e}", file=sys.stderr)
         return "", []

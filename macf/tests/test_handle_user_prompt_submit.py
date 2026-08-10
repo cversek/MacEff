@@ -237,3 +237,36 @@ class TestUserActivityFromPayload:
 
         age = time.time() - _get_last_user_activity_timestamp("s1")
         assert age < 60, f"submit still read as {age / 60:.0f} minutes stale"
+
+
+class TestPolicyInjectionRemoved:
+    """The per-prompt policy-recommendation injection is retired (GH#211).
+
+    Discovery is pull, not push: agents consult the corpus on recognised demand
+    (policy_awareness §2.5), and task-start still auto-surfaces CEP nav guides.
+    A recommender fired into every turn was stale noise; these tests pin its
+    absence so it cannot silently return.
+    """
+
+    def test_hook_has_no_policy_injection_function(self):
+        import macf.hooks.handle_user_prompt_submit as h
+        assert not hasattr(h, "get_policy_injection"), (
+            "the per-prompt policy recommender must not be reintroduced in the hook"
+        )
+
+    def test_output_carries_no_policy_recommendation_block(self, mock_dependencies):
+        import json
+        from macf.hooks.handle_user_prompt_submit import run
+
+        # A policy-relevant prompt is exactly what would have triggered the
+        # injection; the output must not carry the recommendation block.
+        result = run(json.dumps({
+            "session_id": "s1",
+            "prompt": "How do I manage TODOs and backups and checkpoints?",
+        }))
+
+        context = result["hookSpecificOutput"]["additionalContext"]
+        assert "Policy Recommendations" not in context
+        assert "📚 Policy Recommendations" not in context
+        # The rest of the DEV_DRV context is unaffected.
+        assert "🏗️ MACF" in context

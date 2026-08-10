@@ -214,6 +214,25 @@ class TestGetRecommendations:
                 assert formatted_output == ""
                 assert explanations == []
 
+    def test_import_error_propagates_not_swallowed(self):
+        """Missing optional deps must PROPAGATE, not degrade to an empty result.
+
+        An absent dependency is not "no matches" (GH#211). Swallowing it into
+        ("", []) is the silent-inert failure the injection removal was about;
+        the recommend CLI relies on the ImportError reaching it to print the
+        install hint and exit non-zero. A generic Exception still degrades
+        gracefully (test above); only ImportError propagates.
+        """
+        with patch('macf.utils.recommend._get_db_path') as mock_path:
+            mock_db = MagicMock(spec=Path)
+            mock_db.exists.return_value = True
+            mock_path.return_value = mock_db
+
+            with patch('macf.utils.recommend.search_policies',
+                       side_effect=ImportError('lancedb not installed')):
+                with pytest.raises(ImportError):
+                    get_recommendations("test query with enough length")
+
 
 class TestExplainedRecommendationMethods:
     """Test ExplainedRecommendation methods."""
