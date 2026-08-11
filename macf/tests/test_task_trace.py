@@ -122,6 +122,90 @@ class TestOpenFrames:
         assert open_frames([]) == []
 
 
+class TestEnclosingFrames:
+    """A parent holding the frame attention is working inside is not a debt.
+
+    Before this state existed, ``abandoned`` was the else-branch, and the
+    classifier only ever looked *upward* (blockers, parent) — never down. So a
+    MISSION with a running phase fell through to "dropped frame" by
+    construction, and the false-alarm rate scaled with how faithfully work was
+    decomposed. Following the decomposition policy degraded the very detector
+    the work-stack policy depends on.
+    """
+
+    def test_a_parent_of_the_active_frame_encloses_it(self):
+        tasks = [
+            _Task("10", "in_progress", [_Update(100)]),
+            _Task("30", "in_progress", [_Update(900)], parent_id="10"),
+        ]
+        states = {f.task_id: f.state for f in open_frames(tasks)}
+        assert states == {"30": "active", "10": "enclosing"}
+
+    def test_a_genuinely_dropped_frame_is_still_abandoned(self):
+        """The control, and the reason the test above proves anything.
+
+        A fix that simply stopped emitting ``abandoned`` would satisfy every
+        assertion about enclosing frames. This is the known-answer case: an
+        unblocked, unrelated, in-progress frame that attention left really is a
+        dropped frame, and the classifier must still say so.
+        """
+        tasks = [
+            _Task("10", "in_progress", [_Update(100)]),
+            _Task("30", "in_progress", [_Update(900)], parent_id="10"),
+            _Task("40", "in_progress", [_Update(50)]),
+        ]
+        states = {f.task_id: f.state for f in open_frames(tasks)}
+        assert states["40"] == "abandoned", "the fix must not silence the state"
+        assert states["10"] == "enclosing"
+
+    def test_enclosure_reaches_through_grandparents(self):
+        tasks = [
+            _Task("10", "in_progress", [_Update(100)]),
+            _Task("20", "in_progress", [_Update(200)], parent_id="10"),
+            _Task("30", "in_progress", [_Update(900)], parent_id="20"),
+        ]
+        states = {f.task_id: f.state for f in open_frames(tasks)}
+        assert states == {"30": "active", "20": "enclosing", "10": "enclosing"}
+
+    def test_a_parent_dropped_alongside_its_child_is_not_absolved(self):
+        """The discriminator between the correct rule and the tempting one.
+
+        "Does any descendant happen to be in progress" would call the parent
+        enclosing here — but attention is on an unrelated frame, and parent and
+        child were dropped together. Enclosure is about where attention *is*,
+        not about what is merely open underneath.
+        """
+        tasks = [
+            _Task("10", "in_progress", [_Update(100)]),
+            _Task("30", "in_progress", [_Update(200)], parent_id="10"),
+            _Task("40", "in_progress", [_Update(900)]),
+        ]
+        states = {f.task_id: f.state for f in open_frames(tasks)}
+        assert states["10"] == "abandoned"
+        assert states["30"] == "abandoned"
+
+    def test_enclosing_outranks_parked(self):
+        """Work running inside a frame means it is not waiting, whatever its
+        blocker list still says — and a stale blocker should not disguise
+        where attention actually is."""
+        tasks = [
+            _Task("10", "in_progress", [_Update(100)], blocked_by=["9"]),
+            _Task("9", "pending", [_Update(10)]),
+            _Task("30", "in_progress", [_Update(900)], parent_id="10"),
+        ]
+        states = {f.task_id: f.state for f in open_frames(tasks)}
+        assert states["10"] == "enclosing"
+
+    def test_a_parent_link_cycle_does_not_hang(self):
+        """Corrupt hierarchy is a data bug, not a reason to spin forever."""
+        tasks = [
+            _Task("1", "in_progress", [_Update(100)], parent_id="2"),
+            _Task("2", "in_progress", [_Update(900)], parent_id="1"),
+        ]
+        states = {f.task_id: f.state for f in open_frames(tasks)}
+        assert states["2"] == "active"
+
+
 class TestContradictoryFrames:
     def test_completed_parent_with_running_child_is_flagged(self):
         """A structural check needing no timestamps: a parent cannot honestly
