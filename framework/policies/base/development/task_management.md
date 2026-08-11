@@ -4,7 +4,7 @@
 **Type**: Development Infrastructure
 **Scope**: All agents (PA and SA)
 **Status**: ACTIVE (successor to todo_hygiene.md)
-**Version**: 1.2
+**Version**: 1.3
 
 ---
 
@@ -159,7 +159,8 @@ Task management policy governs the use of Claude Code native Task* tools (TaskCr
 - Why is a tree of open tasks not yet a stack?
 - What are push, pop, and pop-reconciled in this system?
 - Why must a frame be durable before it is interrupted?
-- What distinguishes a parked frame from an abandoned one?
+- Which open frames are debts and which are not?
+- Why is a parent whose phase is running not a dropped frame?
 - How do I see what I was in the middle of?
 
 === CEP_NAV_BOUNDARY ===
@@ -1572,15 +1573,24 @@ An interruption may end a turn without giving the agent an opportunity to write 
 
 **Therefore the push must have already happened.** This is the load-bearing reason for the note-as-you-go discipline in §5: a note written while the work is fresh is a frame that survives; a note deferred until the work is finished is a frame that never existed if the work is interrupted first. The agent that writes only at completion has a stack that is empty precisely when it is needed.
 
-### 16.4 Parked is not abandoned
+### 16.4 Not every open frame is a debt
 
 An in-progress task that attention has left is not automatically a dropped frame. A task waiting on an incomplete blocker was set down for a reason and is **parked** — surfacing it as a problem is a false alarm, and a detector that raises false alarms is muted within a week.
 
 The distinction:
 
 - **active** — where attention is now. Not a debt.
+- **enclosing** — attention is *inside* this frame, in a descendant of it. Not a debt: the work is proceeding one level down.
 - **parked** — waiting on an unresolved blocker. Legitimately set down.
 - **abandoned** — unblocked, and attention went elsewhere without completing it. This is the dropped frame.
+
+These four are **exhaustive**: attention is here, or below here, or the frame is waiting on something, or it was dropped. That matters more than it sounds. A classifier that decides the first three and lets everything else fall through to `abandoned` has made the most alarming label its *residual* — the bucket that silently absorbs every case its author did not enumerate. `enclosing` exists because hierarchy was exactly such a case, and it was absorbed for as long as the taxonomy had three states.
+
+**Why the fourth state is load-bearing, and not bookkeeping.** A MISSION with a running phase is the ordinary shape of decomposed work. Classified as a dropped frame, it makes the false-alarm rate scale with *how faithfully work is decomposed* — so following §2.5 degrades the very detector this section exists to keep usable. A policy that punishes compliance with another policy is a defect in the pair, not a rough edge in one of them.
+
+**Enclosure is about where attention *is*, not about what is open underneath.** The tempting shortcut — treat any frame with an in-progress descendant as enclosing — absolves a parent that was dropped *together with* its child. If attention is on an unrelated frame, an ancestor and its descendant are both dropped, and both should say so. The correct test walks up from the active frame.
+
+**Whatever is recommended for resumption must be a frame that was actually dropped.** The classification is read; the recommendation is *acted on*. Pointing an agent at a parked frame sends it at something legitimately waiting on a blocker, and pointing it at an enclosing frame sends it at an ancestor of where it already is — both at the moment of a discontinuity, when the agent has least context with which to notice the advice is wrong.
 
 A second, purely structural check needs no timestamps at all: **a completed parent with an in-progress descendant is a contradiction.** A mission cannot honestly be complete while a phase inside it is still running. This catches the case where a whole branch was declared finished with one frame still open, and it is cheaper and more certain than any staleness heuristic.
 

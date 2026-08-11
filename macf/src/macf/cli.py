@@ -5505,13 +5505,15 @@ def cmd_task_trace(args: argparse.Namespace) -> int:
             print(f"  {moved} #{touch.task_id:<6} {when:>8}  {note}")
         print()
 
-    owed = [f for f in frames if f.state != "active"]
+    # An enclosing frame owes nothing — the work is running inside it. Counting
+    # it as a debt would make the tally grow with every level of decomposition.
+    owed = [f for f in frames if f.state not in ("active", "enclosing")]
     print(f"🧵 Open frames: {len(frames)} ({len(owed)} awaiting a return)")
     if not frames:
         print("   ✅ nothing in progress")
         return 0
 
-    icon = {"active": "▶️ ", "parked": "⏸️ ", "abandoned": "⚠️ "}
+    icon = {"active": "▶️ ", "enclosing": "📂", "parked": "⏸️ ", "abandoned": "⚠️ "}
     for f in frames:
         when = _rel_age_short(f.last_touch) if f.last_touch else "never"
         print(f"   {icon.get(f.state, '  ')} #{f.task_id:<6} {f.state:<10} last touched {when}")
@@ -5521,8 +5523,13 @@ def cmd_task_trace(args: argparse.Namespace) -> int:
         if f.parent_completed and f.state != "active":
             print(f"        ⚠️  its parent is marked COMPLETE while this is still running")
 
-    if owed:
-        print(f"\n   Resume with:  macf_tools task start {owed[0].task_id}")
+    # Recommend a frame that was actually dropped. Pointing at a parked frame
+    # sends the agent at something legitimately waiting on a blocker, and this
+    # line is the one an agent *acts* on — during recovery, when it has least
+    # context with which to notice the advice is wrong.
+    dropped = [f for f in owed if f.state == "abandoned"]
+    if dropped:
+        print(f"\n   Resume with:  macf_tools task start {dropped[0].task_id}")
     return 0
 
 

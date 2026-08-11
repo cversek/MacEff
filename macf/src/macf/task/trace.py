@@ -56,9 +56,21 @@ class Frame:
     ``parked``
         Waiting on an incomplete blocker. Legitimately set down, and flagging
         it would be crying wolf — the distinction that keeps this useful.
+    ``enclosing``
+        Attention is *inside* this frame, in a descendant of it. Not a debt:
+        the work is proceeding one level down. A MISSION with a running phase
+        is the ordinary case, and calling it a dropped frame would make the
+        false-alarm rate scale with *good* decomposition discipline.
     ``abandoned``
         Unblocked, and attention went elsewhere without completing it. This is
         the dropped frame.
+
+    The four states partition the open frames exhaustively: attention is here,
+    or below here, or the frame is waiting on something, or it was dropped.
+    That is why ``abandoned`` can be decided last without being a *residual* —
+    the distinction matters, because a catch-all branch assigns the most
+    alarming label to every case its author did not enumerate. ``enclosing``
+    exists precisely because hierarchy was such a case.
     """
     task_id: str
     subject: str
@@ -130,6 +142,21 @@ def open_frames(tasks) -> List[Frame]:
         if ts is not None and ts > newest_ts:
             newest_ts, newest_id = ts, str(task.id)
 
+    # Every ancestor of the active frame encloses it. Walking *up* from where
+    # attention is costs one pass and answers the question directly; asking
+    # instead "does any descendant happen to be in progress" would wrongly
+    # absolve a parent whose child was dropped alongside it.
+    enclosing_ids = set()
+    seen = set()
+    cursor = newest_id
+    while cursor is not None and cursor not in seen:
+        seen.add(cursor)
+        node = by_id.get(cursor)
+        parent_id = getattr(getattr(node, "mtmd", None), "parent_id", None)
+        cursor = str(parent_id) if parent_id is not None else None
+        if cursor is not None:
+            enclosing_ids.add(cursor)
+
     frames = []
     for task in in_progress:
         tid = str(task.id)
@@ -141,8 +168,13 @@ def open_frames(tasks) -> List[Frame]:
         parent = by_id.get(str(parent_id)) if parent_id is not None else None
         parent_completed = bool(parent and parent.status in ("completed", "archived"))
 
+        # Order encodes precedence. Where attention *is* outranks where it is
+        # waiting: a frame with work running inside it is not "set down waiting
+        # on a blocker", whatever its blocker list still says.
         if tid == newest_id:
             state = "active"
+        elif tid in enclosing_ids:
+            state = "enclosing"
         elif blockers_open:
             state = "parked"
         else:
