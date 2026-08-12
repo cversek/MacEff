@@ -4,7 +4,7 @@
 **Type**: Development Infrastructure
 **Scope**: All agents (PA and SA)
 **Status**: ACTIVE (successor to todo_hygiene.md)
-**Version**: 1.3
+**Version**: 1.4
 
 ---
 
@@ -16,7 +16,7 @@ Task management policy governs the use of Claude Code native Task* tools (TaskCr
 
 **Two storage backends** (see §0.1):
 - **Legacy (default)**: CC's `~/.claude/tasks/{session_uuid}/*.json`. Session-scoped — a new session UUID (continue / rewind / child) gets a *copy* that then diverges, and CC deletes all completed task files when the last open task completes. Fragile for long-lived history.
-- **Home store (opt-in)**: a single project-scoped directory under the agent home (`{agent_home}/agent/public/tasks/`, default), alongside the other consciousness artifacts. Set `task_store.mode: "home"` in `{agent_home}/.maceff/config.json` (or `MACF_TASK_STORE_DIR`). Not keyed by session UUID, so it survives fork/rewind and CC never touches it. This is the recommended backend for any agent that wants durable task history.
+- **Home store (provisioned)**: a single project-scoped directory under the agent home (`{agent_home}/agent/public/tasks/`, default), alongside the other consciousness artifacts. Selected by `task_store.mode: "home"` in `{agent_home}/.maceff/config.json` (or `MACF_TASK_STORE_DIR`). Not keyed by session UUID, so it survives fork/rewind and CC never touches it. **Provisioning creates it** — `macf_tools task store-init` builds the directory and writes the config key, and provisioning calls it. An agent that reaches its first task write without a home store was not provisioned; that is a bug in provisioning, not a preference the agent expressed.
 
 **Supersedes**: `todo_hygiene.md` (DEPRECATED)
 
@@ -26,6 +26,8 @@ Task management policy governs the use of Claude Code native Task* tools (TaskCr
 
 **0 Task Storage & Persistence**
 - Where are task files stored?
+- Who creates the home store, and what does it mean if an agent does not have one?
+- How do I move an existing agent onto the home store without losing history?
 - What creates new session UUIDs?
 - What is the ID assignment behavior?
 - What epistemological gaps remain?
@@ -175,6 +177,19 @@ Each task is stored as `{id}.json` (e.g., `1.json`, `67.json`) in the active sto
 
 - **Legacy**: `~/.claude/tasks/{session_uuid}/{id}.json` — one directory per CC session.
 - **Home store**: `{agent_home}/agent/public/tasks/{id}.json` — one project-scoped directory, no session UUID. Activated by `task_store.mode: "home"` in `{agent_home}/.maceff/config.json` (path overridable; env `MACF_TASK_STORE_DIR` wins). The `TaskReader` resolves this via a `HOME_STORE_UUID` sentinel; all create/read/archive/CLI paths inherit it through `session_path`. Completed-task hiding (`.{id}.json`) is a CC-scanner concern and is skipped here, so the home store stays plain `{id}.json`.
+
+### 0.1.1 Provisioning and migration
+
+The home store is **built by provisioning**, not chosen afterwards. `macf_tools task store-init` creates the directory and writes `task_store.mode: "home"`, preserving every other key in an existing config; it is idempotent, so provisioning and upgrade paths can both call it unconditionally. It deliberately does **not** migrate — provisioning a fresh home and rescuing an existing history are different operations with different failure modes, and one command doing both would make `--dry-run` mean two things.
+
+An existing agent moves with `macf_tools task migrate-store`, which **copies, verifies by sha256 byte-for-byte, and only then flips the config**. That order is the whole design: a config pointed at an unverified store fails later and elsewhere, and reads as amnesia rather than as a bad copy. The legacy directories are never deleted, so reverting is a one-line config edit.
+
+Two properties of migration exist because their absence was a silent partial:
+
+- **Every legacy directory is migrated, not just the live one.** An agent that has been continued, rewound or forked has several session directories. Migrating only the current one produces a success message, a populated store, and a directory nothing will ever mention again — a partial result shaped exactly like a complete one.
+- **Divergent copies are refused, not resolved.** A fork duplicates the store and both sides then move on, so the same id can exist twice with different content. Migration reports the conflicts and stops; `--force` takes the most recently modified copy and *names the discarded ones*, because a silent choice discards whichever copy lost a coin toss.
+
+Dot-prefixed completed tasks are normalised to plain `{id}.json` on the way in. The prefix exists solely to hide files from CC's scanner and the home store is never scanned, so carrying it across leaves one directory holding two conventions — and shell globs skip dotfiles, so anyone counting with `ls *.json` silently undercounts completed work.
 
 ### 0.2 Persistence Behavior
 
