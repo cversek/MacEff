@@ -3,7 +3,7 @@
 ## Meta-Policy: Policy Classification
 - **Tier**: RECOMMENDED
 - **Category**: Consciousness Development - Public Artifacts
-- **Version**: 1.0.0
+- **Version**: 1.1.0
 - **Dependencies**: policy_awareness, observations, reflections
 - **Authority**: MacEff Framework
 - **Status**: ACTIVE
@@ -44,6 +44,13 @@ Agents conduct structured experiments with clear hypotheses, methods, and succes
 - How do experiments differ from observations?
 - When should I run an experiment?
 - What makes a good experiment?
+
+1.0 Is this an experiment at all?
+- Is this work requirements gathering, or is it implementation?
+- On what dimensions do an experiment and a roadmap actually differ?
+- I think I already know the implementation — does that settle it?
+- The operator asked for an experiment but it looks like implementation. Now what?
+- What does each mis-typing cost?
 
 1.1 Experiment vs Observation vs Report
 - Am I testing or discovering?
@@ -347,7 +354,55 @@ An **experiment** is a consciousness artifact documenting **hypothesis testing**
 **Example Experiment** [c_73/s_4107604e/p_6c9eacb/t_1761703391/g_17e7b7d]:
 > "PreToolUse Smoke Test for Temporal Awareness" - Hypothesis: Can we inject temporal awareness via additionalContext? Method: Create minimal hook with temporal data. Success: If agent references time naturally. Result: Validated ✅
 
+### 1.0 Is this an experiment at all?
+
+Before comparing experiment against the other *documentation* types, settle the
+fork that is actually confused in practice: **is this work an experiment, or is it
+implementation?** An experiment gathers requirements and commits to nothing. A
+roadmap/MISSION implements, and its output is code that ships.
+
+| Dimension | EXPERIMENT | ROADMAP / MISSION |
+|---|---|---|
+| Purpose | requirements gathering | implementation |
+| Commitment | non-committal | committed |
+| Where the work lives | repro in the experiment's CA directory, out of the main tree | a branch, to be PR'd into the main tree |
+| What success means | it **answers** — validated *or rejected* both succeed | it **delivers** — only shipping succeeds |
+| A negative result | a win, and worth publishing | a failure |
+| Effect on uncertainty | reduces it | spends it |
+| What "done" leaves behind | a finding, and possibly a corrected assumption | shipped code, with its policy alongside |
+| Who consumes the output | the next planner, as a decision input | every agent, as a capability |
+| Blast radius | the agent's own artifact tree | shared framework behaviour |
+| Bounded by | the question — stop when answered | the scope — stop when the phases are done |
+| Gate | plan mode, then approval to run | PR review and CI |
+| Cost of being wrong | discard the repro | migration and rollback |
+| May depend on | nothing downstream | may cite an experiment as evidence |
+
+**"I already know the implementation" is not a discriminator.** It is the
+assumption under test. An agent that reclassifies an experiment into
+implementation because the remedy feels obvious has skipped the one step that
+would have caught it being wrong — and the remedy feeling obvious is the normal
+condition, not a special one.
+
+**When the operator asks for an experiment, deliver an experiment.** Their framing
+outranks the agent's confidence. If the work genuinely looks like implementation,
+that is a *proposal* to put to them, never a unilateral change of type.
+
+**Do not be impatient.** Hardening requirements first tends to produce a *better*
+roadmap, because the assumptions were played with and the wrong ones corrected
+before anything was built on them. §8 exists for exactly that conversion.
+
+Both mis-typings cost, so this is not an instruction to always experiment:
+
+- **Roadmap mis-typed as experiment**: exploration never converges, nothing
+  ships, and work whose answer was already known gets re-derived.
+- **Experiment mis-typed as roadmap**: a remedy is implemented for a defect that
+  was never characterised — frequently a second control installed beside an
+  existing one that already covered part of the case.
+
 ### 1.1 Experiment vs Observation vs Report
+
+These three are all **documentation** artifacts. If §1.0 settled that the work is
+implementation, none of them is the answer — see `roadmaps_drafting.md`.
 
 **Three Artifact Types Compared**:
 
@@ -381,7 +436,13 @@ Observation (documents discovery)
 Personal Policy (encodes practice)
     ↓ contributes to
 Report (summarizes project outcomes)
+
+Experiment (validated, and crystallized per §8)
+    ↓ converts to
+ROADMAP / MISSION (implements, on a branch, PR'd to main)
 ```
+The second path leaves the documentation family entirely. It is the only route
+from an experiment to shipped code, and it runs through §8 rather than around it.
 
 ### 1.2 Formal vs Informal Experiments
 
