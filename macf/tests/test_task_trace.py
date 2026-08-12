@@ -270,3 +270,63 @@ class TestMoveMarkerIsAPropertyOfTheTouch:
     def test_the_first_touch_is_always_a_move(self):
         tasks = [_Task("1", updates=[_Update(10)])]
         assert visitation_trace(tasks)[0].begins_dwell is True
+
+
+class TestLoopChangeSignal:
+    """`task tree --loop` must notice event-sourced changes, not only file ones.
+
+    Scope is written to the event log and touches no task file. A detector
+    watching only the store therefore cannot see `scope set`, and the loop held
+    a stale frame until its 60-second timed redraw -- so scope markers appeared
+    up to a minute late while ordinary task edits appeared in about a second.
+
+    The asymmetry is the hazard rather than the delay: the display *is* moving,
+    so nothing suggests part of it is stale.
+    """
+
+    def test_event_log_write_moves_the_display_signal(self, tmp_path, monkeypatch):
+        from macf import cli
+
+        store = tmp_path / "tasks"
+        store.mkdir()
+        (store / "1.json").write_text("{}")
+        log = tmp_path / "events.jsonl"
+        log.write_text("")
+        monkeypatch.setattr(cli, "get_log_path", lambda: log, raising=False)
+        import macf.agent_events_log as ael
+        monkeypatch.setattr(ael, "get_log_path", lambda: log)
+
+        before_display = cli.get_display_mtime(store)
+        before_store = cli.get_tasks_mtime(store)
+
+        import os, time
+        time.sleep(0.01)
+        with open(log, "a") as fh:
+            fh.write('{"event": "scope_set"}\n')
+        os.utime(log, (time.time() + 5, time.time() + 5))
+
+        # CONTROL: the store must NOT have moved. Without this, a passing test
+        # could mean the event write happened to touch a task file, which would
+        # make the store-only detector sufficient and the fix unnecessary.
+        assert cli.get_tasks_mtime(store) == before_store, \
+            "control failed: the event write touched the store"
+        assert cli.get_display_mtime(store) != before_display, \
+            "an event-log-only change must trigger a redraw"
+
+    def test_store_change_still_moves_the_signal(self, tmp_path, monkeypatch):
+        """The fix must not replace one blind spot with another."""
+        from macf import cli
+        import macf.agent_events_log as ael
+
+        store = tmp_path / "tasks"
+        store.mkdir()
+        log = tmp_path / "events.jsonl"
+        log.write_text("")
+        monkeypatch.setattr(ael, "get_log_path", lambda: log)
+
+        before = cli.get_display_mtime(store)
+        import os, time
+        f = store / "1.json"
+        f.write_text("{}")
+        os.utime(f, (time.time() + 5, time.time() + 5))
+        assert cli.get_display_mtime(store) != before

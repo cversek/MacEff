@@ -4443,6 +4443,30 @@ def cmd_task_get(args: argparse.Namespace) -> int:
     return 0
 
 
+def get_display_mtime(tasks_dir) -> float:
+    """Latest change to anything the tree renders — store *and* event log.
+
+    The store alone is not enough. Scope is event-sourced: `scope set` writes to
+    the event log and touches no task file, so a detector watching only the store
+    cannot see it. The loop then held a stale frame until its timed redraw came
+    round, which made scope markers appear up to a minute late while ordinary
+    task edits appeared in about a second.
+
+    That asymmetry is worse than uniform slowness. The display *is* updating, so
+    nothing suggests any part of it is stale, and the movement is what persuades
+    a reader the whole frame is current.
+    """
+    latest = get_tasks_mtime(tasks_dir)
+    try:
+        from .agent_events_log import get_log_path
+        log_path = get_log_path()
+        if log_path and log_path.exists():
+            latest = max(latest, log_path.stat().st_mtime)
+    except (OSError, ImportError):
+        pass  # event log unreadable: fall back to store-only detection
+    return latest
+
+
 def get_tasks_mtime(tasks_dir) -> float:
     """Get latest modification time of any task file in the store directory."""
     try:
@@ -4915,7 +4939,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
 
         try:
             while True:
-                current_mtime = get_tasks_mtime(tasks_dir)
+                current_mtime = get_display_mtime(tasks_dir)
                 now = time.time()
 
                 # Redraw when tasks changed, on first iteration, or on the
