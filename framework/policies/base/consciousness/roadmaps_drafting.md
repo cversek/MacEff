@@ -1,6 +1,6 @@
 # Roadmaps Policy: Drafting & Planning
 
-**Version**: 2.4
+**Version**: 2.5
 **Tier**: MANDATORY
 **Category**: Consciousness - Planning
 **Status**: ACTIVE
@@ -92,6 +92,9 @@ roadmap — which is the intended route to implementation, not a detour around i
 - What is the complete sequence from recognition to drafting?
 - How do PlanMode, exploration, and questioning fit together?
 - What gates the transition to execution?
+- Where is the plan drafted, and where does it end up?
+- At what point is roadmap.md written, relative to pinning?
+- What happens after the plan is approved but before implementation starts?
 
 **1 When to Create Roadmaps**
 - What triggers roadmap creation?
@@ -329,22 +332,60 @@ The Explore subagent is designed for codebase discovery without making changes:
    - Clarify ambiguous requirements
    - Align on approach
           ↓
-5. Draft roadmap.md (using discoveries from steps 3-4)
-   - Folder structure
-   - Phase breakdown
-   - Success criteria
+5. DRAFT IN PLAN MODE'S OWN PLAN FILE (using discoveries from steps 3-4)
+   - Phase breakdown, success criteria, delegation strategy
+   - NOT roadmap.md -- see "The whiteboard and the record" below
           ↓
-6. Present roadmap to user
+6. CALL ExitPlanMode when the draft is ready
+   - The call is what SURFACES the draft and raises the approval prompt.
+     Do not wait for approval before calling it -- approval cannot arrive
+     until you do. Approval, when it comes, is of the PLAN.
           ↓
-7. ExitPlanMode (USER APPROVAL REQUIRED)
+7. PIN the approved plan (task_management §2.5)
+   - Creates the MISSION task, the phase tasks, and the roadmap skeleton
           ↓
-8. Execute roadmap (following roadmaps_following.md)
+8. TRANSFER the approved plan into roadmap.md
+   - roadmap.md is the authoritative record from this point on
+          ↓
+9. 🛑 HALT -- do not begin implementation
+          ↓
+10. Execute only when the user invokes it explicitly
+    (a task-start invocation, or "go"/"start")
 ```
 
 **Critical Gates**:
 - **Step 2 (EnterPlanMode)**: Mandatory, no skipping
-- **Step 7 (ExitPlanMode)**: User approval required, gates execution
+- **Step 6 (ExitPlanMode)**: the agent calls it to *request* approval; the prompt
+  the user answers is raised by that call. Waiting for approval before calling it
+  deadlocks -- nothing will arrive. What comes back approves the *plan*.
+- **Step 9 (HALT)**: An approved plan is not an instruction to build it
 - **Steps 3-4**: Encouraged but not mandatory (judgment call based on clarity)
+
+### The whiteboard and the record
+
+Two artifacts, two jobs, and confusing them collides at step 7.
+
+**The plan file is a whiteboard.** It is erased by the next person to use the
+room -- which is you, at your next planning phase. Its ephemerality is not a
+defect to work around; in the drafting phase it is the *point*:
+
+- Plan mode restricts writes to it, so the constraint keeps attention on planning
+  rather than drifting into implementation.
+- ExitPlanMode surfaces what is written there for review, which is what makes
+  approval a real gate rather than a formality.
+
+**roadmap.md is the record.** It is git-tracked, survives compaction, and carries
+the forensic trail. It is written at step 8, *after* pinning, by transferring the
+approved plan.
+
+**Why this order and not the reverse**: pinning creates a roadmap skeleton at
+that path. Authoring roadmap.md during plan mode puts a finished artifact where
+the skeleton will land, and the two collide -- with the finished one losing. The
+whiteboard has no such conflict because nothing else writes to it.
+
+The anti-pattern below still stands, and is about a different failure: never
+treat the whiteboard as *storage*. Drafting there is correct; leaving the plan
+there, or citing it as authoritative, is not.
 
 **Why This Workflow Succeeds**:
 - **Friction prevents premature action**: Can't execute without planning
@@ -1196,9 +1237,10 @@ This creates bidirectional link:
   - **Problem**: Roadmap becomes useless after compaction - no forensic detail, file paths, or implementation guidance
   - **Fix**: Roadmaps MUST be **self-contained for post-compaction recovery**. Include: full forensic context, all file paths, implementation details, architecture references, friction point history. A stranger with only the roadmap should understand and resume the work.
 
-- ❌ **Relying on non-MACF artifacts** - Using Claude Code's `.claude/plans/` files as planning storage
-  - **Problem**: `.claude/plans/` files are **ephemeral Claude Code artifacts**, NOT MacEff consciousness infrastructure. They do not survive compaction, are not git-tracked, and provide no forensic trail.
-  - **Fix**: ALL planning content must live in the roadmap.md file within the proper roadmap folder structure. Never reference `.claude/plans/` as authoritative source. Transfer all plan content to roadmap before execution.
+- ❌ **Relying on non-MACF artifacts** - Treating Claude Code's plan file as planning *storage*
+  - **Problem**: the plan file is an **ephemeral Claude Code artifact**, NOT MacEff consciousness infrastructure. It does not survive compaction, is not git-tracked, provides no forensic trail, and is overwritten by the next planning phase.
+  - **Fix**: transfer the approved plan into roadmap.md, and cite roadmap.md as the authoritative source thereafter.
+  - **Not the same as drafting there.** Drafting in the plan file is the correct step (§0.4 step 5) -- the restriction is what keeps plan mode on planning, and ExitPlanMode is what surfaces the draft for approval. The failure is *leaving* the plan there, or referring back to it as the record. Whiteboard, then record.
 
 - ❌ **Treating plan approval as execution authorization** - Starting implementation immediately after ExitPlanMode
   - **Problem**: ExitPlanMode approval means the PLAN is approved, NOT that execution should begin. User may want to review, schedule, or stage execution separately. Execution is often deferred to the next cycle.
