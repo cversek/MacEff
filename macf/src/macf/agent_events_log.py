@@ -101,6 +101,61 @@ def _get_cached_breadcrumb() -> str:
     return breadcrumb
 
 
+#: Fields whose value cannot be reconstructed from anywhere else, so they are
+#: carried whole however large they get.
+#:
+#: The asymmetry is the whole reason this list exists. A file's contents can be
+#: read off disk and an edit's effect is in its patch, so eliding them loses
+#: nothing. A command, a plan, or a prompt exists only here — once elided it is
+#: gone. A size threshold cannot see that difference; only this list can.
+IRREPLACEABLE_FIELDS = frozenset({
+    "command",                 # what was actually run
+    "plan",                    # the plan a mode transition was approved on
+    "last_assistant_message",  # not recoverable once the turn is gone
+    "description",             # the agent's own account of an action
+    "prompt",                  # operator input
+})
+
+#: Serialised size above which a value is replaced by its size. Chosen from the
+#: measured recovery curve rather than by taste: the median record is well under
+#: it, so ordinary events pass through untouched while the long tail does not.
+ELIDE_THRESHOLD_BYTES = 2048
+
+
+def elide_large_values(payload, threshold=ELIDE_THRESHOLD_BYTES,
+                       exempt=IRREPLACEABLE_FIELDS):
+    """Replace oversized values with their size, recursively.
+
+    The predicate is **size**, never a tool name and never the shape of the
+    response. That is the entire point of this function. Its predecessor tested
+    for a dict containing ``stdout`` — the shape one tool happens to return — and
+    so fired on 70% of records while catching under 2% of the bytes. Every other
+    tool's response walked past it. A size test cannot be escaped by a payload
+    shape nobody anticipated.
+
+    Preserves the existing convention so old and new records read alike: the
+    value becomes ``"[N bytes]"`` and a sibling ``<field>_size`` carries N.
+
+    Returns a structure of the same schema; the caller's object is not mutated.
+    """
+    if isinstance(payload, dict):
+        out = {}
+        for key, value in payload.items():
+            if key in exempt:
+                out[key] = value
+            elif isinstance(value, str) and len(value) > threshold:
+                out[key] = f"[{len(value)} bytes]"
+                out[f"{key}_size"] = len(value)
+            elif isinstance(value, (dict, list)):
+                out[key] = elide_large_values(value, threshold, exempt)
+            else:
+                out[key] = value
+        return out
+    if isinstance(payload, list):
+        return [elide_large_values(item, threshold, exempt) for item in payload]
+    return payload
+
+
 def append_event(
     event: str,
     data: dict,

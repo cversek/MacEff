@@ -55,10 +55,19 @@ def test_event_contains_tool_name(mock_dependencies, hook_stdin_bash_tool):
 
 
 def test_large_stdout_sanitized(mock_dependencies):
-    """Large tool_response stdout is replaced with size metadata."""
-    from macf.hooks.handle_post_tool_use import run
+    """Large tool_response stdout is replaced with size metadata.
 
-    large_output = "x" * 1000
+    Sized relative to the threshold rather than against a literal, so this keeps
+    asserting its guarantee if the threshold moves. It previously used a 1000
+    byte payload against a stdout-specific limit of 500; the rule is now uniform
+    and size-based, so content between the old and new limits is retained. That
+    is a deliberate fidelity gain -- the entire stdout-shaped category accounted
+    for 1.7% of bytes in the measurement that motivated the change.
+    """
+    from macf.hooks.handle_post_tool_use import run
+    from macf.agent_events_log import ELIDE_THRESHOLD_BYTES
+
+    large_output = "x" * (ELIDE_THRESHOLD_BYTES + 1)
     stdin = json.dumps({
         "tool_name": "Bash",
         "tool_input": {"command": "echo hello"},
@@ -69,8 +78,10 @@ def test_large_stdout_sanitized(mock_dependencies):
 
     call_args = mock_dependencies['append_event'].call_args
     hook_input = call_args[1].get('hook_input') or call_args[0][2]
-    assert hook_input['tool_response']['stdout'] == '[1000 bytes]'
-    assert hook_input['tool_response']['stdout_size'] == 1000
+    assert hook_input['tool_response']['stdout'] == f'[{len(large_output)} bytes]'
+    assert hook_input['tool_response']['stdout_size'] == len(large_output)
+    # The command is irreplaceable and rides along untouched regardless of size.
+    assert hook_input['tool_input']['command'] == 'echo hello'
 
 
 def test_exception_handling(mock_dependencies):

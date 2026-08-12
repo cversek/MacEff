@@ -21,7 +21,7 @@ from macf.utils import (
     detect_auto_mode
 )
 from macf.modes import detect_active_modes, anticipate_mode_change, format_mode_indicators, get_active_task_type_marker
-from macf.agent_events_log import append_event
+from macf.agent_events_log import append_event, elide_large_values
 from macf.event_queries import get_active_policy_injections_from_events
 from macf.hooks.hook_logging import log_hook_event
 from macf.observability import Warning, emit_warning
@@ -150,10 +150,15 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         if "file_path" in tool_input:
             event_data["file_path"] = tool_input["file_path"]
 
+        # Same size-based elision as the completed path. This path had no guard
+        # at all and wrote the payload verbatim. Note what the exemption list
+        # buys here: a Bash command is the record of what was run and cannot be
+        # reconstructed, so it is carried whole however long it gets, while a
+        # file's contents written through the same call are not.
         append_event(
             event="tool_call_started",
             data=event_data,
-            hook_input=data
+            hook_input=elide_large_values(data)
         )
 
         # Get token info for smoke test
