@@ -1,6 +1,6 @@
 # Roadmaps Policy: Drafting & Planning
 
-**Version**: 2.3
+**Version**: 2.4
 **Tier**: MANDATORY
 **Category**: Consciousness - Planning
 **Status**: ACTIVE
@@ -36,10 +36,22 @@ Roadmaps are **strategic planning artifacts** that preserve complex development 
 
 ### Optional But Recommended
 
-- Investigation projects with uncertain scope
-- Experimental work requiring structured exploration
+- Investigation projects whose *implementation* scope is uncertain
 - Documentation projects with multiple deliverables
 - Integration work across repositories
+
+### Not This Policy — Use `experiments.md`
+
+- Work that tests whether an approach is right, rather than building it
+- Anything the operator asked for as an experiment
+- Structured exploration whose deliverable is a finding rather than shipped code
+
+These read as roadmap triggers because they are uncertain and multi-step, and
+uncertainty is on the list above. The distinction is *what the uncertainty is
+about*: how much work there is, versus whether the approach is sound. A roadmap
+spends certainty; an experiment produces it. `experiments.md` §1.0 carries the
+full comparison, and §8 there covers converting a validated experiment into a
+roadmap — which is the intended route to implementation, not a detour around it.
 
 ### When NOT Required
 
@@ -346,13 +358,30 @@ The Explore subagent is designed for codebase discovery without making changes:
 
 ### Complexity Triggers
 
+**First, check it is a roadmap at all.** A roadmap implements: it commits, it
+lives on a branch, and it is PR'd into the main tree. If the work is instead
+*requirements gathering* — non-committal, repro kept in a CA directory out of the
+main tree, and finished when it has an answer rather than when it has shipped —
+it is an experiment. See `experiments.md` §1.0 for the dimensions, and §8 there
+for converting a validated experiment into a roadmap.
+
+Note that "I already know the implementation" does not settle it. That belief is
+the assumption an experiment exists to test, and it is the ordinary condition
+rather than a special one.
+
 **Create roadmap when work has**:
 - **Multiple phases** (>3 distinct stages)
-- **Uncertain scope** (investigation or exploration)
+- **Uncertain scope** — but see the caution below
 - **Coordination needs** (multiple agents or specialists)
 - **Temporal span** (crosses compaction boundaries)
 - **Risk factors** (architecture changes, migrations)
 - **Delegation requirements** (specialist handoffs)
+
+**Caution on uncertain scope**: uncertainty about *how much implementation work
+there is* is a roadmap trigger. Uncertainty about *whether the approach is right*
+is not — that is an experiment, and building a roadmap on it spends certainty the
+work does not yet have. Investigation and exploration belong to experiments;
+roadmaps consume their findings.
 
 ### Decision Tree
 
