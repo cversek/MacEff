@@ -201,3 +201,145 @@ class TestSprintPlayTimeNoSelfCollision:
         assert f.exists()
         data = json.loads(f.read_text())
         assert "provisional" not in data["subject"]
+
+
+class TestStoreInit:
+    """Provisioning builds the store; it is not opted into after the fact.
+
+    Nothing in agent init, config init, or any downstream provisioning script
+    created the directory or wrote the config key, so every provisioned agent
+    silently ran on the session-scoped legacy store -- the one CC deletes from
+    and a fork duplicates.
+    """
+
+    def _run(self, home):
+        import argparse
+        from macf.cli import cmd_task_store_init
+        return cmd_task_store_init(argparse.Namespace(home=str(home)))
+
+    def test_creates_store_and_sets_mode_on_a_bare_home(self, tmp_path):
+        assert self._run(tmp_path) == 0
+        assert (tmp_path / "agent" / "public" / "tasks").is_dir()
+        cfg = json.loads((tmp_path / ".maceff" / "config.json").read_text())
+        assert cfg["task_store"]["mode"] == "home"
+
+    def test_preserves_existing_config_keys(self, tmp_path):
+        """A provisioned home already holds identity and hook settings. Pointing
+        it at a new store must not be a rewrite."""
+        maceff = tmp_path / ".maceff"
+        maceff.mkdir()
+        (maceff / "config.json").write_text(json.dumps(
+            {"agent_identity": {"moniker": "Keep Me"}, "hooks": {"capture_output": True}}))
+        assert self._run(tmp_path) == 0
+        cfg = json.loads((maceff / "config.json").read_text())
+        assert cfg["agent_identity"]["moniker"] == "Keep Me"
+        assert cfg["hooks"]["capture_output"] is True
+        assert cfg["task_store"]["mode"] == "home"
+
+    def test_idempotent(self, tmp_path):
+        assert self._run(tmp_path) == 0
+        assert self._run(tmp_path) == 0
+        cfg = json.loads((tmp_path / ".maceff" / "config.json").read_text())
+        assert cfg["task_store"]["mode"] == "home"
+
+    def test_refuses_to_clobber_an_unreadable_config(self, tmp_path):
+        """CONTROL on the read-modify-write: corrupt config must abort, not be
+        silently replaced with a fresh one that drops the agent's identity."""
+        maceff = tmp_path / ".maceff"
+        maceff.mkdir()
+        (maceff / "config.json").write_text("{not json")
+        assert self._run(tmp_path) == 1
+        assert (maceff / "config.json").read_text() == "{not json"
+
+
+class TestMigrateEveryLegacyDirectory:
+    """Migrating only the live session leaves a directory nothing will mention.
+
+    An agent that has been continued, rewound or forked has several session
+    dirs. The old implementation resolved exactly one -- the current session --
+    and reported success, which is a partial result shaped like a complete one.
+    """
+
+    @pytest.fixture
+    def legacy_agent(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("MACF_TASKS_DIR", raising=False)
+        monkeypatch.delenv("MACF_TASK_STORE_DIR", raising=False)
+        monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(tmp_path))
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+        find_agent_home.cache_clear()
+        (tmp_path / ".maceff").mkdir()
+        tasks = tmp_path / ".claude" / "tasks"
+        (tasks / "aaaa-1111").mkdir(parents=True)
+        (tasks / "bbbb-2222").mkdir(parents=True)
+        yield tmp_path
+        find_agent_home.cache_clear()
+
+    def _run(self, dry_run=False, force=False):
+        import argparse
+        from macf.cli import cmd_task_migrate_store
+        return cmd_task_migrate_store(
+            argparse.Namespace(dry_run=dry_run, force=force))
+
+    def test_migrates_tasks_from_every_directory(self, legacy_agent):
+        t = legacy_agent / ".claude" / "tasks"
+        (t / "aaaa-1111" / "1.json").write_text('{"id": "1"}')
+        (t / "bbbb-2222" / "2.json").write_text('{"id": "2"}')
+        assert self._run() == 0
+        store = legacy_agent / "agent" / "public" / "tasks"
+        # The second assertion is the one that matters: migrating only the
+        # "current" directory satisfies the first and fails this.
+        assert (store / "1.json").exists()
+        assert (store / "2.json").exists(), "a whole legacy directory was stranded"
+
+    def test_normalises_the_hidden_dot_prefix(self, legacy_agent):
+        """The prefix exists only to hide files from CC's scanner, which never
+        looks at the home store. Carrying it in leaves one directory with two
+        conventions, and shell globs skip the dotted half."""
+        t = legacy_agent / ".claude" / "tasks"
+        (t / "aaaa-1111" / ".7.json").write_text('{"id": "7"}')
+        assert self._run() == 0
+        store = legacy_agent / "agent" / "public" / "tasks"
+        assert (store / "7.json").exists()
+        assert not (store / ".7.json").exists()
+
+    def test_identical_copies_across_directories_are_not_a_conflict(self, legacy_agent):
+        t = legacy_agent / ".claude" / "tasks"
+        (t / "aaaa-1111" / "5.json").write_text('{"id": "5"}')
+        (t / "bbbb-2222" / "5.json").write_text('{"id": "5"}')
+        assert self._run() == 0
+        assert (legacy_agent / "agent" / "public" / "tasks" / "5.json").exists()
+
+    def test_divergent_copies_refuse_rather_than_choose(self, legacy_agent):
+        """A fork copies the store and both sides move on. Choosing silently
+        discards whichever copy lost a coin toss."""
+        t = legacy_agent / ".claude" / "tasks"
+        (t / "aaaa-1111" / "5.json").write_text('{"id": "5", "v": "old"}')
+        (t / "bbbb-2222" / "5.json").write_text('{"id": "5", "v": "new"}')
+        assert self._run() == 1
+        assert not (legacy_agent / "agent" / "public" / "tasks" / "5.json").exists()
+        cfg = json.loads((legacy_agent / ".maceff" / "config.json").read_text() or "{}") \
+            if (legacy_agent / ".maceff" / "config.json").exists() else {}
+        assert (cfg.get("task_store") or {}).get("mode") != "home", \
+            "config must not flip when the migration refused"
+
+    def test_force_takes_the_newest_divergent_copy(self, legacy_agent):
+        import os, time
+        t = legacy_agent / ".claude" / "tasks"
+        old = t / "aaaa-1111" / "5.json"
+        new = t / "bbbb-2222" / "5.json"
+        old.write_text('{"id": "5", "v": "old"}')
+        new.write_text('{"id": "5", "v": "new"}')
+        os.utime(old, (1000, 1000))
+        os.utime(new, (2000, 2000))
+        assert self._run(force=True) == 0
+        got = (legacy_agent / "agent" / "public" / "tasks" / "5.json").read_text()
+        assert '"new"' in got
+
+    def test_dry_run_touches_nothing(self, legacy_agent):
+        t = legacy_agent / ".claude" / "tasks"
+        (t / "aaaa-1111" / "1.json").write_text('{"id": "1"}')
+        assert self._run(dry_run=True) == 0
+        assert not (legacy_agent / "agent" / "public" / "tasks" / "1.json").exists()
+
+    def test_empty_legacy_refuses(self, legacy_agent):
+        assert self._run() == 1
