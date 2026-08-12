@@ -148,14 +148,24 @@ class TestMigrateStore:
         )
 
     def test_migrates_including_hidden_completed_tasks(self, tmp_path):
+        """Hidden completed tasks must survive the move — under plain names.
+
+        The guarantee this test was written for is unchanged: a dot-prefixed
+        completed task is not dropped. What changed is the name it lands under.
+        The prefix exists solely to hide files from CC's scanner, which never
+        looks at the home store, so carrying it across leaves one directory
+        holding two conventions — and shell globs skip dotfiles, so anyone
+        counting with `ls *.json` silently undercounts completed work.
+        """
         home, _ = self._legacy_setup(tmp_path)
         result = self._run(home, tmp_path)
         assert result.returncode == 0, result.stdout + result.stderr
 
         target = home / "agent" / "public" / "tasks"
         names = {p.name for p in target.iterdir()}
-        assert names == {"000.json", "1.json", "2.json", ".3.json"}, names
-        assert ".3.json" in names, "hidden completed task was dropped"
+        assert names == {"000.json", "1.json", "2.json", "3.json"}, names
+        assert "3.json" in names, "hidden completed task was dropped"
+        assert ".3.json" not in names, "dot prefix carried into the home store"
 
     def test_config_is_flipped_to_home(self, tmp_path):
         home, _ = self._legacy_setup(tmp_path)

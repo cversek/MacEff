@@ -5571,6 +5571,78 @@ def _doctor_check_subject_markers(tasks) -> "list[tuple[str, str, str]]":
     return findings
 
 
+def cmd_task_store_init(args: argparse.Namespace) -> int:
+    """Provision the home task store for an agent home, idempotently.
+
+    This is the mechanism provisioning calls so the home store is *built*
+    rather than opted into. It had been neither: nothing in agent init, config
+    init or any downstream provisioning script created the directory or wrote
+    the config key, so every agent silently ran on the session-scoped legacy
+    store — the one CC deletes from and that a fork duplicates.
+
+    Deliberately does NOT migrate. Provisioning a fresh home and rescuing an
+    existing history are different operations with different failure modes, and
+    a command that quietly did both would make ``--dry-run`` mean two things.
+    Use ``task migrate-store`` for the second.
+
+    Idempotent: safe to run on every provision and every upgrade.
+    """
+    from .task.reader import TaskReader
+
+    if getattr(args, "home", None):
+        agent_home = Path(args.home).expanduser()
+        if not agent_home.is_dir():
+            print(f"❌ Not a directory: {agent_home}", file=sys.stderr)
+            return 1
+    else:
+        agent_home = find_agent_home()
+        if not agent_home:
+            print("❌ Could not determine the agent home; pass --home.",
+                  file=sys.stderr)
+            return 1
+
+    _, rel = TaskReader._load_task_store_config()
+    store = agent_home / rel
+    config_path = agent_home / ".maceff" / "config.json"
+
+    created = not store.exists()
+    try:
+        store.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        print(f"❌ Could not create {store}: {e}", file=sys.stderr)
+        return 1
+    print(f"{'✅ Created' if created else '✓ Present'}: {store}")
+
+    # Read-modify-write. A fresh home has no config at all, and an existing one
+    # holds identity and hook settings that must survive being pointed at a new
+    # store.
+    config = {}
+    if config_path.exists():
+        try:
+            config = json.loads(config_path.read_text())
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"❌ Refusing to overwrite unreadable {config_path}: {e}",
+                  file=sys.stderr)
+            print("   The directory exists; fix the config and re-run.")
+            return 1
+
+    was = (config.get("task_store") or {}).get("mode")
+    config.setdefault("task_store", {})
+    config["task_store"]["mode"] = "home"
+    config["task_store"].setdefault("path", rel)
+    try:
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(json.dumps(config, indent=2) + "\n")
+    except OSError as e:
+        print(f"❌ Could not write {config_path}: {e}", file=sys.stderr)
+        return 1
+    print(f"{'✓ Already' if was == 'home' else '✅ Set'}: "
+          f"task_store.mode = home  ({config_path})")
+
+    _ensure_store_gitignored_for_migration(store)
+    return 0
+
+
 def cmd_task_migrate_store(args: argparse.Namespace) -> int:
     """Move the legacy per-session task store into the project-scoped home store.
 
@@ -5588,6 +5660,16 @@ def cmd_task_migrate_store(args: argparse.Namespace) -> int:
 
     The legacy directory is never deleted. Reverting is a one-line config edit
     as long as it is still there.
+
+    **Every** legacy session directory is migrated, not just the current one. An
+    agent that has been continued, rewound or forked has several, and migrating
+    only the session that happens to be live produces a result shaped exactly
+    like a complete one: a success message, a populated store, and a directory
+    left behind that nothing will ever mention again.
+
+    Dot-prefixed completed tasks are normalised to plain ``{id}.json`` on the
+    way in, because the prefix exists solely to hide files from CC's scanner and
+    the home store is never scanned.
     """
     import hashlib
     from .task import TaskReader
@@ -5595,39 +5677,97 @@ def cmd_task_migrate_store(args: argparse.Namespace) -> int:
     dry_run = getattr(args, "dry_run", False)
     force = getattr(args, "force", False)
 
+    def _digest(p):
+        return hashlib.sha256(p.read_bytes()).hexdigest()
+
     mode, rel = TaskReader._load_task_store_config()
     if mode == "home" and not force:
         print("✅ Already on the home store — nothing to migrate.")
-        print("   Re-run with --force to copy the current session's legacy "
-              "files in anyway.")
+        print("   Re-run with --force to copy any remaining legacy files in.")
         return 0
 
-    legacy = TaskReader(session_uuid=TaskReader()._detect_current_session())
-    source = legacy.session_path
-    if not source or not source.exists():
-        print(f"❌ No legacy task store found for the current session.")
+    # Every session directory, oldest first, not merely the live one.
+    #
+    # Resolved through TaskReader rather than from Path.home(): MACF_TASKS_DIR
+    # relocates the legacy root for isolation, and reading ~/.claude directly
+    # ignores it — which points a sandboxed run at the real store. The mirror of
+    # the leak reader.py guards against in the other direction.
+    cc_root = TaskReader._get_tasks_dir()
+    source_dirs = sorted(
+        (d for d in cc_root.glob("*/") if d.is_dir()),
+        key=lambda d: d.name,
+    ) if cc_root.exists() else []
+    if not source_dirs:
+        print("❌ No legacy task store found under "
+              f"{cc_root} — nothing to migrate.")
         return 1
 
     agent_home = find_agent_home()
     target = agent_home / rel
     config_path = agent_home / ".maceff" / "config.json"
 
-    files = legacy.list_task_files(include_hidden=True)
-    hidden = [f for f in files if f.name.startswith(".")]
+    # Gather every file from every directory, keyed by the name it will land
+    # under. Normalising the dot prefix here is what makes two directories
+    # comparable at all: ".7.json" and "7.json" are the same task.
+    by_target_name = {}
+    total_seen = 0
     print(f"📦 Migrate task store")
-    print(f"   from: {source}  ({len(files)} files, {len(hidden)} hidden)")
+    for d in source_dirs:
+        files = TaskReader(session_uuid=d.name).list_task_files(include_hidden=True)
+        hidden = [f for f in files if f.name.startswith(".")]
+        total_seen += len(files)
+        print(f"   from: {d}  ({len(files)} files, {len(hidden)} hidden)")
+        for f in files:
+            by_target_name.setdefault(f.name.lstrip("."), []).append(f)
     print(f"   to:   {target}")
     print(f"   config: {config_path}")
+    print(f"   {total_seen} file(s) across {len(source_dirs)} directory(ies) "
+          f"-> {len(by_target_name)} task(s)")
 
-    if not files:
+    if not by_target_name:
         print("❌ Legacy store is empty — refusing to migrate nothing.")
         return 1
 
+    # Divergence between directories. A fork copies the store and both sides
+    # then move on, so the same id can exist twice with different content.
+    # Choosing silently would discard whichever copy lost a coin toss.
+    conflicts = {}
+    chosen = {}
+    for name, candidates in sorted(by_target_name.items()):
+        digests = {_digest(c) for c in candidates}
+        if len(digests) == 1:
+            chosen[name] = candidates[0]
+        else:
+            conflicts[name] = candidates
+            chosen[name] = max(candidates, key=lambda p: p.stat().st_mtime)
+
+    if conflicts and not force:
+        print(f"\n❌ {len(conflicts)} task(s) differ between legacy directories:")
+        for name, cands in list(conflicts.items())[:5]:
+            print(f"   {name}")
+            for c in sorted(cands, key=lambda p: p.stat().st_mtime, reverse=True):
+                stamp = datetime.fromtimestamp(c.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+                print(f"      {stamp}  {c.parent.name}/{c.name}")
+        if len(conflicts) > 5:
+            print(f"   ... and {len(conflicts) - 5} more")
+        print("\n   Refusing to choose for you. Re-run with --force to take the "
+              "most recently modified copy of each,")
+        print("   which is reported per file so the discarded ones are named "
+              "rather than silently dropped.")
+        return 1
+    if conflicts:
+        print(f"\n⚠️  {len(conflicts)} divergent task(s); taking most recent:")
+        for name, cands in sorted(conflicts.items()):
+            keep = chosen[name]
+            dropped = [f"{c.parent.name}/{c.name}" for c in cands if c is not keep]
+            print(f"   {name}: keeping {keep.parent.name}/{keep.name}, "
+                  f"discarding {', '.join(dropped)}")
+
     collisions = []
     if target.exists():
-        for f in files:
-            if (target / f.name).exists():
-                collisions.append(f.name)
+        for name in chosen:
+            if (target / name).exists():
+                collisions.append(name)
     if collisions and not force:
         print(f"\n❌ {len(collisions)} file(s) already exist in the target "
               f"(e.g. {collisions[:3]}).")
@@ -5641,25 +5781,22 @@ def cmd_task_migrate_store(args: argparse.Namespace) -> int:
     # 1. COPY
     target.mkdir(parents=True, exist_ok=True)
     copied = 0
-    for f in files:
+    for name, src in sorted(chosen.items()):
         try:
-            (target / f.name).write_bytes(f.read_bytes())
+            (target / name).write_bytes(src.read_bytes())
             copied += 1
         except OSError as e:
-            print(f"❌ Copy failed at {f.name}: {e}", file=sys.stderr)
+            print(f"❌ Copy failed at {name}: {e}", file=sys.stderr)
             print("   Config NOT flipped; the legacy store is untouched.")
             return 1
 
     # 2. VERIFY before flipping. A config pointed at an unverified store fails
     #    later, elsewhere, and looks like data loss rather than a bad copy.
-    def _digest(p):
-        return hashlib.sha256(p.read_bytes()).hexdigest()
-
     mismatched = []
-    for f in files:
-        dest = target / f.name
-        if not dest.exists() or _digest(dest) != _digest(f):
-            mismatched.append(f.name)
+    for name, src in chosen.items():
+        dest = target / name
+        if not dest.exists() or _digest(dest) != _digest(src):
+            mismatched.append(name)
     if mismatched:
         print(f"\n❌ Verification failed for {len(mismatched)} file(s): "
               f"{mismatched[:5]}")
@@ -5692,7 +5829,9 @@ def cmd_task_migrate_store(args: argparse.Namespace) -> int:
     # helper gates on — calling it before the flip would silently no-op.
     _ensure_store_gitignored_for_migration(target)
 
-    print(f"\n📁 The legacy store is retained at:\n   {source}")
+    print("\n📁 The legacy store(s) are retained at:")
+    for d in source_dirs:
+        print(f"   {d}")
     print("   Nothing was deleted — revert by setting task_store.mode back to "
           "\"legacy\".")
     print("\n▶️  Verify with: macf_tools task tree")
@@ -8343,7 +8482,8 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
 
     if success:
         # Hide completed task file from CC's native scanner (dot-prefix).
-        # No-op in the home store, which CC never scans — report accordingly.
+        # hide_task_file guards this itself — it returns early for a non-CC
+        # store — so the call is safe everywhere and only the report is gated.
         from .task.reader import hide_task_file, _is_cc_session_dir
         if reader.session_path:
             hide_task_file(reader.session_path, str(task_id))
@@ -10170,6 +10310,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="proceed even if the target already holds files of the same name",
     )
     task_migrate_parser.set_defaults(func=cmd_task_migrate_store)
+
+    task_store_init_parser = task_sub.add_parser(
+        "store-init",
+        help="provision the home task store and point the config at it",
+    )
+    task_store_init_parser.add_argument(
+        "--home", default=None,
+        help="agent home to provision (default: this agent's home)",
+    )
+    task_store_init_parser.set_defaults(func=cmd_task_store_init)
 
     task_trace_parser = task_sub.add_parser(
         "trace",

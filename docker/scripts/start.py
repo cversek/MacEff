@@ -192,6 +192,62 @@ If you extend the convention, leave a note here so it stays shared.
 """
 
 
+def create_task_store(public: Path, username: str) -> Path:
+    """Create the agent's live task store under agent/public/.
+
+    This is the store, not ``task_archives`` beside it — the archive existed in
+    provisioning for a long time while the store it archives from did not, which
+    is how the gap stayed invisible.
+
+    Its absence is silent and expensive. Without this directory (and the
+    matching ``task_store.mode`` key, see ``configure_task_store``) macf falls
+    back to CC's per-session store: completed tasks are deleted once the last
+    open task closes, and a continue/rewind forks the store into copies that
+    then diverge. Everything works until history is expected to survive.
+
+    Must run at init time for the same reason as the mailbox: agent/public/ is
+    550 under immutable_structure, so the agent cannot create it afterwards.
+    """
+    tasks = public / 'tasks'
+    tasks.mkdir(mode=0o750, exist_ok=True)
+    run_command(['chown', f'{username}:agents_all', str(tasks)])
+    run_command(['chmod', '750', str(tasks)])
+    return tasks
+
+
+def configure_task_store(maceff_dir: Path, username: str) -> bool:
+    """Point the agent's config at the home task store. Returns True if usable.
+
+    The directory alone is not enough: without this key macf reads the legacy
+    per-session store and the provisioned directory sits empty and unread. Both
+    halves or neither.
+
+    Read-modify-write, because an upgrade path finds a config already holding
+    identity and hook settings — pointing an agent at a store is not a reason to
+    discard who it is. An unreadable config is left untouched and reported
+    rather than replaced, since overwriting it would destroy exactly the
+    information nobody can reconstruct.
+    """
+    config_file = maceff_dir / 'config.json'
+    config_data = {}
+    if config_file.exists():
+        try:
+            config_data = json.loads(config_file.read_text())
+        except (OSError, json.JSONDecodeError) as e:
+            log(f"WARNING: {config_file} unreadable ({e}); leaving it alone. "
+                f"{username} will fall back to the legacy task store.")
+            return False
+    if (config_data.get('task_store') or {}).get('mode') != 'home':
+        config_data.setdefault('task_store', {})
+        config_data['task_store']['mode'] = 'home'
+        config_data['task_store'].setdefault('path', 'agent/public/tasks')
+        config_file.write_text(json.dumps(config_data, indent=2) + '\n')
+        log(f"Set task_store.mode=home for {username}")
+    run_command(['chown', f'{username}:{username}', str(config_file)])
+    run_command(['chmod', '600', str(config_file)])
+    return True
+
+
 def create_amail_tree(public: Path, username: str) -> Path:
     """Create the agent's amail mailbox under agent/public/.
 
@@ -754,6 +810,9 @@ def create_agent_tree(username: str, agent_spec: AgentSpec, defaults_config: Opt
     run_command(['chown', f'{username}:agents_all', str(task_archives)])
     run_command(['chmod', '750', str(task_archives)])
 
+    # Create the live task store (MACF infrastructure, always needed).
+    create_task_store(public, username)
+
     # Create the amail mailbox (MACF infrastructure, always needed).
     create_amail_tree(public, username)
 
@@ -798,6 +857,9 @@ def create_agent_tree(username: str, agent_spec: AgentSpec, defaults_config: Opt
         log(f"Initialized agent_state.json for {username}")
     run_command(['chown', f'{username}:{username}', str(state_file)])
     run_command(['chmod', '600', str(state_file)])
+
+    # Point the agent at the home task store (pairs with create_task_store).
+    configure_task_store(maceff_dir, username)
 
 
 def create_personal_policies(username: str) -> None:
