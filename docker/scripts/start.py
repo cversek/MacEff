@@ -382,6 +382,13 @@ def create_pa_user(agent_name: str, agent_spec: AgentSpec, defaults_dict: Option
     # Configure Claude Code settings (merge defaults + agent-specific)
     configure_claude_settings(username, agent_name, agent_spec, defaults_dict)
 
+    # Install/refresh the channel plugins those channels point at -- the
+    # declaration above is only self-fulfilling if the software it names
+    # actually lands on the home. Vanilla homes skip it for the same reason
+    # create_bash_init drops their channels block.
+    if not getattr(agent_spec, 'is_vanilla', False):
+        ensure_channel_plugins(username, channels)
+
 
 KEY_LINE_PREFIXES = ('ssh-', 'ecdsa-', 'sk-ssh-', 'sk-ecdsa-')
 
@@ -598,6 +605,67 @@ fi
 
     run_command(['chown', f'{username}:{username}', str(bashrc)])
     log(f"Bashrc configured for active_project: {username}")
+
+
+# Marketplace sources the provisioner may add on a fresh home. A channel naming
+# a marketplace not listed here is skipped with a warning rather than guessed
+# at -- provisioning must not invent a source for third-party code.
+KNOWN_MARKETPLACE_SOURCES = {
+    'claude-plugins-official': 'anthropics/claude-plugins-official',
+}
+
+
+def ensure_channel_plugins(username: str, channels: Optional[List[str]]) -> None:
+    """Install or update each channel plugin an agent's config declares.
+
+    agents.yaml ``claude_config.channels`` declares strings like
+    ``plugin:telegram@claude-plugins-official``. The harness hands them to
+    ``--channels`` at session launch, but until this step nothing provisioned
+    the plugin they name -- an agent could hold a channel flag pointing at
+    software that was never installed (observed on a fresh deployment,
+    2026-08-13). This makes the declaration self-fulfilling: every container
+    start installs a missing plugin and updates a present one.
+
+    Non-fatal throughout, by design: a container that starts offline must
+    still boot with whatever version it already has. Each CLI call is wrapped
+    in ``timeout`` so a hung network fetch cannot stall provisioning.
+    """
+    if not channels:
+        return
+
+    def as_user(cmd: str) -> None:
+        run_command(['su', '-', username, '-c', f'timeout 90 {cmd}'],
+                    check=False)
+
+    plugins_dir = HOME_ROOT / username / '.claude' / 'plugins'
+    for channel in channels:
+        if not channel.startswith('plugin:') or '@' not in channel:
+            continue
+        plugin_id = channel[len('plugin:'):]
+        _, marketplace = plugin_id.split('@', 1)
+
+        marketplaces_file = plugins_dir / 'known_marketplaces.json'
+        known = marketplaces_file.exists() and \
+            marketplace in marketplaces_file.read_text()
+        if not known:
+            source = KNOWN_MARKETPLACE_SOURCES.get(marketplace)
+            if source is None:
+                log(f"Channel plugin {plugin_id}: marketplace {marketplace!r} "
+                    f"has no known source; skipping (add it to "
+                    f"KNOWN_MARKETPLACE_SOURCES or pre-configure the home)")
+                continue
+            as_user(f'claude plugin marketplace add {source}')
+        else:
+            as_user(f'claude plugin marketplace update {marketplace}')
+
+        installed_file = plugins_dir / 'installed_plugins.json'
+        installed = installed_file.exists() and \
+            plugin_id in installed_file.read_text()
+        if installed:
+            as_user(f'claude plugin update {plugin_id}')
+        else:
+            as_user(f'claude plugin install {plugin_id}')
+        log(f"Channel plugin ensured for {username}: {plugin_id}")
 
 
 def configure_claude_settings(
