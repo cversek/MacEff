@@ -3,8 +3,10 @@ Integration tests for task CLI commands.
 
 Tests the task management commands introduced in v0.4.0:
 - task create (mission, experiment, phase, bug, deleg, task)
-- task archive/restore
 - task grant-update/grant-delete
+
+(The archive/restore/archived trio was retired — its deprecation is
+covered by test_task_archive_deprecated.py.)
 
 Uses subprocess to invoke macf_tools CLI as real integration tests.
 
@@ -257,134 +259,35 @@ class TestTaskCreateDelegCommand:
         assert result.returncode != 0
 
 
-class TestTaskArchiveCommand:
-    """Test macf_tools task archive command."""
+class TestTreeScopeMarkersFromEventLog:
+    """The tree's scope markers come from the event-sourced scope state, not the
+    drift-prone per-task MTMD scope_status field."""
 
-    def test_archive_nonexistent_task_fails(self, isolated_task_env):
-        """Test archiving a nonexistent task fails gracefully."""
-        result = subprocess.run(
-            ['macf_tools', 'task', 'archive', '999'],
-            capture_output=True, text=True, env=isolated_task_env['env']
-        )
+    def test_active_from_events_shows_marker_even_when_mtmd_absent(self, isolated_task_env):
+        """The discriminating case: a task active in the EVENT LOG but with no MTMD
+        scope_status must still show 👀. Fails against the old MTMD-sourced render."""
+        import re
+        env = isolated_task_env['env']
+        tid = str(json.loads(subprocess.run(
+            ['macf_tools', 'task', 'create', 'task', 'Scoped', '--plan', 'p', '--json'],
+            capture_output=True, text=True, env=env).stdout)['task_id'])
 
-        assert result.returncode != 0
-        assert 'not found' in result.stdout.lower() or 'not found' in result.stderr.lower()
+        # Scope it (writes both the scope_activated event and the MTMD field)...
+        subprocess.run(['macf_tools', 'task', 'scope', 'set', tid],
+                       capture_output=True, text=True, env=env)
+        # ...then force the store drift: strip scope_status from the task file so
+        # ONLY the event log knows the task is scoped.
+        tf = isolated_task_env['session_dir'] / f"{tid}.json"
+        data = json.loads(tf.read_text())
+        data['description'] = re.sub(r'\n?scope_status:[^\n]*', '', data.get('description', ''))
+        tf.write_text(json.dumps(data))
+        assert 'scope_status' not in tf.read_text(), "precondition: MTMD scope_status stripped"
 
-    def test_archive_existing_task(self, isolated_task_env):
-        """Test archiving an existing task."""
-        # Create a task first
-        create_result = subprocess.run(
-            ['macf_tools', 'task', 'create', 'task', 'Task to Archive', '--plan', 'Archive test'],
-            capture_output=True, text=True, env=isolated_task_env['env']
-        )
-        assert create_result.returncode == 0
-
-        # Archive it (assuming it gets ID 1)
-        result = subprocess.run(
-            ['macf_tools', 'task', 'archive', '1'],
-            capture_output=True, text=True, env=isolated_task_env['env']
-        )
-
-        assert result.returncode == 0
-        assert 'archived' in result.stdout.lower()
-
-    def test_archive_with_no_cascade(self, isolated_task_env):
-        """Test archive --no-cascade flag."""
-        # Create a parent task
-        parent_result = subprocess.run(
-            ['macf_tools', 'task', 'create', 'task', 'Parent', '--plan', 'Parent test'],
-            capture_output=True, text=True, env=isolated_task_env['env']
-        )
-        assert parent_result.returncode == 0
-
-        # Archive with --no-cascade
-        result = subprocess.run(
-            ['macf_tools', 'task', 'archive', '1', '--no-cascade'],
-            capture_output=True, text=True, env=isolated_task_env['env']
-        )
-
-        # Should succeed
-        assert result.returncode == 0
-
-
-class TestTaskRestoreCommand:
-    """Test macf_tools task restore command."""
-
-    def test_restore_requires_archive_path(self, isolated_task_env):
-        """Test restore command with missing archive."""
-        result = subprocess.run(
-            ['macf_tools', 'task', 'restore', 'nonexistent.json'],
-            capture_output=True, text=True, env=isolated_task_env['env']
-        )
-
-        # Should fail or report not found
-        assert result.returncode != 0 or 'not found' in result.stdout.lower()
-
-    def test_restore_json_output(self, isolated_task_env):
-        """Test restore --json flag format."""
-        # Create and archive a task first
-        create_result = subprocess.run(
-            ['macf_tools', 'task', 'create', 'task', 'Test Restore', '--plan', 'Restore test'],
-            capture_output=True, text=True, env=isolated_task_env['env']
-        )
-        assert create_result.returncode == 0
-
-        archive_result = subprocess.run(
-            ['macf_tools', 'task', 'archive', '1'],
-            capture_output=True, text=True, env=isolated_task_env['env']
-        )
-        assert archive_result.returncode == 0
-
-        # Try to restore with --json (may fail if archive path is complex)
-        result = subprocess.run(
-            ['macf_tools', 'task', 'restore', '1', '--json'],
-            capture_output=True, text=True, env=isolated_task_env['env']
-        )
-
-        # If successful, should be valid JSON
-        if result.returncode == 0:
-            restored_data = json.loads(result.stdout)
-            assert isinstance(restored_data, dict)
-
-
-class TestTaskArchivedListCommand:
-    """Test macf_tools task archived list command."""
-
-    def test_archived_list_empty(self, isolated_task_env):
-        """Test archived list with no archived tasks."""
-        result = subprocess.run(
-            ['macf_tools', 'task', 'archived', 'list'],
-            capture_output=True, text=True, env=isolated_task_env['env']
-        )
-
-        assert result.returncode == 0
-        # Should handle empty list gracefully
-        assert 'No archived tasks' in result.stdout or 'archive' in result.stdout.lower()
-
-    def test_archived_list_shows_archived_tasks(self, isolated_task_env):
-        """Test archived list shows archived tasks."""
-        # Create and archive a task
-        create_result = subprocess.run(
-            ['macf_tools', 'task', 'create', 'task', 'To Archive', '--plan', 'Archive list test'],
-            capture_output=True, text=True, env=isolated_task_env['env']
-        )
-        assert create_result.returncode == 0
-
-        archive_result = subprocess.run(
-            ['macf_tools', 'task', 'archive', '1'],
-            capture_output=True, text=True, env=isolated_task_env['env']
-        )
-        assert archive_result.returncode == 0
-
-        # List archived tasks
-        result = subprocess.run(
-            ['macf_tools', 'task', 'archived', 'list'],
-            capture_output=True, text=True, env=isolated_task_env['env']
-        )
-
-        assert result.returncode == 0
-        # Should show at least one archived task
-        assert 'archive' in result.stdout.lower()
+        tree = subprocess.run(['macf_tools', 'task', 'tree'],
+                              capture_output=True, text=True, env=env)
+        # 👀 is produced ONLY by the scope marker (not by any note), so this is a
+        # clean signal that the marker was sourced from the event log.
+        assert '👀' in tree.stdout, "event-active task must show 👀 despite absent MTMD scope_status"
 
 
 class TestTaskGrantUpdateCommand:
@@ -1111,20 +1014,33 @@ class TestTaskListCommand:
         assert 'Test task 100' in result.stdout
 
     def test_task_list_shows_scope_indicator_for_active_scope(self, isolated_task_env):
-        """Positive test: active scope shows 👀 indicator (the feature gh-48's bug gated)."""
-        self._write_task(isolated_task_env['session_dir'], 101, scope_status='active')
-        result = subprocess.run(
-            ['macf_tools', 'task', 'list'],
-            capture_output=True, text=True, env=isolated_task_env['env'])
+        """Positive test: a task active in the event-sourced scope shows 👀.
+
+        Scope is established through the event log (`scope set`) — the single source
+        of truth the list now reads — not by writing the MTMD scope_status field."""
+        env = isolated_task_env['env']
+        self._write_task(isolated_task_env['session_dir'], 101)
+        subprocess.run(['macf_tools', 'task', 'scope', 'set', '101'],
+                       capture_output=True, text=True, env=env)
+        result = subprocess.run(['macf_tools', 'task', 'list'],
+                                capture_output=True, text=True, env=env)
         assert result.returncode == 0, f'stderr: {result.stderr}'
         assert '👀' in result.stdout
 
     def test_task_list_shows_scope_indicator_for_inactive_scope(self, isolated_task_env):
-        """Inactive scope shows ✅ indicator."""
-        self._write_task(isolated_task_env['session_dir'], 102, scope_status='inactive')
-        result = subprocess.run(
-            ['macf_tools', 'task', 'list'],
-            capture_output=True, text=True, env=isolated_task_env['env'])
+        """A task completed while scoped shows ✅ (inactive) — event-sourced.
+
+        Two tasks are scoped and one completed; the other stays active so the scope
+        is not auto-cleared, leaving the completed one as inactive-in-scope."""
+        env = isolated_task_env['env']
+        self._write_task(isolated_task_env['session_dir'], 102)
+        self._write_task(isolated_task_env['session_dir'], 103)
+        subprocess.run(['macf_tools', 'task', 'scope', 'set', '102', '103'],
+                       capture_output=True, text=True, env=env)
+        subprocess.run(['macf_tools', 'task', 'complete', '102', '--report', 'done'],
+                       capture_output=True, text=True, env=env)
+        result = subprocess.run(['macf_tools', 'task', 'list', '--all'],
+                                capture_output=True, text=True, env=env)
         assert result.returncode == 0, f'stderr: {result.stderr}'
         assert '✅' in result.stdout
 
@@ -1446,3 +1362,131 @@ class TestTaskTreeSuccinctProgressiveDisclosure:
         out = self._tree(isolated_task_env['env'])
         assert 'COMPLETED MIDDLE' in out
         assert 'ACTIVE GRANDCHILD' in out, f"active grandchild hidden by collapse:\n{out}"
+
+
+class TestTaskTraceCommand:
+    """`task trace` surfaces the frame an interrupt left behind."""
+
+    def _seed(self, session_dir, task_id, status, ts, parent='"000"', task_type="TASK"):
+        (session_dir / f"{task_id}.json").write_text(json.dumps({
+            "id": task_id,
+            "subject": f"  #{task_id} work item",
+            "status": status,
+            "description": (
+                '<macf_task_metadata version="1.0">\n'
+                f'task_type: {task_type}\n'
+                'created_by: PA\n'
+                f'parent_id: {parent}\n'
+                'updates:\n'
+                f'  - breadcrumb: s_t/c_1/g_abc1234/p_none/t_{ts}\n'
+                '    description: touched\n'
+                '</macf_task_metadata>\n'
+            ),
+        }))
+
+    def _run(self, env, *args):
+        return subprocess.run(
+            ["macf_tools", "task", "trace", *args],
+            capture_output=True, text=True, env=env,
+        )
+
+    def test_reports_no_open_frames_on_a_clean_tree(self, isolated_task_env):
+        self._seed(isolated_task_env['session_dir'], "000", "in_progress", 100,
+                   parent="null", task_type="SENTINEL")
+        self._seed(isolated_task_env['session_dir'], "1", "completed", 200)
+
+        result = self._run(isolated_task_env['env'])
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "nothing in progress" in result.stdout
+
+    def test_surfaces_an_abandoned_frame(self, isolated_task_env):
+        session = isolated_task_env['session_dir']
+        self._seed(session, "000", "in_progress", 100, parent="null", task_type="SENTINEL")
+        self._seed(session, "5", "in_progress", 200)   # left behind
+        self._seed(session, "6", "completed", 900)     # attention moved here
+
+        result = self._run(isolated_task_env['env'])
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "#5" in result.stdout
+        assert "abandoned" in result.stdout
+        assert "macf_tools task start 5" in result.stdout, "must name the remedy"
+
+    def test_path_flag_shows_the_order_attention_moved(self, isolated_task_env):
+        """Newest first — this asserted the opposite until the ordering changed.
+
+        Kept rather than deleted: it is the test that caught the change, and
+        it now pins the current contract instead of the previous one.
+        """
+        session = isolated_task_env['session_dir']
+        self._seed(session, "000", "in_progress", 100, parent="null", task_type="SENTINEL")
+        self._seed(session, "5", "completed", 200)
+        self._seed(session, "6", "completed", 300)
+
+        result = self._run(isolated_task_env['env'], "--path", "5")
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "Where attention has been" in result.stdout
+        assert result.stdout.index("#6") < result.stdout.index("#5"), \
+            "the most recent touch must render first"
+
+
+class TestTaskTraceRendering:
+    """Newest-first, with truncation that admits it truncated."""
+
+    def _seed(self, session_dir, task_id, status, ts, note="touched", parent='"000"',
+              task_type="TASK"):
+        (session_dir / f"{task_id}.json").write_text(json.dumps({
+            "id": task_id,
+            "subject": f"  #{task_id} work item",
+            "status": status,
+            "description": (
+                '<macf_task_metadata version="1.0">\n'
+                f'task_type: {task_type}\n'
+                'created_by: PA\n'
+                f'parent_id: {parent}\n'
+                'updates:\n'
+                f'  - breadcrumb: s_t/c_1/g_abc1234/p_none/t_{ts}\n'
+                f'    description: {note}\n'
+                '</macf_task_metadata>\n'
+            ),
+        }))
+
+    def _run(self, env, *args):
+        return subprocess.run(["macf_tools", "task", "trace", *args],
+                              capture_output=True, text=True, env=env)
+
+    def test_path_renders_newest_first(self, isolated_task_env):
+        session = isolated_task_env['session_dir']
+        self._seed(session, "000", "in_progress", 100, parent="null", task_type="SENTINEL")
+        self._seed(session, "5", "completed", 200, note="older")
+        self._seed(session, "6", "completed", 300, note="newer")
+
+        out = self._run(isolated_task_env['env'], "--path", "5").stdout
+        assert out.index("#6") < out.index("#5"), "newest touch must render first"
+        assert "newest first" in out
+
+    def test_open_frames_stay_below_the_path(self, isolated_task_env):
+        """Follow-on instruction belongs at the end, where the eye lands last."""
+        session = isolated_task_env['session_dir']
+        self._seed(session, "000", "in_progress", 100, parent="null", task_type="SENTINEL")
+        self._seed(session, "5", "in_progress", 200)
+        self._seed(session, "6", "completed", 300)
+
+        out = self._run(isolated_task_env['env'], "--path", "5").stdout
+        assert out.index("Where attention has been") < out.index("Open frames")
+
+    def test_a_trimmed_note_says_so(self, isolated_task_env):
+        session = isolated_task_env['session_dir']
+        self._seed(session, "000", "in_progress", 100, parent="null", task_type="SENTINEL")
+        self._seed(session, "5", "completed", 200, note="x" * 200)
+
+        out = self._run(isolated_task_env['env'], "--path", "3").stdout
+        assert "…" in out, "a silently clipped note reads as a note that simply ended there"
+
+    def test_full_flag_does_not_trim(self, isolated_task_env):
+        session = isolated_task_env['session_dir']
+        self._seed(session, "000", "in_progress", 100, parent="null", task_type="SENTINEL")
+        self._seed(session, "5", "completed", 200, note="y" * 120)
+
+        out = self._run(isolated_task_env['env'], "--path", "3", "--full").stdout
+        assert "y" * 120 in out
+        assert "…" not in out

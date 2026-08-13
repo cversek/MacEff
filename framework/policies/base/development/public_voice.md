@@ -196,3 +196,13 @@ Public voice is a posture, not a costume. Do not explain, do not decorate, do no
 confess. Write cleanly and let the work speak.
 
 Everything in moderation, including moderation.
+
+---
+
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — external
+     voice on public and third-party surfaces. -->
+
+[[communication]] [[disclosure]] [[opsec]]

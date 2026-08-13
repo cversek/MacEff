@@ -1,10 +1,10 @@
 # Autonomous Operation Policy
 
-**Version**: 1.1
+**Version**: 1.3
 **Tier**: CORE
 **Category**: Operations
 **Status**: ACTIVE
-**Updated**: 2025-12-11
+**Updated**: 2026-08-09
 
 ---
 
@@ -41,6 +41,14 @@ Applies to all Primary Agents (PA) and Subagents (SA) capable of extended autono
 - What is the CLI token requirement?
 - Why two-factor authorization?
 - What does the agent do when authorization is missing?
+
+**3.2 Restartability Resolution (Capability-Drift Guard)**
+- What capability does AUTO_MODE presume but not verify?
+- Which measured observable resolves supervision, and which two must NOT be used?
+- How does behaviour branch on supervised vs unsupervised?
+- When is self-restart permitted vs a self-kill?
+- What makes "it rejoins, it does not fork" true — how is the one-live-supervisor-per-calling-card guarantee enforced, where, and why there?
+- What is the difference between rejoin and fork, and what is the sanctioned rejoin command vs the deliberate-second-instance override?
 
 **4 Mode-Specific Recovery Behavior**
 - How does MANUAL_MODE recovery work?
@@ -282,6 +290,93 @@ This command performs all settings changes atomically:
 **Step 3 - Session Restart**: The agent reminds the user to restart the session. CC does not re-read permission settings mid-session. Without restart, `Write` and other tool permissions retain their pre-switch state.
 
 **Verification**: After restart, `macf_tools mode get --json` should show `enabled: true`.
+
+### 3.2 Restartability Resolution After Activation (Capability-Drift Guard)
+
+AUTO_MODE presumes a capability it does not verify: that the session is
+**restartable and resumable**. Multi-cycle work surviving compaction (§2), the
+Step-3 restart that loads permissions (§3.1), a self-restart to reload settings, and
+harness-resume after a crash *all* assume a **supervisor** is watching. An
+**unsupervised** session that activates AUTO_MODE carries a silent capability
+mismatch: it behaves as if a crash will be recovered when, for it, a crash is
+**death**.
+
+**Before relying on any restart/resume behaviour, the agent MUST resolve its
+supervision state — from a *measured* observable, never from a name or a status
+line:**
+
+- **USE** the supervisor-registry resolution (`macf_tools env`): a registry entry
+  with `status=running`, cross-checked with a live-pid probe *and* the process's own
+  arguments. This is the observable that provably flips across the supervised and
+  unsupervised states.
+- **DO NOT** branch on an environment variable whose name merely *suggests* the
+  answer. `CLAUDE_CODE_CHILD_SESSION` is set in the supervised *interactive* session
+  as well as in any child, so it carries zero bits about supervision or fork-role —
+  the exact mistake an observable's name invites. An observable set identically in
+  both states you must separate is not a discriminator.
+- **DO NOT** trust the service-manager unit status. It can report `active (exited)`
+  while the supervisor is dead: a *reported* value is not an *enforced* one.
+
+**Branch on the result:**
+
+| Resolved state | Restart/resume assumptions | Self-restart | On crash |
+|---|---|---|---|
+| **Supervised** — the registry resolves a live supervisor for this agent | hold | **Permitted**: ride the supervisor's restart path (it rejoins, it does not fork) | the harness relaunches and the AUTO_MODE resume returns the turn |
+| **Unsupervised** — no live supervisor resolves | **do not hold** | **Forbidden**: a self-restart is a self-kill with no relaunch | the session is gone — no resume, no recovery |
+
+In the **unsupervised** case the agent MUST: (a) surface the state to the operator
+plainly, ideally announced at SessionStart rather than waiting to be asked; (b)
+never self-issue the §3.1 Step-3 restart — hand the operator a one-liner instead;
+(c) treat any interruption as terminal, so extended unattended autonomy is hazardous
+and should be declined or bounded until supervision exists.
+
+Observing supervision is **proprioception** and is always permitted; *driving* the
+restart is a separate, grant-gated write action. Self-restart under supervision is a
+real, safe capability; self-restart without it is the "never kill your own runtime"
+failure — the two arms of this one branch.
+
+#### 3.2.1 The Singleton Guarantee: One Live Supervisor per Calling Card
+
+The supervised row above promises self-restart "rejoins, it does not fork." That
+promise is only as good as its enforcement. The failure it guards against is the
+**fork**: two live supervisors under one calling card, hence two clients writing one
+task store. It has been observed in the wild — a restart kick plus a relaunch minted
+*concurrent* instances instead of rejoining, and unattended twins worked the same
+branch as the attended session. Fork-**join** through the substrate held (the twins
+honoured directives they never heard, by reading the staged task notes; reconciliation
+afterward was mechanical). What did not exist was fork **prevention**.
+
+The two operations are not symmetric and must not be confused:
+
+- **Rejoin (safe, sanctioned)**: `macf_tools auto-restart restart <supervisor-pid>`
+  signals the *existing* supervisor to cycle its child in place. No new supervisor, no
+  new terminal, no new client — the conversation resumes in the same session. This is
+  the self-restart the §3.2 table permits under supervision.
+- **Fork (hazard)**: launching a *second* supervisor for a calling card that already
+  has a live one — via a manual launch, a service-manager unit, or a recovery script.
+  Every one of these is a fork mint if it is not guarded.
+
+**The guarantee, enforced:** a supervisor refuses to be *born* if a live supervisor
+already owns its name. The check lives at the single point every birth path converges
+on — not at any one launcher — because a launcher-level check leaves every *other*
+launch door (notably a service-manager unit invoking the supervisor module directly)
+unguarded, which is the same "rule at one call site" defect this framework names
+elsewhere. Liveness is decided by a **measured process probe** (registry entry marked
+running, *and* the pid alive, *and* the pid still a supervisor), never by the state
+file alone — the same evening that produced the fork also produced `running` entries
+for dead pids and dead entries for live ones. The refusal **names the live instance
+and the sanctioned rejoin command**, so an agent or operator who meets the wall is
+handed the path that gets the work done rather than an unexplained boundary.
+
+**The override:** a deliberate second instance (genuinely separate work) is available
+by passing `--force`, or simply by giving the new supervisor a distinct `--name` —
+distinct names are distinct services and never collide. The guard stops the
+*accidental* fork; it does not remove the operator's authority to run two on purpose.
+
+**Registry hygiene rides along:** listings and lookups apply the same measured
+liveness predicate, so a recycled pid — alive, but no longer a supervisor — is never
+reported as a running instance. A registry that cannot answer "who is alive" turns
+every recovery path into a guess, and a guess at this joint is a fork.
 
 ---
 
@@ -648,3 +743,13 @@ Each sleep cycle emits an `agent_sleep_cycle` event:
 - **autonomous_sprint.md** - Sub-policy for 🏃 SPRINT (workload-defined autonomous work)
 - **play_time.md** - Sub-policy for ⏲️ PLAY_TIME (time-bounded autonomous play)
 - **mode_system.md** - Mode definitions including SPRINT work mode and Markov recommender
+
+---
+
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — AUTO_MODE
+     authorization, persistence, recovery, scope gating, and de-escalation. -->
+
+[[autonomy]] [[modes]] [[security]] [[context_recovery]] [[supervision]]

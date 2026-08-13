@@ -98,6 +98,14 @@ macf_tools policy read roadmaps_drafting
 21. What should phases specify?
 22. What is explicitly FORBIDDEN in phase descriptions?
 
+**Policy Engagement Protocol on Phases (MANDATORY)**:
+23. What does the policy require a phase to declare about the policies its executor must engage?
+24. How does the policy say required reading follows from the WORK TYPE, rather than being re-derived per phase?
+25. What distinction does the policy draw between policies a phase READS and policies it WRITES?
+26. When does the policy say a phase carries no PEP at all?
+
+Extract the work-type mapping from the policy rather than reproducing it here — it is expected to grow, and a copy in this command would drift from it. The point of the mapping is that an executor picking a phase up cold, with no memory of the drafting conversation, does not begin work without reading something they needed.
+
 ### Step 4: Exploration (ENCOURAGED if requirements murky)
 
 **If scope is unclear or requirements ambiguous**, use Task tool with Explore subagent to investigate:
@@ -213,6 +221,18 @@ Use CLI to create task atomically - this creates folder structure, skeleton road
 - **Step 2**: EnterPlanMode - autonomous, no skipping
 - **Step 9-12**: Post-draft ceremony - required before execution
 - **Step 12**: STOP - user approval required for execution transition
+
+---
+
+## Wiki-Links Section (REQUIRED)
+
+Before saving, the artifact MUST carry a `## Wiki-Links` section. This is what connects it to the knowledge web. Without it the artifact is an **orphan**: present on disk, reachable only by someone who already knows it exists, and invisible to the concept query a successor would actually use to find it.
+
+**What to link**: consult the roadmaps drafting policy on **knowledge web participation** for what this artifact type should link and what it should avoid. A roadmap is a temporal record — link the domain the mission operates on, not every concept its phases touch. A multi-phase roadmap touches many, and linking all of them produces a hub rather than a signal.
+
+**How to choose**: query the graph before inventing a concept — `macf_tools knowledge query <concept>` — so you connect to vocabulary the corpus already uses instead of coining a near-duplicate that connects to nothing. Two to five concepts.
+
+**Do not emit an empty heading.** A `## Wiki-Links` section with no links is worse than its absence: it satisfies a checker while leaving the artifact exactly as unreachable.
 
 ---
 

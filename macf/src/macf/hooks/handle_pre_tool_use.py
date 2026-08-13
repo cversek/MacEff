@@ -21,7 +21,7 @@ from macf.utils import (
     detect_auto_mode
 )
 from macf.modes import detect_active_modes, anticipate_mode_change, format_mode_indicators, get_active_task_type_marker
-from macf.agent_events_log import append_event
+from macf.agent_events_log import append_event, elide_large_values
 from macf.event_queries import get_active_policy_injections_from_events
 from macf.hooks.hook_logging import log_hook_event
 from macf.observability import Warning, emit_warning
@@ -150,10 +150,15 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         if "file_path" in tool_input:
             event_data["file_path"] = tool_input["file_path"]
 
+        # Same size-based elision as the completed path. This path had no guard
+        # at all and wrote the payload verbatim. Note what the exemption list
+        # buys here: a Bash command is the record of what was run and cannot be
+        # reconstructed, so it is carried whole however long it gets, while a
+        # file's contents written through the same call are not.
         append_event(
             event="tool_call_started",
             data=event_data,
-            hook_input=data
+            hook_input=elide_large_values(data)
         )
 
         # Get token info for smoke test
@@ -459,8 +464,17 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 desc = tool_input.get("description", "")
                 sa_type = tool_input.get("subagent_type", "")
                 tg_details = f"\n{sa_type}: {_html_escape(desc)}"
+            elif tool_name == "Skill":
+                # "Skill" alone is near-information-free in a channel timeline; the
+                # skill name is the whole signal. display_tool already carries it
+                # (Skill(<name>)); surface any args as the detail line.
+                args_preview = str(tool_input.get("args", ""))[:200]
+                if args_preview:
+                    tg_details = f"\n<code>{_html_escape(args_preview)}</code>"
+            # Use display_tool so Skill invocations show Skill(<name>) in the
+            # channel, matching the terminal status line (not the bare "Skill").
             send_telegram_notification(
-                f"<b>{_html_escape(tool_name)}</b> {_html_escape(token_context_minimal)}{tg_details}",
+                f"<b>{_html_escape(display_tool)}</b> {_html_escape(token_context_minimal)}{tg_details}",
                 prefix="\u2699\ufe0f",
                 parse_mode="HTML"
             )

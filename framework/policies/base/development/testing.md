@@ -1307,5 +1307,15 @@ This policy evolves through:
 
 ---
 
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — pragmatic
+     TDD, test focus and counting, and verbosity discipline. -->
+
+[[testing]] [[verification]] [[methodology]] [[coverage]]
+
+---
+
 🔧 Generated with Claude Code
 Co-Authored-By: Claude <noreply@anthropic.com>

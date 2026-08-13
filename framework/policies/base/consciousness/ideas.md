@@ -228,7 +228,19 @@ Ideas form a knowledge graph through three link types:
 ### Wiki-Links (`[[concept_name]]`)
 Free-form references to concepts, files, or entities. Creates edges in the knowledge graph. Compatible with Obsidian and obra/knowledge-graph MCP.
 
-**Normalization and seed vocabulary**: See scholarship policy §3.4 Knowledge Web for wiki-link formatting rules and common concept vocabulary shared across all CA types.
+**Normalization and seed vocabulary**: see the scholarship policy on the knowledge web and wiki-links, for formatting rules and the concept vocabulary shared across all CA types. (Referenced by content, not by section number — section numbers move, and an external reference that names one breaks silently when the policy is reorganised.)
+
+### Node Class and Provenance
+
+**Does this type participate?** Yes, and uniquely: `wiki_links` is a field in the idea schema rather than a section an author remembers to write. Ideas are consequently the only CA type with no orphan problem — the tooling makes participation unavoidable. That is worth noting as evidence for how the other types should be fixed: the schema succeeded where convention failed.
+
+**What is the unit of a node?** The whole idea record.
+
+**Which class?** **Conceptual authority**, with a qualification. An idea is *prospective* — it asserts what might be worth doing, not what was found. It belongs to the class because its claim is meant to outlive the moment, but a reader should weight it as a proposal rather than a finding. The `status` field carries that distinction and should be read alongside any retrieved idea.
+
+**What provenance?** **Lived** by default.
+
+See the scholarship policy on node classes and provenance for what these terms mean; they are defined there once and cited here.
 
 ### Related Ideas
 Integer IDs of other ideas that are conceptually related. Enables cluster discovery.
@@ -315,6 +327,16 @@ Reference idea in roadmap context, update idea status to `promoted`.
 - **Premature promotion**: Jumping from idea to implementation without experiment validation.
 - **Orphan ideas**: Ideas with no provenance. Always include `sparked_by` and `breadcrumb`.
 - **Push model**: Ideas that auto-escalate to experiments. Ideas are pulled, not pushed.
+
+---
+
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — prospective
+     idea capture, the pull model, and idea graph connectivity. -->
+
+[[ideas]] [[knowledge_web]] [[provenance]] [[consciousness_artifacts]]
 
 ---
 

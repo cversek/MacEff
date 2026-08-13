@@ -3,7 +3,7 @@
 ## Meta-Policy: Policy Classification
 - **Tier**: RECOMMENDED
 - **Category**: Consciousness Development - Public Artifacts
-- **Version**: 1.0.0
+- **Version**: 1.1.0
 - **Dependencies**: policy_awareness, observations, reflections
 - **Authority**: MacEff Framework
 - **Status**: ACTIVE
@@ -44,6 +44,13 @@ Agents conduct structured experiments with clear hypotheses, methods, and succes
 - How do experiments differ from observations?
 - When should I run an experiment?
 - What makes a good experiment?
+
+1.0 Is this an experiment at all?
+- Is this work requirements gathering, or is it implementation?
+- On what dimensions do an experiment and a roadmap actually differ?
+- I think I already know the implementation — does that settle it?
+- The operator asked for an experiment but it looks like implementation. Now what?
+- What does each mis-typing cost?
 
 1.1 Experiment vs Observation vs Report
 - Am I testing or discovering?
@@ -202,6 +209,12 @@ Agents conduct structured experiments with clear hypotheses, methods, and succes
 - How to preserve evidence trail?
 - What breadcrumb citations are needed?
 
+9 Knowledge Web Participation
+- Does this type participate in the knowledge graph, and at what unit?
+- Which node class does it belong to, and what is the rationale?
+- What provenance does it carry by default, and how is a non-default marked?
+- What must a Wiki-Links section on this artifact contain?
+
 === CEP_NAV_BOUNDARY ===
 
 ## 0. Preliminary Planning Phase
@@ -341,7 +354,55 @@ An **experiment** is a consciousness artifact documenting **hypothesis testing**
 **Example Experiment** [c_73/s_4107604e/p_6c9eacb/t_1761703391/g_17e7b7d]:
 > "PreToolUse Smoke Test for Temporal Awareness" - Hypothesis: Can we inject temporal awareness via additionalContext? Method: Create minimal hook with temporal data. Success: If agent references time naturally. Result: Validated ✅
 
+### 1.0 Is this an experiment at all?
+
+Before comparing experiment against the other *documentation* types, settle the
+fork that is actually confused in practice: **is this work an experiment, or is it
+implementation?** An experiment gathers requirements and commits to nothing. A
+roadmap/MISSION implements, and its output is code that ships.
+
+| Dimension | EXPERIMENT | ROADMAP / MISSION |
+|---|---|---|
+| Purpose | requirements gathering | implementation |
+| Commitment | non-committal | committed |
+| Where the work lives | repro in the experiment's CA directory, out of the main tree | a branch, to be PR'd into the main tree |
+| What success means | it **answers** — validated *or rejected* both succeed | it **delivers** — only shipping succeeds |
+| A negative result | a win, and worth publishing | a failure |
+| Effect on uncertainty | reduces it | spends it |
+| What "done" leaves behind | a finding, and possibly a corrected assumption | shipped code, with its policy alongside |
+| Who consumes the output | the next planner, as a decision input | every agent, as a capability |
+| Blast radius | the agent's own artifact tree | shared framework behaviour |
+| Bounded by | the question — stop when answered | the scope — stop when the phases are done |
+| Gate | plan mode, then approval to run | PR review and CI |
+| Cost of being wrong | discard the repro | migration and rollback |
+| May depend on | nothing downstream | may cite an experiment as evidence |
+
+**"I already know the implementation" is not a discriminator.** It is the
+assumption under test. An agent that reclassifies an experiment into
+implementation because the remedy feels obvious has skipped the one step that
+would have caught it being wrong — and the remedy feeling obvious is the normal
+condition, not a special one.
+
+**When the operator asks for an experiment, deliver an experiment.** Their framing
+outranks the agent's confidence. If the work genuinely looks like implementation,
+that is a *proposal* to put to them, never a unilateral change of type.
+
+**Do not be impatient.** Hardening requirements first tends to produce a *better*
+roadmap, because the assumptions were played with and the wrong ones corrected
+before anything was built on them. §8 exists for exactly that conversion.
+
+Both mis-typings cost, so this is not an instruction to always experiment:
+
+- **Roadmap mis-typed as experiment**: exploration never converges, nothing
+  ships, and work whose answer was already known gets re-derived.
+- **Experiment mis-typed as roadmap**: a remedy is implemented for a defect that
+  was never characterised — frequently a second control installed beside an
+  existing one that already covered part of the case.
+
 ### 1.1 Experiment vs Observation vs Report
+
+These three are all **documentation** artifacts. If §1.0 settled that the work is
+implementation, none of them is the answer — see `roadmaps_drafting.md`.
 
 **Three Artifact Types Compared**:
 
@@ -375,7 +436,13 @@ Observation (documents discovery)
 Personal Policy (encodes practice)
     ↓ contributes to
 Report (summarizes project outcomes)
+
+Experiment (validated, and crystallized per §8)
+    ↓ converts to
+ROADMAP / MISSION (implements, on a branch, PR'd to main)
 ```
+The second path leaves the documentation family entirely. It is the only route
+from an experiment to shipped code, and it runs through §8 rather than around it.
 
 ### 1.2 Formal vs Informal Experiments
 
@@ -1568,6 +1635,34 @@ With proper cross-references, agents can:
 - Start from experiment → find resulting MISSION → see strategic impact
 - Archaeological search: "What experiment led to X capability?"
 - Strategic search: "What MISsIONS emerged from experimentation phase?"
+
+---
+
+## 9. Knowledge Web Participation
+
+**Does this type participate?** Yes — but an experiment is a *directory*, not a file, so this is the one CA type where the unit of a node has to be decided rather than assumed.
+
+**What is the unit of a node?** **`protocol.md` and `analysis.md` only.** Everything under `data/`, `artifacts/`, `quick_tests/` and similar subdirectories is **evidence, not a node.**
+
+The distinction is between what an experiment *concluded* and what it *recorded while running*. A baseline capture and a per-arm result file are indispensable to verifying the conclusion and meaningless to a concept query — they are addressed by the analysis that cites them, not by the graph. Treating every markdown file in an experiment directory as a peer node inflates the graph with rows of evidence that answer no question anyone asks it, and buries the two files that do.
+
+Concretely, a single experiment directory typically holds two concept-bearing files and a larger number of evidence files; a naive scan makes the evidence outnumber the conclusions.
+
+**Which class?** **Conceptual authority.** The result outlives the run: a hypothesis validated or falsified is a durable claim, which is the entire reason experiments are written down rather than merely performed. Note that this holds even for a *falsified* hypothesis — a recorded refutation is durable knowledge, and losing it is how the same dead end gets explored twice.
+
+**What provenance?** **Lived.** An experiment is a record of something this agent ran, under conditions it controlled. An inherited experiment must be marked, because its result is only as transferable as its conditions, and those conditions were someone else's.
+
+**`protocol.md` and `analysis.md` each carry a `## Wiki-Links` section.** Link the *conceptual area under investigation*, not the mechanics of the apparatus. An experiment about whether a daemon can run headless is about headless operation and service supervision, not about the specific flag that turned out to matter.
+
+---
+
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — hypothesis
+     testing, its evidence discipline, and crystallization into missions. -->
+
+[[experiment_discipline]] [[verification]] [[methodology]] [[measurement]]
 
 ---
 *Policy Established: 2025-10-28*

@@ -102,6 +102,50 @@ ANSI_STRIKE_OFF = "\033[29m"
 SENTINEL_TASK_ID = "000"
 
 
+def normalize_parent_id(parent_id: Optional[Any]) -> str:
+    """Canonicalize a parent task ID, closing the zero-orphan bug (GH #208).
+
+    ``#000`` is the tree root and the default parent when none is given. The
+    task tree is rendered by walking children down from ``"000"``, so a task
+    whose stored ``parent_id`` is any *other* spelling of zero (``"0"``, ``"00"``,
+    ``0``) is silently dropped out of the tree: the walk never reaches it, yet
+    creation still reports success. The string path was the exploitable case —
+    ``"0"`` is truthy, so ``parent_id if parent_id else SENTINEL_TASK_ID`` kept
+    it verbatim, whereas the integer ``0`` used by sprint/play_time is falsy and
+    already collapsed to the sentinel.
+
+    We fix this *structurally* rather than by refusal: every zero-equivalent
+    spelling normalizes to the one canonical root ``"000"``, so an orphaned-by-
+    zero task can no longer be represented at all. The system already treats
+    integer ``0`` as root internally; this makes the string surface agree.
+
+    Args:
+        parent_id: Raw parent id from CLI/API — may carry a leading ``#``,
+            be an int, ``None``, or empty. Non-zero ids are kept as their bare
+            digit string (ids are stored unpadded except the ``"000"`` root).
+
+    Returns:
+        Canonical parent id string: ``"000"`` for any zero-equivalent/empty
+        input, otherwise the stripped digit string.
+
+    Raises:
+        ValueError: If a non-empty value is not a digit string.
+    """
+    if parent_id is None:
+        return SENTINEL_TASK_ID
+    cleaned = str(parent_id).strip().lstrip("#").strip()
+    if not cleaned:
+        return SENTINEL_TASK_ID
+    if not cleaned.isdigit():
+        raise ValueError(
+            f"parent ID must be a digit string (e.g. '000', '42') or omitted; "
+            f"got {parent_id!r}"
+        )
+    if int(cleaned) == 0:
+        return SENTINEL_TASK_ID
+    return cleaned
+
+
 def _compose_type_part(task_type: str, plan_ca_ref: Optional[str] = None,
                        custom: Optional[dict] = None) -> str:
     """The type-marker segment of a composed subject (e.g. '🐛 BUG:', '🔧', '📋').
@@ -664,7 +708,7 @@ def create_mission(
     roadmap_file.write_text(roadmap_content)
 
     # Default parent_id to sentinel if not specified
-    effective_parent_id = parent_id if parent_id else SENTINEL_TASK_ID
+    effective_parent_id = normalize_parent_id(parent_id)
 
     # Create MTMD with title for recomposition
     mtmd = MacfTaskMetaData(
@@ -778,7 +822,7 @@ def create_experiment(
     protocol_file.write_text(protocol_content)
 
     # Default parent_id to sentinel if not specified
-    effective_parent_id = parent_id if parent_id else SENTINEL_TASK_ID
+    effective_parent_id = normalize_parent_id(parent_id)
 
     # Create MTMD with title for recomposition
     mtmd = MacfTaskMetaData(
@@ -894,7 +938,7 @@ def create_detour(
     roadmap_file.write_text(roadmap_content)
 
     # Default parent_id to sentinel if not specified
-    effective_parent_id = parent_id if parent_id else SENTINEL_TASK_ID
+    effective_parent_id = normalize_parent_id(parent_id)
 
     # Create MTMD with title for recomposition
     mtmd = MacfTaskMetaData(
@@ -962,6 +1006,10 @@ def create_phase(
     # Get next task ID
     task_id = _get_next_task_id()
 
+    # Normalize the (required) parent id so a zero-spelling can't orphan the
+    # phase out of the tree (GH #208).
+    effective_parent_id = normalize_parent_id(parent_id)
+
     # Create MTMD with parent_id, title, and plan (XOR)
     mtmd = MacfTaskMetaData(
         version="1.0",
@@ -970,7 +1018,7 @@ def create_phase(
         created_by="PA",
         task_type="PHASE",
         title=title,
-        parent_id=parent_id,
+        parent_id=effective_parent_id,
         plan=plan,
         plan_ca_ref=plan_ca_ref
     )
@@ -981,7 +1029,7 @@ def create_phase(
     # Compose subject with proper ANSI nesting
     # PHASE uses 📋 if has subplan, - if not
     subject = compose_subject(str(task_id), "PHASE", title,
-                              parent_id=str(parent_id), plan_ca_ref=plan_ca_ref)
+                              parent_id=effective_parent_id, plan_ca_ref=plan_ca_ref)
 
     # Create task file
     _create_task_file(task_id, subject, description, blocked_by=blocked_by)
@@ -1035,7 +1083,7 @@ def create_bug(
     task_id = _get_next_task_id()
 
     # Default parent_id to sentinel if not specified
-    effective_parent_id = parent_id if parent_id else SENTINEL_TASK_ID
+    effective_parent_id = normalize_parent_id(parent_id)
 
     # Create MTMD with title and fix tracking
     mtmd = MacfTaskMetaData(
@@ -1063,6 +1111,58 @@ def create_bug(
         task_id=task_id,
         subject=subject,
         mtmd=mtmd
+    )
+
+
+def _gh_view_json(view_args: List[str], fields: List[str], *, timeout: int = 15) -> Dict[str, Any]:
+    """Run ``gh <view_args> --json <fields>`` and degrade across gh versions.
+
+    Current ``gh`` rejects the WHOLE call with ``Unknown JSON field: X`` when any
+    single requested field is unsupported (version-compat drift). That made a
+    drifted optional field — e.g. ``closingIssuesReferences`` on an older gh —
+    fatal, so GH_PR/GH_ISSUE tasks could not be created at all
+    (cversek/MacEff#123). Rather than hard-fail over an optional field, drop the
+    field gh names and retry. Callers read fields with ``.get(...)`` defaults, so
+    a dropped field degrades gracefully instead of taking the whole task down.
+
+    Args:
+        view_args: the gh command up to (not including) ``--json``, e.g.
+            ``["gh", "pr", "view", "213", "--repo", "owner/repo"]``.
+        fields: requested JSON field names, richest-first.
+        timeout: per-invocation subprocess timeout in seconds.
+
+    Returns:
+        Parsed JSON object from gh.
+
+    Raises:
+        ValueError: on a gh failure that is not a droppable unknown-field error,
+            or if every requested field was unsupported.
+    """
+    import subprocess as _subprocess
+    import json as _json
+    import re as _re
+
+    # Preserve the specific command in error text ("gh pr view failed",
+    # "gh issue view failed") that callers and tests rely on.
+    label = " ".join(view_args[:3]) if len(view_args) >= 3 else "gh view"
+
+    remaining = list(fields)
+    dropped: List[str] = []
+    while remaining:
+        result = _subprocess.run(
+            view_args + ["--json", ",".join(remaining)],
+            capture_output=True, text=True, timeout=timeout,
+        )
+        if result.returncode == 0:
+            return _json.loads(result.stdout)
+        m = _re.search(r"Unknown JSON field:\s*[\"']?(\w+)", result.stderr or "")
+        if not m or m.group(1) not in remaining:
+            raise ValueError(f"{label} failed: {result.stderr.strip()}")
+        dropped.append(m.group(1))
+        remaining.remove(m.group(1))
+    raise ValueError(
+        f"{label} failed: this gh version supports none of the requested fields "
+        f"(dropped: {', '.join(dropped)})"
     )
 
 
@@ -1095,18 +1195,11 @@ def create_gh_issue(
                          f"Expected: https://github.com/owner/repo/issues/N")
     owner, repo, issue_number = url_match.group(1), url_match.group(2), int(url_match.group(3))
 
-    # Fetch issue metadata via gh CLI
-    gh_result = _subprocess.run(
-        ["gh", "issue", "view", str(issue_number),
-         "--repo", f"{owner}/{repo}",
-         "--json", "title,labels,state,url"],
-        capture_output=True, text=True, timeout=15
+    # Fetch issue metadata via gh CLI (resilient to gh-version field drift, #123)
+    gh_data = _gh_view_json(
+        ["gh", "issue", "view", str(issue_number), "--repo", f"{owner}/{repo}"],
+        ["title", "labels", "state", "url"],
     )
-    if gh_result.returncode != 0:
-        raise ValueError(f"gh issue view failed: {gh_result.stderr.strip()}")
-
-    import json as _json
-    gh_data = _json.loads(gh_result.stdout)
     title = gh_data["title"]
     labels = [label["name"] for label in gh_data.get("labels", [])]
     state = gh_data.get("state", "OPEN")
@@ -1119,7 +1212,7 @@ def create_gh_issue(
     cycle = parsed['cycle'] if parsed else 1
 
     task_id = _get_next_task_id()
-    effective_parent_id = parent_id if parent_id else SENTINEL_TASK_ID
+    effective_parent_id = normalize_parent_id(parent_id)
 
     # GitHub metadata stored in custom fields
     custom = {
@@ -1191,19 +1284,14 @@ def create_gh_pr(
                          f"Expected: https://github.com/owner/repo/pull/N")
     owner, repo, pr_number = url_match.group(1), url_match.group(2), int(url_match.group(3))
 
-    # Fetch PR metadata via gh CLI. `mergeable` is intentionally NOT fetched or
-    # gated on — it is a lazy/stale field; the merge operation is ground truth.
-    gh_result = _subprocess.run(
-        ["gh", "pr", "view", str(pr_number),
-         "--repo", f"{owner}/{repo}",
-         "--json", "title,labels,state,url,headRefName,baseRefName,isDraft,"
-                   "reviewDecision,closingIssuesReferences,body"],
-        capture_output=True, text=True, timeout=15
+    # Fetch PR metadata via gh CLI, resilient to gh-version field drift (#123).
+    # `mergeable` is intentionally NOT fetched or gated on — it is a lazy/stale
+    # field; the merge operation is ground truth.
+    gh_data = _gh_view_json(
+        ["gh", "pr", "view", str(pr_number), "--repo", f"{owner}/{repo}"],
+        ["title", "labels", "state", "url", "headRefName", "baseRefName",
+         "isDraft", "reviewDecision", "closingIssuesReferences", "body"],
     )
-    if gh_result.returncode != 0:
-        raise ValueError(f"gh pr view failed: {gh_result.stderr.strip()}")
-
-    gh_data = _json.loads(gh_result.stdout)
     title = gh_data["title"]
     labels = [label["name"] for label in gh_data.get("labels", [])]
     state = gh_data.get("state", "OPEN")
@@ -1227,7 +1315,7 @@ def create_gh_pr(
     cycle = parsed['cycle'] if parsed else 1
 
     task_id = _get_next_task_id()
-    effective_parent_id = parent_id if parent_id else SENTINEL_TASK_ID
+    effective_parent_id = normalize_parent_id(parent_id)
 
     # PR metadata + declared review lifecycle stored in custom fields
     custom = {
@@ -1316,7 +1404,7 @@ def create_deleg(
     task_id = _get_next_task_id()
 
     # Default parent_id to sentinel if not specified
-    effective_parent_id = parent_id if parent_id else SENTINEL_TASK_ID
+    effective_parent_id = normalize_parent_id(parent_id)
 
     # Create MTMD
     mtmd = MacfTaskMetaData(
@@ -1381,7 +1469,7 @@ def create_task(
     task_id = _get_next_task_id()
 
     # Default parent_id to sentinel if not specified
-    effective_parent_id = parent_id if parent_id else SENTINEL_TASK_ID
+    effective_parent_id = normalize_parent_id(parent_id)
 
     # Create MTMD with title and task_type
     mtmd = MacfTaskMetaData(
@@ -1569,8 +1657,16 @@ def _play_log_skeleton(title: str, goal: str, chain: List[str],
 # Internal helpers for auto-start chain
 # ---------------------------------------------------------------------------
 
-def _run_task_start(task_id: int, session_uuid: Optional[str] = None) -> bool:
+def _run_task_start(task_id: int, session_uuid: Optional[str] = None,
+                    cascade: bool = True, _cascaded: Optional[List[int]] = None) -> bool:
     """Start a task programmatically (mirrors cmd_task_start logic).
+
+    Cascades upstream by default: starting any task starts its pending ancestors
+    too, so the tree never shows work underway on a branch whose parents still read
+    'pending'. Because the cascade lives in this shared chokepoint, EVERY start path
+    inherits it — explicit ``task start``, sprint/play_time auto-start, and this
+    function's own recursion — not only the CLI command. Pass ``_cascaded`` a list
+    to collect the ancestor IDs that were started (for reporting).
 
     Returns True on success, False on failure.
     """
@@ -1610,6 +1706,24 @@ def _run_task_start(task_id: int, session_uuid: Optional[str] = None) -> bool:
         "breadcrumb": breadcrumb,
         "plan_ca_ref": plan_ca_ref,
     })
+
+    if _cascaded is not None:
+        _cascaded.append(int(task_id))
+
+    # Cascade upstream through the shared chokepoint (terminates at the root
+    # sentinel or the first already-in_progress ancestor, whose call returns early).
+    if cascade and task.mtmd:
+        parent_id = getattr(task.mtmd, "parent_id", None)
+        if parent_id and str(parent_id).lstrip("#") not in ("000", "0", ""):
+            try:
+                pid_int = int(str(parent_id).lstrip("#"))
+            except (ValueError, TypeError):
+                pid_int = None
+            if pid_int is not None:
+                parent = reader.read_task(pid_int)
+                if parent and parent.status == "pending":
+                    _run_task_start(pid_int, session_uuid=session_uuid,
+                                    cascade=True, _cascaded=_cascaded)
     return True
 
 
@@ -1852,7 +1966,7 @@ def create_sprint(
     ).to_dict()
 
     # Parent ID: 0 means sentinel
-    effective_parent_id = str(parent_id) if parent_id else SENTINEL_TASK_ID
+    effective_parent_id = normalize_parent_id(parent_id)
 
     mtmd = MacfTaskMetaData(
         version="1.0",
@@ -2088,7 +2202,7 @@ def create_play_time(
         closure_invoked=False,
     ).to_dict()
 
-    effective_parent_id = str(parent_id) if parent_id else SENTINEL_TASK_ID
+    effective_parent_id = normalize_parent_id(parent_id)
 
     mtmd = MacfTaskMetaData(
         version="1.0",

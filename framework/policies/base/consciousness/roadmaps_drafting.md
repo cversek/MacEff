@@ -1,6 +1,6 @@
 # Roadmaps Policy: Drafting & Planning
 
-**Version**: 2.3
+**Version**: 2.5
 **Tier**: MANDATORY
 **Category**: Consciousness - Planning
 **Status**: ACTIVE
@@ -36,10 +36,22 @@ Roadmaps are **strategic planning artifacts** that preserve complex development 
 
 ### Optional But Recommended
 
-- Investigation projects with uncertain scope
-- Experimental work requiring structured exploration
+- Investigation projects whose *implementation* scope is uncertain
 - Documentation projects with multiple deliverables
 - Integration work across repositories
+
+### Not This Policy — Use `experiments.md`
+
+- Work that tests whether an approach is right, rather than building it
+- Anything the operator asked for as an experiment
+- Structured exploration whose deliverable is a finding rather than shipped code
+
+These read as roadmap triggers because they are uncertain and multi-step, and
+uncertainty is on the list above. The distinction is *what the uncertainty is
+about*: how much work there is, versus whether the approach is sound. A roadmap
+spends certainty; an experiment produces it. `experiments.md` §1.0 carries the
+full comparison, and §8 there covers converting a validated experiment into a
+roadmap — which is the intended route to implementation, not a detour around it.
 
 ### When NOT Required
 
@@ -80,6 +92,9 @@ Roadmaps are **strategic planning artifacts** that preserve complex development 
 - What is the complete sequence from recognition to drafting?
 - How do PlanMode, exploration, and questioning fit together?
 - What gates the transition to execution?
+- Where is the plan drafted, and where does it end up?
+- At what point is roadmap.md written, relative to pinning?
+- What happens after the plan is approved but before implementation starts?
 
 **1 When to Create Roadmaps**
 - What triggers roadmap creation?
@@ -167,6 +182,23 @@ Roadmaps are **strategic planning artifacts** that preserve complex development 
 - PA roadmap scope?
 - SA roadmap scope?
 - Complexity differences?
+
+**9 BUG_FIX Roadmaps**
+- When is a BUG_FIX roadmap warranted instead of a plain bug task?
+- What structure does a BUG_FIX roadmap require?
+- How does verification differ from a feature roadmap?
+
+**10 Knowledge Web Participation**
+- Does this type participate in the knowledge graph, and at what unit?
+- Which node class does it belong to, and what is the rationale?
+- Why does a roadmap's claim expire while the artifacts it produces do not?
+- What should a roadmap's Wiki-Links section link, and what should it avoid?
+
+**11 Policy Engagement Protocol (PEP) on Phases**
+- What must a phase declare about the policies its executor needs?
+- How does required reading follow from the work type rather than being re-derived per phase?
+- When does a phase carry no PEP at all?
+- Why does this requirement live in policy rather than in the drafting skill?
 
 === CEP_NAV_BOUNDARY ===
 
@@ -300,22 +332,60 @@ The Explore subagent is designed for codebase discovery without making changes:
    - Clarify ambiguous requirements
    - Align on approach
           ↓
-5. Draft roadmap.md (using discoveries from steps 3-4)
-   - Folder structure
-   - Phase breakdown
-   - Success criteria
+5. DRAFT IN PLAN MODE'S OWN PLAN FILE (using discoveries from steps 3-4)
+   - Phase breakdown, success criteria, delegation strategy
+   - NOT roadmap.md -- see "The whiteboard and the record" below
           ↓
-6. Present roadmap to user
+6. CALL ExitPlanMode when the draft is ready
+   - The call is what SURFACES the draft and raises the approval prompt.
+     Do not wait for approval before calling it -- approval cannot arrive
+     until you do. Approval, when it comes, is of the PLAN.
           ↓
-7. ExitPlanMode (USER APPROVAL REQUIRED)
+7. PIN the approved plan (task_management §2.5)
+   - Creates the MISSION task, the phase tasks, and the roadmap skeleton
           ↓
-8. Execute roadmap (following roadmaps_following.md)
+8. TRANSFER the approved plan into roadmap.md
+   - roadmap.md is the authoritative record from this point on
+          ↓
+9. 🛑 HALT -- do not begin implementation
+          ↓
+10. Execute only when the user invokes it explicitly
+    (a task-start invocation, or "go"/"start")
 ```
 
 **Critical Gates**:
 - **Step 2 (EnterPlanMode)**: Mandatory, no skipping
-- **Step 7 (ExitPlanMode)**: User approval required, gates execution
+- **Step 6 (ExitPlanMode)**: the agent calls it to *request* approval; the prompt
+  the user answers is raised by that call. Waiting for approval before calling it
+  deadlocks -- nothing will arrive. What comes back approves the *plan*.
+- **Step 9 (HALT)**: An approved plan is not an instruction to build it
 - **Steps 3-4**: Encouraged but not mandatory (judgment call based on clarity)
+
+### The whiteboard and the record
+
+Two artifacts, two jobs, and confusing them collides at step 7.
+
+**The plan file is a whiteboard.** It is erased by the next person to use the
+room -- which is you, at your next planning phase. Its ephemerality is not a
+defect to work around; in the drafting phase it is the *point*:
+
+- Plan mode restricts writes to it, so the constraint keeps attention on planning
+  rather than drifting into implementation.
+- ExitPlanMode surfaces what is written there for review, which is what makes
+  approval a real gate rather than a formality.
+
+**roadmap.md is the record.** It is git-tracked, survives compaction, and carries
+the forensic trail. It is written at step 8, *after* pinning, by transferring the
+approved plan.
+
+**Why this order and not the reverse**: pinning creates a roadmap skeleton at
+that path. Authoring roadmap.md during plan mode puts a finished artifact where
+the skeleton will land, and the two collide -- with the finished one losing. The
+whiteboard has no such conflict because nothing else writes to it.
+
+The anti-pattern below still stands, and is about a different failure: never
+treat the whiteboard as *storage*. Drafting there is correct; leaving the plan
+there, or citing it as authoritative, is not.
 
 **Why This Workflow Succeeds**:
 - **Friction prevents premature action**: Can't execute without planning
@@ -329,13 +399,30 @@ The Explore subagent is designed for codebase discovery without making changes:
 
 ### Complexity Triggers
 
+**First, check it is a roadmap at all.** A roadmap implements: it commits, it
+lives on a branch, and it is PR'd into the main tree. If the work is instead
+*requirements gathering* — non-committal, repro kept in a CA directory out of the
+main tree, and finished when it has an answer rather than when it has shipped —
+it is an experiment. See `experiments.md` §1.0 for the dimensions, and §8 there
+for converting a validated experiment into a roadmap.
+
+Note that "I already know the implementation" does not settle it. That belief is
+the assumption an experiment exists to test, and it is the ordinary condition
+rather than a special one.
+
 **Create roadmap when work has**:
 - **Multiple phases** (>3 distinct stages)
-- **Uncertain scope** (investigation or exploration)
+- **Uncertain scope** — but see the caution below
 - **Coordination needs** (multiple agents or specialists)
 - **Temporal span** (crosses compaction boundaries)
 - **Risk factors** (architecture changes, migrations)
 - **Delegation requirements** (specialist handoffs)
+
+**Caution on uncertain scope**: uncertainty about *how much implementation work
+there is* is a roadmap trigger. Uncertainty about *whether the approach is right*
+is not — that is an experiment, and building a roadmap on it spends certainty the
+work does not yet have. Investigation and exploration belong to experiments;
+roadmaps consume their findings.
 
 ### Decision Tree
 
@@ -1150,9 +1237,10 @@ This creates bidirectional link:
   - **Problem**: Roadmap becomes useless after compaction - no forensic detail, file paths, or implementation guidance
   - **Fix**: Roadmaps MUST be **self-contained for post-compaction recovery**. Include: full forensic context, all file paths, implementation details, architecture references, friction point history. A stranger with only the roadmap should understand and resume the work.
 
-- ❌ **Relying on non-MACF artifacts** - Using Claude Code's `.claude/plans/` files as planning storage
-  - **Problem**: `.claude/plans/` files are **ephemeral Claude Code artifacts**, NOT MacEff consciousness infrastructure. They do not survive compaction, are not git-tracked, and provide no forensic trail.
-  - **Fix**: ALL planning content must live in the roadmap.md file within the proper roadmap folder structure. Never reference `.claude/plans/` as authoritative source. Transfer all plan content to roadmap before execution.
+- ❌ **Relying on non-MACF artifacts** - Treating Claude Code's plan file as planning *storage*
+  - **Problem**: the plan file is an **ephemeral Claude Code artifact**, NOT MacEff consciousness infrastructure. It does not survive compaction, is not git-tracked, provides no forensic trail, and is overwritten by the next planning phase.
+  - **Fix**: transfer the approved plan into roadmap.md, and cite roadmap.md as the authoritative source thereafter.
+  - **Not the same as drafting there.** Drafting in the plan file is the correct step (§0.4 step 5) -- the restriction is what keeps plan mode on planning, and ExitPlanMode is what surfaces the draft for approval. The failure is *leaving* the plan there, or referring back to it as the record. Whiteboard, then record.
 
 - ❌ **Treating plan approval as execution authorization** - Starting implementation immediately after ExitPlanMode
   - **Problem**: ExitPlanMode approval means the PLAN is approved, NOT that execution should begin. User may want to review, schedule, or stage execution separately. Execution is often deferred to the next cycle.
@@ -1191,6 +1279,86 @@ This creates bidirectional link:
 
 ---
 
+## 10 Knowledge Web Participation
+
+**A note on where this lives.** Roadmaps are the one consciousness artifact with no artifact policy — only two *process* policies, `roadmaps_drafting.md` and `roadmaps_following.md`, covering how to write one and how to execute one. The artifact itself was never declared. That gap is very likely why roadmaps were the CA type omitted from graph scanning: there was no policy in which to declare participation. Recorded here for now; the correct long-term home is a `roadmaps.md` artifact policy, and this section should move there when it exists rather than be duplicated.
+
+**Does this type participate?** Yes.
+
+**What is the unit of a node?** **`roadmap.md` only.** A roadmap is a directory, and the other contents — archived todos, subartifacts, working files — are records of execution, not statements of plan.
+
+**Which class?** **Temporal record** (see `scholarship.md`, on node classes and provenance). A roadmap states what is *intended*, and intent is superseded: phases complete, plans are revised, missions are abandoned. A roadmap read a year later answers "what was the plan in cycle N" — a genuine question, and a different one from "what do I know about X."
+
+The claim that survives a roadmap is not the roadmap. It is the report, learning, or reflection produced by executing it. Those are conceptual authority; the plan that led to them is the record of a moment.
+
+**What provenance?** **Lived.**
+
+**Every `roadmap.md` carries a `## Wiki-Links` section.** Link the domain the mission operates on, so that an agent querying that domain discovers there is or was a plan. Do not link every concept the phases touch; a multi-phase roadmap touches many, and linking all of them makes the roadmap a hub that appears everywhere and discriminates nothing — the same failure a checkpoint has, for the same reason.
+
+---
+
 **Policy Established**: Roadmaps as hierarchical planning infrastructure with folder-based organization, measurable completion criteria, and git-tracked evolution. Create roadmaps early for complex multi-phase work to preserve strategic intent across compaction boundaries.
 
 **Core Wisdom**: "Plan with folder structure. Number your phases. Measure your criteria. Commit before revising. Templates accelerate drafting."
+
+---
+
+## 11 Policy Engagement Protocol (PEP) on Phases
+
+**Every phase declares the policies its executor must engage before starting.** The roadmap is the artifact an executor reads before doing anything else, which makes it the only reliable place to attach a reading requirement. A policy that is not delivered at the moment it binds is inert, however well written.
+
+This exists because pull-based discovery fails silently where the demand goes unrecognised. An agent about to add a short helper function does not feel it is doing something a standard governs — it feels like writing four obvious lines. The moment a standard is most load-bearing is exactly the moment nothing prompts you to look for it.
+
+### 11.1 What a PEP declares
+
+A PEP block on a phase names:
+
+- **READS** — policies the executor must engage *before* starting the work.
+- **WRITES** — policies this phase will amend. Amending is not the same as citing, and a phase that changes MANDATORY-tier policy should be visibly different from one that merely follows it.
+- **Questions** — the timeless questions the executor should be able to answer before acting, phrased by content rather than by section number.
+
+### 11.2 Required reading follows from the work type
+
+Do not re-derive the list per phase. A phase declares what *kind* of work it is, and the reading follows:
+
+| work type | READS, at minimum |
+|---|---|
+| writes or modifies code | base coding standards, **plus** the language-specific standards for the language being written |
+| runs an experiment | empiricism, experiments |
+| authors or amends policy | policy writing, plus each policy in WRITES |
+| authors a skill or command | skills writing, slash command writing |
+| publishes outside the agent's own tree | public voice |
+| changes what an agent may do | capability boundaries, and the policy that ships with the capability |
+
+The table is a floor, not a ceiling. A phase adds whatever else its specifics demand, and novel additions are how the table grows.
+
+**Language-specific standards are additive, not alternative.** Base standards state the discipline; the language policy states how it is expressed. A phase writing Python engages both.
+
+### 11.3 Scope — a PEP is not ceremony
+
+**A phase that requires no policy engagement carries no PEP.** Applying the block uniformly is how it becomes something authors paste and executors skim, and a requirement that is skimmed is worse than absent because it looks like coverage.
+
+The test is whether an executor picking the phase up cold, with no memory of the drafting conversation, would otherwise start work without reading something they needed.
+
+### 11.4 Why this is stated here rather than in the drafting skill
+
+The skill asks the policy what a phase requires; the policy answers. Encoding the requirement in tooling would duplicate governance into a second place, which is the drift this framework repeatedly corrects — and it would put the rule where policy readers cannot find it.
+
+### 11.5 The failure that motivated this
+
+Recorded because the case is more persuasive than the rule.
+
+An agent spent a session writing code under a roadmap whose phases carried no PEP. It never opened the coding standards — nothing prompted it to. It then added a normalization helper to a module that already contained one, 350 lines above, under a different name. The duplicate was caught by the operator; not by the agent, not by a test.
+
+The instructive part is what would **not** have prevented it: the DRY rule *in* the coding standards. It would have sat unread in a file the agent had no reason to open. The rule was correct and undelivered, and undelivered is indistinguishable from absent.
+
+---
+
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — strategic
+     plan drafting, its ceremony, and the PEP that delivers policy at the
+     moment it binds. -->
+
+[[methodology]] [[policy_as_api]] [[context_recovery]] [[delegation]]

@@ -512,3 +512,13 @@ Report:
 - `mode_system.md` — SPRINT work mode definition, mode-locking behavior, dashboard
 - `play_time.md` — sibling policy for time-bounded autonomous play (⏲️ PLAY_TIME)
 - `task_management.md` — SPRINT task type schema, scope lifecycle
+
+---
+
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — workload-
+     defined autonomous work, gate discipline, and carry-through compaction. -->
+
+[[autonomy]] [[modes]] [[context_stewardship]] [[methodology]]

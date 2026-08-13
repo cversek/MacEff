@@ -275,12 +275,58 @@ def _tmux_wrap(tmux_session: str, cmd: list) -> list:
             _shell_command_string(cmd)]
 
 
-def _find_supervisor(target: str) -> dict | None:
-    """Find a RUNNING supervisor registry entry by supervisor PID or by name.
-    On multiple name matches, returns the most recently created."""
+def _is_supervisor_process(pid: int) -> bool:
+    """Is this pid still a supervisor, or something that inherited the number?
+
+    Separate and module-level for the same reason ``_is_alive`` is: the process
+    table is not a thing a test should have to own. Both are the seam where
+    "what the registry says" meets "what is actually true".
+    """
+    try:
+        args = subprocess.run(["ps", "-o", "args=", "-p", str(pid)],
+                              capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return "macf.supervisor" in args
+
+
+def is_live_supervisor(data: dict) -> bool:
+    """Does this registry entry describe a supervisor that is actually running?
+
+    Three conditions, and each excludes a state that has been observed on a
+    live host:
+
+    * ``status == "running"`` — entries persist after the process ends, so the
+      file existing proves nothing. Seven stale entries sat in one registry,
+      one of them still claiming a supervisor that had exited nine days earlier.
+    * the pid is alive — an entry can outlive its process by any amount.
+    * the pid is still a supervisor — pids are recycled, and an entry pointing
+      at whatever inherited the number is worse than no entry at all.
+
+    Deliberately NOT ``pgrep -f 'macf.supervisor --name X'``: when tmux starts a
+    server it keeps the command it was asked to run in its own argv, so that
+    matches the tmux server and reports a live supervisor for as long as the
+    server lives. The registry is keyed by the supervisor's own pid, which is
+    what makes the process check meaningful.
+    """
+    if data.get("status") != "running":
+        return False
+    pid = data.get("supervisor_pid", 0)
+    if not pid or not _is_alive(pid):
+        return False
+    return _is_supervisor_process(pid)
+
+
+def _iter_live_supervisors():
+    """Yield the registry data of every supervisor that is actually running now.
+
+    The single registry scan that every "who is live?" question routes through,
+    so ``is_live_supervisor`` — the process-liveness predicate, never the state
+    file alone — is applied in exactly one place and cannot come to mean two
+    different things in two callers.
+    """
     if not REGISTRY_DIR.exists():
-        return None
-    matches = []
+        return
     for entry in REGISTRY_DIR.glob("*.json"):
         if entry.name == "supervisor_crash.log":
             continue
@@ -288,11 +334,43 @@ def _find_supervisor(target: str) -> dict | None:
             data = json.loads(entry.read_text())
         except (json.JSONDecodeError, OSError):
             continue
-        sup_pid = data.get("supervisor_pid", 0)
-        if not _is_alive(sup_pid):
-            continue
-        if target == str(sup_pid) or target == data.get("name"):
-            matches.append(data)
+        if is_live_supervisor(data):
+            yield data
+
+
+def _find_supervisor(target: str) -> dict | None:
+    """Find a RUNNING supervisor registry entry by supervisor PID or by name.
+    On multiple name matches, returns the most recently created."""
+    matches = [
+        data for data in _iter_live_supervisors()
+        if target == str(data.get("supervisor_pid", 0)) or target == data.get("name")
+    ]
+    if not matches:
+        return None
+    return max(matches, key=lambda d: d.get("created", 0))
+
+
+def find_live_supervisor_by_name(name: str, exclude_pid: int = 0) -> dict | None:
+    """The live supervisor already owning this calling card, or None.
+
+    The singleton guard's eyes (task #113 / GH#210). "Owning" is keyed on the
+    supervisor *name* — the calling card — because the fork the FORK INCIDENT
+    documented was three ``claude -c`` clients under one name, and two live
+    supervisors sharing a name is precisely the state in which two clients write
+    one task store. Distinct names are distinct services (``claude`` vs
+    ``manny``) and never collide here.
+
+    ``exclude_pid`` skips the caller's own entry so a supervisor calling this to
+    check for a *pre-existing* twin never matches itself. Liveness is decided by
+    ``is_live_supervisor`` (status running + pid alive + pid still a supervisor),
+    never by the state file alone: the same evening produced ``running`` entries
+    for dead pids and dead entries for live ones. On multiple matches returns the
+    most recently created.
+    """
+    matches = [
+        data for data in _iter_live_supervisors()
+        if data.get("name") == name and data.get("supervisor_pid", 0) != exclude_pid
+    ]
     if not matches:
         return None
     return max(matches, key=lambda d: d.get("created", 0))
@@ -346,7 +424,8 @@ def launch_in_terminal(cmd_args: list, name: str = "",
                        use_tmux: bool = True,
                        session_spec: str = None,
                        post_start_keys: str = None,
-                       post_start_delay: int = 18) -> int:
+                       post_start_delay: int = 18,
+                       force: bool = False) -> int:
     """Launch a supervised process in a new terminal window.
 
     Args:
@@ -378,6 +457,17 @@ def launch_in_terminal(cmd_args: list, name: str = "",
 
     if not name:
         name = os.path.basename(cmd_args[0])
+
+    # Singleton pre-flight, early copy (task #113 / GH#210). run_loop holds the
+    # authoritative guard — it is the confluence a systemd-launched supervisor
+    # also passes through — but refusing HERE too, before a terminal window is
+    # ever opened, spares the interactive user an orphaned terminal that would
+    # only flash the same refusal and vanish. Same predicate, friendlier moment.
+    if not force:
+        existing = find_live_supervisor_by_name(name)
+        if existing:
+            _refuse_duplicate(name, existing, where="launch_in_terminal")
+            return 1
 
     # Optionally pin a session id. When set, the supervised command (e.g. a
     # wrapper around `claude`) forwards it via `claude --session-id
@@ -413,6 +503,11 @@ def launch_in_terminal(cmd_args: list, name: str = "",
     if post_start_keys:
         supervisor_cmd += ["--post-start-keys", post_start_keys,
                            "--post-start-delay", str(post_start_delay)]
+    # Propagate the override: without it the terminal-hosted supervisor would
+    # re-run the pre-flight and refuse, so a --force that stopped at this layer
+    # would be silently ineffective.
+    if force:
+        supervisor_cmd += ["--force"]
     supervisor_cmd += ["--"] + cmd_args
 
     # When tmux-backed, the terminal hosts `tmux new-session` which runs the
@@ -500,6 +595,39 @@ def launch_in_terminal(cmd_args: list, name: str = "",
     return 0
 
 
+# Shell exit codes that mean the command was never launched. POSIX shells use
+# 127 for "not found" and 126 for "found but not executable". Neither describes
+# a process that ran and failed, so neither is a reason to try again.
+_NEVER_LAUNCHED_EXITS = (126, 127)
+
+# A child that exits this fast did not do any work. Pairing the exit code with
+# the lifetime matters: a long-running child is entitled to exit 127 as its own
+# considered result, and killing supervision for that would be wrong.
+_NEVER_LAUNCHED_WINDOW_SECONDS = 3
+
+
+def _unlaunchable_reason(cmd_args: list) -> "str | None":
+    """Why this command can never run, or None if it might.
+
+    Only a path is checked, and only when it is one: a bare word may be an
+    alias or a shell function, and the child is deliberately run through an
+    interactive shell so that those resolve. Refusing them here would break the
+    very indirection that invocation exists to support. An absolute or relative
+    PATH-bearing target, by contrast, is a claim about the filesystem that can
+    be checked cheaply and answered definitively.
+    """
+    if not cmd_args:
+        return "no command was given"
+    target = cmd_args[0]
+    if os.sep not in target:
+        return None
+    if not os.path.exists(target):
+        return f"{target} does not exist"
+    if not os.access(target, os.X_OK):
+        return f"{target} exists but is not executable"
+    return None
+
+
 def _send_post_start_keys(tmux_session: str, keys: str, delay: int) -> None:
     """Send `keys` to the child's tmux pane `delay` seconds after it spawns.
 
@@ -515,9 +643,38 @@ def _send_post_start_keys(tmux_session: str, keys: str, delay: int) -> None:
         print(f"[auto-restart] post-start keys failed (non-fatal): {e}", file=sys.stderr)
 
 
+def _refuse_duplicate(name: str, existing: dict, *, where: str) -> None:
+    """Print the singleton refusal and fire the Telegram notice.
+
+    Shared by both guard sites so the refusal — which names the live instance
+    and the sanctioned rejoin path — reads identically whether it fires early in
+    ``launch_in_terminal`` or authoritatively in ``run_loop``.
+    """
+    other_pid = existing.get("supervisor_pid")
+    other_restarts = existing.get("restart_count", 0)
+    other_session = existing.get("tmux_session") or "n/a"
+    print(f"\n[auto-restart] REFUSING TO START: a live supervisor for "
+          f"'{name}' already exists (pid {other_pid}, {other_restarts} restart(s), "
+          f"tmux session {other_session}).", file=sys.stderr)
+    print("[auto-restart] Starting another would MINT A FORK — two clients "
+          "writing one calling card, the failure GH#210 exists to prevent.",
+          file=sys.stderr)
+    print(f"[auto-restart] To restart that instance IN PLACE (rejoin, not fork):"
+          f"\n                 macf_tools auto-restart restart {other_pid}",
+          file=sys.stderr)
+    print("[auto-restart] To run a genuinely separate service, give it a distinct "
+          "--name. To override this guard deliberately, pass --force.",
+          file=sys.stderr)
+    _notify_telegram(
+        f"Name: {name}\nLive instance: pid {other_pid}\n"
+        f"Rejoin: auto-restart restart {other_pid}",
+        prefix="\U0001f6d1 Supervisor Refused (would fork)")
+
+
 def run_loop(cmd_args: list, name: str = "", restart_delay: int = 5,
              tmux_session: str = None, session_id: str = None,
-             post_start_keys: str = None, post_start_delay: int = 18):
+             post_start_keys: str = None, post_start_delay: int = 18,
+             force: bool = False):
     """Run the supervisor loop (called inside the new terminal).
 
     This is the actual supervisor process — manages the child.
@@ -534,6 +691,41 @@ def run_loop(cmd_args: list, name: str = "", restart_delay: int = 5,
     """
     pid = os.getpid()
     created = time.time()
+
+    # Refuse to supervise a command that cannot ever run. Restarting is a
+    # response to a process that FAILED; a command that does not exist has not
+    # failed, it was never launchable, and no number of retries changes that.
+    #
+    # Measured before this existed: with the child binary removed, the loop
+    # reached three restarts in eight seconds, kept its registry entry marked
+    # "running", and surfaced nothing — the shell's "command not found" went to
+    # a pane that had already gone. An agent's harness silently spinning is
+    # indistinguishable, from every status surface, from one that is simply up.
+    problem = _unlaunchable_reason(cmd_args)
+    if problem:
+        print(f"[auto-restart] REFUSING TO START: {problem}", file=sys.stderr)
+        print("[auto-restart] This is not a transient failure and restarting "
+              "cannot fix it, so no supervisor is registered.", file=sys.stderr)
+        _notify_telegram(f"Name: {name}\n{problem}",
+                         prefix="\U0001f6d1 Supervisor Refused")
+        return 1
+
+    # Singleton pre-flight (task #113 / GH#210). Refuse to become a SECOND live
+    # supervisor for a calling card that already has one. This guard lives HERE,
+    # in run_loop, because run_loop is the confluence every supervisor birth
+    # passes through — `launch_in_terminal`, a systemd unit invoking this module
+    # directly, a manual launch. A guard placed only at `launch_in_terminal`
+    # would leave the systemd door open, and the fork the FORK INCIDENT
+    # documented (three `claude -c` clients under one name) mints through
+    # whichever door is unguarded. Checked by process liveness, never by state
+    # file: this same evening produced 'running' entries for dead pids and dead
+    # entries for live ones. --force is the deliberate override for a human who
+    # genuinely wants a second instance.
+    if not force:
+        existing = find_live_supervisor_by_name(name, exclude_pid=pid)
+        if existing:
+            _refuse_duplicate(name, existing, where="run_loop")
+            return 1
 
     # Export the pinned session id so the child (run via $SHELL -ic, which
     # inherits this environment) can pass it to `claude --session-id`.
@@ -557,6 +749,8 @@ def run_loop(cmd_args: list, name: str = "", restart_delay: int = 5,
     child = None
     restart_count = 0
     stop_requested = False  # Flag for Ctrl-C during countdown
+    # Mutable so the `finally` block can set it without a nonlocal dance.
+    _exit_status = [0]
 
     def handle_restart(signum, frame):
         nonlocal child
@@ -634,7 +828,9 @@ def run_loop(cmd_args: list, name: str = "", restart_delay: int = 5,
                     daemon=True,
                 ).start()
 
+            spawned_at = time.time()
             exit_code = child.wait()
+            lifetime = time.time() - spawned_at
             child = None
             restart_count += 1
 
@@ -648,6 +844,27 @@ def run_loop(cmd_args: list, name: str = "", restart_delay: int = 5,
             reg = _read_registry(pid)
             if reg.get("status") == "disabled":
                 print(f"[auto-restart] Disabled. Not restarting.")
+                break
+
+            # The pre-flight check cannot see through an alias, a shell
+            # function or a PATH lookup, so the same "never launched" case can
+            # still arrive here — as a shell exit code instead of a missing
+            # file. Stop, rather than spin: the shell has already decided this
+            # command does not resolve, and it will decide the same thing every
+            # five seconds forever.
+            if exit_code in _NEVER_LAUNCHED_EXITS and lifetime < _NEVER_LAUNCHED_WINDOW_SECONDS:
+                reason = ("not found" if exit_code == 127 else "not executable")
+                print(f"\n[auto-restart] FATAL: the shell reports the command is "
+                      f"{reason} (exit {exit_code}, after {lifetime:.1f}s).",
+                      file=sys.stderr)
+                print("[auto-restart] Not restarting — retrying cannot resolve a "
+                      "command that does not resolve.", file=sys.stderr)
+                _update_registry(pid, status="failed", last_exit_code=exit_code,
+                                 failure_reason=f"command {reason}")
+                _notify_telegram(
+                    f"Process: {name}\nCommand {reason} (exit {exit_code})\n"
+                    f"Supervision stopped after {restart_count} attempt(s).",
+                    prefix="\U0001f6d1 Supervisor Failed")
                 break
 
             # Install countdown SIGINT handler (interactive shell corrupts default handler)
@@ -685,13 +902,26 @@ def run_loop(cmd_args: list, name: str = "", restart_delay: int = 5,
             child.send_signal(signal.SIGINT)
             child.wait()
     finally:
-        _update_registry(pid, status="stopped",
+        # "stopped" means someone asked it to stop. "failed" means it gave up.
+        # Overwriting the second with the first erases the only signal that
+        # distinguishes a clean shutdown from a supervisor that could not run
+        # what it was given — and that distinction is the entire point of
+        # recording a failure.
+        final_status = "stopped"
+        if _read_registry(pid).get("status") == "failed":
+            final_status = "failed"
+        _update_registry(pid, status=final_status,
                          stopped=time.time(),
                          total_restarts=restart_count)
+        # Carried out of `finally` so the caller — and therefore the service
+        # manager — sees a failure as a failure. A supervisor that gave up and
+        # exited 0 leaves the unit reporting active with nothing supervised.
+        _exit_status[0] = 1 if final_status == "failed" else 0
         _notify_telegram(
             f"Process: {name}\nRestarts: {restart_count}\nUptime: {_format_duration(time.time() - created)}",
             prefix="\U0001f6d1 Supervisor Stopped"
         )
+    return _exit_status[0]
 
 
 def list_processes(show_all: bool = False):
@@ -710,7 +940,13 @@ def list_processes(show_all: bool = False):
         print("No managed processes.")
         return
 
-    # Categorize entries
+    # Categorize entries. "Active" means an entry that is genuinely a live
+    # supervisor — status running AND pid alive AND the pid still a supervisor
+    # (is_live_supervisor), not merely an alive pid. The weaker os.kill check
+    # marked a recycled pid — now running something unrelated — as a live
+    # supervisor, so a dead supervisor's number could show as "running" once the
+    # OS handed it out again (task #113 / GH#210 registry hygiene). _alive is
+    # still recorded for the status-line normalization below.
     active = []
     stale = []
     for entry in entries:
@@ -718,10 +954,9 @@ def list_processes(show_all: bool = False):
             continue
         data = json.loads(entry.read_text())
         pid = data.get("supervisor_pid", 0)
-        alive = _is_alive(pid)
-        data["_alive"] = alive
+        data["_alive"] = _is_alive(pid)
         data["_path"] = entry
-        if alive:
+        if is_live_supervisor(data):
             active.append(data)
         else:
             stale.append(data)
@@ -874,14 +1109,22 @@ if __name__ == "__main__":
         parser.add_argument("--session-id", default=None)
         parser.add_argument("--post-start-keys", default=None)
         parser.add_argument("--post-start-delay", type=int, default=18)
+        parser.add_argument("--force", action="store_true",
+                            help="override the singleton pre-flight and start even if "
+                                 "a live supervisor already owns this name (GH#210)")
 
         args = parser.parse_args(supervisor_argv)
 
         if args.action == "_run_loop":
-            run_loop(cmd, name=args.name, restart_delay=args.delay,
-                     tmux_session=args.tmux_session, session_id=args.session_id,
-                     post_start_keys=args.post_start_keys,
-                     post_start_delay=args.post_start_delay)
+            # Propagate the return code. A supervisor that refuses to start and
+            # then exits 0 tells the service manager it succeeded, which is the
+            # same silent-success failure the refusal exists to end: systemd
+            # would mark the unit active with nothing supervising anything.
+            sys.exit(run_loop(cmd, name=args.name, restart_delay=args.delay,
+                              tmux_session=args.tmux_session, session_id=args.session_id,
+                              post_start_keys=args.post_start_keys,
+                              post_start_delay=args.post_start_delay,
+                              force=args.force) or 0)
 
     except Exception as e:
         # Top-level supervisor crash handler — bare Exception is intentional:

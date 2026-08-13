@@ -995,6 +995,29 @@
           "recovery",
           "permission"
         ]
+      },
+      {
+        "name": "instruction_language",
+        "short_name": "IL",
+        "path": "base/operations/instruction_language.md",
+        "description": "Operator→agent instruction language: grammar vs vocabulary layering, per-pair namespacing, one-obligation-per-form",
+        "CEP_triggers": [
+          "What is IL (the operator instruction language)?",
+          "What is universal (grammar) versus per-pair (vocabulary)?",
+          "Why is the instruction vocabulary namespaced per pair?",
+          "Is there a universal core vocabulary?",
+          "Why must an IL form carry only one obligation?",
+          "How does a directive bundling two obligations fail?"
+        ],
+        "keywords": [
+          "instruction language",
+          "IL",
+          "directive",
+          "grammar",
+          "vocabulary",
+          "namespace",
+          "one obligation"
+        ]
       }
     ]
   },
@@ -1046,7 +1069,7 @@
     "types": {
       "observations": {
         "name": "observations",
-        "emoji": "🔬",
+        "emoji": "\ud83d\udd2c",
         "description": "Technical discoveries and insights",
         "discovery_keys": [
           "observation",
@@ -1059,7 +1082,7 @@
       },
       "experiments": {
         "name": "experiments",
-        "emoji": "🧪",
+        "emoji": "\ud83e\uddea",
         "description": "Controlled testing and validation",
         "discovery_keys": [
           "experiment",
@@ -1073,7 +1096,7 @@
       },
       "reports": {
         "name": "reports",
-        "emoji": "📊",
+        "emoji": "\ud83d\udcca",
         "description": "Project completion summaries",
         "discovery_keys": [
           "report",
@@ -1087,7 +1110,7 @@
       },
       "reflections": {
         "name": "reflections",
-        "emoji": "💭",
+        "emoji": "\ud83d\udcad",
         "description": "Philosophical growth synthesis",
         "discovery_keys": [
           "reflection",
@@ -1101,7 +1124,7 @@
       },
       "checkpoints": {
         "name": "checkpoints",
-        "emoji": "🔖",
+        "emoji": "\ud83d\udd16",
         "description": "Strategic state preservation",
         "discovery_keys": [
           "checkpoint",
@@ -1113,7 +1136,7 @@
       },
       "roadmaps": {
         "name": "roadmaps",
-        "emoji": "🗺️",
+        "emoji": "\ud83d\uddfa\ufe0f",
         "description": "Multi-phase planning documents",
         "discovery_keys": [
           "roadmap",
@@ -1131,7 +1154,7 @@
       },
       "emotions": {
         "name": "emotions",
-        "emoji": "❤️",
+        "emoji": "\u2764\ufe0f",
         "description": "Emotional expression and processing",
         "discovery_keys": [
           "emotional",
@@ -1145,7 +1168,7 @@
       },
       "learnings": {
         "name": "learnings",
-        "emoji": "📚",
+        "emoji": "\ud83d\udcda",
         "description": "Accumulated wisdom and lessons",
         "discovery_keys": [
           "learning",
@@ -1221,11 +1244,18 @@
     "backup": [
       "base/operations/agent_backup"
     ],
+    "blast_radius": [
+      "base/infrastructure/amail",
+      "base/infrastructure/capability_boundaries"
+    ],
     "branch": [
       "base/development/git_discipline"
     ],
     "breakthrough": [
       "base/consciousness/observations"
+    ],
+    "capability_boundary": [
+      "base/infrastructure/capability_boundaries"
     ],
     "ccp": [
       "base/consciousness/checkpoints"
@@ -1268,6 +1298,12 @@
     "container": [
       "tech/docker/container_operations"
     ],
+    "corpus_drift": [
+      "base/infrastructure/corpus_integrity"
+    ],
+    "corpus_integrity": [
+      "base/infrastructure/corpus_integrity"
+    ],
     "debugging": [
       "base/development/debugging_and_validation"
     ],
@@ -1284,8 +1320,17 @@
     "docker": [
       "tech/docker/container_operations"
     ],
+    "doctor": [
+      "base/infrastructure/corpus_integrity"
+    ],
+    "drift": [
+      "base/infrastructure/corpus_integrity"
+    ],
     "dual_trace": [
       "base/consciousness/emotional_expression"
+    ],
+    "egress": [
+      "base/infrastructure/capability_boundaries"
     ],
     "email": [
       "amail"
@@ -1324,12 +1369,19 @@
     "git": [
       "base/development/git_discipline"
     ],
+    "hardening": [
+      "base/infrastructure/capability_boundaries",
+      "tech/docker/container_operations"
+    ],
     "hypothesis": [
       "base/consciousness/experiments"
     ],
     "identity": [
       "base/development/git_discipline",
       "core_principles"
+    ],
+    "identity_separation": [
+      "base/infrastructure/capability_boundaries"
     ],
     "jotewr": [
       "base/consciousness/reflections",
@@ -1378,6 +1430,9 @@
     "observations": [
       "base/consciousness/observations"
     ],
+    "orphan": [
+      "base/infrastructure/corpus_integrity"
+    ],
     "pattern_recognition": [
       "base/consciousness/reflections"
     ],
@@ -1397,6 +1452,10 @@
     ],
     "portable": [
       "base/meta/path_portability"
+    ],
+    "positive_control": [
+      "base/development/debugging_and_validation",
+      "base/infrastructure/capability_boundaries"
     ],
     "production_path": [
       "base/development/debugging_and_validation"
@@ -1427,6 +1486,9 @@
     "reflections": [
       "base/consciousness/reflections",
       "context_management#jotewr"
+    ],
+    "registry_integrity": [
+      "base/infrastructure/corpus_integrity"
     ],
     "release": [
       "base/development/git_discipline"
@@ -1466,6 +1528,9 @@
     ],
     "stakeholder": [
       "base/consciousness/reports"
+    ],
+    "stale_index": [
+      "base/infrastructure/corpus_integrity"
     ],
     "state_preservation": [
       "base/consciousness/checkpoints"
@@ -1556,6 +1621,107 @@
           "daemon",
           "index",
           "cache"
+        ]
+      },
+      {
+        "name": "capability_boundaries",
+        "short_name": "CAPBOUND",
+        "path": "base/infrastructure/capability_boundaries.md",
+        "CEP_triggers": [
+          "I was refused reaching something \u2014 is the network broken or is this deliberate?",
+          "What should an agent do when it meets a capability boundary, and what must it not do?",
+          "Why can't the service being reached just enforce its own allowlist?",
+          "What three different failures does one capability boundary prevent?",
+          "How does a deployment declare what an agent may not reach?",
+          "Why must provisioning abort rather than warn when a boundary cannot be enforced?",
+          "Why is identity separation a prerequisite rather than hardening?",
+          "How do I prove a capability boundary actually holds?",
+          "Why is reading the rule not evidence that it binds?",
+          "Why does a destination that stopped responding return INCONCLUSIVE rather than PASS?"
+        ],
+        "keywords": [
+          "capability",
+          "boundary",
+          "boundaries",
+          "egress",
+          "network",
+          "restriction",
+          "uid",
+          "identity_separation",
+          "blast_radius",
+          "positive_control",
+          "negative_control",
+          "hardening",
+          "reach",
+          "enforcement"
+        ]
+      },
+      {
+        "name": "agent_harness",
+        "short_name": "HARNESS",
+        "path": "base/infrastructure/agent_harness.md",
+        "CEP_triggers": [
+          "How do I tell whether the harness is actually running, and why isn't `tmux has-session` an answer?",
+          "What names the tmux session and the systemd unit, and how do I get back to the agent from it?",
+          "Which characters can a session identifier not contain, and which of those are real constraints?",
+          "Why did `harness status` report ABSENT while the harness was running?",
+          "Why must every tmux `-t` target be written `=name`?",
+          "Why must ANTHROPIC_BASE_URL and the first-party flag never be emitted separately?",
+          "Why does a command started under tmux not inherit my shell's environment?",
+          "What does stopping the harness have to stop, and why is killing the client wrong?",
+          "What must a deployment install, verify, and never hand-edit?",
+          "Why is one session per Calling Card the supported case, and what is deferred?"
+        ],
+        "keywords": [
+          "harness",
+          "tmux",
+          "systemd",
+          "supervisor",
+          "session",
+          "unit",
+          "calling card",
+          "identifier",
+          "restart",
+          "continuity",
+          "auto-restart"
+        ]
+      },
+      {
+        "name": "corpus_integrity",
+        "short_name": "CORPINT",
+        "path": "base/infrastructure/corpus_integrity.md",
+        "CEP_triggers": [
+          "A checker reported nothing wrong \u2014 does that mean the corpus is healthy or that nothing was examined?",
+          "Why is a corpus that reports confidence worse than one that reports nothing?",
+          "Why is there no single doctor for every corpus?",
+          "What do acute, chronic and note mean, and how do they differ from priority?",
+          "Why does the chart print even when there are no findings?",
+          "When is running a doctor worth doing, and what response does each finding warrant?",
+          "Why is CI gating the wrong default answer to a noisy checker?",
+          "What must a new doctor ship with before it can be trusted?",
+          "What verification does a checker need beyond passing its own tests?",
+          "Why must every finding carry a remedy and be locatable?"
+        ],
+        "keywords": [
+          "corpus",
+          "integrity",
+          "doctor",
+          "drift",
+          "orphan",
+          "stale",
+          "index",
+          "registry",
+          "acute",
+          "chronic",
+          "chart",
+          "finding",
+          "remedy",
+          "referral",
+          "checker",
+          "diagnostics",
+          "knowledge_doctor",
+          "curation",
+          "screening"
         ]
       }
     ]

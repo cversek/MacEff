@@ -97,6 +97,12 @@ Agents accumulate reusable wisdom through learnings - compact, cross-referenced 
 - How does the cluster taxonomy trigger the consult, and how does the pull model compensate for losing passive push?
 - What does a learnings curation reconcile in the index and the trigger?
 
+4.4 Knowledge Web Participation
+- Does this type participate in the knowledge graph, and at what unit?
+- Which node class and default provenance do learnings carry?
+- How is an inherited learning marked, and why does it matter?
+- What makes a learning an orphan, and who does an orphan fail?
+
 5 Practical Usage
 - How to access learnings?
 - Search patterns?
@@ -420,6 +426,20 @@ and retiring one only when its cluster empties. The trigger is the ONLY learning
 content in the memory file; keep it lean. Verify that the trigger's path to INDEX.md
 resolves.
 
+### 4.4 Knowledge Web Participation
+
+Sections 4.1–4.3 describe the *index* — a curated, human-readable path into the corpus. This section covers the *graph*, which is a different mechanism with a different failure mode: the index is maintained by a curation step, while the graph is built by scanning artifacts for `[[concept]]` links. An artifact can be perfectly indexed and still invisible to the graph.
+
+**Does this type participate?** Yes. Learnings are the densest concept-bearing artifacts in the corpus and the most-queried.
+
+**What is the unit of a node?** The whole learning file. Learnings are single-insight by design, so the artifact and the concept-bearing unit coincide.
+
+**Which class?** **Conceptual authority** — a learning states what was found in a form intended to outlive the episode that produced it. That is the definition of the class (see `scholarship.md`, on node classes and provenance).
+
+**What provenance?** **Lived** by default: a learning records this agent's own experience. A learning that arrived from a predecessor lineage or another agent is **inherited**, and MUST carry a banner naming the lineage and stating that its claims are unverified by the current agent. This is not bookkeeping — an inherited learning read as lived experience causes the agent to cite as its own something it never experienced, and the corpus offers no other signal that would reveal it.
+
+**Every learning carries a `## Wiki-Links` section.** A learning without one is an orphan: reachable through the index by an agent who already knows to look for it, and unreachable by concept query. Since concept query is how an agent finds prior work it does not know exists, an orphaned learning helps only the reader who least needs it.
+
 ## 5. Practical Usage
 
 ### 5.1 Discovery Commands
@@ -524,6 +544,17 @@ ls agent/private/learnings/2025-10-*
 Experience → Reflection → Learning → Personal Policy
   (raw)      (synthesis)  (pattern)   (constitutional)
 ```
+
+---
+
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — learning
+     capture, the master index, the consultation trigger, and provenance
+     banners on inherited wisdom. -->
+
+[[learnings]] [[knowledge_web]] [[provenance]] [[consciousness_artifacts]] [[discoverability]]
 
 ---
 *Policy Established: 2025-10-21*

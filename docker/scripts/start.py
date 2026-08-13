@@ -192,6 +192,62 @@ If you extend the convention, leave a note here so it stays shared.
 """
 
 
+def create_task_store(public: Path, username: str) -> Path:
+    """Create the agent's live task store under agent/public/.
+
+    This is the store, not ``task_archives`` beside it — the archive existed in
+    provisioning for a long time while the store it archives from did not, which
+    is how the gap stayed invisible.
+
+    Its absence is silent and expensive. Without this directory (and the
+    matching ``task_store.mode`` key, see ``configure_task_store``) macf falls
+    back to CC's per-session store: completed tasks are deleted once the last
+    open task closes, and a continue/rewind forks the store into copies that
+    then diverge. Everything works until history is expected to survive.
+
+    Must run at init time for the same reason as the mailbox: agent/public/ is
+    550 under immutable_structure, so the agent cannot create it afterwards.
+    """
+    tasks = public / 'tasks'
+    tasks.mkdir(mode=0o750, exist_ok=True)
+    run_command(['chown', f'{username}:agents_all', str(tasks)])
+    run_command(['chmod', '750', str(tasks)])
+    return tasks
+
+
+def configure_task_store(maceff_dir: Path, username: str) -> bool:
+    """Point the agent's config at the home task store. Returns True if usable.
+
+    The directory alone is not enough: without this key macf reads the legacy
+    per-session store and the provisioned directory sits empty and unread. Both
+    halves or neither.
+
+    Read-modify-write, because an upgrade path finds a config already holding
+    identity and hook settings — pointing an agent at a store is not a reason to
+    discard who it is. An unreadable config is left untouched and reported
+    rather than replaced, since overwriting it would destroy exactly the
+    information nobody can reconstruct.
+    """
+    config_file = maceff_dir / 'config.json'
+    config_data = {}
+    if config_file.exists():
+        try:
+            config_data = json.loads(config_file.read_text())
+        except (OSError, json.JSONDecodeError) as e:
+            log(f"WARNING: {config_file} unreadable ({e}); leaving it alone. "
+                f"{username} will fall back to the legacy task store.")
+            return False
+    if (config_data.get('task_store') or {}).get('mode') != 'home':
+        config_data.setdefault('task_store', {})
+        config_data['task_store']['mode'] = 'home'
+        config_data['task_store'].setdefault('path', 'agent/public/tasks')
+        config_file.write_text(json.dumps(config_data, indent=2) + '\n')
+        log(f"Set task_store.mode=home for {username}")
+    run_command(['chown', f'{username}:{username}', str(config_file)])
+    run_command(['chmod', '600', str(config_file)])
+    return True
+
+
 def create_amail_tree(public: Path, username: str) -> Path:
     """Create the agent's amail mailbox under agent/public/.
 
@@ -325,6 +381,13 @@ def create_pa_user(agent_name: str, agent_spec: AgentSpec, defaults_dict: Option
 
     # Configure Claude Code settings (merge defaults + agent-specific)
     configure_claude_settings(username, agent_name, agent_spec, defaults_dict)
+
+    # Install/refresh the channel plugins those channels point at -- the
+    # declaration above is only self-fulfilling if the software it names
+    # actually lands on the home. Vanilla homes skip it for the same reason
+    # create_bash_init drops their channels block.
+    if not getattr(agent_spec, 'is_vanilla', False):
+        ensure_channel_plugins(username, channels)
 
 
 KEY_LINE_PREFIXES = ('ssh-', 'ecdsa-', 'sk-ssh-', 'sk-ecdsa-')
@@ -544,6 +607,67 @@ fi
     log(f"Bashrc configured for active_project: {username}")
 
 
+# Marketplace sources the provisioner may add on a fresh home. A channel naming
+# a marketplace not listed here is skipped with a warning rather than guessed
+# at -- provisioning must not invent a source for third-party code.
+KNOWN_MARKETPLACE_SOURCES = {
+    'claude-plugins-official': 'anthropics/claude-plugins-official',
+}
+
+
+def ensure_channel_plugins(username: str, channels: Optional[List[str]]) -> None:
+    """Install or update each channel plugin an agent's config declares.
+
+    agents.yaml ``claude_config.channels`` declares strings like
+    ``plugin:telegram@claude-plugins-official``. The harness hands them to
+    ``--channels`` at session launch, but until this step nothing provisioned
+    the plugin they name -- an agent could hold a channel flag pointing at
+    software that was never installed (observed on a fresh deployment,
+    2026-08-13). This makes the declaration self-fulfilling: every container
+    start installs a missing plugin and updates a present one.
+
+    Non-fatal throughout, by design: a container that starts offline must
+    still boot with whatever version it already has. Each CLI call is wrapped
+    in ``timeout`` so a hung network fetch cannot stall provisioning.
+    """
+    if not channels:
+        return
+
+    def as_user(cmd: str) -> None:
+        run_command(['su', '-', username, '-c', f'timeout 90 {cmd}'],
+                    check=False)
+
+    plugins_dir = HOME_ROOT / username / '.claude' / 'plugins'
+    for channel in channels:
+        if not channel.startswith('plugin:') or '@' not in channel:
+            continue
+        plugin_id = channel[len('plugin:'):]
+        _, marketplace = plugin_id.split('@', 1)
+
+        marketplaces_file = plugins_dir / 'known_marketplaces.json'
+        known = marketplaces_file.exists() and \
+            marketplace in marketplaces_file.read_text()
+        if not known:
+            source = KNOWN_MARKETPLACE_SOURCES.get(marketplace)
+            if source is None:
+                log(f"Channel plugin {plugin_id}: marketplace {marketplace!r} "
+                    f"has no known source; skipping (add it to "
+                    f"KNOWN_MARKETPLACE_SOURCES or pre-configure the home)")
+                continue
+            as_user(f'claude plugin marketplace add {source}')
+        else:
+            as_user(f'claude plugin marketplace update {marketplace}')
+
+        installed_file = plugins_dir / 'installed_plugins.json'
+        installed = installed_file.exists() and \
+            plugin_id in installed_file.read_text()
+        if installed:
+            as_user(f'claude plugin update {plugin_id}')
+        else:
+            as_user(f'claude plugin install {plugin_id}')
+        log(f"Channel plugin ensured for {username}: {plugin_id}")
+
+
 def configure_claude_settings(
     username: str,
     agent_name: str,
@@ -754,6 +878,9 @@ def create_agent_tree(username: str, agent_spec: AgentSpec, defaults_config: Opt
     run_command(['chown', f'{username}:agents_all', str(task_archives)])
     run_command(['chmod', '750', str(task_archives)])
 
+    # Create the live task store (MACF infrastructure, always needed).
+    create_task_store(public, username)
+
     # Create the amail mailbox (MACF infrastructure, always needed).
     create_amail_tree(public, username)
 
@@ -798,6 +925,9 @@ def create_agent_tree(username: str, agent_spec: AgentSpec, defaults_config: Opt
         log(f"Initialized agent_state.json for {username}")
     run_command(['chown', f'{username}:{username}', str(state_file)])
     run_command(['chmod', '600', str(state_file)])
+
+    # Point the agent at the home task store (pairs with create_task_store).
+    configure_task_store(maceff_dir, username)
 
 
 def create_personal_policies(username: str) -> None:
@@ -1521,6 +1651,194 @@ fi
         tz_bridge.chmod(0o644)
 
 
+# Egress rules live in a dedicated chain rather than appended to OUTPUT directly,
+# so re-running startup is idempotent (flush + rebuild) and cannot disturb rules
+# put there by anything else.
+EGRESS_CHAIN = 'MACEFF_EGRESS'
+
+# Both binaries ship in the same distro package. Requiring both is therefore cheap,
+# and skipping the v6 table because "this container has no IPv6 today" is exactly
+# the false-PASS that certifies an unprotected host — the address family a
+# container has is not a property of the config that restricts it.
+EGRESS_BINARIES = ('iptables', 'ip6tables')
+
+# Every refusal below NAMES the policy rather than restating it.
+#
+# A remedy copied into an error string is duplicated policy: it drifts, and the
+# drift is invisible because nobody diffs an error message against a document. A
+# navigate command cannot drift — it resolves to whatever the policy currently
+# says. So these messages carry the diagnosis (which is ours to state) and a
+# pointer (which is the policy's to answer), never an inline prescription and
+# never a section number.
+#
+# The concept hints are deliberate: they are what lets a reader choose a section
+# from the CEP guide without us pinning one. A hint is a pointer; a prescription
+# is a copy.
+POLICY_POINTER = (
+    "\n\nWhy this refuses rather than warns, and what a deployment must do:\n"
+    "    macf_tools policy navigate capability_boundaries\n"
+    "    macf_tools policy navigate container_operations\n"
+    "Related: enforcement placement, identity separation as prerequisite, "
+    "declared-but-unenforceable, verification by attempt."
+)
+
+
+def resolve_egress_policies(agents_config: AgentsConfig) -> Dict[str, List[int]]:
+    """Resolve the effective deny list for every agent.
+
+    An agent's own ``egress`` wins; otherwise it inherits ``defaults.egress``.
+    Absent both, the agent is unrestricted and does not appear in the result.
+
+    Inheritance is what makes this safe over time: an account added to a
+    deployment that declares defaults is covered without anyone remembering to
+    cover it. Exemption requires writing an empty list, which shows up in review.
+    """
+    default_ports: List[int] = []
+    if agents_config.defaults and agents_config.defaults.egress:
+        default_ports = list(agents_config.defaults.egress.deny_tcp_ports)
+
+    policies: Dict[str, List[int]] = {}
+    for agent_spec in agents_config.agents.values():
+        if agent_spec.egress is not None:
+            ports = list(agent_spec.egress.deny_tcp_ports)
+        else:
+            ports = list(default_ports)
+        if ports:
+            policies[agent_spec.username] = sorted(set(ports))
+    return policies
+
+
+def apply_egress_policy(agents_config: AgentsConfig) -> None:
+    """Install per-uid outbound restrictions, or fail provisioning trying.
+
+    A restriction the agent could lift is documentation, so enforcement is keyed
+    on the kernel identity — ``-m owner --uid-owner`` matches the uid that owns
+    the socket, which an unprivileged process cannot spoof.
+
+    This function is deliberately loud. If a policy is declared and cannot be
+    installed, it raises. The alternative — logging a warning and provisioning
+    agents anyway — produces a deployment that documents a control it does not
+    have, which is strictly worse than having no control, because it is believed.
+    """
+    policies = resolve_egress_policies(agents_config)
+
+    if not policies:
+        log("Egress policy: none declared, no rules installed")
+        return
+
+    log(f"Egress policy: {len(policies)} agent(s) restricted, enforcing before sshd")
+
+    # Capability check by ATTEMPT, not by inspecting anything that merely reports
+    # capability. A missing binary and a missing NET_ADMIN both surface here.
+    for binary in EGRESS_BINARIES:
+        if shutil.which(binary) is None:
+            raise RuntimeError(
+                f"Egress policy declared but '{binary}' is not installed in this image. "
+                f"Provisioning refuses to continue: agents would otherwise run believing "
+                f"a restriction that is not present." + POLICY_POINTER
+            )
+        probe = subprocess.run([binary, '-L', 'OUTPUT', '-n'],
+                               capture_output=True, text=True)
+        if probe.returncode != 0:
+            raise RuntimeError(
+                f"Egress policy declared but '{binary}' cannot read the ruleset "
+                f"(exit {probe.returncode}): {probe.stderr.strip()}\n"
+                f"The container almost certainly lacks NET_ADMIN. Provisioning "
+                f"refuses to continue." + POLICY_POINTER
+            )
+
+    # Map usernames to uids up front so a bad account fails before any rule lands.
+    uids: Dict[str, int] = {}
+    for username in policies:
+        try:
+            uid = pwd.getpwnam(username).pw_uid
+        except KeyError:
+            raise RuntimeError(
+                f"Egress policy declared for '{username}' but that account does not "
+                f"exist. Rules must be installed against a real uid." + POLICY_POINTER
+            )
+        # An agent sharing an identity with the operator cannot be filtered without
+        # filtering the operator — the rule is not merely ineffective, it is
+        # inexpressible. Refuse rather than install something misleading.
+        if uid < 1000:
+            raise RuntimeError(
+                f"Egress policy declared for '{username}' (uid {uid}), which is a "
+                f"system or privileged account. Owner-matched filtering requires the "
+                f"agent to hold its own unprivileged uid." + POLICY_POINTER
+            )
+        uids[username] = uid
+
+    duplicates = {u: n for n, u in uids.items() if list(uids.values()).count(u) > 1}
+    if duplicates:
+        raise RuntimeError(
+            f"Egress policy cannot be enforced: accounts share uids {duplicates}. "
+            f"A rule matching one would silently match the other." + POLICY_POINTER
+        )
+
+    for binary in EGRESS_BINARIES:
+        # Idempotent rebuild: create the chain if absent, flush it if present, and
+        # ensure exactly one jump to it from OUTPUT.
+        subprocess.run([binary, '-N', EGRESS_CHAIN], capture_output=True)
+        flush = subprocess.run([binary, '-F', EGRESS_CHAIN], capture_output=True, text=True)
+        if flush.returncode != 0:
+            raise RuntimeError(
+                f"Egress policy: could not flush {EGRESS_CHAIN} via {binary}: "
+                f"{flush.stderr.strip()}"
+            )
+
+        linked = subprocess.run([binary, '-C', 'OUTPUT', '-j', EGRESS_CHAIN],
+                                capture_output=True)
+        if linked.returncode != 0:
+            link = subprocess.run([binary, '-I', 'OUTPUT', '1', '-j', EGRESS_CHAIN],
+                                  capture_output=True, text=True)
+            if link.returncode != 0:
+                raise RuntimeError(
+                    f"Egress policy: could not hook {EGRESS_CHAIN} into OUTPUT via "
+                    f"{binary}: {link.stderr.strip()}"
+                )
+
+        for username, ports in sorted(policies.items()):
+            uid = uids[username]
+            port_spec = ','.join(str(p) for p in ports)
+            # REJECT rather than DROP: the agent gets an immediate refusal instead
+            # of a hang. We are not hiding the rule — a compromised agent learning
+            # the port is blocked is not a loss, whereas a caller that blocks for
+            # 30s is indistinguishable from a network problem in every log we keep.
+            add = subprocess.run(
+                [binary, '-A', EGRESS_CHAIN,
+                 '-p', 'tcp', '-m', 'multiport', '--dports', port_spec,
+                 '-m', 'owner', '--uid-owner', str(uid),
+                 '-j', 'REJECT'],
+                capture_output=True, text=True
+            )
+            if add.returncode != 0:
+                raise RuntimeError(
+                    f"Egress policy: could not install rule for {username} "
+                    f"(uid {uid}, ports {port_spec}) via {binary}: {add.stderr.strip()}"
+                )
+
+    # Read the rules back. Reporting what we asked for is not evidence of what is
+    # installed; these must be two separate observations or they are one variable.
+    for binary in EGRESS_BINARIES:
+        listed = subprocess.run([binary, '-S', EGRESS_CHAIN],
+                                capture_output=True, text=True)
+        if listed.returncode != 0:
+            raise RuntimeError(
+                f"Egress policy: installed rules but cannot read {EGRESS_CHAIN} back "
+                f"via {binary}: {listed.stderr.strip()}"
+            )
+        for username, ports in sorted(policies.items()):
+            marker = f"--uid-owner {uids[username]} "
+            if marker not in listed.stdout:
+                raise RuntimeError(
+                    f"Egress policy: rule for {username} (uid {uids[username]}) is "
+                    f"absent from {binary} {EGRESS_CHAIN} after installation. "
+                    f"Chain reads:\n{listed.stdout}" + POLICY_POINTER
+                )
+            log(f"Egress rule active [{binary}]: {username} "
+                f"(uid {uids[username]}) denied tcp/{','.join(str(p) for p in ports)}")
+
+
 def main() -> int:
     """
     Container startup entry point.
@@ -1646,6 +1964,14 @@ def main() -> int:
                     if sa_def.exists() and sa_def.stat().st_size == 0:
                         log(f"WARNING: {sa_def} is empty - delegation to '{sa_name}' will fail. "
                             f"Check that framework/subagents/{sa_name}.md exists.")
+
+        # Enforce egress policy the moment every agent uid exists and BEFORE any
+        # code runs as one. initialize_agents() below invokes `su - <agent>`, and
+        # sshd starts later still; both are points at which an unrestricted agent
+        # could act. Raising here aborts startup, which is the intended behaviour:
+        # a container that cannot enforce a declared restriction must not offer
+        # accounts that believe they are restricted.
+        apply_egress_policy(agents_config)
 
         # Create project workspaces
         if projects_config:

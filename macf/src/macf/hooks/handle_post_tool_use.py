@@ -12,7 +12,7 @@ from typing import Dict, Any
 from macf.utils import (
     get_current_session_id,
 )
-from macf.agent_events_log import append_event
+from macf.agent_events_log import append_event, elide_large_values
 from macf.hooks.hook_logging import log_hook_event
 
 
@@ -46,23 +46,19 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             "success": True  # PostToolUse means tool completed (may have errors in output but call completed)
         }
 
-        # Sanitize hook_input: replace large content with size metadata
-        sanitized_data = data.copy()
-        if "tool_response" in sanitized_data:
-            tr = sanitized_data["tool_response"]
-            if isinstance(tr, dict) and "stdout" in tr:
-                stdout = tr.get("stdout", "")
-                if len(stdout) > 500:  # Threshold for "large" content
-                    sanitized_data["tool_response"] = {
-                        **tr,
-                        "stdout": f"[{len(stdout)} bytes]",
-                        "stdout_size": len(stdout)
-                    }
-
+        # Replace oversized values with their size before the event is written.
+        #
+        # This used to test whether tool_response was a dict containing
+        # "stdout" — the shape one tool happens to return. Measured against a
+        # real log that predicate fired on 70% of records and caught 1.7% of the
+        # bytes: every other tool's response walked past it, and a single field
+        # holding whole-file content accounted for most of the remainder.
+        # elide_large_values tests size instead, which no unanticipated payload
+        # shape can escape.
         append_event(
             event="tool_call_completed",
             data=event_data,
-            hook_input=sanitized_data
+            hook_input=elide_large_values(data)
         )
 
         # Silent: no message output (PreToolUse handles user/agent awareness)

@@ -229,6 +229,44 @@ class TestScopePausePrimitives:
         assert check["total"] == 3
 
 
+class TestScopePauseAll:
+    """`scope pause --all` — the non-hanging, reversible full-gate quiet for USER_REMOTE."""
+
+    def test_pause_all_pauses_every_active(self, isolated_events):
+        from types import SimpleNamespace
+        from macf.task.scope import set_scope, get_scope_check
+        from macf.cli import cmd_task_scope_pause
+        set_scope(["1", "2", "3"])
+        rc = cmd_task_scope_pause(SimpleNamespace(task_ids=[], all=True,
+                                                  justification="remote: quiet the whole gate"))
+        assert rc == 0
+        check = get_scope_check()
+        assert check["active_count"] == 0
+        assert check["paused_count"] == 3
+
+    def test_pause_all_rejects_ids_and_all_together(self, isolated_events):
+        from types import SimpleNamespace
+        from macf.task.scope import set_scope
+        from macf.cli import cmd_task_scope_pause
+        set_scope(["1"])
+        rc = cmd_task_scope_pause(SimpleNamespace(task_ids=["1"], all=True, justification="x"))
+        assert rc == 1
+
+    def test_pause_all_on_empty_scope_is_clean_noop(self, isolated_events):
+        from types import SimpleNamespace
+        from macf.cli import cmd_task_scope_pause
+        rc = cmd_task_scope_pause(SimpleNamespace(task_ids=[], all=True, justification="x"))
+        assert rc == 0
+
+    def test_pause_all_still_requires_justification(self, isolated_events):
+        from types import SimpleNamespace
+        from macf.task.scope import set_scope
+        from macf.cli import cmd_task_scope_pause
+        set_scope(["1"])
+        rc = cmd_task_scope_pause(SimpleNamespace(task_ids=[], all=True, justification=""))
+        assert rc == 1  # justification is mandatory even for --all
+
+
 class TestScopeAddRemovePrimitives:
     """Test scope add/remove (incremental edits, no replace)."""
 
@@ -275,91 +313,37 @@ class TestScopeAddRemovePrimitives:
         assert any(s["reason"] == "not_in_scope" for s in result["skipped_ids"])
 
 
-class TestScopeOrphanHealing:
-    """Stale MTMD scope_status with lost event history.
+class TestScopeStatusFieldRetired:
+    """The per-task MTMD scope_status field is retired; scope is event-sourced only.
 
-    The bug: task files keep scope_status="active" from a legacy session while
-    the event log carries no scope membership -- the tree renders 👀 but every
-    scope command reports not_in_scope. Orphans must be detectable, and
-    pause/remove/clear must heal them.
+    Replaces the former orphan-healing suite: orphans were tasks whose MTMD
+    scope_status disagreed with the event log, and that disagreement is now
+    structurally impossible.
     """
 
-    @pytest.fixture
-    def home_with_orphan(self, tmp_path, monkeypatch):
-        from macf.utils.paths import find_agent_home
-        monkeypatch.delenv("MACF_TASKS_DIR", raising=False)
-        monkeypatch.delenv("MACF_TASK_STORE_DIR", raising=False)
-        monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(tmp_path))
-        find_agent_home.cache_clear()
-        maceff = tmp_path / ".maceff"
-        maceff.mkdir()
-        (maceff / "config.json").write_text(json.dumps(
-            {"task_store": {"mode": "home", "path": "agent/public/tasks"}}))
-        (maceff / "agent_events_log.jsonl").touch()
-        store = tmp_path / "agent" / "public" / "tasks"
-        store.mkdir(parents=True)
-        desc = (
-            '<macf_task_metadata version="1.0">\n'
-            "creation_breadcrumb: s_test/c_1/p_x/t_1\n"
-            "created_cycle: 1\n"
-            "created_by: PA\n"
-            "scope_status: active\n"
-            "</macf_task_metadata>"
-        )
-        (store / "99.json").write_text(json.dumps({
-            "id": "99",
-            "subject": "#99 orphan task",
-            "description": desc,
-            "status": "pending",
-        }))
-        yield tmp_path
-        find_agent_home.cache_clear()
-
-    def test_orphan_detected_but_absent_from_event_state(self, home_with_orphan):
-        from macf.task.scope import get_scope_state, find_orphaned_scope_tasks
-        assert get_scope_state() == {}
-        assert find_orphaned_scope_tasks() == {"99": "active"}
-
-    def test_remove_heals_orphan(self, home_with_orphan):
-        from macf.task.reader import TaskReader
-        from macf.task.scope import remove_from_scope, find_orphaned_scope_tasks
-        result = remove_from_scope(["99"])
-        assert result["success"]
-        assert result["removed_ids"] == ["99"]
-        assert result["healed_ids"] == ["99"]
+    def test_find_orphaned_scope_tasks_is_always_empty(self, isolated_events):
+        from macf.task.scope import set_scope, find_orphaned_scope_tasks
+        set_scope(["1", "2", "3"])
+        # Even with an active event-sourced scope, there is no drift-prone field to
+        # go stale, so there are never any orphans to find.
         assert find_orphaned_scope_tasks() == {}
-        task = TaskReader().read_task("99")
-        assert task.mtmd.scope_status is None
 
-    def test_pause_heals_orphan_and_event_state_adopts(self, home_with_orphan):
-        from macf.task.reader import TaskReader
+    def test_model_metadata_no_longer_carries_scope_status(self):
+        import dataclasses
+        from macf.task.models import MacfTaskMetaData
+        names = {f.name for f in dataclasses.fields(MacfTaskMetaData)}
+        assert "scope_status" not in names
+
+    def test_scope_mutations_still_work_event_sourced(self, isolated_events):
         from macf.task.scope import (
-            pause_scoped_tasks, get_scope_state, find_orphaned_scope_tasks,
+            set_scope, pause_scoped_tasks, complete_scoped_task,
+            remove_from_scope, get_scope_check,
         )
-        result = pause_scoped_tasks(["99"], justification="stale scoping from a legacy sprint")
-        assert result["success"]
-        assert result["paused_ids"] == ["99"]
-        assert result["healed_ids"] == ["99"]
-        # Event replay adopts the previously-unknown tid as paused
-        assert get_scope_state() == {"99": "paused"}
-        assert find_orphaned_scope_tasks() == {}
-        task = TaskReader().read_task("99")
-        assert task.mtmd.scope_status == "paused"
-
-    def test_clear_sweeps_orphans(self, home_with_orphan):
-        from macf.task.reader import TaskReader
-        from macf.task.scope import clear_scope, find_orphaned_scope_tasks
-        result = clear_scope()
-        assert result["success"]
-        assert result["orphans_swept"] == ["99"]
-        assert find_orphaned_scope_tasks() == {}
-        task = TaskReader().read_task("99")
-        assert task.mtmd.scope_status is None
-
-    def test_unscoped_unknown_task_still_skipped(self, home_with_orphan):
-        # A task with NO stale MTMD must still be refused (no accidental adoption)
-        from macf.task.scope import pause_scoped_tasks, remove_from_scope
-        result = pause_scoped_tasks(["555"], justification="reason")
-        assert any(s["reason"] == "not_in_scope" for s in result["skipped_ids"])
-        result = remove_from_scope(["555"])
-        assert any(s["reason"] == "not_in_scope" for s in result["skipped_ids"])
+        set_scope(["10", "11", "12"])
+        pause_scoped_tasks(["10"], justification="external blocker")
+        complete_scoped_task("11")
+        remove_from_scope(["12"])
+        check = get_scope_check()
+        assert check["active_count"] == 0    # 12 removed, 11 inactive, 10 paused
+        assert check["paused_count"] == 1
+        assert check["inactive_count"] == 1

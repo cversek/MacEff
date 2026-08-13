@@ -149,6 +149,27 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             "session_id": session_id
         })
 
+        # Ensure the Transcript Monitor is running (#144). TM produces the
+        # user_activity_detected events that USER_IDLE / USER_REMOTE detection
+        # depend on. It was previously started only opportunistically (AUTO_MODE
+        # entry, task-create), so a session that did neither ran blind and
+        # activity detection silently degraded. Tying it to the session lifecycle
+        # here covers every fresh start and every resume. start_daemon()
+        # daemonizes (non-blocking) and is idempotent; failure is logged, never
+        # fatal to the hook.
+        try:
+            from macf.transcript_monitor.daemon import (
+                is_running as _tm_running, start_daemon as _tm_start,
+            )
+            if not _tm_running():
+                _tm_start()
+        except (ImportError, OSError, RuntimeError) as e:
+            emit_warning(Warning(
+                source="session_start",
+                kind="transcript_monitor_autostart_failed",
+                detail=f"could not ensure transcript monitor running: {e}",
+            ))
+
         # PHASE 1: Check source field FIRST (highest priority)
         # This distinguishes user-initiated /compact from crash-based session migration
         source = data.get('source')
@@ -172,7 +193,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             })
             # Fall through to compaction recovery (skip migration check)
         elif source == 'resume':
-            # μC (microcompaction) resume — NOT a compaction, NOT a migration.
+            # Session resume — NOT a compaction, NOT a migration.
             # Same session continues. Skip all compaction/migration detection.
             # CRITICAL: Do NOT fall through to PHASE 3 JSONL scanning, which
             # would find stale compact_boundary markers from earlier real

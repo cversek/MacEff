@@ -4,7 +4,7 @@
 **Type**: Development Infrastructure
 **Scope**: All agents (PA and SA)
 **Status**: ACTIVE (successor to todo_hygiene.md)
-**Version**: 1.2
+**Version**: 1.4
 
 ---
 
@@ -16,7 +16,7 @@ Task management policy governs the use of Claude Code native Task* tools (TaskCr
 
 **Two storage backends** (see §0.1):
 - **Legacy (default)**: CC's `~/.claude/tasks/{session_uuid}/*.json`. Session-scoped — a new session UUID (continue / rewind / child) gets a *copy* that then diverges, and CC deletes all completed task files when the last open task completes. Fragile for long-lived history.
-- **Home store (opt-in)**: a single project-scoped directory under the agent home (`{agent_home}/agent/public/tasks/`, default), alongside the other consciousness artifacts. Set `task_store.mode: "home"` in `{agent_home}/.maceff/config.json` (or `MACF_TASK_STORE_DIR`). Not keyed by session UUID, so it survives fork/rewind and CC never touches it. This is the recommended backend for any agent that wants durable task history.
+- **Home store (provisioned)**: a single project-scoped directory under the agent home (`{agent_home}/agent/public/tasks/`, default), alongside the other consciousness artifacts. Selected by `task_store.mode: "home"` in `{agent_home}/.maceff/config.json` (or `MACF_TASK_STORE_DIR`). Not keyed by session UUID, so it survives fork/rewind and CC never touches it. **Provisioning creates it** — `macf_tools task store-init` builds the directory and writes the config key, and provisioning calls it. An agent that reaches its first task write without a home store was not provisioned; that is a bug in provisioning, not a preference the agent expressed.
 
 **Supersedes**: `todo_hygiene.md` (DEPRECATED)
 
@@ -26,6 +26,8 @@ Task management policy governs the use of Claude Code native Task* tools (TaskCr
 
 **0 Task Storage & Persistence**
 - Where are task files stored?
+- Who creates the home store, and what does it mean if an agent does not have one?
+- How do I move an existing agent onto the home store without losing history?
 - What creates new session UUIDs?
 - What is the ID assignment behavior?
 - What epistemological gaps remain?
@@ -110,6 +112,8 @@ Task management policy governs the use of Claude Code native Task* tools (TaskCr
 - What is the completion_report format?
 - What elements are required in completion reports?
 - How do I handle partial work?
+- What must I do when work I performed covers a task that was never started?
+- How do I record out-of-order execution so a successor can tell it from skipped work?
 - What type-specific completion gates exist?
 - How does GH_ISSUE closeout work?
 
@@ -140,8 +144,26 @@ Task management policy governs the use of Claude Code native Task* tools (TaskCr
 **11 Migration from TodoWrite**
 - What changed between paradigms?
 
-**12 Future Experiments**
+**12 Task Scope System**
+- How is scope set and cleared?
+- What does the scope gate enforce?
+
+**13 Future Experiments**
 - What knowledge gaps need empirical validation?
+
+**14 Integration with Other Policies**
+- Which policies does task management depend on?
+
+**15 Evolution & Feedback**
+- How do I propose a change to this policy?
+
+**16 The Work Stack**
+- Why is a tree of open tasks not yet a stack?
+- What are push, pop, and pop-reconciled in this system?
+- Why must a frame be durable before it is interrupted?
+- Which open frames are debts and which are not?
+- Why is a parent whose phase is running not a dropped frame?
+- How do I see what I was in the middle of?
 
 === CEP_NAV_BOUNDARY ===
 
@@ -155,6 +177,19 @@ Each task is stored as `{id}.json` (e.g., `1.json`, `67.json`) in the active sto
 
 - **Legacy**: `~/.claude/tasks/{session_uuid}/{id}.json` — one directory per CC session.
 - **Home store**: `{agent_home}/agent/public/tasks/{id}.json` — one project-scoped directory, no session UUID. Activated by `task_store.mode: "home"` in `{agent_home}/.maceff/config.json` (path overridable; env `MACF_TASK_STORE_DIR` wins). The `TaskReader` resolves this via a `HOME_STORE_UUID` sentinel; all create/read/archive/CLI paths inherit it through `session_path`. Completed-task hiding (`.{id}.json`) is a CC-scanner concern and is skipped here, so the home store stays plain `{id}.json`.
+
+### 0.1.1 Provisioning and migration
+
+The home store is **built by provisioning**, not chosen afterwards. `macf_tools task store-init` creates the directory and writes `task_store.mode: "home"`, preserving every other key in an existing config; it is idempotent, so provisioning and upgrade paths can both call it unconditionally. It deliberately does **not** migrate — provisioning a fresh home and rescuing an existing history are different operations with different failure modes, and one command doing both would make `--dry-run` mean two things.
+
+An existing agent moves with `macf_tools task migrate-store`, which **copies, verifies by sha256 byte-for-byte, and only then flips the config**. That order is the whole design: a config pointed at an unverified store fails later and elsewhere, and reads as amnesia rather than as a bad copy. The legacy directories are never deleted, so reverting is a one-line config edit.
+
+Two properties of migration exist because their absence was a silent partial:
+
+- **Every legacy directory is migrated, not just the live one.** An agent that has been continued, rewound or forked has several session directories. Migrating only the current one produces a success message, a populated store, and a directory nothing will ever mention again — a partial result shaped exactly like a complete one.
+- **Divergent copies are refused, not resolved.** A fork duplicates the store and both sides then move on, so the same id can exist twice with different content. Migration reports the conflicts and stops; `--force` takes the most recently modified copy and *names the discarded ones*, because a silent choice discards whichever copy lost a coin toss.
+
+Dot-prefixed completed tasks are normalised to plain `{id}.json` on the way in. The prefix exists solely to hide files from CC's scanner and the home store is never scanned, so carrying it across leaves one directory holding two conventions — and shell globs skip dotfiles, so anyone counting with `ls *.json` silently undercounts completed work.
 
 ### 0.2 Persistence Behavior
 
@@ -706,6 +741,15 @@ parent_id: 68
 
 **Priority**: MTMD `parent_id` takes precedence if both present.
 
+**Root and the zero forms**: `#000` is the reserved tree root and the default
+parent when `--parent` is omitted. Every zero-equivalent spelling — `0`, `00`,
+`#0`, an empty value — normalizes to `000` at creation. This is deliberate: the
+tree is rendered by walking children down from `000`, so a parent stored as bare
+`"0"` (`!= "000"`) would drop the task out of the tree while creation still
+reported success. Normalizing makes that orphan-by-zero unrepresentable rather
+than merely warned about (GH #208). Non-zero IDs are kept unpadded (`5`, not
+`005`) so they match their stored task ID.
+
 ---
 
 ## 4 Dual Dependency System
@@ -766,7 +810,7 @@ The agent ALWAYS has visibility into CA refs via enhanced `task list` display.
 macf_tools task start #67     # → in_progress (records started_breadcrumb)
 macf_tools task pause #67     # → pending (for temporary pause)
 macf_tools task complete #67  # → completed (mandatory --report)
-macf_tools task archive #67   # → archived (with cascade)
+# task archive is RETIRED — use `task hide-completed` to declutter; see §7
 ```
 
 **Why Lifecycle Commands**: Status transitions are **consciousness events**, not raw data mutations. Each transition:
@@ -796,6 +840,8 @@ Work put down for one or more cycles loses its live working context to compactio
 1. **Bumps the stamp** — appends a `resumed via CLI (stale-resume from Cycle N)` update carrying a fresh breadcrumb, so the task's displayed date/cycle reflects the resumption (see §9 tree display).
 2. **Prints a resume banner** — which cycle the task was last worked, how long ago, and the current cycle.
 3. **Prompts the resume ritual** — read the full history (`task get #N`), re-read every note in the update stream plus any `plan_ca_ref` it references, and **narrate your understanding of where things stand and the next step to the user before executing.**
+
+**Orient the whole stack before the single task.** A stale resume means you were away, so the frame you are resuming may not be the only one attention left open. Read the work stack first (§16.5) — it answers which frames exist and which one you actually owe a return to, a question no single task's history can answer. The per-task ritual above is step two of an orientation that begins at the stack.
 
 A same-cycle re-start of an already-active task stays a plain no-op — no banner, no ritual.
 
@@ -923,7 +969,38 @@ If CLI unavailable, complete manually:
 
 Keep status `in_progress`, document blocker, create subtask for remaining work.
 
-### 6.5 Type-Specific Completion Gates
+### 6.5 Out-of-Order and Untracked Execution
+
+**If work you have performed covers a task that was never started, start it.** Then either complete it, or record explicitly that it was executed out of sequence and complete it in sequence.
+
+This is not bookkeeping neatness. A task sitting `pending` while its work is being done makes the tree assert something false — that nobody is working it. Orientation begins by reading the tree, so a successor, a peer, or the same agent after compaction will conclude the work is available and either duplicate it or plan around a gap that has already been filled.
+
+The failure is easy to fall into precisely because the *work* is correct. A directive arrives mid-flight, the right response is obvious, and it gets executed immediately — while the tree stays where it was. Nothing about doing good work prompts you to notice that you are doing it off the record.
+
+**What to do:**
+
+1. **Start the task**, even if the work is already finished. Starting is what makes the tree true.
+2. **Record the out-of-order execution in a note** — what was done, why it ran ahead of its place, and what remains. A phase completed silently ahead of schedule is indistinguishable, later, from one that was skipped.
+3. **Assess against the task's own criteria** rather than against the work you happened to do. Partial coverage is the common case, and the criteria are what reveal which parts are still open.
+4. **Complete it in sequence** once the remainder is done.
+
+**Applies beyond phases.** Any tracked work item — a bug fixed while investigating something else, a phase advanced by a side effect, an issue resolved incidentally — has the same obligation. Working off the tree is working off the clock, and for an agent this is worse than for a human: an agent does not persist, so untracked work is not merely uncredited, it is unrecoverable.
+
+**Tell**: you are about to describe work in a report or a message, and the task it belongs to is not `in_progress`.
+
+### 6.6 Resuming an Interrupted Task
+
+**When you jump back to a task you had already started, start it again.** Verify the outcome: the task tree's recency marker (👈) should move back to that task.
+
+This is the companion to §6.5. That section keeps the tree honest about work that was never tracked; this one keeps it honest about *where work is happening now*.
+
+Interleaved work is the normal case, not the exception — a directive arrives, a phase is set down and picked back up, an investigation detours through three tasks. The recency marker exists to answer "where did work last happen", and after any interleaving it answers correctly only if resumption is recorded. Otherwise the tree points at whatever was touched last, which after a detour is reliably the wrong thing, and a successor orienting from it starts in the wrong place.
+
+**Verify rather than assume.** The instruction specifies an observable outcome — the marker moves — and checking it is part of doing it. This matters more than it sounds: the behaviour was originally a no-op that warned "already in_progress" and changed nothing, so an agent following this rule without checking would have believed it complied while the tree stayed wrong. A directive that names an outcome is asking for the outcome, not the gesture.
+
+**A same-cycle resumption is a light event.** It refreshes the stamp and records that work resumed. It does not require the read-history ritual that a *stale* resume does — work last touched in an earlier cycle carries its own heavier protocol, because the context that made it legible is gone.
+
+### 6.7 Type-Specific Completion Gates
 
 Certain task types have completion requirements beyond the standard `--report`. When `task complete` is invoked on a gated type without meeting requirements, the system **redirects the agent to read the relevant policy section** rather than encoding the full policy in the error message. This ensures agents engage with the nuanced requirements in the policy itself.
 
@@ -1021,42 +1098,37 @@ The gate pattern generalizes to any task type. Each gate redirects to its own po
 
 ---
 
-## 7 Archive Protocol
+## 7 Archive Protocol — RETIRED
 
-### 7.1 Multi-Repo Archive Structure
+**The `task archive` / `task restore` / `task archived` trio is retired.** All
+three fail closed (exit `2`) and print a deprecation notice; none performs
+archiving, restoring, or listing.
 
-For multi-repo development, archive directory reflects repository context:
+**Why it was retired.** `task archive` printed a ✅ success line while archiving
+nothing — the task stayed live. A subcommand that reports success for an
+operation it did not perform is the exact failure mode this policy exists to
+prevent, so rather than repair an unwanted feature it was failed closed. `restore`
+(restored *from* an archive) and `archived` (listed archives) were both premised on
+`archive` producing real archives; with no supported way to produce one, they were
+retired in the same move rather than left as paths into dead machinery. The
+subcommands still *resolve* (they were kept as self-explaining stubs, not removed)
+so existing muscle memory meets an explanation instead of an "invalid choice"
+error.
 
-```
-agent/public/task_archives/
-├── MacEff/
-│   └── v0.4.0/
-│       ├── archive.md
-│       └── task_files/
-└── AnotherRepo/
-    └── v1.0.0/
-        ├── archive.md
-        └── task_files/
-```
-
-### 7.2 Cross-Repo Tasks
-
-Tasks spanning multiple repos document all repos in MTMD:
-```yaml
-repo: MacEff              # Primary repo
-related_repos:
-  - AnotherRepo
-```
-
-### 7.3 Cascade Behavior
-
-Cascade archiving is **default behavior** - archiving a parent archives all children:
+**Use instead — to declutter the task tree:**
 
 ```bash
-macf_tools task archive #67    # Archives #67 and all descendants
+macf_tools task hide-completed   # dot-prefix completed task files (hidden from CC scanner)
+macf_tools task unhide-all       # reverse it
 ```
 
-No `--cascade` flag needed. Use `--no-cascade` to archive single task.
+Hiding is reversible, writes nothing it cannot undo, and never claims a state
+change it did not make — the property the archive command violated.
+
+**Durable history** does not depend on archiving: with the **home store**
+(`task_store.mode: "home"`, §0.1) task files are project-scoped and survive
+fork/rewind/compaction in place, so there is nothing an archive step needs to
+rescue.
 
 ---
 
@@ -1193,7 +1265,7 @@ macf_tools task metadata add #67 label "v0.4.0"          # Add metadata tags
 macf_tools task start #67              # pending → in_progress
 macf_tools task pause #67              # in_progress → pending
 macf_tools task complete #67 --report "..." # → completed (report mandatory)
-macf_tools task archive #67            # → archived (cascade default)
+# task archive is RETIRED — use `task hide-completed`; see §7
 ```
 
 **Why Lifecycle Commands**:
@@ -1205,7 +1277,7 @@ Status transitions are **consciousness events**, not raw data mutations. Each li
 | `task start` | → `in_progress` | `started_breadcrumb` | Marks when work began |
 | `task pause` | → `pending` | Update entry added | Correction only (see below) |
 | `task complete` | → `completed` | `completion_breadcrumb` | Requires `--report` |
-| `task archive` | → `archived` | Update entry added | Cascades to children |
+| ~~`task archive`~~ | RETIRED | — | Fails closed; use `task hide-completed` (§7) |
 
 **`task pause` — Corrections Only**:
 
@@ -1468,7 +1540,7 @@ macf_tools task scope check                       # JSON output for Stop hook
 
 ---
 
-## 13 Integration with Other Policies
+## 14 Integration with Other Policies
 
 - `release_workflow.md` - Task archival during releases
 - `roadmaps_following.md` - MISSION task patterns
@@ -1477,11 +1549,104 @@ macf_tools task scope check                       # JSON output for Stop hook
 
 ---
 
-## 14 Evolution & Feedback
+## 15 Evolution & Feedback
 
 **Principle**: Task management should feel like an upgrade from TodoWrite - same consciousness patterns, better infrastructure.
 
 **DRAFT → OFFICIAL Path**: Validate §12 experiments, refine CLI based on usage.
+
+---
+
+## 16 The Work Stack
+
+Tasks are usually described as a record of work. They are also, read a certain way, a **stack** — and that reading is what makes them useful at the moment an agent is most likely to lose its place.
+
+### 16.1 A tree of open tasks is not yet a stack
+
+An agent returning from an interruption, a context loss, or a handoff asks one question: *what was I in the middle of?* A tree of six open tasks answers a different question. It reports six unfinished things without saying which one attention actually left and owes a return to.
+
+The missing element is **ordering**. A stack is not a set of frames; it is an ordered set with a discipline about which one you return to. The tree holds the frames. The order in which attention moved through them is what turns a pile into a stack.
+
+That ordering already exists: every task update carries a breadcrumb with a timestamp, so the sequence of touches is recorded. A tree's recency marker is the maximum over those timestamps — a single pointer derived from a full trace. The trace is not missing, only reduced away at display time.
+
+### 16.2 The operations, and where each already lives
+
+| Stack operation | Mechanism |
+|---|---|
+| **push** | starting a task, or noting on one — the durable write |
+| **frame contents** | the task plus its timestamped update stream |
+| **pop** | completing the task |
+| **pop, reconciled** | the resume protocol: work last touched in an earlier cycle requires re-reading its history before continuing |
+| **stack contents** | open frames, oldest first |
+| **the path taken** | the visitation trace |
+
+The fourth row is the one worth noticing. Resuming stale work does not restore a frame blindly — it reports the frame's age and requires reconciliation first, because the world may have moved while the work was set down. That is the correct semantics for a pop, and it is why §5's reading discipline is not ceremony.
+
+### 16.3 A frame must be durable *before* it is interrupted
+
+An interruption may end a turn without giving the agent an opportunity to write anything down. Whatever was held only in the agent's head at that moment is gone, and no amount of good intent at interrupt time recovers it — the agent is not running at interrupt time.
+
+**Therefore the push must have already happened.** This is the load-bearing reason for the note-as-you-go discipline in §5: a note written while the work is fresh is a frame that survives; a note deferred until the work is finished is a frame that never existed if the work is interrupted first. The agent that writes only at completion has a stack that is empty precisely when it is needed.
+
+### 16.4 Not every open frame is a debt
+
+An in-progress task that attention has left is not automatically a dropped frame. A task waiting on an incomplete blocker was set down for a reason and is **parked** — surfacing it as a problem is a false alarm, and a detector that raises false alarms is muted within a week.
+
+The distinction:
+
+- **active** — where attention is now. Not a debt.
+- **enclosing** — attention is *inside* this frame, in a descendant of it. Not a debt: the work is proceeding one level down.
+- **parked** — waiting on an unresolved blocker. Legitimately set down.
+- **abandoned** — unblocked, and attention went elsewhere without completing it. This is the dropped frame.
+
+These four are **exhaustive**: attention is here, or below here, or the frame is waiting on something, or it was dropped. That matters more than it sounds. A classifier that decides the first three and lets everything else fall through to `abandoned` has made the most alarming label its *residual* — the bucket that silently absorbs every case its author did not enumerate. `enclosing` exists because hierarchy was exactly such a case, and it was absorbed for as long as the taxonomy had three states.
+
+**Why the fourth state is load-bearing, and not bookkeeping.** A MISSION with a running phase is the ordinary shape of decomposed work. Classified as a dropped frame, it makes the false-alarm rate scale with *how faithfully work is decomposed* — so following §2.5 degrades the very detector this section exists to keep usable. A policy that punishes compliance with another policy is a defect in the pair, not a rough edge in one of them.
+
+**Enclosure is about where attention *is*, not about what is open underneath.** The tempting shortcut — treat any frame with an in-progress descendant as enclosing — absolves a parent that was dropped *together with* its child. If attention is on an unrelated frame, an ancestor and its descendant are both dropped, and both should say so. The correct test walks up from the active frame.
+
+**Whatever is recommended for resumption must be a frame that was actually dropped.** The classification is read; the recommendation is *acted on*. Pointing an agent at a parked frame sends it at something legitimately waiting on a blocker, and pointing it at an enclosing frame sends it at an ancestor of where it already is — both at the moment of a discontinuity, when the agent has least context with which to notice the advice is wrong.
+
+A second, purely structural check needs no timestamps at all: **a completed parent with an in-progress descendant is a contradiction.** A mission cannot honestly be complete while a phase inside it is still running. This catches the case where a whole branch was declared finished with one frame still open, and it is cheaper and more certain than any staleness heuristic.
+
+### 16.5 Seeing the stack
+
+```
+macf_tools task trace            # the open frames, classified (§16.4)
+macf_tools task trace --path N   # the order attention moved through them
+```
+
+Consult `--help` for the current flags and output form; this policy governs *when* the trace must be read and *what it is for*, not how it renders.
+
+**Run it after any discontinuity, and before declaring a branch of work finished.** This is a *procedure*, not a suggestion. Reading a single task's history tells you where *one* frame stands; the trace tells you which frames are open at all and which one attention actually left — the question `task get` cannot answer.
+
+**What counts as a discontinuity is lost context, not a restarted process.** The two are routinely confused, and the confusion runs in both directions — performing a recovery ritual that is not needed, or skipping one that is:
+
+| Event | Context | Read the stack? |
+|---|---|---|
+| Compaction | destroyed | **yes** |
+| Cleared session | destroyed | **yes** |
+| Work last touched in an earlier cycle (§5.3.1) | lost while set down | **yes** |
+| Handoff — a frame opened by someone else | never held | **yes** |
+| Session resume (the process restarts, the conversation continues) | **intact** | **no** |
+
+A session resume is a rejoin, not a rebirth: the supervisor restarts the client and the conversation continues, so the working context is exactly what it was. Treating it as a recovery wastes the ritual and teaches the agent to perform orientation as ceremony rather than as the response to a real loss.
+
+### 16.6 Why this is an obligation and not a convenience
+
+Where an operator directs an agent by interruption, the two parties hold different responsibilities. The operator is entitled to raise something the moment it is noticed and then move on; that is what makes correcting cheap enough to do at all. The cost of that arrangement is that **someone must hold the interrupted work, and it is not the operator.**
+
+An agent that services the newest instruction and silently drops the previous one has not merely forgotten a task. It has broken the contract that made interrupting safe — and the operator, having moved on by design, is the last party able to notice.
+
+
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — persistent
+     task tracking, lifecycle ceremony, scope gating, and the tree as the
+     orientation surface. -->
+
+[[methodology]] [[breadcrumb]] [[autonomy]] [[context_recovery]] [[observability]]
 
 ---
 

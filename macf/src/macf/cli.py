@@ -1,6 +1,6 @@
 # PYTHON_ARGCOMPLETE_OK
 # tools/src/maceff/cli.py
-import argparse, json, os, re, subprocess, sys, glob, platform, socket, unicodedata
+import argparse, json, os, re, subprocess, sys, glob, platform, socket, time, unicodedata
 from pathlib import Path
 from datetime import datetime, timezone
 try:
@@ -391,6 +391,17 @@ def cmd_env(args: argparse.Namespace) -> int:
         }
     }
 
+    # Supervision diagnostics. Every fact below was derivable before this
+    # existed, and every one of them was derived by hand -- repeatedly, in one
+    # evening, by the person who had just written the harness -- from $TMUX, ps
+    # ancestry walks and greps of the supervisor registry. Two came out wrong.
+    try:
+        from macf.utils.supervision import diagnose
+        data["supervision"] = diagnose()
+    except Exception as e:
+        # Never let a diagnostic break the command it is reporting on.
+        data["supervision"] = {"error": f"{type(e).__name__}: {e}"}
+
     # Output format
     if getattr(args, 'json', False):
         # Convert tuple to dict for JSON serialization
@@ -404,6 +415,15 @@ def cmd_env(args: argparse.Namespace) -> int:
 
         print("Agent ID")
         print(f"  {data['identity']['agent_id']}")
+        print()
+
+        print("Supervision")
+        sup = data.get("supervision") or {}
+        if "error" in sup:
+            print(f"  (unavailable: {sup['error']})")
+        else:
+            from macf.utils.supervision import format_diagnosis
+            print(format_diagnosis(sup))
         print()
 
         print("Versions")
@@ -494,7 +514,14 @@ def cmd_time(_: argparse.Namespace) -> int:
     current_time = _now_iso()
     print(current_time)
 
-    # Show gap since most recent CCP
+    # Show gap since most recent CCP.
+    #
+    # This goes to stderr, not stdout. `time` is documented as emitting a single
+    # ISO-8601 timestamp, which makes it the kind of command other code parses;
+    # a second line on stdout breaks every such consumer, and breaks them
+    # quietly, because the first line still parses for anything reading only one.
+    # Human-facing annotation belongs on stderr whenever stdout has a machine
+    # consumer, and an interactive caller still sees both streams.
     try:
         config = ConsciousnessConfig()
         checkpoints_path = config.get_checkpoints_path()
@@ -512,7 +539,8 @@ def cmd_time(_: argparse.Namespace) -> int:
                 delta = now - ccp_mtime
                 hours = int(delta.total_seconds() // 3600)
                 minutes = int((delta.total_seconds() % 3600) // 60)
-                print(f"Last CCP: {latest_ccp.name} ({hours}h {minutes}m ago)")
+                print(f"Last CCP: {latest_ccp.name} ({hours}h {minutes}m ago)",
+                      file=sys.stderr)
     except OSError as e:
         print(f"⚠️ MACF: CCP lookup failed: {e}", file=sys.stderr)
 
@@ -1427,8 +1455,21 @@ def cmd_statusline(args: argparse.Namespace) -> int:
 
 
 def _harness_params(args: argparse.Namespace):
+    from dataclasses import replace
     from .utils.harness import default_params
-    return default_params(agent=getattr(args, "agent", None), home=getattr(args, "home", None))
+    p = default_params(agent=getattr(args, "agent", None), home=getattr(args, "home", None))
+    # Channels are declared, never inferred. They are the agent's inbound link
+    # when nobody is attached, and a default would be a guess about reachability.
+    channels = tuple(getattr(args, "channel", None) or ())
+    prefix = getattr(args, "shell_prefix", None)
+    if channels or prefix:
+        p = replace(p, channels=channels, shell_prefix=prefix)
+    # Fill anything not given from what the last install recorded. Without this
+    # a flagless `install --check` renders different artifacts and reports drift
+    # that is not there — and acting on that report with --force would strip the
+    # channel silently.
+    from .utils.harness import load_settings
+    return load_settings(p)
 
 
 def cmd_harness_generate(args: argparse.Namespace) -> int:
@@ -1439,18 +1480,40 @@ def cmd_harness_generate(args: argparse.Namespace) -> int:
     anywhere — the hand-edited predecessor drifted precisely because there was
     nothing to diff against.
     """
-    from .utils.harness import render_unit, render_child, render_tmux_conf
+    from .utils.harness import (
+        render_child,
+        render_launch_functions,
+        render_start,
+        render_tmux_conf,
+        render_unit,
+        render_watchdog,
+    )
 
     try:
         p = _harness_params(args)
         attach = not getattr(args, "no_proxy", False)
         what = getattr(args, "what", "unit")
+        if what == "watchdog":
+            svc, tmr = render_watchdog(p)
+            print(f"# ===== cc-harness-{p.agent}-watch.service =====")
+            print(svc, end="")
+            print(f"\n# ===== cc-harness-{p.agent}-watch.timer =====")
+            print(tmr, end="")
+            return 0
         if what in ("unit", "all"):
             print(render_unit(p, attach_proxy=attach), end="")
+        if what in ("start", "all"):
+            if what == "all":
+                print(f"\n# ===== {p.start} =====")
+            print(render_start(p, attach_proxy=attach), end="")
         if what in ("child", "all"):
             if what == "all":
                 print(f"\n# ===== {p.child_path} =====")
             print(render_child(p), end="")
+        if what in ("functions", "all"):
+            if what == "all":
+                print(f"\n# ===== {p.functions} =====")
+            print(render_launch_functions(p), end="")
         if what in ("tmux", "all"):
             if what == "all":
                 print(f"\n# ===== {p.home}/.tmux-{p.agent}.conf =====")
@@ -1471,7 +1534,14 @@ def cmd_harness_install(args: argparse.Namespace) -> int:
     """
     from pathlib import Path
     import stat as _stat
-    from .utils.harness import render_unit, render_child, render_tmux_conf
+    from .utils.harness import (
+        render_child,
+        render_launch_functions,
+        render_start,
+        render_tmux_conf,
+        render_unit,
+        save_settings,
+    )
 
     try:
         p = _harness_params(args)
@@ -1479,9 +1549,17 @@ def cmd_harness_install(args: argparse.Namespace) -> int:
         unit_dir = Path.home() / ".config" / "systemd" / "user"
         targets = [
             (unit_dir / p.unit_name, render_unit(p, attach_proxy=attach), False),
+            (Path(p.start), render_start(p, attach_proxy=attach), True),
             (Path(p.child_path), render_child(p), True),
+            (Path(p.functions), render_launch_functions(p), False),
             (p.home / f".tmux-{p.agent}.conf", render_tmux_conf(p), False),
         ]
+        if getattr(args, "watchdog", False):
+            svc, tmr = render_watchdog(p)
+            targets += [
+                (unit_dir / f"cc-harness-{p.agent}-watch.service", svc, False),
+                (unit_dir / f"cc-harness-{p.agent}-watch.timer", tmr, False),
+            ]
 
         if getattr(args, "check", False):
             drift = 0
@@ -1513,9 +1591,13 @@ def cmd_harness_install(args: argparse.Namespace) -> int:
                 path.chmod(path.stat().st_mode | _stat.S_IXUSR)
             print(f"   ✓ {path}")
 
+        save_settings(p)
+        print(f"   ✓ {p.settings_path}")
         print(f"\n✅ Harness installed for agent '{p.agent}'")
         print(f"   systemctl --user daemon-reload && systemctl --user enable --now {p.unit_name}")
-        print(f"   attach:  tmux attach -t {p.agent}")
+        # "=" is not decoration: tmux matches targets by PREFIX, so advice
+        # without it teaches the loose form that caused GH #209.
+        print(f"   attach:  tmux attach -t ={p.agent}   (or: maceff_{p.prefix}_harness_launch)")
         print(f"   status:  macf_tools harness status --agent {p.agent}")
         print(f"   stop:    systemctl --user stop {p.unit_name}   (stops the supervisor, not the child)")
         return 0
@@ -1524,23 +1606,120 @@ def cmd_harness_install(args: argparse.Namespace) -> int:
         return 1
 
 
-def cmd_harness_status(args: argparse.Namespace) -> int:
-    """Report unit state, session presence and proxy attachment."""
-    from pathlib import Path
+def cmd_harness_attach(args: argparse.Namespace) -> int:
+    """Attach this terminal to the agent's supervised session.
+
+    Exists so that no remote shell has to hardcode a session name. A helper on
+    another machine held the OLD name after the session was renamed, and broke
+    with "no sessions" -- a fourth hand-maintained copy of harness knowledge, on
+    a host the generator cannot reach. `ssh host -t macf_tools harness attach`
+    resolves the name where the name is defined, so a rename cannot strand it.
+    """
+    from .utils.harness import resolve_agent
+    from .utils.identity import calling_card_from_identifier
 
     try:
+        agent, source = resolve_agent(getattr(args, "agent", None))
+        if source == "ambiguous":
+            print("Several harnesses are installed here; name one with --agent:",
+                  file=sys.stderr)
+            for a in agent:
+                print(f"   {a}  ({calling_card_from_identifier(a)})", file=sys.stderr)
+            return 1
+
+        # "=" forces an exact match; tmux resolves targets by prefix, so a bare
+        # name would happily attach to "<agent>-stale-ssh".
+        target = f"={agent}"
+        if subprocess.run(["tmux", "has-session", "-t", target],
+                          capture_output=True).returncode != 0:
+            print(f"No tmux session '{agent}' on this host.", file=sys.stderr)
+            print(f"   start it:  {'maceff_' + agent.rpartition('_')[0].lower() + '_harness_launch'}",
+                  file=sys.stderr)
+            print(f"   or:        systemctl --user start cc-harness-{agent}.service",
+                  file=sys.stderr)
+            return 1
+
+        # -CC hands the session to iTerm2 as native windows. It matters more
+        # than it looks: the client owns the alternate screen, so under a plain
+        # attach there is no tmux-level scrollback at all -- control mode is
+        # what restores native scrollback, selection and find on macOS.
+        cmd = ["tmux"]
+        if getattr(args, "control", False):
+            cmd.append("-CC")
+        cmd += ["attach", "-t", target]
+        # -d evicts other clients: two clients of different geometries is the
+        # cause of the fragmented redraws. Read-only observers skip it.
+        cmd.append("-r" if getattr(args, "read_only", False) else "-d")
+        os.execvp("tmux", cmd)
+    except Exception as e:
+        print(f"Error attaching to harness: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_harness_status(args: argparse.Namespace) -> int:
+    """Report unit state, session presence and proxy attachment.
+
+    Every negative line names the agent it checked, and a defaulted name says
+    so. This command once printed a confident ABSENT for a harness that was
+    running under a different name, and came within one step of telling the
+    operator his harness did not exist — an instrument answering about
+    something it never looked at.
+    """
+    from pathlib import Path
+    from .utils.harness import resolve_agent
+    from .utils.identity import calling_card_from_identifier
+
+    try:
+        agent, source = resolve_agent(getattr(args, "agent", None))
+        if source == "ambiguous":
+            print("agent:   AMBIGUOUS — several harnesses are installed here:")
+            for a in agent:
+                print(f"           {a}  ({calling_card_from_identifier(a)})")
+            print("\nPick one with --agent; this command will not choose for you.",
+                  file=sys.stderr)
+            return 1
+
         p = _harness_params(args)
         unit_path = Path.home() / ".config" / "systemd" / "user" / p.unit_name
-        print(f"agent:   {p.agent}")
-        print(f"unit:    {unit_path} {'(present)' if unit_path.exists() else '(ABSENT)'}")
+        card = calling_card_from_identifier(p.agent)
+        if source == "default":
+            # The line that was missing. A default reported as a resolution is
+            # how "no harness for the name I guessed" reads as "no harness".
+            print(f"agent:   {p.agent}  (DEFAULT — not resolved from the "
+                  f"environment, config or any installed unit)")
+        else:
+            print(f"agent:   {p.agent}  ({card}, via {source})")
+        print(f"unit:    {unit_path} "
+              f"{'(present)' if unit_path.exists() else f'(ABSENT for agent {p.agent})'}")
 
         active = subprocess.run(["systemctl", "--user", "is-active", p.unit_name],
                                 capture_output=True, text=True).stdout.strip()
         print(f"active:  {active or 'unknown'}")
 
-        has_session = subprocess.run(["tmux", "has-session", "-t", p.agent],
+        # "=" forces an EXACT session match. Without it tmux resolves a target
+        # by prefix, so `-t thm` happily matches a session called
+        # "thm-stale-ssh" -- which is precisely the name someone gives the
+        # imposter while moving it out of the way, so the workaround for the
+        # name collision silently did not resolve the collision.
+        has_session = subprocess.run(["tmux", "has-session", "-t", f"={p.agent}"],
                                      capture_output=True).returncode == 0
-        print(f"session: {'up' if has_session else 'absent'} (tmux -t {p.agent})")
+        print(f"session: {'up' if has_session else f'absent for {p.agent}'} "
+              f"(tmux -t ={p.agent})")
+
+        # Presence is not ownership. A session under this name may be anyone's
+        # — that is how the harness stayed down for days while every surface
+        # said "session: up".
+        if has_session:
+            sup = subprocess.run(
+                ["bash", "-c",
+                 f'for f in {p.registry}/*.json; do [ -e "$f" ] || continue; '
+                 f'grep -q \'"name": "{p.agent}"\' "$f" || continue; '
+                 f'grep -q \'"status": "running"\' "$f" || continue; '
+                 f'pid=${{f##*/}}; pid=${{pid%.json}}; kill -0 "$pid" 2>/dev/null || continue; '
+                 f'ps -o args= -p "$pid" | grep -q "macf\\.supervisor" || continue; '
+                 f'echo "$pid"; break; done'],
+                capture_output=True, text=True).stdout.strip()
+            print(f"owner:   {'macf supervisor pid ' + sup if sup else 'NOT this harness — the name is held by something else'}")
 
         probe = subprocess.run(
             ["curl", "-s", "--max-time", "2", "-o", "/dev/null",
@@ -3151,6 +3330,10 @@ def cmd_mode_set_work(args: argparse.Namespace) -> int:
     info = WORK_MODES[mode]
     append_event("work_mode_change", {"mode": mode})
     print(f"✅ Work mode set: {info['emoji']} {mode}")
+    from .modes.transition_messages import transition_reinforcement
+    _reinforce = transition_reinforcement(mode)
+    if _reinforce:
+        print(f"   {_reinforce}")
 
     # PLAY_TIME transition recording
     try:
@@ -3359,10 +3542,45 @@ def cmd_mode_set(args: argparse.Namespace) -> int:
         mode = args.mode.upper()
         auth_token = getattr(args, 'auth_token', None)
 
+        # USER_REMOTE / USER_PRESENT: an orthogonal presence mode, not part of the
+        # AUTO/MANUAL operational toggle. Handle up front and return. It emits the
+        # mode_change event detection reads; the mode auto-clears when the operator's
+        # next CLI message lands (see modes.detection._detect_user_remote). v1 is
+        # advisory — this switch message plus mode_system.md are the binding
+        # guidance; the Ask->Deny permission enforcement is a follow-up.
+        if mode in ("USER_REMOTE", "USER_PRESENT"):
+            from .agent_events_log import append_event
+            if mode == "USER_PRESENT":
+                append_event("mode_change", {"mode": "USER_REMOTE", "enabled": False})
+                from .utils.claude_settings import toggle_user_remote_deny_permissions
+                restored = toggle_user_remote_deny_permissions(False)
+                print("✅ USER_REMOTE cleared — operator present at the CLI.")
+                if restored and restored.get("restored"):
+                    print(f"   Restored {len(restored['restored'])} CLI-blocking permission(s) (restart to load).")
+                return 0
+            append_event("mode_change", {"mode": "USER_REMOTE", "enabled": True})
+            print("📡 USER_REMOTE active. The operator is reachable ONLY via a remote")
+            print("   channel (Telegram); the CLI is unattended. Do NOT use tools that")
+            print("   block on CLI input — they hang the session until someone returns:")
+            print("   • AskUserQuestion — does not reach Telegram. Ask via the Telegram")
+            print("     reply tool, or your turn-final message (the Stop hook forwards it).")
+            print("   • Ask-list commands (git push, gh pr create/merge, gh issue")
+            print("     create/close, git reset --hard, rm -r, docker teardown) — each")
+            print("     prompts at the empty CLI. Commit locally; HOLD pushes/PRs.")
+            print("   Communicate via the Telegram reply tool. The dashboard indicator")
+            print("   clears when you return to the CLI; run `mode set USER_PRESENT`")
+            print("   (or restart) to restore the denied permissions.")
+            from .utils.claude_settings import toggle_user_remote_deny_permissions
+            denied = toggle_user_remote_deny_permissions(True)
+            if denied and denied.get("denied"):
+                print(f"   🚫 Denied {len(denied['denied'])} CLI-blocking tools (AskUserQuestion + "
+                      "Ask-list) — takes effect on next restart.")
+            return 0
+
         # Validate mode argument
         if mode not in ('AUTO_MODE', 'MANUAL_MODE'):
             print(f"Invalid mode: {mode}")
-            print("Valid modes: AUTO_MODE, MANUAL_MODE")
+            print("Valid modes: AUTO_MODE, MANUAL_MODE, USER_REMOTE, USER_PRESENT")
             return 1
 
         enabled = (mode == 'AUTO_MODE')
@@ -3450,6 +3668,10 @@ def cmd_mode_set(args: argparse.Namespace) -> int:
 
         if success:
             print(f"✅ {message}")
+            from .modes.transition_messages import transition_reinforcement
+            _reinforce = transition_reinforcement(mode)
+            if _reinforce:
+                print(f"   {_reinforce}")
 
             from .utils.claude_settings import (
                 set_autocompact_enabled, set_permission_mode,
@@ -4046,12 +4268,15 @@ def cmd_task_list(args: argparse.Namespace) -> int:
             key=lambda t: str(t.id).zfill(10),
         )
 
-    # Load scope state from MTMD scope_status field on tasks (same source as cmd_task_tree).
-    # Without this, format_task's scope indicator block raises NameError (gh-48).
-    scope_state = {}
-    for t in tasks:
-        if t.mtmd and getattr(t.mtmd, 'scope_status', None):
-            scope_state[t.id] = t.mtmd.scope_status
+    # Scope markers are sourced from the EVENT LOG — the single source of truth the
+    # gate uses — not the per-task MTMD scope_status field. That field is a
+    # denormalized cache duplicated across task stores and drifts both ways: markers
+    # vanish where it is unwritten (the event log has the task), and zombie orphans
+    # persist where it is stale (the event log dropped it). get_scope_state() replays
+    # scope events and is store-independent, so the tree always agrees with
+    # `scope check` / `scope show`.
+    from .task.scope import get_scope_state
+    scope_state = get_scope_state()
 
     def format_task(t: MacfTask, indent: int = 0) -> str:
         prefix = "  " * indent
@@ -4077,10 +4302,12 @@ def cmd_task_list(args: argparse.Namespace) -> int:
             status_icon = "◻"
             line = f"{prefix}{status_icon} {_dim_task_ids(subject_with_live_parent(t))}"
 
-        # Scope indicator (👀 for active, ✅ for completed/inactive)
+        # Scope indicator (👀 active, ⏸️ paused, ✅ inactive/completed)
         if scope_state and t.id in scope_state:
             if scope_state[t.id] == "active":
                 line += " 👀"
+            elif scope_state[t.id] == "paused":
+                line += " ⏸️"
             elif scope_state[t.id] == "inactive":
                 line += " ✅"
 
@@ -4216,6 +4443,30 @@ def cmd_task_get(args: argparse.Namespace) -> int:
     return 0
 
 
+def get_display_mtime(tasks_dir) -> float:
+    """Latest change to anything the tree renders — store *and* event log.
+
+    The store alone is not enough. Scope is event-sourced: `scope set` writes to
+    the event log and touches no task file, so a detector watching only the store
+    cannot see it. The loop then held a stale frame until its timed redraw came
+    round, which made scope markers appear up to a minute late while ordinary
+    task edits appeared in about a second.
+
+    That asymmetry is worse than uniform slowness. The display *is* updating, so
+    nothing suggests any part of it is stale, and the movement is what persuades
+    a reader the whole frame is current.
+    """
+    latest = get_tasks_mtime(tasks_dir)
+    try:
+        from .agent_events_log import get_log_path
+        log_path = get_log_path()
+        if log_path and log_path.exists():
+            latest = max(latest, log_path.stat().st_mtime)
+    except (OSError, ImportError):
+        pass  # event log unreadable: fall back to store-only detection
+    return latest
+
+
 def get_tasks_mtime(tasks_dir) -> float:
     """Get latest modification time of any task file in the store directory."""
     try:
@@ -4258,11 +4509,11 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
         reader = TaskReader()
         all_tasks = reader.read_all_tasks()
 
-        # Load scope state from MTMD scope_status field on tasks
-        scope_state = {}
-        for t in all_tasks:
-            if t.mtmd and getattr(t.mtmd, 'scope_status', None):
-                scope_state[t.id] = t.mtmd.scope_status
+        # Scope markers sourced from the event log (single source of truth), not the
+        # per-task MTMD scope_status field which drifts across stores. See the note
+        # at the other render site.
+        from .task.scope import get_scope_state
+        scope_state = get_scope_state()
 
         # Archive filtering (default: hide archived)
         def is_archived(task):
@@ -4575,6 +4826,8 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
             if scope_state and task.id in scope_state:
                 if scope_state[task.id] == "active":
                     text += " 👀"
+                elif scope_state[task.id] == "paused":
+                    text += " ⏸️"
 
             text += recency_marker(task)
 
@@ -4686,7 +4939,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
 
         try:
             while True:
-                current_mtime = get_tasks_mtime(tasks_dir)
+                current_mtime = get_display_mtime(tasks_dir)
                 now = time.time()
 
                 # Redraw when tasks changed, on first iteration, or on the
@@ -5240,6 +5493,94 @@ def cmd_task_reparent(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_task_trace(args: argparse.Namespace) -> int:
+    """Show where attention has been, and what it owes a return to.
+
+    The tree answers "what work exists". This answers "what was I in the middle
+    of" — which after an interrupt, a compaction, or a handoff is the question
+    that actually needs answering, and the one a tree of six open tasks cannot.
+    """
+    from .task import TaskReader
+    from .task.trace import visitation_trace, open_frames
+
+    tasks = TaskReader().read_all_tasks()
+    frames = open_frames(tasks)
+    path_n = getattr(args, "path", 0)
+
+    if getattr(args, "json", False):
+        print(json.dumps({
+            "frames": [vars(f) for f in frames],
+            "path": [vars(t) for t in reversed(visitation_trace(tasks)[-path_n:])] if path_n else [],
+        }, indent=2))
+        return 0
+
+    if path_n:
+        # Newest first: the question this answers is a recency question, and the
+        # convention every other log-shaped tool sets. The move markers survive
+        # the reversal because they were computed chronologically and carried on
+        # each touch — reading them off display adjacency would invert them.
+        trace = visitation_trace(tasks)[-path_n:]
+        full = getattr(args, "full", False)
+        print(f"👣 Where attention has been — {len(trace)} most recent, newest first\n")
+        for touch in reversed(trace):
+            moved = "→" if touch.begins_dwell else " "
+            when = _rel_age_short(touch.timestamp)
+            note = touch.description if full else _ellipsize(touch.description, 56)
+            print(f"  {moved} #{touch.task_id:<6} {when:>8}  {note}")
+        print()
+
+    # An enclosing frame owes nothing — the work is running inside it. Counting
+    # it as a debt would make the tally grow with every level of decomposition.
+    owed = [f for f in frames if f.state not in ("active", "enclosing")]
+    print(f"🧵 Open frames: {len(frames)} ({len(owed)} awaiting a return)")
+    if not frames:
+        print("   ✅ nothing in progress")
+        return 0
+
+    icon = {"active": "▶️ ", "enclosing": "📂", "parked": "⏸️ ", "abandoned": "⚠️ "}
+    for f in frames:
+        when = _rel_age_short(f.last_touch) if f.last_touch else "never"
+        print(f"   {icon.get(f.state, '  ')} #{f.task_id:<6} {f.state:<10} last touched {when}")
+        print(f"        {_strip_ansi(f.subject)[:96]}")
+        if f.blockers_open:
+            print(f"        ⏸  waiting on {', '.join('#' + b for b in f.blockers_open)}")
+        if f.parent_completed and f.state != "active":
+            print(f"        ⚠️  its parent is marked COMPLETE while this is still running")
+
+    # Recommend a frame that was actually dropped. Pointing at a parked frame
+    # sends the agent at something legitimately waiting on a blocker, and this
+    # line is the one an agent *acts* on — during recovery, when it has least
+    # context with which to notice the advice is wrong.
+    dropped = [f for f in owed if f.state == "abandoned"]
+    if dropped:
+        print(f"\n   Resume with:  macf_tools task start {dropped[0].task_id}")
+    return 0
+
+
+def _ellipsize(text: str, width: int) -> str:
+    """Trim to `width`, marking the cut so a truncated note cannot read as whole.
+
+    A note silently clipped mid-sentence looks like a note that simply ended
+    there, which is the reading most likely to mislead whoever is reconstructing
+    what they were doing.
+    """
+    text = (text or "").strip()
+    if len(text) <= width:
+        return text
+    return text[:width - 1].rstrip() + "…"
+
+
+def _rel_age_short(ts) -> str:
+    """Compact relative age, e.g. '3m', '5h', '12d'."""
+    if not ts:
+        return "?"
+    secs = max(0, int(time.time() - int(ts)))
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
+        if secs >= size:
+            return f"{secs // size}{unit}"
+    return f"{secs}s"
+
+
 def _doctor_check_subject_markers(tasks) -> "list[tuple[str, str, str]]":
     """Find tasks whose stored ``[^#N]`` marker disagrees with ``parent_id``.
 
@@ -5252,6 +5593,78 @@ def _doctor_check_subject_markers(tasks) -> "list[tuple[str, str, str]]":
         if corrected != t.subject:
             findings.append((t.id, t.subject, corrected))
     return findings
+
+
+def cmd_task_store_init(args: argparse.Namespace) -> int:
+    """Provision the home task store for an agent home, idempotently.
+
+    This is the mechanism provisioning calls so the home store is *built*
+    rather than opted into. It had been neither: nothing in agent init, config
+    init or any downstream provisioning script created the directory or wrote
+    the config key, so every agent silently ran on the session-scoped legacy
+    store — the one CC deletes from and that a fork duplicates.
+
+    Deliberately does NOT migrate. Provisioning a fresh home and rescuing an
+    existing history are different operations with different failure modes, and
+    a command that quietly did both would make ``--dry-run`` mean two things.
+    Use ``task migrate-store`` for the second.
+
+    Idempotent: safe to run on every provision and every upgrade.
+    """
+    from .task.reader import TaskReader
+
+    if getattr(args, "home", None):
+        agent_home = Path(args.home).expanduser()
+        if not agent_home.is_dir():
+            print(f"❌ Not a directory: {agent_home}", file=sys.stderr)
+            return 1
+    else:
+        agent_home = find_agent_home()
+        if not agent_home:
+            print("❌ Could not determine the agent home; pass --home.",
+                  file=sys.stderr)
+            return 1
+
+    _, rel = TaskReader._load_task_store_config()
+    store = agent_home / rel
+    config_path = agent_home / ".maceff" / "config.json"
+
+    created = not store.exists()
+    try:
+        store.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        print(f"❌ Could not create {store}: {e}", file=sys.stderr)
+        return 1
+    print(f"{'✅ Created' if created else '✓ Present'}: {store}")
+
+    # Read-modify-write. A fresh home has no config at all, and an existing one
+    # holds identity and hook settings that must survive being pointed at a new
+    # store.
+    config = {}
+    if config_path.exists():
+        try:
+            config = json.loads(config_path.read_text())
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"❌ Refusing to overwrite unreadable {config_path}: {e}",
+                  file=sys.stderr)
+            print("   The directory exists; fix the config and re-run.")
+            return 1
+
+    was = (config.get("task_store") or {}).get("mode")
+    config.setdefault("task_store", {})
+    config["task_store"]["mode"] = "home"
+    config["task_store"].setdefault("path", rel)
+    try:
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(json.dumps(config, indent=2) + "\n")
+    except OSError as e:
+        print(f"❌ Could not write {config_path}: {e}", file=sys.stderr)
+        return 1
+    print(f"{'✓ Already' if was == 'home' else '✅ Set'}: "
+          f"task_store.mode = home  ({config_path})")
+
+    _ensure_store_gitignored_for_migration(store)
+    return 0
 
 
 def cmd_task_migrate_store(args: argparse.Namespace) -> int:
@@ -5271,6 +5684,16 @@ def cmd_task_migrate_store(args: argparse.Namespace) -> int:
 
     The legacy directory is never deleted. Reverting is a one-line config edit
     as long as it is still there.
+
+    **Every** legacy session directory is migrated, not just the current one. An
+    agent that has been continued, rewound or forked has several, and migrating
+    only the session that happens to be live produces a result shaped exactly
+    like a complete one: a success message, a populated store, and a directory
+    left behind that nothing will ever mention again.
+
+    Dot-prefixed completed tasks are normalised to plain ``{id}.json`` on the
+    way in, because the prefix exists solely to hide files from CC's scanner and
+    the home store is never scanned.
     """
     import hashlib
     from .task import TaskReader
@@ -5278,39 +5701,97 @@ def cmd_task_migrate_store(args: argparse.Namespace) -> int:
     dry_run = getattr(args, "dry_run", False)
     force = getattr(args, "force", False)
 
+    def _digest(p):
+        return hashlib.sha256(p.read_bytes()).hexdigest()
+
     mode, rel = TaskReader._load_task_store_config()
     if mode == "home" and not force:
         print("✅ Already on the home store — nothing to migrate.")
-        print("   Re-run with --force to copy the current session's legacy "
-              "files in anyway.")
+        print("   Re-run with --force to copy any remaining legacy files in.")
         return 0
 
-    legacy = TaskReader(session_uuid=TaskReader()._detect_current_session())
-    source = legacy.session_path
-    if not source or not source.exists():
-        print(f"❌ No legacy task store found for the current session.")
+    # Every session directory, oldest first, not merely the live one.
+    #
+    # Resolved through TaskReader rather than from Path.home(): MACF_TASKS_DIR
+    # relocates the legacy root for isolation, and reading ~/.claude directly
+    # ignores it — which points a sandboxed run at the real store. The mirror of
+    # the leak reader.py guards against in the other direction.
+    cc_root = TaskReader._get_tasks_dir()
+    source_dirs = sorted(
+        (d for d in cc_root.glob("*/") if d.is_dir()),
+        key=lambda d: d.name,
+    ) if cc_root.exists() else []
+    if not source_dirs:
+        print("❌ No legacy task store found under "
+              f"{cc_root} — nothing to migrate.")
         return 1
 
     agent_home = find_agent_home()
     target = agent_home / rel
     config_path = agent_home / ".maceff" / "config.json"
 
-    files = legacy.list_task_files(include_hidden=True)
-    hidden = [f for f in files if f.name.startswith(".")]
+    # Gather every file from every directory, keyed by the name it will land
+    # under. Normalising the dot prefix here is what makes two directories
+    # comparable at all: ".7.json" and "7.json" are the same task.
+    by_target_name = {}
+    total_seen = 0
     print(f"📦 Migrate task store")
-    print(f"   from: {source}  ({len(files)} files, {len(hidden)} hidden)")
+    for d in source_dirs:
+        files = TaskReader(session_uuid=d.name).list_task_files(include_hidden=True)
+        hidden = [f for f in files if f.name.startswith(".")]
+        total_seen += len(files)
+        print(f"   from: {d}  ({len(files)} files, {len(hidden)} hidden)")
+        for f in files:
+            by_target_name.setdefault(f.name.lstrip("."), []).append(f)
     print(f"   to:   {target}")
     print(f"   config: {config_path}")
+    print(f"   {total_seen} file(s) across {len(source_dirs)} directory(ies) "
+          f"-> {len(by_target_name)} task(s)")
 
-    if not files:
+    if not by_target_name:
         print("❌ Legacy store is empty — refusing to migrate nothing.")
         return 1
 
+    # Divergence between directories. A fork copies the store and both sides
+    # then move on, so the same id can exist twice with different content.
+    # Choosing silently would discard whichever copy lost a coin toss.
+    conflicts = {}
+    chosen = {}
+    for name, candidates in sorted(by_target_name.items()):
+        digests = {_digest(c) for c in candidates}
+        if len(digests) == 1:
+            chosen[name] = candidates[0]
+        else:
+            conflicts[name] = candidates
+            chosen[name] = max(candidates, key=lambda p: p.stat().st_mtime)
+
+    if conflicts and not force:
+        print(f"\n❌ {len(conflicts)} task(s) differ between legacy directories:")
+        for name, cands in list(conflicts.items())[:5]:
+            print(f"   {name}")
+            for c in sorted(cands, key=lambda p: p.stat().st_mtime, reverse=True):
+                stamp = datetime.fromtimestamp(c.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+                print(f"      {stamp}  {c.parent.name}/{c.name}")
+        if len(conflicts) > 5:
+            print(f"   ... and {len(conflicts) - 5} more")
+        print("\n   Refusing to choose for you. Re-run with --force to take the "
+              "most recently modified copy of each,")
+        print("   which is reported per file so the discarded ones are named "
+              "rather than silently dropped.")
+        return 1
+    if conflicts:
+        print(f"\n⚠️  {len(conflicts)} divergent task(s); taking most recent:")
+        for name, cands in sorted(conflicts.items()):
+            keep = chosen[name]
+            dropped = [f"{c.parent.name}/{c.name}" for c in cands if c is not keep]
+            print(f"   {name}: keeping {keep.parent.name}/{keep.name}, "
+                  f"discarding {', '.join(dropped)}")
+
     collisions = []
     if target.exists():
-        for f in files:
-            if (target / f.name).exists():
-                collisions.append(f.name)
+        for name in chosen:
+            if (target / name).exists():
+                collisions.append(name)
     if collisions and not force:
         print(f"\n❌ {len(collisions)} file(s) already exist in the target "
               f"(e.g. {collisions[:3]}).")
@@ -5324,25 +5805,22 @@ def cmd_task_migrate_store(args: argparse.Namespace) -> int:
     # 1. COPY
     target.mkdir(parents=True, exist_ok=True)
     copied = 0
-    for f in files:
+    for name, src in sorted(chosen.items()):
         try:
-            (target / f.name).write_bytes(f.read_bytes())
+            (target / name).write_bytes(src.read_bytes())
             copied += 1
         except OSError as e:
-            print(f"❌ Copy failed at {f.name}: {e}", file=sys.stderr)
+            print(f"❌ Copy failed at {name}: {e}", file=sys.stderr)
             print("   Config NOT flipped; the legacy store is untouched.")
             return 1
 
     # 2. VERIFY before flipping. A config pointed at an unverified store fails
     #    later, elsewhere, and looks like data loss rather than a bad copy.
-    def _digest(p):
-        return hashlib.sha256(p.read_bytes()).hexdigest()
-
     mismatched = []
-    for f in files:
-        dest = target / f.name
-        if not dest.exists() or _digest(dest) != _digest(f):
-            mismatched.append(f.name)
+    for name, src in chosen.items():
+        dest = target / name
+        if not dest.exists() or _digest(dest) != _digest(src):
+            mismatched.append(name)
     if mismatched:
         print(f"\n❌ Verification failed for {len(mismatched)} file(s): "
               f"{mismatched[:5]}")
@@ -5375,7 +5853,9 @@ def cmd_task_migrate_store(args: argparse.Namespace) -> int:
     # helper gates on — calling it before the flip would silently no-op.
     _ensure_store_gitignored_for_migration(target)
 
-    print(f"\n📁 The legacy store is retained at:\n   {source}")
+    print("\n📁 The legacy store(s) are retained at:")
+    for d in source_dirs:
+        print(f"   {d}")
     print("   Nothing was deleted — revert by setting task_store.mode back to "
           "\"legacy\".")
     print("\n▶️  Verify with: macf_tools task tree")
@@ -6332,107 +6812,88 @@ def cmd_task_create_play_time(args: argparse.Namespace) -> int:
 
 
 def cmd_task_archive(args: argparse.Namespace) -> int:
-    """Archive a task (and children by default) to disk."""
-    from .task.archive import archive_task
+    """DEPRECATED: task archive no longer performs meaningful archiving.
 
-    # Parse task ID
-    try:
-        task_id = _parse_task_id_arg(args.task_id)
-    except ValueError:
-        print(f"❌ Invalid task ID: {args.task_id}")
-        return 1
-
-    cascade = not args.no_cascade
-
-    result = archive_task(task_id, cascade=cascade)
-
-    if not result.success:
-        print(f"❌ Archive failed: {result.error}")
-        return 1
-
-    if args.json_output:
+    The operator retired this command (2026-08-06): it printed a ✅ success line
+    while writing nothing — a report of a state change that did not happen, the
+    exact failure mode to avoid. Rather than repair an unwanted feature it now
+    fails closed with a pointer to the supported alternative. Kept as a stub (not
+    removed) so the subcommand still resolves and explains itself rather than
+    vanishing from under existing muscle memory.
+    """
+    if getattr(args, "json_output", False):
         import json
-        output = {
-            "success": True,
-            "task_id": result.task_id,
-            "archive_path": result.archive_path,
-            "children_archived": result.children_archived,
-        }
-        print(json.dumps(output, indent=2))
+        print(json.dumps({
+            "success": False,
+            "deprecated": True,
+            "message": "task archive is deprecated; it performed no archiving. "
+                       "Use `task hide-completed` to declutter.",
+        }, indent=2))
     else:
-        print(f"✅ Archived task #{result.task_id}")
-        print(f"   📦 Archive: {result.archive_path}")
-        if result.children_archived:
-            print(f"   📦 Children archived: {len(result.children_archived)} tasks")
-            for child_id in result.children_archived[:5]:
-                print(f"      - #{child_id}")
-            if len(result.children_archived) > 5:
-                print(f"      ... and {len(result.children_archived) - 5} more")
-
-    return 0
+        print("⚠️  `task archive` is DEPRECATED and performs no archiving.")
+        print("    It used to print a success checkmark while writing nothing — a")
+        print("    false report of a state change. To declutter the task tree, use:")
+        print("        macf_tools task hide-completed")
+    # Fail closed: never exit 0, so nothing can read this as a successful archive.
+    return 2
 
 
 def cmd_task_restore(args: argparse.Namespace) -> int:
-    """Restore a task from archive."""
-    from .task.archive import restore_task
+    """DEPRECATED: the archive/restore/archived trio is retired.
 
-    result = restore_task(args.archive_path_or_id)
-
-    if not result.success:
-        if result.task_json:
-            # PermissionError fallback: output task JSON for manual TaskCreate
-            print(f"⚠️ MACF: {result.error}")
-            print(f"   Original ID: #{result.old_id}")
-            print(f"\nTask JSON for TaskCreate:")
-            print(result.task_json)
-            return 2  # Distinct exit code: recoverable via TaskCreate
-        print(f"❌ Restore failed: {result.error}")
-        return 1
-
-    if args.json_output:
+    `task restore` restored a task from an archive produced by `task archive` —
+    which is itself deprecated for reporting success while archiving nothing.
+    With no supported way to produce an archive, restore has no real input, so it
+    is retired alongside archive rather than left as a path into dead machinery.
+    Kept as a self-explaining stub (not removed) so the subcommand still resolves
+    and points at the supported alternative instead of vanishing.
+    """
+    if getattr(args, "json_output", False):
         import json
-        output = {
-            "success": True,
-            "old_id": result.old_id,
-            "new_id": result.new_id,
-        }
-        print(json.dumps(output, indent=2))
+        print(json.dumps({
+            "success": False,
+            "deprecated": True,
+            "message": "task restore is deprecated; the archive subsystem it "
+                       "depended on performed no real archiving. Use "
+                       "`task hide-completed` / `task unhide-all` to manage tree clutter.",
+        }, indent=2))
     else:
-        print(f"✅ Restored task")
-        print(f"   📦 Original ID: #{result.old_id}")
-        print(f"   🆕 New ID: #{result.new_id}")
-        print()
-        print(f"View with: macf_tools task get #{result.new_id}")
-
-    return 0
+        print("⚠️  `task restore` is DEPRECATED — the archive/restore/archived")
+        print("    trio is retired. `task archive` reported success while writing")
+        print("    nothing, so there is no supported archive to restore from. To")
+        print("    manage task-tree clutter, use:")
+        print("        macf_tools task hide-completed")
+        print("        macf_tools task unhide-all")
+    # Fail closed: never exit 0, so nothing reads this as a successful restore.
+    return 2
 
 
 def cmd_task_archived_list(args: argparse.Namespace) -> int:
-    """List archived tasks."""
-    from .task.archive import list_archived_tasks
+    """DEPRECATED: the archive/restore/archived trio is retired.
 
-    archives = list_archived_tasks()
-
-    if not archives:
-        print("No archived tasks found.")
-        return 0
-
-    if args.json_output:
+    `task archived` listed archives produced by `task archive` — which is
+    deprecated for reporting success while archiving nothing. With no supported
+    way to produce an archive, this list is definitionally empty, so it is retired
+    alongside archive rather than left implying a working archive store. Kept as a
+    self-explaining stub (not removed) so the subcommand still resolves.
+    """
+    if getattr(args, "json_output", False):
         import json
-        print(json.dumps(archives, indent=2))
+        print(json.dumps({
+            "success": False,
+            "deprecated": True,
+            "message": "task archived is deprecated; the archive subsystem "
+                       "produced no real archives. Use `task hide-completed` / "
+                       "`task unhide-all` to manage tree clutter.",
+        }, indent=2))
     else:
-        print(f"📦 Archived Tasks ({len(archives)} total)")
-        print("-" * 60)
-        for arch in archives:
-            archived_at = arch.get("archived_at", "unknown")
-            if archived_at and archived_at != "unknown":
-                # Format datetime
-                archived_at = archived_at[:19].replace("T", " ")
-            print(f"#{arch['id']:>4} | {archived_at} | {arch['subject'][:40]}")
-        print()
-        print("Restore with: macf_tools task restore <id_or_path>")
-
-    return 0
+        print("⚠️  `task archived` is DEPRECATED — the archive/restore/archived")
+        print("    trio is retired. `task archive` produced no real archives, so this")
+        print("    list has nothing to show. To manage task-tree clutter, use:")
+        print("        macf_tools task hide-completed")
+        print("        macf_tools task unhide-all")
+    # Fail closed: never exit 0, so nothing reads this as an authoritative listing.
+    return 2
 
 
 def cmd_task_hide_completed(args: argparse.Namespace) -> int:
@@ -6617,11 +7078,32 @@ def cmd_task_start(args: argparse.Namespace) -> int:
     breadcrumb = get_breadcrumb()
 
     if task.status == "in_progress":
-        # Already active. A same-cycle re-start is a no-op, but a stale resume
-        # (last worked an earlier cycle) still bumps the stamp + prompts the
-        # read-notes-and-narrate ritual -- the case task start otherwise misses.
+        # Already active. Both a same-cycle re-start and a stale resume are
+        # legitimate RESUMPTIONS and both refresh the recency stamp; they differ
+        # only in ceremony. A stale resume (last worked an earlier cycle) also
+        # prompts the read-notes-and-narrate ritual, which same-cycle work does
+        # not need because the history is still in context.
+        #
+        # Re-starting used to warn and return without touching anything, which
+        # made resumption invisible: an agent returning to a task it had put
+        # down could not move the tree's focus marker back to it, so the tree
+        # kept asserting that work was happening wherever it LAST happened
+        # rather than where it IS happening. Interleaved work made that reliably
+        # wrong. Resuming is an event, not a mistake.
         if not stale:
-            print(f"⚠️  Task #{task_id} is already in_progress")
+            if task.mtmd:
+                from .task.models import MacfTaskUpdate
+                import copy
+                new_mtmd = copy.deepcopy(task.mtmd)
+                new_mtmd.updates.append(MacfTaskUpdate(
+                    breadcrumb=breadcrumb,
+                    description="Task resumed via CLI (same-cycle)",
+                    agent="PA"))
+                update_task_file(task_id, {"description": task.description_with_updated_mtmd(new_mtmd)})
+            append_event("task_resumed", {
+                "task_id": str(task_id), "from_cycle": None, "breadcrumb": breadcrumb})
+            print(f"▶️  Task #{task_id} resumed (was already in_progress)")
+            print(f"   Breadcrumb: {breadcrumb}")
             return 0
         last_cycle, last_ts, cur_cycle = stale
         if task.mtmd:
@@ -6679,8 +7161,31 @@ def cmd_task_start(args: argparse.Namespace) -> int:
                 })
                 injected_policies.append(policy_name)
 
+    # Cascade upstream (#115 / GH#212): a phase in_progress under an ancestor
+    # still 'pending' makes the tree misreport where work stands — orientation
+    # reads the MISSION as "nobody is working this", the wrong direction. Walk the
+    # ancestor chain and start any pending ancestor, reporting each so the
+    # resumption is visible rather than silent.
+    cascaded = []
+    if task.mtmd and getattr(task.mtmd, "parent_id", None) and str(task.mtmd.parent_id).lstrip("#") != "000":
+        from .task.create import _run_task_start
+        try:
+            _pid = int(str(task.mtmd.parent_id).lstrip("#"))
+        except (ValueError, TypeError):
+            _pid = None
+        if _pid is not None:
+            ancestor = reader.read_task(_pid)
+            if ancestor and ancestor.status == "pending":
+                # _run_task_start now cascades the full ancestor chain through the
+                # shared chokepoint; collect the started ancestors for the report.
+                _run_task_start(_pid, _cascaded=cascaded)
+
     print(f"✅ Task #{task_id} started")
     print(f"   Breadcrumb: {breadcrumb}")
+    if cascaded:
+        print(f"   ⬆️  Cascade-started {len(cascaded)} pending ancestor(s): "
+              + ", ".join(f"#{c}" for c in cascaded))
+        print("      (a phase cannot truly be underway while an ancestor reads 'pending')")
     if injected_policies:
         print(f"   Auto-injected policies: {injected_policies}")
     if stale:
@@ -7162,7 +7667,25 @@ def cmd_task_scope_pause(args: argparse.Namespace) -> int:
         print("     'Multi-cycle implementation work — design draft delivered, awaits user sign-off'")
         return 1
 
-    raw_ids = [tid.lstrip('#') for tid in args.task_ids]
+    # --all: pause every currently-ACTIVE scoped task. This is the non-hanging,
+    # reversible, audited full-gate quiet — the USER_REMOTE-safe alternative to the
+    # destructive `scope clear` (which is denied while remote). Pause keeps the
+    # tasks in scope and reversible via `scope unpause`.
+    if getattr(args, "all", False):
+        if args.task_ids:
+            print("❌ Pass task IDs OR --all, not both.")
+            return 1
+        from .task.scope import get_active_scope
+        raw_ids = [str(t["id"]) for t in get_active_scope() if t.get("status") == "active"]
+        if not raw_ids:
+            print("✅ No active scoped tasks to pause.")
+            return 0
+    elif not args.task_ids:
+        print("❌ Provide task IDs, or --all to pause every active scoped task.")
+        return 1
+    else:
+        raw_ids = [tid.lstrip('#') for tid in args.task_ids]
+
     result = pause_scoped_tasks(
         raw_ids,
         justification=args.justification.strip(),
@@ -7709,6 +8232,36 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
         print(f"⚠️  Task #{task_id} is already completed")
         return 1
 
+    # Guard: completing a parent while its children are still open puts a done
+    # parent over unfinished work — an inconsistency the tree reader can't trust.
+    # In AUTO_MODE (or with --force) warn and proceed; otherwise refuse and point
+    # at the fix. Mirror of cascade-start, which guards the start direction.
+    _open_children = [
+        (t.id, t.status) for t in reader.read_all_tasks()
+        if t.mtmd and str(getattr(t.mtmd, "parent_id", "") or "").lstrip("#") == str(task_id)
+        and t.status in ("pending", "in_progress")
+    ]
+    if _open_children:
+        try:
+            from .modes import detect_auto_mode
+            _auto, _ = detect_auto_mode(get_current_session_id())
+        except (ImportError, OSError, ValueError) as e:
+            # Not knowing the mode is survivable — the warning below still
+            # prints and the operator still decides. Swallowing the reason is
+            # not: it would hide a broken mode subsystem behind a completion
+            # that merely looks conservative.
+            print(f"⚠️ MACF: could not resolve mode for completion gate: {e}",
+                  file=sys.stderr)
+            _auto = False
+        _listing = ", ".join(f"#{cid}({st})" for cid, st in _open_children[:8])
+        print(f"⚠️  Task #{task_id} has {len(_open_children)} incomplete child task(s): {_listing}")
+        if _auto or getattr(args, "force", False):
+            print("   Completing anyway (AUTO_MODE / --force) — those children remain open.")
+        else:
+            print("   A parent completing over open children misrepresents the tree.")
+            print("   Complete, reparent, or pause the children first — or re-run with --force.")
+            return 1
+
     # Type-specific completion gate: GH_ISSUE
     task_type = getattr(task.mtmd, 'task_type', None) if task.mtmd else None
     if task_type == "GH_ISSUE":
@@ -7953,7 +8506,8 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
 
     if success:
         # Hide completed task file from CC's native scanner (dot-prefix).
-        # No-op in the home store, which CC never scans — report accordingly.
+        # hide_task_file guards this itself — it returns early for a non-CC
+        # store — so the call is safe everywhere and only the report is gated.
         from .task.reader import hide_task_file, _is_cc_session_dir
         if reader.session_path:
             hide_task_file(reader.session_path, str(task_id))
@@ -7979,6 +8533,29 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
                 print(f"   👀→✅ Scoped task completed ({remaining} remaining)")
         except (ImportError, OSError, KeyError) as e:
             print(f"⚠️ MACF: scoped task completion check failed for #{task_id} (non-blocking): {e}", file=sys.stderr)
+
+        # Completing a scope OWNER (SPRINT / PLAY_TIME) must release its scoped
+        # members from the gate. complete_scoped_task above only marks the
+        # owner itself inactive; without this, the owner's pending children stay
+        # 'active' forever — `remaining` never reaches 0, the auto-clear never
+        # fires, and the Stop-hook scope gate nags long after the sprint is done.
+        # This runs in the shared success path, so it covers force-completion too:
+        # a force-completed sprint releases its children (they return to the tree
+        # at their real status; they are not fake-completed).
+        if task_type in ("SPRINT", "PLAY_TIME"):
+            try:
+                from .task.scope import get_scope_check, clear_scope
+                if get_scope_check().get("active_count", 0) > 0:
+                    clr = clear_scope()
+                    if clr.get("success"):
+                        swept = len(set(
+                            clr.get("active_removed", [])
+                            + clr.get("inactive_removed", [])
+                            + clr.get("orphans_swept", [])
+                        ))
+                        print(f"   🧹 Scope owner completed — released {swept} task(s) from the scope gate")
+            except (ImportError, OSError, KeyError) as e:
+                print(f"⚠️ MACF: scope release on owner completion failed for #{task_id} (non-blocking): {e}", file=sys.stderr)
 
         print(f"✅ Task #{task_id} marked complete")
         print(f"   Breadcrumb: {breadcrumb}")
@@ -8940,7 +9517,8 @@ def _cmd_ar_launch(args):
                               use_tmux=not getattr(args, 'no_tmux', False),
                               session_spec=getattr(args, 'session_id', None),
                               post_start_keys=getattr(args, 'post_start_keys', None),
-                              post_start_delay=getattr(args, 'post_start_delay', 18))
+                              post_start_delay=getattr(args, 'post_start_delay', 18),
+                              force=getattr(args, 'force', False))
 
 def _cmd_ar_list(args=None):
     from .supervisor import list_processes
@@ -9089,7 +9667,8 @@ def cmd_idea_archive(args: argparse.Namespace) -> int:
 
 def cmd_idea_graph(args: argparse.Namespace) -> int:
     """Show ideas-only knowledge graph (wiki-links and relations between ideas)."""
-    from .ideas import build_idea_graph, format_graph_tree, format_graph_cluster
+    from .ideas import build_idea_graph, format_graph_cluster
+    from .knowledge_web import format_web_tree
 
     graph = build_idea_graph()
     if not graph["ideas"]:
@@ -9105,7 +9684,7 @@ def cmd_idea_graph(args: argparse.Namespace) -> int:
         return 0
 
     if getattr(args, "tree", False):
-        print(format_graph_tree(graph))
+        print(format_web_tree(graph))
     else:
         print(format_graph_cluster(graph))
     return 0
@@ -9113,25 +9692,38 @@ def cmd_idea_graph(args: argparse.Namespace) -> int:
 
 def cmd_knowledge_graph(args: argparse.Namespace) -> int:
     """Show cross-CA knowledge graph (ideas + learnings + checkpoints + reflections + observations + experiments + reports)."""
-    from .ideas import (build_knowledge_graph, format_graph_cluster_cross_ca,
-                        format_graph_tree)
+    from .knowledge_web import (build_knowledge_web, format_web_cluster_cross_ca,
+                                format_web_tree)
 
-    kg = build_knowledge_graph()
+    kg = build_knowledge_web()
     stats = kg["stats"]
 
     if getattr(args, "json_output", False):
         print(json.dumps(stats, indent=2))
         return 0
 
-    print(format_graph_cluster_cross_ca(kg))
+    print(format_web_cluster_cross_ca(kg))
     return 0
 
 
 def cmd_knowledge_query(args: argparse.Namespace) -> int:
     """Query knowledge graph by concept, node ID, or keyword."""
-    from .ideas import query_knowledge_graph, format_query_result
+    from .knowledge_web import query_knowledge_web, format_query_result
 
-    result = query_knowledge_graph(args.term)
+    result = query_knowledge_web(args.term)
+
+    # Filter by node class. A checkpoint's claims expire and a learning's do
+    # not; a query asking "what do I know about X" wants durable insight, while
+    # "which cycle touched X" wants the temporal record. Returning both
+    # unlabelled dilutes the first with the second, and the dilution worsens
+    # every cycle. See the scholarship policy on node classes and provenance.
+    node_class = getattr(args, "node_class", None)
+    if node_class:
+        for key in ("nodes", "neighbors"):
+            if key in result:
+                result[key] = [n for n in result[key]
+                               if n.get("node_class") == node_class]
+        result["filtered_by_class"] = node_class
     if getattr(args, "json_output", False):
         print(json.dumps(result, indent=2, default=str))
     else:
@@ -9141,10 +9733,10 @@ def cmd_knowledge_query(args: argparse.Namespace) -> int:
 
 def cmd_knowledge_gaps(args: argparse.Namespace) -> int:
     """Detect missing wiki-links in the knowledge graph."""
-    from .ideas import detect_graph_gaps, format_gap_report, build_knowledge_graph
+    from .knowledge_web import detect_web_gaps, format_gap_report, build_knowledge_web
 
-    kg = build_knowledge_graph()
-    gaps = detect_graph_gaps(kg)
+    kg = build_knowledge_web()
+    gaps = detect_web_gaps(kg)
     if getattr(args, "json_output", False):
         print(json.dumps(gaps, indent=2))
     else:
@@ -9152,12 +9744,30 @@ def cmd_knowledge_gaps(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_knowledge_doctor(args: argparse.Namespace) -> int:
+    """Report what the knowledge web cannot report about itself.
+
+    Exits non-zero when acute findings exist, so a caller can gate on it — but
+    note that gating is deliberately NOT the intended default use. See the
+    policy on when running this is worth doing.
+    """
+    from .diagnostics import Severity, format_diagnosis
+    from .knowledge_doctor import examine
+
+    dx = examine()
+    if getattr(args, "json_output", False):
+        print(json.dumps(dx.to_dict(), indent=2, default=str))
+    else:
+        print(format_diagnosis(dx))
+    return 1 if dx.counts().get(Severity.ACUTE, 0) else 0
+
+
 def cmd_knowledge_viz(args: argparse.Namespace) -> int:
     """Generate interactive HTML knowledge graph visualization."""
-    from .ideas import generate_graph_html
+    from .knowledge_web import generate_web_html
 
     output = getattr(args, "output", "") or "/tmp/macf_knowledge_graph.html"
-    path = generate_graph_html(output)
+    path = generate_web_html(output)
     print(f"📊 Knowledge graph written to: {path}")
     print(f"   Open in browser: file://{path}")
     return 0
@@ -9438,8 +10048,13 @@ def _build_parser() -> argparse.ArgumentParser:
     harness_generate.add_argument("--home", help="agent home directory")
     harness_generate.add_argument("--no-proxy", action="store_true",
                                   help="render without proxy attachment")
-    harness_generate.add_argument("--what", choices=["unit", "child", "tmux", "all"], default="unit",
-                                  help="which artifact to render (default: unit)")
+    harness_generate.add_argument("--channel", action="append", metavar="PLUGIN",
+                                 help="channel plugin the client must load; repeatable")
+    harness_generate.add_argument("--shell-prefix", metavar="NAME",
+                                 help="short handle for the generated shell functions (default: the moniker half of the Calling Card)")
+    harness_generate.add_argument(
+        "--what", choices=["unit", "start", "child", "functions", "tmux", "watchdog", "all"], default="unit",
+        help="which artifact to render (default: unit)")
     harness_generate.set_defaults(func=cmd_harness_generate)
 
     harness_install = harness_sub.add_parser("install", help="write harness artifacts into place")
@@ -9447,11 +10062,27 @@ def _build_parser() -> argparse.ArgumentParser:
     harness_install.add_argument("--home", help="agent home directory")
     harness_install.add_argument("--no-proxy", action="store_true",
                                  help="install without proxy attachment")
+    harness_install.add_argument("--channel", action="append", metavar="PLUGIN",
+                                 help="channel plugin the client must load; repeatable")
+    harness_install.add_argument("--shell-prefix", metavar="NAME",
+                                 help="short handle for the generated shell functions (default: the moniker half of the Calling Card)")
+    harness_install.add_argument("--watchdog", action="store_true",
+                                 help="also install a timer that restarts the session if the "
+                                      "tmux server dies (the supervisor dies with it)")
     harness_install.add_argument("--check", action="store_true",
                                  help="report drift against what would be rendered; write nothing")
     harness_install.add_argument("--force", action="store_true",
                                  help="overwrite an existing unit that differs")
     harness_install.set_defaults(func=cmd_harness_install)
+
+    harness_attach = harness_sub.add_parser(
+        "attach", help="attach this terminal to the agent's supervised session")
+    harness_attach.add_argument("--agent", help="agent slug (default: resolved from identity)")
+    harness_attach.add_argument("--control", action="store_true",
+                                help="attach in tmux control mode (-CC), for iTerm2 on macOS")
+    harness_attach.add_argument("--read-only", action="store_true",
+                                help="observe without evicting other clients or taking the keyboard")
+    harness_attach.set_defaults(func=cmd_harness_attach)
 
     harness_status = harness_sub.add_parser("status", help="show harness unit and session state")
     harness_status.add_argument("--agent", help="agent slug")
@@ -10015,7 +10646,7 @@ def _build_parser() -> argparse.ArgumentParser:
     task_create_play_time_parser.set_defaults(func=cmd_task_create_play_time)
 
     # task archive
-    task_archive_parser = task_sub.add_parser("archive", help="archive task to disk")
+    task_archive_parser = task_sub.add_parser("archive", help="(DEPRECATED — no-op; use `task hide-completed`)")
     task_archive_parser.add_argument("task_id", help="task ID to archive (e.g., #67 or 67)")
     task_archive_parser.add_argument("--no-cascade", dest="no_cascade", action="store_true",
                                      help="archive only this task, not children (default: cascade)")
@@ -10088,6 +10719,31 @@ def _build_parser() -> argparse.ArgumentParser:
         help="proceed even if the target already holds files of the same name",
     )
     task_migrate_parser.set_defaults(func=cmd_task_migrate_store)
+
+    task_store_init_parser = task_sub.add_parser(
+        "store-init",
+        help="provision the home task store and point the config at it",
+    )
+    task_store_init_parser.add_argument(
+        "--home", default=None,
+        help="agent home to provision (default: this agent's home)",
+    )
+    task_store_init_parser.set_defaults(func=cmd_task_store_init)
+
+    task_trace_parser = task_sub.add_parser(
+        "trace",
+        help="show where attention has been and what it owes a return to",
+    )
+    task_trace_parser.add_argument(
+        "--path", type=int, default=0, metavar="N",
+        help="also show the last N touches, in the order they happened",
+    )
+    task_trace_parser.add_argument(
+        "--full", action="store_true",
+        help="show note text in full instead of trimming it to one line",
+    )
+    task_trace_parser.add_argument("--json", action="store_true", help="output as JSON")
+    task_trace_parser.set_defaults(func=cmd_task_trace)
 
     task_doctor_parser = task_sub.add_parser(
         "doctor",
@@ -10165,7 +10821,8 @@ def _build_parser() -> argparse.ArgumentParser:
     scope_sub = scope_parser.add_subparsers(dest="scope_cmd")
 
     scope_pause_parser = scope_sub.add_parser("pause", help="pause active scoped tasks with mandatory justification (BUG #1067)")
-    scope_pause_parser.add_argument("task_ids", nargs="+", help="task IDs to pause (e.g., #1043 #1044)")
+    scope_pause_parser.add_argument("task_ids", nargs="*", help="task IDs to pause (e.g., #1043 #1044); omit when using --all")
+    scope_pause_parser.add_argument("--all", action="store_true", help="pause ALL currently-active scoped tasks — the non-hanging, reversible full-gate quiet safe under USER_REMOTE")
     scope_pause_parser.add_argument("--justification", "-j", required=True,
                                     help="REQUIRED — structural reason recorded in task note + event log")
     scope_pause_parser.set_defaults(func=cmd_task_scope_pause)
@@ -10341,6 +10998,12 @@ def _build_parser() -> argparse.ArgumentParser:
                            help="terminal app (default: auto-detect)")
     ar_launch.add_argument("--no-tmux", action="store_true",
                            help="do not back the session with tmux (disables send-keys)")
+    ar_launch.add_argument("--force", action="store_true",
+                           help="override the singleton pre-flight: start even if a live "
+                                "supervisor already owns this --name. Without this, launching "
+                                "a second supervisor for a name that already has one is refused "
+                                "as a fork (GH#210); the sanctioned in-place restart is "
+                                "'auto-restart restart <pid>'.")
     ar_launch.add_argument("--post-start-keys", default=None, metavar="KEYS",
                            help="tmux keys to send after every child spawn (initial and each "
                                 "restart), e.g. 'Enter' to dismiss a workspace-trust dialog that "
@@ -10365,7 +11028,7 @@ def _build_parser() -> argparse.ArgumentParser:
     ar_list.set_defaults(func=lambda args: _cmd_ar_list(args))
 
     # auto-restart restart
-    ar_restart = ar_sub.add_parser("restart", help="trigger restart (μC) for a supervised process")
+    ar_restart = ar_sub.add_parser("restart", help="trigger a session resume (restart) for a supervised process")
     ar_restart.add_argument("pid", type=int, help="supervisor PID")
     ar_restart.set_defaults(func=lambda args: _cmd_ar_restart(args))
 
@@ -10523,11 +11186,24 @@ def _build_parser() -> argparse.ArgumentParser:
     kg_query = knowledge_sub.add_parser("query", help="query subgraph by concept, node ID, or keyword")
     kg_query.add_argument("term", help="concept name, node ID (#007), or keyword")
     kg_query.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")
+    kg_query.add_argument(
+        "--class", dest="node_class",
+        choices=["conceptual_authority", "temporal_record", "normative"],
+        help="restrict to one node class: conceptual_authority (durable claims), "
+             "temporal_record (claims that expire), normative (rules). "
+             "Default returns all classes, each labelled.")
     kg_query.set_defaults(func=cmd_knowledge_query)
 
     kg_gaps = knowledge_sub.add_parser("gaps", help="detect missing wiki-links")
     kg_gaps.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")
     kg_gaps.set_defaults(func=cmd_knowledge_gaps)
+
+    kg_doctor = knowledge_sub.add_parser(
+        "doctor",
+        help="report orphans, drift, singletons and registry gaps the graph cannot see")
+    kg_doctor.add_argument("--json", dest="json_output", action="store_true",
+                           help="machine-readable output")
+    kg_doctor.set_defaults(func=cmd_knowledge_doctor)
 
     kg_viz = knowledge_sub.add_parser("viz", help="generate interactive HTML visualization")
     kg_viz.add_argument("output", nargs="?", default="", help="output path (default: /tmp/macf_knowledge_graph.html)")

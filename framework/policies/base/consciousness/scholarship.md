@@ -74,6 +74,12 @@ Scholarship policy establishes enhanced citation practices for consciousness art
 - What normalization rules apply?
 - When should I add a Wiki-Links section?
 
+**3.5 Node Classes and Provenance**
+- What kinds of claim can a graph node make, and why does the difference matter for retrieval?
+- Why is normative a class of its own rather than a kind of conceptual authority?
+- What is provenance, and why is it an axis independent of class?
+- What must each CA-type policy answer about its own participation?
+
 **4 Citation Examples by CA Type**
 - What does a citation look like for each CA type?
 
@@ -559,6 +565,64 @@ macf_tools idea graph --html [path]  # Interactive HTML visualization
 ```
 
 Wiki-links create edges: two artifacts sharing `[[compaction]]` are connected through that concept. The graph reveals clusters, hubs, and isolated artifacts that could benefit from cross-linking.
+
+---
+
+### 3.5 Node Classes and Provenance
+
+A graph whose nodes are all the same kind of thing cannot answer "what do I know about X" honestly. A checkpoint recording that a pull request was unmerged and a learning stating a durable principle are both true, both retrievable, and radically different in what a reader may do with them. Retrieval that presents them identically misrepresents the corpus.
+
+Two **independent axes** classify every node. They answer different questions and must not be collapsed into one label.
+
+#### 3.5.1 Class — what kind of claim is this?
+
+| class | the artifact asserts | test |
+|---|---|---|
+| **conceptual authority** | what was found, and it generalises beyond the moment it was found | would this still be worth reading in a year, to someone who was not there? |
+| **temporal record** | what was true at a moment, and the claim expires | does this describe a state that changes without the artifact being wrong? |
+| **normative** | what MUST be done | does this bind behaviour rather than describe it? |
+
+A learning says *here is what I found*. A checkpoint says *here is where things stood*. A policy says *here is what you shall do*. The distinction is not importance — a temporal record is not lesser, it answers a different question ("which cycle worked on X") and belongs in the graph under a label that says so, rather than competing with durable insight for the same query.
+
+**Why normative is its own class rather than a kind of conceptual authority**: a reader who cannot tell governance from opinion will treat a rule as advice or advice as a rule. Both errors are consequential, and neither is recoverable from the text alone once retrieval has flattened them.
+
+#### 3.5.2 Provenance — whose experience is this?
+
+| provenance | meaning |
+|---|---|
+| **lived** | this agent produced it from its own work |
+| **inherited** | it arrived from a predecessor lineage or ships with the framework |
+
+Provenance is **orthogonal to class**, not a further class. Every combination is meaningful: a framework policy is *normative + inherited*; an agent's own learning is *conceptual + lived*; a learning distilled by a predecessor and carried into this tree is *conceptual + inherited*; a checkpoint is *temporal + lived*.
+
+Collapsing provenance into class is the same error as collapsing normative into conceptual authority — two questions answered with one label. The consequence is specific: an agent that retrieves inherited knowledge as though it were its own is misled about the evidential status of its own answer, and will cite as experience something it never experienced.
+
+**Marking convention**: an inherited artifact carries a banner naming the lineage and stating that its claims are unverified by the current agent. The banner frames; it never edits the artifact's own text (see the anti-patterns on bulk edits over narrative artifacts).
+
+#### 3.5.3 How other policies use this
+
+These definitions live here and are **cited, not restated**. A CA-type policy states which class its artifacts belong to and why, and points here for what the class means. Restating a definition in eight places guarantees eight versions of it.
+
+What each CA-type policy is expected to answer:
+
+1. What is the **unit of a node** — the whole artifact, or a named subset of its files?
+2. Which **class** does it belong to, and why?
+3. What **provenance** does it carry by default, and how is a non-default marked?
+4. What should this type's **Wiki-Links contain** — what does an artifact of this type link, and what must it never link?
+
+Participation itself is not on the list, because it is not a per-type decision (see the next section): every artifact-producing location participates, and an individual artifact joins the web by carrying links. What a type's policy defines is how its nodes are *interpreted*, and the scanner executes those definitions rather than owning its own.
+
+#### 3.5.4 No participation registry: policy defines, code executes
+
+There is **no registry of participating types**, and none may be introduced. The lesson behind this rule was earned twice. First, a survey of this framework found **six** places that each described "the CA types", no two of which agreed — the manifest, the CA-types command output, the graph scanner's directory list, the set of CA-type policy files, the filesystem itself, and the path resolution used to locate an agent's own artifacts. The union named more types than any single list, including two directories that were producing artifacts while appearing in no registry at all. Second, the first attempted fix — one authoritative declaration table — immediately began accreting deployment-specific entries into framework code and gatekeeping decisions no list should own. A better registry does not fix registration; abolishing registration does.
+
+**Participation is emergent and universal.** Every artifact-producing location under the agent tree participates, discovered from the filesystem rather than declared; the framework policies participate the same way. An individual artifact joins the web by carrying `[[links]]` — writing them *is* the act of joining, and a file without concepts simply never becomes a node. The undeclared-but-real state in which artifacts accumulate unseen is thereby **inexpressible rather than checked-for**: a directory cannot be missing from a list that does not exist.
+
+Three rules follow:
+
+1. **Policy defines, code executes.** Unit-of-node and node class are defined in each CA-type policy's knowledge-web participation section; the scanner carries only derivation rules that apply those definitions, each citing the policy that owns it. A distinction whose definition lives only in code is a registry wearing different clothes.
+2. **One walk.** The web builder and any doctor examine the same files through the same traversal. A checker with its own copy of the walk will drift from the thing it checks, and the drift will be silent.
+3. **Linkless is visible, not excluded.** A location whose artifacts carry no links participates and shows as orphaned. That census is honest noise, curable by annotation — never by de-registering the location, which is the old failure restated.
 
 ---
 
@@ -1168,3 +1232,16 @@ This policy evolves through:
 
 🔧 Generated with Claude Code
 Co-Authored-By: Claude <noreply@anthropic.com>
+
+---
+
+## Wiki-Links
+
+<!-- NORMATIVE node (see the node classes and provenance section above): this policy
+     states what MUST be done. It is also INHERITED — shipped with the framework rather
+     than produced by any one agent. Link what it GOVERNS, never what it mentions.
+     Note: this file DISCUSSES the ## Wiki-Links convention at length, so a naive
+     'does it contain the heading' check reports a false positive here. Mention is not
+     use — the same distinction the extractor enforces for concepts. -->
+
+[[knowledge_web]] [[scholarship]] [[epistemics]]

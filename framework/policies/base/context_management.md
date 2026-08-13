@@ -162,7 +162,7 @@ macf_tools hooks status      # Hook states with timestamps
 - Wind-down: CL20 (200k) → **CL4** (1M)
 - CCP trigger: CL5 (200k) → **CL1** (1M)
 - JOTEWR: CL2 (200k) → **CL0** (1M)
-- Use μC (Ctrl-D + `claude -c`) to extend cycles without compaction
+- Use a session resume (Ctrl-D + `claude -c`) to extend cycles without compaction
 
 **Communication Adaptation**:
 - **Normal** (<85%): Full explanations
@@ -454,6 +454,16 @@ macf_tools hooks logs        # Compaction detection events
 - Default 200k; set `MACF_CONTEXT_WINDOW` for 1M models
 - CL based on usable space (percentage scales to any window)
 - CC 2.0 shows total in display
+
+---
+
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — token/time
+     awareness, compaction preparation, and recovery protocol. -->
+
+[[context_management]] [[compaction_trauma]] [[context_recovery]] [[context_stewardship]]
 
 ---
 *Policy Established: 2025-10-10*

@@ -26,7 +26,10 @@ This fixture is module-local (not global) because:
 
 import json
 import os
+import subprocess
+import sys
 import tempfile
+import warnings
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
@@ -149,6 +152,161 @@ def isolated_agent_home(tmp_path, monkeypatch):
     yield test_home
 
     find_agent_home.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def isolated_task_store(tmp_path, monkeypatch):
+    """Point the task store at a per-test directory, at the boundary.
+
+    The agent home fixture above already isolates the store *indirectly*: the
+    home store resolves through `find_agent_home()`, so isolating the home
+    isolates the store as a side effect. That is true today and it is not
+    something to rely on. It holds only while the store keeps resolving through
+    that one function, it depends on an lru_cache being cleared, and if it ever
+    stops holding, the failure mode is a silent write into the durable record of
+    what an agent was doing -- discovered, if at all, by noticing a wrong status
+    months later. That is exactly how it was discovered the first time.
+
+    So the store is isolated here directly and for its own sake.
+    `MACF_TASKS_DIR` also forces `TaskReader._resolve_home_store()` to return
+    None, so neither backend can address anything outside `tmp_path`.
+
+    Boundary isolation rather than patched write paths, deliberately. Patching
+    named symbols covers the writes you predicted; a path you did not predict
+    goes to the real store while the test passes. A test module that isolated by
+    patching `_create_task_file`, `update_task_file` and `TaskReader` still
+    re-opened a completed task in a live store, because the auto-start chain
+    reached a write that was not in that set. An environment variable has no
+    escape path. This is the same reasoning that removed the `testing`
+    parameter: code-level isolation creates two universes and the tests then
+    verify the wrong one.
+
+    Tests needing a specific backend override this — `MACF_TASK_STORE_DIR` takes
+    precedence, and `delenv` restores default resolution.
+
+    Yields:
+        Path to the isolated task directory
+    """
+    test_tasks = tmp_path / "_macf_isolated_tasks"
+    test_tasks.mkdir(parents=True, exist_ok=True)
+    # Both, and in this order. MACF_TASK_STORE_DIR outranks MACF_TASKS_DIR in
+    # `_resolve_home_store`, so setting only the latter would leave the store
+    # pointing at whatever a developer happens to export in their own shell --
+    # isolation that works on the machine that does not need it and fails on the
+    # one that does.
+    monkeypatch.delenv("MACF_TASK_STORE_DIR", raising=False)
+    monkeypatch.setenv("MACF_TASKS_DIR", str(test_tasks))
+
+    yield test_tasks
+
+
+class LiveStoreTouched(UserWarning):
+    """The real task store changed while the suite ran.
+
+    Its own category so it can be filtered to an error (`-W error::...`) by
+    anyone who wants the CI behaviour locally.
+    """
+
+
+def _fingerprint(dirs):
+    """Map every task file under `dirs` to (size, mtime_ns).
+
+    Cheap enough to run twice per session over a few thousand files, and it
+    catches modification of an existing file — which a count or a directory
+    mtime does not. A completed task being flipped back to in-progress changes
+    no filename and no file count.
+    """
+    seen = {}
+    for d in dirs:
+        for p in d.rglob("*.json"):
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+            seen[str(p)] = (st.st_size, st.st_mtime_ns)
+    return seen
+
+
+@pytest.fixture(scope="session", autouse=True)
+def live_task_store_is_left_alone():
+    """Fail the run if it wrote into the developer's real task store.
+
+    The isolation above should make this impossible. The guard exists because
+    the previous isolation was also believed to make it impossible, and the leak
+    it missed was found months afterwards by noticing that a task which had
+    completed cleanly was somehow in progress again — with a test fixture's
+    breadcrumb in its update history.
+
+    A leak that announces itself is worth more than one that has to be inferred
+    from a wrong status later, so this reports at the end of the run rather than
+    leaving the evidence to be stumbled on.
+
+    Resolution happens at session start, before any per-test isolation applies,
+    so the paths are the real ones. Where there is no live store — CI, a fresh
+    checkout — there is nothing to fingerprint and the guard is inert.
+    """
+    from macf.task.reader import TaskReader
+
+    targets = []
+    try:
+        home = TaskReader._resolve_home_store()
+        if home and home.exists():
+            targets.append(home)
+        legacy = TaskReader._get_tasks_dir()
+        if legacy.exists():
+            targets.append(legacy)
+    except (OSError, ValueError, ImportError) as e:
+        print(f"⚠️ MACF: live task store guard could not resolve a store: {e}",
+              file=sys.stderr)
+
+    before = _fingerprint(targets)
+
+    yield
+
+    after = _fingerprint(targets)
+    if before == after:
+        return
+
+    added = sorted(set(after) - set(before))
+    removed = sorted(set(before) - set(after))
+    changed = sorted(p for p in set(before) & set(after) if before[p] != after[p])
+    detail = (
+        "the LIVE task store changed during this run — task files are the "
+        "durable record of what an agent was doing, and a test that can write "
+        "there can make finished work look unfinished.\n"
+        f"  added:   {added}\n"
+        f"  changed: {changed}\n"
+        f"  removed: {removed}"
+    )
+
+    # Strict only where a concurrent writer is impossible.
+    #
+    # This guard cannot see WHICH process wrote; it sees only that the store
+    # differs. On a workstation the agent that owns the store is often working
+    # in it while the suite runs, and those edits land inside the same window --
+    # measured, on the run that prompted this branch, where the three files it
+    # flagged were the author's own task notes. Failing on that would train
+    # everyone to ignore the one message that matters, and a detector that
+    # cries wolf gets muted, which is worse than not having one.
+    #
+    # In CI there is no other writer, so a difference means a test wrote it, and
+    # there the run fails. Elsewhere it reports and lets a human judge, because
+    # "these are my own edits" is a judgement only the human can make.
+    if os.environ.get("CI"):
+        pytest.fail(detail, pytrace=False)
+
+    # `warnings.warn`, not a print. pytest captures fixture stdout/stderr, so a
+    # printed notice is swallowed on a passing run — visible only when something
+    # else already failed, which is precisely when it is not needed. Warnings go
+    # to the end-of-run summary whether the run passed or not.
+    warnings.warn(
+        f"{detail}\n"
+        "  (not failing outside CI: a concurrent writer on this machine is the "
+        "benign explanation, and these are often the author's own edits. In CI "
+        "there is no other writer and this is an error.)",
+        LiveStoreTouched,
+        stacklevel=1,
+    )
 
 
 @pytest.fixture
@@ -757,3 +915,69 @@ def mock_temporal_context_hook():
 def mock_minimal_timestamp_hook():
     """Return fixed minimal timestamp for high-frequency hooks."""
     return "12:45:30 AM"
+
+
+# A unix socket path is capped by `sockaddr_un.sun_path`: 104 bytes on the BSDs
+# and macOS, 108 on Linux. Nothing reports this as a length error -- the bind
+# simply fails, and tmux surfaces it as "error connecting to <path> (File name
+# too long)".
+SUN_PATH_MAX = 104 if sys.platform == "darwin" else 108
+
+
+@pytest.fixture
+def tmux_sandbox_env():
+    """An environment for driving tmux against a private, disposable server.
+
+    Three properties, all load-bearing, each one learned from a failure rather
+    than chosen up front:
+
+    - **$TMUX is stripped.** A tmux client that inherits $TMUX attaches to THAT
+      server and ignores TMUX_TMPDIR entirely. Every process inside a tmux pane
+      has $TMUX set -- which is how an agent runs this suite, and never how CI
+      runs it -- so a teardown `kill-server` reached the host's default server
+      and destroyed every session on it, including a live agent harness.
+
+    - **PATH is inherited.** An environment built from scratch carries no PATH,
+      and POSIX then falls back to a fixed `/usr/bin:/bin:/usr/sbin:/sbin`
+      (`os.confstr('CS_PATH')`). tmux is on that path under most Linux
+      packaging and is not under Homebrew, so a from-scratch env cannot find
+      the binary on macOS no matter what the developer's shell says.
+
+    - **The socket directory is short, and is deliberately not `tmp_path`.**
+      tmux appends `tmux-<uid>/default` to TMUX_TMPDIR, and macOS roots
+      `tmp_path` under `/private/var/folders/<2>/<26>/T/`, which overruns
+      SUN_PATH_MAX once pytest adds `pytest-of-<user>/pytest-<n>/<test>0/` --
+      142 bytes measured against a 104-byte cap. Linux's `/tmp/...` stays
+      under it.
+
+    The first two pull against each other, which is why both natural spellings
+    are wrong: `{**os.environ, ...}` keeps PATH but leaks $TMUX, and
+    `{"TMUX_TMPDIR": ...}` drops $TMUX but loses PATH.
+
+    Inheriting PATH also makes the `shutil.which("tmux")` skip guards on the
+    classes that use this fixture meaningful again. A guard is only worth
+    having if it queries the same thing the guarded operation will; while the
+    env was scrubbed, `which()` consulted the real PATH, found Homebrew's tmux,
+    declined to skip, and the subprocess then failed to find the same binary.
+    """
+    # macOS TMPDIR is too long to hold a socket, so ask for a short base
+    # explicitly rather than accepting the platform default.
+    base = "/tmp" if os.path.isdir("/tmp") else None
+    with tempfile.TemporaryDirectory(prefix="macf-tmux-", dir=base) as sock:
+        env = {k: v for k, v in os.environ.items() if k != "TMUX"}
+        env["TMUX_TMPDIR"] = sock
+
+        # Fail by name rather than by tmux's opaque "File name too long".
+        probe = os.path.join(sock, f"tmux-{os.getuid()}", "default")
+        assert len(probe) <= SUN_PATH_MAX, (
+            f"tmux socket path is {len(probe)} bytes, over the {SUN_PATH_MAX}-byte "
+            f"limit on this platform: {probe}"
+        )
+
+        yield env
+
+        # This teardown is the destructive one, and it is survivable only
+        # because the env above selects a private server. Target it explicitly
+        # so a future edit that reintroduces $TMUX cannot turn this line into
+        # kill-server against the host.
+        subprocess.run(["tmux", "kill-server"], env=env, capture_output=True)

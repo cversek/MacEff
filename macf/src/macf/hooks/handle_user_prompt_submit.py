@@ -33,9 +33,6 @@ from macf.observability import Warning, emit_warning
 # EXPERIMENT: Memory injection script path (Cycle 337)
 MEMORY_RECALL_SCRIPT = Path(__file__).parent.parent.parent / "agent/public/experiments/2026-01-15_140000_001_Claude-Mem_Associative_Injection/artifacts/memory-recall.py"
 
-# NOTE: recommend module imported lazily inside get_policy_injection() (heavy deps ~3s)
-
-
 def get_memory_injection(prompt: str) -> str:
     """
     Query claude-mem for associative memories relevant to the prompt.
@@ -67,72 +64,6 @@ def get_memory_injection(prompt: str) -> str:
         pass  # Fail silently - don't block session
 
     return ""
-
-
-def get_policy_injection(prompt: str) -> str:
-    """
-    Query policy index for relevant policy recommendations.
-
-    Fast path: Socket client to warm search service (45ms)
-    Fallback: Direct import of recommend module (4000ms on first call)
-
-    Logs warnings when fallback is used - not silent failures.
-    Returns empty string on any failure (graceful degradation).
-    """
-    if len(prompt) < 10:  # Skip very short prompts
-        return ""
-
-    # Fast path: Try socket client first (stdlib only, no heavy imports)
-    try:
-        from macf.search_service.client import get_policy_injection as client_get_injection
-        result = client_get_injection(prompt)
-        if result:  # Service returned a result
-            return result
-        # Empty result means service unavailable - fall through with warning
-    except ImportError as e:
-        # Client module not available - log and fall through
-        emit_warning(Warning(source="user_prompt_submit", kind="search_service_unavailable", detail=f"search_service.client not available: {e}"))
-    except Exception as e:
-        # Unexpected error - log with traceback
-        emit_warning(Warning(source="user_prompt_submit", kind="search_service_unavailable", detail=f"search_service.client error: {e}"))
-        log_hook_event({
-            "hook_name": "user_prompt_submit",
-            "event_type": "WARNING",
-            "warning": "search_service_client_failed",
-            "error": str(e),
-            "error_type": type(e).__name__,
-            "traceback": traceback.format_exc(),
-            "fallback": "direct_recommend_import"
-        })
-
-    # Slow path fallback: Direct import (4s on first call)
-    # Log that we're using fallback so user knows service isn't running
-    emit_warning(Warning(source="user_prompt_submit", kind="search_service_unavailable", detail="Search service unavailable, using slow fallback (4s)"))
-    log_hook_event({
-        "hook_name": "user_prompt_submit",
-        "event_type": "WARNING",
-        "warning": "search_service_fallback",
-        "message": "Using direct recommend import (slow path ~4s)",
-        "hint": "Start search service: macf_tools search-service start"
-    })
-
-    try:
-        from macf.utils.recommend import get_recommendations
-        formatted, _ = get_recommendations(prompt)
-        return formatted
-    except ImportError:
-        return ""  # recommend module not available
-    except Exception as e:
-        # Log fallback error too
-        log_hook_event({
-            "hook_name": "user_prompt_submit",
-            "event_type": "ERROR",
-            "error": str(e),
-            "error_type": type(e).__name__,
-            "traceback": traceback.format_exc(),
-            "context": "direct_recommend_fallback_failed"
-        })
-        return ""  # Fail gracefully - don't block session
 
 
 def record_user_activity_from_payload(prompt: str) -> bool:
@@ -215,14 +146,40 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         from macf.utils.session import get_last_user_prompt_uuid
         current_prompt_uuid = get_last_user_prompt_uuid(session_id)
 
-        # Extract prompt preview for forensic recovery (first 200 chars)
+        # Capture the FULL operator prompt for forensic recovery and prompt-content
+        # analysis (#119). This was truncated to the first 200 chars, which silently
+        # biased any analysis of prompt content — 35% of prompts hit the cap exactly,
+        # so anything said mid-message was invisible and unrecoverable once logged.
+        # Follow-up (idea): store a transcript pointer rather than inlining full text,
+        # per 'Index Metadata, Not Content' — the transcript already holds the text.
         prompt = hook_input.get('prompt', '') if hook_input else ''
-        prompt_preview = prompt[:200] if prompt else None
+        prompt_preview = prompt if prompt else None
 
         # Record activity from the payload in hand before anything derives
         # staleness from the event log, so this render and the ones after it
         # agree with the event that produced them (#181).
         record_user_activity_from_payload(prompt)
+
+        # USER_REMOTE auto-restore: a CLI prompt means the operator is back at the
+        # keyboard, which auto-clears USER_REMOTE (detection derives that from the
+        # activity just recorded). Restore the deny'd permissions here too —
+        # otherwise the tools USER_REMOTE walled off stay denied until an explicit
+        # `mode set USER_PRESENT`, stranding the returned operator. No-op when
+        # nothing is denied; full permission enforcement reloads on the next restart.
+        try:
+            from macf.utils.claude_settings import restore_user_remote_deny_if_active
+            _ur_restored = restore_user_remote_deny_if_active()
+            if _ur_restored and _ur_restored.get("restored"):
+                from macf.agent_events_log import append_event
+                append_event("mode_change", {
+                    "mode": "USER_REMOTE",
+                    "enabled": False,
+                    "source": "auto_restore_on_cli_activity",
+                })
+        except Exception as e:
+            emit_warning(Warning(source="user_prompt_submit",
+                                 kind="user_remote_auto_restore_failed",
+                                 detail=str(e)))
 
         # Start Development Drive tracking with current UUID and prompt preview
         # Note: start_dev_drv() emits dev_drv_started event internally
@@ -301,8 +258,13 @@ Breadcrumb: {breadcrumb}"""
         # Note: prompt already extracted above for prompt_preview
         memory_injection = ""  # get_memory_injection(prompt)
 
-        # EXPERIMENT: Get policy recommendation injection (Cycle 338)
-        policy_injection = get_policy_injection(prompt)
+        # Per-prompt policy-recommendation injection removed (GH#211). Policy
+        # discovery in MacEff is pull, not push: agents consult the corpus on
+        # recognised demand (task/phase orientation, before shipping a fix, when
+        # a bug resists the first hypothesis) via `macf_tools policy
+        # search`/`recommend`, and task-start still auto-surfaces CEP nav guides.
+        # A recommender fired into every turn was stale noise with a maintenance
+        # burden; see policy_awareness §2.5.
 
         # Format footer
         footer = format_macf_footer()
@@ -314,7 +276,6 @@ Breadcrumb: {breadcrumb}"""
             voice_transcript if voice_transcript else "",  # Voice auto-transcription
             boundary_guidance if boundary_guidance else "",
             memory_injection if memory_injection else "",  # EXPERIMENT: associative memories
-            policy_injection if policy_injection else "",  # EXPERIMENT: policy recommendations
             footer
         ]
         plain_content = chr(10).join([s for s in sections if s])

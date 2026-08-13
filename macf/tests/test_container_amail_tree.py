@@ -111,3 +111,70 @@ def test_is_idempotent_across_restarts(start_module, public_dir, calls):
 def test_returns_the_mailbox_path(start_module, public_dir, calls):
     result = start_module.create_amail_tree(public_dir, "pa_test")
     assert result == public_dir / "amail"
+
+
+class TestTaskStoreProvisioning:
+    """The live task store must be built by provisioning, like the mailbox.
+
+    ``task_archives`` was created here for a long time while ``tasks`` -- the
+    store it archives *from* -- was not, so provisioning appeared to know about
+    the task subsystem while leaving every agent on CC's per-session store. That
+    store deletes completed tasks and forks on rewind, and the failure is
+    invisible until history is expected to survive.
+    """
+
+    def test_creates_the_store(self, start_module, public_dir, calls):
+        start_module.create_task_store(public_dir, "pa_test")
+        assert (public_dir / "tasks").is_dir()
+
+    def test_store_is_distinct_from_the_archive(self, start_module, public_dir, calls):
+        """CONTROL against the original confusion: creating the store must not
+        be satisfied by the archive directory existing."""
+        (public_dir / "task_archives").mkdir()
+        start_module.create_task_store(public_dir, "pa_test")
+        assert (public_dir / "tasks").is_dir()
+        assert (public_dir / "tasks") != (public_dir / "task_archives")
+
+    def test_idempotent_on_reprovision(self, start_module, public_dir, calls):
+        start_module.create_task_store(public_dir, "pa_test")
+        (public_dir / "tasks" / "7.json").write_text("{}")
+        start_module.create_task_store(public_dir, "pa_test")
+        assert (public_dir / "tasks" / "7.json").exists(), "reprovision destroyed tasks"
+
+    def test_grants_group_access_for_peer_traversal(self, start_module, public_dir, calls):
+        start_module.create_task_store(public_dir, "pa_test")
+        assert ["chown", "pa_test:agents_all", str(public_dir / "tasks")] in calls
+        assert ["chmod", "750", str(public_dir / "tasks")] in calls
+
+
+class TestTaskStoreConfig:
+    """The directory alone leaves the agent reading the legacy store."""
+
+    def test_writes_mode_home_on_a_bare_maceff_dir(self, start_module, tmp_path, calls):
+        m = tmp_path / ".maceff"
+        m.mkdir()
+        assert start_module.configure_task_store(m, "pa_test") is True
+        import json as _json
+        cfg = _json.loads((m / "config.json").read_text())
+        assert cfg["task_store"]["mode"] == "home"
+        assert cfg["task_store"]["path"] == "agent/public/tasks"
+
+    def test_preserves_identity_on_upgrade(self, start_module, tmp_path, calls):
+        import json as _json
+        m = tmp_path / ".maceff"
+        m.mkdir()
+        (m / "config.json").write_text(_json.dumps(
+            {"agent_identity": {"moniker": "Keep Me"}}))
+        assert start_module.configure_task_store(m, "pa_test") is True
+        cfg = _json.loads((m / "config.json").read_text())
+        assert cfg["agent_identity"]["moniker"] == "Keep Me"
+        assert cfg["task_store"]["mode"] == "home"
+
+    def test_leaves_an_unreadable_config_untouched(self, start_module, tmp_path, calls):
+        """CONTROL: overwriting a corrupt config would destroy exactly the
+        information nobody can reconstruct. Report and decline."""
+        m = tmp_path / ".maceff"
+        m.mkdir()
+        (m / "config.json").write_text("{not json")
+        assert start_module.configure_task_store(m, "pa_test") is False
+        assert (m / "config.json").read_text() == "{not json"

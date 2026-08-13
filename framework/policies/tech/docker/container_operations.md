@@ -149,6 +149,13 @@ services:
 
 ### 1.2 Networking & Isolation
 
+> **Restricting what an agent may reach**: this section covers how containers
+> communicate. Deliberately *preventing* an agent identity from reaching something —
+> and proving the prevention holds — is a different concern with its own policy. See
+> `capability_boundaries.md` for what a deployment must declare, why enforcement
+> cannot live in the component being reached, and why a rule that is present must
+> still be verified by an attempt that fails.
+
 **Service Communication**:
 
 Docker Compose provides automatic DNS service discovery using service names:
@@ -232,6 +239,16 @@ RUN pip install flask==2.3.2 pandas==2.0.3 numpy==1.24.3
 ```
 
 ### 2.2 Security Considerations
+
+> **Two threat models, both applicable.** This section is conventional container
+> security: it assumes the workload is trusted and protects it — from secrets
+> baked into images, loose permissions, vulnerable dependencies.
+>
+> A multi-agent deployment carries a second, inverted threat model in which **the
+> agent inside the container is the party being contained**, because its inputs are
+> attacker-controlled and its capabilities exceed its scope. That is not a stricter
+> version of what follows; it is a different question, and answering one does not
+> answer the other. See `capability_boundaries.md`.
 
 **Secrets Management**:
 
@@ -516,3 +533,13 @@ This policy evolves based on operational experience. Discovered improvements or 
 - Document friction points in `friction_points/friction_points.md`
 - Reference this policy in DevOpsEng specialization work
 - Update as MacEff deployment patterns mature
+
+---
+
+## Wiki-Links
+
+<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
+     classes and provenance). Links are what this policy governs — container
+     build, volume, runtime, and deployment discipline. -->
+
+[[containers]] [[deployment]] [[container_deployment]] [[security]] [[portability]]
