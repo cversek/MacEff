@@ -105,3 +105,21 @@ def read_message(message_id: str, socket_path: Path,
     return _roundtrip({"op": "read", "message_id": message_id},
                       socket_path, timeout,
                       "The message was not read.")
+
+
+def read_internet(ref: str, socket_path: Path,
+                  timeout: float = 10.0) -> Dict[str, Any]:
+    """One internet message (raw + provenance sidecar), by delivery name or
+    content-sha prefix. Same absent parameter as every read: whose mailbox
+    follows from kernel identity, not from anything this function accepts."""
+    return _roundtrip({"op": "read_internet", "ref": ref},
+                      socket_path, timeout,
+                      "The message was not read.")
+
+
+def status(socket_path: Path, timeout: float = 10.0) -> Dict[str, Any]:
+    """The caller's mailbox counts, including the one it cannot compute
+    itself: quarantined mail lives where the refused party cannot edit it,
+    so its count only exists on the far side of the socket."""
+    return _roundtrip({"op": "status"}, socket_path, timeout,
+                      "No status was returned.")

@@ -9021,10 +9021,12 @@ def cmd_amail_list(args: argparse.Namespace) -> int:
         print(f"❌ {resp.get('error', 'the broker refused the read')}")
         return 1
     msgs = [Message.from_dict(d) for d in resp.get("messages", [])]
+    internet = resp.get("internet", [])
     if args.json:
-        print(json.dumps([m.to_dict() for m in msgs], indent=2))
+        print(json.dumps({"messages": [m.to_dict() for m in msgs],
+                          "internet": internet}, indent=2))
         return 0
-    if not msgs:
+    if not msgs and not internet:
         print("(no messages)")
         return 0
     for m in msgs:
@@ -9032,7 +9034,20 @@ def cmd_amail_list(args: argparse.Namespace) -> int:
         print(f"    {_term_safe(m.subject)}")
         print(f"    id={_term_safe(m.message_id)} thread={_term_safe(m.thread_id)}"
               + (f" reply-to={_term_safe(m.parent)}" if m.parent else ""))
-    print(f"\n{len(msgs)} message(s)")
+    # Internet mail: listed FROM THE SIDECAR, never from the raw message —
+    # the sidecar is broker-verified provenance; the raw headers are the
+    # sender's own claims and get neutralised only at `read` time.
+    for item in internet:
+        sc = item.get("sidecar", {})
+        obs = sc.get("observed", {})
+        authz = sc.get("authorization", {})
+        marker = "🌐" if item.get("message_present") else "🌐⚠️ (message file missing)"
+        print(f"{_term_safe(str(sc.get('received_at', '?')))}  "
+              f"{_term_safe(str(obs.get('envelope_from', '?')))}  {marker}")
+        print(f"    {_term_safe(str(obs.get('subject', '(no subject)')))}")
+        print(f"    sha={_term_safe(str(sc.get('raw_sha256', '?'))[:16])} "
+              f"class={_term_safe(str(authz.get('outcome', '?')))}")
+    print(f"\n{len(msgs)} bundle message(s), {len(internet)} internet message(s)")
     return 0
 
 
@@ -9047,6 +9062,26 @@ def cmd_amail_read(args: argparse.Namespace) -> int:
     cfg = _amail_config()
     try:
         resp = read_message(args.message_id, Path(cfg["socket"]))
+        if not resp.get("ok"):
+            # Not a bundle id — the same ref may name an internet delivery
+            # (name or content-sha prefix). One verb, two shapes, per the
+            # sidecar-as-common-denominator rule.
+            from macf.amail.client import read_internet
+            iresp = read_internet(args.message_id, Path(cfg["socket"]))
+            if iresp.get("ok"):
+                sc = iresp.get("sidecar", {})
+                if args.json:
+                    print(json.dumps(iresp, indent=2))
+                    return 0
+                # Provenance FIRST, from the broker-verified sidecar; the raw
+                # mail below is the sender's material, neutralised so it can
+                # neither redraw the badge nor escape the terminal.
+                authz = sc.get("authorization", {})
+                print(f"🌐 internet mail  class={_term_safe(str(authz.get('outcome', '?')))}"
+                      f"  reason={_term_safe(str(authz.get('reason', '?')))}")
+                print(f"sha256={_term_safe(str(sc.get('raw_sha256', '?')))}")
+                print(_term_safe(iresp.get("raw", "")))
+                return 0
     except BrokerUnavailable as e:
         print(f"❌ {e}")
         return 1
@@ -9090,30 +9125,42 @@ def cmd_amail_status(args: argparse.Namespace) -> int:
     # the honest answer is that the count is unknown — because when the broker
     # is down the mail genuinely is not readable, and a number here would be
     # asserting otherwise.
-    count = None  # None means "not known", which is not the same as zero
+    counts = None  # None means "not known", which is not the same as zero
     if reachable:
+        from macf.amail.client import status as _status, BrokerUnavailable
         try:
-            from macf.amail.client import list_messages as _list
-            _resp = _list(sock)
+            _resp = _status(sock)
             if _resp.get("ok"):
-                count = len(_resp.get("messages", []))
-        except Exception:
-            count = None
+                counts = {k: _resp.get(k) for k in
+                          ("messages", "internet", "quarantined")}
+        except (BrokerUnavailable, ValueError) as e:
+            print(f"⚠️ MACF: status read failed (counts unknown): {e}",
+                  file=sys.stderr)
     info = {
         "agent": cfg["agent"] or None,
         "address": f"{cfg['agent']}@{cfg['domain']}" if cfg["agent"] and cfg["domain"] else None,
         "socket": str(sock),
         "broker_reachable": reachable,
         "maildir": str(box) if box else None,
-        "messages": count,
+        # The quarantine count is the load-bearing one: an empty inbox and an
+        # inbox with three refusals must be distinguishable states.
+        "counts": counts,
     }
     if args.json:
         print(json.dumps(info, indent=2))
         return 0 if reachable else 1
-    _count_str = f"{count} message(s)" if count is not None else "count unavailable"
+    if counts is not None:
+        _count_str = (f"{counts['messages']} bundle(s), "
+                      f"{counts['internet']} internet, "
+                      f"{counts['quarantined']} quarantined")
+    else:
+        _count_str = "counts unavailable"
     print(f"address:  {info['address'] or '(unconfigured)'}")
     print(f"maildir:  {info['maildir'] or '(unknown)'}  [{_count_str}]")
     print(f"broker:   {'✅ reachable' if reachable else '❌ unreachable'} at {sock}")
+    if counts is not None and counts["quarantined"]:
+        print(f"⚠️  {counts['quarantined']} message(s) in quarantine — refused "
+              f"with reasons attached; the operator can list them broker-side.")
     if not reachable:
         print("\n   Mail cannot be sent without the broker. There is no fallback")
         print("   transport by design — the broker is what enforces the contact list.")

@@ -234,3 +234,69 @@ def test_in_flight_spool_entries_are_not_shortfalls(deploy):
     report = inbound.reconcile(deploy)
     assert report["balanced"] is True
     assert report["in_flight"] == 1
+
+
+# ---- the read surface: two shapes, one listing, all through the broker -----
+
+@pytest.fixture
+def broker_with_mail(deploy):
+    """A Broker over the deploy fixture's config, with one delivered
+    internet message and the quarantine wired."""
+    from macf.amail.broker import Broker
+    deploy.broker_config.inbound_quarantine = deploy.quarantine_dir
+    raw = make_raw(body="the readable one")
+    inbound.process_entry(deploy, *spool(deploy, raw))
+    return Broker(deploy.broker_config), raw
+
+
+def test_list_includes_internet_mail_via_sidecar(broker_with_mail):
+    broker, raw = broker_with_mail
+    resp = broker.list_messages(AGENT)
+    assert resp["ok"] is True
+    assert len(resp["internet"]) == 1
+    item = resp["internet"][0]
+    assert item["message_present"] is True
+    assert item["sidecar"]["raw_sha256"] == hashlib.sha256(raw).hexdigest()
+    assert item["sidecar"]["authorization"]["outcome"] == DELIVER_PULL
+
+
+def test_read_internet_by_sha_prefix_and_by_name(broker_with_mail):
+    broker, raw = broker_with_mail
+    sha = hashlib.sha256(raw).hexdigest()
+    by_sha = broker.read_internet(AGENT, sha[:12])
+    assert by_sha["ok"] is True
+    assert by_sha["raw"] == raw.decode()
+    name = broker.list_messages(AGENT)["internet"][0]["name"]
+    assert broker.read_internet(AGENT, name)["ok"] is True
+
+
+def test_read_internet_miss_and_not_yours_are_one_answer(broker_with_mail):
+    broker, _ = broker_with_mail
+    assert broker.read_internet(AGENT, "feedfeedfeed")["ok"] is False
+    # An unmapped caller is refused before any lookup at all.
+    with pytest.raises(PermissionError):
+        broker.read_internet("nobody", "feedfeedfeed")
+
+
+def test_status_counts_attribute_quarantine_to_the_recipient(deploy):
+    from macf.amail.broker import Broker
+    deploy.broker_config.inbound_quarantine = deploy.quarantine_dir
+    inbound.process_entry(deploy, *spool(deploy, make_raw()))  # delivered
+    inbound.process_entry(deploy, *spool(deploy,               # quarantined
+        make_raw(sender="stranger@example.org", body="refused")))
+    resp = Broker(deploy.broker_config).status_counts(AGENT)
+    assert resp["ok"] is True
+    assert resp["internet"] == 1
+    assert resp["quarantined"] == 1
+
+
+def test_status_counts_damaged_quarantine_metadata_still_counts(deploy):
+    # A refusal artifact with unreadable metadata is still a refusal
+    # artifact; dropping it from the count rebuilds the silent-drop
+    # ambiguity one layer up.
+    from macf.amail.broker import Broker
+    deploy.broker_config.inbound_quarantine = deploy.quarantine_dir
+    deploy.quarantine_dir.mkdir(parents=True, exist_ok=True)
+    (deploy.quarantine_dir / "broken.json").write_text("{not json")
+    resp = Broker(deploy.broker_config).status_counts(AGENT)
+    assert resp["quarantined"] == 1

@@ -3013,7 +3013,8 @@ class TestStoreIsBrokerOwned:
 
         out = capsys.readouterr().out
         assert "1 message(s)" not in out, "counted by reading the store directly"
-        assert "count unavailable" in out
+        assert "1 bundle(s)" not in out, "counted by reading the store directly"
+        assert "counts unavailable" in out
 
     def test_broker_reads_are_scoped_to_the_callers_own_mailbox(self, deployment):
         """alpha asking for mail gets alpha's mail, never beta's."""

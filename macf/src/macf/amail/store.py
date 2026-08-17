@@ -11,8 +11,10 @@ within a filesystem is atomic. Writing straight into new/ would race every reade
 from __future__ import annotations
 
 import itertools
+import json
 import os
 import socket
+import sys
 import threading
 import time
 from pathlib import Path
@@ -236,6 +238,53 @@ def read_all(home: Path, include_seen: bool = True) -> List[Message]:
                 # must not make the whole mailbox unreadable.
                 continue
     return sorted(out, key=lambda m: m.sort_key())
+
+
+def read_internet(home: Path) -> List[dict]:
+    """Every internet-mail delivery in this mailbox, by its sidecar.
+
+    Sidecar presence is what distinguishes internet mail from agent bundles
+    in the shared Maildir — the sidecar IS the uniform index, so the listing
+    is built from sidecars alone and never parses raw mail. A sidecar whose
+    message file is missing is still listed, flagged, because a half-pair is
+    evidence of an interrupted delivery and hiding evidence is how gaps go
+    unexplained.
+    """
+    d = maildir_for(home)
+    side = d / "sidecars"
+    if not side.is_dir():
+        return []
+    out: List[dict] = []
+    for sc in sorted(side.glob("*.json")):
+        name = sc.stem
+        try:
+            meta = json.loads(sc.read_text())
+        except (OSError, ValueError) as e:
+            print(f"⚠️ MACF: unreadable sidecar {sc.name} (listed as "
+                  f"damaged): {e}", file=sys.stderr)
+            meta = {"damaged": str(e)}
+        present = any((d / box / name).is_file() for box in ("new", "cur"))
+        out.append({"name": name, "sidecar": meta, "message_present": present})
+    return out
+
+
+def find_internet(home: Path, ref: str) -> Optional[tuple]:
+    """(raw bytes, sidecar dict) for one internet message, or None.
+
+    `ref` is the delivery name or a prefix of the content sha256 — both are
+    values the owner learned from their own listing, so neither is guessable
+    authority over anyone else's mail (the home is already the caller's own).
+    """
+    for item in read_internet(home):
+        sha = str(item["sidecar"].get("raw_sha256", ""))
+        if item["name"] == ref or (ref and sha.startswith(ref)):
+            d = maildir_for(home)
+            for box in ("new", "cur"):
+                p = d / box / item["name"]
+                if p.is_file():
+                    return p.read_bytes(), item["sidecar"]
+            return None
+    return None
 
 
 def thread(home: Path, thread_id: str) -> List[Message]:

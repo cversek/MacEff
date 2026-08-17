@@ -44,6 +44,7 @@ from .models import Message, new_id, _now_iso
 from .trust import TrustClass, LOCAL_SUBMISSION
 from .crypto import verify
 from .store import deliver, ensure_maildir, read_all as _store_read_all, find as _store_find
+from . import store
 
 DEFAULT_SOCKET = "/run/amail/broker.sock"
 
@@ -146,6 +147,11 @@ class BrokerConfig:
     audit_path: Optional[Path] = None
     socket_path: Path = Path(DEFAULT_SOCKET)
     credentials_path: Optional[Path] = None
+
+    #: Broker-owned quarantine for refused INTERNET mail (the inbound module
+    #: writes it). Optional: a deployment without internet inbound has none,
+    #: and status_counts then reports zero quarantined rather than failing.
+    inbound_quarantine: Optional[Path] = None
 
     #: uid -> agent name. THE authentication table. The socket is world-writable,
     #: so the only thing distinguishing one submitter from another is the kernel's
@@ -708,14 +714,81 @@ class Broker:
         return home
 
     def list_messages(self, agent: str, thread: Optional[str] = None) -> Dict[str, Any]:
-        """Every message in the requesting agent's own mailbox."""
+        """Every message in the requesting agent's own mailbox.
+
+        Two shapes, one listing: agent bundles as Message dicts, internet
+        mail as its sidecar view — the sidecar is the uniform index, so the
+        internet entries are listed without parsing raw mail. Clients that
+        predate internet mail ignore the extra key and lose nothing.
+        """
         home = self._own_mailbox(agent)
         msgs = _store_read_all(home)
         if thread:
             msgs = [m for m in msgs if m.thread_id == thread]
+        internet = [] if thread else store.read_internet(home)
         if self.audit:
-            self.audit.read(agent=agent, operation="list", count=len(msgs))
-        return {"ok": True, "messages": [m.to_dict() for m in msgs]}
+            self.audit.read(agent=agent, operation="list",
+                            count=len(msgs) + len(internet))
+        return {"ok": True, "messages": [m.to_dict() for m in msgs],
+                "internet": internet}
+
+    def read_internet(self, agent: str, ref: str) -> Dict[str, Any]:
+        """One internet message (raw bytes + provenance sidecar) from the
+        requesting agent's own mailbox, by delivery name or sha prefix.
+
+        The raw mail is returned VERBATIM as text with replacement for
+        undecodable bytes — neutralising for display is the CLIENT's duty at
+        render time, the same division read_message uses. Miss and not-yours
+        are one answer, for the same oracle reason as read_message.
+        """
+        home = self._own_mailbox(agent)
+        found = store.find_internet(home, ref)
+        if self.audit:
+            self.audit.read(agent=agent, operation="read_internet",
+                            message_id=ref, found=found is not None)
+        if found is None:
+            return {"ok": False, "error": "no such message"}
+        raw, sidecar = found
+        return {"ok": True, "raw": raw.decode("utf-8", "replace"),
+                "sidecar": sidecar}
+
+    def status_counts(self, agent: str) -> Dict[str, Any]:
+        """Counts the caller cannot compute alone — chiefly the quarantine.
+
+        Quarantined mail is broker-owned (spool-not-store's cousin: refused
+        evidence lives where the refused party cannot edit it), so its count
+        must come through the socket or the agent cannot distinguish an
+        empty inbox from an inbox with three refusals — the exact ambiguity
+        the specification forbids building.
+        """
+        home = self._own_mailbox(agent)
+        quarantined = 0
+        qdir = self.config.inbound_quarantine
+        if qdir is not None and qdir.is_dir():
+            own_addr = self.config.address_for(agent).lower()
+            for sc in qdir.glob("*.json"):
+                try:
+                    meta = json.loads(sc.read_text())
+                except (OSError, ValueError):
+                    # Damaged quarantine metadata still counts: it is a
+                    # refusal artifact, and dropping it from the count
+                    # rebuilds the silent-drop ambiguity one layer up.
+                    quarantined += 1
+                    continue
+                to = str(meta.get("observed", {}).get("envelope_to", "")).lower()
+                if to == own_addr:
+                    quarantined += 1
+        counts = {
+            "messages": len(_store_read_all(home)),
+            "internet": len(store.read_internet(home)),
+            "quarantined": quarantined,
+        }
+        if self.audit:
+            # audit.read's schema is deliberately fixed; the total is the
+            # auditable fact, the breakdown is in the response.
+            self.audit.read(agent=agent, operation="status",
+                            count=sum(counts.values()))
+        return {"ok": True, **counts}
 
     def read_message(self, agent: str, message_id: str) -> Dict[str, Any]:
         """One message from the requesting agent's own mailbox."""
@@ -946,6 +1019,10 @@ class _Handler(socketserver.StreamRequestHandler):
                 resp = broker.list_messages(sender, thread=req.get("thread"))
             elif op == "read":
                 resp = broker.read_message(sender, req["message_id"])
+            elif op == "read_internet":
+                resp = broker.read_internet(sender, req["ref"])
+            elif op == "status":
+                resp = broker.status_counts(sender)
             else:
                 # Named rather than ignored: a client asking for an operation
                 # this broker does not have is a version skew or an intention,
