@@ -52,6 +52,10 @@ from .crypto import (
 )
 from .broker import Broker, BrokerConfig, DeliveryError, serve
 from .client import submit, list_messages, read_message, BrokerUnavailable
+from .inbound import (
+    InboundConfig, PushEligibilityError, SpoolError,
+    process_spool, process_entry, reconcile,
+)
 from . import store
 
 __all__ = [

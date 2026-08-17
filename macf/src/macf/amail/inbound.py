@@ -1,0 +1,400 @@
+"""Internet-inbound processing — the broker's consumption of the ingest spool.
+
+Implements the inbound-system specification (agent design record; merging
+into the amail policy after review): the transport layer authenticates and
+spools; THIS module is where the broker verifies, authorizes, delivers or
+quarantines, and accounts for every spooled message. One owner per gate:
+upstream authenticates transport identity, the broker alone authorizes
+senders.
+
+The trust chain this module completes:
+
+    spool (single-writer: the receiver's uid; no agent path to it)
+      -> hash re-verified against the sidecar    (corruption check ONLY --
+         the same uid writes both files, so forgery is excluded by the
+         spool's permissions, never by this comparison)
+      -> provenance extracted FROM THE RAW BYTES (the sidecar's copy is
+         advisory: authorization must not rest on a summary one component
+         away from the evidence)
+      -> authorization at the contacts file      (deny / deliver / deliver
+         with push-wake)
+      -> delivery BEFORE spool deletion, quarantine never silent deletion
+      -> one terminal audit record per spooled message (the conservation
+         property: a drop becomes a number that does not balance)
+
+Push-wake eligibility is DERIVED, never declared: a grant on an address in
+the agent namespace is a fatal configuration error (checked at startup and
+re-checked per decision, since both inputs can change at runtime), and the
+audit-history backstop FAILS CLOSED when its evidence is missing.
+"""
+from __future__ import annotations
+
+import email
+import email.policy
+import email.utils
+import hashlib
+import json
+import os
+import re
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Dict, Iterator, List, Optional, Tuple
+
+from .broker import BrokerConfig
+from .contacts import ContactBook, ContactListError
+from .audit import AuditLog
+from . import store
+
+
+class SpoolError(ValueError):
+    """A spool entry that cannot be processed as spooled mail."""
+
+
+class PushEligibilityError(ContactListError):
+    """A push-wake grant that the derivation forbids. FATAL at startup and at
+    decision time alike: a violation discovered while running is the same
+    violation, later."""
+
+
+#: Terminal dispositions — the exhaustive set the conservation check balances.
+DELIVERED = "delivered"
+QUARANTINED = "quarantined"
+#: Non-terminal: recorded when an entry is first seen, paired by one terminal.
+SEEN = "spool_seen"
+
+#: Delivery classes the authorization step can produce.
+DELIVER_PULL = "deliver-pull"
+DELIVER_PUSH_WAKE = "deliver-push-wake"
+DENY = "deny"
+
+
+@dataclass
+class InboundConfig:
+    """Wiring for the spool consumer. Paths and the verdict authority; the
+    broker's own config supplies domain, homes, contacts, and audit."""
+
+    broker_config: BrokerConfig
+    spool_dir: Path
+    quarantine_dir: Path
+    #: The authserv-id this deployment trusts in Authentication-Results
+    #: headers (a binding fact — e.g. the MX operator's identifier). A
+    #: verdict stamped by anyone else is treated as absent.
+    verdict_authority: str = ""
+
+
+# --------------------------------------------------------------- provenance
+
+# Authentication-Results result extraction: "method=result" pairs, per the
+# header's registered grammar. Parsed leniently on purpose — the header is
+# evidence to weigh, and a parse failure must read as "no verdict", never
+# crash authorization.
+_METHOD_RESULT = re.compile(r"\b(dmarc|spf|dkim|arc)\s*=\s*([a-zA-Z0-9]+)")
+
+
+def first_verdict(raw: bytes, authority: str) -> Optional[Dict[str, str]]:
+    """The FIRST Authentication-Results instance, iff stamped by `authority`.
+
+    First instance, from the raw bytes: a sender can hand their MTA a message
+    that already CONTAINS a forged verdict header, and every hop prepends —
+    so the outermost (first) instance is the one our edge stamped, and any
+    later instance is unvetted input. A verdict whose authserv-id is not the
+    declared authority is treated as absent rather than believed.
+
+    Returns {"authserv_id": ..., "dmarc": ..., "spf": ..., ...} for the
+    methods present, or None when no trustworthy verdict exists. Never
+    raises on malformed mail: unparseable evidence IS "no verdict".
+    """
+    if not authority:
+        return None
+    try:
+        msg = email.message_from_bytes(raw, policy=email.policy.default)
+        header = msg.get("Authentication-Results")
+    except (ValueError, LookupError, UnicodeError) as e:
+        print(f"⚠️ MACF: Authentication-Results parse failed (treating as "
+              f"absent): {e}", file=sys.stderr)
+        return None
+    if not header:
+        return None
+    value = str(header)
+    authserv = value.split(";", 1)[0].strip()
+    if authserv.split()[0].lower() != authority.lower():
+        return None
+    verdict: Dict[str, str] = {"authserv_id": authserv}
+    for method, result in _METHOD_RESULT.findall(value):
+        # First occurrence of each method wins within the one header.
+        verdict.setdefault(method.lower(), result.lower())
+    return verdict
+
+
+def sender_identity(raw: bytes) -> Tuple[str, str]:
+    """(envelope-ish sender, from-domain) as claimed by the message.
+
+    The CLAIM, not the fact — pairing it with a dmarc=pass verdict from the
+    trusted authority is what upgrades it to an authenticated identity, and
+    that pairing is authorize()'s job, kept out of here so parsing and
+    trust cannot blur.
+    """
+    try:
+        msg = email.message_from_bytes(raw, policy=email.policy.default)
+        _, addr = email.utils.parseaddr(str(msg.get("From", "")))
+    except (ValueError, LookupError, UnicodeError) as e:
+        print(f"⚠️ MACF: From-header parse failed: {e}", file=sys.stderr)
+        raise SpoolError(f"unparseable From header: {e}") from e
+    addr = addr.strip().lower()
+    if "@" not in addr:
+        raise SpoolError(f"message From yields no usable address: {addr!r}")
+    return addr, addr.rsplit("@", 1)[1]
+
+
+# --------------------------------------------------------- push eligibility
+
+def assert_push_grants_eligible(contacts: ContactBook,
+                                broker_config: BrokerConfig) -> None:
+    """Every push grant in the contacts file, checked against the agent
+    namespace. A grant on an agent's own address is the two-edge loop the
+    pull-only property exists to prevent, configured into existence — so it
+    is FATAL, not a warning: a warning in a log is another silent nothing.
+
+    Called at broker startup AND per authorization decision. The contacts
+    file is re-read per decision by design, and an address can ENTER the
+    agent namespace while the broker runs; a boot-only check goes stale the
+    moment either input changes.
+    """
+    for (agent, address), granted in contacts.push_grants().items():
+        if granted and broker_config.agent_for(address) is not None:
+            raise PushEligibilityError(
+                f"contacts grant push-wake to '{address}' (for '{agent}'), "
+                f"but that address is in the agent namespace. Turn-opening "
+                f"privilege is human-only BY DERIVATION; refusing to run "
+                f"with this configuration."
+            )
+
+
+def push_denied_by_history(audit: Optional[AuditLog], address: str) -> Optional[str]:
+    """The audit-history backstop: an address that has EVER originated an
+    agent-bundle submission is push-denied, whatever the contacts say.
+
+    FAILS CLOSED: missing or unreadable history returns a denial reason
+    rather than "no history found" — the security answer and the
+    broken-instrument answer must never share a value. Returns None only
+    when readable history affirmatively shows no bundle from this address.
+    """
+    if audit is None:
+        return "no audit log configured; push denied (backstop fails closed)"
+    addr = address.strip().lower()
+    try:
+        for rec in audit.records():
+            if rec.get("direction") == "inbound":
+                continue
+            if str(rec.get("sender", "")).strip().lower() == addr:
+                return (f"'{address}' has originated agent-bundle traffic "
+                        f"(audit {rec.get('ts', '?')}); push denied")
+    except (OSError, ValueError) as e:
+        print(f"⚠️ MACF: audit history unreadable (push denied, fails "
+              f"closed): {e}", file=sys.stderr)
+        return f"audit history unreadable ({e}); push denied (fails closed)"
+    return None
+
+
+# ------------------------------------------------------------ authorization
+
+def authorize(cfg: InboundConfig, recipient_agent: str, raw: bytes) -> Tuple[str, str]:
+    """(outcome, reason). Outcome ∈ {DENY, DELIVER_PULL, DELIVER_PUSH_WAKE}.
+
+    Authentication upstream, authorization here, in that order:
+    1. A trustworthy verdict must exist (first instance, our authority) and
+       carry dmarc=pass — otherwise the sender identity is a claim nobody
+       vouched for, and the outcome is DENY, stated as such.
+    2. The authenticated address must be in the recipient's contacts.
+    3. Push-wake requires: the grant in the contacts file, AND the
+       derivation (agent-namespace check re-asserted), AND a clean
+       audit-history backstop. Any miss degrades to DELIVER_PULL — a
+       degraded wake is mail that arrives quietly, not mail that vanishes.
+    """
+    contacts = ContactBook(cfg.broker_config.contacts_path)
+    assert_push_grants_eligible(contacts, cfg.broker_config)
+
+    sender, from_domain = sender_identity(raw)
+    verdict = first_verdict(raw, cfg.verdict_authority)
+    if verdict is None:
+        return DENY, ("no trustworthy authentication verdict (absent, or "
+                      "stamped by an authserv-id this deployment does not "
+                      "trust)")
+    if verdict.get("dmarc") != "pass":
+        return DENY, (f"sender '{sender}' not authenticated: dmarc="
+                      f"{verdict.get('dmarc', 'absent')}")
+
+    if not contacts.permits(recipient_agent, sender):
+        return DENY, (contacts.refuse_reason(recipient_agent, sender)
+                      or f"'{sender}' is not a contact of '{recipient_agent}'")
+
+    if contacts.push_granted(recipient_agent, sender):
+        history_denial = push_denied_by_history(
+            AuditLog(cfg.broker_config.audit_path)
+            if cfg.broker_config.audit_path else None, sender)
+        if history_denial is None:
+            return DELIVER_PUSH_WAKE, f"contact of '{recipient_agent}', push granted"
+        # Degraded, visibly: the mail still arrives; only the wake is lost.
+        print(f"⚠️ MACF: push-wake degraded to pull for '{sender}': "
+              f"{history_denial}", file=sys.stderr)
+        return DELIVER_PULL, (f"contact of '{recipient_agent}'; push degraded: "
+                              f"{history_denial}")
+    return DELIVER_PULL, f"contact of '{recipient_agent}'"
+
+
+# ------------------------------------------------------------- the consumer
+
+def _spool_entries(spool_dir: Path) -> Iterator[Tuple[Path, Path]]:
+    """(eml, sidecar) pairs. A half-pair is a SpoolError surfaced to the
+    caller per entry, not a skip — a .eml without its sidecar is evidence of
+    an interrupted write, and skipping evidence is how gaps go unexplained."""
+    for eml in sorted(spool_dir.glob("*.eml")):
+        yield eml, eml.with_suffix(".json")
+
+
+def _quarantine(cfg: InboundConfig, eml: Path, sidecar: Path, reason: str) -> Path:
+    """MOVE to quarantine with the reason attached. Never deletes content:
+    quarantine expiry is the system's only content-deletion path, and it is
+    the watched one."""
+    qdir = cfg.quarantine_dir
+    qdir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    dest = qdir / eml.name
+    os.rename(eml, dest)  # same filesystem by deployment contract
+    side_dest = qdir / sidecar.name
+    if sidecar.exists():
+        os.rename(sidecar, side_dest)
+    (qdir / f"{eml.stem}.reason").write_text(reason + "\n")
+    return dest
+
+
+def process_entry(cfg: InboundConfig, eml: Path, sidecar: Path) -> Dict[str, Any]:
+    """One spool entry to exactly one terminal disposition. Returns the
+    audit-shaped summary; raises nothing in the normal course — every
+    anticipated failure is a QUARANTINED disposition with its reason, and
+    an unanticipated one propagates loudly rather than becoming a guess."""
+    audit = (AuditLog(cfg.broker_config.audit_path)
+             if cfg.broker_config.audit_path else None)
+    raw = eml.read_bytes()
+    sha = hashlib.sha256(raw).hexdigest()
+
+    def terminal(decision: str, reason: str, recipient: str = "") -> Dict[str, Any]:
+        if audit is not None:
+            audit.inbound(sender=summary.get("sender", "unknown"),
+                          recipient=recipient or summary.get("recipient", "unknown"),
+                          message_id=sha, decision=decision, reason=reason)
+        summary.update({"disposition": decision, "reason": reason})
+        return summary
+
+    summary: Dict[str, Any] = {"sha256": sha, "entry": eml.name}
+    if audit is not None:
+        audit.inbound(sender="unknown", recipient="unknown", message_id=sha,
+                      decision=SEEN, reason=f"spool entry {eml.name}")
+
+    # Corruption check — NOT a forgery check; the spool's single-writer
+    # permission is the forgery exclusion.
+    try:
+        meta = json.loads(sidecar.read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        _quarantine(cfg, eml, sidecar, f"sidecar unreadable: {e}")
+        return terminal(QUARANTINED, f"sidecar unreadable: {e}")
+    if meta.get("raw_sha256") != sha:
+        _quarantine(cfg, eml, sidecar,
+                    f"stored bytes hash {sha[:16]} != sidecar claim "
+                    f"{str(meta.get('raw_sha256'))[:16]} (storage corruption)")
+        return terminal(QUARANTINED, "hash mismatch against sidecar")
+
+    # Recipient: the envelope the transport recorded, resolved to a local
+    # agent. Mail for nobody-we-host is quarantined, visibly.
+    envelope_to = str(meta.get("observed", {}).get("envelope_to", "")).strip().lower()
+    recipient_agent = cfg.broker_config.agent_for(envelope_to)
+    summary["recipient"] = envelope_to
+    if recipient_agent is None:
+        _quarantine(cfg, eml, sidecar, f"no local agent for '{envelope_to}'")
+        return terminal(QUARANTINED, f"no local agent for '{envelope_to}'")
+
+    try:
+        sender, _ = sender_identity(raw)
+        summary["sender"] = sender
+        outcome, reason = authorize(cfg, recipient_agent, raw)
+    except SpoolError as e:
+        _quarantine(cfg, eml, sidecar, str(e))
+        return terminal(QUARANTINED, str(e))
+    # PushEligibilityError deliberately NOT caught: a forbidden grant is a
+    # deployment configuration failure, and processing mail under it would
+    # be running with the property this module exists to hold, absent.
+
+    if outcome == DENY:
+        _quarantine(cfg, eml, sidecar, reason)
+        return terminal(QUARANTINED, reason, recipient_agent)
+
+    home = cfg.broker_config.agent_homes[recipient_agent]
+    sidecar_out = dict(meta)
+    sidecar_out["authorization"] = {"outcome": outcome, "reason": reason}
+    delivered_path = store.deliver_raw(home, raw, json.dumps(sidecar_out, indent=1))
+    summary["delivered_to"] = str(delivered_path)
+    summary["delivery_class"] = outcome
+
+    # Delivery COMPLETED; only now may the spool entry go.
+    os.unlink(eml)
+    os.unlink(sidecar)
+    return terminal(DELIVERED, f"{outcome}: {reason}", recipient_agent)
+
+
+def process_spool(cfg: InboundConfig) -> List[Dict[str, Any]]:
+    """Drain the spool. Startup gate first: a forbidden push grant refuses
+    the whole run before any mail moves."""
+    assert_push_grants_eligible(ContactBook(cfg.broker_config.contacts_path),
+                                cfg.broker_config)
+    results = []
+    for eml, sidecar in _spool_entries(cfg.spool_dir):
+        results.append(process_entry(cfg, eml, sidecar))
+    return results
+
+
+# ------------------------------------------------------------- conservation
+
+def reconcile(cfg: InboundConfig) -> Dict[str, Any]:
+    """The conservation property, checkable: every SEEN sha reaches exactly
+    one terminal disposition, or is still physically in the spool (in
+    flight). Anything else is a shortfall — a drop that became a number.
+
+    The report never lies by omission: an unreadable audit log is an ERROR
+    result, not an empty-and-balanced one.
+    """
+    audit = (AuditLog(cfg.broker_config.audit_path)
+             if cfg.broker_config.audit_path else None)
+    if audit is None:
+        return {"balanced": False,
+                "error": "no audit log configured; conservation unprovable"}
+    seen: Dict[str, int] = {}
+    terminals: Dict[str, int] = {}
+    try:
+        for rec in audit.records():
+            if rec.get("direction") != "inbound":
+                continue
+            sha = str(rec.get("message_id", ""))
+            decision = rec.get("decision")
+            if decision == SEEN:
+                seen[sha] = seen.get(sha, 0) + 1
+            elif decision in (DELIVERED, QUARANTINED):
+                terminals[sha] = terminals.get(sha, 0) + 1
+    except (OSError, ValueError) as e:
+        return {"balanced": False, "error": f"audit unreadable: {e}"}
+
+    in_flight = {hashlib.sha256(p.read_bytes()).hexdigest()
+                 for p in cfg.spool_dir.glob("*.eml")} if cfg.spool_dir.exists() else set()
+    missing = [s for s in seen
+               if s not in terminals and s not in in_flight]
+    surplus = [s for s in terminals if s not in seen]
+    report = {
+        "seen": len(seen), "terminal": len(terminals),
+        "in_flight": len(in_flight),
+        "missing_terminal": missing, "terminal_without_seen": surplus,
+        "balanced": not missing and not surplus,
+    }
+    if not report["balanced"]:
+        print(f"⚠️ MACF: inbound conservation SHORTFALL: {len(missing)} seen "
+              f"without terminal, {len(surplus)} terminal without seen",
+              file=sys.stderr)
+    return report

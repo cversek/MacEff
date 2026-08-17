@@ -141,6 +141,76 @@ def deliver(home: Path, message: Message) -> Path:
     return d / "new" / name
 
 
+def deliver_raw(home: Path, raw: bytes, sidecar: str) -> Path:
+    """Deliver internet mail: raw RFC 822 bytes, exactly as transport-verified.
+
+    Spec F6.1: foreign mail is NOT re-wrapped in the agent-bundle format --
+    doing so would sign an authorship claim about a message the broker did not
+    author. The raw bytes go into new/ untouched (so any later hash check still
+    matches the transport-verified value), and the verified provenance rides in
+    a SIDECAR at Maildir/sidecars/<name>.json -- the spec's common-denominator
+    index (F6.3), one per delivery.
+
+    Same descriptor discipline as deliver(), for the same adversarially-proven
+    reason: the mailbox is agent-owned, and a name checked then reused is a
+    race an audit has already won once.
+    """
+    d = ensure_maildir(home)
+    side = d / "sidecars"
+    _assert_real_dir(side)
+    side.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _assert_real_dir(side)
+    name = _unique_name()
+
+    md_fd = _open_dir(str(d))
+    try:
+        tmp_fd = _open_dir("tmp", dir_fd=md_fd)
+        try:
+            new_fd = _open_dir("new", dir_fd=md_fd)
+            try:
+                side_fd = _open_dir("sidecars", dir_fd=md_fd)
+                try:
+                    # Sidecar FIRST: a message in new/ whose sidecar is missing
+                    # would be mail without provenance, which downstream reads
+                    # as less trustworthy than it is. If the message write then
+                    # fails, the error path removes the sidecar too -- an
+                    # orphan sidecar is not "collectable later", it is a leak
+                    # this function created and must clean up itself.
+                    sfd = os.open(f"{name}.json",
+                                  os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                                  0o600, dir_fd=side_fd)
+                    with os.fdopen(sfd, "w", encoding="utf-8") as f:
+                        f.write(sidecar)
+                    try:
+                        fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                                     0o600, dir_fd=tmp_fd)
+                        try:
+                            with os.fdopen(fd, "wb") as f:
+                                f.write(raw)
+                        except BaseException:
+                            try:
+                                os.unlink(name, dir_fd=tmp_fd)
+                            except OSError:
+                                pass
+                            raise
+                        os.rename(name, name, src_dir_fd=tmp_fd, dst_dir_fd=new_fd)
+                    except BaseException:
+                        try:
+                            os.unlink(f"{name}.json", dir_fd=side_fd)
+                        except OSError:
+                            pass
+                        raise
+                finally:
+                    os.close(side_fd)
+            finally:
+                os.close(new_fd)
+        finally:
+            os.close(tmp_fd)
+    finally:
+        os.close(md_fd)
+    return d / "new" / name
+
+
 def read_all(home: Path, include_seen: bool = True) -> List[Message]:
     """Every message in the mailbox, ordered per the policy's sort key.
 

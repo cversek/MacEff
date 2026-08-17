@@ -41,7 +41,7 @@ class ContactBook:
     def _load(self) -> Dict[str, List[str]]:
         return self._load_full()[0]
 
-    def _load_full(self) -> Tuple[Dict[str, List[str]], Dict[Tuple[str, str], List[str]]]:
+    def _load_full(self) -> Tuple[Dict[str, List[str]], Dict[Tuple[str, str], List[str]], Dict[Tuple[str, str], bool]]:
         """Parsed fresh whenever the FILE changes, not once per process.
 
         v1.1 moved Ed25519 key parsing inside this function, which is re-entered
@@ -67,7 +67,7 @@ class ContactBook:
             self._cache = (stamp, parsed)
         return parsed
 
-    def _parse(self) -> Tuple[Dict[str, List[str]], Dict[Tuple[str, str], List[str]]]:
+    def _parse(self) -> Tuple[Dict[str, List[str]], Dict[Tuple[str, str], List[str]], Dict[Tuple[str, str], bool]]:
         if not self.path.exists():
             # Fail closed. An absent contact list is not an empty restriction;
             # it means the deployment is not configured, and sending under that
@@ -85,6 +85,7 @@ class ContactBook:
 
         book: Dict[str, List[str]] = {}
         keys: Dict[Tuple[str, str], List[str]] = {}
+        push: Dict[Tuple[str, str], bool] = {}
         for agent, entries in raw.items():
             if not isinstance(entries, list):
                 raise ContactListError(f"contacts for '{agent}' must be a list")
@@ -137,12 +138,25 @@ class ContactBook:
                                     f"contact key for '{addr}' is unusable: {ex}"
                                 ) from ex
                         keys[(agent, addr)] = list(declared)
+                    # push-wake grant (inbound spec P5.2). Validated at LOAD
+                    # like the keys, and for the same reason: a malformed
+                    # grant discovered mid-authorization would put broken
+                    # configuration inside a security decision. Whether the
+                    # ADDRESS may hold the grant at all is the inbound
+                    # module's derivation (agent-namespace check) -- this
+                    # layer only guarantees the field is an honest boolean.
+                    if "push" in e:
+                        if not isinstance(e["push"], bool):
+                            raise ContactListError(
+                                f"contact 'push' for '{addr}' must be a boolean, "
+                                f"got {type(e['push']).__name__}")
+                        push[(agent, addr)] = e["push"]
                 elif isinstance(e, str):
                     addrs.append(e.strip().lower())
                 else:
                     raise ContactListError(f"contact entry for '{agent}' must be a string or object")
             book[agent] = addrs
-        return book, keys
+        return book, keys, push
 
     def contacts_for(self, agent: str) -> List[str]:
         return self._load().get(agent, [])
@@ -156,8 +170,26 @@ class ContactBook:
         same correspondent under different keys, and merging them would let one
         agent's contact list decide what another agent is willing to believe.
         """
-        _, keys = self._load_full()
+        _, keys, _ = self._load_full()
         return keys.get((agent, (correspondent or "").strip().lower()), [])
+
+    def push_granted(self, agent: str, correspondent: str) -> bool:
+        """True when the contacts file grants push-wake for this correspondent.
+
+        A GRANT, not an eligibility: whether the address may hold the grant at
+        all is the inbound module's derivation (agent-namespace check, audit
+        backstop), which runs at every decision. Read per-decision like
+        everything else here, so revoking push takes effect without a restart.
+        """
+        _, _, push = self._load_full()
+        return push.get((agent, (correspondent or "").strip().lower()), False)
+
+    def push_grants(self) -> Dict[Tuple[str, str], bool]:
+        """Every (agent, address) push grant in the file, for boot/derivation
+        sweeps -- the inbound module's refuse-to-start check needs the full
+        set, not one lookup."""
+        _, _, push = self._load_full()
+        return dict(push)
 
     def permits(self, agent: str, recipient: str) -> bool:
         """True when `agent` may send to `recipient`.
