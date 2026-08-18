@@ -53,6 +53,12 @@ def _hdr(value: Any) -> str:
     return s[:_MAX_HEADER]
 
 
+#: Sentinel passed by deserialize() to say "this value came off disk; do not
+#: invent one if it is absent". A distinct object rather than a bool flag so
+#: the rule lives in one place and every other constructor keeps minting.
+MINTED_ON_READ = "\x00minted-on-read\x00"
+
+
 def new_id(prefix: str) -> str:
     """A locally-generated identifier that needs no coordination to be unique.
 
@@ -95,7 +101,17 @@ class Message:
         # A message that opens a thread mints its identifier. A reply carries the
         # one it was given, unchanged — the thread is named by whoever opened it
         # and is never renamed.
-        if not self.thread_id:
+        #
+        # COMPOSITION ONLY. Minting is right when a message is being created and
+        # wrong when one is being READ: deserialize() passes thread_id=MINTED_ON_READ
+        # so a stored message missing the header keeps an explicit marker instead
+        # of silently acquiring a fresh identifier on every listing. That silent
+        # path produced a thread id which changed between two back-to-back reads
+        # — an identifier that cannot thread anything, and one no test caught
+        # because every test constructed messages rather than re-reading them.
+        if self.thread_id == MINTED_ON_READ:
+            self.thread_id = ""
+        elif not self.thread_id:
             self.thread_id = new_id("thr")
 
     def reply(self, sender: str, body: str, subject: Optional[str] = None) -> "Message":
@@ -223,7 +239,9 @@ class Message:
             subject=h.get("subject", ""),
             body=body.rstrip("\n"),
             message_id=h.get("message-id", ""),
-            thread_id=h.get("thread-id", ""),
+            # See __post_init__: reading is not composing, so an absent
+            # thread-id stays absent rather than being invented per read.
+            thread_id=h.get("thread-id") or MINTED_ON_READ,
             parent=h.get("in-reply-to") or None,
             date=h.get("date", ""),
             signature=h.get("x-amail-signature") or None,

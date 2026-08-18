@@ -33,8 +33,20 @@ DOMAIN = "agents.test"
 
 def make_raw(sender: str = HUMAN, dmarc: str = "pass",
              authority: str = AUTHORITY, extra_headers: str = "",
-             body: str = "hello there") -> bytes:
-    ar = f"Authentication-Results: {authority}; dmarc={dmarc}; spf=pass\r\n"
+             body: str = "hello there", aligned: str = None,
+             omit_header_from: bool = False) -> bytes:
+    """A spooled message as the edge would hand it over.
+
+    `header.from=` is part of the BASELINE because a real authority states
+    which domain it aligned; the verdict is only bindable to a sender if that
+    statement is present. `aligned` overrides it (the parser-differential
+    case: aligned as one domain, From reading as another) and
+    `omit_header_from` removes it entirely.
+    """
+    dmarc_from = "" if omit_header_from else \
+        f" header.from={aligned or sender.rsplit('@', 1)[1]};"
+    ar = (f"Authentication-Results: {authority}; dmarc={dmarc}"
+          f"{dmarc_from} spf=pass\r\n")
     return (f"{extra_headers}{ar}From: Someone <{sender}>\r\n"
             f"To: {AGENT}@{DOMAIN}\r\nSubject: test\r\n\r\n{body}").encode()
 
@@ -155,6 +167,57 @@ def test_forged_later_verdict_cannot_override_first_instance(deploy):
     result = inbound.process_entry(deploy, *spool(deploy, raw))
     assert result["disposition"] == QUARANTINED
     assert "dmarc" in result["reason"]
+
+
+# ---- the verdict must be BOUND to the sender, not merely adjacent to it ----
+# Reported by the peer reviewer from a read of authorize(): dmarc=pass and
+# contacts.permits(sender) were two independent gates, so a pass covering ANY
+# domain admitted a sender at a DIFFERENT domain. It could not be weaponised
+# from outside (producing the pass side needs a signable domain), which is why
+# it needed a reader rather than a prober.
+
+def test_verdict_aligned_to_another_domain_does_not_admit_this_sender(deploy):
+    # The exact parser differential: the authority aligned a domain the
+    # attacker can sign; parseaddr resolves the From to a real contact.
+    # Single variable from the accepted baseline — only the aligned domain.
+    raw = make_raw(sender=HUMAN, aligned="attacker-controlled.example")
+    result = inbound.process_entry(deploy, *spool(deploy, raw))
+    assert result["disposition"] == QUARANTINED
+    assert "does not cover this sender" in result["reason"]
+    assert "attacker-controlled.example" in result["reason"], \
+        "the refusal must name BOTH domains or it cannot be diagnosed"
+    assert HUMAN.rsplit("@", 1)[1] in result["reason"]
+
+
+def test_dmarc_pass_naming_no_aligned_domain_is_refused(deploy):
+    # A pass with no header.from is unbindable: it says somebody's mail
+    # passed. Fail closed rather than fall back to trusting adjacency.
+    raw = make_raw(omit_header_from=True)
+    result = inbound.process_entry(deploy, *spool(deploy, raw))
+    assert result["disposition"] == QUARANTINED
+    assert "names no aligned domain" in result["reason"]
+
+
+def test_aligned_domain_is_read_from_the_first_instance_only(deploy):
+    # The binding must inherit the first-instance rule, or it becomes a new
+    # way to smuggle a claim: forged LATER instance aligning the sender's
+    # real domain, first instance aligning something else.
+    forged = (f"Authentication-Results: {AUTHORITY}; dmarc=pass "
+              f"header.from={HUMAN.rsplit('@', 1)[1]}; spf=pass\r\n")
+    raw = make_raw(aligned="attacker-controlled.example")
+    raw = raw.replace(b"From:", forged.encode() + b"From:", 1)
+    result = inbound.process_entry(deploy, *spool(deploy, raw))
+    assert result["disposition"] == QUARANTINED
+    assert "does not cover this sender" in result["reason"]
+
+
+def test_multiple_from_headers_are_refused_not_resolved(deploy):
+    # RFC 5322 permits one. Two means our parser and the authority's may pick
+    # different ones, which is the vehicle for the differential above.
+    raw = make_raw(extra_headers=f"From: Someone Else <{PUSHY}>\r\n")
+    result = inbound.process_entry(deploy, *spool(deploy, raw))
+    assert result["disposition"] == QUARANTINED
+    assert "From headers" in result["reason"]
 
 
 def test_untrusted_authority_reads_as_no_verdict(deploy):
@@ -307,6 +370,62 @@ def test_delivered_internet_read_directly_by_sha_prefix_and_name(delivered):
     name = list_delivered_internet(home)[0]["name"]
     assert read_delivered_internet(home, name) is not None
     assert read_delivered_internet(home, "feedfeedfeed") is None
+
+
+# ---- the two facets must not overlap (found live, by the operator) --------
+# Delivered internet mail is stored as raw RFC 822 (F6.1), which parses well
+# enough to impersonate a bundle in the shared Maildir. That produced a
+# phantom bundle AND a thread id minted from the clock on every read.
+
+def test_internet_mail_does_not_appear_in_the_bundle_facet(delivered, deploy):
+    from macf.amail import store
+    from macf.amail.client import list_delivered_internet
+    home, _ = delivered
+    assert len(list_delivered_internet(home)) == 1, "the internet facet must see it"
+    assert store.read_all(home) == [], \
+        "one delivery counted twice: raw internet mail read as a bundle"
+
+
+def test_a_real_bundle_still_appears_in_the_bundle_facet(delivered, deploy):
+    """The control on the fix. Excluding by sidecar could 'fix' the count by
+    hiding everything; this proves genuine bundles are still listed, and that
+    the two facets partition rather than overlap."""
+    from macf.amail import store
+    from macf.amail.client import list_delivered_internet
+    from macf.amail.models import Message
+    home, _ = delivered
+    store.deliver(home, Message(sender="peer@agents.test", to=[f"{AGENT}@{DOMAIN}"],
+                                subject="a real bundle", body="hi"))
+    assert len(store.read_all(home)) == 1, "the genuine bundle must be listed"
+    assert store.read_all(home)[0].subject == "a real bundle"
+    assert len(list_delivered_internet(home)) == 1, "and the internet one, once"
+
+
+def test_thread_id_is_stable_across_reads(delivered, deploy):
+    """A thread identifier minted at read time changes between two listings
+    and cannot thread anything. Stored bundles keep theirs; a stored message
+    with no thread-id keeps NONE rather than acquiring a fresh one per read."""
+    from macf.amail import store
+    from macf.amail.models import Message
+    home, _ = delivered
+    m = Message(sender="peer@agents.test", to=[f"{AGENT}@{DOMAIN}"],
+                subject="threaded", body="hi")
+    minted = m.thread_id
+    assert minted, "composition still mints"
+    store.deliver(home, m)
+    first = store.read_all(home)[0].thread_id
+    second = store.read_all(home)[0].thread_id
+    assert first == second == minted, "thread id must survive reading, unchanged"
+
+
+def test_reading_a_message_without_a_thread_id_does_not_invent_one(deploy):
+    from macf.amail.models import Message
+    stored = ("From: peer@agents.test\r\nTo: a@b.test\r\nSubject: s\r\n"
+              "Message-ID: mid-1\r\n\r\nbody")
+    a = Message.deserialize(stored)
+    b = Message.deserialize(stored)
+    assert a.thread_id == b.thread_id == "", \
+        "reading is not composing: an absent thread id must stay absent"
 
 
 def test_the_socket_carries_no_delivered_mail_operations(delivered, deploy):

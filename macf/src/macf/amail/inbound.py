@@ -105,6 +105,10 @@ class InboundConfig:
 # evidence to weigh, and a parse failure must read as "no verdict", never
 # crash authorization.
 _METHOD_RESULT = re.compile(r"\b(dmarc|spf|dkim|arc)\s*=\s*([a-zA-Z0-9]+)")
+#: The domain DMARC evaluation aligned, as the authority reported it. Anchored
+#: to `header.from=` so it reads the authority's own statement about which
+#: domain passed, not a domain appearing anywhere in the header.
+_DMARC_FROM = re.compile(r"\bheader\.from\s*=\s*([A-Za-z0-9.\-_]+)")
 
 
 def first_verdict(raw: bytes, authority: str) -> Optional[Dict[str, str]]:
@@ -139,6 +143,13 @@ def first_verdict(raw: bytes, authority: str) -> Optional[Dict[str, str]]:
     for method, result in _METHOD_RESULT.findall(value):
         # First occurrence of each method wins within the one header.
         verdict.setdefault(method.lower(), result.lower())
+    # The domain the authority actually ALIGNED, extracted so authorize() can
+    # bind the verdict to the sender instead of trusting that two independent
+    # parsers agree about which From header this message has. Without it a
+    # dmarc=pass is only "somebody's mail passed", not "this sender's did".
+    m = _DMARC_FROM.search(value)
+    if m:
+        verdict["dmarc_from"] = m.group(1).lower()
     return verdict
 
 
@@ -152,6 +163,17 @@ def sender_identity(raw: bytes) -> Tuple[str, str]:
     """
     try:
         msg = email.message_from_bytes(raw, policy=email.policy.default)
+        froms = msg.get_all("From") or []
+        # RFC 5322 permits exactly one From. Accepting more means picking one,
+        # and "which one" is exactly where our parser and the authority's can
+        # disagree — the differential that lets a message be aligned as one
+        # domain and read as a contact at another. Refused rather than
+        # resolved: there is no correct way to choose, and choosing quietly is
+        # how the choice stops being visible.
+        if len(froms) > 1:
+            raise SpoolError(f"message carries {len(froms)} From headers; "
+                             "RFC 5322 permits one and choosing among them is "
+                             "a parser differential, not a repair")
         _, addr = email.utils.parseaddr(str(msg.get("From", "")))
     except (ValueError, LookupError, UnicodeError) as e:
         print(f"⚠️ MACF: From-header parse failed: {e}", file=sys.stderr)
@@ -239,6 +261,24 @@ def authorize(cfg: InboundConfig, recipient_agent: str, raw: bytes) -> Tuple[str
     if verdict.get("dmarc") != "pass":
         return DENY, (f"sender '{sender}' not authenticated: dmarc="
                       f"{verdict.get('dmarc', 'absent')}")
+
+    # BIND the verdict to the sender. A dmarc=pass says SOME domain aligned;
+    # without this it was never checked to be the domain we then look up in
+    # the contact list. The two facts came from two different parsers of the
+    # same message — our authority's DMARC From-extraction and Python's
+    # parseaddr — and the code merely placed them next to each other, which
+    # made "they cannot disagree" an assumption about parser agreement rather
+    # than something asserted. Parser differentials are precisely the bug
+    # class that lives in that gap (multiple From headers, RFC 2047
+    # encoded-words), so the agreement is now checked, not presumed.
+    aligned = verdict.get("dmarc_from")
+    if aligned is None:
+        return DENY, ("verdict carries dmarc=pass but names no aligned domain "
+                      "(header.from absent); cannot bind the pass to a sender")
+    if aligned != from_domain:
+        return DENY, (f"authentication does not cover this sender: the "
+                      f"authority aligned '{aligned}' but the message's From "
+                      f"resolves to '{from_domain}'")
 
     if not contacts.permits(recipient_agent, sender):
         return DENY, (contacts.refuse_reason(recipient_agent, sender)

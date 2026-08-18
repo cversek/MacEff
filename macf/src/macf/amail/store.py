@@ -219,14 +219,32 @@ def deliver_raw(home: Path, raw: bytes, sidecar: str) -> Path:
 
 
 def read_all(home: Path, include_seen: bool = True) -> List[Message]:
-    """Every message in the mailbox, ordered per the policy's sort key.
+    """Every AGENT-BUNDLE message in the mailbox, ordered per the policy's
+    sort key.
 
     Order comes from (date, message_id) — not from filenames, not from a counter,
     and not from directory listing order, which is unspecified.
+
+    INTERNET MAIL IS EXCLUDED, by sidecar presence — the same discriminator
+    read_internet() uses, so one delivery cannot appear in both facets.
+    It has to be excluded explicitly because internet mail is stored as raw
+    RFC 822 (spec F6.1: never re-wrapped, so the transport-verified hash
+    still matches), and raw mail parses well enough here to impersonate a
+    bundle: From/To/Subject line up, the body survives, and only `thread-id`
+    is missing — whereupon Message.__post_init__ MINTS one from the current
+    clock. That produced two live defects the operator caught by asking why
+    the counts disagreed with reality: one internet message double-counted
+    as a phantom "bundle" tagged unclassified, and a thread id that changed
+    between two back-to-back listings. A thread identifier that changes each
+    time you look at it cannot thread anything; both were the same defect,
+    which is that this function's aperture was never narrowed to its own
+    format.
     """
     d = maildir_for(home)
     if not d.exists():
         return []
+    side = d / "sidecars"
+    internet = {sc.stem for sc in side.glob("*.json")} if side.is_dir() else set()
     boxes = ["new"] + (["cur"] if include_seen else [])
     out: List[Message] = []
     for box in boxes:
@@ -234,7 +252,7 @@ def read_all(home: Path, include_seen: bool = True) -> List[Message]:
         if not p.is_dir():
             continue
         for f in p.iterdir():
-            if not f.is_file():
+            if not f.is_file() or f.name in internet:
                 continue
             try:
                 out.append(Message.deserialize(f.read_text()))
