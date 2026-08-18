@@ -81,6 +81,12 @@ class InboundConfig:
     #: headers (a binding fact — e.g. the MX operator's identifier). A
     #: verdict stamped by anyone else is treated as absent.
     verdict_authority: str = ""
+    #: While the wake mechanism is unbuilt, no path may produce the
+    #: push-wake outcome: a granted, eligible sender delivers as pull with
+    #: the degradation visible. Default OFF is itself the control —
+    #: enabling push-wake is a deliberate deployment act, never a side
+    #: effect of granting a contact.
+    push_wake_enabled: bool = False
 
 
 # --------------------------------------------------------------- provenance
@@ -230,6 +236,12 @@ def authorize(cfg: InboundConfig, recipient_agent: str, raw: bytes) -> Tuple[str
                       or f"'{sender}' is not a contact of '{recipient_agent}'")
 
     if contacts.push_granted(recipient_agent, sender):
+        if not cfg.push_wake_enabled:
+            # The wake mechanism is not built yet; the grant is real and
+            # the mail still arrives — quietly, and visibly so.
+            return DELIVER_PULL, (f"contact of '{recipient_agent}'; push "
+                                  f"granted but push-wake is disabled "
+                                  f"(mechanism not yet built)")
         history_denial = push_denied_by_history(
             AuditLog(cfg.broker_config.audit_path)
             if cfg.broker_config.audit_path else None, sender)

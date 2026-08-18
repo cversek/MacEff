@@ -107,14 +107,26 @@ def read_message(message_id: str, socket_path: Path,
                       "The message was not read.")
 
 
-def read_internet(ref: str, socket_path: Path,
-                  timeout: float = 10.0) -> Dict[str, Any]:
-    """One internet message (raw + provenance sidecar), by delivery name or
-    content-sha prefix. Same absent parameter as every read: whose mailbox
-    follows from kernel identity, not from anything this function accepts."""
-    return _roundtrip({"op": "read_internet", "ref": ref},
-                      socket_path, timeout,
-                      "The message was not read.")
+def list_delivered_internet(home: Path) -> list:
+    """Internet deliveries in the caller's OWN mailbox, read directly.
+
+    Direct by design, not by convenience: delivered mail is the agent's
+    permanent record — custody transferred at delivery, authorization
+    already decided and recorded by the broker — so its access path is the
+    filesystem, like every other artifact the agent owns. The socket is the
+    access path to the BROKER's stores (spool, quarantine, counts), where
+    content has not yet been authorized for this agent.
+    """
+    from . import store
+    return store.read_internet(home)
+
+
+def read_delivered_internet(home: Path, ref: str):
+    """(raw bytes, sidecar) for one delivered internet message in the
+    caller's own mailbox, by delivery name or content-sha prefix; None when
+    absent. Same custody reasoning as list_delivered_internet."""
+    from . import store
+    return store.find_internet(home, ref)
 
 
 def status(socket_path: Path, timeout: float = 10.0) -> Dict[str, Any]:

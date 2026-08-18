@@ -716,41 +716,22 @@ class Broker:
     def list_messages(self, agent: str, thread: Optional[str] = None) -> Dict[str, Any]:
         """Every message in the requesting agent's own mailbox.
 
-        Two shapes, one listing: agent bundles as Message dicts, internet
-        mail as its sidecar view — the sidecar is the uniform index, so the
-        internet entries are listed without parsing raw mail. Clients that
-        predate internet mail ignore the extra key and lose nothing.
+        CUSTODY NOTE: delivered mail is the agent's own permanent store, and
+        the architectural ruling is that its access path is the FILESYSTEM,
+        not this socket — the socket is the access path to the broker's
+        stores (spool, quarantine, counts). Internet deliveries are
+        therefore read directly by the owner and are deliberately NOT
+        surfaced here. This bundle-read operation predates that ruling and
+        remains during the transition; its realignment is scheduled, not
+        forgotten.
         """
         home = self._own_mailbox(agent)
         msgs = _store_read_all(home)
         if thread:
             msgs = [m for m in msgs if m.thread_id == thread]
-        internet = [] if thread else store.read_internet(home)
         if self.audit:
-            self.audit.read(agent=agent, operation="list",
-                            count=len(msgs) + len(internet))
-        return {"ok": True, "messages": [m.to_dict() for m in msgs],
-                "internet": internet}
-
-    def read_internet(self, agent: str, ref: str) -> Dict[str, Any]:
-        """One internet message (raw bytes + provenance sidecar) from the
-        requesting agent's own mailbox, by delivery name or sha prefix.
-
-        The raw mail is returned VERBATIM as text with replacement for
-        undecodable bytes — neutralising for display is the CLIENT's duty at
-        render time, the same division read_message uses. Miss and not-yours
-        are one answer, for the same oracle reason as read_message.
-        """
-        home = self._own_mailbox(agent)
-        found = store.find_internet(home, ref)
-        if self.audit:
-            self.audit.read(agent=agent, operation="read_internet",
-                            message_id=ref, found=found is not None)
-        if found is None:
-            return {"ok": False, "error": "no such message"}
-        raw, sidecar = found
-        return {"ok": True, "raw": raw.decode("utf-8", "replace"),
-                "sidecar": sidecar}
+            self.audit.read(agent=agent, operation="list", count=len(msgs))
+        return {"ok": True, "messages": [m.to_dict() for m in msgs]}
 
     def status_counts(self, agent: str) -> Dict[str, Any]:
         """Counts the caller cannot compute alone — chiefly the quarantine.
@@ -1019,8 +1000,6 @@ class _Handler(socketserver.StreamRequestHandler):
                 resp = broker.list_messages(sender, thread=req.get("thread"))
             elif op == "read":
                 resp = broker.read_message(sender, req["message_id"])
-            elif op == "read_internet":
-                resp = broker.read_internet(sender, req["ref"])
             elif op == "status":
                 resp = broker.status_counts(sender)
             else:

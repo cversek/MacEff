@@ -9021,7 +9021,11 @@ def cmd_amail_list(args: argparse.Namespace) -> int:
         print(f"❌ {resp.get('error', 'the broker refused the read')}")
         return 1
     msgs = [Message.from_dict(d) for d in resp.get("messages", [])]
-    internet = resp.get("internet", [])
+    # Delivered internet mail is read DIRECTLY from the agent's own store:
+    # custody transferred at delivery, so the filesystem is its access path
+    # — the socket is the access path to the broker's stores only.
+    from macf.amail.client import list_delivered_internet
+    internet = list_delivered_internet(Path(cfg["home"])) if cfg.get("home") else []
     if args.json:
         print(json.dumps({"messages": [m.to_dict() for m in msgs],
                           "internet": internet}, indent=2))
@@ -9064,23 +9068,26 @@ def cmd_amail_read(args: argparse.Namespace) -> int:
         resp = read_message(args.message_id, Path(cfg["socket"]))
         if not resp.get("ok"):
             # Not a bundle id — the same ref may name an internet delivery
-            # (name or content-sha prefix). One verb, two shapes, per the
-            # sidecar-as-common-denominator rule.
-            from macf.amail.client import read_internet
-            iresp = read_internet(args.message_id, Path(cfg["socket"]))
-            if iresp.get("ok"):
-                sc = iresp.get("sidecar", {})
+            # (name or content-sha prefix), which is read DIRECTLY: custody
+            # transferred at delivery, the filesystem is its access path.
+            from macf.amail.client import read_delivered_internet
+            found = read_delivered_internet(Path(cfg["home"]), args.message_id) \
+                if cfg.get("home") else None
+            if found is not None:
+                raw, sc = found
                 if args.json:
-                    print(json.dumps(iresp, indent=2))
+                    print(json.dumps({"sidecar": sc,
+                                      "raw": raw.decode("utf-8", "replace")},
+                                     indent=2))
                     return 0
-                # Provenance FIRST, from the broker-verified sidecar; the raw
+                # Provenance FIRST, from the broker-written sidecar; the raw
                 # mail below is the sender's material, neutralised so it can
                 # neither redraw the badge nor escape the terminal.
                 authz = sc.get("authorization", {})
                 print(f"🌐 internet mail  class={_term_safe(str(authz.get('outcome', '?')))}"
                       f"  reason={_term_safe(str(authz.get('reason', '?')))}")
                 print(f"sha256={_term_safe(str(sc.get('raw_sha256', '?')))}")
-                print(_term_safe(iresp.get("raw", "")))
+                print(_term_safe(raw.decode("utf-8", "replace")))
                 return 0
     except BrokerUnavailable as e:
         print(f"❌ {e}")

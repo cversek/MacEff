@@ -162,6 +162,7 @@ def test_mail_for_unknown_recipient_is_quarantined(deploy):
 # ---- push-wake eligibility (the spec's named controls) ---------------------
 
 def test_push_granted_human_gets_push_wake_class(deploy):
+    deploy.push_wake_enabled = True
     raw = make_raw(sender=PUSHY)
     result = inbound.process_entry(deploy, *spool(deploy, raw))
     assert result["disposition"] == DELIVERED
@@ -181,6 +182,7 @@ def test_generous_contacts_file_fails_the_run(deploy):
 
 def test_history_backstop_degrades_push_to_pull_visibly(deploy, capsys):
     # The pushy sender has originated agent-bundle traffic per the audit log.
+    deploy.push_wake_enabled = True
     from macf.amail.audit import AuditLog
     AuditLog(deploy.broker_config.audit_path).allowed(
         sender=PUSHY, recipients=[f"{AGENT}@{DOMAIN}"], message_id="m1",
@@ -193,6 +195,7 @@ def test_history_backstop_degrades_push_to_pull_visibly(deploy, capsys):
 
 
 def test_history_backstop_fails_closed_without_audit(deploy):
+    deploy.push_wake_enabled = True
     deploy.broker_config.audit_path = None
     raw = make_raw(sender=PUSHY)
     result = inbound.process_entry(deploy, *spool(deploy, raw))
@@ -236,46 +239,66 @@ def test_in_flight_spool_entries_are_not_shortfalls(deploy):
     assert report["in_flight"] == 1
 
 
-# ---- the read surface: two shapes, one listing, all through the broker -----
+# ---- the read surface, per the custody rule --------------------------------
+# Delivered mail is the agent's own permanent store: read DIRECTLY from the
+# filesystem. The socket remains the access path to the BROKER's stores
+# (status counts, quarantine) — tested further down against the Broker.
 
 @pytest.fixture
-def broker_with_mail(deploy):
-    """A Broker over the deploy fixture's config, with one delivered
-    internet message and the quarantine wired."""
-    from macf.amail.broker import Broker
-    deploy.broker_config.inbound_quarantine = deploy.quarantine_dir
+def delivered(deploy):
+    """One authorized internet message, delivered into the agent's store."""
     raw = make_raw(body="the readable one")
     inbound.process_entry(deploy, *spool(deploy, raw))
-    return Broker(deploy.broker_config), raw
+    return deploy.broker_config.agent_homes[AGENT], raw
 
 
-def test_list_includes_internet_mail_via_sidecar(broker_with_mail):
-    broker, raw = broker_with_mail
-    resp = broker.list_messages(AGENT)
-    assert resp["ok"] is True
-    assert len(resp["internet"]) == 1
-    item = resp["internet"][0]
-    assert item["message_present"] is True
-    assert item["sidecar"]["raw_sha256"] == hashlib.sha256(raw).hexdigest()
-    assert item["sidecar"]["authorization"]["outcome"] == DELIVER_PULL
+def test_delivered_internet_listed_directly_via_sidecar(delivered):
+    from macf.amail.client import list_delivered_internet
+    home, raw = delivered
+    items = list_delivered_internet(home)
+    assert len(items) == 1
+    assert items[0]["message_present"] is True
+    assert items[0]["sidecar"]["raw_sha256"] == hashlib.sha256(raw).hexdigest()
+    assert items[0]["sidecar"]["authorization"]["outcome"] == DELIVER_PULL
 
 
-def test_read_internet_by_sha_prefix_and_by_name(broker_with_mail):
-    broker, raw = broker_with_mail
+def test_delivered_internet_read_directly_by_sha_prefix_and_name(delivered):
+    from macf.amail.client import read_delivered_internet, list_delivered_internet
+    home, raw = delivered
     sha = hashlib.sha256(raw).hexdigest()
-    by_sha = broker.read_internet(AGENT, sha[:12])
-    assert by_sha["ok"] is True
-    assert by_sha["raw"] == raw.decode()
-    name = broker.list_messages(AGENT)["internet"][0]["name"]
-    assert broker.read_internet(AGENT, name)["ok"] is True
+    found = read_delivered_internet(home, sha[:12])
+    assert found is not None and found[0] == raw
+    name = list_delivered_internet(home)[0]["name"]
+    assert read_delivered_internet(home, name) is not None
+    assert read_delivered_internet(home, "feedfeedfeed") is None
 
 
-def test_read_internet_miss_and_not_yours_are_one_answer(broker_with_mail):
-    broker, _ = broker_with_mail
-    assert broker.read_internet(AGENT, "feedfeedfeed")["ok"] is False
-    # An unmapped caller is refused before any lookup at all.
-    with pytest.raises(PermissionError):
-        broker.read_internet("nobody", "feedfeedfeed")
+def test_broker_listing_no_longer_carries_delivered_internet_mail(delivered, deploy):
+    # The socket is the access path to the BROKER's stores only; delivered
+    # mail must not be surfaced through it.
+    from macf.amail.broker import Broker
+    resp = Broker(deploy.broker_config).list_messages(AGENT)
+    assert resp["ok"] is True
+    assert "internet" not in resp
+
+
+# ---- push-wake ships disabled: the no-path-produces-it control -------------
+
+def test_push_wake_disabled_by_default_degrades_grant_to_pull(deploy):
+    # The control for shipping with the wake unbuilt: even a fully granted,
+    # eligible sender must deliver as pull, with the reason visible.
+    raw = make_raw(sender=PUSHY)
+    result = inbound.process_entry(deploy, *spool(deploy, raw))
+    assert result["disposition"] == DELIVERED
+    assert result["delivery_class"] == DELIVER_PULL
+    assert "push-wake is disabled" in result["reason"]
+
+
+def test_push_wake_when_enabled_grants_the_class(deploy):
+    deploy.push_wake_enabled = True
+    raw = make_raw(sender=PUSHY)
+    result = inbound.process_entry(deploy, *spool(deploy, raw))
+    assert result["delivery_class"] == DELIVER_PUSH_WAKE
 
 
 def test_status_counts_attribute_quarantine_to_the_recipient(deploy):
