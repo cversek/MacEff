@@ -309,13 +309,20 @@ def test_delivered_internet_read_directly_by_sha_prefix_and_name(delivered):
     assert read_delivered_internet(home, "feedfeedfeed") is None
 
 
-def test_broker_listing_no_longer_carries_delivered_internet_mail(delivered, deploy):
-    # The socket is the access path to the BROKER's stores only; delivered
-    # mail must not be surfaced through it.
+def test_the_socket_carries_no_delivered_mail_operations(delivered, deploy):
+    # The socket is the access path to the BROKER's stores only. This test
+    # once asserted that list_messages omitted internet mail — the half-step;
+    # the realignment removed the delivered-mail operations outright, and
+    # status_counts no longer counts the agent's store either.
     from macf.amail.broker import Broker
-    resp = Broker(deploy.broker_config).list_messages(AGENT)
+    assert not hasattr(Broker, "list_messages")
+    assert not hasattr(Broker, "read_message")
+    deploy.broker_config.inbound_quarantine = deploy.quarantine_dir
+    deploy.broker_config.inbound_handoff = deploy.handoff_dir
+    resp = Broker(deploy.broker_config).status_counts(AGENT)
     assert resp["ok"] is True
-    assert "internet" not in resp
+    assert "internet" not in resp and "messages" not in resp, \
+        "own-store counts crossing the socket is the custody deviation returning"
 
 
 # ---- push-wake ships disabled: the no-path-produces-it control -------------
@@ -348,12 +355,17 @@ def test_status_counts_track_pickup_ingest_and_quarantine(deploy):
     broker = Broker(deploy.broker_config)
     resp = broker.status_counts(AGENT)
     assert resp["ok"] is True
-    assert resp["pending_pickup"] == 1 and resp["internet"] == 0
+    assert resp["pending_pickup"] == 1
     assert resp["quarantined"] == 1
-    # After the recipient ingests, the counts move across.
-    ingest(deploy.broker_config.agent_homes[AGENT], deploy.handoff_dir / AGENT)
+    # After the recipient ingests, the box drains — and the delivered copy is
+    # visible where custody now lives: the agent's own store, via the
+    # filesystem, not through any socket count.
+    from macf.amail.client import list_delivered_internet
+    home = deploy.broker_config.agent_homes[AGENT]
+    ingest(home, deploy.handoff_dir / AGENT)
     resp = broker.status_counts(AGENT)
-    assert resp["pending_pickup"] == 0 and resp["internet"] == 1
+    assert resp["pending_pickup"] == 0
+    assert len(list_delivered_internet(home)) == 1
 
 
 def test_status_counts_damaged_quarantine_metadata_still_counts(deploy):

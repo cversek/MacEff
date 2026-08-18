@@ -9003,43 +9003,39 @@ def cmd_amail_send(args: argparse.Namespace) -> int:
 def cmd_amail_list(args: argparse.Namespace) -> int:
     """List messages in this agent's mailbox.
 
-    The read goes THROUGH the broker, not around it. Importing the store here
-    and calling `read_all(home)` — which is what this command used to do — reads
-    the mailbox with no audit record, no authorization, and a home taken from
-    local config rather than from kernel-established identity. That is the
-    bypass the broker exists to prevent, performed by the framework's own CLI.
+    Access follows custody: delivered mail — bundles and internet alike — is
+    the agent's own permanent record, and its access path is the FILESYSTEM.
+    A record that requires a running service to read is not a permanent
+    record, so a stopped broker must not make this listing fail. (This
+    command once went through the broker for bundles; that was the custody
+    deviation the spec's conformance table carried, realigned when the
+    unprivileged broker made it physically impossible.)
     """
-    from macf.amail import Message, BrokerUnavailable
-    from macf.amail.client import list_messages
-
     cfg = _amail_config()
-    try:
-        resp = list_messages(Path(cfg["socket"]), thread=args.thread)
-    except BrokerUnavailable as e:
-        print(f"❌ {e}")
+    if not cfg.get("home"):
+        print("❌ amail is not configured: no agent home resolved")
         return 1
-    if not resp.get("ok"):
-        print(f"❌ {resp.get('error', 'the broker refused the read')}")
-        return 1
-    msgs = [Message.from_dict(d) for d in resp.get("messages", [])]
+    home = Path(cfg["home"])
     # Pull = ingest then read. The recipient itself executes the custody
     # transfer: mail waiting in the broker's pickup box is moved into the
     # agent's OWN store as the agent, then read directly from it — the
     # filesystem is the access path to the agent's store; the socket only
     # ever reaches the broker's.
+    from macf.amail import store
     from macf.amail.client import ingest, list_delivered_internet
-    internet = []
-    if cfg.get("home"):
-        box = Path(cfg["handoff"]) / (cfg.get("agent") or "")
-        if cfg.get("agent") and box.is_dir():
-            ingested = ingest(Path(cfg["home"]), box)
-            ok = sum(1 for r in ingested if r.get("ingested"))
-            stuck = [r for r in ingested if not r.get("ingested")]
-            if ok:
-                print(f"📥 ingested {ok} message(s) from the pickup box")
-            for r in stuck:
-                print(f"⚠️  pickup entry NOT ingested: {r['name']}: {r['reason']}")
-        internet = list_delivered_internet(Path(cfg["home"]))
+    box = Path(cfg["handoff"]) / (cfg.get("agent") or "")
+    if cfg.get("agent") and box.is_dir():
+        ingested = ingest(home, box)
+        ok = sum(1 for r in ingested if r.get("ingested"))
+        stuck = [r for r in ingested if not r.get("ingested")]
+        if ok:
+            print(f"📥 ingested {ok} message(s) from the pickup box")
+        for r in stuck:
+            print(f"⚠️  pickup entry NOT ingested: {r['name']}: {r['reason']}")
+    msgs = store.read_all(home)
+    if args.thread:
+        msgs = [m for m in msgs if m.thread_id == args.thread]
+    internet = list_delivered_internet(home)
     if args.json:
         print(json.dumps({"messages": [m.to_dict() for m in msgs],
                           "internet": internet}, indent=2))
@@ -9070,46 +9066,44 @@ def cmd_amail_list(args: argparse.Namespace) -> int:
 
 
 def cmd_amail_read(args: argparse.Namespace) -> int:
-    """Print one message in full, fetched through the broker.
+    """Print one message in full, from the agent's OWN store.
 
-    See `cmd_amail_list` on why this does not import the store.
+    Access follows custody (see `cmd_amail_list`): delivered mail is read
+    directly from the store the agent owns. No broker is consulted and none
+    is required — a stopped broker must not make the permanent record
+    unreadable.
     """
-    from macf.amail import Message, BrokerUnavailable
-    from macf.amail.client import read_message
+    from macf.amail import store
 
     cfg = _amail_config()
-    try:
-        resp = read_message(args.message_id, Path(cfg["socket"]))
-        if not resp.get("ok"):
-            # Not a bundle id — the same ref may name an internet delivery
-            # (name or content-sha prefix), which is read DIRECTLY: custody
-            # transferred at delivery, the filesystem is its access path.
-            from macf.amail.client import read_delivered_internet
-            found = read_delivered_internet(Path(cfg["home"]), args.message_id) \
-                if cfg.get("home") else None
-            if found is not None:
-                raw, sc = found
-                if args.json:
-                    print(json.dumps({"sidecar": sc,
-                                      "raw": raw.decode("utf-8", "replace")},
-                                     indent=2))
-                    return 0
-                # Provenance FIRST, from the broker-written sidecar; the raw
-                # mail below is the sender's material, neutralised so it can
-                # neither redraw the badge nor escape the terminal.
-                authz = sc.get("authorization", {})
-                print(f"🌐 internet mail  class={_term_safe(str(authz.get('outcome', '?')))}"
-                      f"  reason={_term_safe(str(authz.get('reason', '?')))}")
-                print(f"sha256={_term_safe(str(sc.get('raw_sha256', '?')))}")
-                print(_term_safe(raw.decode("utf-8", "replace")))
+    if not cfg.get("home"):
+        print("❌ amail is not configured: no agent home resolved")
+        return 1
+    home = Path(cfg["home"])
+    m = store.find(home, args.message_id)
+    if m is None:
+        # Not a bundle id — the same ref may name an internet delivery
+        # (name or content-sha prefix), read the same way: directly.
+        from macf.amail.client import read_delivered_internet
+        found = read_delivered_internet(home, args.message_id)
+        if found is not None:
+            raw, sc = found
+            if args.json:
+                print(json.dumps({"sidecar": sc,
+                                  "raw": raw.decode("utf-8", "replace")},
+                                 indent=2))
                 return 0
-    except BrokerUnavailable as e:
-        print(f"❌ {e}")
+            # Provenance FIRST, from the broker-written sidecar; the raw
+            # mail below is the sender's material, neutralised so it can
+            # neither redraw the badge nor escape the terminal.
+            authz = sc.get("authorization", {})
+            print(f"🌐 internet mail  class={_term_safe(str(authz.get('outcome', '?')))}"
+                  f"  reason={_term_safe(str(authz.get('reason', '?')))}")
+            print(f"sha256={_term_safe(str(sc.get('raw_sha256', '?')))}")
+            print(_term_safe(raw.decode("utf-8", "replace")))
+            return 0
+        print("❌ no such message")
         return 1
-    if not resp.get("ok"):
-        print(f"❌ {resp.get('error', 'no such message')}")
-        return 1
-    m = Message.from_dict(resp["message"])
     if args.json:
         print(json.dumps(m.to_dict(), indent=2))
         return 0
@@ -9140,12 +9134,21 @@ def cmd_amail_status(args: argparse.Namespace) -> int:
         except OSError:
             reachable = False
     box = store.maildir_for(Path(cfg["home"])) if cfg["home"] else None
-    # The COUNT comes through the broker, like every other read. Counting by
-    # `store.read_all(home)` is still reading the mailbox, and a diagnostic is
-    # not exempt from the property it is reporting on. When the broker is down
-    # the honest answer is that the count is unknown — because when the broker
-    # is down the mail genuinely is not readable, and a number here would be
-    # asserting otherwise.
+    # Access follows custody, and so do the counts. The agent's OWN store —
+    # delivered bundles and internet mail — is counted here, from the
+    # filesystem, because that store stays readable whether or not any
+    # service runs. The BROKER's stores (quarantine, pickup box) can only be
+    # counted through the socket: they are scoped to this agent by the
+    # broker, live where this uid cannot read, and an empty display without
+    # the broker's answer would be indistinguishable from an empty box.
+    local = None
+    if cfg["home"]:
+        try:
+            local = {"messages": len(store.read_all(Path(cfg["home"]))),
+                     "internet": len(store.read_internet(Path(cfg["home"])))}
+        except OSError as e:
+            print(f"⚠️ MACF: cannot read own store (counts unknown): {e}",
+                  file=sys.stderr)
     counts = None  # None means "not known", which is not the same as zero
     if reachable:
         from macf.amail.client import status as _status, BrokerUnavailable
@@ -9153,9 +9156,18 @@ def cmd_amail_status(args: argparse.Namespace) -> int:
             _resp = _status(sock)
             if _resp.get("ok"):
                 counts = {k: _resp.get(k) for k in
-                          ("messages", "internet", "quarantined")}
+                          ("quarantined", "pending_pickup")}
+            else:
+                # An explicit refusal is not the same fact as an unreachable
+                # broker, and swallowing it made the two indistinguishable —
+                # which is exactly how a stale daemon on the socket (one that
+                # predates this op) hid behind "counts unavailable".
+                print(f"⚠️ MACF: broker reachable but refused the status op: "
+                      f"{_resp.get('error', '(no reason given)')} — a broker "
+                      f"that does not speak this op is likely running stale "
+                      f"code.", file=sys.stderr)
         except (BrokerUnavailable, ValueError) as e:
-            print(f"⚠️ MACF: status read failed (counts unknown): {e}",
+            print(f"⚠️ MACF: status read failed (broker-side counts unknown): {e}",
                   file=sys.stderr)
     info = {
         "agent": cfg["agent"] or None,
@@ -9163,28 +9175,35 @@ def cmd_amail_status(args: argparse.Namespace) -> int:
         "socket": str(sock),
         "broker_reachable": reachable,
         "maildir": str(box) if box else None,
+        "own_store": local,
         # The quarantine count is the load-bearing one: an empty inbox and an
         # inbox with three refusals must be distinguishable states.
-        "counts": counts,
+        "broker_counts": counts,
     }
     if args.json:
         print(json.dumps(info, indent=2))
         return 0 if reachable else 1
-    if counts is not None:
-        _count_str = (f"{counts['messages']} bundle(s), "
-                      f"{counts['internet']} internet, "
-                      f"{counts['quarantined']} quarantined")
+    if local is not None:
+        _local_str = f"{local['messages']} bundle(s), {local['internet']} internet"
     else:
-        _count_str = "counts unavailable"
+        _local_str = "own-store counts unavailable"
     print(f"address:  {info['address'] or '(unconfigured)'}")
-    print(f"maildir:  {info['maildir'] or '(unknown)'}  [{_count_str}]")
+    print(f"maildir:  {info['maildir'] or '(unknown)'}  [{_local_str}]")
     print(f"broker:   {'✅ reachable' if reachable else '❌ unreachable'} at {sock}")
+    # The pickup box is how a recipient learns it has mail awaiting custody
+    # transfer — the one count that calls for an action, so it gets its own
+    # line rather than a slot in the summary.
+    if counts is not None and counts.get("pending_pickup"):
+        print(f"📬 {counts['pending_pickup']} message(s) waiting in your pickup "
+              f"box — `amail list` ingests them into your own store.")
     if counts is not None and counts["quarantined"]:
         print(f"⚠️  {counts['quarantined']} message(s) in quarantine — refused "
               f"with reasons attached; the operator can list them broker-side.")
     if not reachable:
-        print("\n   Mail cannot be sent without the broker. There is no fallback")
-        print("   transport by design — the broker is what enforces the contact list.")
+        print("\n   Without the broker: sending is impossible (no fallback")
+        print("   transport by design — the broker enforces the contact list),")
+        print("   and the quarantine/pickup counts above are UNKNOWN, not zero.")
+        print("   Your own delivered mail stays readable; `amail list` shows it.")
     return 0 if reachable else 1
 
 

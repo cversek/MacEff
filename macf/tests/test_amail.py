@@ -2944,66 +2944,81 @@ class TestCanonicalizeDestroysASubmittedTrustClaim:
 
 
 # ---------------------------------------------------------------------------
-# The mirror of the skip-the-broker test: can the store be READ without it?
+# ACCESS FOLLOWS CUSTODY (spec I3 / C7.3) — and this block used to assert the
+# opposite, deliberately, so its history is part of its meaning.
 #
-# The submission side has always had "can the broker be skipped". Reads had no
-# equivalent, and the answer was yes — trivially, via the framework's own CLI,
-# which imported the store and called read_all(home) with the home taken from
-# local config rather than from kernel-established identity. A read that goes
-# around the broker leaves no audit record and answers to no allowlist.
+# The first version of these tests pinned "with no broker, no mail is
+# readable": reads were routed through the socket so they would be audited and
+# answer to an allowlist. The custody ruling reversed that at the delivery
+# boundary — the agent's mailbox is a permanent consciousness-artifact store,
+# and a record that requires a running service to read is not a permanent
+# record. The split property now measured here:
 #
-# These tests are behavioural on purpose. Asserting that a module does not
-# contain a particular import would pass while the bypass moved one file over.
-# The property is "with no broker, no mail is readable", so that is what is
-# measured: real mail is placed in the mailbox, the broker is made unreachable,
-# and the commands must fail rather than fall back to the files.
+#   DELIVERED mail (the agent's own store): readable directly, broker down or
+#   not. That is a REQUIREMENT, not a fallback — the acceptance battery's
+#   broker-outage test turns on it.
+#
+#   The BROKER's stores (quarantine, pickup counts) and SUBMISSION: socket
+#   only. No broker means those counts are UNKNOWN (never displayed as zero)
+#   and sending is impossible.
+#
+# The old bundle list/read socket operations served delivered mail across the
+# custody boundary — the KNOWN-DEVIATION the spec's conformance table carried
+# until the unprivileged broker made executing them physically impossible
+# (its uid cannot read agent homes). The structural tests below pin their
+# absence so the deviation cannot quietly return.
 # ---------------------------------------------------------------------------
 
 
-class TestStoreIsBrokerOwned:
+class TestAccessFollowsCustody:
 
     def _cfg(self, monkeypatch, home, socket_path):
         from macf import cli
+        # Mirrors _amail_config's full contract — every key it always sets —
+        # so these tests fail on real regressions, not on the fake drifting.
         monkeypatch.setattr(cli, "_amail_config", lambda: {
             "agent": "alpha", "domain": DOMAIN,
             "socket": str(socket_path), "home": str(home),
+            "handoff": str(Path(str(home)).parent / "handoff-unused"),
         })
         return cli
 
-    def test_list_does_not_fall_back_to_the_store_when_the_broker_is_down(
+    def test_list_reads_delivered_mail_with_the_broker_down(
             self, deployment, monkeypatch, capsys):
-        """Mail exists; the broker does not. The message must NOT be shown."""
+        """Delivered mail is the agent's permanent record. A stopped broker
+        must not make it unreadable — the battery's outage test turns on
+        exactly this."""
         from argparse import Namespace
         home = deployment["homes"]["alpha"]
-        store.deliver(home, msg(subject="SUBJECT-THAT-MUST-NOT-LEAK"))
-        # It is genuinely there — otherwise this test would pass vacuously by
-        # finding nothing to leak.
+        store.deliver(home, msg(subject="READABLE-WITHOUT-A-BROKER"))
         assert len(store.read_all(home)) == 1
 
         cli = self._cfg(monkeypatch, home, deployment["tmp"] / "absent.sock")
         rc = cli.cmd_amail_list(Namespace(thread=None, json=False))
 
         out = capsys.readouterr().out
-        assert rc == 1, "a read with no broker must fail, not succeed quietly"
-        assert "SUBJECT-THAT-MUST-NOT-LEAK" not in out
+        assert rc == 0, "listing the agent's own record needs no service"
+        assert "READABLE-WITHOUT-A-BROKER" in out
 
-    def test_read_does_not_fall_back_to_the_store_when_the_broker_is_down(
+    def test_read_works_with_the_broker_down(
             self, deployment, monkeypatch, capsys):
         from argparse import Namespace
         home = deployment["homes"]["alpha"]
-        m = msg(subject="ALSO-MUST-NOT-LEAK")
+        m = msg(subject="ALSO-READABLE-WITHOUT-A-BROKER")
         store.deliver(home, m)
 
         cli = self._cfg(monkeypatch, home, deployment["tmp"] / "absent.sock")
         rc = cli.cmd_amail_read(Namespace(message_id=m.message_id, json=False))
 
         out = capsys.readouterr().out
-        assert rc == 1
-        assert "ALSO-MUST-NOT-LEAK" not in out
+        assert rc == 0
+        assert "ALSO-READABLE-WITHOUT-A-BROKER" in out
 
-    def test_status_reports_an_unknown_count_rather_than_reading_the_store(
+    def test_status_splits_counts_by_custody_when_the_broker_is_down(
             self, deployment, monkeypatch, capsys):
-        """A diagnostic is not exempt from the property it reports on."""
+        """Own-store counts come from the filesystem and survive the outage;
+        broker-store counts must read as UNKNOWN — an absent broker's empty
+        display must never be mistakable for an empty quarantine."""
         from argparse import Namespace
         home = deployment["homes"]["alpha"]
         store.deliver(home, msg(subject="s"))
@@ -3012,101 +3027,121 @@ class TestStoreIsBrokerOwned:
         cli.cmd_amail_status(Namespace(json=False))
 
         out = capsys.readouterr().out
-        assert "1 message(s)" not in out, "counted by reading the store directly"
-        assert "1 bundle(s)" not in out, "counted by reading the store directly"
-        assert "counts unavailable" in out
+        assert "1 bundle(s)" in out, "the agent counts its own record itself"
+        assert "❌ unreachable" in out
+        assert "UNKNOWN, not zero" in out, \
+            "broker-side counts must be declared unknown, not omitted silently"
 
-    def test_broker_reads_are_scoped_to_the_callers_own_mailbox(self, deployment):
-        """alpha asking for mail gets alpha's mail, never beta's."""
-        broker = deployment["broker"]
-        homes = deployment["homes"]
-        store.deliver(homes["beta"], msg(subject="BETAS-PRIVATE-MAIL"))
-        store.deliver(homes["alpha"], msg(subject="alphas own"))
+    def _listening_socket(self, path):
+        """A real AF_UNIX listener so the reachability probe succeeds; the
+        status call itself is monkeypatched, so nothing talks through it."""
+        import socket as _socket
+        srv = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+        srv.bind(str(path))
+        srv.listen(1)
+        return srv
 
-        resp = broker.list_messages("alpha")
+    def test_status_surfaces_a_broker_refusal_instead_of_swallowing_it(
+            self, deployment, monkeypatch, capsys):
+        """ok:false from a reachable broker is a distinct fact from broker-down.
 
-        assert resp["ok"]
-        subjects = [m["subject"] for m in resp["messages"]]
-        assert "alphas own" in subjects
-        assert "BETAS-PRIVATE-MAIL" not in subjects
+        The swallowed form of this is how a stale daemon on the socket — one
+        predating the status op — hid behind a bare "counts unavailable".
+        """
+        from argparse import Namespace
+        import macf.amail.client as client
+        home = deployment["homes"]["alpha"]
+        sock = deployment["tmp"] / "live.sock"
+        srv = self._listening_socket(sock)
+        try:
+            monkeypatch.setattr(client, "status", lambda p: {
+                "ok": False, "error": "ValueError: unknown operation 'status'"})
+            cli = self._cfg(monkeypatch, home, sock)
+            cli.cmd_amail_status(Namespace(json=False))
+        finally:
+            srv.close()
+        captured = capsys.readouterr()
+        assert "unknown operation 'status'" in captured.err, \
+            "the broker's own refusal reason must reach stderr"
+        assert "stale" in captured.err
+        # And the refusal must not have silently produced fake zeros: the
+        # broker-owned counts' action lines only print from a real answer.
+        assert "quarantine" not in captured.out
+        assert "pickup box" not in captured.out
 
-    def test_a_peers_message_reads_as_not_found_not_as_forbidden(self, deployment):
-        """Not-yours and not-there are the same answer, so the broker cannot be
-        used as an oracle for another agent's message ids."""
-        broker = deployment["broker"]
-        m = msg(subject="beta only")
-        store.deliver(deployment["homes"]["beta"], m)
+    def test_status_shows_the_pending_pickup_count(
+            self, deployment, monkeypatch, capsys):
+        """pending_pickup is the count that calls for an action — a recipient
+        learns it has custody transfers waiting. Dropping it in presentation
+        makes the box invisible to exactly the party that must drain it."""
+        from argparse import Namespace
+        import macf.amail.client as client
+        home = deployment["homes"]["alpha"]
+        sock = deployment["tmp"] / "live2.sock"
+        srv = self._listening_socket(sock)
+        try:
+            monkeypatch.setattr(client, "status", lambda p: {
+                "ok": True, "messages": 0, "internet": 0,
+                "quarantined": 0, "pending_pickup": 2})
+            cli = self._cfg(monkeypatch, home, sock)
+            cli.cmd_amail_status(Namespace(json=False))
+        finally:
+            srv.close()
+        out = capsys.readouterr().out
+        assert "2 message(s) waiting in your pickup box" in out
+        assert "amail list" in out, "the remedy must be named, not implied"
 
-        resp = broker.read_message("alpha", m.message_id)
-
-        assert resp["ok"] is False
-        assert resp["error"] == "no such message"
-
-    def test_read_operations_accept_no_mailbox_parameter(self):
-        """The invariant is structural: there is no parameter through which a
-        caller could name a mailbox, so identity is the only thing that selects
-        one. If a future edit adds `home=` or `agent=`, this fails and forces
-        the conversation rather than letting the bypass in quietly."""
-        import inspect
+    def test_the_socket_has_no_delivered_mail_operations(self):
+        """Structural pin on the realignment: bundle-mail list/read operations
+        served delivered mail across the custody boundary, and a future edit
+        reintroducing them should fail here and force the conversation. Their
+        old concerns are not lost — they dissolved: scoping-to-own-mailbox and
+        the message-id-oracle problem existed only BECAUSE a socket op reached
+        into mail stores; with delivered mail read from the agent's own store
+        by the agent's own uid, the kernel is the scope."""
         from macf.amail import Broker
-
         for name in ("list_messages", "read_message"):
-            params = set(inspect.signature(getattr(Broker, name)).parameters)
-            assert not (params & {"home", "path", "mailbox", "maildir"}), (
-                f"Broker.{name} accepts a mailbox parameter; reads must be "
-                f"scoped by kernel identity alone"
+            assert not hasattr(Broker, name), (
+                f"Broker.{name} has returned: a socket operation serving "
+                f"delivered mail crosses the custody rule (spec I3/C7.3)"
             )
 
+    def test_status_accepts_no_mailbox_parameter(self):
+        """The surviving read op is scoped by kernel identity alone: there is
+        no parameter through which a caller could name whose counts it wants."""
+        import inspect
+        from macf.amail import Broker
+        params = set(inspect.signature(Broker.status_counts).parameters)
+        assert not (params & {"home", "path", "mailbox", "maildir"}), (
+            "Broker.status_counts accepts a mailbox parameter; broker-store "
+            "reads must be scoped by kernel identity alone"
+        )
 
-class TestReadsAreAudited:
-    """Reads leave a record, because that was the argument for moving them.
 
-    The case for putting reads behind the broker was that a read going around it
-    leaves no audit trace and answers to no allowlist. Reads were duly routed
-    through the broker -- and still left no trace. The authorisation half shipped
-    and the accountability half did not, which the test suite could not see and
-    the first real deployment's log showed immediately.
+class TestBrokerStoreReadsAreAudited:
+    """The status op reads the BROKER's stores, and that read leaves a record.
+
+    Historical note: delivered-mail reads were once audited here too. The
+    custody ruling forbids that as a control — the agent owns those files, so
+    a read-audit over them would faithfully record compliant reads and
+    silently omit every other kind, complete-looking and incomplete by
+    construction. Accountability lives at authorization and delivery, which
+    the broker audits; what remains auditable at read time is access to the
+    stores the broker itself owns.
     """
 
-    def _entries(self, deployment):
-        return list(deployment["broker"].audit.records())
-
-    def test_list_writes_a_read_record_naming_the_agent(self, deployment):
+    def test_status_writes_a_read_record_naming_the_agent(self, deployment):
         broker = deployment["broker"]
-        store.deliver(deployment["homes"]["alpha"], msg(subject="one"))
 
-        broker.list_messages("alpha")
+        broker.status_counts("alpha")
 
-        reads = [r for r in self._entries(deployment) if r.get("decision") == "read"]
-        assert len(reads) == 1, "a read that leaves no record is the defect"
+        reads = [r for r in list(deployment["broker"].audit.records())
+                 if r.get("decision") == "read"]
+        assert len(reads) == 1, "a broker-store read that leaves no record is the defect"
         assert reads[0]["sender"] == "alpha"
-        assert reads[0]["operation"] == "list"
-        assert reads[0]["count"] == 1
-
-    def test_read_records_a_miss_as_well_as_a_hit(self, deployment):
-        """A run of misses is what fishing for another agent's ids looks like,
-        so the miss is the case worth being able to see."""
-        broker = deployment["broker"]
-        m = msg(subject="beta only")
-        store.deliver(deployment["homes"]["beta"], m)
-
-        broker.read_message("alpha", m.message_id)   # a miss, from alpha's view
-
-        reads = [r for r in self._entries(deployment) if r.get("decision") == "read"]
-        assert len(reads) == 1
-        assert reads[0]["operation"] == "read"
-        assert reads[0]["found"] is False
-        assert reads[0]["sender"] == "alpha"
-
-    def test_the_record_distinguishes_a_read_from_a_submission(self, deployment):
-        """Direction is 'mailbox': nothing crosses a trust boundary on a read,
-        which is why the record is the only place the access is visible."""
-        broker = deployment["broker"]
-        broker.list_messages("alpha")
-
-        rec = [r for r in self._entries(deployment) if r.get("decision") == "read"][0]
-        assert rec["direction"] == "mailbox"
-        assert rec["ts"]
+        assert reads[0]["operation"] == "status"
+        assert reads[0]["direction"] == "mailbox"
+        assert reads[0]["ts"]
 
 
 class TestNoGuardWithoutACallSite:

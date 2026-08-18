@@ -43,7 +43,7 @@ from .contacts import ContactBook, ContactListError
 from .models import Message, new_id, _now_iso
 from .trust import TrustClass, LOCAL_SUBMISSION
 from .crypto import verify
-from .store import deliver, ensure_maildir, read_all as _store_read_all, find as _store_find
+from .store import deliver, ensure_maildir
 from . import store
 
 DEFAULT_SOCKET = "/run/amail/broker.sock"
@@ -699,55 +699,32 @@ class Broker:
     # bypasses the broker leaves no audit trace and answers to no allowlist —
     # the framework's own tooling was the first thing doing it.
 
-    def _own_mailbox(self, agent: str) -> Path:
-        """The requesting agent's own mailbox, or a refusal.
-
-        Fails closed on an unmapped agent, matching `identify`: a default here
-        would hand a caller somebody else's mail.
-
-        The refusal IS audited, though not from here: it raises, and the request
-        handler records it with the kernel-established identity attached. Stated
-        because "successful reads are audited" would otherwise leave a reader
-        wondering whether the refusals silently are not.
-        """
-        home = self.config.agent_homes.get(agent)
-        if home is None:
-            raise PermissionError(
-                f"'{agent}' has no provisioned mailbox; refusing the read. "
-                "Reaching the socket is not authorization."
-            )
-        return home
-
-    def list_messages(self, agent: str, thread: Optional[str] = None) -> Dict[str, Any]:
-        """Every message in the requesting agent's own mailbox.
-
-        CUSTODY NOTE: delivered mail is the agent's own permanent store, and
-        the architectural ruling is that its access path is the FILESYSTEM,
-        not this socket — the socket is the access path to the broker's
-        stores (spool, quarantine, counts). Internet deliveries are
-        therefore read directly by the owner and are deliberately NOT
-        surfaced here. This bundle-read operation predates that ruling and
-        remains during the transition; its realignment is scheduled, not
-        forgotten.
-        """
-        home = self._own_mailbox(agent)
-        msgs = _store_read_all(home)
-        if thread:
-            msgs = [m for m in msgs if m.thread_id == thread]
-        if self.audit:
-            self.audit.read(agent=agent, operation="list", count=len(msgs))
-        return {"ok": True, "messages": [m.to_dict() for m in msgs]}
-
     def status_counts(self, agent: str) -> Dict[str, Any]:
-        """Counts the caller cannot compute alone — chiefly the quarantine.
+        """Counts of the BROKER's stores scoped to this agent — nothing else.
 
         Quarantined mail is broker-owned (spool-not-store's cousin: refused
         evidence lives where the refused party cannot edit it), so its count
         must come through the socket or the agent cannot distinguish an
         empty inbox from an inbox with three refusals — the exact ambiguity
-        the specification forbids building.
+        the specification forbids building. The pickup-box count is the same
+        story one step earlier: accepted mail awaiting the custody transfer.
+
+        What is deliberately NOT here: counts of the agent's own store
+        (delivered bundles, delivered internet mail). Access follows custody
+        — the filesystem is the access path to the agent's store, and the
+        agent counts its own record itself. The unprivileged deployment
+        enforces this physically: the broker's uid cannot read agent homes,
+        which is how the old messages/internet counts here died — as an
+        EACCES, not a design essay.
         """
-        home = self._own_mailbox(agent)
+        if agent not in self.config.agent_homes:
+            # Fails closed on an unmapped agent, matching `identify`. The
+            # refusal is audited by the request handler, which records it with
+            # the kernel-established identity attached.
+            raise PermissionError(
+                f"'{agent}' has no provisioned mailbox; refusing the read. "
+                "Reaching the socket is not authorization."
+            )
         quarantined = 0
         qdir = self.config.inbound_quarantine
         if qdir is not None and qdir.is_dir():
@@ -769,8 +746,6 @@ class Broker:
         if hdir is not None and (hdir / agent).is_dir():
             pending_pickup = len(list((hdir / agent).glob("*.eml")))
         counts = {
-            "messages": len(_store_read_all(home)),
-            "internet": len(store.read_internet(home)),
             "quarantined": quarantined,
             "pending_pickup": pending_pickup,
         }
@@ -780,23 +755,6 @@ class Broker:
             self.audit.read(agent=agent, operation="status",
                             count=sum(counts.values()))
         return {"ok": True, **counts}
-
-    def read_message(self, agent: str, message_id: str) -> Dict[str, Any]:
-        """One message from the requesting agent's own mailbox."""
-        home = self._own_mailbox(agent)
-        msg = _store_find(home, message_id)
-        # Audited either way, and `found` is recorded: a miss is the interesting
-        # case, because a run of them is what fishing for another agent's
-        # message ids looks like from the log.
-        if self.audit:
-            self.audit.read(agent=agent, operation="read",
-                            message_id=message_id, found=msg is not None)
-        if msg is None:
-            # Not found and not-yours are the same answer on purpose: a
-            # distinguishable "exists but not yours" turns the broker into an
-            # oracle for other agents' message ids.
-            return {"ok": False, "error": "no such message"}
-        return {"ok": True, "message": msg.to_dict()}
 
     def identify(self, conn: socket.socket) -> str:
         """Authenticate the connecting process from kernel-supplied credentials.
@@ -995,21 +953,24 @@ class _Handler(socketserver.StreamRequestHandler):
                     f"submitted as '{claimed}' but the connecting process is '{sender}'")
 
             # OPERATION DISPATCH. `op` is absent in every client written before
-            # reads existed, and absent means "submit" — so the wire stays
-            # compatible with a client that only ever learned to send, and the
-            # submission path is unchanged for it.
+            # other operations existed, and absent means "submit" — so the wire
+            # stays compatible with a client that only ever learned to send, and
+            # the submission path is unchanged for it.
             #
-            # Note what the read operations do NOT take: a home, a path, or an
-            # agent name. `sender` here is the kernel-established identity, and
-            # it is the only thing that selects a mailbox.
+            # Note what `status` does NOT take: a home, a path, or an agent
+            # name. `sender` here is the kernel-established identity, and it is
+            # the only thing that selects whose broker-store counts come back.
+            #
+            # There are deliberately no bundle list/read operations. Access
+            # follows custody: delivered mail is the agent's own permanent
+            # record, read directly from its store — the socket reaches only
+            # the broker's stores. The old ops served delivered mail across
+            # that boundary, and the unprivileged deployment could not execute
+            # them anyway (the broker's uid cannot read agent homes).
             op = req.get("op", "submit")
             if op == "submit":
                 msg = Message.from_dict(req["message"])
                 resp = broker.submit(sender, msg)
-            elif op == "list":
-                resp = broker.list_messages(sender, thread=req.get("thread"))
-            elif op == "read":
-                resp = broker.read_message(sender, req["message_id"])
             elif op == "status":
                 resp = broker.status_counts(sender)
             else:

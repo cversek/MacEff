@@ -84,27 +84,12 @@ def submit(sender: str, message: Message, socket_path: Path,
     )
 
 
-def list_messages(socket_path: Path, thread: Optional[str] = None,
-                  timeout: float = 10.0) -> Dict[str, Any]:
-    """The caller's own mailbox, as the broker sees it.
-
-    Note the absent parameter: there is no way to ask for a mailbox. Which one
-    is read follows from the kernel-supplied identity of this process, so this
-    function cannot be pointed at a peer's mail even by a caller that wants to.
-    """
-    req: Dict[str, Any] = {"op": "list"}
-    if thread:
-        req["thread"] = thread
-    return _roundtrip(req, socket_path, timeout,
-                      "No messages were listed.")
-
-
-def read_message(message_id: str, socket_path: Path,
-                 timeout: float = 10.0) -> Dict[str, Any]:
-    """One message from the caller's own mailbox, by id."""
-    return _roundtrip({"op": "read", "message_id": message_id},
-                      socket_path, timeout,
-                      "The message was not read.")
+# There are deliberately no list/read wrappers here. Access follows custody:
+# delivered mail — bundles and internet alike — is the agent's own permanent
+# record, read directly from its store (`macf.amail.store`). The socket reaches
+# only the broker's stores; the wrappers that once served delivered mail across
+# that boundary were the KNOWN-DEVIATION the spec's conformance table carried,
+# realigned when the unprivileged broker made them impossible to execute.
 
 
 def ingest(home: Path, pickup_box: Path) -> list:
