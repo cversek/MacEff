@@ -58,7 +58,12 @@ class PushEligibilityError(ContactListError):
 
 
 #: Terminal dispositions — the exhaustive set the conservation check balances.
-DELIVERED = "delivered"
+#: The broker's terminal for accepted mail is HANDOFF, not delivery: under
+#: the pickup-box model the broker places authorized mail in a per-recipient
+#: box it owns, and the RECIPIENT executes the custody transfer by ingesting
+#: into its own store as itself. No component ever writes across a uid
+#: boundary, so nothing on the mail path needs privilege.
+HANDED_OFF = "handed-off"
 QUARANTINED = "quarantined"
 #: Non-terminal: recorded when an entry is first seen, paired by one terminal.
 SEEN = "spool_seen"
@@ -77,6 +82,10 @@ class InboundConfig:
     broker_config: BrokerConfig
     spool_dir: Path
     quarantine_dir: Path
+    #: The pickup boxes: handoff_dir/<agent>/ is broker-owned, group-readable
+    #: (and group-deletable) by exactly that agent. Deployment provisions the
+    #: per-agent group and setgid bit; this code only ever writes 0640 files.
+    handoff_dir: Path = Path("/var/lib/amail/handoff")
     #: The authserv-id this deployment trusts in Authentication-Results
     #: headers (a binding fact — e.g. the MX operator's identifier). A
     #: verdict stamped by anyone else is treated as absent.
@@ -340,17 +349,26 @@ def process_entry(cfg: InboundConfig, eml: Path, sidecar: Path) -> Dict[str, Any
         _quarantine(cfg, eml, sidecar, reason)
         return terminal(QUARANTINED, reason, recipient_agent)
 
-    home = cfg.broker_config.agent_homes[recipient_agent]
+    box = cfg.handoff_dir / recipient_agent
+    box.mkdir(mode=0o2770, parents=True, exist_ok=True)
     sidecar_out = dict(meta)
     sidecar_out["authorization"] = {"outcome": outcome, "reason": reason}
-    delivered_path = store.deliver_raw(home, raw, json.dumps(sidecar_out, indent=1))
-    summary["delivered_to"] = str(delivered_path)
+    base = box / eml.stem
+    # Sidecar first, message second, both 0640 so the recipient's group can
+    # read; the recipient may REMOVE from the box (dir group-write) but the
+    # files themselves are not group-writable — content re-verified by hash
+    # at ingest regardless.
+    base.with_suffix(".json").write_text(json.dumps(sidecar_out, indent=1))
+    base.with_suffix(".json").chmod(0o640)
+    base.with_suffix(".eml").write_bytes(raw)
+    base.with_suffix(".eml").chmod(0o640)
+    summary["handed_off_to"] = str(base.with_suffix(".eml"))
     summary["delivery_class"] = outcome
 
-    # Delivery COMPLETED; only now may the spool entry go.
+    # Handoff COMPLETED; only now may the spool entry go.
     os.unlink(eml)
     os.unlink(sidecar)
-    return terminal(DELIVERED, f"{outcome}: {reason}", recipient_agent)
+    return terminal(HANDED_OFF, f"{outcome}: {reason}", recipient_agent)
 
 
 def process_spool(cfg: InboundConfig) -> List[Dict[str, Any]]:
@@ -389,7 +407,7 @@ def reconcile(cfg: InboundConfig) -> Dict[str, Any]:
             decision = rec.get("decision")
             if decision == SEEN:
                 seen[sha] = seen.get(sha, 0) + 1
-            elif decision in (DELIVERED, QUARANTINED):
+            elif decision in (HANDED_OFF, QUARANTINED):
                 terminals[sha] = terminals.get(sha, 0) + 1
     except (OSError, ValueError) as e:
         return {"balanced": False, "error": f"audit unreadable: {e}"}

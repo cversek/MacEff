@@ -107,6 +107,61 @@ def read_message(message_id: str, socket_path: Path,
                       "The message was not read.")
 
 
+def ingest(home: Path, pickup_box: Path) -> list:
+    """Execute the custody transfer: move handed-off mail from the broker's
+    pickup box into the caller's OWN store, as the caller.
+
+    This is the step that makes the pickup-box model work without any
+    privileged component: the broker (unprivileged) hands off into a box
+    only this agent's group can read; the agent ingests as itself, so
+    ownership of the permanent record is correct by construction. The
+    content hash is re-verified against the sidecar before the box entry is
+    removed — removal only after the ingested copy exists (the same
+    completion-before-deletion rule the broker applies at the spool).
+
+    Returns one result dict per pickup entry, including failures — an entry
+    that cannot be ingested stays in the box, visibly, with its reason.
+    """
+    import hashlib
+    from . import store
+
+    results = []
+    if not pickup_box.is_dir():
+        return results
+    for eml in sorted(pickup_box.glob("*.eml")):
+        sidecar = eml.with_suffix(".json")
+        entry = {"name": eml.name}
+        try:
+            raw = eml.read_bytes()
+            meta = json.loads(sidecar.read_text())
+        except (OSError, json.JSONDecodeError) as e:
+            entry.update(ingested=False, reason=f"unreadable pair: {e}")
+            results.append(entry)
+            continue
+        actual = hashlib.sha256(raw).hexdigest()
+        if meta.get("raw_sha256") != actual:
+            entry.update(ingested=False,
+                         reason=f"hash mismatch (sidecar {str(meta.get('raw_sha256'))[:12]}, "
+                                f"bytes {actual[:12]}); left in box")
+            results.append(entry)
+            continue
+        delivered = store.deliver_raw(home, raw, json.dumps(meta, indent=1))
+        try:
+            eml.unlink()
+            sidecar.unlink()
+        except OSError as e:
+            # Ingested but not removed: the copy exists and a duplicate
+            # ingest is prevented next round by... nothing yet — so say it
+            # loudly instead of pretending.
+            import sys
+            print(f"⚠️ MACF: pickup entry {eml.name} ingested but not "
+                  f"removable ({e}); it will re-ingest as a duplicate next "
+                  f"round unless removed", file=sys.stderr)
+        entry.update(ingested=True, path=str(delivered), sha256=actual)
+        results.append(entry)
+    return results
+
+
 def list_delivered_internet(home: Path) -> list:
     """Internet deliveries in the caller's OWN mailbox, read directly.
 

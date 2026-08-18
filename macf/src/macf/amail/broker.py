@@ -153,6 +153,11 @@ class BrokerConfig:
     #: and status_counts then reports zero quarantined rather than failing.
     inbound_quarantine: Optional[Path] = None
 
+    #: Broker-owned pickup boxes (handoff_dir/<agent>/): accepted mail waits
+    #: here until the recipient ingests it into its own store. Optional for
+    #: the same reason as the quarantine.
+    inbound_handoff: Optional[Path] = None
+
     #: uid -> agent name. THE authentication table. The socket is world-writable,
     #: so the only thing distinguishing one submitter from another is the kernel's
     #: view of who is on the other end. A submitted `sender` field is a claim; this
@@ -759,10 +764,15 @@ class Broker:
                 to = str(meta.get("observed", {}).get("envelope_to", "")).lower()
                 if to == own_addr:
                     quarantined += 1
+        pending_pickup = 0
+        hdir = self.config.inbound_handoff
+        if hdir is not None and (hdir / agent).is_dir():
+            pending_pickup = len(list((hdir / agent).glob("*.eml")))
         counts = {
             "messages": len(_store_read_all(home)),
             "internet": len(store.read_internet(home)),
             "quarantined": quarantined,
+            "pending_pickup": pending_pickup,
         }
         if self.audit:
             # audit.read's schema is deliberately fixed; the total is the

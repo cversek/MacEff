@@ -156,6 +156,11 @@ def deliver_raw(home: Path, raw: bytes, sidecar: str) -> Path:
     Same descriptor discipline as deliver(), for the same adversarially-proven
     reason: the mailbox is agent-owned, and a name checked then reused is a
     race an audit has already won once.
+
+    Always called AS THE MAILBOX OWNER: under the pickup-box model the
+    recipient itself ingests from the broker's handoff box into its own
+    store, so ownership is correct by construction and no caller ever
+    writes across a uid boundary.
     """
     d = ensure_maildir(home)
     side = d / "sidecars"

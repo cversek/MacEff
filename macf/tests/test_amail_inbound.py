@@ -20,7 +20,7 @@ pytest.importorskip("cryptography", reason="amail requires the crypto extra")
 from macf.amail import inbound
 from macf.amail.broker import BrokerConfig
 from macf.amail.inbound import (
-    DELIVERED, DELIVER_PULL, DELIVER_PUSH_WAKE, QUARANTINED,
+    HANDED_OFF, DELIVER_PULL, DELIVER_PUSH_WAKE, QUARANTINED,
     InboundConfig, PushEligibilityError,
 )
 
@@ -57,6 +57,7 @@ def deploy(tmp_path):
         ),
         spool_dir=tmp_path / "spool",
         quarantine_dir=tmp_path / "quarantine",
+        handoff_dir=tmp_path / "handoff",
         verdict_authority=AUTHORITY,
     )
     cfg.spool_dir.mkdir()
@@ -78,24 +79,56 @@ def spool(cfg: InboundConfig, raw: bytes, *, envelope_to: str = f"{AGENT}@{DOMAI
 
 # ---- known answer first ----------------------------------------------------
 
-def test_authorized_mail_is_delivered_byte_exact(deploy):
+def test_authorized_mail_is_handed_off_byte_exact(deploy):
     raw = make_raw()
     eml, sidecar = spool(deploy, raw)
     result = inbound.process_entry(deploy, eml, sidecar)
 
-    assert result["disposition"] == DELIVERED
+    assert result["disposition"] == HANDED_OFF
     assert result["delivery_class"] == DELIVER_PULL
-    delivered = list((deploy.broker_config.agent_homes[AGENT] / "Maildir" / "new").iterdir())
-    assert len(delivered) == 1
-    assert delivered[0].read_bytes() == raw
-    # Spool consumed only after delivery.
+    box = deploy.handoff_dir / AGENT
+    handed = list(box.glob("*.eml"))
+    assert len(handed) == 1
+    assert handed[0].read_bytes() == raw
+    # Spool consumed only after the handoff completed.
     assert not eml.exists() and not sidecar.exists()
 
 
-def test_delivery_sidecar_carries_authorization_and_untrusted_observations(deploy):
+def test_ingest_executes_the_custody_transfer(deploy):
+    # The RECIPIENT moves mail from the pickup box into its own store, as
+    # itself -- ownership correct by construction, no privileged component.
+    from macf.amail.client import ingest, list_delivered_internet
     raw = make_raw()
     inbound.process_entry(deploy, *spool(deploy, raw))
-    sidecars = list((deploy.broker_config.agent_homes[AGENT] / "Maildir" / "sidecars").iterdir())
+    home = deploy.broker_config.agent_homes[AGENT]
+    results = ingest(home, deploy.handoff_dir / AGENT)
+    assert len(results) == 1 and results[0]["ingested"] is True
+    # Box emptied only after the ingested copy exists.
+    assert list((deploy.handoff_dir / AGENT).glob("*.eml")) == []
+    items = list_delivered_internet(home)
+    assert len(items) == 1
+    assert items[0]["sidecar"]["raw_sha256"] == hashlib.sha256(raw).hexdigest()
+
+
+def test_ingest_refuses_a_tampered_box_entry(deploy):
+    # A box entry whose bytes do not match its sidecar hash stays in the
+    # box with the reason -- never silently ingested, never silently gone.
+    from macf.amail.client import ingest
+    raw = make_raw()
+    inbound.process_entry(deploy, *spool(deploy, raw))
+    box = deploy.handoff_dir / AGENT
+    victim = next(box.glob("*.eml"))
+    victim.write_bytes(raw + b"tampered")
+    results = ingest(deploy.broker_config.agent_homes[AGENT], box)
+    assert results[0]["ingested"] is False
+    assert "hash mismatch" in results[0]["reason"]
+    assert victim.exists()
+
+
+def test_handoff_sidecar_carries_authorization_and_untrusted_observations(deploy):
+    raw = make_raw()
+    inbound.process_entry(deploy, *spool(deploy, raw))
+    sidecars = list((deploy.handoff_dir / AGENT).glob("*.json"))
     assert len(sidecars) == 1
     meta = json.loads(sidecars[0].read_text())
     assert meta["authorization"]["outcome"] == DELIVER_PULL
@@ -109,7 +142,7 @@ def test_audit_records_seen_and_exactly_one_terminal(deploy):
                deploy.broker_config.audit_path.read_text().splitlines()]
     decisions = [r["decision"] for r in records if r.get("direction") == "inbound"]
     assert decisions.count(inbound.SEEN) == 1
-    assert decisions.count(DELIVERED) == 1
+    assert decisions.count(HANDED_OFF) == 1
 
 
 # ---- refusals: one variable each -------------------------------------------
@@ -165,7 +198,7 @@ def test_push_granted_human_gets_push_wake_class(deploy):
     deploy.push_wake_enabled = True
     raw = make_raw(sender=PUSHY)
     result = inbound.process_entry(deploy, *spool(deploy, raw))
-    assert result["disposition"] == DELIVERED
+    assert result["disposition"] == HANDED_OFF
     assert result["delivery_class"] == DELIVER_PUSH_WAKE
 
 
@@ -189,7 +222,7 @@ def test_history_backstop_degrades_push_to_pull_visibly(deploy, capsys):
         rung="local")
     raw = make_raw(sender=PUSHY)
     result = inbound.process_entry(deploy, *spool(deploy, raw))
-    assert result["disposition"] == DELIVERED
+    assert result["disposition"] == HANDED_OFF
     assert result["delivery_class"] == DELIVER_PULL
     assert "degraded" in capsys.readouterr().err
 
@@ -199,7 +232,7 @@ def test_history_backstop_fails_closed_without_audit(deploy):
     deploy.broker_config.audit_path = None
     raw = make_raw(sender=PUSHY)
     result = inbound.process_entry(deploy, *spool(deploy, raw))
-    assert result["disposition"] == DELIVERED
+    assert result["disposition"] == HANDED_OFF
     assert result["delivery_class"] == DELIVER_PULL  # not push: fails closed
 
 
@@ -219,7 +252,7 @@ def test_conservation_goes_red_when_a_terminal_record_is_removed(deploy):
     inbound.process_entry(deploy, *spool(deploy, make_raw()))
     audit_path = deploy.broker_config.audit_path
     lines = [l for l in audit_path.read_text().splitlines()
-             if json.loads(l).get("decision") != DELIVERED]
+             if json.loads(l).get("decision") != HANDED_OFF]
     audit_path.write_text("\n".join(lines) + "\n")
     report = inbound.reconcile(deploy)
     assert report["balanced"] is False
@@ -246,10 +279,13 @@ def test_in_flight_spool_entries_are_not_shortfalls(deploy):
 
 @pytest.fixture
 def delivered(deploy):
-    """One authorized internet message, delivered into the agent's store."""
+    """One authorized message, handed off AND ingested by the recipient."""
+    from macf.amail.client import ingest
     raw = make_raw(body="the readable one")
     inbound.process_entry(deploy, *spool(deploy, raw))
-    return deploy.broker_config.agent_homes[AGENT], raw
+    home = deploy.broker_config.agent_homes[AGENT]
+    ingest(home, deploy.handoff_dir / AGENT)
+    return home, raw
 
 
 def test_delivered_internet_listed_directly_via_sidecar(delivered):
@@ -289,7 +325,7 @@ def test_push_wake_disabled_by_default_degrades_grant_to_pull(deploy):
     # eligible sender must deliver as pull, with the reason visible.
     raw = make_raw(sender=PUSHY)
     result = inbound.process_entry(deploy, *spool(deploy, raw))
-    assert result["disposition"] == DELIVERED
+    assert result["disposition"] == HANDED_OFF
     assert result["delivery_class"] == DELIVER_PULL
     assert "push-wake is disabled" in result["reason"]
 
@@ -301,16 +337,23 @@ def test_push_wake_when_enabled_grants_the_class(deploy):
     assert result["delivery_class"] == DELIVER_PUSH_WAKE
 
 
-def test_status_counts_attribute_quarantine_to_the_recipient(deploy):
+def test_status_counts_track_pickup_ingest_and_quarantine(deploy):
     from macf.amail.broker import Broker
+    from macf.amail.client import ingest
     deploy.broker_config.inbound_quarantine = deploy.quarantine_dir
-    inbound.process_entry(deploy, *spool(deploy, make_raw()))  # delivered
+    deploy.broker_config.inbound_handoff = deploy.handoff_dir
+    inbound.process_entry(deploy, *spool(deploy, make_raw()))  # handed off
     inbound.process_entry(deploy, *spool(deploy,               # quarantined
         make_raw(sender="stranger@example.org", body="refused")))
-    resp = Broker(deploy.broker_config).status_counts(AGENT)
+    broker = Broker(deploy.broker_config)
+    resp = broker.status_counts(AGENT)
     assert resp["ok"] is True
-    assert resp["internet"] == 1
+    assert resp["pending_pickup"] == 1 and resp["internet"] == 0
     assert resp["quarantined"] == 1
+    # After the recipient ingests, the counts move across.
+    ingest(deploy.broker_config.agent_homes[AGENT], deploy.handoff_dir / AGENT)
+    resp = broker.status_counts(AGENT)
+    assert resp["pending_pickup"] == 0 and resp["internet"] == 1
 
 
 def test_status_counts_damaged_quarantine_metadata_still_counts(deploy):

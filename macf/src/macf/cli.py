@@ -8760,6 +8760,7 @@ def _amail_config() -> dict:
                 cfg = {}
     cfg.setdefault("domain", os.environ.get("MACF_AMAIL_DOMAIN", ""))
     cfg.setdefault("socket", os.environ.get("MACF_AMAIL_SOCKET", "/run/amail/broker.sock"))
+    cfg.setdefault("handoff", os.environ.get("MACF_AMAIL_HANDOFF", "/var/lib/amail/handoff"))
     cfg.setdefault("agent", os.environ.get("MACEFF_AGENT_NAME", ""))
     # The agent's OWN private signing key. It lives in the agent's home, not the
     # broker's: a signing key proves authorship and reaches nothing, so holding
@@ -9021,11 +9022,24 @@ def cmd_amail_list(args: argparse.Namespace) -> int:
         print(f"❌ {resp.get('error', 'the broker refused the read')}")
         return 1
     msgs = [Message.from_dict(d) for d in resp.get("messages", [])]
-    # Delivered internet mail is read DIRECTLY from the agent's own store:
-    # custody transferred at delivery, so the filesystem is its access path
-    # — the socket is the access path to the broker's stores only.
-    from macf.amail.client import list_delivered_internet
-    internet = list_delivered_internet(Path(cfg["home"])) if cfg.get("home") else []
+    # Pull = ingest then read. The recipient itself executes the custody
+    # transfer: mail waiting in the broker's pickup box is moved into the
+    # agent's OWN store as the agent, then read directly from it — the
+    # filesystem is the access path to the agent's store; the socket only
+    # ever reaches the broker's.
+    from macf.amail.client import ingest, list_delivered_internet
+    internet = []
+    if cfg.get("home"):
+        box = Path(cfg["handoff"]) / (cfg.get("agent") or "")
+        if cfg.get("agent") and box.is_dir():
+            ingested = ingest(Path(cfg["home"]), box)
+            ok = sum(1 for r in ingested if r.get("ingested"))
+            stuck = [r for r in ingested if not r.get("ingested")]
+            if ok:
+                print(f"📥 ingested {ok} message(s) from the pickup box")
+            for r in stuck:
+                print(f"⚠️  pickup entry NOT ingested: {r['name']}: {r['reason']}")
+        internet = list_delivered_internet(Path(cfg["home"]))
     if args.json:
         print(json.dumps({"messages": [m.to_dict() for m in msgs],
                           "internet": internet}, indent=2))
