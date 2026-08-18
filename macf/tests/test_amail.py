@@ -59,8 +59,22 @@ def deployment(tmp_path):
         # exactly the point: anything it submits is 'alpha', and a claim to be
         # 'beta' must be refused rather than believed.
         agent_uids={os.getuid(): "alpha"},
+        # Delivery is by pickup box for agent mail as well as internet mail:
+        # one mechanism, and the broker writes only its own stores.
+        inbound_handoff=tmp_path / "handoff",
+        inbound_quarantine=tmp_path / "quarantine",
     )
-    return {"cfg": cfg, "broker": Broker(cfg), "homes": homes,
+    def _pull(agent: str):
+        """Custody transfer, as the recipient. Delivery no longer ends in the
+        recipient's Maildir — it ends in a pickup box the recipient drains, so
+        every test that asserts on delivered mail must pull first, like the
+        agent does."""
+        from macf.amail.client import ingest
+        ingest(homes[agent], (tmp_path / "handoff") / agent,
+               contacts_path=contacts, agent=agent)
+        return homes[agent]
+
+    return {"cfg": cfg, "broker": Broker(cfg), "homes": homes, "pull": _pull,
             "contacts": contacts, "tmp": tmp_path}
 
 
@@ -78,7 +92,7 @@ class TestContactRestriction:
     def test_permitted_recipient_is_delivered(self, deployment):
         r = deployment["broker"].submit("alpha", msg())
         assert r["ok"] is True
-        assert store.read_all(deployment["homes"]["beta"])[0].body == "b"
+        assert store.read_all(deployment["pull"]("beta"))[0].body == "b"
 
     def test_unlisted_recipient_is_refused(self, deployment):
         r = deployment["broker"].submit("alpha", msg(to="stranger@elsewhere.test"))
@@ -101,7 +115,7 @@ class TestContactRestriction:
         r = deployment["broker"].submit(
             "alpha", msg(to=[f"beta@{DOMAIN}", "stranger@elsewhere.test"]))
         assert r["ok"] is False
-        assert store.read_all(deployment["homes"]["beta"]) == []
+        assert store.read_all(deployment["pull"]("beta")) == []
 
     def test_case_variation_does_not_evade_the_check(self, deployment):
         """A restriction sidestepped by capitalising a letter is not one."""
@@ -140,6 +154,9 @@ class TestContactRestriction:
         r = deployment["broker"].submit(
             "alpha", msg(to="stranger@elsewhere.test", sender="alpha@elsewhere.test"))
         assert r["ok"] is True, "with the check removed the message must go through"
+        from macf.amail.client import ingest
+        ingest(deployment["tmp"] / "stranger",
+               deployment["cfg"].inbound_handoff / "stranger")
         assert len(store.read_all(deployment["tmp"] / "stranger")) == 1
 
 
@@ -170,18 +187,37 @@ class TestCredentialCustody:
 
 
 class TestEnforcementLocation:
-    def test_client_module_performs_no_contact_check(self):
+    def test_client_performs_no_authorization_check(self):
         """Enforcement must not live in agent-side code.
 
-        A check in the client is advisory — the agent controls that file. This
-        asserts the client never consults a contact list, so the guarantee cannot
-        quietly migrate to where an agent could remove it.
+        A check in the client is advisory — the agent controls that file. The
+        invariant is about AUTHORIZATION: whether a sender may reach this
+        recipient is the broker's judgement, and it must never migrate to where
+        an agent could remove it.
+
+        This test once banned the word ContactBook outright, as a blunt proxy
+        for that invariant. Ingest-time signature verification made the proxy
+        wrong: the recipient reads the KEYS it has been given so it can form its
+        own view of a message it already holds. That is the agent evaluating its
+        own mail, not the agent deciding its own permissions — and the keys come
+        from a broker-owned file it cannot write. So the ban is now on the
+        authorization predicates themselves, which is what the invariant was
+        always about. Narrowed deliberately, not deleted: `permits` and
+        `push_granted` are the calls that would make enforcement agent-side.
         """
         import inspect
         from macf.amail import client
         src = inspect.getsource(client)
-        assert "ContactBook" not in src
-        assert "permits" not in src
+        assert "permits" not in src, "authorization must not be client-side"
+        assert "push_granted" not in src, "grant evaluation must not be client-side"
+        # And the narrowing must be real: key lookup is the ONLY contact-book
+        # use permitted here, so a future edit reaching for anything else fails.
+        # Two mentions exactly — the import and the single construction.
+        assert src.count("ContactBook") == 2, (
+            "the client's contact-book use must stay limited to one key lookup")
+        assert "keys_for" in src, (
+            "if ingest stopped verifying, this guard's narrowing is no longer "
+            "justified and should be tightened back")
 
     def test_client_has_no_fallback_transport(self, tmp_path):
         """With the broker down, sending must fail — not find another way out."""
@@ -378,7 +414,7 @@ class TestInbound:
         m = Message(sender=f"alpha@{DOMAIN}", to=[f"beta@{DOMAIN}"], subject="hi", body="x")
         r = deployment["broker"].accept_inbound(m, f"beta@{DOMAIN}")
         assert r["decision"] == "delivered"
-        assert len(store.read_all(deployment["homes"]["beta"])) == 1
+        assert len(store.read_all(deployment["pull"]("beta"))) == 1
 
     def test_unlisted_sender_is_quarantined_not_rejected(self, deployment):
         """Retained, not bounced: rejecting reveals which addresses exist, and
@@ -387,15 +423,20 @@ class TestInbound:
                     subject="?", body="x")
         r = deployment["broker"].accept_inbound(m, f"beta@{DOMAIN}")
         assert r["decision"] == "quarantined"
-        assert store.read_all(deployment["homes"]["beta"]) == []
-        q = deployment["homes"]["beta"] / "Maildir" / "quarantine"
-        assert len(list(q.iterdir())) == 1
+        assert store.read_all(deployment["pull"]("beta")) == []
+        # Broker-owned: refused evidence must live where the refused party
+        # cannot edit it, and the recipient owns its home.
+        q = deployment["cfg"].inbound_quarantine
+        assert len(list(q.glob("*.amsg"))) == 1
 
     def test_quarantine_records_the_reason(self, deployment):
         m = Message(sender="stranger@elsewhere.test", to=[f"beta@{DOMAIN}"], subject="?", body="x")
         deployment["broker"].accept_inbound(m, f"beta@{DOMAIN}")
-        q = next((deployment["homes"]["beta"] / "Maildir" / "quarantine").iterdir())
-        assert "X-Amail-Quarantine-Reason:" in q.read_text()
+        q = next((deployment["cfg"].inbound_quarantine).glob("*.json"))
+        meta = json.loads(q.read_text())
+        assert meta["authorization"]["outcome"] == "deny"
+        assert "not in the contact list" in meta["authorization"]["reason"]
+        assert meta["sender"] == "stranger@elsewhere.test"
 
     def test_inbound_decisions_are_audited(self, deployment):
         m = Message(sender="stranger@elsewhere.test", to=[f"beta@{DOMAIN}"], subject="?", body="x")
@@ -465,7 +506,7 @@ class TestPeerAuthentication:
     def test_spoofed_submission_delivers_nothing(self, running):
         submit("beta", msg(to=f"alpha@{DOMAIN}", sender=f"beta@{DOMAIN}"),
                running["cfg"].socket_path)
-        assert store.read_all(running["homes"]["alpha"]) == []
+        assert store.read_all(running["pull"]("alpha")) == []
 
     def test_identity_mismatch_is_audited(self, running):
         """The forensic record must show the attempt, attributed to the real peer
@@ -552,7 +593,7 @@ class TestHeaderInjection:
     def test_quarantine_reason_cannot_inject(self, deployment):
         m = Message(sender="s@x\nX-Evil: 1", to=[f"beta@{DOMAIN}"], subject="?", body="b")
         deployment["broker"].accept_inbound(m, f"beta@{DOMAIN}")
-        q = next((deployment["homes"]["beta"] / "Maildir" / "quarantine").iterdir())
+        q = next((deployment["cfg"].inbound_quarantine).iterdir())
         head = q.read_text().split("\n\n")[0]
         assert not any(l.startswith("X-Evil:") for l in head.splitlines())
 
@@ -722,12 +763,12 @@ class TestMessageSenderAuthenticity:
         m = Message(sender="charlie@elsewhere.test", to=[f"beta@{DOMAIN}"],
                     subject="s", body="b")
         deployment["broker"].submit("alpha", m)
-        assert store.read_all(deployment["homes"]["beta"]) == []
+        assert store.read_all(deployment["pull"]("beta")) == []
 
     def test_a_reply_cannot_be_aimed_at_a_third_party(self, deployment):
         """The actual harm: what the recipient would reply TO."""
         deployment["broker"].submit("alpha", msg())
-        got = store.read_all(deployment["homes"]["beta"])[0]
+        got = store.read_all(deployment["pull"]("beta"))[0]
         assert got.reply(sender=f"beta@{DOMAIN}", body="ack").to == [f"alpha@{DOMAIN}"]
 
     def test_forgery_is_audited(self, deployment):
@@ -805,7 +846,7 @@ class TestCanonicalisation:
         m = Message(sender="", to=[f"beta@{DOMAIN}"], subject="s", body="b")
         deployment["broker"].submit("alpha", m)
         assert m.sender == f"alpha@{DOMAIN}"
-        assert store.read_all(deployment["homes"]["beta"])[0].sender == f"alpha@{DOMAIN}"
+        assert store.read_all(deployment["pull"]("beta"))[0].sender == f"alpha@{DOMAIN}"
 
     def test_message_id_is_reminted(self, deployment):
         """A submitter-chosen id can shadow another message in find(), splice a
@@ -845,7 +886,7 @@ class TestCanonicalisation:
     def test_a_genuine_reply_still_works(self, deployment):
         """Negative control: the bounds must not break ordinary correspondence."""
         deployment["broker"].submit("alpha", msg())
-        got = store.read_all(deployment["homes"]["beta"])[0]
+        got = store.read_all(deployment["pull"]("beta"))[0]
         rep = got.reply(sender=f"beta@{DOMAIN}", body="ack")
         assert deployment["broker"].submit("beta", rep)["ok"] is True
 
@@ -947,7 +988,7 @@ class TestAuditCompleteness:
         monkeypatch.setattr("macf.amail.broker.deliver", boom)
 
         r = deployment["broker"].submit("alpha", msg(to=[f"beta@{DOMAIN}", f"gamma@{DOMAIN}"]))
-        assert len(store.read_all(deployment["homes"]["beta"])) == 1, "beta got the mail"
+        assert len(store.read_all(deployment["pull"]("beta"))) == 1, "beta got the mail"
         allowed = [x for x in deployment["broker"].audit.records() if x["decision"] == "allowed"]
         assert allowed, "delivered mail left NO audit record"
         assert f"beta@{DOMAIN}" in allowed[0]["recipients"]
@@ -1027,7 +1068,7 @@ class TestOverTheSocket:
         """The headline criterion, exercised over the real socket."""
         r = submit("alpha", msg(body="no human touched this"), running["cfg"].socket_path)
         assert r["ok"] is True
-        assert store.read_all(running["homes"]["beta"])[0].body == "no human touched this"
+        assert store.read_all(running["pull"]("beta"))[0].body == "no human touched this"
 
     def test_refusal_travels_back_to_the_agent(self, running):
         """An agent that cannot tell a message was refused learns to believe mail
@@ -1520,30 +1561,30 @@ class TestInboundIdentifierVisibility:
         m.parent = new_id("msg")
         assert _ID_RE.match(m.parent), "the test value must pass the shape check"
         deployment["broker"].accept_inbound(m, f"alpha@{DOMAIN}")
-        assert store.read_all(deployment["homes"]["alpha"])[0].parent is None
+        assert store.read_all(deployment["pull"]("alpha"))[0].parent is None
 
     def test_a_real_visible_parent_is_kept(self, deployment):
         """Dropping every parent would 'fix' this by breaking threading."""
         first = deployment["broker"].submit("alpha", msg())
-        seen = store.read_all(deployment["homes"]["beta"])[0]
+        seen = store.read_all(deployment["pull"]("beta"))[0]
         # The sender must be one BETA permits, or the message is quarantined and
         # the parent question never arises — which is what the first version of
         # this test actually measured.
         m = msg(sender=f"alpha@{DOMAIN}", to=[f"beta@{DOMAIN}"])
         m.parent = seen.message_id
         deployment["broker"].accept_inbound(m, f"beta@{DOMAIN}")
-        delivered = [x for x in store.read_all(deployment["homes"]["beta"])
+        delivered = [x for x in store.read_all(deployment["pull"]("beta"))
                      if x.parent is not None]
         assert delivered and delivered[0].parent == seen.message_id
         assert first["ok"] is True
 
     def test_asserted_thread_id_cannot_join_an_existing_thread(self, deployment):
         deployment["broker"].submit("alpha", msg())
-        existing = store.read_all(deployment["homes"]["beta"])[0].thread_id
+        existing = store.read_all(deployment["pull"]("beta"))[0].thread_id
         m = msg(sender=f"alpha@{DOMAIN}", to=[f"beta@{DOMAIN}"])
         m.thread_id, m.parent = existing, None
         deployment["broker"].accept_inbound(m, f"beta@{DOMAIN}")
-        grafted = [x for x in store.read_all(deployment["homes"]["beta"])
+        grafted = [x for x in store.read_all(deployment["pull"]("beta"))
                    if x.body == "b" and x.thread_id == existing]
         assert len(grafted) == 1, "an asserted thread_id joined an existing thread"
 
@@ -1859,11 +1900,11 @@ class TestInboundAuthorizesBeforeScanning:
 
     def test_quarantined_mail_is_not_threaded_against_a_real_conversation(self, deployment):
         deployment["broker"].submit("alpha", msg())
-        existing = store.read_all(deployment["homes"]["beta"])[0].thread_id
+        existing = store.read_all(deployment["pull"]("beta"))[0].thread_id
         m = msg(sender="stranger@elsewhere.test", to=[f"beta@{DOMAIN}"])
         m.thread_id = existing
         deployment["broker"].accept_inbound(m, f"beta@{DOMAIN}")
-        q = list((deployment["homes"]["beta"] / "Maildir" / "quarantine").iterdir())
+        q = list((deployment["cfg"].inbound_quarantine).iterdir())
         assert q and existing not in q[0].read_text()
 
 
@@ -1978,7 +2019,7 @@ class TestAuthorshipSigning:
         m = msg(sender=f"beta@{DOMAIN}", to=[f"alpha@{DOMAIN}"], body="durable")
         m.signature = sign(m, load_private_key(keyed["beta_key"]))
         keyed["broker"].accept_inbound(m, f"alpha@{DOMAIN}")
-        raw = next((keyed["homes"]["alpha"] / "Maildir" / "new").iterdir()).read_text()
+        raw = next((keyed["pull"]("alpha") / "Maildir" / "new").iterdir()).read_text()
         stored = Message.deserialize(raw)
         assert verify(stored, stored.signature, [keyed["beta_pub"]]) is True
 
@@ -2046,7 +2087,7 @@ class TestInboundTrustClassification:
         m = msg(sender=f"beta@{DOMAIN}", to=[f"alpha@{DOMAIN}"], body="hello")
         m.signature = sign(m, load_private_key(keyed["beta_key"]))
         keyed["broker"].accept_inbound(m, f"alpha@{DOMAIN}")
-        stored = store.read_all(keyed["homes"]["alpha"])[0]
+        stored = store.read_all(keyed["pull"]("alpha"))[0]
         assert stored.trust == TrustClass.ATTESTED.value
 
     def test_a_forged_signature_is_suspect_not_merely_unverified(self, keyed, tmp_path):
@@ -2058,19 +2099,19 @@ class TestInboundTrustClassification:
         m = msg(sender=f"beta@{DOMAIN}", to=[f"alpha@{DOMAIN}"])
         m.signature = sign(m, load_private_key(other))
         keyed["broker"].accept_inbound(m, f"alpha@{DOMAIN}")
-        assert store.read_all(keyed["homes"]["alpha"])[0].trust == TrustClass.SUSPECT.value
+        assert store.read_all(keyed["pull"]("alpha"))[0].trust == TrustClass.SUSPECT.value
 
     def test_unsigned_mail_from_a_correspondent_who_declared_a_key_is_suspect(self, keyed):
         """Declaring a key is a commitment to using one. An attacker with the
         address but not the key simply omits the signature and hopes."""
         m = msg(sender=f"beta@{DOMAIN}", to=[f"alpha@{DOMAIN}"])
         keyed["broker"].accept_inbound(m, f"alpha@{DOMAIN}")
-        assert store.read_all(keyed["homes"]["alpha"])[0].trust == TrustClass.SUSPECT.value
+        assert store.read_all(keyed["pull"]("alpha"))[0].trust == TrustClass.SUSPECT.value
 
     def test_unsigned_mail_from_a_correspondent_with_no_key_is_unverified(self, deployment):
         m = msg(sender=f"alpha@{DOMAIN}", to=[f"beta@{DOMAIN}"])
         deployment["broker"].accept_inbound(m, f"beta@{DOMAIN}")
-        assert store.read_all(deployment["homes"]["beta"])[0].trust == TrustClass.UNVERIFIED.value
+        assert store.read_all(deployment["pull"]("beta"))[0].trust == TrustClass.UNVERIFIED.value
 
     def test_domain_authentication_never_promotes_to_attested(self, deployment):
         """DMARC passes cleanly for a message reading as a trusted human over an
@@ -2088,7 +2129,7 @@ class TestInboundTrustClassification:
         m = msg(sender=f"beta@{DOMAIN}", to=[f"alpha@{DOMAIN}"])
         m.signature = sign(m, load_private_key(keyed["beta_key"]))
         keyed["broker"].accept_inbound(m, f"alpha@{DOMAIN}")
-        raw = next((keyed["homes"]["alpha"] / "Maildir" / "new").iterdir()).read_text()
+        raw = next((keyed["pull"]("alpha") / "Maildir" / "new").iterdir()).read_text()
         assert Message.deserialize(raw).trust == TrustClass.ATTESTED.value
 
 
@@ -2112,14 +2153,14 @@ class TestTrustIsMintedNotAccepted:
         m = msg()
         m.trust = "attested"  # a lie, submitted by the sender
         deployment["broker"].submit("alpha", m)
-        stored = store.read_all(deployment["homes"]["beta"])[0]
+        stored = store.read_all(deployment["pull"]("beta"))[0]
         assert stored.trust == TrustClass.UNVERIFIED.value, \
             "an unsigned message was labelled with the sender's own claim"
 
         m2 = msg(body="second")
         m2.trust = "definitely-trustworthy"
         deployment["broker"].submit("alpha", m2)
-        got = [x for x in store.read_all(deployment["homes"]["beta"]) if x.body == "second"][0]
+        got = [x for x in store.read_all(deployment["pull"]("beta")) if x.body == "second"][0]
         assert got.trust == TrustClass.UNVERIFIED.value
 
     def test_local_delivery_is_classified_by_the_same_classifier_as_inbound(self, keyed):
@@ -2137,7 +2178,7 @@ class TestTrustIsMintedNotAccepted:
         }))
         keyed["contacts"].chmod(0o644)
         keyed["broker"].submit("alpha", msg(body="unsigned but keyed"))
-        stored = [x for x in store.read_all(keyed["homes"]["beta"])
+        stored = [x for x in store.read_all(keyed["pull"]("beta"))
                   if x.body == "unsigned but keyed"][0]
         assert stored.trust == TrustClass.SUSPECT.value, \
             "a declared key went unused and the message still claimed to be signed"
@@ -2159,7 +2200,7 @@ class TestTrustIsMintedNotAccepted:
         stripped.signature = None
         keyed["broker"].submit("alpha", signed)
         keyed["broker"].submit("alpha", stripped)
-        got = {x.body: x.trust for x in store.read_all(keyed["homes"]["beta"])}
+        got = {x.body: x.trust for x in store.read_all(keyed["pull"]("beta"))}
         assert got["signed"] == TrustClass.ATTESTED.value
         assert got["stripped"] == TrustClass.SUSPECT.value
 
@@ -2167,7 +2208,7 @@ class TestTrustIsMintedNotAccepted:
         m = msg(sender="stranger@elsewhere.test", to=[f"beta@{DOMAIN}"])
         m.trust = "attested"
         deployment["broker"].accept_inbound(m, f"beta@{DOMAIN}")
-        q = next((deployment["homes"]["beta"] / "Maildir" / "quarantine").iterdir())
+        q = next((deployment["cfg"].inbound_quarantine).iterdir())
         assert "X-Amail-Trust: attested" not in q.read_text()
 
     def test_trust_is_classified_in_the_taxonomy(self):
@@ -2285,7 +2326,7 @@ class TestInboundAuthenticationHeadersAreNeverTrusted:
         m = Message.deserialize(raw)
         assert m.trust == "attested", "fixture must actually carry the forged claim"
         deployment["broker"].accept_inbound(m, f"beta@{DOMAIN}")
-        q = next((deployment["homes"]["beta"] / "Maildir" / "quarantine").iterdir())
+        q = next((deployment["cfg"].inbound_quarantine).iterdir())
         assert "X-Amail-Trust: attested" not in q.read_text()
 
 
@@ -2327,7 +2368,7 @@ class TestStoredMessagesStayVerifiable:
         assert verify(m, m.signature, [keyed["beta_pub"]]), f"{label}: unsigned in memory"
 
         keyed["broker"].accept_inbound(m, f"alpha@{DOMAIN}")
-        raw = next((keyed["homes"]["alpha"] / "Maildir" / "new").iterdir()).read_text()
+        raw = next((keyed["pull"]("alpha") / "Maildir" / "new").iterdir()).read_text()
         stored = Message.deserialize(raw)
         assert verify(stored, stored.signature, [keyed["beta_pub"]]), (
             f"{label}: verified in memory, UNVERIFIABLE once stored — the exact "
@@ -2599,7 +2640,7 @@ class TestTruncationPrecedesClassification:
         assert verify(m, m.signature, [keyed["beta_pub"]]), f"{kind}: unsigned in memory"
 
         keyed["broker"].accept_inbound(m, f"alpha@{DOMAIN}")
-        raw = next((keyed["homes"]["alpha"] / "Maildir" / "new").iterdir()).read_text()
+        raw = next((keyed["pull"]("alpha") / "Maildir" / "new").iterdir()).read_text()
         stored = Message.deserialize(raw)
         verifies = verify(stored, stored.signature, [keyed["beta_pub"]])
         claims_signed = stored.trust == TrustClass.ATTESTED.value
@@ -2613,7 +2654,7 @@ class TestTruncationPrecedesClassification:
         m = msg(sender=f"beta@{DOMAIN}", to=[f"alpha@{DOMAIN}"], body="ordinary\n")
         m.signature = sign(m, load_private_key(keyed["beta_key"]))
         keyed["broker"].accept_inbound(m, f"alpha@{DOMAIN}")
-        stored = store.read_all(keyed["homes"]["alpha"])[0]
+        stored = store.read_all(keyed["pull"]("alpha"))[0]
         assert stored.trust == TrustClass.ATTESTED.value
         assert stored.body == "ordinary"
 
@@ -2639,7 +2680,7 @@ class TestTruncationPrecedesClassification:
                    + [f"alpha@{DOMAIN}"])
         m.signature = sign(m, load_private_key(keyed["beta_key"]))
         keyed["broker"].accept_inbound(m, f"alpha@{DOMAIN}")
-        raw = next((keyed["homes"]["alpha"] / "Maildir" / "new").iterdir()).read_text()
+        raw = next((keyed["pull"]("alpha") / "Maildir" / "new").iterdir()).read_text()
         stored = Message.deserialize(raw)
         assert stored.to == Message.deserialize(raw).to
         assert len(", ".join(stored.to)) <= 998
@@ -2661,7 +2702,7 @@ class TestInboundBoundsMatchTheSubmitPath:
         m = msg(sender=f"alpha@{DOMAIN}", to=[f"beta@{DOMAIN}"])
         m.signature = "A" * 50_000
         deployment["broker"].accept_inbound(m, f"beta@{DOMAIN}")
-        stored = store.read_all(deployment["homes"]["beta"])[0]
+        stored = store.read_all(deployment["pull"]("beta"))[0]
         assert len(stored.signature or "") <= bmod.MAX_SIGNATURE
 
     def test_an_inbound_recipient_list_is_bounded(self, deployment):
@@ -2669,7 +2710,7 @@ class TestInboundBoundsMatchTheSubmitPath:
         m = msg(sender=f"alpha@{DOMAIN}", to=[f"r{i}@x.test" for i in range(500)])
         m.to.append(f"beta@{DOMAIN}")
         deployment["broker"].accept_inbound(m, f"beta@{DOMAIN}")
-        stored = store.read_all(deployment["homes"]["beta"])[0]
+        stored = store.read_all(deployment["pull"]("beta"))[0]
         assert len(stored.to) <= bmod.MAX_RECIPIENTS
 
 

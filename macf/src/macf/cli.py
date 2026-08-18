@@ -8761,6 +8761,11 @@ def _amail_config() -> dict:
     cfg.setdefault("domain", os.environ.get("MACF_AMAIL_DOMAIN", ""))
     cfg.setdefault("socket", os.environ.get("MACF_AMAIL_SOCKET", "/run/amail/broker.sock"))
     cfg.setdefault("handoff", os.environ.get("MACF_AMAIL_HANDOFF", "/var/lib/amail/handoff"))
+    # Broker-owned, agent-READABLE: the recipient reads the keys it has been
+    # given and cannot rewrite them, which is what lets verification happen at
+    # ingest without a broker round-trip.
+    cfg.setdefault("contacts", os.environ.get(
+        "MACF_AMAIL_CONTACTS", "/var/lib/amail_broker/contacts.json"))
     cfg.setdefault("agent", os.environ.get("MACEFF_AGENT_NAME", ""))
     # The agent's OWN private signing key. It lives in the agent's home, not the
     # broker's: a signing key proves authorship and reaches nothing, so holding
@@ -9025,7 +9030,11 @@ def cmd_amail_list(args: argparse.Namespace) -> int:
     from macf.amail.client import ingest, list_delivered_internet
     box = Path(cfg["handoff"]) / (cfg.get("agent") or "")
     if cfg.get("agent") and box.is_dir():
-        ingested = ingest(home, box)
+        # The contacts path lets ingest verify signatures with the keys
+        # THIS recipient holds — a filesystem read, so it still works
+        # with the broker stopped, which R4 requires.
+        ingested = ingest(home, box, contacts_path=cfg.get("contacts"),
+                          agent=cfg.get("agent") or "")
         ok = sum(1 for r in ingested if r.get("ingested"))
         stuck = [r for r in ingested if not r.get("ingested")]
         if ok:

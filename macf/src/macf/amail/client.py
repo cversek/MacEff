@@ -92,7 +92,8 @@ def submit(sender: str, message: Message, socket_path: Path,
 # realigned when the unprivileged broker made them impossible to execute.
 
 
-def ingest(home: Path, pickup_box: Path) -> list:
+def ingest(home: Path, pickup_box: Path, contacts_path: Optional[Path] = None,
+           agent: str = "") -> list:
     """Execute the custody transfer: move handed-off mail from the broker's
     pickup box into the caller's OWN store, as the caller.
 
@@ -113,6 +114,8 @@ def ingest(home: Path, pickup_box: Path) -> list:
     results = []
     if not pickup_box.is_dir():
         return results
+    for amsg in sorted(pickup_box.glob("*.amsg")):
+        results.append(_ingest_bundle(home, amsg, contacts_path, agent))
     for eml in sorted(pickup_box.glob("*.eml")):
         sidecar = eml.with_suffix(".json")
         entry = {"name": eml.name}
@@ -145,6 +148,114 @@ def ingest(home: Path, pickup_box: Path) -> list:
         entry.update(ingested=True, path=str(delivered), sha256=actual)
         results.append(entry)
     return results
+
+
+
+def _ingest_bundle(home: Path, amsg: Path, contacts_path, agent: str) -> dict:
+    """Custody transfer for an agent message, including the signature verdict.
+
+    VERIFICATION HAPPENS HERE, not at read time, for three reasons the battery
+    made concrete. Read-time verification lives on the path the suite never
+    exercises — the same path that hid a phantom listing and a thread id minted
+    from the clock. Ingest is exercised. Second, it must keep working with the
+    broker stopped, so the keys come from the contacts file on disk, read
+    directly, never a broker round-trip: the file is broker-OWNED and
+    agent-readable, so an agent can read the keys it has been given and cannot
+    rewrite them. Third, custody transfers once, so the trust fact is
+    established at the boundary and recorded, rather than recomputed on every
+    glance.
+
+    The verdict never collapses to a boolean. A declared key can change, so the
+    raw message and its signature are preserved and re-verification stays
+    possible; and keys_for()'s three states stay distinct, because "no key
+    declared" is not "declared and failed" is not "verified".
+    """
+    import hashlib
+    from . import store
+    from .models import Message
+    from .trust import TrustClass
+
+    sidecar = amsg.with_suffix(".json")
+    entry = {"name": amsg.name, "kind": "bundle"}
+    try:
+        payload = amsg.read_bytes()
+        meta = json.loads(sidecar.read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        entry.update(ingested=False, reason=f"unreadable pair: {e}")
+        return entry
+    actual = hashlib.sha256(payload).hexdigest()
+    if meta.get("raw_sha256") != actual:
+        entry.update(ingested=False,
+                     reason=f"hash mismatch (sidecar {str(meta.get('raw_sha256'))[:12]}, "
+                            f"bytes {actual[:12]}); left in box")
+        return entry
+    try:
+        message = Message.deserialize(payload.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as e:
+        entry.update(ingested=False, reason=f"undeserializable message: {e}")
+        return entry
+
+    verdict = _verify_at_ingest(message, contacts_path, agent)
+    message.trust = verdict["trust"]
+    meta["ingest_verification"] = verdict
+    # Disagreement with the broker's own read is information, not noise: it is
+    # what a stale or compromised broker looks like from the recipient's side.
+    broker_trust = meta.get("broker_trust")
+    if broker_trust and broker_trust != verdict["trust"]:
+        import sys as _sys
+        print(f"⚠️ MACF: trust disagreement on {message.message_id}: broker said "
+              f"{broker_trust!r}, own keys say {verdict['trust']!r} "
+              f"({verdict['reason']})", file=_sys.stderr)
+        meta["ingest_verification"]["disagrees_with_broker"] = broker_trust
+
+    delivered = store.deliver(home, message)
+    store.write_bundle_sidecar(home, delivered.name, json.dumps(meta, indent=1))
+    try:
+        amsg.unlink()
+        sidecar.unlink()
+    except OSError as e:
+        import sys as _sys
+        print(f"⚠️ MACF: pickup entry {amsg.name} ingested but not removable "
+              f"({e}); it will re-ingest as a duplicate next round unless "
+              f"removed", file=_sys.stderr)
+    entry.update(ingested=True, path=str(delivered), sha256=actual,
+                 trust=verdict["trust"])
+    return entry
+
+
+def _verify_at_ingest(message, contacts_path, agent: str) -> dict:
+    """The recipient's own signature verdict. Three states, never flattened."""
+    from .trust import TrustClass
+    from .crypto import verify
+
+    if not contacts_path or not agent:
+        return {"trust": TrustClass.UNVERIFIED.value, "keys_declared": None,
+                "reason": "no local contact book available to this recipient; "
+                          "no verification attempted"}
+    try:
+        from .contacts import ContactBook
+        keys = ContactBook(Path(contacts_path)).keys_for(agent, message.sender)
+    except (OSError, ValueError) as e:
+        return {"trust": TrustClass.UNVERIFIED.value, "keys_declared": None,
+                "reason": f"contact book unreadable ({e}); no verification attempted"}
+
+    if message.signature and keys:
+        if verify(message, message.signature, keys):
+            return {"trust": TrustClass.ATTESTED.value, "keys_declared": len(keys),
+                    "reason": "signature verified against a declared key"}
+        return {"trust": TrustClass.SUSPECT.value, "keys_declared": len(keys),
+                "reason": "signature present and did NOT verify against any "
+                          "declared key"}
+    if message.signature and not keys:
+        return {"trust": TrustClass.UNVERIFIED.value, "keys_declared": 0,
+                "reason": "signed, but this recipient declares no key for the "
+                          "sender; nothing can be concluded"}
+    if keys and not message.signature:
+        return {"trust": TrustClass.SUSPECT.value, "keys_declared": len(keys),
+                "reason": "sender declares a key and sent no signature; "
+                          "breaking that commitment is the shape of impersonation"}
+    return {"trust": TrustClass.UNVERIFIED.value, "keys_declared": 0,
+            "reason": "unsigned, and no key declared for the sender"}
 
 
 def list_delivered_internet(home: Path) -> list:

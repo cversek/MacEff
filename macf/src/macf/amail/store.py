@@ -218,6 +218,41 @@ def deliver_raw(home: Path, raw: bytes, sidecar: str) -> Path:
     return d / "new" / name
 
 
+
+def bundle_sidecars_for(home: Path) -> Path:
+    """Where ingest records its verdict for AGENT messages.
+
+    A separate directory from `sidecars/` on purpose. The internet listing
+    discriminates by sidecar presence in `sidecars/`, so writing bundle
+    sidecars there would make every ingested agent message read as internet
+    mail — re-creating the facet overlap that was just fixed, from the other
+    direction. Same evidence, different index.
+    """
+    return maildir_for(home) / "bundle_sidecars"
+
+
+def write_bundle_sidecar(home: Path, name: str, sidecar: str) -> Path:
+    """Record the ingest verdict beside an agent message, owned by the agent."""
+    d = bundle_sidecars_for(home)
+    d.mkdir(mode=0o700, parents=True, exist_ok=True)
+    p = d / f"{name}.json"
+    p.write_text(sidecar)
+    p.chmod(0o600)
+    return p
+
+
+def read_bundle_sidecar(home: Path, name: str) -> Optional[dict]:
+    """The recorded ingest verdict for one agent message, or None."""
+    p = bundle_sidecars_for(home) / f"{name}.json"
+    if not p.is_file():
+        return None
+    try:
+        return json.loads(p.read_text())
+    except (OSError, ValueError) as e:
+        print(f"⚠️ MACF: unreadable bundle sidecar {p.name}: {e}", file=sys.stderr)
+        return None
+
+
 def read_all(home: Path, include_seen: bool = True) -> List[Message]:
     """Every AGENT-BUNDLE message in the mailbox, ordered per the policy's
     sort key.

@@ -497,3 +497,180 @@ def test_status_counts_damaged_quarantine_metadata_still_counts(deploy):
     (deploy.quarantine_dir / "broken.json").write_text("{not json")
     resp = Broker(deploy.broker_config).status_counts(AGENT)
     assert resp["quarantined"] == 1
+
+
+# ---- unified delivery: agent mail travels the same pickup box -------------
+# The pickup-box model covered internet mail only; agent-to-agent delivery
+# still wrote across a uid boundary, which worked solely because the broker
+# ran as root and was invisible because nothing exercised the path.
+
+@pytest.fixture
+def two_agents(tmp_path):
+    """Two local agents with a mutual contact list, delivery by pickup box."""
+    from macf.amail.broker import Broker, BrokerConfig
+    homes = {a: tmp_path / a for a in ("alpha", "beta")}
+    for h in homes.values():
+        (h / "Maildir").mkdir(parents=True)
+    contacts = tmp_path / "contacts.json"
+    contacts.write_text(json.dumps({
+        "alpha": [f"beta@{DOMAIN}"], "beta": [f"alpha@{DOMAIN}"]}))
+    contacts.chmod(0o644)
+    import os as _os
+    cfg = BrokerConfig(
+        domain=DOMAIN, agent_homes=homes, contacts_path=contacts,
+        audit_path=tmp_path / "audit.jsonl",
+        inbound_handoff=tmp_path / "handoff",
+        inbound_quarantine=tmp_path / "quarantine",
+        agent_uids={_os.getuid(): "alpha"})
+    return {"cfg": cfg, "broker": Broker(cfg), "homes": homes,
+            "contacts": contacts, "tmp": tmp_path}
+
+
+def _bundle(sender="alpha", to="beta"):
+    from macf.amail.models import Message
+    return Message(sender=f"{sender}@{DOMAIN}", to=[f"{to}@{DOMAIN}"],
+                   subject="unified", body="one mechanism")
+
+
+def test_submission_lands_in_the_pickup_box_not_the_recipient_home(two_agents):
+    from macf.amail import store
+    r = two_agents["broker"].submit("alpha", _bundle())
+    assert r["ok"] is True
+    box = two_agents["cfg"].inbound_handoff / "beta"
+    assert len(list(box.glob("*.amsg"))) == 1, "delivery must end in the box"
+    assert len(list(box.glob("*.json"))) == 1, "and carry its sidecar"
+    assert store.read_all(two_agents["homes"]["beta"]) == [], \
+        "the broker must not write into the recipient's own store"
+
+
+def test_the_recipient_executes_the_custody_transfer(two_agents):
+    from macf.amail import store
+    from macf.amail.client import ingest
+    two_agents["broker"].submit("alpha", _bundle())
+    box = two_agents["cfg"].inbound_handoff / "beta"
+    results = ingest(two_agents["homes"]["beta"], box,
+                     contacts_path=two_agents["contacts"], agent="beta")
+    assert [r["ingested"] for r in results] == [True]
+    msgs = store.read_all(two_agents["homes"]["beta"])
+    assert [m.subject for m in msgs] == ["unified"]
+    assert list(box.glob("*")) == [], "box drained only after the copy exists"
+
+
+def test_ingest_refuses_a_tampered_bundle_and_leaves_it_in_the_box(two_agents):
+    from macf.amail import store
+    from macf.amail.client import ingest
+    two_agents["broker"].submit("alpha", _bundle())
+    box = two_agents["cfg"].inbound_handoff / "beta"
+    amsg = next(box.glob("*.amsg"))
+    amsg.write_bytes(amsg.read_bytes().replace(b"one mechanism", b"tampered!!!!"))
+    results = ingest(two_agents["homes"]["beta"], box,
+                     contacts_path=two_agents["contacts"], agent="beta")
+    assert results[0]["ingested"] is False
+    assert "hash mismatch" in results[0]["reason"]
+    assert store.read_all(two_agents["homes"]["beta"]) == []
+    assert amsg.exists(), "evidence stays in the box rather than vanishing"
+
+
+def test_ingest_works_with_no_broker_process_at_all(two_agents):
+    """R4 extended to agent mail: custody transfer is a filesystem act, and
+    signature verification must not need a broker round-trip or it breaks
+    silently the first time the broker is down."""
+    from macf.amail import store
+    from macf.amail.client import ingest
+    two_agents["broker"].submit("alpha", _bundle())
+    del two_agents["broker"]          # nothing serving, nothing to call
+    box = two_agents["cfg"].inbound_handoff / "beta"
+    results = ingest(two_agents["homes"]["beta"], box,
+                     contacts_path=two_agents["contacts"], agent="beta")
+    assert results[0]["ingested"] is True
+    assert len(store.read_all(two_agents["homes"]["beta"])) == 1
+
+
+def test_ingest_records_three_distinct_key_states(two_agents, tmp_path):
+    """keys_for's three states must not flatten: no key declared is not
+    declared-and-failed is not verified."""
+    from macf.amail.client import _verify_at_ingest
+    from macf.amail.crypto import generate_keypair, load_private_key, sign
+    from macf.amail.trust import TrustClass
+
+    # (a) unsigned, no key declared -> UNVERIFIED, nothing concluded
+    v = _verify_at_ingest(_bundle(), two_agents["contacts"], "beta")
+    assert v["trust"] == TrustClass.UNVERIFIED.value and v["keys_declared"] == 0
+
+    # (b) key declared, message unsigned -> SUSPECT (a broken commitment)
+    key = tmp_path / "alpha.pem"
+    pub = generate_keypair(key)
+    two_agents["contacts"].write_text(json.dumps({
+        "beta": [{"address": f"alpha@{DOMAIN}", "key": pub}],
+        "alpha": [f"beta@{DOMAIN}"]}))
+    v = _verify_at_ingest(_bundle(), two_agents["contacts"], "beta")
+    assert v["trust"] == TrustClass.SUSPECT.value and v["keys_declared"] == 1
+
+    # (c) signed and verifiable -> ATTESTED
+    m = _bundle()
+    m.signature = sign(m, load_private_key(key))
+    v = _verify_at_ingest(m, two_agents["contacts"], "beta")
+    assert v["trust"] == TrustClass.ATTESTED.value
+
+    # (d) signed but the signature does not check out -> SUSPECT, and NOT the
+    #     same answer as (a): "we looked and it did not add up" is the case
+    #     worth waking someone for.
+    m2 = _bundle()
+    m2.signature = sign(m, load_private_key(key))   # signature for a different body
+    m2.body = "swapped after signing"
+    v = _verify_at_ingest(m2, two_agents["contacts"], "beta")
+    assert v["trust"] == TrustClass.SUSPECT.value
+    assert "did NOT verify" in v["reason"]
+
+
+def test_ingest_preserves_the_signature_for_re_verification(two_agents, tmp_path):
+    """The verdict must not collapse to a boolean: a declared key can change,
+    so the evidence has to survive the transfer."""
+    from macf.amail import store
+    from macf.amail.client import ingest
+    from macf.amail.crypto import generate_keypair, load_private_key, sign
+    key = tmp_path / "alpha.pem"
+    pub = generate_keypair(key)
+    two_agents["contacts"].write_text(json.dumps({
+        "beta": [{"address": f"alpha@{DOMAIN}", "key": pub}],
+        "alpha": [f"beta@{DOMAIN}"]}))
+    m = _bundle()
+    m.signature = sign(m, load_private_key(key))
+    two_agents["broker"].submit("alpha", m)
+    box = two_agents["cfg"].inbound_handoff / "beta"
+    ingest(two_agents["homes"]["beta"], box,
+           contacts_path=two_agents["contacts"], agent="beta")
+    stored = store.read_all(two_agents["homes"]["beta"])[0]
+    assert stored.signature, "signature discarded; re-verification impossible"
+    from macf.amail.crypto import verify
+    assert verify(stored, stored.signature, [pub])
+
+
+def test_a_trust_disagreement_with_the_broker_is_surfaced(two_agents, tmp_path, capsys):
+    """The recipient verifying with its OWN keys is only worth doing if a
+    disagreement with the broker's read is visible — that is what a stale or
+    compromised broker looks like from this side."""
+    from macf.amail.client import ingest
+    two_agents["broker"].submit("alpha", _bundle())
+    box = two_agents["cfg"].inbound_handoff / "beta"
+    sidecar = next(box.glob("*.json"))
+    meta = json.loads(sidecar.read_text())
+    meta["broker_trust"] = "attested"          # broker claims more than we can confirm
+    sidecar.write_text(json.dumps(meta))
+    ingest(two_agents["homes"]["beta"], box,
+           contacts_path=two_agents["contacts"], agent="beta")
+    err = capsys.readouterr().err
+    assert "trust disagreement" in err
+    assert "attested" in err
+
+
+def test_no_component_writes_outside_its_own_stores(two_agents):
+    """The no-privileged-component property, mechanised for AGENT mail.
+
+    The broker may touch only its own handoff and quarantine trees; the
+    recipient's home must be untouched until the recipient itself ingests.
+    """
+    two_agents["broker"].submit("alpha", _bundle())
+    beta_home = two_agents["homes"]["beta"]
+    written = [p for p in beta_home.rglob("*") if p.is_file()]
+    assert written == [], f"broker wrote into the recipient's home: {written}"

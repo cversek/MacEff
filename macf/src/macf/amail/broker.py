@@ -25,6 +25,7 @@ failure this whole subsystem is built to avoid.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -202,6 +203,95 @@ class Broker:
 
     # ------------------------------------------------------------------ delivery
 
+    def quarantine_refused(self, agent: str, message: Message, reason: str) -> Path:
+        """Retain refused mail in the BROKER's quarantine, with its reason.
+
+        Retained rather than rejected: rejecting at the transport boundary
+        reveals which addresses exist, and legitimately forwarded mail can
+        arrive from an unexpected envelope sender. Quarantine keeps the
+        evidence and keeps the decision reversible — but it keeps it where the
+        REFUSED party cannot edit it, which is why this is broker-owned rather
+        than a directory inside the recipient's home.
+        """
+        if self.config.inbound_quarantine is None:
+            raise DeliveryError(
+                "no quarantine directory configured: there is nowhere to retain "
+                "refused mail where the refused party cannot edit it. Refusing "
+                "rather than dropping the evidence.")
+        q = Path(self.config.inbound_quarantine)
+        q.mkdir(mode=0o700, parents=True, exist_ok=True)
+        stem = f"{int(time.time())}-{message.message_id}"
+        (q / f"{stem}.amsg").write_text(message.serialize())
+        (q / f"{stem}.json").write_text(json.dumps({
+            "kind": "bundle",
+            "quarantined_at": _now_iso(),
+            "message_id": message.message_id,
+            "sender": message.sender,
+            "recipient": self.config.address_for(agent),
+            "authorization": {"outcome": "deny", "reason": reason},
+        }, indent=1))
+        return q / f"{stem}.amsg"
+
+    def hand_off(self, agent: str, message: Message, trust: str) -> Path:
+        """Hand a delivered message into the recipient's pickup box.
+
+        UNIFIED DELIVERY. This replaced a direct write into the recipient's
+        Maildir — the broker reaching across a uid boundary into a home it does
+        not own. That worked only because the broker ran as root, and the
+        pickup-box model had already deleted the same operation from the
+        INTERNET path; agent mail kept it for months because nothing exercised
+        the path. One mechanism now: the broker writes only its own stores, the
+        recipient ingests into its own, and no component on the mail path holds
+        privilege.
+
+        The sidecar carries the broker's AUTHORIZATION judgement, which is the
+        broker's to make and the recipient's to consume: only the broker holds
+        contact books, and only it may say a sender is a contact of this
+        recipient. The recipient can edit the sidecar once it owns it — but the
+        authoritative copy is the audit record, so that only fools itself, and
+        an agent lying to itself is not a security boundary. If a sidecar
+        classification ever crosses an AGENT boundary that stops being true and
+        it becomes forgeable input; see the spec's handoff section.
+
+        The signature verdict is deliberately NOT decided here — the recipient
+        verifies at ingest with the keys it holds. This classification is the
+        broker's view, recorded so the two can be compared.
+        """
+        if self.config.inbound_handoff is None:
+            raise DeliveryError(
+                "no handoff directory configured: delivery is by pickup box and "
+                "there is nowhere to hand this message. Refusing rather than "
+                "reporting a delivery that did not happen.")
+        box = Path(self.config.inbound_handoff) / agent
+        box.mkdir(mode=0o2770, parents=True, exist_ok=True)
+        payload = message.serialize().encode("utf-8")
+        stem = f"{int(time.time())}-{message.message_id}"
+        sidecar = {
+            "kind": "bundle",
+            "handed_off_at": _now_iso(),
+            "message_id": message.message_id,
+            "sender": message.sender,
+            "recipient": self.config.address_for(agent),
+            "raw_sha256": hashlib.sha256(payload).hexdigest(),
+            "authorization": {
+                "outcome": "deliver-pull",
+                "reason": f"contact of '{agent}'",
+            },
+            # The broker's own read, for comparison against the recipient's.
+            # Disagreement is information, not noise: it is what a compromised
+            # or stale broker looks like from the recipient's side.
+            "broker_trust": trust,
+        }
+        base = box / stem
+        # Sidecar first, message second, mirroring the inbound handoff: a
+        # message without its sidecar is an unexplained artifact, while a
+        # sidecar without its message is a visibly interrupted delivery.
+        base.with_suffix(".json").write_text(json.dumps(sidecar, indent=1))
+        base.with_suffix(".json").chmod(0o640)
+        base.with_suffix(".amsg").write_bytes(payload)
+        base.with_suffix(".amsg").chmod(0o640)
+        return base.with_suffix(".amsg")
+
     def _rung(self, recipient: str) -> str:
         return "local" if self.config.agent_for(recipient) else "relay"
 
@@ -221,11 +311,11 @@ class Broker:
         agent = self.config.agent_for(recipient)
         if agent:
             # Classified against THIS recipient's contact book, immediately
-            # before the write. Two recipients may declare different keys for
+            # before the handoff. Two recipients may declare different keys for
             # the same sender, so the answer is per mailbox, not per message.
             trust = self.classify_inbound(message, agent).value
             message.trust = trust
-            deliver(self.config.agent_homes[agent], message)
+            self.hand_off(agent, message, trust)
             return "local", trust
         raise DeliveryError(
             f"no transport for '{recipient}': rung 1 (local) does not apply and "
@@ -632,7 +722,11 @@ class Broker:
             # it threaded against a real conversation.
             message.parent, message.thread_id = None, new_id("thr")
             reason = f"sender '{message.sender}' is not in the contact list for '{agent}'"
-            quarantine(home, message, reason)
+            # BROKER-OWNED quarantine, not the agent's. Refused evidence must
+            # live where the refused party cannot edit it, and the agent owns
+            # its home — the same reason the internet path quarantines
+            # broker-side. This also removes the last cross-uid write.
+            self.quarantine_refused(agent, message, reason)
             if self.audit:
                 self.audit.inbound(sender=message.sender, recipient=recipient,
                                    message_id=message.message_id,
@@ -669,7 +763,10 @@ class Broker:
                 message.thread_id = new_id("thr")
         message.sender = remote_sender
 
-        deliver(home, message)
+        # Same unified path: inbound peer mail is handed off, not written
+        # across the boundary. `home` is retained above only to read the
+        # recipient's existing threads for the parent/thread checks.
+        self.hand_off(agent, message, message.trust or "")
         if self.audit:
             self.audit.inbound(sender=message.sender, recipient=recipient,
                                message_id=message.message_id, decision="delivered",
