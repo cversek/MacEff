@@ -138,7 +138,7 @@ class ContactBook:
                                     f"contact key for '{addr}' is unusable: {ex}"
                                 ) from ex
                         keys[(agent, addr)] = list(declared)
-                    # push-wake grant (inbound spec the push-wake derivation). Validated at LOAD
+                    # push-wake grant. Validated at LOAD
                     # like the keys, and for the same reason: a malformed
                     # grant discovered mid-authorization would put broken
                     # configuration inside a security decision. Whether the
