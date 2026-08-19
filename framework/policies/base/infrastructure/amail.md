@@ -38,6 +38,8 @@ becomes tractable once the address stops encoding how the message travels.
 - What is the delivery ladder?
 - How does the broker choose a rung?
 - Why does the same address work on one host and across many?
+- How does delivery actually complete, and who performs the final write?
+- What must a deployment provision before mail can be delivered at all?
 - Where is the authoritative mail store?
 
 **3 The Broker**
@@ -132,15 +134,61 @@ contact lists, or stored messages. Only the broker's rung choice changes.
 
 ### 2.2 Local delivery is an optimization, not a special case
 
-Rung 1 exists because writing to a mailbox on the same disk is faster, more private,
-and cannot fail in transit — not because same-host mail is a different kind of mail.
-It carries the same fields, the same identifiers, and appears identical to the
-recipient.
+Rung 1 exists because same-host delivery is faster, more private, and cannot fail
+in transit — not because same-host mail is a different kind of mail. It carries the
+same fields, the same identifiers, and appears identical to the recipient.
+
+"Same-host" describes the route, not the write. How delivery actually completes is
+§2.3, and it is the same for every rung.
 
 A design that treated local mail as its own mechanism would need a second format, a
 second set of rules, and a migration the first time an agent moved hosts.
 
-### 2.3 The authoritative store is local
+### 2.3 Delivery completes as a hand-off, never as a write into another's home
+
+**The broker MUST NOT write into a recipient's mailbox.** Delivery terminates in a
+per-recipient **pickup box** that the broker owns; the **recipient** completes the
+custody transfer by ingesting into its own store, as itself. This holds for every
+kind of mail — agent-to-agent, peer-inbound, and internet — and for refused mail,
+which is retained in a broker-owned store rather than anywhere inside the
+recipient's home.
+
+**Why this is a policy statement and not an implementation note.** The obvious
+design has the broker write each recipient's mailbox directly. That requires a
+process that can write across uid boundaries, which means privilege on the mail
+path — and the justification arrives already attached to the requirement ("the
+broker delivers into homes it does not own"), which is what makes it hard to
+notice. It is a *design choice*, not an operation: hand the mail into a box the
+recipient's group can read, and nobody writes across a boundary at all. The
+resulting property is worth more than the convenience it costs:
+
+> Compromise of any single component yields that component's own stores and
+> nothing above its row.
+
+**Consequences a deployment MUST honour:**
+
+- **Pickup boxes are provisioned, not auto-created.** An unprivileged broker cannot
+  place a box in the recipient's group, so a box it creates on demand is unreadable
+  by the very agent it belongs to. This failure is **silent at the sender** —
+  submission reports success and the message sits in the box — so provisioning is a
+  deployment responsibility and an aged-entry alarm is the backstop that surfaces a
+  box nobody is draining.
+- **Ingest is a filesystem act and MUST NOT require the broker.** A permanent record
+  that needs a running service to receive it is not permanent. Custody transfer, and
+  any verification performed during it, use only what the recipient can read locally.
+- **Ownership is correct by construction**, which is what §2.4's mode-700
+  agent-owned mailbox has always claimed. Under direct-write delivery that claim
+  required a privileged process to be careful; under hand-off it is simply true,
+  because the only writer is the owner.
+
+**Apply this rule to every delivery path at once.** A hand-off model applied to one
+path while a sibling path keeps writing directly leaves the privilege requirement
+intact and hides it behind whichever path happens to be exercised — the property
+then holds by coverage rather than by construction, which is not a property at all.
+
+---
+
+### 2.4 The authoritative store is local
 
 Each agent's mailbox is a **standard Maildir in the agent's home**, owned by the
 agent, mode 700.
