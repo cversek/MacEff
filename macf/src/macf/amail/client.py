@@ -258,6 +258,39 @@ def _verify_at_ingest(message, contacts_path, agent: str) -> dict:
             "reason": "unsigned, and no key declared for the sender"}
 
 
+
+def read_sent(home: Path) -> list:
+    """This agent's own copies of what it sent. Filesystem, no broker."""
+    from . import store
+    return store.read_sent(home)
+
+
+def sent_disposition(dispositions_dir: Path, message_id: str) -> Optional[Dict[str, Any]]:
+    """What became of a message this agent sent, or None if nothing recorded.
+
+    Read from the BROKER's store by filesystem, deliberately -- not over the
+    socket. The fate of a message must remain knowable when the broker is not
+    running, for the same reason the sent copy itself must: a record that needs
+    a service to be read is not a record. The broker owns the file so the agent
+    cannot forge its own delivery confirmations; the agent reads it so it can
+    always answer "did that leave?".
+
+    None is a REAL answer and distinct from a bad one: it means nothing has been
+    recorded for this id yet. A caller that treats it as "delivered" has invented
+    the silent success this whole store exists to prevent.
+    """
+    f = Path(dispositions_dir) / f"{message_id}.json"
+    if not f.is_file():
+        return None
+    try:
+        return json.loads(f.read_text())
+    except (OSError, ValueError) as e:
+        import sys as _sys
+        print(f"⚠️ MACF: disposition record for {message_id} is unreadable "
+              f"({e}); treating as UNKNOWN, not as delivered", file=_sys.stderr)
+        return None
+
+
 def list_delivered_internet(home: Path) -> list:
     """Internet deliveries in the caller's OWN mailbox, read directly.
 

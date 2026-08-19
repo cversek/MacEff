@@ -143,6 +143,92 @@ def deliver(home: Path, message: Message) -> Path:
     return d / "new" / name
 
 
+
+def sent_dir(home: Path) -> Path:
+    """Where an agent keeps copies of what IT sent.
+
+    A sibling of new/cur, not a flag on them: sent mail is a different kind of
+    artifact from received mail, and mixing them would make every listing have
+    to filter by direction. The agent authored these, so the agent writes them
+    -- no broker involvement at any point.
+    """
+    return maildir_for(home) / "sent"
+
+
+def deliver_sent(home: Path, message: Message) -> Path:
+    """Write the sender's own canonical copy of a message it composed.
+
+    THE COPY IS THE AGENT'S, AND ONLY THE AGENT'S. The spec has required this
+    since draft 0.4 and nothing implemented it, which the peer found by looking
+    for a Sent concept and discovering there was none: an agent could send mail
+    and retain no record that it had.
+
+    What is deliberately NOT here: the broker's authorization verdict. The agent
+    authored this content, so "you were allowed to send it" vouches for nothing
+    the agent did not already know, and it lives in the broker's audit as
+    bookkeeping. What the agent genuinely cannot self-determine -- whether the
+    message actually LEFT -- is the disposition, and that is a mutable transport
+    fact kept in the broker's own store and READ from here (see the broker's
+    disposition record). Immutable artifact, mutable fate, separate homes.
+
+    Same descriptor discipline as deliver(): the mailbox is agent-owned, so a
+    name checked and then reused is a race that has been won against this code
+    before.
+    """
+    d = ensure_maildir(home)
+    sd = sent_dir(home)
+    _assert_real_dir(sd)
+    sd.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _assert_real_dir(sd)
+    name = _unique_name()
+
+    md_fd = _open_dir(str(d))
+    try:
+        tmp_fd = _open_dir("tmp", dir_fd=md_fd)
+        try:
+            sent_fd = _open_dir("sent", dir_fd=md_fd)
+            try:
+                fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             0o600, dir_fd=tmp_fd)
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as f:
+                        f.write(message.serialize())
+                except BaseException:
+                    try:
+                        os.unlink(name, dir_fd=tmp_fd)
+                    except OSError:
+                        pass
+                    raise
+                os.rename(name, name, src_dir_fd=tmp_fd, dst_dir_fd=sent_fd)
+            finally:
+                os.close(sent_fd)
+        finally:
+            os.close(tmp_fd)
+    finally:
+        os.close(md_fd)
+    return sd / name
+
+
+def read_sent(home: Path) -> List[Message]:
+    """Everything this agent has sent, from its own store, ordered like the rest.
+
+    Readable with no broker running: it is the agent's own permanent record, and
+    a record that needs a service to be read is not a record.
+    """
+    sd = sent_dir(home)
+    if not sd.is_dir():
+        return []
+    out: List[Message] = []
+    for f in sd.iterdir():
+        if not f.is_file():
+            continue
+        try:
+            out.append(Message.deserialize(f.read_text()))
+        except (OSError, ValueError):
+            continue
+    return sorted(out, key=lambda m: m.sort_key())
+
+
 def deliver_raw(home: Path, raw: bytes, sidecar: str) -> Path:
     """Deliver internet mail: raw RFC 822 bytes, exactly as transport-verified.
 

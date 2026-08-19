@@ -743,3 +743,88 @@ def test_the_two_populations_are_reported_separately(deploy):
     assert len(report["aged_spool"]) == 1
     assert len(report["aged_pickup"]) == 1
     assert report["alerts"] == 2
+
+
+# ---- the sender's canonical copy, and the fate it cannot self-determine ----
+# Required by the spec since draft 0.4 and never built; the peer found it by
+# looking for a Sent concept and discovering there was none.
+
+def test_the_sender_keeps_its_own_copy(tmp_path):
+    from macf.amail import store
+    from macf.amail.models import Message
+    home = tmp_path / "sender"
+    (home / "Maildir").mkdir(parents=True)
+    m = Message(sender="me@agents.test", to=["you@example.org"],
+                subject="outbound", body="my own words")
+    store.deliver_sent(home, m)
+    sent = store.read_sent(home)
+    assert [x.subject for x in sent] == ["outbound"]
+    assert sent[0].body == "my own words"
+
+
+def test_the_sent_copy_is_readable_with_no_broker_in_existence(tmp_path):
+    """The agent authored it, so nothing about reading it may require a service."""
+    from macf.amail import store
+    from macf.amail.models import Message
+    home = tmp_path / "sender"
+    (home / "Maildir").mkdir(parents=True)
+    store.deliver_sent(home, Message(sender="me@agents.test", to=["you@example.org"],
+                                     subject="offline", body="x"))
+    # No broker object is constructed anywhere in this test, deliberately.
+    assert len(store.read_sent(home)) == 1
+
+
+def test_sent_and_received_do_not_contaminate_each_other(tmp_path):
+    """Direction is a different KIND of artifact, not a flag: a sent copy must
+    not appear in the inbox listing, and received mail must not appear in sent."""
+    from macf.amail import store
+    from macf.amail.models import Message
+    home = tmp_path / "sender"
+    (home / "Maildir").mkdir(parents=True)
+    store.deliver(home, Message(sender="peer@agents.test", to=["me@agents.test"],
+                                subject="INBOUND", body="to me"))
+    store.deliver_sent(home, Message(sender="me@agents.test", to=["peer@agents.test"],
+                                     subject="OUTBOUND", body="from me"))
+    assert [m.subject for m in store.read_all(home)] == ["INBOUND"]
+    assert [m.subject for m in store.read_sent(home)] == ["OUTBOUND"]
+
+
+def test_disposition_is_a_history_not_a_last_value(tmp_path):
+    """A bounce after three deferrals is a different fact from an immediate
+    bounce, and only a sequence can tell them apart."""
+    from macf.amail.broker import Broker, BrokerConfig
+    from macf.amail.client import sent_disposition
+    cfg = BrokerConfig(domain="agents.test", dispositions_dir=tmp_path / "disp")
+    b = Broker(cfg)
+    for state in ("submitted", "deferred", "deferred", "bounced"):
+        b.record_disposition("alpha", "msg-1", state, detail=f"{state} detail")
+    rec = sent_disposition(cfg.dispositions_dir, "msg-1")
+    assert [h["state"] for h in rec["history"]] == \
+        ["submitted", "deferred", "deferred", "bounced"]
+
+
+def test_an_unrecorded_disposition_reads_as_none_not_as_delivered(tmp_path):
+    """None is a real answer. A caller treating it as success would invent the
+    silent delivery this store exists to prevent."""
+    from macf.amail.client import sent_disposition
+    (tmp_path / "disp").mkdir()
+    assert sent_disposition(tmp_path / "disp", "msg-never-sent") is None
+
+
+def test_the_disposition_is_readable_by_the_sender_but_broker_owned(tmp_path):
+    from macf.amail.broker import Broker, BrokerConfig
+    cfg = BrokerConfig(domain="agents.test", dispositions_dir=tmp_path / "disp")
+    f = Broker(cfg).record_disposition("alpha", "msg-2", "submitted")
+    import stat as _stat
+    mode = f.stat().st_mode
+    assert mode & _stat.S_IROTH, "the sender must be able to read its own mail's fate"
+    assert not (mode & _stat.S_IWOTH), "but it must not be able to forge it"
+
+
+def test_a_missing_disposition_store_is_announced_not_silent(tmp_path, capsys):
+    """Submitting mail while recording no fate rebuilds the silent drop on the
+    sending side, so the absence must be loud."""
+    from macf.amail.broker import Broker, BrokerConfig
+    cfg = BrokerConfig(domain="agents.test", dispositions_dir=None)
+    assert Broker(cfg).record_disposition("alpha", "msg-3", "submitted") is None
+    assert "no disposition store configured" in capsys.readouterr().err

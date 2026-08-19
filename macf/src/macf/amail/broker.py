@@ -32,6 +32,7 @@ import re
 import socket
 import socketserver
 import stat
+import sys
 import struct
 import threading
 import time
@@ -154,6 +155,16 @@ class BrokerConfig:
     #: and status_counts then reports zero quarantined rather than failing.
     inbound_quarantine: Optional[Path] = None
 
+    #: Broker-owned disposition records: what became of each SUBMITTED message.
+    #: Agent-READABLE (0644) and broker-written, the same shape as the contacts
+    #: file. The sender's own copy of what it composed is immutable and lives in
+    #: the agent's store; the FATE of that message is mutable (submitted ->
+    #: deferred -> bounced) and is established by components the agent cannot
+    #: see, so it lives where its writer lives and crosses to the agent by READ.
+    #: Without it an agent holds a sent copy and cannot tell whether it left,
+    #: which is the outbound face of a silent drop.
+    dispositions_dir: Optional[Path] = None
+
     #: Broker-owned pickup boxes (handoff_dir/<agent>/): accepted mail waits
     #: here until the recipient ingests it into its own store. Optional for
     #: the same reason as the quarantine.
@@ -231,6 +242,39 @@ class Broker:
             "authorization": {"outcome": "deny", "reason": reason},
         }, indent=1))
         return q / f"{stem}.amsg"
+
+    def record_disposition(self, agent: str, message_id: str, state: str,
+                           detail: str = "") -> Optional[Path]:
+        """Write what became of a submitted message. Broker-owned, agent-readable.
+
+        Appends to a per-message history rather than overwriting, because the
+        states are a SEQUENCE (submitted, then deferred, then bounced) and the
+        last one alone loses the story an operator needs to read. A bounce after
+        three deferrals is a different fact from an immediate bounce.
+
+        Returns None when no disposition store is configured, and says so on
+        stderr rather than silently doing nothing: a deployment that submits mail
+        while recording no fate has rebuilt the silent drop on the sending side.
+        """
+        if self.config.dispositions_dir is None:
+            print("⚠️ MACF: no disposition store configured; the fate of "
+                  f"{message_id} is unrecorded and the sender cannot learn it",
+                  file=sys.stderr)
+            return None
+        d = Path(self.config.dispositions_dir)
+        d.mkdir(mode=0o755, parents=True, exist_ok=True)
+        f = d / f"{message_id}.json"
+        try:
+            history = json.loads(f.read_text()).get("history", [])
+        except (OSError, ValueError):
+            history = []
+        history.append({"state": state, "detail": detail, "at": _now_iso()})
+        f.write_text(json.dumps({"message_id": message_id, "agent": agent,
+                                 "history": history}, indent=1))
+        # World-readable on purpose: the SENDER must be able to read the fate of
+        # its own mail with no broker running, and a fate is not a secret.
+        f.chmod(0o644)
+        return f
 
     def hand_off(self, agent: str, message: Message, trust: str) -> Path:
         """Hand a delivered message into the recipient's pickup box.
