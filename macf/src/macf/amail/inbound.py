@@ -37,6 +37,7 @@ import json
 import os
 import re
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
@@ -96,6 +97,15 @@ class InboundConfig:
     #: enabling push-wake is a deliberate deployment act, never a side
     #: effect of granting a contact.
     push_wake_enabled: bool = False
+
+    #: Orphan-sweep age bounds, in seconds. A spool entry older than this
+    #: was never processed (a dead consumer, or one that crashed mid-run); a
+    #: pickup-box entry older than this is a recipient that has stopped
+    #: draining. Both
+    #: are facts the operator must learn FROM THE SYSTEM rather than from
+    #: silence, which is the whole point of the sweep.
+    spool_age_bound_s: int = 3600
+    pickup_age_bound_s: int = 86400
 
 
 # --------------------------------------------------------------- provenance
@@ -423,6 +433,99 @@ def process_spool(cfg: InboundConfig) -> List[Dict[str, Any]]:
 
 
 # ------------------------------------------------------------- conservation
+
+
+# --------------------------------------------------------------- aged sweep
+
+def sweep_aged(cfg: InboundConfig, now: Optional[float] = None) -> Dict[str, Any]:
+    """THE ORPHAN SWEEP: find entries nobody has moved, and SAY SO.
+
+    Never deletes content — that is the whole discipline. Mail that could not
+    be processed becomes an inspectable artifact; it does not evaporate.
+
+    Two populations, two different failures wearing the same shape:
+
+      spool entries past the bound  -> the CONSUMER is not running, or died
+                                       mid-run. Under manual operation that is
+                                       expected between runs; under a watcher
+                                       it means the watcher is dead.
+      pickup entries past the bound -> the RECIPIENT has stopped draining, or
+                                       (the case that actually bit this
+                                       deployment) its box carries the wrong
+                                       group and it never could.
+
+    Aged SPOOL entries move to quarantine -- authorized-but-
+    unprocessed mail becomes an inspectable artifact rather than an alert
+    someone read once. Aged PICKUP entries are REPORTED AND LEFT WHERE THEY
+    ARE: custody was handed to the recipient, and pulling mail back out of its
+    box would undo the transfer the whole model rests on. The alert is the
+    remedy, not a repair.
+
+    Written because the spec asserted this sweep for four drafts while nothing
+    implemented it, and a later design then leaned on it as the backstop for an
+    unattended watcher. A specified-but-absent alarm is worse than a missing
+    one: the design above it assumes cover that does not exist.
+    """
+    now = time.time() if now is None else now
+    report: Dict[str, Any] = {
+        "swept_at": time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(now)),
+        "aged_spool": [], "aged_pickup": [], "alerts": 0}
+    audit = (AuditLog(cfg.broker_config.audit_path)
+             if cfg.broker_config.audit_path else None)
+
+    if cfg.spool_dir.is_dir():
+        for eml in sorted(cfg.spool_dir.glob("*.eml")):
+            try:
+                age = now - eml.stat().st_mtime
+            except OSError as e:
+                print(f"⚠️ MACF: cannot stat spool entry {eml.name}: {e}",
+                      file=sys.stderr)
+                report["alerts"] += 1
+                continue
+            if age < cfg.spool_age_bound_s:
+                continue
+            sidecar = eml.with_suffix(".json")
+            reason = (f"aged out of the spool after {int(age)}s "
+                      f"(bound {cfg.spool_age_bound_s}s): never processed")
+            try:
+                _quarantine(cfg, eml, sidecar, reason)
+            except OSError as e:
+                print(f"⚠️ MACF: aged spool entry {eml.name} could NOT be "
+                      f"quarantined ({e}); it remains in the spool",
+                      file=sys.stderr)
+                report["alerts"] += 1
+                continue
+            print(f"⚠️ MACF: {reason} -- {eml.name} moved to quarantine",
+                  file=sys.stderr)
+            if audit:
+                audit.inbound(sender="unknown", recipient="unknown",
+                              message_id=eml.stem, decision=QUARANTINED,
+                              reason=reason)
+            report["aged_spool"].append(eml.name)
+            report["alerts"] += 1
+
+    hdir = Path(cfg.handoff_dir) if cfg.handoff_dir else None
+    if hdir and hdir.is_dir():
+        for box in sorted(hdir.iterdir()):
+            if not box.is_dir():
+                continue
+            entries = sorted(list(box.glob("*.eml")) + list(box.glob("*.amsg")))
+            for entry in entries:
+                try:
+                    age = now - entry.stat().st_mtime
+                except OSError:
+                    continue
+                if age < cfg.pickup_age_bound_s:
+                    continue
+                print(f"⚠️ MACF: pickup entry {entry.name} in box "
+                      f"'{box.name}' un-ingested after {int(age)}s (bound "
+                      f"{cfg.pickup_age_bound_s}s): the recipient has stopped "
+                      f"draining, or cannot read its own box",
+                      file=sys.stderr)
+                report["aged_pickup"].append(f"{box.name}/{entry.name}")
+                report["alerts"] += 1
+    return report
+
 
 def reconcile(cfg: InboundConfig) -> Dict[str, Any]:
     """The conservation property, checkable: every SEEN sha reaches exactly

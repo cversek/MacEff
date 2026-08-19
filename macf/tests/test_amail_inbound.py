@@ -11,6 +11,7 @@ check MUST go red when fed an audit log with a terminal record removed.
 """
 import hashlib
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -674,3 +675,71 @@ def test_no_component_writes_outside_its_own_stores(two_agents):
     beta_home = two_agents["homes"]["beta"]
     written = [p for p in beta_home.rglob("*") if p.is_file()]
     assert written == [], f"broker wrote into the recipient's home: {written}"
+
+
+# ---- the orphan sweep ------------------------------------------------------
+# The spec required this sweep for four drafts and nothing implemented it,
+# while a later design leaned on it as the backstop for an unattended watcher.
+# A specified-but-absent alarm is worse than a missing one: the design above it
+# assumes cover it does not have.
+
+def test_sweep_does_not_fire_on_fresh_entries(deploy):
+    """KNOWN-ANSWER FIRST. A sweep that alarms on everything would pass every
+    positive test below while telling an operator nothing."""
+    spool(deploy, make_raw())
+    report = inbound.sweep_aged(deploy)
+    assert report["aged_spool"] == [] and report["aged_pickup"] == []
+    assert report["alerts"] == 0
+
+
+def test_aged_spool_entry_is_quarantined_and_alerts(deploy, capsys):
+    eml, sidecar = spool(deploy, make_raw())
+    # One variable: the clock. Nothing about the entry itself is unusual.
+    future = time.time() + deploy.spool_age_bound_s + 60
+    report = inbound.sweep_aged(deploy, now=future)
+    assert report["aged_spool"] == [eml.name]
+    assert report["alerts"] == 1
+    assert not eml.exists(), "an aged entry must leave the spool"
+    assert list(deploy.quarantine_dir.glob("*.eml")), \
+        "aged entries move to quarantine; content is never deleted"
+    assert "MACF" in capsys.readouterr().err
+
+
+def test_aged_spool_entry_is_audited_so_conservation_still_balances(deploy):
+    """An aged entry that left the spool with no terminal record would make the
+    ledger go red for a message the system actually handled correctly."""
+    eml, _ = spool(deploy, make_raw())
+    inbound.sweep_aged(deploy, now=time.time() + deploy.spool_age_bound_s + 60)
+    records = [json.loads(l) for l in
+               deploy.broker_config.audit_path.read_text().splitlines()]
+    terminals = [r for r in records if r.get("decision") == QUARANTINED]
+    assert len(terminals) == 1
+    assert "aged out of the spool" in terminals[0]["reason"]
+
+
+def test_aged_pickup_entry_alerts_but_is_left_in_the_box(deploy, capsys):
+    """Custody was handed to the recipient. Pulling mail back out of its box
+    would undo the transfer the whole model rests on, so the alert IS the
+    remedy rather than a repair."""
+    inbound.process_entry(deploy, *spool(deploy, make_raw()))
+    box = deploy.handoff_dir / AGENT
+    entry = next(box.glob("*.eml"))
+    report = inbound.sweep_aged(
+        deploy, now=time.time() + deploy.pickup_age_bound_s + 60)
+    assert report["aged_pickup"] == [f"{AGENT}/{entry.name}"]
+    assert entry.exists(), "an aged pickup entry must NOT be taken back"
+    assert "stopped draining, or cannot read its own box" in capsys.readouterr().err, \
+        "the alert must name the mis-provisioned box, which is silent at the sender"
+
+
+def test_the_two_populations_are_reported_separately(deploy):
+    """A dead consumer and a non-draining recipient are different faults with
+    different remedies; one combined count would hide which one happened."""
+    spool(deploy, make_raw(body="stuck in spool"))
+    inbound.process_entry(deploy, *spool(deploy, make_raw(body="stuck in box")))
+    far = time.time() + max(deploy.spool_age_bound_s,
+                            deploy.pickup_age_bound_s) + 60
+    report = inbound.sweep_aged(deploy, now=far)
+    assert len(report["aged_spool"]) == 1
+    assert len(report["aged_pickup"]) == 1
+    assert report["alerts"] == 2
