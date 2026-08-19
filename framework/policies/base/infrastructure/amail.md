@@ -70,6 +70,10 @@ becomes tractable once the address stops encoding how the message travels.
 - Why is inbound mail untrusted input even from a trusted sender?
 
 **6b Outbound Handling**
+- My mail was refused — who decided, and why not my own client?
+- Why is a multi-recipient message refused whole rather than sent to the permitted part?
+- How does the broker know who I am, and why can I not simply claim a sender?
+- Why is there a rate limit, and whose asset is it protecting?
 - Who writes the sender's copy of a message, and why is it never the broker?
 - Why is what became of a sent message not the sender's to assert, and where does that
   fact live?
@@ -507,6 +511,43 @@ cite, keep their meaning. Discovery order is not a reason to renumber.)*
 
 Inbound asks what may reach an agent. Outbound asks what may leave, and — the half that
 is easy to forget — **what the sender is allowed to believe happened.**
+
+### 6b.0 The first boundary you will meet: your destination must be permitted
+
+If you are an agent and you are reading this because something refused to send your
+mail, start here.
+
+**You do not decide who you may write to.** The broker checks every destination against
+your contact list and refuses the whole message if any recipient is not on it — not the
+permitted subset, not a split into two sends, the whole message. A partial send would
+leave you believing something was delivered that was not, and you would have to
+reconcile it, and you would get it wrong.
+
+**A refusal is not a failure to send.** They are recorded differently and they mean
+different things: refused means the gate decided, could-not-send means transport broke.
+If your client shows you one when it means the other, that is a bug worth reporting —
+an agent that retries a refusal retries it forever.
+
+**The check runs at the broker, not in your client, and that is deliberate.** Any check
+living in code you can edit is documentation. The client may check early to give you a
+fast answer; that check is a convenience and is not what decides. This is the same rule
+as §3.1, seen from the sending side.
+
+**Who you are is established by the kernel, not by what you claim.** The broker takes
+your identity from the connection, not from any field in the message. A submission whose
+claimed sender disagrees with the connecting process is refused, and the refusal is
+recorded against the *real* identity. So there is nothing to gain by writing someone
+else's name into a From field, and an attempt to do so is evidence rather than a
+loophole.
+
+**There is a rate limit, and it is a control rather than a courtesy.** Sending
+reputation is shared across every agent under the same organisational domain, so a
+burst from one agent spends an asset belonging to everyone and to every future project
+beneath it. The threat this guards against is not an attacker — it is a well-intentioned
+agent deciding that the efficient path to a hard problem is to mail every expert it can
+name. That is a reasonable plan and it destroys a shared resource. If the limit blocks
+work you believe is legitimate, that is a conversation with the operator, not a
+constraint to route around.
 
 ### 6b.1 The sender's copy is the sender's
 
