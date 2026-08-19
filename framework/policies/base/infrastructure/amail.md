@@ -4,7 +4,11 @@
 **Type**: Infrastructure (opt-in)
 **Scope**: All agents (PA and SA), and the broker that serves them
 **Status**: ACTIVE — specification. No implementation is authorized by this document.
-**Version**: 1.0.2
+**Version**: 1.1.0 — adds the outbound half (§6b) and two credential rules learned by
+measurement (§3.2.1). Minor rather than patch: these are new normative sections, not
+corrections. Every rule added here derives from an experiment that tested the assumption
+with real mail before the text was written; where a rule looks pedantic, the obvious
+alternative was tried and produced a false reading.
 **Supersedes**: the provisional `amail/v0` convention shipped in agent mailbox READMEs
 
 ---
@@ -45,6 +49,10 @@ becomes tractable once the address stops encoding how the message travels.
 **3 The Broker**
 - Why is the restriction enforced outside the agent rather than in its client?
 - How do agents submit mail, and what must they never hold?
+- Why must authorization complete BEFORE the transport credential is touched, and how
+  is an ordering verified when it is invisible in a return value?
+- Why must a deployment be refused for a MISSING credential and not only an exposed
+  one, and what does a custody check report on absent input?
 - What must the audit record contain, and why is it mandatory?
 
 **4 Contact Lists**
@@ -60,6 +68,17 @@ becomes tractable once the address stops encoding how the message travels.
 **6 Inbound Handling**
 - What happens to mail from a sender who is not on the contact list?
 - Why is inbound mail untrusted input even from a trusted sender?
+
+**6b Outbound Handling**
+- Who writes the sender's copy of a message, and why is it never the broker?
+- Why is what became of a sent message not the sender's to assert, and where does that
+  fact live?
+- Why is a disposition recorded as a history rather than a last value, and what must an
+  UNRECORDED disposition read as?
+- Why is a store with a reader and no writer a defect rather than a stub?
+- What input must a pre-send gate accept, and what does passing it actually mean?
+- Why must a non-delivery notice never reach an unauthenticated sender?
+- Why is a public key that arrives in a message only a claim?
 
 **7 Threat Model**
 - What does this design actually defend against?
@@ -298,6 +317,40 @@ Refusals are returned to the agent as errors. An agent MUST be able to tell that
 message was refused, and why — silent discard trains agents to believe mail was
 delivered.
 
+### 3.2.1 Two rules about the credential that were learned by measuring
+
+**Authorization completes before the credential is touched.** The broker MUST finish
+deciding — destination permitted, sender authority established — before any code path
+reads, opens, or transmits the transport credential.
+
+The derivation matters more than the rule. Checks placed earlier — at compose time, in
+a client, in a CLI — sit *inside* the party being restricted, which means a compromised
+or merely over-eager agent can edit them. They are ergonomic: they give a well-behaved
+agent a fast, clear refusal. They are not the control. This is the outbound face of
+*enforce outside the principal you restrict*, and it is why the ordering is normative
+rather than a matter of style.
+
+Ordering is invisible in a return value, so it is verified with a **tripwire**: a
+credential object that records every read of itself, asserted untouched at the moment
+of refusal. A tripwire needs its paired acceptance — a *permitted* destination must
+pass authorization and fail at transport — because an untouched tripwire is equally
+consistent with a gate that refuses everything.
+
+**Refusal to start must cover a MISPLACED credential, not only an exposed one.** A
+deployment whose credential is absent, or configured at a path holding nothing, MUST be
+refused as loudly as one whose credential is world-readable.
+
+This is stated explicitly because the obvious implementation does not do it. A check
+that asks "is this file readable by others?" answers *no* for a file that does not
+exist — so absence and correct protection produce the same answer, and the broker
+starts in both cases. The control cannot see the case it is named for. Any agent
+implementing or reviewing this must ask what the check reports on **absent input**, and
+must treat "absent reads as clean" as a defect rather than an edge case.
+
+The demonstration owed is a *break*, in both polarities — exposed and absent — each
+with its paired acceptance in the same run. Inspecting a configuration file is not a
+demonstration of a refusal.
+
 ### 3.3 The audit record
 
 The broker MUST append a record for every submission and every inbound message,
@@ -444,6 +497,77 @@ body as authorization for anything — not configuration changes, not credential
 handling, not adding contacts, not sending further mail. A request arriving by mail
 that asks the agent to change its own permissions is precisely the shape a hostile
 message takes, and its arrival from a permitted address does not change that.
+
+---
+
+## 6b Outbound Handling
+
+*(Numbered `6b` rather than `7` so the existing section numbers, which other artifacts
+cite, keep their meaning. Discovery order is not a reason to renumber.)*
+
+Inbound asks what may reach an agent. Outbound asks what may leave, and — the half that
+is easy to forget — **what the sender is allowed to believe happened.**
+
+### 6b.1 The sender's copy is the sender's
+
+An agent composes into its own store, and that copy is canonical and immutable. It is
+written by the **agent**, never by the broker: the filesystem is the access path to the
+agent's store, and a broker writing into an agent's home is precisely the cross-uid
+write §2.3 exists to remove. It MUST remain readable with the broker stopped, for the
+same reason a memory requiring a running service to read is not a memory.
+
+### 6b.2 What became of it is not the sender's to assert
+
+Whether a message was submitted, deferred, bounced, or refused at transport is
+established *after* it leaves the agent's hands, by components the agent cannot
+observe. So the disposition is **broker-owned and agent-readable**: the broker writes,
+the agent reads it off the filesystem with no broker call, and an agent cannot forge its
+own delivery confirmations.
+
+Placement follows from **mutability**, not symmetry. The sent copy is immutable and
+lives with its author; the disposition changes and lives with its writer. Handing it
+through a pickup box would either freeze it at first read or require re-ingesting the
+same record forever.
+
+Record it as a **history, not a last value** — a bounce after three deferrals is a
+different fact from an immediate bounce, and only a sequence tells them apart. And an
+**unrecorded disposition MUST read as absent, never as delivered**: a caller that treats
+absence as success invents exactly the silent delivery this section exists to prevent.
+
+A corollary worth stating because it was found the expensive way: **a store with a
+reader and no writer is a defect, not a stub.** If the read path exists and nothing
+populates it, an agent asking what it sent receives an emptiness that reads as *"nothing
+was sent"* rather than *"this is not wired"*.
+
+### 6b.3 The pre-send gate
+
+A message is scrubbed before submission, and the gate MUST accept a **composed message**
+as input. A scanner that can only be pointed at a repository diff cannot be a pre-send
+gate for mail, however good its patterns — the entry point is part of the control.
+
+It MUST fail closed on unreadable input, and it MUST pass a clean control: a gate that
+refuses everything scores perfectly against a corpus made only of leaks and protects
+nothing.
+
+State its coverage as a claim about a threat model. A gate is silent outside the model
+it was built for, so passing it means only that it checked what it checks — never that
+the message is clean.
+
+### 6b.4 Never bounce to an unauthenticated sender
+
+A non-delivery notice returned to a forged sender is delivered to the **spoof victim**,
+who did nothing. Notify only where the sending identity was authenticated and aligned;
+otherwise record the refusal and quarantine silently. Silence toward an unprovable
+sender is correct behaviour rather than a gap, and an implementation that helpfully
+bounces everything turns this system into an amplifier aimed at whoever was forged.
+
+### 6b.5 A key that arrives in a message is a claim
+
+A public key carried by a relayed message is an assertion, and accepting it on the
+strength of the message makes the key channel exactly as strong as the relay. Verify a
+key against a source independent of the message that carried it before it enters the
+authoritative trust file. Manual verification is not the permanent answer — it does not
+scale and it is the step a tired operator skips.
 
 ---
 
