@@ -338,6 +338,8 @@ def test_every_declared_field_reaches_the_broker(tmp_path):
         "rate_limit_per_agent": "-> rate_limiter (per-agent RateLimit)",
         "rate_limit_broker": "-> rate_limiter (broker-principal RateLimit)",
         "rate_limit_window_seconds": "-> rate_limiter (window on each RateLimit)",
+        "transport_endpoint": "-> transport (HttpTransport endpoint)",
+        "transport_timeout": "-> transport (HttpTransport timeout)",
     }
     missing = declared - carried - set(TRANSFORMED)
     assert not missing, (

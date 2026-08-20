@@ -89,6 +89,22 @@ class BrokerDeployConfig(BaseModel):
                     "agent composed them.")
     rate_limit_window_seconds: int = Field(
         default=3600, description="the sliding window, in seconds")
+    transport_endpoint: Optional[str] = Field(
+        default=None,
+        description="the outbound submission endpoint. Null until the outbound "
+                    "leg exists, and null is why sends REFUSE rather than "
+                    "silently doing nothing: the broker names the missing "
+                    "transport at the rung that needed it. THIS FIELD IS THE "
+                    "ONLY WAY A DEPLOYMENT CAN OBTAIN A TRANSPORT -- the class "
+                    "existed and was unit-tested for a full phase while nothing "
+                    "on the deployment path could construct one, so a broker "
+                    "holding a valid credential still had no route to the "
+                    "internet.")
+    transport_timeout: float = Field(
+        default=30.0,
+        description="seconds to wait on the submission endpoint. Bounded "
+                    "because an unbounded submit holds the socket open and a "
+                    "sender learns nothing while it waits.")
     opsec_scan: bool = Field(
         default=True,
         description="run the pre-send OPSEC scrub on every outbound message. "
@@ -139,10 +155,38 @@ class BrokerDeployConfig(BaseModel):
             inbound_handoff=self.inbound_handoff,
             dispositions_dir=self.dispositions_dir,
             rate_limiter=self._build_rate_limiter(),
+            transport=self._build_transport(),
             opsec_scan=self._build_scan() if self.opsec_scan else None,
             refuse_unscanned=self.refuse_unscanned,
             agent_uids={b.uid: name for name, b in self.agents.items()},
         )
+
+    def _build_transport(self):
+        """The outbound transport, or None when no endpoint is declared.
+
+        NONE RATHER THAN A NULL TRANSPORT, deliberately. The broker's rung-3
+        path already refuses on a missing transport and names the recipient
+        that needed one; returning a refusing object here would give one
+        condition two refusal paths with two messages, and two mechanisms for
+        one property drift apart the first time only one of them is touched.
+        NullTransport remains the right default for a caller building a
+        BrokerConfig directly, where no rung check stands behind it.
+
+        THE GAP THIS CLOSES was the wiring chain a layer deeper than the one
+        that ate ``dispositions_dir``. The transport class was written, tested
+        and complete; the on-disk contract had no field for an endpoint, so
+        ``to_broker_config`` had nothing to translate and every deployment ran
+        with ``transport=None`` no matter what its credential said. The
+        declared-vs-consumed guard could not see it: that test walks the
+        on-disk fields and asserts each is consumed, which finds a DROPPED
+        field and is structurally blind to a BrokerConfig field that no
+        on-disk field FEEDS. Absence again, on the axis the instrument does
+        not scan.
+        """
+        if not self.transport_endpoint:
+            return None
+        from macf.amail.transport import HttpTransport
+        return HttpTransport(self.transport_endpoint, timeout=self.transport_timeout)
 
     def _build_rate_limiter(self):
         """The limiter, or None when the deployment declares no budget.
