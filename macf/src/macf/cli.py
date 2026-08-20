@@ -9016,10 +9016,43 @@ def cmd_amail_send(args: argparse.Namespace) -> int:
             print(f"❌ {result['error']}")
         return 1
     for d in result.get("delivered", []):
-        print(f"✅ delivered to {d['recipient']} (rung: {d['rung']})")
+        print(_render_send_outcome(d))
     print(f"   message-id: {result['message_id']}")
     print(f"   thread-id:  {result['thread_id']}")
     return 0
+
+
+def _render_send_outcome(d: dict) -> str:
+    """What the sender is TOLD, which is the only layer the sender reads.
+
+    THIS EXISTED AS `delivered to {recipient}` FOR EVERY OUTCOME, and it was
+    wrong in the one case that matters. The transport maps a 2xx to
+    `submitted` -- custody accepted, arrival unknown -- and the ledger records
+    exactly that. The rendering then reported "delivered" over the top of it.
+
+    Every layer beneath this line was correct. The disposition vocabulary
+    deliberately has no reachable `delivered` for an internet send, the store
+    held `submitted`, and the agent read the word "delivered" anyway. A silent
+    success does not need a broken ledger; it only needs the last renderer to
+    be more confident than the record it renders.
+
+    So the STATE is rendered, never assumed, and an unrecognised state prints
+    itself rather than being flattened into the optimistic case -- a renderer
+    that maps the unknown onto its happiest branch is the same defect with a
+    smaller blast radius.
+    """
+    where = f"{d['recipient']} (rung: {d['rung']})"
+    state = d.get("state")
+    if state == "delivered":
+        return f"✅ delivered to {where}"
+    if state == "submitted":
+        return (f"📤 submitted to {where} — ACCEPTED FOR SENDING, "
+                f"not confirmed delivered")
+    if state == "deferred":
+        return f"⏳ deferred for {where} — the far side said not now"
+    if state is None:
+        return f"❔ handed off to {where} — no disposition recorded"
+    return f"❔ {state} for {where}"
 
 
 def cmd_amail_list(args: argparse.Namespace) -> int:
