@@ -9215,7 +9215,7 @@ def cmd_amail_status(args: argparse.Namespace) -> int:
             _resp = _status(sock)
             if _resp.get("ok"):
                 counts = {k: _resp.get(k) for k in
-                          ("quarantined", "pending_pickup")}
+                          ("quarantined", "pending_pickup", "budget")}
             else:
                 # An explicit refusal is not the same fact as an unreachable
                 # broker, and swallowing it made the two indistinguishable —
@@ -9255,6 +9255,19 @@ def cmd_amail_status(args: argparse.Namespace) -> int:
     if counts is not None and counts.get("pending_pickup"):
         print(f"📬 {counts['pending_pickup']} message(s) waiting in your pickup "
               f"box — `amail list` ingests them into your own store.")
+    # THE BUDGET, BEFORE THE WALL (amail spec O5b.6b). The threat case for the
+    # rate limit is the well-intentioned under-scoped sender, and a control
+    # aimed at good faith that good faith cannot see is discoverable only by
+    # tripping it -- which teaches the sender the system is unreliable rather
+    # than that the resource is shared.
+    b = (counts or {}).get("budget")
+    if b and b.get("error"):
+        # Unknown is not unused. Telling a sender it has spent nothing when the
+        # truth is unreadable is the silent-empty this subsystem keeps finding.
+        print(f"⚠️  send budget UNKNOWN ({b['error']}) — not the same as unused")
+    elif b and b.get("limited"):
+        print(f"📊 send budget: {b['used']}/{b['max_per_window']} used, "
+              f"{b['remaining']} remaining in a {b['window_seconds']}s window")
     if counts is not None and counts["quarantined"]:
         print(f"⚠️  {counts['quarantined']} message(s) in quarantine — refused "
               f"with reasons attached; the operator can list them broker-side.")

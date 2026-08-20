@@ -239,3 +239,52 @@ class TestContactsAuthorityIsPerAgent:
         book = ContactBook(p)
         assert book.keys_for("alpha", "shared@example.org") == [key_a]
         assert book.keys_for("beta", "shared@example.org") == [key_b]
+
+
+def test_the_broker_status_op_carries_the_budget_to_the_agent(tmp_path):
+    """amail spec O5b.6b "the-rate-limit-must-be-observable-to-the-sending-agent",
+    THE ARM THAT WAS MISSING.
+
+    The clause requires the budget to be readable THROUGH THE CLIENT'S STATUS
+    SURFACE. The controls that existed showed the limiter could COMPUTE a
+    budget and that its state file was agent-readable — both true, neither the
+    property. Nothing carried it to the agent, so the status surface printed no
+    budget at all and the one control aimed at good faith stayed discoverable
+    only by tripping it. That is the easier-adjacent-property drift, in a row
+    already marked as holding.
+    """
+    import json as _json
+    from macf.amail.broker import Broker, BrokerConfig
+
+    contacts = tmp_path / "contacts.json"
+    contacts.write_text(_json.dumps({"alpha": ["peer@agents.test"]}))
+    (tmp_path / "alpha" / "Maildir").mkdir(parents=True)
+    rl = limiter(tmp_path, cap=5, window=60)
+    b = Broker(BrokerConfig(
+        domain="agents.test", contacts_path=contacts,
+        inbound_handoff=tmp_path / "handoff",
+        agent_homes={"alpha": tmp_path / "alpha"}, rate_limiter=rl))
+
+    rl.check_and_consume("alpha")
+    resp = b.status_counts("alpha")
+    assert resp["ok"]
+    assert resp["budget"]["max_per_window"] == 5
+    assert resp["budget"]["used"] == 1
+    assert resp["budget"]["remaining"] == 4
+
+
+def test_a_deployment_with_no_limiter_reports_no_budget_rather_than_zero(tmp_path):
+    """The paired negative. `no limit configured` and `you have used none of
+    your limit` are different facts, and a surface that renders both as a
+    comfortable number is the silent-empty one layer up."""
+    import json as _json
+    from macf.amail.broker import Broker, BrokerConfig
+
+    contacts = tmp_path / "contacts.json"
+    contacts.write_text(_json.dumps({"alpha": []}))
+    (tmp_path / "alpha" / "Maildir").mkdir(parents=True)
+    b = Broker(BrokerConfig(
+        domain="agents.test", contacts_path=contacts,
+        inbound_handoff=tmp_path / "handoff",
+        agent_homes={"alpha": tmp_path / "alpha"}))
+    assert b.status_counts("alpha")["budget"] is None

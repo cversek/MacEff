@@ -1302,12 +1302,36 @@ class Broker:
             "quarantined": quarantined,
             "pending_pickup": pending_pickup,
         }
+        # THE BUDGET, spec O5b.6b "the-rate-limit-must-be-observable-to-the-
+        # sending-agent". It is answered HERE because the broker owns the
+        # limiter and its caps; the agent holds neither, and making the client
+        # parse the broker's own configuration to learn its allowance would
+        # hand the restricted party the definition of the restriction.
+        #
+        # The clause says the budget must be readable THROUGH THE CLIENT'S
+        # STATUS SURFACE, and it was not: the limiter could compute a budget
+        # and the state file was agent-readable, which is the easier adjacent
+        # property. Nothing carried it to the agent, so the one control aimed
+        # at GOOD FAITH was discoverable only by tripping it.
+        budget = None
+        limiter = getattr(self.config, "rate_limiter", None)
+        if limiter is not None:
+            try:
+                budget = limiter.budget(agent)
+            except (OSError, ValueError) as e:
+                # Reporting is not enforcing, and "unknown" is not "unused".
+                # Telling a sender it has spent nothing when the truth is
+                # unreadable is the silent-empty this subsystem keeps finding.
+                budget = {"principal": agent, "error": str(e)}
+        # NOT folded into `counts`: that dict is summed for the audit total,
+        # and the budget is neither a count nor summable. Keeping it out is
+        # what stops a reporting addition from corrupting an audit figure.
         if self.audit:
             # audit.read's schema is deliberately fixed; the total is the
             # auditable fact, the breakdown is in the response.
             self.audit.read(agent=agent, operation="status",
                             count=sum(counts.values()))
-        return {"ok": True, **counts}
+        return {"ok": True, **counts, "budget": budget}
 
     def identify(self, conn: socket.socket) -> str:
         """Authenticate the connecting process from kernel-supplied credentials.
