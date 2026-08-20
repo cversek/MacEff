@@ -45,6 +45,16 @@ from typing import Any, Dict, Optional
 #: A transport that mapped 2xx to `delivered` would therefore record a delivery
 #: nobody had witnessed, on the happy path, for every message it ever sent.
 #: That is the silent success this ledger exists to prevent.
+#: The User-Agent the transport identifies itself with. NOT COSMETIC, and the
+#: default is actively harmful: urllib sends `Python-urllib/x.y`, which the
+#: edge's Browser Integrity Check refuses with a 403 carrying `error code:
+#: 1010` -- BEFORE the access layer evaluates the credential at all. Measured
+#: against the live endpoint: identical request, default agent 403/1010, named
+#: agent 400 with the Worker's own JSON. So without this line every real send
+#: fails at the edge while the classifier reports a credential that was never
+#: examined.
+USER_AGENT = "amail-broker/0.5 (+macf)"
+
 ACCEPTED = "submitted"        # NON-TERMINAL. Custody accepted, arrival unknown.
 DEFERRED = "deferred"         # non-terminal: the far side said "not now"
 BOUNCED = "bounced"           # terminal: the far side said "not this message"
@@ -154,7 +164,18 @@ class HttpTransport:
 
         payload = _json.dumps({
             "from": getattr(message, "sender", None),
-            "to": list(getattr(message, "to", None) or []),
+            # A STRING, NOT A LIST. The endpoint requires all four fields to
+            # be non-empty STRINGS and answers a JSON array with
+            # `{"status":"rejected","reason":"MISSING_FIELD","field":"to"}` --
+            # measured, after both sides read the schema and agreed it matched.
+            # Neither of us saw it by reading; the running endpoint said so.
+            #
+            # MULTI-RECIPIENT IS UNVERIFIED. Comma-joining is the RFC 5322
+            # address-list form and the obvious reading, but it has not been
+            # measured against this endpoint's parser and is NOT claimed to
+            # work. Single-recipient is measured; anything else is a guess
+            # wearing a plausible shape.
+            "to": ", ".join(getattr(message, "to", None) or []),
             "subject": getattr(message, "subject", None),
             "body": getattr(message, "body", None),
         }).encode("utf-8")
@@ -168,7 +189,8 @@ class HttpTransport:
         # This was my assumption and it was wrong. It is corrected here rather
         # than accommodated on both sides, because a transport that sent both
         # shapes "to be safe" would put the secret on a header nobody reads.
-        headers = {"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json",
+                   "User-Agent": USER_AGENT}
         headers.update(credential.as_headers())
         req = urllib.request.Request(
             self.endpoint, data=payload, method="POST", headers=headers)
@@ -207,6 +229,20 @@ class HttpTransport:
         detail = (body or "")[:200]
         if 200 <= code < 300:
             return TransportResult(ACCEPTED, f"accepted for sending ({code})")
+        if code == 403 and "1010" in detail:
+            # THE WAF, NOT THE ACCESS LAYER, and the difference is the whole
+            # diagnosis. Error 1010 is a Browser Integrity Check refusing the
+            # USER-AGENT before the credential is evaluated, so reporting it as
+            # a custody failure sends whoever is on call to the credential --
+            # which is correct, present and never looked at. A wrong refusal
+            # message is worse than none: it is a confident pointer at an
+            # innocent component.
+            raise TransportError(
+                "the edge's integrity check refused this request (403, error "
+                "code 1010) before the access layer evaluated anything. This "
+                "measures the WAF, NOT the credential: the submission "
+                "credential was never examined. Check the User-Agent, not the "
+                "token.")
         if code == 403:
             raise TransportError(
                 "the edge refused this request (403): the submission credential "

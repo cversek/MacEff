@@ -299,3 +299,68 @@ class TestTheCredentialHasTwoHalves:
         text = repr(CRED)
         assert "secret-value" not in text and "id.access" not in text
         assert "complete=True" in text
+
+
+# ------------------------------------------- what the live endpoint taught us
+#
+# Three defects that an injected opener structurally cannot show, all measured
+# against the deployed endpoint rather than reasoned about.
+
+
+def _capture(status=202, body='{"status":"accepted"}'):
+    """An opener that records the request instead of answering from a script."""
+    seen = {}
+
+    class _Resp:
+        status = None
+        def __init__(self, code, payload):
+            _Resp.status = code
+            self._p = payload
+        def read(self): return self._p.encode()
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def opener(req, timeout=None):
+        seen["headers"] = {k.lower(): v for k, v in req.header_items()}
+        seen["payload"] = json.loads(req.data.decode())
+        return _Resp(status, body)
+
+    return opener, seen
+
+
+def test_the_request_names_a_user_agent():
+    """Measured: the default `Python-urllib/x.y` draws a 403 + `error code:
+    1010` from the edge's integrity check BEFORE the credential is evaluated.
+    Without a named agent every real send fails at a layer that never looked
+    at the token."""
+    opener, seen = _capture()
+    t = T.HttpTransport("https://x.test/submit", opener=opener)
+    t.send(msg(), T.AccessCredential("id.access", "secret"))
+    assert "user-agent" in seen["headers"]
+    assert "urllib" not in seen["headers"]["user-agent"].lower()
+
+
+def test_the_recipient_is_a_string_not_a_list():
+    """Measured: the endpoint requires all four fields to be non-empty STRINGS
+    and answers a JSON array with MISSING_FIELD/`to`. Both sides read the
+    schema, agreed it matched, and were wrong; the running endpoint said so."""
+    opener, seen = _capture()
+    t = T.HttpTransport("https://x.test/submit", opener=opener)
+    t.send(msg(), T.AccessCredential("id.access", "secret"))
+    assert isinstance(seen["payload"]["to"], str)
+
+
+def test_a_1010_refusal_does_not_blame_the_credential():
+    """The WAF and the access layer both answer 403 and mean different things.
+    Reporting an integrity-check refusal as a custody failure points whoever is
+    on call at a credential that is correct, present, and was never examined."""
+    with pytest.raises(T.TransportError) as e:
+        T.HttpTransport._classify(403, "error code: 1010")
+    assert "1010" in str(e.value)
+    assert "never examined" in str(e.value)
+
+    # PAIRED: a real Access refusal must STILL blame the credential, or the
+    # fix above has simply moved the misattribution one case over.
+    with pytest.raises(T.TransportError) as e2:
+        T.HttpTransport._classify(403, "<title>Error ・ Cloudflare Access</title>")
+    assert "credential" in str(e2.value)
