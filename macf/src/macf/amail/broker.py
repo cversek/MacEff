@@ -224,6 +224,17 @@ class BrokerConfig:
     #: the same reason as the quarantine.
     inbound_handoff: Optional[Path] = None
 
+    #: The outbound transport -- the broker's only route to the internet, and
+    #: the holder of nothing. It performs NO authorization: destination, rate
+    #: limit and pre-send gate all run before anything reaches it, because a
+    #: transport that authorizes puts a boundary decision wherever the
+    #: transport runs, which on the current binding is someone else's edge.
+    #:
+    #: `None` means rung 3 raises rather than silently succeeding. See
+    #: transport.NullTransport for why an absent transport must refuse loudly
+    #: rather than be skipped.
+    transport: Optional[Any] = None
+
     #: The outbound rate limiter (spec O5b.6
     #: "outbound-submission-must-be-rate-limited"). `None` means UNBOUNDED,
     #: which the spec calls a missing PRECONDITION rather than a default --
@@ -643,8 +654,15 @@ class Broker:
     def _rung(self, recipient: str) -> str:
         return "local" if self.config.agent_for(recipient) else "relay"
 
-    def _deliver_one(self, recipient: str, message: Message) -> Tuple[str, str]:
-        """Deliver to one recipient. Returns (rung, classification).
+    def _deliver_one(self, recipient: str, message: Message) -> Tuple[str, str, str]:
+        """Deliver to one recipient. Returns (rung, classification, DISPOSITION).
+
+        THE DISPOSITION IS RETURNED TOO, and it is not always "delivered". A
+        local handoff is terminal; an internet submission may come back
+        DEFERRED, which is neither a delivery nor a failure. Collapsing the
+        three into "it returned, so it arrived" would record a delivery the
+        far side has not agreed to -- the silent-success failure this ledger
+        exists to prevent, arriving through the happy path.
 
         THE CLASSIFICATION IS RETURNED, not left on the message. It used to be
         written to the shared Message and read back after the loop, so the
@@ -664,12 +682,29 @@ class Broker:
             trust = self.classify_inbound(message, agent).value
             message.trust = trust
             self.hand_off(agent, message, trust)
-            return "local", trust
-        raise DeliveryError(
-            f"no transport for '{recipient}': rung 1 (local) does not apply and "
-            "remote delivery is not configured. Refusing to report success for a "
-            "message that was not sent."
-        )
+            # Local handoff IS delivery: the message is in the recipient's
+            # pickup box and only the recipient can move it from there.
+            return "local", trust, "delivered"
+        # RUNG 3: the internet, via a transport that performs NO authorization.
+        # Everything that decides whether this message may exist has already
+        # run -- destination, rate limit, pre-send gate -- because a transport
+        # that authorizes puts a boundary decision wherever the transport runs,
+        # and on the current binding that is a script on someone else's edge.
+        transport = getattr(self.config, "transport", None)
+        if transport is None:
+            raise DeliveryError(
+                f"no transport for '{recipient}': rung 1 (local) does not apply "
+                "and remote delivery is not configured. Refusing to report "
+                "success for a message that was not sent."
+            )
+        # THE CREDENTIAL IS READ HERE, at send time, and is the LAST thing
+        # touched (spec O5b.3 "align-or-refuse-sits-at-the-last-point-before-
+        # the-credential"). Custody was asserted at startup; this re-reads
+        # rather than caching, so a credential rotated or pulled during an
+        # incident takes effect on the next send instead of outliving its file.
+        from .transport import read_credential
+        result = transport.send(message, read_credential(self.config.credentials_path))
+        return "internet", result.detail, result.state
 
     # -------------------------------------------------------------------- submit
 
@@ -897,8 +932,9 @@ class Broker:
         delivered, failures = [], []
         for r in message.to:
             try:
-                rung, trust = self._deliver_one(r, message)
-                delivered.append({"recipient": r, "rung": rung, "trust": trust})
+                rung, trust, state = self._deliver_one(r, message)
+                delivered.append({"recipient": r, "rung": rung, "trust": trust,
+                                  "state": state})
             except Exception as e:  # noqa: BLE001
                 # Catch EVERYTHING, not just DeliveryError. An OSError escaping
                 # here skipped the audit block below, so mail already delivered to
@@ -930,9 +966,13 @@ class Broker:
         # helper nothing calls. Delivered and failed recipients are recorded
         # separately because that difference is the entire reason the store is
         # per-recipient — spec O5d.8 "disposition-is-per-recipient".
-        if delivered:
-            self._record_fate(sender, message, "delivered",
-                              recipients=[d["recipient"] for d in delivered])
+        # PER STATE, not per "it returned". A deferred submission and a
+        # delivered one are different facts, and the ledger's whole value is
+        # that a discrepancy means something.
+        for state in sorted({d["state"] for d in delivered}):
+            self._record_fate(sender, message, state,
+                              recipients=[d["recipient"] for d in delivered
+                                          if d["state"] == state])
         for f in failures:
             self._record_fate(sender, message, "bounced", f["error"],
                               recipients=[f["recipient"]])
