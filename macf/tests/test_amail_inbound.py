@@ -805,7 +805,7 @@ def test_disposition_is_a_history_not_a_last_value(tmp_path):
 
 
 def test_disposition_is_recorded_per_recipient_not_per_message(tmp_path):
-    """Spec O5d.8 "disposition-is-per-recipient". Delivered to one and bounced
+    """amail spec O5d.8 "disposition-is-per-recipient". Delivered to one and bounced
     for another is the ordinary case, and one shared history cannot hold it."""
     from macf.amail.broker import Broker, BrokerConfig
     from macf.amail.client import sent_disposition
@@ -821,7 +821,7 @@ def test_disposition_is_recorded_per_recipient_not_per_message(tmp_path):
 
 
 def test_a_message_level_refusal_writes_a_record_for_every_recipient(tmp_path):
-    """Spec O5d.8a "message-level-refusal-writes-a-record-for-every-recipient".
+    """amail spec O5d.8a "message-level-refusal-writes-a-record-for-every-recipient".
     The refusal is a decision about the submission as a UNIT, so
     a permitted recipient with no record at all would leave the derived view
     with nothing to read."""
@@ -837,7 +837,7 @@ def test_a_message_level_refusal_writes_a_record_for_every_recipient(tmp_path):
 
 
 def test_the_derived_view_is_the_least_successful_outcome(tmp_path):
-    """Spec O5d.8b "message-level-view-is-the-least-successful-outcome".
+    """amail spec O5d.8b "message-level-view-is-the-least-successful-outcome".
     Any recipient bounced makes the message bounced; delivered
     requires that every recipient reached it. A summary reporting success while
     a recipient bounced is the silent-delivery failure, one level up."""
@@ -929,7 +929,7 @@ def test_a_first_disposition_is_not_warned_about(tmp_path, capsys):
 
 
 def test_no_recipients_records_nothing_and_says_so(tmp_path, capsys):
-    """A fate belongs to a message-recipient PAIR — spec O5d.8c
+    """A fate belongs to a message-recipient PAIR — amail spec O5d.8c
     "conservation-unit-is-the-message-recipient-pair". With no
     recipient there is no pair, and a placeholder row could never reach a
     terminal state -- it would sit in the conservation ledger forever."""
@@ -940,7 +940,7 @@ def test_no_recipients_records_nothing_and_says_so(tmp_path, capsys):
 
 
 def test_the_content_hash_is_written_once_and_never_rewritten(tmp_path):
-    """Spec O5c.7a "the-hash-lives-where-its-verifier-can-reach-it".
+    """amail spec O5c.7a "the-hash-lives-where-its-verifier-can-reach-it".
     A hash that changes is not evidence of anything, so a later
     call carrying a different value must not be able to relabel what was sent."""
     from macf.amail.broker import Broker, BrokerConfig
@@ -955,7 +955,7 @@ def test_the_content_hash_is_written_once_and_never_rewritten(tmp_path):
 
 
 def test_concurrent_appends_do_not_lose_records(tmp_path):
-    """Spec O5d.10 "disposition-appends-are-safe-under-concurrent-writers".
+    """amail spec O5d.10 "disposition-appends-are-safe-under-concurrent-writers".
     The audit log's rotation lost 42 of 50 records under
     ordinary concurrency with no attacker involved; this store has the same
     read-modify-write shape and must not repeat it."""
@@ -1013,7 +1013,7 @@ def _custody_fixture(tmp_path, monkeypatch, *, ok=True, refused=None, raises=Fal
 
 
 def test_the_sent_copy_exists_before_the_broker_is_asked(tmp_path, monkeypatch):
-    """Spec O5c.6 "the-sent-copy-is-written-before-submission". Write-after
+    """amail spec O5c.6 "the-sent-copy-is-written-before-submission". Write-after
     loses the record of anything that died mid-flight, which is exactly the
     case a sender most needs evidence of."""
     from macf.amail import client, store
@@ -1111,7 +1111,7 @@ def test_the_content_hash_survives_the_brokers_reminting(tmp_path, monkeypatch):
 
 
 def test_the_agent_side_reconciliation_goes_red_in_both_directions(tmp_path, monkeypatch):
-    """Spec O5d.6a "composed-never-submitted-is-reconciled-agent-side", and the
+    """amail spec O5d.6a "composed-never-submitted-is-reconciled-agent-side", and the
     control V19c asks for: BOTH directions, run as the agent with no broker."""
     from macf.amail import client, store
     from macf.amail.broker import Broker, BrokerConfig
@@ -1150,7 +1150,7 @@ def test_the_agent_side_reconciliation_goes_red_in_both_directions(tmp_path, mon
 
 
 def test_an_unresolved_attempt_is_named_rather_than_sorted(tmp_path, monkeypatch):
-    """Spec O13.10 "the-outbound-ledger's-left-edge". A submission that died
+    """amail spec O13.10 "the-outbound-ledger's-left-edge". A submission that died
     before the broker's first look is indistinguishable from one it lost, and
     folding it into either column would balance the ledger by deciding a
     question the system cannot answer."""
@@ -1230,7 +1230,7 @@ def test_the_real_send_path_keeps_a_copy_and_records_a_fate(tmp_path, monkeypatc
 
 
 def test_a_denied_submission_records_a_terminal_fate_for_every_recipient(tmp_path):
-    """A DENY is TERMINAL and IS counted -- spec O5d.7
+    """A DENY is TERMINAL and IS counted -- amail spec O5d.7
     "terminal-dispositions-are-enumerated-and-closed". A ledger that omitted
     refusals would let two implementations compute different balances from
     identical traffic, and a ledger whose value is that a discrepancy means

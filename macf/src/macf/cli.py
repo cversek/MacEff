@@ -8979,7 +8979,7 @@ def cmd_amail_send(args: argparse.Namespace) -> int:
             return 1
 
     # SEND BY COPY. The agent keeps its own canonical record BEFORE the broker
-    # is asked — spec O5c.6 "the-sent-copy-is-written-before-submission" — so a
+    # is asked — amail spec O5c.6 "the-sent-copy-is-written-before-submission" — so a
     # send that dies mid-flight still leaves the sender evidence of what it
     # composed and how far the attempt got. Going through the custody path
     # rather than calling submit() directly is what puts the write ON the live

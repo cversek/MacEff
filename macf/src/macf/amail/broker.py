@@ -215,6 +215,23 @@ class BrokerConfig:
     #: the same reason as the quarantine.
     inbound_handoff: Optional[Path] = None
 
+    #: The pre-send OPSEC scrub, ON the submission path (spec O5e.1
+    #: "the-gate-must-accept-a-composed-message"). It lives at the BROKER
+    #: rather than in the client for the same reason every other check does:
+    #: a scrub in code the agent can edit is documentation.
+    #:
+    #: `None` means NO GATE, and that is a deployment state rather than a
+    #: default to be assumed safe -- submit() says so out loud on every send,
+    #: because a gate that is silently absent is exactly the specified-but-
+    #: absent trap this subsystem keeps finding.
+    opsec_scan: Optional[Any] = None
+
+    #: What to do with a part that could not be read as text (spec O5e.6
+    #: "fail-closed-applies-to-the-scan-not-the-message"). The deployment
+    #: chooses; what is forbidden is the third option, where an unscanned part
+    #: silently counts as scanned.
+    refuse_unscanned: bool = True
+
     #: uid -> agent name. THE authentication table. The socket is world-writable,
     #: so the only thing distinguishing one submitter from another is the kernel's
     #: view of who is on the other end. A submitted `sender` field is a claim; this
@@ -408,6 +425,42 @@ class Broker:
             # so it must never observe a half-written record.
             os.replace(tmp, f)
         return f
+
+    def _scrub(self, message: Message) -> Optional[str]:
+        """Run the pre-send gate. Returns a refusal reason, or None to pass.
+
+        THE ABSENCE OF A GATE IS ANNOUNCED, not defaulted to safe. A deployment
+        with `opsec_scan=None` sends unscrubbed, which is a legitimate choice
+        for a closed fleet and an alarming one anywhere else -- and the only
+        thing separating those two cases is whether anyone knows. Silence here
+        would make an unconfigured gate indistinguishable from a passing one,
+        which is the specified-but-absent trap in its purest form.
+
+        THE GATE'S OWN FAILURE IS A REFUSAL. If the scanner raises, this
+        refuses the message rather than passing it: a gate that fails open is
+        not a gate, and an exception is exactly the case where the temptation
+        to continue is strongest because everything else about the send worked.
+        """
+        scan = getattr(self.config, "opsec_scan", None)
+        if scan is None:
+            print(f"⚠️ MACF: no pre-send scrub configured; {message.message_id} "
+                  f"is being sent UNSCANNED", file=sys.stderr)
+            return None
+        try:
+            result = scan(message)
+        except Exception as e:  # noqa: BLE001 - see docstring: fail closed
+            print(f"⚠️ MACF: the pre-send scrub raised ({type(e).__name__}: {e}); "
+                  f"refusing {message.message_id} rather than sending unscanned",
+                  file=sys.stderr)
+            return f"scrub failed to run ({type(e).__name__})"
+
+        if getattr(result, "findings", None):
+            # The reason names CATEGORIES and quotes nothing: a refusal message
+            # travels into logs and notices, which are themselves outward-facing.
+            return result.reason()
+        if getattr(result, "unscanned", None) and self.config.refuse_unscanned:
+            return result.reason()
+        return None
 
     def _record_fate(self, sender: str, message: Message, state: str,
                      detail: str = "", recipients: Optional[List[str]] = None) -> None:
@@ -748,6 +801,19 @@ class Broker:
             # a caller told "delivered" about some recipients and not others has
             # to reconcile that, and will get it wrong.
             return {"ok": False, "refused": refusals, "message_id": message.message_id}
+
+        # THE PRE-SEND GATE, at the last point before anything is delivered
+        # (spec O5e.1). Placed AFTER authorization so a refused destination
+        # never reaches it, and BEFORE transport so nothing leaves unscanned.
+        gate = self._scrub(message)
+        if gate is not None:
+            if self.audit:
+                self.audit.refused(sender=sender, recipients=message.to,
+                                   reason=f"pre-send gate: {gate}",
+                                   message_id=message.message_id)
+            self._record_fate(sender, message, "gate-refused", gate)
+            return {"ok": False, "refused": [f"pre-send gate: {gate}"],
+                    "message_id": message.message_id}
 
         delivered, failures = [], []
         for r in message.to:

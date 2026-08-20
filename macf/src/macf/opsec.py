@@ -41,6 +41,144 @@ DEFAULT_PROFILE: Dict[str, Any] = {
     ],
 }
 
+### ---------------------------------------------------------------------------
+### THE SIX CATEGORIES THE STATIC PROFILE ABOVE CANNOT HOLD.
+###
+### The **amail spec** O5e.4 "the-gate-states-its-coverage-as-a-threat-model"
+### records these as uncovered, and they are uncovered for a structural reason
+### rather than an oversight: THEY ARE PROPERTIES OF THE RUNNING ENVIRONMENT.
+### A static JSON profile cannot know this host's name, this account's name, or
+### where this agent's home is, so no amount of editing DEFAULT_PROFILE would
+### have added them. They must be derived when the scan runs.
+###
+### (This module is framework-wide, not part of amail, so the spec reference is
+### qualified. An unqualified clause number is only resolvable by someone
+### already inside the subsystem that owns it.)
+###
+### Derived values are themselves private -- that is the point of them -- so
+### they are never written to the profile on disk, and a finding reports the
+### CATEGORY and the span while REDACTING the matched text. A gate that echoes
+### the secret it caught into a log has moved the leak, not stopped it.
+### ---------------------------------------------------------------------------
+
+#: Categories that hold whatever the environment. Ordered most-specific first
+#: so a key blob is reported as key material rather than as a generic blob.
+SECRET_SHAPED: List[List[str]] = [
+    [r"-----BEGIN [A-Z ]*PRIVATE KEY-----", "private key material"],
+    [r"\bssh-(?:rsa|ed25519|dss)\s+AAAA[0-9A-Za-z+/=]{20,}", "ssh public key"],
+    [r"\b(?:gh[pousr]|github_pat)_[A-Za-z0-9_]{20,}", "github token"],
+    [r"\bxox[baprs]-[A-Za-z0-9-]{10,}", "slack token"],
+    [r"\bAKIA[0-9A-Z]{16}\b", "aws access key id"],
+    [r"\bsk-[A-Za-z0-9]{20,}", "api key"],
+    [r"(?i)\b(?:api[_-]?key|secret|passwd|password|token|bearer)\s*[:=]\s*"
+     r"[\"']?[A-Za-z0-9_\-./+=]{12,}", "credential assignment"],
+    [r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+     "uuid"],
+]
+
+
+def _literal(value: str) -> str:
+    """A literal value as a word-bounded pattern.
+
+    The boundaries exclude word characters and NOTHING ELSE, which is a
+    narrower rule than it first looks and was corrected by a test. An earlier
+    version also excluded a trailing hyphen, on the reasoning that it kept the
+    match inside one word -- and that silently passed `deployer-keys.txt`,
+    where the username is disclosed by the FILENAME. In a path or a filename a
+    hyphen is a separator, not a continuation.
+
+    A trailing LETTER still blocks: `deployers` is a different word that merely
+    contains the value, and matching it would produce the noise that gets a
+    gate muted.
+    """
+    import re as _re
+    return r"(?<!\w)" + _re.escape(value) + r"(?!\w)"
+
+
+def environment_patterns(env: Optional[Dict[str, str]] = None) -> List[List[str]]:
+    """Patterns for the six environment-derived categories.
+
+    `env` overrides discovery, and that parameter is what makes this testable
+    at all: a test that had to use the REAL hostname in order to check the
+    hostname rule would be committing the disclosure it exists to prevent.
+
+    Short values are deliberately DROPPED rather than matched. A three-letter
+    username turns every scan into a wall of false positives, and a gate whose
+    output is mostly noise gets muted within a week -- which leaves the real
+    leak unreviewed. Covering less and being believed is the better trade, and
+    it is the same reasoning the private scanner records for its own omissions.
+    """
+    import getpass
+    import socket
+
+    e = dict(env or {})
+    if env is None:
+        try:
+            e.setdefault("hostname", socket.gethostname())
+        except OSError:
+            pass
+        try:
+            e.setdefault("username", getpass.getuser())
+        except (OSError, KeyError):
+            pass
+        try:
+            from .utils.paths import find_agent_home
+            home = find_agent_home()
+            if home:
+                e.setdefault("agent_home", str(home))
+                mon = _moniker_from(home)
+                if mon:
+                    e.setdefault("moniker", mon)
+        except (ImportError, OSError):
+            pass
+
+    out: List[List[str]] = []
+    host = (e.get("hostname") or "").strip()
+    if len(host) >= 4:
+        out.append([_literal(host), "hostname"])
+        first = host.split(".")[0]
+        # The FQDN and its first label are the SAME disclosure, and the bare
+        # label is the form that actually appears in prose -- matching only the
+        # FQDN would pass the sentence a human would really write.
+        if first != host and len(first) >= 4:
+            out.append([_literal(first), "hostname"])
+
+    user = (e.get("username") or "").strip()
+    if len(user) >= 4:
+        out.append([_literal(user), "local username"])
+
+    home_path = (e.get("agent_home") or "").strip()
+    if home_path:
+        out.append([_literal(home_path), "agent home path"])
+    # Absolute paths into ANY user home, not only this one: a collaborator's
+    # path is someone else's disclosure and belongs to the same category.
+    out.append([r"(?:/home|/Users|/root)/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*",
+                "filesystem path"])
+
+    mon = (e.get("moniker") or "").strip()
+    if len(mon) >= 4:
+        out.append([_literal(mon), "agent moniker"])
+    # The @-suffixed short id, which is the form that actually leaks: it reads
+    # as an email-ish token, so it survives the review that would have caught
+    # the moniker spelled out.
+    out.append([r"@[0-9a-f]{6}\b", "agent uuid"])
+    return out
+
+
+def _moniker_from(home) -> Optional[str]:
+    """The agent's moniker from its calling card, or None.
+
+    Read rather than configured: the card already names the agent, and a second
+    source of the same fact would drift from it.
+    """
+    from pathlib import Path as _P
+    try:
+        text = (_P(home) / ".maceff_primary_agent.id").read_text().strip()
+    except OSError:
+        return None
+    return text.split("@", 1)[0].strip() or None
+
+
 ### The hook body written into <repo>/.git/hooks/. Reads the profile at run
 ### time so pattern edits do not require reinstallation. Kept dependency-free
 ### (stdlib only) because it runs in whatever python3 the committer has.
@@ -174,3 +312,188 @@ def install_hook(repo: Path, profile: Optional[Path] = None) -> Dict[str, Any]:
         "hooks_dir": str(hooks_dir),
         "profile": str(profile_path),
     }
+
+
+### ---------------------------------------------------------------------------
+### THE TEXT-LEVEL ENTRY POINT.
+###
+### Before this, the matching logic in this module existed ONLY as a string --
+### HOOK_TEMPLATE, written to disk and run by subprocess against `git diff
+### --cached`. It could not be imported, called, or pointed at anything that
+### was not a staged diff. The amail spec O5e.1
+### "the-gate-must-accept-a-composed-message" requires a gate that takes a
+### composed message, and the honest description of the starting state was not
+### "the scanner only exposes staged lines" but "there is no scanner to expose".
+###
+### So the matching moves here, where it can be called and tested. The hook
+### template keeps its own small matcher because it must run stdlib-only in
+### whatever python3 a committer has, with macf possibly not installed at all
+### -- but both read the SAME profile, so the vocabulary cannot diverge even
+### though the two loops are separate.
+### ---------------------------------------------------------------------------
+
+#: A part that could not be read as text. NOT an empty finding list: the amail
+#: spec O5e.6 "fail-closed-applies-to-the-scan-not-the-message" makes this its
+#: own outcome, because "nothing found" and "nothing looked at" are different
+#: facts and only one of them is safe to treat as clean.
+UNSCANNED = "unscanned"
+
+
+class Finding:
+    """One hit. Carries the category and the span, never the matched text.
+
+    Redaction is not decoration. A finding travels into logs, refusal messages
+    and operator alerts -- all of which are outward-facing surfaces the amail
+    spec O5e.0a "the-scrub-is-scoped-to-the-act-of-emission" puts IN SCOPE. A
+    gate that quotes the secret it caught has relocated the disclosure into the
+    record of having prevented it.
+    """
+
+    __slots__ = ("part", "label", "start", "end", "length")
+
+    def __init__(self, part: str, label: str, start: int, end: int):
+        self.part, self.label = part, label
+        self.start, self.end, self.length = start, end, end - start
+
+    def __repr__(self) -> str:
+        return (f"Finding(part={self.part!r}, label={self.label!r}, "
+                f"at={self.start}:{self.end}, len={self.length})")
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {"part": self.part, "label": self.label,
+                "start": self.start, "end": self.end, "length": self.length}
+
+
+class ScanResult:
+    """What a scan found, and what it could not look at.
+
+    `clean` is False when ANYTHING was unscanned, which is the whole of the
+    fail-closed rule: a caller asking "is this clean?" must not get True for a
+    message half of which was never read.
+    """
+
+    __slots__ = ("findings", "unscanned")
+
+    def __init__(self, findings: Optional[List[Finding]] = None,
+                 unscanned: Optional[List[str]] = None):
+        self.findings = findings or []
+        self.unscanned = unscanned or []
+
+    @property
+    def clean(self) -> bool:
+        return not self.findings and not self.unscanned
+
+    def reason(self) -> str:
+        """A refusal message that names categories and quotes nothing."""
+        bits = []
+        if self.findings:
+            counts: Dict[str, int] = {}
+            for f in self.findings:
+                counts[f"{f.part}:{f.label}"] = counts.get(f"{f.part}:{f.label}", 0) + 1
+            bits.append("; ".join(f"{k} x{v}" for k, v in sorted(counts.items())))
+        if self.unscanned:
+            bits.append("unscanned parts: " + ", ".join(sorted(self.unscanned)))
+        return " | ".join(bits) or "clean"
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {"clean": self.clean, "unscanned": list(self.unscanned),
+                "findings": [f.as_dict() for f in self.findings]}
+
+
+def compiled_checks(profile: Optional[Dict[str, Any]] = None,
+                    env: Optional[Dict[str, str]] = None) -> List[Any]:
+    """Every pattern this gate applies, compiled once.
+
+    Three sources, and they are combined here rather than merged into the
+    profile on disk: the static vocabulary, the always-on secret shapes, and
+    the environment-derived six. The last two never touch the profile file
+    because writing this host's name into a file that lives on this host --
+    and that a future hand might copy somewhere -- would create the disclosure.
+    """
+    import re as _re
+    prof = profile if profile is not None else DEFAULT_PROFILE
+    checks = []
+    for pattern, label in prof.get("hard", []):
+        checks.append((_re.compile(pattern), label))
+    for pattern, label in SECRET_SHAPED:
+        checks.append((_re.compile(pattern), label))
+    for pattern, label in environment_patterns(env):
+        checks.append((_re.compile(pattern), label))
+    return checks
+
+
+def scan_text(text: Any, *, part: str = "body",
+              profile: Optional[Dict[str, Any]] = None,
+              env: Optional[Dict[str, str]] = None,
+              checks: Optional[List[Any]] = None) -> ScanResult:
+    """Scan one piece of text. The entry point that did not exist.
+
+    Non-text input is reported UNSCANNED rather than coerced. `str(b"...")`
+    would produce `b'\\x00...'` and scan the REPR -- a scan that looks like it
+    ran, reports clean, and examined a string the sender never wrote. That is
+    the dead instrument this gate is most at risk of becoming.
+    """
+    if text is None:
+        return ScanResult(unscanned=[part])
+    if isinstance(text, (bytes, bytearray)):
+        try:
+            text = bytes(text).decode("utf-8")
+        except UnicodeDecodeError:
+            return ScanResult(unscanned=[part])
+    if not isinstance(text, str):
+        return ScanResult(unscanned=[part])
+
+    use = checks if checks is not None else compiled_checks(profile, env)
+    found = [Finding(part, label, m.start(), m.end())
+             for rx, label in use for m in rx.finditer(text)]
+    return ScanResult(findings=found)
+
+
+def scan_parts(parts: Dict[str, Any], *,
+               profile: Optional[Dict[str, Any]] = None,
+               env: Optional[Dict[str, str]] = None) -> ScanResult:
+    """Scan a named collection of parts, compiling the patterns once."""
+    use = compiled_checks(profile, env)
+    findings: List[Finding] = []
+    unscanned: List[str] = []
+    for name, value in parts.items():
+        r = scan_text(value, part=name, checks=use)
+        findings.extend(r.findings)
+        unscanned.extend(r.unscanned)
+    return ScanResult(findings=findings, unscanned=unscanned)
+
+
+def scan_message(message: Any, *, attachments: Optional[Dict[str, Any]] = None,
+                 profile: Optional[Dict[str, Any]] = None,
+                 env: Optional[Dict[str, str]] = None) -> ScanResult:
+    """Scan a composed message across its ENUMERATED surface.
+
+    The amail spec O5e.5 "the-gate's-scope-is-enumerated" names it: headers,
+    body, and attachment FILENAMES and metadata. A gate reading only the body
+    passes a leak in a subject line and still satisfies a rule that says
+    "scan the message".
+
+    Attachment CONTENT is not read here. That is a scoping decision and it is
+    stated rather than left implicit: a filename and its metadata are text and
+    are scanned; arbitrary bytes are reported UNSCANNED, and the deployment
+    decides whether an unscanned part may be sent (the amail spec O5e.6). What
+    is forbidden is the third option -- an unscanned part silently counting as
+    scanned.
+    """
+    parts: Dict[str, Any] = {
+        "header:from": getattr(message, "sender", None),
+        "header:to": ", ".join(getattr(message, "to", None) or []),
+        "header:subject": getattr(message, "subject", None),
+        "body": getattr(message, "body", None),
+    }
+    for name, meta in (attachments or {}).items():
+        parts[f"attachment:name:{name}"] = name
+        if isinstance(meta, (str, bytes, bytearray)):
+            parts[f"attachment:meta:{name}"] = meta
+        elif isinstance(meta, dict):
+            parts[f"attachment:meta:{name}"] = " ".join(
+                f"{k}={v}" for k, v in sorted(meta.items()))
+        elif meta is not None:
+            # Something we cannot read as text. Say so; do not stringify it.
+            parts[f"attachment:meta:{name}"] = meta
+    return scan_parts(parts, profile=profile, env=env)

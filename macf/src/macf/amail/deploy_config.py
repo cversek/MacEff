@@ -68,6 +68,24 @@ class BrokerDeployConfig(BaseModel):
         default=None,
         description="pickup boxes: handoff/<agent>/ owned by the broker, "
                     "group = the recipient's group; the recipient ingests as itself")
+    dispositions_dir: Optional[Path] = Field(
+        default=None,
+        description="broker-owned, agent-READABLE records of what became of "
+                    "each submitted message. Without it a sender holds a copy "
+                    "of what it sent and cannot learn whether it left, which "
+                    "is the outbound face of a silent drop.")
+    opsec_scan: bool = Field(
+        default=True,
+        description="run the pre-send OPSEC scrub on every outbound message. "
+                    "Defaults ON: a gate is only a control if the deployment "
+                    "that ships has it, and an opt-in security default is off "
+                    "everywhere nobody remembered to turn it on. Set false "
+                    "only for a closed fleet, deliberately.")
+    refuse_unscanned: bool = Field(
+        default=True,
+        description="refuse a message with a part the scrub could not read as "
+                    "text. What is forbidden is the third option, where an "
+                    "unscanned part silently counts as scanned.")
 
     @field_validator("agents")
     @classmethod
@@ -87,7 +105,14 @@ class BrokerDeployConfig(BaseModel):
         return v
 
     def to_broker_config(self) -> BrokerConfig:
-        """The in-memory shape the broker actually runs on."""
+        """The in-memory shape the broker actually runs on.
+
+        EVERY FIELD ABOVE MUST APPEAR BELOW. A field declared in the on-disk
+        contract and dropped here is worse than an absent one: the operator
+        writes it, the config validates, the broker starts, and the setting
+        does nothing — a silent partial with the shape of a complete one. The
+        test suite asserts the two sides agree rather than trusting this note.
+        """
         return BrokerConfig(
             domain=self.domain,
             agent_homes={name: b.home for name, b in self.agents.items()},
@@ -97,5 +122,21 @@ class BrokerDeployConfig(BaseModel):
             credentials_path=self.credentials_path,
             inbound_quarantine=self.inbound_quarantine,
             inbound_handoff=self.inbound_handoff,
+            dispositions_dir=self.dispositions_dir,
+            opsec_scan=self._build_scan() if self.opsec_scan else None,
+            refuse_unscanned=self.refuse_unscanned,
             agent_uids={b.uid: name for name, b in self.agents.items()},
         )
+
+    @staticmethod
+    def _build_scan():
+        """The pre-send scrub as a callable the broker can invoke.
+
+        Bound here rather than in the broker so the broker holds no opinion
+        about which scanner it runs, and a deployment can substitute one
+        without touching enforcement code. The patterns are derived from the
+        RUNNING environment at scan time (hostname, account, agent home), so
+        nothing private is written into the deployment file.
+        """
+        from macf.opsec import scan_message
+        return scan_message
