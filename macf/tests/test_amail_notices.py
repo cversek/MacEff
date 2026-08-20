@@ -427,3 +427,69 @@ def test_an_unauthenticated_sender_still_gets_silence_through_the_wire(tmp_path,
     out = I._notify_refusal(_inbound_cfg(tmp_path, t), b"From: forged@x\n\nx", "forged@x")
     assert out["emitted"] is False and out["sent"] is False
     assert t.sent == [], "a notice reached the transport for an unauthenticated sender"
+
+
+# ------------------------------------------ the ACCOUNT of the notice (c_22)
+#
+# A notice went out over the real transport, charged the broker's budget, and
+# wrote neither an audit record nor a disposition. Three accounting mechanisms
+# and one fired.
+
+def _ledger_cfg(tmp_path, transport):
+    import json as _json
+    from macf.amail.broker import BrokerConfig
+    contacts = tmp_path / "contacts.json"; contacts.write_text(_json.dumps({"alpha": []}))
+    (tmp_path / "alpha").mkdir()
+    return BrokerConfig(domain="ours.test", contacts_path=contacts,
+                        audit_path=tmp_path / "audit.jsonl",
+                        dispositions_dir=tmp_path / "disp",
+                        agent_homes={"alpha": tmp_path / "alpha"},
+                        transport=transport)
+
+
+def test_a_sent_notice_is_recorded_in_both_stores(tmp_path):
+    """THE DEFECT. The message left; the account of it did not."""
+    import json as _json
+    from macf.amail import notices as N
+    from macf.amail.broker import Broker
+    from macf.amail.ratelimit import BROKER_PRINCIPAL
+    bc = _ledger_cfg(tmp_path, _Recording())
+    r = N.transmit(_composed(), transport=bc.transport, credential="c",
+                   ledger=Broker(bc))
+    assert r.sent is True
+    recs = list((tmp_path / "disp").glob("*.json"))
+    assert len(recs) == 1, "the notice left no disposition record"
+    d = _json.loads(recs[0].read_text())
+    assert d["agent"] == BROKER_PRINCIPAL, "a notice was billed to an agent"
+    assert "them@example.org" in d["recipients"]
+    audit = (tmp_path / "audit.jsonl").read_text()
+    assert "broker-originated" in audit, "the audit log cannot say who sent it"
+
+
+def test_a_failed_notice_is_recorded_too(tmp_path):
+    """A notice that reached the transport and failed is not the same fact as
+    one never attempted, and leaving it unrecorded puts the gap back on the
+    path where it matters most."""
+    import json as _json
+    from macf.amail import notices as N
+    from macf.amail.broker import Broker
+    bc = _ledger_cfg(tmp_path, _Broken())
+    r = N.transmit(_composed(), transport=bc.transport, credential="c",
+                   ledger=Broker(bc))
+    assert r.sent is False
+    recs = list((tmp_path / "disp").glob("*.json"))
+    assert len(recs) == 1
+    hist = _json.loads(recs[0].read_text())["recipients"]["them@example.org"]["history"]
+    assert "TransportError" in hist[-1]["detail"]
+
+
+def test_a_recording_failure_does_not_undo_a_send(tmp_path, capsys):
+    """The message is already gone. Pretending otherwise would make the
+    ledger's error into a second and larger lie -- so it announces."""
+    from macf.amail import notices as N
+    class _BrokenLedger:
+        def record_notice(self, *a, **k): raise OSError("disk full")
+    t = _Recording()
+    r = N.transmit(_composed(), transport=t, credential="c", ledger=_BrokenLedger())
+    assert r.sent is True, "a recording failure was allowed to deny a real send"
+    assert "ledger is short by one" in capsys.readouterr().err

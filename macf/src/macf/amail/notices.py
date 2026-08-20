@@ -202,7 +202,8 @@ def emit(decision: NoticeDecision, *, to_address: str, sender_address: str,
 
 
 def transmit(decision: NoticeDecision, *, transport: Any = None,
-             credential: Any = None) -> NoticeDecision:
+             credential: Any = None, ledger: Optional[Any] = None
+             ) -> NoticeDecision:
     """Actually send a notice that `emit` decided on and composed.
 
     KEPT SEPARATE FROM `emit`, which stays free of I/O so every branch of the
@@ -237,9 +238,36 @@ def transmit(decision: NoticeDecision, *, transport: Any = None,
         # The refusal it answers has ALREADY happened and is recorded. Letting a
         # transport failure propagate would make an undeliverable notice undo
         # the quarantine decision that produced it.
+        # THE FAILURE IS ACCOUNTED FOR TOO. A notice that reached the
+        # transport and failed is not the same fact as one never attempted,
+        # and leaving the failed case unrecorded would put the gap back on the
+        # only path where it matters most.
+        _account(ledger, decision.message, recipients, "bounced",
+                 f"{type(e).__name__}: {e}")
         return NoticeDecision(True, f"{decision.reason}; notice NOT sent "
                                     f"({type(e).__name__}: {e})",
                               message=decision.message, alert=True, sent=False)
+    _account(ledger, decision.message, recipients, result.state, result.detail)
     return NoticeDecision(True, f"{decision.reason}; sent ({result.state})",
                           message=decision.message, alert=decision.alert,
                           sent=True)
+
+
+def _account(ledger: Optional[Any], message: Any, recipients: list,
+             state: str, detail: str) -> None:
+    """Write the audit entry and the fate, and NEVER let that break the send.
+
+    A recording failure must not undo a transmission that already happened --
+    the message is gone, and pretending otherwise would make the ledger's
+    error into a second, larger lie. It is announced instead, because an
+    unrecorded send is exactly the condition this store exists to make
+    impossible to hide.
+    """
+    if ledger is None or not recipients:
+        return
+    try:
+        ledger.record_notice(message, recipients[0], state, detail)
+    except (OSError, ValueError, AttributeError) as e:
+        print(f"⚠️ MACF: a notice was SENT and its record was not written "
+              f"({type(e).__name__}: {e}); the ledger is short by one and the "
+              f"message has already left", file=sys.stderr)

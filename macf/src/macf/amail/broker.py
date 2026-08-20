@@ -1480,6 +1480,43 @@ class Broker:
                     "configuration into a broker-owned directory."
                 )
 
+    def record_notice(self, message: Any, recipient: str, state: str,
+                      detail: str = "") -> None:
+        """Account for a BROKER-ORIGINATED message that left the system.
+
+        THIS EXISTED FOR NOBODY UNTIL A NOTICE ACTUALLY WENT OUT. The notice
+        path charged the broker's rate-limit budget, passed the pre-send gate,
+        read the credential and reached the transport -- and wrote NEITHER an
+        audit record NOR a disposition. A message crossed the boundary on our
+        credential and the two stores that exist to account for outbound
+        traffic had no trace of it.
+
+        Three accounting mechanisms and one fired. The inconsistency is what
+        made it findable: had all three been silent I would have suspected the
+        notice never went, and the budget stamp is what proved it did.
+
+        TWO CLAIMS DEPENDED ON THIS AND WERE FALSE. The audit log is supposed
+        to answer "who spoke to whom" in BOTH directions -- spec O5b.1, which
+        calls that the broker's actual job -- and it could not answer it for
+        anything the broker itself sent. And V19's conservation was
+        structurally blind to notices: absent from both sides of the balance,
+        so the ledger balanced while outbound traffic it could not see was
+        leaving. A ledger whose whole value is that a discrepancy means
+        something cannot afford invisible traffic.
+
+        The principal is the BROKER, not an agent. No agent composed it, no
+        agent's budget paid for it, and attributing it to one would put a
+        message in an agent's ledger that the agent never wrote.
+        """
+        from .ratelimit import BROKER_PRINCIPAL
+        if self.audit:
+            self.audit.allowed(sender=BROKER_PRINCIPAL, recipients=[recipient],
+                               message_id=getattr(message, "message_id", "") or "",
+                               rung="internet",
+                               authorship="broker-originated")
+        self._record_fate(BROKER_PRINCIPAL, message, state, detail,
+                          recipients=[recipient])
+
     def credential_status(self) -> str:
         """Custody of the submission credential, as FOUR distinct states.
 

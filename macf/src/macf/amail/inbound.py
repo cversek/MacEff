@@ -407,8 +407,16 @@ def _notify_refusal(cfg: InboundConfig, raw: bytes, sender: str) -> Dict[str, An
                       f"a notice ({type(e).__name__}); the notice will not be "
                       f"sent and the refusal stands", file=sys.stderr)
                 transport = None
+        # THE LEDGER. A notice is outbound mail by every other rule this spec
+        # applies to it -- the pre-send gate, the broker's rate-limit budget,
+        # credential custody -- and the account of it was the one place it was
+        # left out. Without this a message crosses the boundary on our
+        # credential and neither the audit log nor the disposition store has
+        # any trace, so V19's conservation balances over traffic it cannot see.
+        from .broker import Broker
         decision = notices.transmit(decision, transport=transport,
-                                    credential=credential)
+                                    credential=credential,
+                                    ledger=Broker(bc))
 
     if decision.alert:
         print(f"🚨 MACF: a notice for a refused message needs a human: "
