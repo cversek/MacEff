@@ -1797,3 +1797,143 @@ def serve(broker: Broker) -> _Server:
     os.chmod(path, 0o666)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
+
+
+# ------------------------------------------------- outbound conservation (V19)
+
+def reconcile_outbound(audit_path: Optional[Path],
+                       dispositions_dir: Optional[Path],
+                       *, since: Optional[str] = None,
+                       until: Optional[str] = None) -> Dict[str, Any]:
+    """The BROKER's half of outbound conservation. Spec V19 / O5d.6.
+
+    THE AGENT-SIDE HALF CANNOT DO THIS JOB, and the difference is not
+    redundancy. `client.reconcile_sent` WALKS THE AGENT'S SENT COPIES and looks
+    up a disposition for each, so it finds a record that is MISSING and is
+    structurally blind to a record matching no copy at all -- nothing there
+    enumerates the store. A planted disposition for a message the agent never
+    composed passes it completely. This walks the other side.
+
+    THE UNIT IS THE MESSAGE-RECIPIENT PAIR (O5d.8c), not the message. Transport
+    outcomes are per-recipient by nature, so a balance over messages would net
+    two different fates into one row and report agreement it has not got.
+
+    BOTH EDGES OF THE WINDOW ARE DECLARED AND REPORTED (O5d.7), because
+    "balanced" over an undeclared window is a true statement that misinforms --
+    the same defect as a green suite with no denominator. The LEFT edge is the
+    broker's first look at a submission: a message composed and never submitted
+    is invisible here BY CONSTRUCTION and is reconciled agent-side instead
+    (O5d.6a), so counting it would report a shortfall for behaviour O5c.6
+    explicitly blesses. The RIGHT edge is the retention bound: an aged-out
+    record leaves BOTH sides of the balance together.
+
+    `abandoned` IS NOT AN ANOMALY ON EVERY BINDING. Where no positive terminal
+    disposition is observable -- see the binding notes -- a correctly submitted
+    message ages from `submitted` to `abandoned`, and a checker that flags it
+    reports a shortfall for correct behaviour. That is how a tolerance gets
+    widened until the alarm stops complaining, after which it never complains.
+    So `abandoned` is counted as TERMINAL and reported separately rather than
+    being called a discrepancy.
+    """
+    out: Dict[str, Any] = {
+        "ok": True,
+        "window": {"since": since, "until": until},
+        "audited_pairs": 0,
+        "terminal": 0,
+        "in_flight": 0,
+        "abandoned": 0,
+        "missing_record": [],      # audited, no disposition record
+        "orphan_record": [],       # disposition record, never audited
+        "unreadable": [],
+    }
+    if not audit_path or not dispositions_dir:
+        out["ok"] = False
+        out["unreadable"].append(
+            "audit log or disposition store not configured; a conservation "
+            "check with only one side is not a check")
+        return out
+
+    def _in_window(ts: Optional[str]) -> bool:
+        if ts is None:
+            return True
+        if since and ts < since:
+            return False
+        if until and ts > until:
+            return False
+        return True
+
+    # LEFT SIDE: every (message, recipient) the broker took a decision on.
+    audited: Dict[str, set] = {}
+    try:
+        for line in Path(audit_path).read_text().splitlines():
+            if not line.strip():
+                continue
+            try:
+                rec = json.loads(line)
+            except (ValueError, TypeError):
+                # A damaged line is not silently skipped: it is a hole in the
+                # very record the balance is computed from.
+                out["unreadable"].append("audit line unparseable")
+                continue
+            if rec.get("direction") != "outbound":
+                continue
+            mid = rec.get("message_id")
+            if not mid or not _in_window(rec.get("ts")):
+                continue
+            for r in rec.get("recipients") or []:
+                audited.setdefault(mid, set()).add(str(r).strip().lower())
+    except OSError as e:
+        out["ok"] = False
+        out["unreadable"].append(f"audit log unreadable: {e}")
+        return out
+
+    # RIGHT SIDE: every pair the disposition store holds a fate for.
+    recorded: Dict[str, Dict[str, str]] = {}
+    try:
+        files = sorted(Path(dispositions_dir).glob("*.json"))
+    except OSError as e:
+        out["ok"] = False
+        out["unreadable"].append(f"disposition store unreadable: {e}")
+        return out
+    for f in files:
+        try:
+            d = json.loads(f.read_text())
+        except (OSError, ValueError) as e:
+            # REFUSES TO GUESS. An unreadable record is not an absent one, and
+            # treating it as absent would let corruption look like a shortfall
+            # -- or worse, let a shortfall look like corruption.
+            out["unreadable"].append(f"{f.name}: {e}")
+            continue
+        mid = d.get("message_id") or f.stem
+        for r, v in (d.get("recipients") or {}).items():
+            hist = v.get("history") or []
+            if not hist:
+                continue
+            recorded.setdefault(mid, {})[str(r).strip().lower()] = hist[-1].get("state")
+
+    TERMINAL = {"denied", "rate-refused", "gate-refused", "bounced",
+                "delivered", "abandoned"}
+
+    for mid, rs in audited.items():
+        for r in rs:
+            out["audited_pairs"] += 1
+            state = recorded.get(mid, {}).get(r)
+            if state is None:
+                out["missing_record"].append(f"{mid}/{r}")
+            elif state == "abandoned":
+                out["abandoned"] += 1
+                out["terminal"] += 1
+            elif state in TERMINAL:
+                out["terminal"] += 1
+            else:
+                out["in_flight"] += 1
+
+    for mid, rs in recorded.items():
+        for r in rs:
+            if r not in audited.get(mid, set()):
+                # THE DIRECTION THE AGENT-SIDE CHECK CANNOT SEE: a fate for a
+                # pair the broker never decided on.
+                out["orphan_record"].append(f"{mid}/{r}")
+
+    out["ok"] = not (out["missing_record"] or out["orphan_record"] or out["unreadable"])
+    return out
