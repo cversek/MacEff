@@ -226,3 +226,87 @@ class BrokerDeployConfig(BaseModel):
         """
         from macf.opsec import scan_message
         return scan_message
+
+
+class InboundDeployConfig(BaseModel):
+    """The on-disk INBOUND configuration (``inbound_config.json``).
+
+    THIS EXISTS BECAUSE THE INBOUND ENTRY POINT HAND-ROLLED ITS CONFIG. The
+    broker daemon loads its file through :class:`BrokerDeployConfig` — validated,
+    unknown keys refused, every field carried. The inbound consumer parsed a
+    dict by hand and built a :class:`BrokerConfig` from four fields, so it ran
+    with ``opsec_scan=None``, ``rate_limiter=None`` and ``transport=None``.
+
+    The consequence was live and silent: a non-delivery notice was **never
+    scrubbed**, was charged against **no budget**, and could not be sent — while
+    the code implementing all three was correct and fully tested. Two entry
+    points to one deployment, one validated and one by hand, and the hand-rolled
+    one dropped two security controls without saying anything.
+
+    THE DUPLICATION WAS THE CRUFT. The old file re-declared ``domain``,
+    ``agents``, ``contacts_path`` and ``audit_path`` — all of which the broker
+    config already carries — so the two could drift apart, and did. The broker
+    half is now READ FROM THE BROKER'S OWN FILE and this contract holds only
+    what is genuinely inbound.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    spool_dir: Path = Field(description="the receiver's spool; this consumer's input")
+    quarantine_dir: Path = Field(description="broker-owned quarantine for refused mail")
+    handoff_dir: Path = Field(
+        default=Path("/var/lib/amail/handoff"),
+        description="pickup boxes: handoff/<agent>/, broker-owned, recipient-group readable")
+    verdict_authority: str = Field(
+        default="",
+        description="the authserv-id this deployment trusts in "
+                    "Authentication-Results. A verdict stamped by anyone else "
+                    "is treated as ABSENT, never as a failure.")
+    push_wake_enabled: bool = Field(
+        default=False,
+        description="while the wake mechanism is unbuilt this stays false and "
+                    "no path may produce the push-wake outcome")
+    broker_config_path: Path = Field(
+        default=Path("/etc/amail/broker_config.json"),
+        description="the BROKER's deployment config. Read through the same "
+                    "validated model the broker daemon uses, so both entry "
+                    "points agree by construction rather than by discipline.")
+    contacts_path: Optional[Path] = Field(
+        default=None,
+        description="OPTIONAL override of the broker's contact list for INBOUND "
+                    "authorization. Null means use the broker's, which is what "
+                    "the amail spec prefers: one broker-owned store whose "
+                    "AUTHORITY is per-agent. A separate list here makes "
+                    "who-may-write-to-me and who-I-may-write-to two different "
+                    "questions with two different answers, which is a "
+                    "deployment's choice to make DELIBERATELY and not by "
+                    "inheriting an old file.")
+    audit_path: Optional[Path] = Field(
+        default=None, description="OPTIONAL override of the broker's audit log")
+
+    def to_inbound_config(self):
+        """Compose the in-memory inbound config, broker half included.
+
+        The broker half comes from the broker's own validated file, so a
+        control added there — a scrubber, a limiter, a transport — reaches this
+        entry point WITHOUT anyone remembering to add it in a second place.
+        That is the whole point: the previous arrangement required remembering,
+        and the remembering did not happen.
+        """
+        import json as _json
+        from macf.amail.inbound import InboundConfig
+
+        bc = BrokerDeployConfig.model_validate(
+            _json.loads(Path(self.broker_config_path).read_text())).to_broker_config()
+        if self.contacts_path is not None:
+            bc.contacts_path = self.contacts_path
+        if self.audit_path is not None:
+            bc.audit_path = self.audit_path
+        return InboundConfig(
+            broker_config=bc,
+            spool_dir=self.spool_dir,
+            quarantine_dir=self.quarantine_dir,
+            handoff_dir=self.handoff_dir,
+            verdict_authority=self.verdict_authority,
+            push_wake_enabled=self.push_wake_enabled,
+        )

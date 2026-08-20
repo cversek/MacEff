@@ -148,3 +148,66 @@ def test_every_broker_config_field_is_either_fed_or_declared_derived():
         f"{sorted(unfed)}. A field the broker reads and the on-disk contract "
         f"cannot reach is inert in every real deployment while every unit test "
         f"stays green.")
+
+
+# ------------------------------------------------- the inbound half (c_22)
+#
+# The inbound entry point hand-rolled its BrokerConfig from four fields while
+# the broker daemon loaded the same deployment through the validated model. It
+# therefore ran with no scrubber, no rate limiter and no transport, so a
+# non-delivery notice was never scrubbed, charged against no budget, and could
+# not be sent -- while the code implementing all three was correct and tested.
+
+def _files(tmp_path, inbound_extra=None):
+    import json as _json
+    b = tmp_path / "broker_config.json"
+    b.write_text(_json.dumps(dict(
+        VALID, transport_endpoint="https://submit.example.test/submit")))
+    cfg = {"spool_dir": str(tmp_path / "spool"),
+           "quarantine_dir": str(tmp_path / "q"),
+           "broker_config_path": str(b),
+           "verdict_authority": "mx.example.net"}
+    cfg.update(inbound_extra or {})
+    return cfg
+
+
+def test_the_inbound_config_inherits_the_brokers_outbound_controls(tmp_path):
+    """THE DEFECT, pinned. A control added to the broker's config must reach
+    the inbound entry point WITHOUT anyone remembering to add it twice --
+    because the previous arrangement required remembering, and it did not
+    happen."""
+    from macf.amail.deploy_config import InboundDeployConfig
+    ic = InboundDeployConfig.model_validate(_files(tmp_path)).to_inbound_config()
+    bc = ic.broker_config
+    assert bc.opsec_scan is not None, "notices would be composed with no gate"
+    assert bc.transport is not None, "notices could not be sent"
+    assert bc.domain == "example.test"
+
+
+def test_inbound_defaults_to_the_brokers_contact_list(tmp_path):
+    """The spec prefers ONE broker-owned store whose authority is per-agent.
+    Two lists make who-may-write-to-me and who-I-may-write-to different
+    questions, which a deployment may choose deliberately and must not inherit
+    from an old file."""
+    from macf.amail.deploy_config import InboundDeployConfig
+    ic = InboundDeployConfig.model_validate(_files(tmp_path)).to_inbound_config()
+    assert str(ic.broker_config.contacts_path).endswith("contacts.json")
+
+
+def test_a_separate_inbound_contact_list_is_an_explicit_override(tmp_path):
+    """Still possible, and now it has to be SAID. The paired positive for the
+    test above: a default that cannot be overridden is a different defect."""
+    from macf.amail.deploy_config import InboundDeployConfig
+    ic = InboundDeployConfig.model_validate(
+        _files(tmp_path, {"contacts_path": "/etc/amail/inbound_contacts.json"})
+    ).to_inbound_config()
+    assert str(ic.broker_config.contacts_path) == "/etc/amail/inbound_contacts.json"
+
+
+def test_the_old_duplicated_keys_are_refused(tmp_path):
+    """`domain` and `agents` came from the broker config all along. Accepting
+    them here is what let the two drift apart, so the contract refuses them
+    rather than quietly preferring one."""
+    from macf.amail.deploy_config import InboundDeployConfig
+    with pytest.raises(ValidationError, match="domain"):
+        InboundDeployConfig.model_validate(_files(tmp_path, {"domain": "other.test"}))
