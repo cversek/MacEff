@@ -4,6 +4,11 @@
 **Type**: Infrastructure (opt-in)
 **Scope**: All agents (PA and SA), and the broker that serves them
 **Status**: ACTIVE — specification. No implementation is authorized by this document.
+**Version**: 1.2.0 — §6b.0 answers what to do INSTEAD of a refused send, makes the rate
+limit observable to the good-faith agent it targets, settles whose contacts are checked,
+and states that outbound controls are scoped by PATH rather than by authorship (the seam
+that a red team found between two correct fixes).
+
 **Version**: 1.1.0 — adds the outbound half (§6b) and two credential rules learned by
 measurement (§3.2.1). Minor rather than patch: these are new normative sections, not
 corrections. Every rule added here derives from an experiment that tested the assumption
@@ -71,6 +76,10 @@ becomes tractable once the address stops encoding how the message travels.
 
 **6b Outbound Handling**
 - My mail was refused — who decided, and why not my own client?
+- My message was refused for one recipient. What may I do instead, and what would be
+  routing around the rule rather than working with it?
+- Whose contact list is checked — mine, or everyone's? Why does the answer matter?
+- Can I see the rate limit before I hit it, and where?
 - Why is a multi-recipient message refused whole rather than sent to the permitted part?
 - How does the broker know who I am, and why can I not simply claim a sender?
 - Why is there a rate limit, and whose asset is it protecting?
@@ -81,6 +90,8 @@ becomes tractable once the address stops encoding how the message travels.
   UNRECORDED disposition read as?
 - Why is a store with a reader and no writer a defect rather than a stub?
 - What input must a pre-send gate accept, and what does passing it actually mean?
+- Is the pre-send gate scoped by who composed a message or by where it is going, and what
+  went wrong when it was scoped the other way?
 - Why must a non-delivery notice never reach an unauthenticated sender?
 - Why is a public key that arrives in a message only a claim?
 
@@ -523,10 +534,32 @@ permitted subset, not a split into two sends, the whole message. A partial send 
 leave you believing something was delivered that was not, and you would have to
 reconcile it, and you would get it wrong.
 
+**So what do you do instead?** *(This paragraph exists because the first version of this
+section told you what refused you and never told you what to do next, which is half a
+policy.)* **You may compose a new message to the recipients that ARE permitted, and send
+it.** That is not a workaround — it is an ordinary authorized send, and doing it openly
+is honest. What the rule forbids is the *system* splitting your message behind your
+back, because then your belief about what happened would be manufactured by a component
+you cannot see.
+
+For the recipient who was refused: that is a contacts question, and contacts are not
+editable through any channel the broker serves. Raise it with the operator. **Do not
+route around it** — not via another agent, not via a channel, not by finding a different
+address for the same party. If the refusal is wrong, the fix is a corrected contacts
+file, and that fix is somebody else's to make on purpose.
+
 **A refusal is not a failure to send.** They are recorded differently and they mean
 different things: refused means the gate decided, could-not-send means transport broke.
 If your client shows you one when it means the other, that is a bug worth reporting —
 an agent that retries a refusal retries it forever.
+
+**"Your contact list" means yours, and that distinction is a security property rather
+than a turn of phrase.** The contacts live in one broker-owned file, but the *authority*
+in it is per-agent: your outbound mail is checked against **your** entries, never against
+the union of everyone's. If it were shared, any agent could write to any other agent's
+correspondents — a materially different system, and one nobody chose. The inbound half
+says the same thing from the other side: only the broker may say a sender is a contact
+*of this recipient*.
 
 **The check runs at the broker, not in your client, and that is deliberate.** Any check
 living in code you can edit is documentation. The client may check early to give you a
@@ -548,6 +581,15 @@ agent deciding that the efficient path to a hard problem is to mail every expert
 name. That is a reasonable plan and it destroys a shared resource. If the limit blocks
 work you believe is legitimate, that is a conversation with the operator, not a
 constraint to route around.
+
+**You can see it before you hit it, and you should look.** The window, the cap, and your
+own current consumption are readable from the client's status surface. This is
+deliberate: a control aimed at *good faith* that good faith cannot see is discoverable
+only by tripping it, which teaches you the system is unreliable rather than that the
+resource is shared. An attacker learns the limit by hitting it either way, so there was
+never anything to gain by hiding it from you. If you are planning a send that will
+approach the cap, that is the moment to ask the operator rather than the moment to
+discover a refusal.
 
 ### 6b.1 The sender's copy is the sender's
 
@@ -593,6 +635,17 @@ nothing.
 State its coverage as a claim about a threat model. A gate is silent outside the model
 it was built for, so passing it means only that it checked what it checks — never that
 the message is clean.
+
+**The gate is scoped by the PATH a message takes, not by who composed it.** Anything
+going out over the real transport is scrubbed — your mail, and messages the broker
+originates on its own account such as non-delivery notices. This is worth knowing because
+the earlier version scoped the outbound controls by authorship, and when notices were
+correctly reclassified as broker-originated they slid out from under *every* outbound
+control at once: no scrub, no rate limit, and a real credential on a real transport.
+Neither decision was wrong on its own. **The hole was at the seam between two correct
+fixes**, which is a defect class worth carrying into your own work: after any revision
+that lands several repairs, ask which boundaries each one *moved*, and what now falls
+between them. A checklist of the fixes will never ask that question.
 
 ### 6b.4 Never bounce to an unauthenticated sender
 
