@@ -249,3 +249,116 @@ def deploy_with_notices(tmp_path):
         return eml, side
 
     return cfg, spool_fn, make
+
+
+# ------------------------------------------- transmission (found by a battery)
+#
+# For one whole phase `emitted` was the only field, it meant "decided and
+# composed", and every reader took it to mean SENT. A live run reported
+# `emitted: true` for a notice that reached no transport, no audit record and
+# no ledger.
+
+class _Recording:
+    name = "recording"
+    def __init__(self): self.sent = []
+    def send(self, message, credential, recipient=None):
+        self.sent.append((recipient, message))
+        from macf.amail import transport as T
+        return T.TransportResult(T.ACCEPTED, "accepted for sending (202)")
+
+
+class _Broken:
+    name = "broken"
+    def send(self, message, credential, recipient=None):
+        from macf.amail.transport import TransportError
+        raise TransportError("endpoint unreachable")
+
+
+def _composed():
+    from macf.amail import notices as N
+    return N.emit(N.NoticeDecision(True, "authenticated and aligned"),
+                  to_address="them@example.org",
+                  sender_address="postmaster@ours.test")
+
+
+def test_a_transmitted_notice_reports_sent():
+    from macf.amail import notices as N
+    t = _Recording()
+    r = N.transmit(_composed(), transport=t, credential="cred")
+    assert r.sent is True
+    assert len(t.sent) == 1 and t.sent[0][0] == "them@example.org"
+
+
+def test_a_freshly_composed_notice_is_not_yet_sent():
+    """THE DEFAULT IS THE HAZARD, and the first version of this suite missed it.
+
+    A mutant flipping the `sent` default to True survived, because every test
+    exercised a branch that passes `sent` explicitly. The branch that does NOT
+    pass it is `emit` itself — which composes and returns without transmitting,
+    and is precisely the object whose optimism caused the original defect.
+    """
+    from macf.amail import notices as N
+    d = _composed()
+    assert d.emitted is True
+    assert d.sent is False, "a composed notice claimed to have been sent"
+
+
+def test_a_decision_not_to_emit_is_never_transmitted_even_carrying_a_message():
+    """THE GUARD THE FIRST VERSION DID NOT REACH.
+
+    A mutant removing the `not decision.emitted` check survived, because the
+    gate-refused decision it was tested with also carries `message=None`, so
+    the message check caught it and the emitted check was never exercised. A
+    control that passes because a DIFFERENT control fired is a dead control
+    wearing a live one's result. Here the message is present and emitted is
+    False, so only the guard under test can refuse.
+    """
+    from macf.amail import notices as N
+    t = _Recording()
+    suppressed = N.NoticeDecision(False, "sender was not authenticated",
+                                  message=N.compose_notice(
+                                      "victim@example.org", N.CODE_NOT_ACCEPTED,
+                                      sender_address="postmaster@ours.test"))
+    r = N.transmit(suppressed, transport=t, credential="cred")
+    assert r.sent is False
+    assert t.sent == [], "a notice the gate declined reached the transport"
+
+
+def test_no_transport_is_composed_but_NOT_sent():
+    """The state the system was actually in, now nameable. A deployment with no
+    outbound leg is legitimate; what must never happen is that state being
+    indistinguishable from a delivered one."""
+    from macf.amail import notices as N
+    r = N.transmit(_composed(), transport=None)
+    assert r.emitted is True
+    assert r.sent is False
+    assert "NOT sent" in r.reason
+
+
+def test_a_transport_failure_does_not_undo_the_refusal():
+    """The refusal this notice answers has ALREADY happened and is recorded.
+    Letting a transport error propagate would make an undeliverable notice
+    reach back and break the quarantine decision that produced it."""
+    from macf.amail import notices as N
+    r = N.transmit(_composed(), transport=_Broken(), credential="cred")
+    assert r.sent is False
+    assert r.alert is True, "a notice that could not be sent must be visible"
+
+
+def test_a_notice_the_gate_refused_is_never_transmitted():
+    """Fail-closed beats exactly-one, and it must survive the new wire: the
+    scrub's refusal cannot be undone by a later transmission step."""
+    from macf.amail import notices as N
+    class _Findings:
+        findings = ["planted"]
+        unscanned = None
+        def reason(self): return "planted"
+    refused = N.emit(N.NoticeDecision(True, "aligned"),
+                     to_address="them@example.org",
+                     sender_address="postmaster@ours.test",
+                     scrub=lambda m: _Findings())
+    assert refused.emitted is False and refused.alert is True
+    t = _Recording()
+    r = N.transmit(refused, transport=t, credential="cred")
+    assert r.sent is False
+    assert t.sent == [], "a gate-refused notice reached the transport"

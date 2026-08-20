@@ -67,6 +67,17 @@ class NoticeDecision:
     reason: str
     message: Optional[Message] = None
     alert: bool = False
+    #: WHETHER IT ACTUALLY LEFT. Separate from `emitted`, and the separation is
+    #: a repair rather than a refinement: for one whole phase `emitted` was the
+    #: only field, it meant "the decision was taken and a notice was composed",
+    #: and every reader took it to mean SENT. A live battery run reported
+    #: `emitted: true` for a notice that reached no transport, no audit record
+    #: and no ledger — the operator would have checked an empty mailbox against
+    #: a report saying one went out.
+    #:
+    #: A decision and its execution are different facts. One field cannot carry
+    #: both without the more optimistic reading winning.
+    sent: bool = False
 
 
 def is_notice(message: Any) -> bool:
@@ -188,3 +199,47 @@ def emit(decision: NoticeDecision, *, to_address: str, sender_address: str,
                                          f"{result.reason()}", alert=True)
 
     return NoticeDecision(True, decision.reason, message=notice)
+
+
+def transmit(decision: NoticeDecision, *, transport: Any = None,
+             credential: Any = None) -> NoticeDecision:
+    """Actually send a notice that `emit` decided on and composed.
+
+    KEPT SEPARATE FROM `emit`, which stays free of I/O so every branch of the
+    spec's decision tree can be exercised without a transport. That separation
+    was correct and it is also what let the gap hide: `emit` returned a composed
+    notice, its caller reported success, and nothing carried the notice
+    outward.
+
+    THIS WAS A DELIBERATE DEFERRAL THAT EXPIRED. The notice path was left
+    unwired on purpose while no transport existed, because handing this path a
+    live sender before there was one was the single thing this module must not
+    do by accident. A transport exists now, so the deferral is spent and what
+    remains is a missing wire.
+
+    NO TRANSPORT IS NOT A FAILURE OF THE NOTICE, and the distinction is
+    reported rather than flattened: a deployment with no outbound leg is
+    legitimate, and its notices are composed-not-sent. What must never happen
+    is that state being indistinguishable from a delivered one.
+    """
+    if not decision.emitted or decision.message is None:
+        return decision
+    if transport is None:
+        return NoticeDecision(True, f"{decision.reason}; composed but NOT sent: "
+                                    f"no outbound transport is configured",
+                              message=decision.message, alert=decision.alert,
+                              sent=False)
+    try:
+        recipients = list(getattr(decision.message, "to", None) or [])
+        result = transport.send(decision.message, credential,
+                                recipient=recipients[0] if recipients else None)
+    except Exception as e:  # noqa: BLE001 - a notice must not break the refusal
+        # The refusal it answers has ALREADY happened and is recorded. Letting a
+        # transport failure propagate would make an undeliverable notice undo
+        # the quarantine decision that produced it.
+        return NoticeDecision(True, f"{decision.reason}; notice NOT sent "
+                                    f"({type(e).__name__}: {e})",
+                              message=decision.message, alert=True, sent=False)
+    return NoticeDecision(True, f"{decision.reason}; sent ({result.state})",
+                          message=decision.message, alert=decision.alert,
+                          sent=True)
