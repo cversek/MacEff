@@ -211,3 +211,23 @@ def test_the_old_duplicated_keys_are_refused(tmp_path):
     from macf.amail.deploy_config import InboundDeployConfig
     with pytest.raises(ValidationError, match="domain"):
         InboundDeployConfig.model_validate(_files(tmp_path, {"domain": "other.test"}))
+
+
+def test_a_notice_is_audited_OUTBOUND_even_when_inbound_uses_its_own_log(tmp_path):
+    """A NOTICE IS OUTBOUND TRAFFIC, so its audit record belongs in the
+    outbound log even where a deployment points inbound at a separate one.
+
+    Measured: with the notice audited into the inbound log, the outbound
+    conservation ledger reported it as an ORPHAN RECORD within minutes -- a
+    fate for a pair the broker never audited. That check found a defect
+    introduced an hour after the check itself was built, which is the argument
+    for building the check.
+    """
+    from macf.amail.deploy_config import InboundDeployConfig
+    ic = InboundDeployConfig.model_validate(
+        _files(tmp_path, {"audit_path": "/var/lib/inbound_audit.jsonl"})
+    ).to_inbound_config()
+    assert str(ic.broker_config.audit_path) == "/var/lib/inbound_audit.jsonl"
+    assert str(ic.outbound_audit_path).endswith("audit.jsonl"), \
+        "outbound traffic would be filed where the outbound balance never looks"
+    assert ic.outbound_audit_path != ic.broker_config.audit_path

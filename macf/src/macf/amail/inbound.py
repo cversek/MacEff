@@ -90,6 +90,16 @@ class InboundConfig:
     #: The authserv-id this deployment trusts in Authentication-Results
     #: headers (a binding fact — e.g. the MX operator's identifier). A
     #: verdict stamped by anyone else is treated as absent.
+    #: The OUTBOUND audit log, kept separately because this deployment may
+    #: point inbound at a different one. A NOTICE IS OUTBOUND TRAFFIC, so its
+    #: record belongs in the outbound log or that log cannot answer "who spoke
+    #: to whom" -- which the spec calls the broker's actual job.
+    #:
+    #: Measured: with the notice audited into the inbound log, the outbound
+    #: conservation ledger reported it as an ORPHAN RECORD within minutes -- a
+    #: fate for a pair the broker never audited. The check found a defect
+    #: introduced an hour after the check itself was built.
+    outbound_audit_path: Optional[Path] = None
     verdict_authority: str = ""
     #: While the wake mechanism is unbuilt, no path may produce the
     #: push-wake outcome: a granted, eligible sender delivers as pull with
@@ -413,10 +423,16 @@ def _notify_refusal(cfg: InboundConfig, raw: bytes, sender: str) -> Dict[str, An
         # left out. Without this a message crosses the boundary on our
         # credential and neither the audit log nor the disposition store has
         # any trace, so V19's conservation balances over traffic it cannot see.
+        import dataclasses
         from .broker import Broker
+        # The ledger writes to the OUTBOUND audit log even where inbound uses
+        # its own: a notice is outbound mail, and filing it inbound puts it
+        # where the outbound balance does not look.
+        ledger_bc = (dataclasses.replace(bc, audit_path=cfg.outbound_audit_path)
+                     if cfg.outbound_audit_path else bc)
         decision = notices.transmit(decision, transport=transport,
                                     credential=credential,
-                                    ledger=Broker(bc))
+                                    ledger=Broker(ledger_bc))
 
     if decision.alert:
         print(f"🚨 MACF: a notice for a refused message needs a human: "

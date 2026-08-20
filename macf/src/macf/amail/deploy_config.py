@@ -298,12 +298,17 @@ class InboundDeployConfig(BaseModel):
 
         bc = BrokerDeployConfig.model_validate(
             _json.loads(Path(self.broker_config_path).read_text())).to_broker_config()
+        outbound_audit = bc.audit_path
         if self.contacts_path is not None:
             bc.contacts_path = self.contacts_path
         if self.audit_path is not None:
             bc.audit_path = self.audit_path
         return InboundConfig(
             broker_config=bc,
+            # Captured BEFORE any inbound override is applied above, so a
+            # deployment that splits its logs still files outbound traffic
+            # outbound.
+            outbound_audit_path=outbound_audit,
             spool_dir=self.spool_dir,
             quarantine_dir=self.quarantine_dir,
             handoff_dir=self.handoff_dir,
