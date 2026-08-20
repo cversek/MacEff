@@ -99,20 +99,35 @@ def read_imap_credential(path: Optional[Path]) -> ImapCredential:
     return cred
 
 
-def fetch_raw(message_id: str, credential: ImapCredential, *,
+def fetch_raw(correlation: str, credential: ImapCredential, *,
               mailbox: str = "INBOX", client_factory: Optional[Any] = None) -> bytes:
-    """The raw bytes of one received copy, keyed by MESSAGE-ID.
+    """The raw bytes of one received copy, found by a CORRELATION TOKEN.
 
-    KEYED BY MESSAGE-ID RATHER THAN SUBJECT, and the reason is not convenience.
-    Subjects are neither unique nor stable, so a subject search can return the
-    wrong message and no reader would know. The message-id is MINTED BY OUR
-    BROKER and recorded in the disposition ledger, so the key that identifies
-    the copy is the key the ledger already holds -- the fetch and the record
-    are about the same object by construction rather than by matching.
+    THE FIRST VERSION KEYED ON OUR MESSAGE-ID AND THAT WAS WRONG, measured on
+    the first real fetch. The reasoning read well -- the broker mints the
+    message-id and the ledger records it, so the fetch and the record would be
+    about the same object by construction -- and it rested on an assumption
+    nobody checked: that our id appears in the copy that arrives.
+    IT DOES NOT. The submission carries four fields and no headers, so the
+    SENDING PROVIDER mints the RFC message-id. Searching a real mailbox for our
+    internal id returns nothing at all.
+
+    So the correlation key must be a value WE place in a field WE control and
+    that SURVIVES to the receiver. The subject does; the caller puts the
+    ledger's message-id in it, and this searches for that. The tie back to the
+    record is then explicit rather than structural, which is weaker and is
+    what is actually available -- saying so is better than a docstring that
+    claims a guarantee the transport cannot give.
+
+    THE SEARCH VALUE IS QUOTED. Unquoted multi-word criteria draw a BAD
+    response from the server -- the first real search failed on exactly that,
+    and a criterion the server cannot parse fails as a protocol error rather
+    than as "not found", which is the distinction this module exists to keep.
 
     `client_factory` is injected so the SEQUENCE can be tested without a
     network. It is not a substitute for running against a real mailbox, and
-    that distinction is the whole reason this module exists.
+    that distinction is the whole reason this module exists -- the two defects
+    above were both invisible to a suite that was green.
     """
     if not credential or not credential.complete:
         raise FetchError("no complete IMAP credential; refusing to open a mailbox")
@@ -133,10 +148,11 @@ def fetch_raw(message_id: str, credential: ImapCredential, *,
         # READONLY: selecting read-write and fetching would set \Seen and
         # mutate the mailbox being measured.
         client.select(mailbox, readonly=True)
-        typ, data = client.search(None, 'HEADER', 'Message-ID', message_id)
+        typ, data = client.search(None, 'HEADER', 'Subject',
+                                  '"%s"' % correlation.replace('"', ''))
         if typ != "OK" or not data or not data[0]:
             raise NotFound(
-                f"no message with Message-ID {message_id!r} in {mailbox!r}. The "
+                f"no message carrying {correlation!r} in {mailbox!r}. The "
                 f"mailbox opened and the message is not in it, which is an "
                 f"observation about the message rather than about the fetch.")
         num = data[0].split()[0]

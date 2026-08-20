@@ -32,7 +32,7 @@ CRED = F.ImapCredential("imap.example.test", "reader@example.test", "secret")
 
 def test_the_raw_bytes_come_back():
     c = _Client()
-    raw = F.fetch_raw("<m1@ours.test>", CRED, client_factory=lambda h: c)
+    raw = F.fetch_raw("msg-1-abc", CRED, client_factory=lambda h: c)
     assert raw == b"From: a@b\n\nbody"
 
 
@@ -41,7 +41,7 @@ def test_the_mailbox_is_opened_READ_ONLY():
     \\Seen flag, so the instrument would MUTATE THE THING IT MEASURES and a
     second reading would be of a mailbox the first reading changed."""
     c = _Client()
-    F.fetch_raw("<m1@ours.test>", CRED, client_factory=lambda h: c)
+    F.fetch_raw("msg-1-abc", CRED, client_factory=lambda h: c)
     assert c.readonly is True
 
 
@@ -49,7 +49,7 @@ def test_the_fetch_PEEKS_rather_than_reading():
     """The other half of non-destructive. RFC822 sets \\Seen; BODY.PEEK[] does
     not. Read-only SELECT alone is not enough on every server."""
     c = _Client()
-    F.fetch_raw("<m1@ours.test>", CRED, client_factory=lambda h: c)
+    F.fetch_raw("msg-1-abc", CRED, client_factory=lambda h: c)
     assert "PEEK" in c.fetch_spec
 
 
@@ -60,13 +60,13 @@ def test_a_missing_message_is_NOT_a_fetch_failure():
     keeps finding."""
     c = _Client(found=False)
     with pytest.raises(F.NotFound):
-        F.fetch_raw("<gone@ours.test>", CRED, client_factory=lambda h: c)
+        F.fetch_raw("msg-gone", CRED, client_factory=lambda h: c)
 
 
 def test_a_broken_mailbox_is_a_fetch_failure_not_an_absence():
     def explode(host): raise OSError("connection refused")
     with pytest.raises(F.FetchError) as e:
-        F.fetch_raw("<m1@ours.test>", CRED, client_factory=explode)
+        F.fetch_raw("msg-1-abc", CRED, client_factory=explode)
     assert not isinstance(e.value, F.NotFound)
 
 
@@ -87,7 +87,7 @@ def test_the_credential_never_prints_its_secret():
 def test_a_partial_credential_cannot_open_a_mailbox():
     c = _Client()
     with pytest.raises(F.FetchError, match="refusing to open"):
-        F.fetch_raw("<m1@ours.test>", F.ImapCredential("h", "u", ""),
+        F.fetch_raw("msg-1-abc", F.ImapCredential("h", "u", ""),
                     client_factory=lambda h: c)
     assert c.selected is None, "a mailbox was opened without a complete credential"
 
@@ -95,5 +95,20 @@ def test_a_partial_credential_cannot_open_a_mailbox():
 def test_the_mailbox_is_closed_even_when_the_fetch_fails():
     c = _Client(found=False)
     with pytest.raises(F.NotFound):
-        F.fetch_raw("<gone@ours.test>", CRED, client_factory=lambda h: c)
+        F.fetch_raw("msg-gone", CRED, client_factory=lambda h: c)
     assert c.logged_out is True
+
+
+def test_the_search_value_is_quoted():
+    """Unquoted multi-word criteria draw a BAD response from a real server --
+    the first live search failed on exactly that. A criterion the server cannot
+    parse fails as a protocol error rather than as "not found", which is the
+    one distinction this module exists to keep."""
+    seen = {}
+    class _C(_Client):
+        def search(self, charset, *criteria):
+            seen["criteria"] = criteria
+            return ("OK", [b"7"])
+    F.fetch_raw("G8 run with spaces", CRED, client_factory=lambda h: _C())
+    assert seen["criteria"][-1].startswith('"')
+    assert seen["criteria"][-1].endswith('"')
