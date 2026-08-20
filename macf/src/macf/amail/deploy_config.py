@@ -74,6 +74,21 @@ class BrokerDeployConfig(BaseModel):
                     "each submitted message. Without it a sender holds a copy "
                     "of what it sent and cannot learn whether it left, which "
                     "is the outbound face of a silent drop.")
+    rate_limit_dir: Optional[Path] = Field(
+        default=None,
+        description="broker-owned, agent-READABLE rate-limit state. On disk "
+                    "rather than in memory: a budget held in memory resets "
+                    "when the broker restarts, which turns a restart into a "
+                    "way to spend the budget twice.")
+    rate_limit_per_agent: Optional[int] = Field(
+        default=None, description="max submissions per agent per window")
+    rate_limit_broker: Optional[int] = Field(
+        default=None,
+        description="max broker-originated messages (non-delivery notices) per "
+                    "window. Separate from the per-agent budget because no "
+                    "agent composed them.")
+    rate_limit_window_seconds: int = Field(
+        default=3600, description="the sliding window, in seconds")
     opsec_scan: bool = Field(
         default=True,
         description="run the pre-send OPSEC scrub on every outbound message. "
@@ -123,10 +138,37 @@ class BrokerDeployConfig(BaseModel):
             inbound_quarantine=self.inbound_quarantine,
             inbound_handoff=self.inbound_handoff,
             dispositions_dir=self.dispositions_dir,
+            rate_limiter=self._build_rate_limiter(),
             opsec_scan=self._build_scan() if self.opsec_scan else None,
             refuse_unscanned=self.refuse_unscanned,
             agent_uids={b.uid: name for name, b in self.agents.items()},
         )
+
+    def _build_rate_limiter(self):
+        """The limiter, or None when the deployment declares no budget.
+
+        Requires BOTH a state directory and at least one cap. A cap with
+        nowhere to record consumption cannot enforce anything, and a directory
+        with no cap enforces nothing -- either alone would produce a limiter
+        that looks configured and permits everything, which is worse than an
+        absent one because submit() would stop announcing it.
+        """
+        if not self.rate_limit_dir:
+            return None
+        limits = {}
+        if self.rate_limit_per_agent:
+            from macf.amail.ratelimit import RateLimit
+            for name in self.agents:
+                limits[name] = RateLimit(self.rate_limit_per_agent,
+                                         self.rate_limit_window_seconds)
+        if self.rate_limit_broker:
+            from macf.amail.ratelimit import RateLimit, BROKER_PRINCIPAL
+            limits[BROKER_PRINCIPAL] = RateLimit(self.rate_limit_broker,
+                                                 self.rate_limit_window_seconds)
+        if not limits:
+            return None
+        from macf.amail.ratelimit import RateLimiter
+        return RateLimiter(self.rate_limit_dir, limits)
 
     @staticmethod
     def _build_scan():

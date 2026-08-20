@@ -224,6 +224,14 @@ class BrokerConfig:
     #: the same reason as the quarantine.
     inbound_handoff: Optional[Path] = None
 
+    #: The outbound rate limiter (spec O5b.6
+    #: "outbound-submission-must-be-rate-limited"). `None` means UNBOUNDED,
+    #: which the spec calls a missing PRECONDITION rather than a default --
+    #: submit() announces it on every send. Reputation aggregates at the
+    #: organisational domain, so an unbounded sender spends an asset belonging
+    #: to every agent under it.
+    rate_limiter: Optional[Any] = None
+
     #: The pre-send OPSEC scrub, ON the submission path (spec O5e.1
     #: "the-gate-must-accept-a-composed-message"). It lives at the BROKER
     #: rather than in the client for the same reason every other check does:
@@ -434,6 +442,49 @@ class Broker:
             # so it must never observe a half-written record.
             os.replace(tmp, f)
         return f
+
+    def _rate_refusal(self, principal: str) -> Optional[str]:
+        """Charge one send against the principal's budget.
+
+        AN ABSENT LIMITER IS ANNOUNCED, for the same reason an absent scrub is:
+        the amail spec calls rate limiting a PRECONDITION of the live path, so a
+        deployment running without one is in a state somebody needs to know
+        about. Silence would make an unconfigured budget indistinguishable from
+        a budget with room left.
+
+        A LIMITER THAT CANNOT DETERMINE CONSUMPTION REFUSES. It raises rather
+        than returning zero, and that exception is converted to a refusal here
+        instead of being swallowed — an unreadable budget is not an empty one,
+        and treating it as empty hands unlimited sending to whoever can corrupt
+        a file the broker reads.
+        """
+        limiter = getattr(self.config, "rate_limiter", None)
+        if limiter is None:
+            print(f"⚠️ MACF: no rate limiter configured; {principal} is sending "
+                  f"against an UNBOUNDED budget, and sending reputation is "
+                  f"shared across every agent under this domain",
+                  file=sys.stderr)
+            return None
+        try:
+            return limiter.check_and_consume(principal)
+        except Exception as e:  # noqa: BLE001 - see docstring: fail closed
+            print(f"⚠️ MACF: the rate limiter could not answer for {principal} "
+                  f"({type(e).__name__}: {e}); refusing rather than sending "
+                  f"against an unknown budget", file=sys.stderr)
+            return f"budget could not be determined ({type(e).__name__})"
+
+    def rate_budget(self, principal: str) -> Dict[str, Any]:
+        """What a sender may READ about its own budget before it hits the wall.
+
+        Spec O5b.6b. Exposed on the broker so the client status surface can
+        render it; the underlying state file is agent-readable by filesystem
+        too, so this keeps working with the broker stopped.
+        """
+        limiter = getattr(self.config, "rate_limiter", None)
+        if limiter is None:
+            return {"principal": principal, "limited": False,
+                    "reason": "no rate limiter configured"}
+        return limiter.budget(principal)
 
     def _scrub(self, message: Message) -> Optional[str]:
         """Run the pre-send gate. Returns a refusal reason, or None to pass.
@@ -810,6 +861,25 @@ class Broker:
             # a caller told "delivered" about some recipients and not others has
             # to reconcile that, and will get it wrong.
             return {"ok": False, "refused": refusals, "message_id": message.message_id}
+
+        # THE RATE LIMIT, before the scrub and before transport (spec O5b.6
+        # "outbound-submission-must-be-rate-limited"). Placed AFTER the
+        # contacts check so a refused destination does not spend budget an
+        # agent is entitled to, and BEFORE the gate so a burst cannot be paid
+        # for in scanning work.
+        rate = self._rate_refusal(sender)
+        if rate is not None:
+            if self.audit:
+                self.audit.refused(sender=sender, recipients=message.to,
+                                   reason=f"rate limit: {rate}",
+                                   message_id=message.message_id)
+            # `rate-refused` is its own terminal disposition, distinguishable in
+            # the record from an authorization DENY and from a transport
+            # failure — three different facts, and a caller that conflates them
+            # retries one of them forever.
+            self._record_fate(sender, message, "rate-refused", rate)
+            return {"ok": False, "refused": [f"rate limit: {rate}"],
+                    "message_id": message.message_id}
 
         # THE PRE-SEND GATE, at the last point before anything is delivered
         # (spec O5e.1). Placed AFTER authorization so a refused destination

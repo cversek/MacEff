@@ -327,9 +327,19 @@ def test_every_declared_field_reaches_the_broker(tmp_path):
 
     declared = set(BrokerDeployConfig.model_fields)
     carried = {f.name for f in dataclasses.fields(BrokerConfig)}
-    # Names that are deliberately transformed rather than copied through.
-    transformed = {"agents"}          # -> agent_homes + agent_uids
-    missing = declared - carried - transformed
+
+    # Deliberately TRANSFORMED rather than copied through. Each entry names
+    # what it becomes, and each is covered by a behavioural test below -- an
+    # exemption list that only needs a NAME added is a guard that whoever trips
+    # it can neuter, which would make this check worse than absent.
+    TRANSFORMED = {
+        "agents": "-> agent_homes + agent_uids",
+        "rate_limit_dir": "-> rate_limiter (RateLimiter state dir)",
+        "rate_limit_per_agent": "-> rate_limiter (per-agent RateLimit)",
+        "rate_limit_broker": "-> rate_limiter (broker-principal RateLimit)",
+        "rate_limit_window_seconds": "-> rate_limiter (window on each RateLimit)",
+    }
+    missing = declared - carried - set(TRANSFORMED)
     assert not missing, (
         f"declared in the deployment file and absent from BrokerConfig: "
         f"{sorted(missing)} -- an operator could set these and nothing would read them")
