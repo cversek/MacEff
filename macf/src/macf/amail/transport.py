@@ -32,9 +32,27 @@ from typing import Any, Dict, Optional
 #: (spec O5d.7 "terminal-dispositions-are-enumerated-and-closed"). The mapping
 #: lives HERE rather than at each call site so two transports cannot disagree
 #: about what "temporary failure" means to the ledger.
-SENT = "delivered"
-DEFERRED = "deferred"
-BOUNCED = "bounced"
+#:
+#: `ACCEPTED` IS NOT `delivered`, AND THIS IS THE CORRECTION THAT MATTERS.
+#: The endpoint answers 202 "accepted for sending", which is the platform
+#: taking CUSTODY -- not the message arriving. Measured at the peer's endpoint:
+#: the 202 returned while the message was not yet visible at the receiving
+#: mailbox; it appeared seconds later. So the send call reports success while
+#: the message exists nowhere the receiver can see, and nothing downstream of
+#: that acceptance is observable to the endpoint at all -- no bounce, no
+#: deferral, no delivery.
+#:
+#: A transport that mapped 2xx to `delivered` would therefore record a delivery
+#: nobody had witnessed, on the happy path, for every message it ever sent.
+#: That is the silent success this ledger exists to prevent.
+ACCEPTED = "submitted"        # NON-TERMINAL. Custody accepted, arrival unknown.
+DEFERRED = "deferred"         # non-terminal: the far side said "not now"
+BOUNCED = "bounced"           # terminal: the far side said "not this message"
+
+#: `delivered` is DELIBERATELY ABSENT from this module. On this binding it is
+#: unreachable: no signal the endpoint can send means "it arrived". If the
+#: ledger ever shows `delivered` for an internet send, it came from a source
+#: that is not the transport -- a receiver-side observation, or a defect.
 
 
 class TransportError(RuntimeError):
@@ -55,7 +73,7 @@ class TransportResult:
     recipients: Optional[Dict[str, str]] = None
 
     def __post_init__(self) -> None:
-        if self.state not in (SENT, DEFERRED, BOUNCED):
+        if self.state not in (ACCEPTED, DEFERRED, BOUNCED):
             raise ValueError(
                 f"{self.state!r} is not a disposition this ledger can hold. A "
                 f"transport inventing its own vocabulary is how two components "
@@ -120,15 +138,19 @@ class HttpTransport:
         import urllib.error
         import urllib.request
 
-        if not credential:
+        if not credential or not getattr(credential, "complete", False):
             # The credential arrives from the caller, which read it from disk
-            # at send time. An empty one here means custody failed upstream and
-            # the send must not proceed -- reaching the network with no
-            # credential would produce an edge refusal that reads as a network
+            # at send time. An absent or PARTIAL one means custody failed
+            # upstream and the send must not proceed -- reaching the network
+            # without it produces an edge refusal that reads as a network
             # problem rather than as a custody failure.
+            #
+            # Partial matters now that the credential has two halves: an id
+            # with no secret would sail past a truthiness check and fail at the
+            # edge, where the diagnosis is someone else's log.
             raise TransportError(
-                "no submission credential was supplied to the transport; "
-                "refusing to reach the network without one")
+                "no complete submission credential was supplied to the "
+                "transport; refusing to reach the network without one")
 
         payload = _json.dumps({
             "from": getattr(message, "sender", None),
@@ -136,10 +158,20 @@ class HttpTransport:
             "subject": getattr(message, "subject", None),
             "body": getattr(message, "body", None),
         }).encode("utf-8")
+        # TWO HEADERS, NOT A BEARER TOKEN. Corrected against the deployed
+        # endpoint: it sits behind a platform access layer that evaluates a
+        # SERVICE TOKEN -- an id and a secret -- at the edge, before the
+        # receiving code runs at all. There is no bearer scheme here, and the
+        # credential is not something the far side's code checks: it is
+        # something the platform checks before that code exists.
+        #
+        # This was my assumption and it was wrong. It is corrected here rather
+        # than accommodated on both sides, because a transport that sent both
+        # shapes "to be safe" would put the secret on a header nobody reads.
+        headers = {"Content-Type": "application/json"}
+        headers.update(credential.as_headers())
         req = urllib.request.Request(
-            self.endpoint, data=payload, method="POST",
-            headers={"Content-Type": "application/json",
-                     "Authorization": f"Bearer {credential}"})
+            self.endpoint, data=payload, method="POST", headers=headers)
         opener = self._opener or urllib.request.urlopen
         try:
             with opener(req, timeout=self.timeout) as resp:
@@ -154,23 +186,69 @@ class HttpTransport:
 
     @staticmethod
     def _classify(code: int, body: str) -> TransportResult:
-        """HTTP status -> disposition. The 4xx/5xx split is the whole point.
+        """HTTP status -> disposition. Three splits, each for its own reason.
 
-        A 5xx is the far side saying "not now"; a 4xx is it saying "not this
-        message". Collapsing them makes a caller retry a permanent rejection
-        forever, or abandon a message the far side would have accepted a minute
-        later. The detail is truncated because it is remote-supplied text that
-        ends up in a broker-owned record.
+        2xx IS NOT DELIVERY. It is acceptance of custody, and it maps to the
+        NON-TERMINAL `submitted`. See the ACCEPTED constant: the measurement
+        behind it is a 202 returning before the message was visible anywhere
+        the receiver could see.
+
+        THE 4xx/5xx SPLIT: a 5xx is the far side saying "not now"; a 4xx is it
+        saying "not this message". Collapsing them makes a caller retry a
+        permanent rejection forever, or abandon a message the far side would
+        have accepted a minute later.
+
+        403 IS NEITHER, and raises. An edge refusal is the platform rejecting
+        OUR CREDENTIAL before the far side ever saw the message -- nobody made
+        a decision about this message, so recording a disposition for it would
+        blame the message for a custody failure. It is the same class as
+        unreachable: a condition of ours, not a verdict on the mail.
         """
         detail = (body or "")[:200]
         if 200 <= code < 300:
-            return TransportResult(SENT, f"accepted ({code})")
+            return TransportResult(ACCEPTED, f"accepted for sending ({code})")
+        if code == 403:
+            raise TransportError(
+                "the edge refused this request (403): the submission credential "
+                "was not accepted, so the message was never offered to anyone. "
+                "This is a custody failure, not a rejection of the mail.")
         if code in (408, 429) or 500 <= code < 600:
             return TransportResult(DEFERRED, f"temporary failure ({code}): {detail}")
         return TransportResult(BOUNCED, f"rejected ({code}): {detail}")
 
 
-def read_credential(path: Optional[Path]) -> str:
+@dataclass
+class AccessCredential:
+    """A service-token credential: an id and a secret, both required.
+
+    TWO HALVES, AND `complete` EXISTS BECAUSE ONE HALF IS THE DANGEROUS STATE.
+    A credential holding an id and no secret is truthy, non-empty, and passes
+    every naive check -- and then fails at the edge, where the diagnosis lives
+    in somebody else's logs and reads as a network problem. The partial state
+    has to be nameable here, on our side of the boundary.
+    """
+
+    client_id: str = ""
+    client_secret: str = ""
+
+    @property
+    def complete(self) -> bool:
+        return bool(self.client_id and self.client_secret)
+
+    def as_headers(self) -> Dict[str, str]:
+        return {"CF-Access-Client-Id": self.client_id,
+                "CF-Access-Client-Secret": self.client_secret}
+
+    def __repr__(self) -> str:
+        # NEVER the values. This object ends up in tracebacks and error
+        # reports, which is exactly where a secret should not be, and a
+        # dataclass would print both halves by default.
+        return (f"AccessCredential(client_id=<{len(self.client_id)} chars>, "
+                f"client_secret=<{len(self.client_secret)} chars>, "
+                f"complete={self.complete})")
+
+
+def read_credential(path: Optional[Path]) -> "AccessCredential":
     """Read the submission credential from disk, at send time.
 
     Not cached, deliberately. A cached secret outlives the file it came from:
@@ -182,8 +260,34 @@ def read_credential(path: Optional[Path]) -> str:
         raise TransportError(
             "no credential path configured; the broker holds nothing to send with")
     try:
-        return Path(path).read_text().strip()
+        text = Path(path).read_text()
     except OSError as e:
         print(f"⚠️ MACF: the submission credential could not be read ({e}); "
               f"mail is NOT being sent", file=sys.stderr)
         raise TransportError(f"credential unreadable: {e}") from e
+
+    # SELF-LABELLING LINES, not positional values. Order is the thing that gets
+    # misremembered, and a swapped id and secret produce an edge refusal whose
+    # cause is invisible from here.
+    fields: Dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        fields[k.strip().upper()] = v.strip().strip("\"'")
+
+    cred = AccessCredential(fields.get("CF_ACCESS_CLIENT_ID", ""),
+                            fields.get("CF_ACCESS_CLIENT_SECRET", ""))
+    if not cred.complete:
+        # NAMED, not counted. Which half is missing is the whole diagnostic,
+        # and reporting "invalid credential" would send the reader to the
+        # wrong file.
+        missing = [n for n, v in (("CF_ACCESS_CLIENT_ID", cred.client_id),
+                                  ("CF_ACCESS_CLIENT_SECRET", cred.client_secret))
+                   if not v]
+        raise TransportError(
+            f"the submission credential is INCOMPLETE: {', '.join(missing)} "
+            f"absent or empty. A partial credential fails at the edge, where "
+            f"the failure reads as a network problem rather than as ours.")
+    return cred

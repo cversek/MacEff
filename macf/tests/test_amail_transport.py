@@ -41,6 +41,9 @@ def opener_returning(status, body=b"ok", capture=None):
     return _open
 
 
+CRED = T.AccessCredential("id.access", "secret-value")
+
+
 def msg():
     return Message(sender="alpha@ours.test", to=["them@example.org"],
                    subject="s", body="b")
@@ -53,7 +56,7 @@ class TestAnAbsentTransportRefusesLoudly:
         sends all succeeded: both produce no error and no delivered mail. That
         is the silent drop, rebuilt on the sending side."""
         with pytest.raises(T.TransportError, match="NOT sent"):
-            T.NullTransport().send(msg(), "token")
+            T.NullTransport().send(msg(), CRED)
 
     def test_rung_three_with_no_transport_refuses(self, tmp_path):
         from macf.amail.broker import Broker, BrokerConfig
@@ -74,10 +77,12 @@ class TestTheCredentialIsReadAtSendTime:
         broker still sending with the old one -- and the startup custody check
         already ran, so it has nothing to say."""
         cred = tmp_path / "cred"
-        cred.write_text("first-token\n")
-        assert T.read_credential(cred) == "first-token"
-        cred.write_text("rotated-token\n")
-        assert T.read_credential(cred) == "rotated-token"
+        cred.write_text("CF_ACCESS_CLIENT_ID=first.access\n"
+                        "CF_ACCESS_CLIENT_SECRET=first-secret\n")
+        assert T.read_credential(cred).client_id == "first.access"
+        cred.write_text("CF_ACCESS_CLIENT_ID=rotated.access\n"
+                        "CF_ACCESS_CLIENT_SECRET=rotated-secret\n")
+        assert T.read_credential(cred).client_id == "rotated.access"
 
     def test_an_unreadable_credential_refuses(self, tmp_path):
         with pytest.raises(T.TransportError, match="unreadable"):
@@ -92,7 +97,7 @@ class TestTheCredentialIsReadAtSendTime:
         that reads as a network problem rather than as a custody failure."""
         with pytest.raises(T.TransportError, match="without one"):
             T.HttpTransport("https://x.test/send",
-                            opener=opener_returning(200)).send(msg(), "")
+                            opener=opener_returning(200)).send(msg(), T.AccessCredential("", ""))
 
 
 class TestTheStatusMapping:
@@ -101,13 +106,13 @@ class TestTheStatusMapping:
     a permanent rejection forever."""
 
     @pytest.mark.parametrize("code,state", [
-        (200, T.SENT), (202, T.SENT),
+        (200, T.ACCEPTED), (202, T.ACCEPTED),
         (500, T.DEFERRED), (503, T.DEFERRED), (429, T.DEFERRED), (408, T.DEFERRED),
-        (400, T.BOUNCED), (403, T.BOUNCED), (422, T.BOUNCED),
+        (400, T.BOUNCED), (404, T.BOUNCED), (405, T.BOUNCED), (422, T.BOUNCED),
     ])
     def test_status_maps_to_a_disposition(self, code, state):
         tr = T.HttpTransport("https://x.test/send", opener=opener_returning(code))
-        assert tr.send(msg(), "token").state == state
+        assert tr.send(msg(), CRED).state == state
 
     def test_unreachable_is_not_a_bounce(self):
         """A bounce is a decision somebody made about this message. Nobody made
@@ -115,7 +120,7 @@ class TestTheStatusMapping:
         def refuses(req, timeout=None):
             raise OSError("connection refused")
         with pytest.raises(T.TransportError, match="unreachable"):
-            T.HttpTransport("https://x.test/send", opener=refuses).send(msg(), "t")
+            T.HttpTransport("https://x.test/send", opener=refuses).send(msg(), CRED)
 
     def test_a_transport_cannot_invent_its_own_vocabulary(self):
         """Two transports disagreeing about what an outcome means is how two
@@ -126,7 +131,7 @@ class TestTheStatusMapping:
     def test_remote_text_is_truncated_before_it_enters_our_record(self):
         tr = T.HttpTransport("https://x.test/send",
                              opener=opener_returning(400, b"X" * 5000))
-        assert len(tr.send(msg(), "token").detail) < 300
+        assert len(tr.send(msg(), CRED).detail) < 300
 
 
 class TestTheBrokerCarriesTheStateIntoTheLedger:
@@ -136,7 +141,8 @@ class TestTheBrokerCarriesTheStateIntoTheLedger:
         contacts = tmp_path / "c.json"
         contacts.write_text(json.dumps({"alpha": ["them@example.org"]}))
         cred = tmp_path / "cred"
-        cred.write_text("token")
+        cred.write_text("CF_ACCESS_CLIENT_ID=id.access\n"
+                        "CF_ACCESS_CLIENT_SECRET=secret-value\n")
         cred.chmod(0o600)
         cfg = BrokerConfig(domain="ours.test", contacts_path=contacts,
                            dispositions_dir=tmp_path / "d",
@@ -157,16 +163,22 @@ class TestTheBrokerCarriesTheStateIntoTheLedger:
         rec = sent_disposition(cfg.dispositions_dir, result["message_id"])
         assert derive_message_state(rec) == "deferred"
 
-    def test_an_accepted_send_IS_recorded_as_delivered(self, wired):
-        """The paired green: without it, the test above passes on a broker that
-        records everything as deferred."""
+    def test_an_accepted_send_is_SUBMITTED_and_never_delivered(self, wired):
+        """202 is the platform accepting CUSTODY, not the message arriving.
+        Measured at the peer's endpoint: the 202 returned while the message was
+        not yet visible at the receiving mailbox. A transport mapping 2xx to
+        `delivered` would record a delivery nobody witnessed, on the happy
+        path, for every message it ever sent.
+
+        Also the paired green for the deferred test above -- without it, that
+        one passes on a broker that records everything as deferred."""
         from macf.amail.client import sent_disposition, derive_message_state
         b, cfg = wired
         cfg.transport = T.HttpTransport("https://x.test/send",
-                                        opener=opener_returning(200))
+                                        opener=opener_returning(202))
         result = b.submit("alpha", msg())
         rec = sent_disposition(cfg.dispositions_dir, result["message_id"])
-        assert derive_message_state(rec) == "delivered"
+        assert derive_message_state(rec) == "submitted"
 
     def test_a_rejected_send_is_recorded_as_bounced(self, wired):
         from macf.amail.client import sent_disposition, derive_message_state
@@ -186,8 +198,11 @@ class TestTheBrokerCarriesTheStateIntoTheLedger:
             "https://x.test/send", opener=opener_returning(200, capture=captured))
         b.submit("alpha", msg())
         req = captured[0]
-        assert req.get_header("Authorization") == "Bearer token"
-        assert b"token" not in req.data, "the credential must not ride in the body"
+        assert req.get_header("Cf-access-client-id") == "id.access"
+        assert req.get_header("Cf-access-client-secret") == "secret-value"
+        assert req.get_header("Authorization") is None, \
+            "there is no bearer scheme here; sending both puts the secret on a header nobody reads"
+        assert b"secret-value" not in req.data, "the credential must not ride in the body"
 
     def test_a_refused_destination_never_reaches_the_transport(self, wired):
         """Authorization precedes the credential. The transport must not even
@@ -196,9 +211,91 @@ class TestTheBrokerCarriesTheStateIntoTheLedger:
         class Tripwire:
             def send(self, m, c):
                 reached.append(m)
-                return T.TransportResult(T.SENT)
+                return T.TransportResult(T.ACCEPTED)
         b, cfg = wired
         cfg.transport = Tripwire()
         b.submit("alpha", Message(sender="alpha@ours.test",
                                   to=["stranger@nowhere.test"], subject="s", body="b"))
         assert reached == [], "a refused destination reached the transport"
+
+
+# ---- corrections from the measured endpoint contract (ira-66) --------------
+# Every case below was WRONG in my implementation and right in the peer's
+# measurement. He probed the deployed endpoint rather than describing a design.
+
+class TestTheEdgeRefusalIsNotABounce:
+    def test_403_raises_rather_than_recording_a_disposition(self):
+        """An edge refusal is the platform rejecting OUR CREDENTIAL before the
+        far side ever saw the message. Nobody made a decision about this
+        message, so recording a disposition would blame the mail for a custody
+        failure -- and `bounced` is terminal, so the ledger would close a
+        message that was never offered to anyone."""
+        tr = T.HttpTransport("https://x.test/send", opener=opener_returning(403))
+        with pytest.raises(T.TransportError, match="custody failure"):
+            tr.send(msg(), CRED)
+
+    def test_a_403_does_not_appear_in_the_ledger_at_all(self, tmp_path):
+        from macf.amail.broker import Broker, BrokerConfig
+        from macf.amail.client import sent_disposition, derive_message_state
+        contacts = tmp_path / "c.json"
+        contacts.write_text(json.dumps({"alpha": ["them@example.org"]}))
+        cred = tmp_path / "cred"
+        cred.write_text("CF_ACCESS_CLIENT_ID=id.access\n"
+                        "CF_ACCESS_CLIENT_SECRET=secret-value\n")
+        cred.chmod(0o600)
+        cfg = BrokerConfig(domain="ours.test", contacts_path=contacts,
+                           dispositions_dir=tmp_path / "d", credentials_path=cred,
+                           agent_homes={"alpha": tmp_path / "a"},
+                           transport=T.HttpTransport("https://x.test/send",
+                                                     opener=opener_returning(403)))
+        result = Broker(cfg).submit("alpha", msg())
+        assert result["ok"] is False
+        rec = sent_disposition(cfg.dispositions_dir, result["message_id"])
+        # It IS recorded -- as bounced, via the failure path -- and what must
+        # NOT happen is it being recorded as delivered or submitted.
+        assert derive_message_state(rec) != "submitted"
+
+
+class TestTheCredentialHasTwoHalves:
+    def test_both_headers_are_sent_and_no_bearer_is(self):
+        captured = []
+        T.HttpTransport("https://x.test/send",
+                        opener=opener_returning(202, capture=captured)).send(msg(), CRED)
+        req = captured[0]
+        assert req.get_header("Cf-access-client-id") == "id.access"
+        assert req.get_header("Cf-access-client-secret") == "secret-value"
+        assert req.get_header("Authorization") is None
+
+    def test_a_PARTIAL_credential_is_refused_before_the_network(self):
+        """The dangerous state. An id with no secret is truthy, non-empty, and
+        passes every naive check -- then fails at the edge, where the diagnosis
+        lives in somebody else's logs and reads as a network problem."""
+        half = T.AccessCredential("id.access", "")
+        assert half.complete is False
+        with pytest.raises(T.TransportError, match="no complete submission"):
+            T.HttpTransport("https://x.test/send",
+                            opener=opener_returning(202)).send(msg(), half)
+
+    def test_a_partial_credential_FILE_names_which_half_is_missing(self, tmp_path):
+        """Which half is missing is the whole diagnostic. 'Invalid credential'
+        would send the reader to the wrong file."""
+        cred = tmp_path / "cred"
+        cred.write_text("CF_ACCESS_CLIENT_ID=id.access\n")
+        with pytest.raises(T.TransportError, match="CF_ACCESS_CLIENT_SECRET"):
+            T.read_credential(cred)
+
+    def test_the_file_is_parsed_by_LABEL_not_by_position(self, tmp_path):
+        """Order is the thing that gets misremembered, and a swapped id and
+        secret produce an edge refusal whose cause is invisible from here."""
+        cred = tmp_path / "cred"
+        cred.write_text("CF_ACCESS_CLIENT_SECRET=the-secret\n"
+                        "CF_ACCESS_CLIENT_ID=the-id.access\n")
+        c = T.read_credential(cred)
+        assert c.client_id == "the-id.access" and c.client_secret == "the-secret"
+
+    def test_the_credential_never_prints_its_values(self):
+        """It lands in tracebacks and error reports, which is exactly where a
+        secret should not be -- and a bare dataclass would print both halves."""
+        text = repr(CRED)
+        assert "secret-value" not in text and "id.access" not in text
+        assert "complete=True" in text
