@@ -355,9 +355,16 @@ def _notify_refusal(cfg: InboundConfig, raw: bytes, sender: str) -> Dict[str, An
     returned nothing for "not sent" would make a deliberate silence
     indistinguishable from a step that never ran.
 
-    The composed notice is returned rather than transmitted. The outbound
-    transport is Phase 4 and does not exist; handing this a live sender now
-    would be the one thing this module must never do by accident.
+    THE NOTICE IS NOW TRANSMITTED, and the history matters. It was composed
+    and returned for a whole phase because no outbound transport existed, and
+    handing this path a live sender before there was one would have been the
+    single thing this module must not do by accident. That deferral was
+    correct and it EXPIRED when the transport landed — after which what
+    remained was a missing wire and a report that read as though it were not.
+
+    The reported shape says both facts separately: `emitted` is the decision,
+    `sent` is what happened. A live run reported an emitted notice that reached
+    no transport, no audit record and no ledger, and the reader could not tell.
     """
     from . import notices
 
@@ -381,11 +388,33 @@ def _notify_refusal(cfg: InboundConfig, raw: bytes, sender: str) -> Dict[str, An
         rate_limiter=getattr(bc, "rate_limiter", None),
         principal=notices.BROKER_PRINCIPAL,
     )
+    # THE WIRE. Read the credential at send time like every other outbound
+    # path, and never cache it here: a notice sender holding a stale secret is
+    # the same defect as a transport holding one, in a module that sends less
+    # often and would therefore notice later.
+    if decision.emitted and decision.message is not None:
+        credential = None
+        transport = getattr(bc, "transport", None)
+        if transport is not None:
+            try:
+                from .transport import read_credential
+                credential = read_credential(bc.credentials_path)
+            except Exception as e:  # noqa: BLE001 - see below; a notice must not
+                # break the refusal it answers. The quarantine has already
+                # happened and is recorded; an unreadable credential must make
+                # the notice fail, not the decision that produced it.
+                print(f"⚠️ MACF: the submission credential could not be read for "
+                      f"a notice ({type(e).__name__}); the notice will not be "
+                      f"sent and the refusal stands", file=sys.stderr)
+                transport = None
+        decision = notices.transmit(decision, transport=transport,
+                                    credential=credential)
+
     if decision.alert:
-        print(f"🚨 MACF: notice for a refused message was NOT emitted and this "
-              f"needs a human: {decision.reason}", file=sys.stderr)
-    return {"emitted": decision.emitted, "reason": decision.reason,
-            "alert": decision.alert}
+        print(f"🚨 MACF: a notice for a refused message needs a human: "
+              f"{decision.reason}", file=sys.stderr)
+    return {"emitted": decision.emitted, "sent": decision.sent,
+            "reason": decision.reason, "alert": decision.alert}
 
 
 def _quarantine(cfg: InboundConfig, eml: Path, sidecar: Path, reason: str) -> Path:

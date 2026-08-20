@@ -362,3 +362,68 @@ def test_a_notice_the_gate_refused_is_never_transmitted():
     r = N.transmit(refused, transport=t, credential="cred")
     assert r.sent is False
     assert t.sent == [], "a gate-refused notice reached the transport"
+
+
+# ------------------------------- the WIRE itself (the thing that was missing)
+#
+# The notice module was complete and correct for a whole phase while nothing
+# carried its output outward. Testing `transmit` proves the sender works;
+# only this proves the inbound path CALLS it. That distinction is the entire
+# defect being repaired here, so it gets its own control.
+
+def _inbound_cfg(tmp_path, transport):
+    import json as _json
+    from macf.amail.broker import BrokerConfig
+    from macf.amail.inbound import InboundConfig
+    contacts = tmp_path / "contacts.json"
+    contacts.write_text(_json.dumps({"alpha": []}))
+    cred = tmp_path / "cred"
+    cred.write_text("CF_ACCESS_CLIENT_ID=x.access\nCF_ACCESS_CLIENT_SECRET=y\n")
+    cred.chmod(0o600)
+    (tmp_path / "alpha").mkdir()
+    bc = BrokerConfig(domain="ours.test", contacts_path=contacts,
+                      credentials_path=cred, agent_homes={"alpha": tmp_path / "alpha"},
+                      transport=transport)
+    return InboundConfig(broker_config=bc, spool_dir=tmp_path / "s",
+                         quarantine_dir=tmp_path / "q")
+
+
+_AUTHED = (b"Authentication-Results: mx.test; dmarc=pass header.from=them.example\n"
+           b"From: them@them.example\nSubject: hi\n\nbody\n")
+
+
+def test_the_inbound_path_actually_transmits_the_notice(tmp_path, monkeypatch):
+    """THE CONTROL FOR THE WIRE. `transmit` being correct proves the sender
+    works; it does not prove anybody calls it, and for a whole phase nobody
+    did while the report claimed otherwise."""
+    from macf.amail import inbound as I
+    t = _Recording()
+    monkeypatch.setattr(I, "authentication_status",
+                        lambda cfg, raw: (True, "them@them.example", "aligned"))
+    out = I._notify_refusal(_inbound_cfg(tmp_path, t), _AUTHED, "them@them.example")
+    assert out["emitted"] is True
+    assert out["sent"] is True, "the notice was decided and never transmitted"
+    assert len(t.sent) == 1
+
+
+def test_the_report_distinguishes_decided_from_sent(tmp_path, monkeypatch):
+    """With no transport the decision still stands and the report must NOT
+    claim delivery — the exact pair of facts one field could not carry."""
+    from macf.amail import inbound as I
+    monkeypatch.setattr(I, "authentication_status",
+                        lambda cfg, raw: (True, "them@them.example", "aligned"))
+    out = I._notify_refusal(_inbound_cfg(tmp_path, None), _AUTHED, "them@them.example")
+    assert out["emitted"] is True and out["sent"] is False
+
+
+def test_an_unauthenticated_sender_still_gets_silence_through_the_wire(tmp_path, monkeypatch):
+    """The amplifier case must survive the new wire. A notice to a forged
+    sender is delivered to the SPOOF VICTIM, so the wire must not become a
+    path that reaches the transport before the decision is consulted."""
+    from macf.amail import inbound as I
+    t = _Recording()
+    monkeypatch.setattr(I, "authentication_status",
+                        lambda cfg, raw: (False, "", "unauthenticated"))
+    out = I._notify_refusal(_inbound_cfg(tmp_path, t), b"From: forged@x\n\nx", "forged@x")
+    assert out["emitted"] is False and out["sent"] is False
+    assert t.sent == [], "a notice reached the transport for an unauthenticated sender"
