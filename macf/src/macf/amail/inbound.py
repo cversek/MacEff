@@ -246,6 +246,53 @@ def push_denied_by_history(audit: Optional[AuditLog], address: str) -> Optional[
 
 # ------------------------------------------------------------ authorization
 
+def authentication_status(cfg: InboundConfig, raw: bytes) -> Tuple[bool, str, str]:
+    """Was the sending identity AUTHENTICATED and ALIGNED? (ok, sender, why).
+
+    EXTRACTED SO TWO DECISIONS CANNOT DRIFT. `authorize()` needs it to refuse;
+    the non-delivery notice needs it to decide whether replying is safe at all
+    (spec O5g.1 "never-notify-an-unauthenticated-sender"). The alternative was
+    for the notice path to re-derive the same conclusion, or worse to read it
+    out of `authorize()`'s prose reason -- deciding whether to send outbound
+    mail by string-matching an error message.
+
+    THE STAKES ON THE NOTICE SIDE ARE HIGHER THAN ON THE REFUSAL SIDE. A wrong
+    refusal drops one message. A wrong notice sends OUR bounce to whoever the
+    forger named, making this system an amplifier aimed at someone who did
+    nothing -- so the two readers must be the same code, not two readings that
+    agree today.
+    """
+    sender, from_domain = sender_identity(raw)
+    verdict = first_verdict(raw, cfg.verdict_authority)
+    if verdict is None:
+        return False, sender, ("no trustworthy authentication verdict (absent, "
+                               "or stamped by an authserv-id this deployment "
+                               "does not trust)")
+    if verdict.get("dmarc") != "pass":
+        return False, sender, (f"sender '{sender}' not authenticated: dmarc="
+                               f"{verdict.get('dmarc', 'absent')}")
+
+    # BIND the verdict to the sender. A dmarc=pass says SOME domain aligned;
+    # without this it was never checked to be the domain we then look up in
+    # the contact list. The two facts came from two different parsers of the
+    # same message — our authority's DMARC From-extraction and Python's
+    # parseaddr — and the code merely placed them next to each other, which
+    # made "they cannot disagree" an assumption about parser agreement rather
+    # than something asserted. Parser differentials are precisely the bug
+    # class that lives in that gap (multiple From headers, RFC 2047
+    # encoded-words), so the agreement is now checked, not presumed.
+    aligned = verdict.get("dmarc_from")
+    if aligned is None:
+        return False, sender, ("verdict carries dmarc=pass but names no "
+                               "aligned domain (header.from absent); cannot "
+                               "bind the pass to a sender")
+    if aligned != from_domain:
+        return False, sender, (f"authentication does not cover this sender: "
+                               f"the authority aligned '{aligned}' but the "
+                               f"message's From resolves to '{from_domain}'")
+    return True, sender, f"authenticated and aligned as '{sender}'"
+
+
 def authorize(cfg: InboundConfig, recipient_agent: str, raw: bytes) -> Tuple[str, str]:
     """(outcome, reason). Outcome ∈ {DENY, DELIVER_PULL, DELIVER_PUSH_WAKE}.
 
@@ -262,33 +309,9 @@ def authorize(cfg: InboundConfig, recipient_agent: str, raw: bytes) -> Tuple[str
     contacts = ContactBook(cfg.broker_config.contacts_path)
     assert_push_grants_eligible(contacts, cfg.broker_config)
 
-    sender, from_domain = sender_identity(raw)
-    verdict = first_verdict(raw, cfg.verdict_authority)
-    if verdict is None:
-        return DENY, ("no trustworthy authentication verdict (absent, or "
-                      "stamped by an authserv-id this deployment does not "
-                      "trust)")
-    if verdict.get("dmarc") != "pass":
-        return DENY, (f"sender '{sender}' not authenticated: dmarc="
-                      f"{verdict.get('dmarc', 'absent')}")
-
-    # BIND the verdict to the sender. A dmarc=pass says SOME domain aligned;
-    # without this it was never checked to be the domain we then look up in
-    # the contact list. The two facts came from two different parsers of the
-    # same message — our authority's DMARC From-extraction and Python's
-    # parseaddr — and the code merely placed them next to each other, which
-    # made "they cannot disagree" an assumption about parser agreement rather
-    # than something asserted. Parser differentials are precisely the bug
-    # class that lives in that gap (multiple From headers, RFC 2047
-    # encoded-words), so the agreement is now checked, not presumed.
-    aligned = verdict.get("dmarc_from")
-    if aligned is None:
-        return DENY, ("verdict carries dmarc=pass but names no aligned domain "
-                      "(header.from absent); cannot bind the pass to a sender")
-    if aligned != from_domain:
-        return DENY, (f"authentication does not cover this sender: the "
-                      f"authority aligned '{aligned}' but the message's From "
-                      f"resolves to '{from_domain}'")
+    authenticated, sender, why = authentication_status(cfg, raw)
+    if not authenticated:
+        return DENY, why
 
     if not contacts.permits(recipient_agent, sender):
         return DENY, (contacts.refuse_reason(recipient_agent, sender)
@@ -322,6 +345,47 @@ def _spool_entries(spool_dir: Path) -> Iterator[Tuple[Path, Path]]:
     an interrupted write, and skipping evidence is how gaps go unexplained."""
     for eml in sorted(spool_dir.glob("*.eml")):
         yield eml, eml.with_suffix(".json")
+
+
+def _notify_refusal(cfg: InboundConfig, raw: bytes, sender: str) -> Dict[str, Any]:
+    """Emit a non-delivery notice for a refused message, if it is safe to.
+
+    Returns the decision either way. Silence is this path's most common and
+    most CORRECT outcome, so it has to stay accountable: a function that
+    returned nothing for "not sent" would make a deliberate silence
+    indistinguishable from a step that never ran.
+
+    The composed notice is returned rather than transmitted. The outbound
+    transport is Phase 4 and does not exist; handing this a live sender now
+    would be the one thing this module must never do by accident.
+    """
+    from . import notices
+
+    bc = cfg.broker_config
+    authenticated, auth_sender, _why = authentication_status(cfg, raw)
+    decision = notices.decide(
+        authenticated=authenticated,
+        sender=auth_sender or sender,
+        # A refused NOTICE is never answered (spec O5g.4). Read from the
+        # message's own broker-set marker, never inferred from its subject:
+        # a subject is sender-controlled, so inferring would let a
+        # correspondent suppress its own notices by naming a message well.
+        refused_was_notice=notices.NOTICE_HEADER.lower() in raw.decode(
+            "utf-8", errors="replace").lower(),
+    )
+    decision = notices.emit(
+        decision,
+        to_address=auth_sender or sender,
+        sender_address=f"postmaster@{bc.domain}",
+        scrub=getattr(bc, "opsec_scan", None),
+        rate_limiter=getattr(bc, "rate_limiter", None),
+        principal=notices.BROKER_PRINCIPAL,
+    )
+    if decision.alert:
+        print(f"🚨 MACF: notice for a refused message was NOT emitted and this "
+              f"needs a human: {decision.reason}", file=sys.stderr)
+    return {"emitted": decision.emitted, "reason": decision.reason,
+            "alert": decision.alert}
 
 
 def _quarantine(cfg: InboundConfig, eml: Path, sidecar: Path, reason: str) -> Path:
@@ -397,6 +461,13 @@ def process_entry(cfg: InboundConfig, eml: Path, sidecar: Path) -> Dict[str, Any
 
     if outcome == DENY:
         _quarantine(cfg, eml, sidecar, reason)
+        # THE AFFIRMATIVE HALF (spec O5g.3). The refusal is recorded either
+        # way; what varies is whether the correspondent learns of it, and that
+        # turns on whether we can prove who they are. Emitting is attempted
+        # here rather than left to a later sweep because the decision needs the
+        # authentication status of THIS message, which the quarantine does not
+        # preserve in a form the gate could re-derive safely.
+        summary["notice"] = _notify_refusal(cfg, raw, sender)
         return terminal(QUARANTINED, reason, recipient_agent)
 
     box = cfg.handoff_dir / recipient_agent
