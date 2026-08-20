@@ -15,7 +15,7 @@ def test_a_transport_reason_reaches_the_ledger(tmp_path, monkeypatch):
 
     class Rejecting:
         name = "rejecting"
-        def send(self, message, credential):
+        def send(self, message, credential, recipient=None):
             return T.TransportResult(
                 T.BOUNCED,
                 'rejected (422): {"status":"rejected","reason":"DEST_NOT_VERIFIED"}')
@@ -54,7 +54,7 @@ def test_the_trust_slot_is_not_used_for_a_transport_reason(tmp_path):
 
     class Accepting:
         name = "accepting"
-        def send(self, message, credential):
+        def send(self, message, credential, recipient=None):
             return T.TransportResult(T.ACCEPTED, "accepted for sending (202)")
 
     cred = tmp_path / "cred"

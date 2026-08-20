@@ -63,6 +63,33 @@ BOUNCED = "bounced"           # terminal: the far side said "not this message"
 #: unreachable: no signal the endpoint can send means "it arrived". If the
 #: ledger ever shows `delivered` for an internet send, it came from a source
 #: that is not the transport -- a receiver-side observation, or a defect.
+#:
+#: `bounced` IS ALSO UNREACHABLE ON THIS BINDING, and saying so is the same
+#: honesty applied to the other end of the enum. Two facts compound:
+#:   - the envelope return path is PROVIDER-OWNED and its local part reads as
+#:     a bounce-drop, so a refusal made by a RECEIVER never reaches us; and
+#:   - every destination must be verified at the sending provider before we
+#:     may send to it at all (measured: `422 DEST_NOT_VERIFIED`), so the
+#:     ordinary way to provoke a hard bounce -- mail a nonexistent mailbox --
+#:     is closed by the same gate that protects the path.
+#: So it is unreachable AND the experiment that would confirm it is out of
+#: reach, which is a weaker epistemic position than the `delivered` case and
+#: is stated as such rather than rounded up.
+#:
+#: WHAT THIS MODULE STILL PRODUCES is `bounced` for a refusal THE ENDPOINT
+#: ITSELF makes (a 4xx), which is a different fact from a receiver's bounce
+#: and is the only one observable here.
+#:
+#: THE CONSEQUENCE BELONGS TO THE LEDGER, not here: if no positive terminal
+#: disposition is observable, a correctly submitted message ages from
+#: `submitted` to `abandoned`, and a conservation check treating `abandoned`
+#: as an anomaly reports a shortfall for entirely correct behaviour. The
+#: failure mode that follows is somebody widening the tolerance until the
+#: alarm stops complaining, after which it never complains. `abandoned` is
+#: therefore declared a NORMAL terminal state for this binding, in the
+#: deployment's binding notes rather than in the normative text -- the
+#: normative enum is unchanged, and what changed is what this transport can
+#: observe.
 
 
 class TransportError(RuntimeError):
@@ -72,6 +99,29 @@ class TransportError(RuntimeError):
     facts: one should be retried and the other never should, and a caller that
     conflates them retries a permanent rejection forever.
     """
+
+
+def _one_recipient(message: Any, recipient: Optional[str]) -> str:
+    """The single recipient this submission is for.
+
+    REFUSES rather than joining. An earlier version comma-joined the message's
+    recipient list, which the endpoint answers with MISSING_FIELD because it
+    requires a non-empty STRING -- so every multi-recipient send failed with a
+    message that named the wrong problem. Joining was never measured to work,
+    and a transport that quietly does the unmeasured thing when handed more
+    than it can carry is how an untested path stays in a live system.
+    """
+    if recipient:
+        return recipient
+    to = list(getattr(message, "to", None) or [])
+    if len(to) == 1:
+        return to[0]
+    raise TransportError(
+        f"this transport carries ONE recipient per submission and was given "
+        f"{len(to)}. The caller must make one call per recipient; joining an "
+        f"address list is unmeasured against this endpoint and is not done "
+        f"silently. Authorization is unaffected -- it is decided once, "
+        f"upstream, for the whole submission.")
 
 
 @dataclass
@@ -106,7 +156,8 @@ class NullTransport:
 
     name = "null"
 
-    def send(self, message: Any, credential: str) -> TransportResult:
+    def send(self, message: Any, credential: str,
+             recipient: Optional[str] = None) -> TransportResult:
         raise TransportError(
             "no outbound transport is configured; this broker cannot reach the "
             "internet. Mail was NOT sent. Refusing rather than reporting a "
@@ -143,7 +194,29 @@ class HttpTransport:
         # suite imply it.
         self._opener = opener
 
-    def send(self, message: Any, credential: str) -> TransportResult:
+    def send(self, message: Any, credential: str,
+             recipient: Optional[str] = None) -> TransportResult:
+        """Submit ONE message to ONE recipient.
+
+        ONE RECIPIENT PER SUBMISSION, and this is the transport CONTRACT rather
+        than a convenience. The endpoint requires `to` to be a non-empty
+        STRING; comma-joining an address list is the obvious reading of that
+        and it has never been measured, so it stays out of the live system.
+
+        It is also the better shape independently of the endpoint. The ledger's
+        unit is the message-recipient PAIR and transport outcomes are
+        per-recipient by nature -- one delivered, another bounced. A
+        per-recipient transport call makes each disposition a DIRECT
+        OBSERVATION instead of a decomposition of a joint result, which is what
+        an undefined derivation would otherwise have to invent.
+
+        THIS DOES NOT SPLIT AN AUTHORIZATION. Multi-recipient submissions are
+        all-or-nothing (spec O5b.7): if any destination is refused the whole
+        submission is refused, and that decision is made ONCE, upstream, before
+        anything reaches here. The broker then makes N transport calls having
+        already decided. Nothing is silently split -- the split is downstream
+        of the decision and visible in the ledger as N records.
+        """
         import json as _json
         import urllib.error
         import urllib.request
@@ -170,12 +243,7 @@ class HttpTransport:
             # measured, after both sides read the schema and agreed it matched.
             # Neither of us saw it by reading; the running endpoint said so.
             #
-            # MULTI-RECIPIENT IS UNVERIFIED. Comma-joining is the RFC 5322
-            # address-list form and the obvious reading, but it has not been
-            # measured against this endpoint's parser and is NOT claimed to
-            # work. Single-recipient is measured; anything else is a guess
-            # wearing a plausible shape.
-            "to": ", ".join(getattr(message, "to", None) or []),
+            "to": _one_recipient(message, recipient),
             "subject": getattr(message, "subject", None),
             "body": getattr(message, "body", None),
         }).encode("utf-8")

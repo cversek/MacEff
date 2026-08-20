@@ -340,6 +340,39 @@ def test_the_request_names_a_user_agent():
     assert "urllib" not in seen["headers"]["user-agent"].lower()
 
 
+def test_the_transport_refuses_more_than_one_recipient():
+    """ONE RECIPIENT PER SUBMISSION -- the endpoint's contract, and the better
+    shape besides: it makes each disposition a direct observation rather than a
+    decomposition of a joint result.
+
+    REFUSES rather than joining. Comma-joining is the obvious reading of "to
+    must be a non-empty string" and it was never measured, and a transport that
+    quietly does the unmeasured thing when handed more than it can carry is how
+    an untested path survives in a live system.
+    """
+    opener, seen = _capture()
+    t = T.HttpTransport("https://x.test/submit", opener=opener)
+    many = Message(sender="alpha@ours.test",
+                   to=["one@example.org", "two@example.org"],
+                   subject="s", body="b")
+    with pytest.raises(T.TransportError, match="ONE recipient"):
+        t.send(many, CRED)
+    assert not seen, "the transport reached the network with an ambiguous recipient"
+
+
+def test_an_explicit_recipient_is_what_gets_sent():
+    """The paired positive. A refusal-only pair passes on a transport that
+    refuses everything, and the caller's per-recipient loop is the thing that
+    has to work."""
+    opener, seen = _capture()
+    t = T.HttpTransport("https://x.test/submit", opener=opener)
+    many = Message(sender="alpha@ours.test",
+                   to=["one@example.org", "two@example.org"],
+                   subject="s", body="b")
+    t.send(many, CRED, recipient="two@example.org")
+    assert seen["payload"]["to"] == "two@example.org"
+
+
 def test_the_recipient_is_a_string_not_a_list():
     """Measured: the endpoint requires all four fields to be non-empty STRINGS
     and answers a JSON array with MISSING_FIELD/`to`. Both sides read the

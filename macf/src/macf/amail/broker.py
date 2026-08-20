@@ -711,7 +711,12 @@ class Broker:
         # rather than caching, so a credential rotated or pulled during an
         # incident takes effect on the next send instead of outliving its file.
         from .transport import read_credential
-        result = transport.send(message, read_credential(self.config.credentials_path))
+        # ONE CALL PER RECIPIENT. This loop is already per-recipient, so the
+        # transport is handed the recipient it is actually for rather than the
+        # message's whole list -- which is what the endpoint's contract
+        # requires and what makes each disposition a direct observation.
+        result = transport.send(message, read_credential(self.config.credentials_path),
+                                recipient=recipient)
         # No signature classification exists on an outbound internet send, so
         # the trust slot is EMPTY rather than borrowed for something else.
         return "internet", "", result.state, result.detail
