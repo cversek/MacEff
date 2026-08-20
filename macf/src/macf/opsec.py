@@ -463,9 +463,37 @@ def scan_parts(parts: Dict[str, Any], *,
     return ScanResult(findings=findings, unscanned=unscanned)
 
 
+#: Headers the SENDER DOES NOT AUTHOR: the addressing the protocol requires a
+#: message to carry. Exempt from the scrub by default, and the exemption is
+#: STATED here rather than discovered, per the amail spec O5e.4
+#: "coverage-is-a-claim-about-a-threat-model".
+#:
+#: WHY, and this is a threat-model correction rather than a relaxation. A leak
+#: is private context appearing WHERE IT DOES NOT BELONG. A sender's own
+#: address in its own From header is the return path: the recipient already
+#: has it by construction, it is the one string a message may not omit, and
+#: the protocol -- not the agent -- decides its shape.
+#:
+#: MEASURED, on the first real send: an agent address of the form
+#: `<agent>@<container>.<domain>` carried the framework name twice, in the
+#: local part and in the domain, so the gate refused EVERY message the
+#: deployment could compose. Not occasionally: totally. A gate that refuses
+#: one hundred percent of legitimate traffic is not strict, it is misaimed,
+#: and the only pressure it generates is to switch it off.
+#:
+#: WHAT IS DELIBERATELY NOT EXEMPT: `subject`. It is a header AND it is the
+#: agent's own text, and O5e.5 exists because "a gate scanning only the body
+#: passes a leak in a subject line". Exempting headers WHOLESALE would have
+#: satisfied the request that produced this change while reopening the exact
+#: attack that produced O5e.5. The axis is AUTHORSHIP OF THE TEXT, not
+#: header-versus-body.
+ADDRESSING_PARTS = ("header:from", "header:to")
+
+
 def scan_message(message: Any, *, attachments: Optional[Dict[str, Any]] = None,
                  profile: Optional[Dict[str, Any]] = None,
-                 env: Optional[Dict[str, str]] = None) -> ScanResult:
+                 env: Optional[Dict[str, str]] = None,
+                 include_addressing: bool = False) -> ScanResult:
     """Scan a composed message across its ENUMERATED surface.
 
     The amail spec O5e.5 "the-gate's-scope-is-enumerated" names it: headers,
@@ -479,6 +507,14 @@ def scan_message(message: Any, *, attachments: Optional[Dict[str, Any]] = None,
     decides whether an unscanned part may be sent (the amail spec O5e.6). What
     is forbidden is the third option -- an unscanned part silently counting as
     scanned.
+
+    ADDRESSING HEADERS ARE EXEMPT BY DEFAULT (``ADDRESSING_PARTS``): the sender
+    does not author them and the recipient already holds them. Pass
+    ``include_addressing=True`` to scan the full surface -- correct when what
+    is being scanned is an outward RENDERING of a message (an operator
+    listing, a published directory entry) rather than the message itself,
+    because there the addresses are exactly what leaks (O5e.0a/O5e.0b). The
+    capability is retained and defaulted off, not removed.
     """
     parts: Dict[str, Any] = {
         "header:from": getattr(message, "sender", None),
@@ -496,4 +532,7 @@ def scan_message(message: Any, *, attachments: Optional[Dict[str, Any]] = None,
         elif meta is not None:
             # Something we cannot read as text. Say so; do not stringify it.
             parts[f"attachment:meta:{name}"] = meta
+    if not include_addressing:
+        for name in ADDRESSING_PARTS:
+            parts.pop(name, None)
     return scan_parts(parts, profile=profile, env=env)

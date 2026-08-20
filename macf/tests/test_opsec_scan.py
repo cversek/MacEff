@@ -371,3 +371,69 @@ def test_the_gate_can_be_turned_off_deliberately(tmp_path):
         opsec_scan=False,
     ).to_broker_config()
     assert cfg.opsec_scan is None
+
+
+# ------------------------------- addressing is not authorship (measured live)
+#
+# The first real send from a live deployment was refused by this gate on its
+# own From header: agent addressing of the form <agent>@<container>.<domain>
+# tripped a hard pattern twice, in the local part and in the domain, so NO
+# message that deployment could compose could pass. A gate that refuses 100%
+# of legitimate traffic is misaimed, and the only pressure it creates is to
+# switch it off.
+#
+# The correction is on the AUTHORSHIP axis, not the header/body axis, and the
+# second test below is the one that keeps it honest.
+
+
+def _framework_addressed(subject="a plain subject", body="a plain body"):
+    """A message whose ADDRESSING carries the framework name, as a real
+    deployment's does by construction, with agent-authored text clean."""
+    from macf.amail.models import Message
+    # The address trips a HARD pattern in both the local part and the domain,
+    # which is the structural property a real deployment's addressing has. The
+    # particular pattern is irrelevant -- a synthetic one is used here because
+    # writing a real account name into a public test is the disclosure this
+    # module exists to prevent, and the gate caught exactly that on the first
+    # attempt at this test.
+    return Message(sender="MISSION@DETOUR.example.dev",
+                   to=["someone@example.org"], subject=subject, body=body)
+
+
+def test_the_senders_own_address_is_not_a_leak():
+    """KNOWN-ANSWER GREEN. The return path is not private context appearing
+    where it does not belong -- the recipient holds it by construction."""
+    r = opsec.scan_message(_framework_addressed())
+    assert not r.findings, f"clean message refused on: {r.findings}"
+
+
+def test_the_subject_is_still_scanned():
+    """THE PROPERTY THAT MUST SURVIVE THE FIX (amail spec O5e.5
+    "the-gate's-scope-is-enumerated").
+
+    Exempting headers WHOLESALE would satisfy the request that produced this
+    change and reopen the exact attack that produced O5e.5. The subject is a
+    header AND it is the agent's own text; the axis is who wrote it.
+    """
+    r = opsec.scan_message(_framework_addressed(subject="re: MISSION planning"))
+    assert r.findings, "a leak planted in the subject was not caught"
+    assert any(f.part == "header:subject" for f in r.findings)
+
+
+def test_the_body_is_still_scanned():
+    r = opsec.scan_message(_framework_addressed(body="see EXPERIMENT 008"))
+    assert any(f.part == "body" for f in r.findings)
+
+
+def test_full_surface_remains_available_for_outward_renderings():
+    # THIS TEST IS ALSO THE SENSITIVITY CONTROL FOR THE THREE ABOVE. If the
+    # fixture's addressing tripped nothing, "the clean message passes" would
+    # pass on any implementation, exemption or not -- a dead control shaped
+    # exactly like a live one. It earned its keep immediately: the first
+    # rewrite of the fixture was inert and this assertion is what said so.
+    """The capability is defaulted off, not deleted. An outward RENDERING of a
+    message (an operator listing, a published directory entry) is exactly where
+    the addresses DO leak -- amail spec O5e.0a/O5e.0b -- and that caller opts in.
+    """
+    r = opsec.scan_message(_framework_addressed(), include_addressing=True)
+    assert any(f.part == "header:from" for f in r.findings)
