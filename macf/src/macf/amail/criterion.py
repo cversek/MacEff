@@ -159,7 +159,35 @@ def read_criterion(raw: bytes, authority: Optional[str], identity: str, *,
         # Absent input must never read as clean.
         return out
 
-    first = " ".join(instances[0].split())
+    # THE RECEIVER'S OWN STAMPS ARE A CONTIGUOUS LEADING RUN, NOT ONE HEADER.
+    #
+    # O5i.2 says "first instance", and that rule was written against a receiver
+    # that stamps ONE header carrying every method. A third provider stamps
+    # FOUR -- one per method, all from its own authserv-id -- and reading only
+    # the first returns whichever method happens to be listed first. Measured:
+    # the dmarc token was in instance 1 and the verdict was right BY LUCK. Had
+    # the provider ordered spf first, the same authenticated message would have
+    # read NOT_AUTHENTICATED.
+    #
+    # THE SECURITY PROPERTY IS PRESERVED EXACTLY, because it was never about
+    # the count. A sender-supplied header arrives BELOW the receiver's own
+    # stamps, so the trustworthy set is the CONTIGUOUS LEADING RUN carrying the
+    # declared authority -- and the run stops at the first instance that is not
+    # ours, which is precisely where a forgery would begin. Reading further
+    # would build a gate whose reading the attacker writes; reading less
+    # reports a method the receiver did state as absent.
+    trusted = []
+    for inst in instances:
+        flat = " ".join(inst.split())
+        tok = _FIRST_TOKEN_RE.match(flat)
+        cand = tok.group(1) if tok else None
+        this_id = cand if (cand is not None and "=" not in cand) else None
+        if not trusted:
+            expected = this_id            # the run's authority is the first's
+        elif this_id != expected:
+            break                          # no longer the receiver's own stamps
+        trusted.append(flat)
+    first = " ".join(trusted)
 
     # THE AUTHSERV-ID IS DETECTED, NOT ASSUMED. RFC 8601 makes it the mandatory
     # first token, and a major provider omits it, so the field can begin with a

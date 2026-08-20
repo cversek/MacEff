@@ -173,3 +173,87 @@ def test_a_forged_later_instance_is_ignored():
     assert r["instances_present"] == 2
     assert r["header_from"] == IDENT, "a later instance was read"
     assert r["verdict"] == C.AUTHENTICATED
+
+
+# ------------------------- a receiver that SPLITS its verdict (third shape)
+#
+# Three real receivers, three header shapes: one header with every method and
+# an authserv-id; one header with NO authserv-id; and FOUR headers, one method
+# each, all from the same authority. The reader handled the first by design and
+# the third by luck -- the dmarc token happened to be listed first.
+
+RECEIVER_C = b"""\
+Authentication-Results: mail.example-c.ch; dmarc=pass (p=none dis=none) header.from=ours.example.dev
+Authentication-Results: mail.example-c.ch; spf=pass smtp.mailfrom=ours.example.dev
+Authentication-Results: mail.example-c.ch; dkim=pass (2048-bit key) header.d=ours.example.dev
+From: agent@ours.example.dev
+Subject: s
+
+body
+"""
+
+# The same receiver, methods in a different order. Nothing in RFC 8601 fixes
+# the order, so a reader that gets C right must get this right too.
+RECEIVER_C_REORDERED = b"""\
+Authentication-Results: mail.example-c.ch; spf=pass smtp.mailfrom=ours.example.dev
+Authentication-Results: mail.example-c.ch; dkim=pass (2048-bit key) header.d=ours.example.dev
+Authentication-Results: mail.example-c.ch; dmarc=pass (p=none dis=none) header.from=ours.example.dev
+From: agent@ours.example.dev
+Subject: s
+
+body
+"""
+
+AUTH_C = "mail.example-c.ch"
+
+
+def test_a_split_verdict_is_read_across_the_receivers_own_stamps():
+    r = C.read_criterion(RECEIVER_C, AUTH_C, IDENT, provenance=C.FETCHED)
+    assert r["verdict"] == C.AUTHENTICATED
+    assert r["results"]["spf"] == "pass"
+    assert r["results"]["dkim"] == "pass", "a method the receiver stated was read as absent"
+
+
+def test_the_order_of_the_receivers_stamps_does_not_change_the_verdict():
+    """THE LUCK, REMOVED. RFC 8601 fixes no order, so a reader that returns the
+    right answer because the dmarc token happens to be listed first is a
+    constant waiting for a provider to reorder."""
+    a = C.read_criterion(RECEIVER_C, AUTH_C, IDENT, provenance=C.FETCHED)
+    b = C.read_criterion(RECEIVER_C_REORDERED, AUTH_C, IDENT, provenance=C.FETCHED)
+    assert a["verdict"] == b["verdict"] == C.AUTHENTICATED
+    assert a["results"] == b["results"]
+
+
+def test_the_run_STOPS_at_a_header_that_is_not_the_receivers():
+    """THE SECURITY PROPERTY, unchanged and now load-bearing in a new way. A
+    sender-supplied header arrives BELOW the receiver's own stamps, so the run
+    must stop at the first instance that is not ours -- which is exactly where
+    a forgery begins. Reading past it builds a gate whose reading the attacker
+    writes.
+
+    THE FIRST VERSION OF THIS TEST DID NOT DISCRIMINATE, and the mutation
+    sweep said so: it asserted on `header.from`, which is protected by
+    first-match-wins whether or not the forged instances are joined in. A
+    control that passes because a DIFFERENT mechanism happens to hold is a dead
+    control wearing a live one's result -- the second time that exact shape has
+    turned up in this suite today.
+
+    The discriminating case is a receiver that does NOT state the deciding
+    method, with an attacker supplying it below. Reading past the run then
+    lifts the verdict straight out of the forgery.
+    """
+    receiver_silent_on_dmarc = b"""\
+Authentication-Results: mail.example-c.ch; spf=pass smtp.mailfrom=ours.example.dev
+Authentication-Results: mail.example-c.ch; dkim=pass (2048-bit key) header.d=ours.example.dev
+Authentication-Results: attacker.invalid; dmarc=pass header.from=ours.example.dev
+From: agent@ours.example.dev
+Subject: s
+
+body
+"""
+    r = C.read_criterion(receiver_silent_on_dmarc, AUTH_C, IDENT,
+                         provenance=C.FETCHED)
+    assert r["results"]["dmarc"] is None, \
+        "a dmarc verdict was taken from a header the receiver did not write"
+    assert r["verdict"] == C.NOT_AUTHENTICATED
+    assert not C.is_pass(r)
