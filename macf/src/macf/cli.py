@@ -8978,8 +8978,25 @@ def cmd_amail_send(args: argparse.Namespace) -> int:
                   "treats unsigned mail as suspect.")
             return 1
 
+    # SEND BY COPY. The agent keeps its own canonical record BEFORE the broker
+    # is asked — spec O5c.6 "the-sent-copy-is-written-before-submission" — so a
+    # send that dies mid-flight still leaves the sender evidence of what it
+    # composed and how far the attempt got. Going through the custody path
+    # rather than calling submit() directly is what puts the write ON the live
+    # send path; a helper with no caller is the reader-with-no-writer defect
+    # this phase exists to fix, one level up.
+    from macf.amail.client import send_with_custody
+    home = Path(cfg["home"]) if cfg.get("home") else None
     try:
-        result = submit(cfg["agent"], msg, Path(cfg["socket"]))
+        if home:
+            result = send_with_custody(home, cfg["agent"], msg, Path(cfg["socket"]))
+        else:
+            # No home configured means there is nowhere to keep the copy. Say so
+            # rather than sending without one: a send that silently keeps no
+            # record is the state O5c.5 calls a defect, chosen deliberately.
+            print("⚠️ MACF: no agent home configured, so no sent copy can be "
+                  "kept; sending without a local record", file=sys.stderr)
+            result = submit(cfg["agent"], msg, Path(cfg["socket"]))
     except BrokerUnavailable as e:
         print(f"❌ {e}")
         return 1

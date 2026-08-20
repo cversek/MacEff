@@ -797,10 +797,77 @@ def test_disposition_is_a_history_not_a_last_value(tmp_path):
     cfg = BrokerConfig(domain="agents.test", dispositions_dir=tmp_path / "disp")
     b = Broker(cfg)
     for state in ("submitted", "deferred", "deferred", "bounced"):
-        b.record_disposition("alpha", "msg-1", state, detail=f"{state} detail")
+        b.record_disposition("alpha", "msg-1", state, detail=f"{state} detail",
+                             recipients=["you@example.org"])
     rec = sent_disposition(cfg.dispositions_dir, "msg-1")
-    assert [h["state"] for h in rec["history"]] == \
+    assert [h["state"] for h in rec["recipients"]["you@example.org"]["history"]] == \
         ["submitted", "deferred", "deferred", "bounced"]
+
+
+def test_disposition_is_recorded_per_recipient_not_per_message(tmp_path):
+    """Spec O5d.8 "disposition-is-per-recipient". Delivered to one and bounced
+    for another is the ordinary case, and one shared history cannot hold it."""
+    from macf.amail.broker import Broker, BrokerConfig
+    from macf.amail.client import sent_disposition
+    cfg = BrokerConfig(domain="agents.test", dispositions_dir=tmp_path / "disp")
+    b = Broker(cfg)
+    b.record_disposition("alpha", "msg-multi", "submitted",
+                         recipients=["a@example.org", "b@example.org"])
+    b.record_disposition("alpha", "msg-multi", "delivered", recipients=["a@example.org"])
+    b.record_disposition("alpha", "msg-multi", "bounced", recipients=["b@example.org"])
+    per = sent_disposition(cfg.dispositions_dir, "msg-multi")["recipients"]
+    assert [h["state"] for h in per["a@example.org"]["history"]] == ["submitted", "delivered"]
+    assert [h["state"] for h in per["b@example.org"]["history"]] == ["submitted", "bounced"]
+
+
+def test_a_message_level_refusal_writes_a_record_for_every_recipient(tmp_path):
+    """Spec O5d.8a "message-level-refusal-writes-a-record-for-every-recipient".
+    The refusal is a decision about the submission as a UNIT, so
+    a permitted recipient with no record at all would leave the derived view
+    with nothing to read."""
+    from macf.amail.broker import Broker, BrokerConfig
+    from macf.amail.client import sent_disposition
+    cfg = BrokerConfig(domain="agents.test", dispositions_dir=tmp_path / "disp")
+    Broker(cfg).record_disposition(
+        "alpha", "msg-denied", "denied", detail="b@example.org is not a contact",
+        recipients=["a@example.org", "b@example.org"])
+    per = sent_disposition(cfg.dispositions_dir, "msg-denied")["recipients"]
+    assert set(per) == {"a@example.org", "b@example.org"}
+    assert all(e["history"][-1]["state"] == "denied" for e in per.values())
+
+
+def test_the_derived_view_is_the_least_successful_outcome(tmp_path):
+    """Spec O5d.8b "message-level-view-is-the-least-successful-outcome".
+    Any recipient bounced makes the message bounced; delivered
+    requires that every recipient reached it. A summary reporting success while
+    a recipient bounced is the silent-delivery failure, one level up."""
+    from macf.amail.broker import Broker, BrokerConfig
+    from macf.amail.client import sent_disposition, derive_message_state
+    cfg = BrokerConfig(domain="agents.test", dispositions_dir=tmp_path / "disp")
+    b = Broker(cfg)
+    b.record_disposition("alpha", "m", "delivered", recipients=["a@example.org"])
+    b.record_disposition("alpha", "m", "bounced", recipients=["b@example.org"])
+    assert derive_message_state(sent_disposition(cfg.dispositions_dir, "m")) == "bounced"
+
+    # The paired positive: without the bounce the same code must say delivered,
+    # or "bounced" proves only that the function returns a constant.
+    b.record_disposition("alpha", "m2", "delivered",
+                         recipients=["a@example.org", "b@example.org"])
+    assert derive_message_state(sent_disposition(cfg.dispositions_dir, "m2")) == "delivered"
+
+
+def test_an_unrecognised_state_makes_the_derivation_unknown_not_optimistic(tmp_path, capsys):
+    """A state this version does not know must not be SKIPPED — skipping it lets
+    an unrecognised outcome silently improve the summary."""
+    from macf.amail.broker import Broker, BrokerConfig
+    from macf.amail.client import sent_disposition, derive_message_state
+    cfg = BrokerConfig(domain="agents.test", dispositions_dir=tmp_path / "disp")
+    b = Broker(cfg)
+    b.record_disposition("alpha", "m3", "bounced", recipients=["a@example.org"])
+    b.record_disposition("alpha", "m3", "quarantined-by-a-future-version",
+                         recipients=["b@example.org"])
+    assert derive_message_state(sent_disposition(cfg.dispositions_dir, "m3")) is None
+    assert "unrecognised state" in capsys.readouterr().err
 
 
 def test_an_unrecorded_disposition_reads_as_none_not_as_delivered(tmp_path):
@@ -814,11 +881,104 @@ def test_an_unrecorded_disposition_reads_as_none_not_as_delivered(tmp_path):
 def test_the_disposition_is_readable_by_the_sender_but_broker_owned(tmp_path):
     from macf.amail.broker import Broker, BrokerConfig
     cfg = BrokerConfig(domain="agents.test", dispositions_dir=tmp_path / "disp")
-    f = Broker(cfg).record_disposition("alpha", "msg-2", "submitted")
+    f = Broker(cfg).record_disposition("alpha", "msg-2", "submitted",
+                                       recipients=["you@example.org"])
     import stat as _stat
     mode = f.stat().st_mode
     assert mode & _stat.S_IROTH, "the sender must be able to read its own mail's fate"
     assert not (mode & _stat.S_IWOTH), "but it must not be able to forge it"
+
+
+def test_an_unreadable_disposition_record_is_never_overwritten(tmp_path, capsys):
+    """THE ONE THAT MATTERS. A record that exists and cannot be parsed used to be
+    silently replaced with an empty history, and the next write committed that
+    emptiness -- evidence destruction inside the function whose job is to keep
+    evidence, which is the audit log's own rotation defect one subsystem later.
+
+    Refusing must be LOUD and must leave the bytes alone."""
+    from macf.amail.broker import Broker, BrokerConfig
+    cfg = BrokerConfig(domain="agents.test", dispositions_dir=tmp_path / "disp")
+    b = Broker(cfg)
+    b.record_disposition("alpha", "msg-corrupt", "submitted",
+                         recipients=["you@example.org"])
+    f = cfg.dispositions_dir / "msg-corrupt.json"
+    f.write_text("{ this is not json")           # simulate a truncated write
+    corrupt_bytes = f.read_bytes()
+
+    with pytest.raises(ValueError):
+        b.record_disposition("alpha", "msg-corrupt", "delivered",
+                             recipients=["you@example.org"])
+
+    assert f.read_bytes() == corrupt_bytes, \
+        "the unreadable record must survive untouched; it is the only copy"
+    err = capsys.readouterr().err
+    assert "REFUSING to overwrite" in err
+    assert "cannot be read" in err
+
+
+def test_a_first_disposition_is_not_warned_about(tmp_path, capsys):
+    """The paired positive for the test above, and it is the reason the three
+    states are kept distinct: a missing record is EXPECTED (this is the first
+    fate for this message), so warning about it would train readers to ignore
+    the two warnings that matter."""
+    from macf.amail.broker import Broker, BrokerConfig
+    cfg = BrokerConfig(domain="agents.test", dispositions_dir=tmp_path / "disp")
+    Broker(cfg).record_disposition("alpha", "msg-first", "submitted",
+                                   recipients=["you@example.org"])
+    assert capsys.readouterr().err == ""
+
+
+def test_no_recipients_records_nothing_and_says_so(tmp_path, capsys):
+    """A fate belongs to a message-recipient PAIR — spec O5d.8c
+    "conservation-unit-is-the-message-recipient-pair". With no
+    recipient there is no pair, and a placeholder row could never reach a
+    terminal state -- it would sit in the conservation ledger forever."""
+    from macf.amail.broker import Broker, BrokerConfig
+    cfg = BrokerConfig(domain="agents.test", dispositions_dir=tmp_path / "disp")
+    assert Broker(cfg).record_disposition("alpha", "msg-none", "submitted") is None
+    assert "no recipients given" in capsys.readouterr().err
+
+
+def test_the_content_hash_is_written_once_and_never_rewritten(tmp_path):
+    """Spec O5c.7a "the-hash-lives-where-its-verifier-can-reach-it".
+    A hash that changes is not evidence of anything, so a later
+    call carrying a different value must not be able to relabel what was sent."""
+    from macf.amail.broker import Broker, BrokerConfig
+    from macf.amail.client import sent_disposition
+    cfg = BrokerConfig(domain="agents.test", dispositions_dir=tmp_path / "disp")
+    b = Broker(cfg)
+    b.record_disposition("alpha", "msg-h", "submitted", recipients=["a@example.org"],
+                         content_sha256="a" * 64)
+    b.record_disposition("alpha", "msg-h", "delivered", recipients=["a@example.org"],
+                         content_sha256="b" * 64)
+    assert sent_disposition(cfg.dispositions_dir, "msg-h")["content_sha256"] == "a" * 64
+
+
+def test_concurrent_appends_do_not_lose_records(tmp_path):
+    """Spec O5d.10 "disposition-appends-are-safe-under-concurrent-writers".
+    The audit log's rotation lost 42 of 50 records under
+    ordinary concurrency with no attacker involved; this store has the same
+    read-modify-write shape and must not repeat it."""
+    import threading
+    from macf.amail.broker import Broker, BrokerConfig
+    from macf.amail.client import sent_disposition
+    cfg = BrokerConfig(domain="agents.test", dispositions_dir=tmp_path / "disp")
+    b = Broker(cfg)
+    n = 40
+
+    def append(i):
+        b.record_disposition("alpha", "msg-race", "deferred", detail=str(i),
+                             recipients=["a@example.org"])
+
+    threads = [threading.Thread(target=append, args=(i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    history = sent_disposition(cfg.dispositions_dir, "msg-race")["recipients"]["a@example.org"]["history"]
+    assert len(history) == n, f"lost {n - len(history)} of {n} concurrent records"
+    assert sorted(int(h["detail"]) for h in history) == list(range(n))
 
 
 def test_a_missing_disposition_store_is_announced_not_silent(tmp_path, capsys):
@@ -828,3 +988,278 @@ def test_a_missing_disposition_store_is_announced_not_silent(tmp_path, capsys):
     cfg = BrokerConfig(domain="agents.test", dispositions_dir=None)
     assert Broker(cfg).record_disposition("alpha", "msg-3", "submitted") is None
     assert "no disposition store configured" in capsys.readouterr().err
+
+
+# ---- Phase 1: send-by-copy custody, wired ----------------------------------
+# `deliver_sent` and `record_disposition` both existed, were tested, and had
+# ZERO non-test call sites -- a reader with no writer, which returns an
+# emptiness that reads as "nothing was sent" rather than "this is not wired".
+
+def _custody_fixture(tmp_path, monkeypatch, *, ok=True, refused=None, raises=False):
+    """A send path with the socket replaced, so the custody sequence is what is
+    under test rather than the broker."""
+    from macf.amail import client
+    home = tmp_path / "sender"
+    (home / "Maildir").mkdir(parents=True)
+
+    def fake_submit(sender, message, socket_path, timeout=10.0):
+        if raises:
+            raise client.BrokerUnavailable("broker is down")
+        return {"ok": ok, "message_id": "msg-BROKER-MINTED",
+                "refused": refused or []}
+
+    monkeypatch.setattr(client, "submit", fake_submit)
+    return home
+
+
+def test_the_sent_copy_exists_before_the_broker_is_asked(tmp_path, monkeypatch):
+    """Spec O5c.6 "the-sent-copy-is-written-before-submission". Write-after
+    loses the record of anything that died mid-flight, which is exactly the
+    case a sender most needs evidence of."""
+    from macf.amail import client, store
+    from macf.amail.models import Message
+    home = tmp_path / "sender"
+    (home / "Maildir").mkdir(parents=True)
+    seen = {}
+
+    def fake_submit(sender, message, socket_path, timeout=10.0):
+        # AT THE MOMENT OF SUBMISSION the copy must already be on disk.
+        seen["copies"] = len(store.read_sent(home))
+        seen["state"] = store.read_sent_sidecar(
+            home, store.read_sent_with_state(home)[0]["name"])["state"]
+        return {"ok": True, "message_id": "msg-BROKER-MINTED"}
+
+    monkeypatch.setattr(client, "submit", fake_submit)
+    client.send_with_custody(home, "alpha",
+                             Message(sender="me@agents.test", to=["you@example.org"],
+                                     subject="s", body="b"),
+                             tmp_path / "sock")
+    assert seen["copies"] == 1, "the copy must exist BEFORE the broker is asked"
+    assert seen["state"] == client.ATTEMPTED, \
+        "and the annotation must already say an attempt is in flight"
+
+
+def test_a_crash_before_the_broker_answers_leaves_attempted_not_refused(tmp_path, monkeypatch):
+    """The client must never assert a broker decision it did not hear. `refused`
+    written here would be the same invention the disposition store exists to
+    prevent, committed on the other side."""
+    from macf.amail import client, store
+    from macf.amail.models import Message
+    home = _custody_fixture(tmp_path, monkeypatch, raises=True)
+    with pytest.raises(client.BrokerUnavailable):
+        client.send_with_custody(home, "alpha",
+                                 Message(sender="me@agents.test", to=["you@example.org"],
+                                         subject="s", body="b"),
+                                 tmp_path / "sock")
+    entry = store.read_sent_with_state(home)[0]
+    assert entry["sidecar"]["state"] == client.ATTEMPTED
+    assert len(store.read_sent(home)) == 1, "the copy survives the failed send"
+
+
+def test_a_refusal_is_recorded_on_the_agents_own_copy(tmp_path, monkeypatch):
+    from macf.amail import client, store
+    from macf.amail.models import Message
+    home = _custody_fixture(tmp_path, monkeypatch, ok=False,
+                            refused=["you@example.org is not a contact"])
+    client.send_with_custody(home, "alpha",
+                             Message(sender="me@agents.test", to=["you@example.org"],
+                                     subject="s", body="b"),
+                             tmp_path / "sock")
+    side = store.read_sent_with_state(home)[0]["sidecar"]
+    assert side["state"] == client.REFUSED
+    assert side["refused"] == ["you@example.org is not a contact"]
+
+
+def test_both_message_ids_are_recorded_so_the_two_records_can_be_joined(tmp_path, monkeypatch):
+    """The broker RE-MINTS message_id, so the agent's copy carries an id that
+    matches no disposition record. Recording both is what lets the agent find
+    the fate of its own mail."""
+    from macf.amail import client, store
+    from macf.amail.models import Message
+    home = _custody_fixture(tmp_path, monkeypatch)
+    m = Message(sender="me@agents.test", to=["you@example.org"], subject="s", body="b")
+    local = m.message_id
+    client.send_with_custody(home, "alpha", m, tmp_path / "sock")
+    side = store.read_sent_with_state(home)[0]["sidecar"]
+    assert side["local_message_id"] == local
+    assert side["broker_message_id"] == "msg-BROKER-MINTED"
+    assert side["local_message_id"] != side["broker_message_id"]
+
+
+def test_the_content_hash_survives_the_brokers_reminting(tmp_path, monkeypatch):
+    """THE DEVIATION, TESTED. Byte-equality of the serialized message is
+    unsatisfiable because the broker re-mints message_id and date. The hash
+    covers `signing_payload` -- the named canonical subset -- which excludes
+    exactly those two fields, so it still means something after canonicalisation."""
+    from macf.amail import client, store
+    from macf.amail.models import Message
+    from macf.amail.crypto import signing_payload
+    import hashlib
+    home = _custody_fixture(tmp_path, monkeypatch)
+    m = Message(sender="me@agents.test", to=["you@example.org"], subject="s", body="b")
+    result = client.send_with_custody(home, "alpha", m, tmp_path / "sock")
+
+    # The broker's canonicalisation, simulated: new id, new date, same content.
+    remined = Message(sender=m.sender, to=list(m.to), subject=m.subject, body=m.body)
+    assert remined.message_id != m.message_id, "precondition: the ids differ"
+    assert hashlib.sha256(signing_payload(remined)).hexdigest() == result["content_sha256"]
+
+    # The paired NEGATIVE: change the content and the hash must move, or the
+    # comparison proves only that it returns a constant.
+    altered = Message(sender=m.sender, to=list(m.to), subject=m.subject, body="tampered")
+    assert hashlib.sha256(signing_payload(altered)).hexdigest() != result["content_sha256"]
+
+
+def test_the_agent_side_reconciliation_goes_red_in_both_directions(tmp_path, monkeypatch):
+    """Spec O5d.6a "composed-never-submitted-is-reconciled-agent-side", and the
+    control V19c asks for: BOTH directions, run as the agent with no broker."""
+    from macf.amail import client, store
+    from macf.amail.broker import Broker, BrokerConfig
+    from macf.amail.models import Message
+    home = _custody_fixture(tmp_path, monkeypatch)
+    disp = tmp_path / "disp"
+    cfg = BrokerConfig(domain="agents.test", dispositions_dir=disp)
+
+    m = Message(sender="me@agents.test", to=["you@example.org"], subject="s", body="b")
+    client.send_with_custody(home, "alpha", m, tmp_path / "sock")
+
+    # SUBMITTED with no disposition recorded -> red, naming the id.
+    red = client.reconcile_sent(home, disp)
+    assert red["ok"] is False
+    assert red["missing_disposition"] == ["msg-BROKER-MINTED"]
+
+    # The paired GREEN: record the fate and the same check must go clean.
+    Broker(cfg).record_disposition("alpha", "msg-BROKER-MINTED", "delivered",
+                                   recipients=["you@example.org"])
+    green = client.reconcile_sent(home, disp)
+    assert green["ok"] is True and green["submitted"] == 1
+
+    # The OTHER direction: a copy never submitted must NOT have a disposition.
+    store.deliver_sent(home, Message(sender="me@agents.test", to=["x@example.org"],
+                                     subject="draft", body="never sent"))
+    name = [e["name"] for e in store.read_sent_with_state(home) if e["sidecar"] is None][0]
+    store.write_sent_sidecar(home, name, {"state": client.COMPOSED,
+                                          "local_message_id": "msg-LOCAL-ONLY"})
+    assert client.reconcile_sent(home, disp)["composed"] == 1, \
+        "composed-never-submitted is EXPECTED, not a shortfall"
+    Broker(cfg).record_disposition("alpha", "msg-LOCAL-ONLY", "delivered",
+                                   recipients=["x@example.org"])
+    surplus = client.reconcile_sent(home, disp)
+    assert surplus["ok"] is False
+    assert surplus["unexpected_disposition"] == ["msg-LOCAL-ONLY"]
+
+
+def test_an_unresolved_attempt_is_named_rather_than_sorted(tmp_path, monkeypatch):
+    """Spec O13.10 "the-outbound-ledger's-left-edge". A submission that died
+    before the broker's first look is indistinguishable from one it lost, and
+    folding it into either column would balance the ledger by deciding a
+    question the system cannot answer."""
+    from macf.amail import client
+    from macf.amail.models import Message
+    home = _custody_fixture(tmp_path, monkeypatch, raises=True)
+    with pytest.raises(client.BrokerUnavailable):
+        client.send_with_custody(home, "alpha",
+                                 Message(sender="me@agents.test", to=["you@example.org"],
+                                         subject="s", body="b"),
+                                 tmp_path / "sock")
+    out = client.reconcile_sent(home, tmp_path / "disp")
+    assert len(out["unresolved"]) == 1
+    assert out["composed"] == 0 and out["submitted"] == 0, \
+        "it must be in NEITHER column, or the balance is a false one"
+
+
+def test_the_real_send_path_keeps_a_copy_and_records_a_fate(tmp_path, monkeypatch):
+    """THE PATH TEST, and it replaces a weaker guard that I nearly shipped.
+
+    The first version of this asserted `deliver_sent` had a non-test CALL SITE.
+    That guard passed the moment `send_with_custody` existed -- while
+    `send_with_custody` itself had no caller, so the CLI still sent mail keeping
+    no copy. The property is "the write is ON the live send path"; the guard
+    measured "something references the function", which is the easier adjacent
+    property, and it went green while the thing it protects was false.
+
+    Same shape as the round-1 finding about the pre-send gate: the corpus
+    certifies the scanner, only the path certifies the gate. So this drives the
+    REAL CLI entry point and asserts the artifacts exist afterwards."""
+    import argparse
+    from macf import cli
+    from macf.amail import store, client
+    from macf.amail.broker import Broker, BrokerConfig
+
+    home = tmp_path / "home"
+    (home / "Maildir").mkdir(parents=True)
+    peer_home = tmp_path / "peer"
+    (peer_home / "Maildir").mkdir(parents=True)
+    disp = tmp_path / "disp"
+    contacts = tmp_path / "contacts.json"
+    contacts.write_text(json.dumps({"alpha": ["peer@agents.test"]}))
+    broker = Broker(BrokerConfig(domain="agents.test", dispositions_dir=disp,
+                                 contacts_path=contacts,
+                                 inbound_handoff=tmp_path / "handoff",
+                                 agent_homes={"alpha": home, "peer": peer_home}))
+
+    monkeypatch.setattr(cli, "_amail_config", lambda: {
+        "agent": "alpha", "domain": "agents.test", "home": str(home),
+        "socket": str(tmp_path / "sock"), "signing_key": None})
+    # The socket is replaced by the real broker object: the transport is not
+    # what is under test, the SEQUENCE is.
+    monkeypatch.setattr(client, "submit",
+                        lambda sender, message, socket_path, timeout=10.0:
+                        broker.submit(sender, message))
+
+    args = argparse.Namespace(to=["peer@agents.test"], subject="hi",
+                              body="real path", body_file=None, reply_to=None,
+                              json=False)
+    assert cli.cmd_amail_send(args) == 0
+
+    # 1. The agent kept its own copy, from the REAL entry point.
+    copies = store.read_sent(home)
+    assert [m.body for m in copies] == ["real path"]
+
+    # 2. Its annotation reached `submitted`, so a crash is distinguishable.
+    entry = store.read_sent_with_state(home)[0]
+    assert entry["sidecar"]["state"] == client.SUBMITTED
+
+    # 3. The broker recorded a fate, per recipient, joined by the id it minted.
+    rec = client.sent_disposition(disp, entry["sidecar"]["broker_message_id"])
+    assert rec is not None, "the send path must WRITE a disposition, not just have one"
+    assert list(rec["recipients"]) == ["peer@agents.test"]
+
+    # 4. And the two records reconcile, as the agent, with no broker call.
+    assert client.reconcile_sent(home, disp)["ok"] is True
+
+
+def test_a_denied_submission_records_a_terminal_fate_for_every_recipient(tmp_path):
+    """A DENY is TERMINAL and IS counted -- spec O5d.7
+    "terminal-dispositions-are-enumerated-and-closed". A ledger that omitted
+    refusals would let two implementations compute different balances from
+    identical traffic, and a ledger whose value is that a discrepancy means
+    something cannot afford an ambiguous denominator.
+
+    Recorded against BOTH recipients even though only one offended, per spec
+    O5d.8a "message-level-refusal-writes-a-record-for-every-recipient": the
+    refusal is a decision about the submission as a unit."""
+    from macf.amail.broker import Broker, BrokerConfig
+    from macf.amail.client import sent_disposition, derive_message_state
+    from macf.amail.models import Message
+
+    home = tmp_path / "home"
+    (home / "Maildir").mkdir(parents=True)
+    contacts = tmp_path / "contacts.json"
+    contacts.write_text(json.dumps({"alpha": ["ok@agents.test"]}))
+    disp = tmp_path / "disp"
+    b = Broker(BrokerConfig(domain="agents.test", contacts_path=contacts,
+                            dispositions_dir=disp, agent_homes={"alpha": home}))
+
+    m = Message(sender="alpha@agents.test",
+                to=["ok@agents.test", "stranger@example.org"],
+                subject="s", body="b")
+    result = b.submit("alpha", m)
+    assert result["ok"] is False
+
+    rec = sent_disposition(disp, result["message_id"])
+    assert rec is not None, "a refusal is a FATE and must be recorded"
+    assert set(rec["recipients"]) == {"ok@agents.test", "stranger@example.org"}, \
+        "the permitted recipient needs a record too, or the derivation has nothing to read"
+    assert all(e["history"][-1]["state"] == "denied" for e in rec["recipients"].values())
+    assert derive_message_state(rec) == "denied"

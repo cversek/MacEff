@@ -13,10 +13,11 @@ from __future__ import annotations
 
 import json
 import socket
+import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from .models import Message
+from .models import Message, _now_iso
 
 
 class BrokerUnavailable(RuntimeError):
@@ -84,6 +85,150 @@ def submit(sender: str, message: Message, socket_path: Path,
     )
 
 
+#: The submission states a sent copy's annotation can carry. Deliberately NOT
+#: the disposition vocabulary: these are what the AGENT observed of its own
+#: attempt, and the broker's `submitted`/`delivered`/`bounced` are what the
+#: BROKER observed of the message's fate. Two observers, two vocabularies —
+#: collapsing them would let one side's silence read as the other's verdict.
+COMPOSED = "composed"        # written, never yet handed to the broker
+ATTEMPTED = "attempted"      # handed over; no answer received (crash, outage)
+SUBMITTED = "submitted"      # the broker answered and accepted it
+REFUSED = "refused"          # the broker answered and refused it
+
+
+def send_with_custody(home: Path, sender: str, message: Message,
+                      socket_path: Path, timeout: float = 10.0) -> Dict[str, Any]:
+    """Compose, KEEP A COPY, then submit — in that order, and the order is the point.
+
+    Spec O5c.6 "the-sent-copy-is-written-before-submission". Writing after the
+    broker answers loses the record of anything that died mid-flight, which is
+    precisely the case a sender most needs evidence of. So the copy exists
+    before the attempt, and the annotation records how far the attempt got.
+
+    The three writes are not ceremony. Each one is the state a crash at that
+    instant would leave behind:
+
+        composed   -> the process died before it ever reached the socket
+        attempted  -> it died with the request in flight; the broker may or may
+                      not have acted, and NOTHING here may claim to know which
+        submitted  -> the broker answered
+
+    `attempted` is written BEFORE the call rather than after it, because a state
+    written after the call cannot describe a failure of the call.
+
+    The content hash covers `signing_payload()` — the same bytes a signature
+    covers — rather than the serialized message. Spec O5c.7 asks for the exact
+    submitted bytes OR a NAMED CANONICAL SUBSET, and the subset is required
+    here: the broker RE-MINTS message_id and date (a submitter-chosen id shadows
+    a real message and a submitter-chosen date controls the reader's ordering),
+    so stored bytes and submitted bytes can never be equal and a raw comparison
+    would report mismatch on every message ever sent. `signing_payload` already
+    excludes exactly those two fields, for exactly this reason, and already has
+    a round-trip property test — so this reuses the codebase's one definition of
+    "what the message IS" instead of coining a second one that could drift.
+    """
+    import hashlib
+    from . import store
+    from .crypto import signing_payload
+
+    content_sha256 = hashlib.sha256(signing_payload(message)).hexdigest()
+
+    sent_path = store.deliver_sent(home, message)
+    name = sent_path.name
+    meta = {
+        "state": COMPOSED,
+        "composed_at": _now_iso(),
+        "content_sha256": content_sha256,
+        # The id the AGENT minted. The broker will mint its own, and recording
+        # both is what lets the two records be joined afterwards.
+        "local_message_id": message.message_id,
+        "broker_message_id": None,
+        "to": list(message.to),
+    }
+    store.write_sent_sidecar(home, name, meta)
+
+    meta["state"] = ATTEMPTED
+    meta["attempted_at"] = _now_iso()
+    store.write_sent_sidecar(home, name, meta)
+
+    try:
+        result = submit(sender, message, socket_path, timeout)
+    except BrokerUnavailable:
+        # The annotation stays at `attempted` on purpose. We do not know whether
+        # the broker acted, and writing `refused` here would be the client
+        # asserting a broker decision it never heard — the same invention the
+        # disposition store exists to prevent, committed on the other side.
+        raise
+
+    meta["state"] = SUBMITTED if result.get("ok") else REFUSED
+    meta["answered_at"] = _now_iso()
+    meta["broker_message_id"] = result.get("message_id")
+    if not result.get("ok"):
+        meta["refused"] = result.get("refused") or []
+    store.write_sent_sidecar(home, name, meta)
+
+    result["sent_copy"] = str(sent_path)
+    result["content_sha256"] = content_sha256
+    return result
+
+
+def reconcile_sent(home: Path, dispositions_dir: Optional[Path]) -> Dict[str, Any]:
+    """The AGENT-SIDE half of conservation, over the copies the agent owns.
+
+    Spec O5d.6a "composed-never-submitted-is-reconciled-agent-side". The broker's
+    ledger starts at submission and structurally cannot see a message composed
+    and never submitted — O5c.6 blesses that class as correct and expected — so
+    counting it there would report a shortfall for correct behaviour, and
+    counting it nowhere loses it. It is counted here, where it is visible.
+
+    The rule, and it is the whole check:
+
+        state `composed`  -> a disposition record MUST NOT exist. Expected,
+                             never a shortfall.
+        state `submitted` -> a disposition record MUST exist.
+        state `attempted` -> UNRESOLVED, and named as such rather than sorted
+                             into either bucket. This is the residual edge of
+                             spec O13.10 "the-outbound-ledger's-left-edge": the
+                             submission may have died before the broker's first
+                             look, or after it, and neither side can tell.
+
+    `unresolved` is reported separately BECAUSE it is the honest answer. Folding
+    it into either column would make the ledger balance by deciding a question
+    the system cannot answer, which is worse than an imbalance — an imbalance
+    prompts a look, and a false balance prevents one.
+    """
+    from . import store
+
+    out: Dict[str, Any] = {"ok": True, "composed": 0, "submitted": 0,
+                           "unresolved": [], "missing_disposition": [],
+                           "unexpected_disposition": [], "unannotated": []}
+    for entry in store.read_sent_with_state(home):
+        side = entry.get("sidecar")
+        if side is None:
+            # No annotation at all. Distinct from `composed`, and it means this
+            # copy predates the annotation or its sidecar was lost — either way
+            # it cannot be reconciled, and saying so beats guessing.
+            out["unannotated"].append(entry["name"])
+            continue
+        state = side.get("state")
+        mid = side.get("broker_message_id") or side.get("local_message_id")
+        record = sent_disposition(dispositions_dir, mid) if dispositions_dir else None
+
+        if state == COMPOSED:
+            out["composed"] += 1
+            if record is not None:
+                out["unexpected_disposition"].append(mid)
+        elif state in (SUBMITTED, REFUSED):
+            out["submitted"] += 1
+            if record is None:
+                out["missing_disposition"].append(mid)
+        elif state == ATTEMPTED:
+            out["unresolved"].append(mid)
+
+    out["ok"] = not (out["missing_disposition"] or out["unexpected_disposition"])
+    return out
+
+
 # There are deliberately no list/read wrappers here. Access follows custody:
 # delivered mail — bundles and internet alike — is the agent's own permanent
 # record, read directly from its store (`macf.amail.store`). The socket reaches
@@ -141,7 +286,6 @@ def ingest(home: Path, pickup_box: Path, contacts_path: Optional[Path] = None,
             # Ingested but not removed: the copy exists and a duplicate
             # ingest is prevented next round by... nothing yet — so say it
             # loudly instead of pretending.
-            import sys
             print(f"⚠️ MACF: pickup entry {eml.name} ingested but not "
                   f"removable ({e}); it will re-ingest as a duplicate next "
                   f"round unless removed", file=sys.stderr)
@@ -202,10 +346,9 @@ def _ingest_bundle(home: Path, amsg: Path, contacts_path, agent: str) -> dict:
     # what a stale or compromised broker looks like from the recipient's side.
     broker_trust = meta.get("broker_trust")
     if broker_trust and broker_trust != verdict["trust"]:
-        import sys as _sys
         print(f"⚠️ MACF: trust disagreement on {message.message_id}: broker said "
               f"{broker_trust!r}, own keys say {verdict['trust']!r} "
-              f"({verdict['reason']})", file=_sys.stderr)
+              f"({verdict['reason']})", file=sys.stderr)
         meta["ingest_verification"]["disagrees_with_broker"] = broker_trust
 
     delivered = store.deliver(home, message)
@@ -214,10 +357,9 @@ def _ingest_bundle(home: Path, amsg: Path, contacts_path, agent: str) -> dict:
         amsg.unlink()
         sidecar.unlink()
     except OSError as e:
-        import sys as _sys
         print(f"⚠️ MACF: pickup entry {amsg.name} ingested but not removable "
               f"({e}); it will re-ingest as a duplicate next round unless "
-              f"removed", file=_sys.stderr)
+              f"removed", file=sys.stderr)
     entry.update(ingested=True, path=str(delivered), sha256=actual,
                  trust=verdict["trust"])
     return entry
@@ -265,6 +407,70 @@ def read_sent(home: Path) -> list:
     return store.read_sent(home)
 
 
+#: Outcomes ranked LEAST-SUCCESSFUL FIRST. The order is the whole content of
+#: spec O5d.8b "message-level-view-is-the-least-successful-outcome": the derived
+#: view is the minimum over the per-recipient outcomes, so any recipient bounced
+#: makes the message bounced, and `delivered` requires that every recipient
+#: reached it.
+#:
+#: Least-successful rather than most-successful because a sender needs to know
+#: that SOMETHING failed. A summary reporting success while a recipient bounced
+#: is the silent-delivery failure the disposition store exists to prevent, one
+#: level up.
+#:
+#: The refusals sort below the transport outcomes because they mean nothing was
+#: attempted at all. `abandoned` (in flight past its age bound) sorts above
+#: `bounced` because a bounce is a definite negative and an abandonment is an
+#: unknown — and the unknown must not masquerade as the definite fact.
+_OUTCOME_RANK = {
+    "denied": 0,
+    "gate-refused": 1,
+    "rate-refused": 2,
+    "bounced": 3,
+    "abandoned": 4,
+    "submitted": 5,
+    "deferred": 6,
+    "delivered": 7,
+}
+
+
+def derive_message_state(record: Dict[str, Any]) -> Optional[str]:
+    """The message-level view, DERIVED from the per-recipient records.
+
+    Spec O5d.8 "message-level-view-is-derived-never-stored": it is computed on
+    every read and never written down, because a stored copy can drift from the
+    records it summarises. Spec O5d.8b
+    "message-level-view-is-the-least-successful-outcome" fixes HOW, so that two
+    implementations
+    cannot compute different balances from identical traffic.
+
+    Returns None when there is nothing to derive from — which is distinct from
+    every state in the vocabulary and MUST NOT be read as `delivered`.
+
+    An UNKNOWN state in the record makes the whole derivation UNKNOWN rather
+    than being skipped. Skipping it would let a state this version does not
+    recognise silently improve the summary: a future `quarantined` would be
+    dropped, and a message with one bounce and one unrecognised outcome would
+    derive `bounced` while the truth was worse. Refusing to derive is the
+    honest answer to "I do not know what one of these means".
+    """
+    per = (record or {}).get("recipients") or {}
+    worst: Optional[str] = None
+    for _addr, entry in per.items():
+        history = entry.get("history") or []
+        if not history:
+            continue
+        state = history[-1].get("state")
+        if state not in _OUTCOME_RANK:
+            print(f"⚠️ MACF: disposition carries unrecognised state {state!r}; "
+                  "the message-level view is UNKNOWN rather than derived from "
+                  "the states this version happens to know", file=sys.stderr)
+            return None
+        if worst is None or _OUTCOME_RANK[state] < _OUTCOME_RANK[worst]:
+            worst = state
+    return worst
+
+
 def sent_disposition(dispositions_dir: Path, message_id: str) -> Optional[Dict[str, Any]]:
     """What became of a message this agent sent, or None if nothing recorded.
 
@@ -285,9 +491,8 @@ def sent_disposition(dispositions_dir: Path, message_id: str) -> Optional[Dict[s
     try:
         return json.loads(f.read_text())
     except (OSError, ValueError) as e:
-        import sys as _sys
         print(f"⚠️ MACF: disposition record for {message_id} is unreadable "
-              f"({e}); treating as UNKNOWN, not as delivered", file=_sys.stderr)
+              f"({e}); treating as UNKNOWN, not as delivered", file=sys.stderr)
         return None
 
 

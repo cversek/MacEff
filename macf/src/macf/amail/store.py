@@ -339,6 +339,96 @@ def read_bundle_sidecar(home: Path, name: str) -> Optional[dict]:
         return None
 
 
+def sent_sidecars_for(home: Path) -> Path:
+    """Where a sent copy's SUBMISSION STATE lives, beside but not inside it.
+
+    A third sidecar directory, and the separation is not fussiness: the internet
+    listing discriminates by presence in `sidecars/` and the agent-bundle
+    listing by presence in `bundle_sidecars/`, so a sent annotation in either
+    would make every sent copy read as a delivery it is not. The same reasoning
+    that split the first two applies to the third.
+
+    Why a sidecar at all rather than a field on the message: the sent copy is
+    CANONICAL and IMMUTABLE — spec O5c.1 "the-sent-copy-is-canonical-and-
+    immutable" — it is what the agent said. Submission state changes after the
+    saying, so it cannot live in the artifact whose whole property is that it
+    does not change. Immutable artifact, mutable annotation, separate files.
+    """
+    return maildir_for(home) / "sent_sidecars"
+
+
+def write_sent_sidecar(home: Path, name: str, meta: dict) -> Path:
+    """Record submission state beside a sent copy. Agent-owned, agent-written.
+
+    Spec O5c.2 "the-sent-copy-is-written-by-the-agent-never-the-broker" covers
+    this annotation too: it is the AGENT's record of what it attempted, written
+    as the agent, readable with no broker in existence. The broker's view of the
+    same message lives in the disposition store and is the broker's to write.
+    Two records, two owners, and a disagreement between them is information
+    rather than a bug — it is what a lost submission looks like from each side.
+    """
+    d = sent_sidecars_for(home)
+    d.mkdir(mode=0o700, parents=True, exist_ok=True)
+    p = d / f"{name}.json"
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(json.dumps(meta, indent=1))
+    tmp.chmod(0o600)
+    # Atomic: a crash between composing and submitting is the case this record
+    # exists to make legible, so the record itself must never be the thing that
+    # is half-written when the crash happens.
+    os.replace(tmp, p)
+    return p
+
+
+def read_sent_sidecar(home: Path, name: str) -> Optional[dict]:
+    """The submission state recorded for one sent copy, or None if absent.
+
+    None means NO ANNOTATION WAS EVER WRITTEN, which is a different fact from
+    `state: composed` (written, never attempted). Keeping them distinct is the
+    same three-states rule the key-lookup verdict follows: "not recorded" is not
+    "recorded as not attempted".
+    """
+    p = sent_sidecars_for(home) / f"{name}.json"
+    if not p.is_file():
+        return None
+    try:
+        return json.loads(p.read_text())
+    except (OSError, ValueError) as e:
+        print(f"⚠️ MACF: unreadable sent sidecar {p.name} ({e}); treating as "
+              f"UNANNOTATED, which is not the same as unsent", file=sys.stderr)
+        return None
+
+
+def read_sent_with_state(home: Path) -> List[dict]:
+    """Every sent copy paired with its submission annotation.
+
+    The reading surface for the AGENT-SIDE half of conservation — spec O5d.6a
+    "composed-never-submitted-is-reconciled-agent-side". The broker's ledger
+    begins at submission and structurally cannot see a message that was composed
+    and never submitted, so that class is accounted for here, where it is
+    visible, or it is not accounted for at all.
+    """
+    sd = sent_dir(home)
+    if not sd.is_dir():
+        return []
+    out: List[dict] = []
+    for f in sorted(sd.iterdir()):
+        if not f.is_file():
+            continue
+        try:
+            m = Message.deserialize(f.read_text())
+        except (OSError, ValueError) as e:
+            print(f"⚠️ MACF: unreadable sent copy {f.name} ({e}); listed with "
+                  f"no message so it cannot vanish from the reconciliation",
+                  file=sys.stderr)
+            out.append({"name": f.name, "message": None, "sidecar": None,
+                        "unreadable": str(e)})
+            continue
+        out.append({"name": f.name, "message": m,
+                    "sidecar": read_sent_sidecar(home, f.name)})
+    return out
+
+
 def read_all(home: Path, include_seen: bool = True) -> List[Message]:
     """Every AGENT-BUNDLE message in the mailbox, ordered per the policy's
     sort key.

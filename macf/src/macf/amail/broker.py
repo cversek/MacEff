@@ -25,6 +25,7 @@ failure this whole subsystem is built to avoid.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -36,6 +37,11 @@ import sys
 import struct
 import threading
 import time
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - non-POSIX
+    fcntl = None  # type: ignore[assignment]
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -71,6 +77,45 @@ MAX_RECIPIENTS = 64     # ContactBook is consulted per recipient
 #: a mechanism it was not written to check. A limit that a sibling always
 #: reaches first is not a limit; it is a comment.
 MAX_SIGNATURE = 512
+
+
+#: One advisory lock per disposition store, keyed by directory. The threading
+#: lock covers handler threads inside one broker (this server is multi-threaded
+#: by design); the file lock covers separate broker processes. Two kinds of
+#: concurrent writer, two locks — the same pair the audit log settled on after
+#: its rotation was measured losing 42 of 50 records under ordinary concurrency.
+_DISPOSITION_LOCKS: Dict[str, threading.Lock] = {}
+_DISPOSITION_LOCKS_GUARD = threading.Lock()
+
+
+@contextlib.contextmanager
+def _disposition_lock(record: Path):
+    """Serialise the read-modify-write of one disposition store.
+
+    Spec O5d.10 "disposition-appends-are-safe-under-concurrent-writers". The
+    lock spans BOTH the read and the write: locking them separately leaves
+    exactly the window it is meant to close, since the loss happens between
+    them rather than inside either one.
+
+    The lock file is per DIRECTORY rather than per record. A per-record lock
+    would serialise nothing useful and would litter the store with one lock file
+    per message, which the retention sweep would then have to learn to ignore.
+    """
+    d = record.parent
+    key = str(d)
+    with _DISPOSITION_LOCKS_GUARD:
+        tlock = _DISPOSITION_LOCKS.setdefault(key, threading.Lock())
+    with tlock:
+        if fcntl is None:  # pragma: no cover - non-POSIX
+            yield
+            return
+        lockfile = d / ".dispositions.lock"
+        with open(lockfile, "a+b") as lf:
+            fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
 
 #: Longest the JOINED recipient list may be. serialize() writes `To:` as a
 #: single header value, so a longer list is silently shortened on the way to
@@ -244,13 +289,35 @@ class Broker:
         return q / f"{stem}.amsg"
 
     def record_disposition(self, agent: str, message_id: str, state: str,
-                           detail: str = "") -> Optional[Path]:
+                           detail: str = "", *,
+                           recipients: Optional[List[str]] = None,
+                           content_sha256: Optional[str] = None) -> Optional[Path]:
         """Write what became of a submitted message. Broker-owned, agent-readable.
 
-        Appends to a per-message history rather than overwriting, because the
-        states are a SEQUENCE (submitted, then deferred, then bounced) and the
-        last one alone loses the story an operator needs to read. A bounce after
-        three deferrals is a different fact from an immediate bounce.
+        PER RECIPIENT, not per message — spec O5d.8 "disposition-is-per-recipient".
+        Transport outcomes are per-recipient by nature (delivered to one, bounced
+        for another), so a single per-message history cannot represent them. The
+        message-level view is DERIVED from these records rather than stored
+        beside them, where the two could drift.
+
+        Message-LEVEL refusals (`denied`, `rate-refused`, `gate-refused`) are
+        decisions about the submission as a unit, so they are written against
+        EVERY named recipient with the same value — spec O5d.8a
+        "message-level-refusal-writes-a-record-for-every-recipient". Recording
+        them only against the offending recipients would leave the permitted ones
+        with no record at all, and the derived view would have nothing to read.
+
+        Within each recipient the states are APPENDED as a history rather than
+        overwritten — spec O5d.4 "disposition-is-a-history-not-a-last-value" —
+        because they are a SEQUENCE and the last one alone loses the story. A
+        bounce after three deferrals is a different fact from an immediate
+        bounce, and only a sequence tells them apart.
+
+        `content_sha256` is the hash of the submitted content, kept here because
+        this is the one broker-owned store the agent can already read — spec
+        O5c.7a "the-hash-lives-where-its-verifier-can-reach-it". No new store and
+        no new access path. Written once and never rewritten: a hash that changes
+        is not evidence of anything.
 
         Returns None when no disposition store is configured, and says so on
         stderr rather than silently doing nothing: a deployment that submits mail
@@ -261,20 +328,144 @@ class Broker:
                   f"{message_id} is unrecorded and the sender cannot learn it",
                   file=sys.stderr)
             return None
+        if not recipients:
+            # A fate belongs to a message-recipient PAIR — spec O5d.8c
+            # "conservation-unit-is-the-message-recipient-pair". With no
+            # recipient there is no pair, so there is nothing whose fate this
+            # would be, and inventing a placeholder would put a row in the
+            # conservation ledger that can never reach a terminal state.
+            print(f"⚠️ MACF: no recipients given for {message_id}; nothing to "
+                  "record a disposition against", file=sys.stderr)
+            return None
+
         d = Path(self.config.dispositions_dir)
         d.mkdir(mode=0o755, parents=True, exist_ok=True)
         f = d / f"{message_id}.json"
-        try:
-            history = json.loads(f.read_text()).get("history", [])
-        except (OSError, ValueError):
-            history = []
-        history.append({"state": state, "detail": detail, "at": _now_iso()})
-        f.write_text(json.dumps({"message_id": message_id, "agent": agent,
-                                 "history": history}, indent=1))
-        # World-readable on purpose: the SENDER must be able to read the fate of
-        # its own mail with no broker running, and a fate is not a secret.
-        f.chmod(0o644)
+        at = _now_iso()
+
+        # THE LOCK SPANS READ AND WRITE — spec O5d.10
+        # "disposition-appends-are-safe-under-concurrent-writers".
+        with _disposition_lock(f):
+            # THREE STATES, KEPT DISTINCT. The version this replaces collapsed
+            # them into one `except (OSError, ValueError): history = []`, which
+            # is not a fallback but EVIDENCE DESTRUCTION: a record that exists
+            # and cannot be parsed was silently replaced by an empty one, and
+            # the next write committed that emptiness to disk. It did so inside
+            # the function whose whole purpose is to preserve what became of a
+            # message — the audit log's own rotation defect, reproduced one
+            # subsystem later, which is exactly what O5d.10
+            # "disposition-appends-are-safe-under-concurrent-writers" forbids.
+            try:
+                rec = json.loads(f.read_text())
+            except FileNotFoundError:
+                # EXPECTED, and the only one of the three that is: this is the
+                # first fate recorded for this message. Not a failure, so not a
+                # warning — a warning here would train readers to ignore the
+                # other two.
+                rec = {}
+            except (OSError, json.JSONDecodeError, ValueError) as e:
+                # The record EXISTS and could not be read. Whatever it held is
+                # evidence, and overwriting it destroys the only copy. Warn,
+                # log, and let the caller decide — per the warn-and-reraise rule
+                # for utility functions. A submission that fails loudly beats a
+                # delivery nobody can account for, which is the same trade the
+                # audit log makes when it runs out of descriptors.
+                print(f"⚠️ MACF: disposition record {f.name} exists and cannot "
+                      f"be read ({e}); REFUSING to overwrite it — the prior "
+                      f"history is the evidence this store exists to keep",
+                      file=sys.stderr)
+                try:
+                    from macf.agent_events_log import append_event
+                    append_event("error", {
+                        "source": "amail.broker.record_disposition",
+                        "error": str(e), "error_type": type(e).__name__,
+                        "message_id": message_id,
+                        "fallback": "none; raised to caller rather than "
+                                    "overwriting an unreadable record",
+                    })
+                except (ImportError, OSError, ValueError) as log_e:
+                    print(f"⚠️ MACF: event logging also failed: {log_e}",
+                          file=sys.stderr)
+                raise
+
+            rec.setdefault("message_id", message_id)
+            rec.setdefault("agent", agent)
+            if content_sha256 and not rec.get("content_sha256"):
+                rec["content_sha256"] = content_sha256
+            per = rec.setdefault("recipients", {})
+            for r in recipients:
+                per.setdefault(r, {"history": []})["history"].append(
+                    {"state": state, "detail": detail, "at": at})
+
+            tmp = f.with_name(f.name + ".tmp")
+            tmp.write_text(json.dumps(rec, indent=1))
+            # World-readable on purpose: the SENDER must be able to read the
+            # fate of its own mail with no broker running, and a fate is not a
+            # secret. Set before the rename so no reader ever observes 0600.
+            tmp.chmod(0o644)
+            # Atomic replace rather than write-in-place: a concurrent READER
+            # holds no lock (the agent reads this by filesystem, deliberately),
+            # so it must never observe a half-written record.
+            os.replace(tmp, f)
         return f
+
+    def _record_fate(self, sender: str, message: Message, state: str,
+                     detail: str = "", recipients: Optional[List[str]] = None) -> None:
+        """Record a fate without letting the recording break the send.
+
+        Called from the live submission path, so its failure modes matter as
+        much as its success. Two rules, and they pull in opposite directions:
+
+        A missing disposition store is already announced by record_disposition
+        and must not abort a delivery that has otherwise happened — refusing
+        the send would make an unconfigured store worse than a broken one.
+
+        But an UNREADABLE EXISTING RECORD raises (it refuses to overwrite
+        evidence), and swallowing that here would put the silence straight back
+        in: the send would report success while the fate went unrecorded and
+        nobody learned. So it is caught, announced, and carried on the RESULT
+        rather than dropped — the caller can see that the mail moved and its
+        fate did not get written down, which is a state worth knowing about and
+        not one worth failing a completed delivery over.
+        """
+        try:
+            self.record_disposition(
+                sender, message.message_id, state, detail,
+                recipients=recipients if recipients is not None else list(message.to),
+                content_sha256=self._content_sha256(message))
+        except (OSError, ValueError) as e:
+            print(f"⚠️ MACF: the fate of {message.message_id} could not be "
+                  f"recorded ({e}); the mail moved and the record did not",
+                  file=sys.stderr)
+            if self.audit:
+                self.audit.error(context="disposition",
+                                 detail=f"{message.message_id}: {e}")
+
+    @staticmethod
+    def _content_sha256(message: Message) -> Optional[str]:
+        """Hash of the NAMED CANONICAL SUBSET, not of the serialized message.
+
+        Spec O5c.7 "the-broker-records-the-hash-of-the-submitted-content" asks
+        for the exact submitted bytes OR a named subset. The subset is required
+        here rather than preferred: canonicalize() RE-MINTS message_id and date,
+        so the agent's stored bytes and the submitted bytes can never be equal
+        and a raw comparison would report mismatch on every message ever sent.
+
+        `signing_payload` is that subset, and it already excludes exactly those
+        two fields for exactly this reason — the broker re-mints on inbound too,
+        and covering them would have made every stored message unverifiable
+        after ingress. Reusing it means there is ONE definition of "what the
+        message is" rather than two that can drift.
+        """
+        try:
+            from .crypto import signing_payload
+            return hashlib.sha256(signing_payload(message)).hexdigest()
+        except (ImportError, ValueError, TypeError) as e:
+            print(f"⚠️ MACF: could not compute the content hash for "
+                  f"{message.message_id} ({e}); the disposition is recorded "
+                  f"without it, so the sender's copy is unverifiable",
+                  file=sys.stderr)
+            return None
 
     def hand_off(self, agent: str, message: Message, trust: str) -> Path:
         """Hand a delivered message into the recipient's pickup box.
@@ -547,6 +738,12 @@ class Broker:
             if self.audit:
                 self.audit.refused(sender=sender, recipients=message.to,
                                    reason="; ".join(refusals), message_id=message.message_id)
+            # A DENY IS TERMINAL AND IS COUNTED — spec O5d.7
+            # "terminal-dispositions-are-enumerated-and-closed". Recorded against
+            # EVERY named recipient, because the refusal is a decision about the
+            # submission as a unit and a permitted recipient left with no record
+            # would leave the derived view with nothing to read.
+            self._record_fate(sender, message, "denied", "; ".join(refusals))
             # Partially-permitted is refused outright rather than partially sent:
             # a caller told "delivered" about some recipients and not others has
             # to reconcile that, and will get it wrong.
@@ -583,6 +780,17 @@ class Broker:
                                    authorship=f"so_peercred:{sender}")
             for f in failures:
                 self.audit.error(context="delivery", detail=f"{f['recipient']}: {f['error']}")
+
+        # THE FATE, RECORDED PER RECIPIENT, on the live path rather than in a
+        # helper nothing calls. Delivered and failed recipients are recorded
+        # separately because that difference is the entire reason the store is
+        # per-recipient — spec O5d.8 "disposition-is-per-recipient".
+        if delivered:
+            self._record_fate(sender, message, "delivered",
+                              recipients=[d["recipient"] for d in delivered])
+        for f in failures:
+            self._record_fate(sender, message, "bounced", f["error"],
+                              recipients=[f["recipient"]])
 
         return {
             "ok": not failures,
