@@ -1,0 +1,76 @@
+
+
+# --------------------------------------------- a bounce must carry its reason
+#
+# Measured on a real send: a 422 DEST_NOT_VERIFIED was recorded as `bounced`
+# with an EMPTY detail, and the reason had to be recovered by sending the
+# message a second time. A ledger that records the fate and discards the
+# evidence has failed at the one job it has.
+
+def test_a_transport_reason_reaches_the_ledger(tmp_path, monkeypatch):
+    from macf.amail.broker import Broker, BrokerConfig
+    from macf.amail.models import Message
+    from macf.amail import transport as T
+    import json as _json
+
+    class Rejecting:
+        name = "rejecting"
+        def send(self, message, credential):
+            return T.TransportResult(
+                T.BOUNCED,
+                'rejected (422): {"status":"rejected","reason":"DEST_NOT_VERIFIED"}')
+
+    cred = tmp_path / "cred"
+    cred.write_text("CF_ACCESS_CLIENT_ID=x.access\nCF_ACCESS_CLIENT_SECRET=y\n")
+    cred.chmod(0o600)
+    contacts = tmp_path / "contacts.json"
+    contacts.write_text(_json.dumps({"alpha": ["far@example.org"]}))
+    (tmp_path / "alpha" / "Maildir").mkdir(parents=True)
+    b = Broker(BrokerConfig(
+        domain="agents.test", contacts_path=contacts, credentials_path=cred,
+        dispositions_dir=tmp_path / "disp", inbound_handoff=tmp_path / "handoff",
+        agent_homes={"alpha": tmp_path / "alpha"}, transport=Rejecting()))
+
+    b.submit("alpha", Message(sender="alpha@agents.test", to=["far@example.org"],
+                              subject="s", body="b"))
+
+    recs = list((tmp_path / "disp").glob("*.json"))
+    assert len(recs) == 1
+    hist = _json.loads(recs[0].read_text())["recipients"]["far@example.org"]["history"]
+    assert hist[-1]["state"] == "bounced"
+    assert "DEST_NOT_VERIFIED" in hist[-1]["detail"], (
+        "the ledger recorded a bounce with no reason; a bare `bounced` is a "
+        "fact nobody can act on")
+
+
+def test_the_trust_slot_is_not_used_for_a_transport_reason(tmp_path):
+    """The detail used to ride in the classification slot, so one field meant a
+    signature verdict on one rung and a rejection reason on another, and no
+    reader of the audit log could tell which it was holding."""
+    from macf.amail.broker import Broker, BrokerConfig
+    from macf.amail.models import Message
+    from macf.amail import transport as T
+    import json as _json
+
+    class Accepting:
+        name = "accepting"
+        def send(self, message, credential):
+            return T.TransportResult(T.ACCEPTED, "accepted for sending (202)")
+
+    cred = tmp_path / "cred"
+    cred.write_text("CF_ACCESS_CLIENT_ID=x.access\nCF_ACCESS_CLIENT_SECRET=y\n")
+    cred.chmod(0o600)
+    contacts = tmp_path / "contacts.json"
+    contacts.write_text(_json.dumps({"alpha": ["far@example.org"]}))
+    (tmp_path / "alpha" / "Maildir").mkdir(parents=True)
+    b = Broker(BrokerConfig(
+        domain="agents.test", contacts_path=contacts, credentials_path=cred,
+        dispositions_dir=tmp_path / "disp", inbound_handoff=tmp_path / "handoff",
+        agent_homes={"alpha": tmp_path / "alpha"}, transport=Accepting()))
+
+    res = b.submit("alpha", Message(sender="alpha@agents.test",
+                                    to=["far@example.org"], subject="s", body="b"))
+    d = res["delivered"][0]
+    assert d["state"] == "submitted"
+    assert d["detail"] == "accepted for sending (202)"
+    assert d["trust"] == "", "the transport reason leaked back into the trust slot"

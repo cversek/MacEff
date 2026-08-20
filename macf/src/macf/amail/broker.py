@@ -654,8 +654,16 @@ class Broker:
     def _rung(self, recipient: str) -> str:
         return "local" if self.config.agent_for(recipient) else "relay"
 
-    def _deliver_one(self, recipient: str, message: Message) -> Tuple[str, str, str]:
-        """Deliver to one recipient. Returns (rung, classification, DISPOSITION).
+    def _deliver_one(self, recipient: str, message: Message
+                     ) -> Tuple[str, str, str, str]:
+        """Deliver to one recipient. Returns (rung, classification, DISPOSITION, DETAIL).
+
+        THE DETAIL IS A FOURTH VALUE RATHER THAN A REUSE OF THE THIRD, and the
+        reason is a defect this signature previously had: the internet rung
+        returned the transport's detail string IN THE CLASSIFICATION SLOT. One
+        field then meant a signature verdict on the local rung and a rejection
+        reason on the internet rung, and no reader of the audit log could tell
+        which it was holding.
 
         THE DISPOSITION IS RETURNED TOO, and it is not always "delivered". A
         local handoff is terminal; an internet submission may come back
@@ -684,7 +692,7 @@ class Broker:
             self.hand_off(agent, message, trust)
             # Local handoff IS delivery: the message is in the recipient's
             # pickup box and only the recipient can move it from there.
-            return "local", trust, "delivered"
+            return "local", trust, "delivered", ""
         # RUNG 3: the internet, via a transport that performs NO authorization.
         # Everything that decides whether this message may exist has already
         # run -- destination, rate limit, pre-send gate -- because a transport
@@ -704,7 +712,9 @@ class Broker:
         # incident takes effect on the next send instead of outliving its file.
         from .transport import read_credential
         result = transport.send(message, read_credential(self.config.credentials_path))
-        return "internet", result.detail, result.state
+        # No signature classification exists on an outbound internet send, so
+        # the trust slot is EMPTY rather than borrowed for something else.
+        return "internet", "", result.state, result.detail
 
     # -------------------------------------------------------------------- submit
 
@@ -932,9 +942,9 @@ class Broker:
         delivered, failures = [], []
         for r in message.to:
             try:
-                rung, trust, state = self._deliver_one(r, message)
+                rung, trust, state, detail = self._deliver_one(r, message)
                 delivered.append({"recipient": r, "rung": rung, "trust": trust,
-                                  "state": state})
+                                  "state": state, "detail": detail})
             except Exception as e:  # noqa: BLE001
                 # Catch EVERYTHING, not just DeliveryError. An OSError escaping
                 # here skipped the audit block below, so mail already delivered to
@@ -969,10 +979,19 @@ class Broker:
         # PER STATE, not per "it returned". A deferred submission and a
         # delivered one are different facts, and the ledger's whole value is
         # that a discrepancy means something.
-        for state in sorted({d["state"] for d in delivered}):
-            self._record_fate(sender, message, state,
-                              recipients=[d["recipient"] for d in delivered
-                                          if d["state"] == state])
+        # GROUPED BY (STATE, DETAIL), not by state alone. The reason a
+        # message was rejected is the whole actionable content of a bounce:
+        # "the destination is not verified at the provider" is a step somebody
+        # can take, and a bare `bounced` is a fact nobody can act on. This was
+        # dropped on the floor for every non-failure state -- the detail sat in
+        # the result dict and was never passed here -- so a real bounce recorded
+        # an empty reason and the reason had to be recovered by SENDING THE
+        # MESSAGE AGAIN, which is the ledger failing at the one job it has.
+        by_fate: Dict[Tuple[str, str], List[str]] = {}
+        for d in delivered:
+            by_fate.setdefault((d["state"], d.get("detail", "")), []).append(d["recipient"])
+        for (state, detail), rs in sorted(by_fate.items()):
+            self._record_fate(sender, message, state, detail, recipients=rs)
         for f in failures:
             self._record_fate(sender, message, "bounced", f["error"],
                               recipients=[f["recipient"]])
