@@ -78,6 +78,15 @@ MAX_RECIPIENTS = 64     # ContactBook is consulted per recipient
 #: reaches first is not a limit; it is a comment.
 MAX_SIGNATURE = 512
 
+#: Credential custody states. FOUR, kept distinct, because the boolean they
+#: replace could not express the case the invariant was named for -- an absent
+#: credential and an unconfigured one both answered "not exposed", which is
+#: true and is not the question. See Broker.credential_status().
+CRED_UNCONFIGURED = "unconfigured"
+CRED_MISSING = "missing"
+CRED_EXPOSED = "exposed"
+CRED_HELD = "held"
+
 
 #: One advisory lock per disposition store, keyed by directory. The threading
 #: lock covers handler threads inside one broker (this server is multi-threaded
@@ -1208,12 +1217,32 @@ class Broker:
         enforced nowhere. Starting the broker is the moment the guarantee has to
         hold, so the check belongs on that path.
         """
-        if self.credential_readable_by_others():
+        status = self.credential_status()
+        if status == CRED_EXPOSED:
             raise PermissionError(
                 f"credential {self.config.credentials_path} is readable by group "
                 "or other. The security property depends on agents being unable to "
                 "read it. Refusing to start; chmod 600 and retry."
             )
+        if status == CRED_MISSING:
+            # THE CASE THE OLD CHECK COULD NOT SEE (spec O5f.3
+            # "refusal-must-cover-a-misplaced-credential"). A configured path
+            # with nothing at it means the broker holds NO credential while
+            # believing it holds a protected one. Starting would defer the
+            # failure to the first send, where it surfaces as a transport
+            # error and reads as a network problem rather than as a
+            # misprovisioned deployment.
+            raise PermissionError(
+                f"credential {self.config.credentials_path} is CONFIGURED AND "
+                "ABSENT. The broker holds no credential; a protected one and a "
+                "missing one are different facts and only one of them is safe. "
+                "Refusing to start; place the credential or unset the path."
+            )
+        if status == CRED_UNCONFIGURED:
+            # Legitimate while the outbound leg does not exist, and announced
+            # so it cannot be mistaken for a credential that passed its check.
+            print("⚠️ MACF: no submission credential configured; the broker has "
+                  "no outbound transport and nothing to protect", file=sys.stderr)
         # The contact list is re-read on every decision, so an agent that can
         # WRITE it grants itself any recipient instantly — the allowlist would
         # become advisory in the same way an agent-side check is. Guarding the
@@ -1293,18 +1322,58 @@ class Broker:
                     "configuration into a broker-owned directory."
                 )
 
-    def credential_readable_by_others(self) -> bool:
-        """True if any non-owner can read the credential file.
+    def credential_status(self) -> str:
+        """Custody of the submission credential, as FOUR distinct states.
 
-        Exposed as a method so the guarantee is testable rather than asserted.
-        The security property depends on this being False; a comment claiming it
-        proves nothing.
+        Spec O5f.3 "refusal-must-cover-a-misplaced-credential", and the reason
+        this replaces a boolean is that a boolean could not express the case
+        the invariant was named for.
+
+        `credential_readable_by_others()` answered False for BOTH "no
+        credential is configured" and "one is configured and the file is not
+        there". The answer is defensible on its own terms -- a file that does
+        not exist is not readable by anyone -- and it is the wrong question.
+        The property V22 claims is CUSTODY: that the broker holds its
+        credential. A misplaced credential means the broker holds nothing,
+        starts anyway, and reports a protected credential it does not have.
+
+            CRED_UNCONFIGURED  no credentials_path. Legitimate while the
+                               outbound leg does not exist, and announced
+                               rather than assumed.
+            CRED_MISSING       configured and absent. THE CASE THE OLD CHECK
+                               COULD NOT SEE.
+            CRED_EXPOSED       present and readable by group or other.
+            CRED_HELD          present, and not readable by anyone else.
+
+        Four states rather than three because "not configured" and "configured
+        but gone" are a deployment choice and a deployment FAULT, and the
+        difference is exactly what an operator needs in order to act.
         """
         p = self.config.credentials_path
-        if not p or not Path(p).exists():
-            return False
-        mode = Path(p).stat().st_mode
-        return bool(mode & (stat.S_IRGRP | stat.S_IROTH))
+        if not p:
+            return CRED_UNCONFIGURED
+        path = Path(p)
+        if not path.exists():
+            return CRED_MISSING
+        mode = path.stat().st_mode
+        if mode & (stat.S_IRGRP | stat.S_IROTH):
+            return CRED_EXPOSED
+        return CRED_HELD
+
+    def credential_readable_by_others(self) -> bool:
+        """True if a PRESENT credential is readable by a non-owner.
+
+        NARROW BY DESIGN, and retained only because that narrow question is
+        genuinely useful. It answers about EXPOSURE and cannot answer about
+        CUSTODY: an absent credential returns False here, correctly, and False
+        does not mean the broker holds anything.
+
+        Do not use this to decide whether it is safe to start. That is
+        `credential_status()`, and the distinction is the whole of V22 --
+        a test asserting this returns False for a missing file passed for
+        months while the property it appeared to protect did not hold.
+        """
+        return self.credential_status() == CRED_EXPOSED
 
 
 # ---------------------------------------------------------------------- server

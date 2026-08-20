@@ -51,10 +51,18 @@ def deployment(tmp_path):
     # correctly refuses to start on a group-writable policy file. The check found
     # a real group-writable contact list the first time it ran — on this fixture.
     contacts.chmod(0o644)
+    # PROVISIONED, because a correct deployment HOLDS its credential and the
+    # fixture should look like one. Leaving it absent used to be invisible:
+    # the custody check could not see a configured-but-missing credential, so
+    # every test here ran against a broker holding nothing while asserting the
+    # credential was protected.
+    cred = tmp_path / "smarthost.cred"
+    cred.write_text("smarthost-secret")
+    cred.chmod(0o600)
     cfg = BrokerConfig(
         domain=DOMAIN, agent_homes=homes, contacts_path=contacts,
         audit_path=tmp_path / "audit.jsonl", socket_path=tmp_path / "b.sock",
-        credentials_path=tmp_path / "smarthost.cred",
+        credentials_path=cred,
         # The test process has one uid, so it can only BE one agent. That is
         # exactly the point: anything it submits is 'alpha', and a claim to be
         # 'beta' must be refused rather than believed.
@@ -182,8 +190,86 @@ class TestCredentialCustody:
             f"{label}-readable credential was not detected")
 
     def test_absent_credential_is_not_reported_as_exposed(self, deployment):
-        """A missing file is not a leak; only a present, readable one is."""
+        """A missing file is not a leak; only a present, readable one is.
+
+        STILL TRUE, AND IT WAS NEVER THE QUESTION. This assertion is about
+        EXPOSURE and passed for months while the broker started holding no
+        credential at all -- see the custody tests below, which ask what the
+        invariant actually claims. Kept, narrowed, and explicitly labelled as
+        insufficient, because deleting it would lose a correct fact and leaving
+        it unlabelled is how it came to stand in for one it does not cover.
+        """
+        deployment["cfg"].credentials_path.unlink()
         assert deployment["broker"].credential_readable_by_others() is False
+
+
+class TestCredentialCustodyBothPolarities:
+    """amail spec O5f.3 "refusal-must-cover-a-misplaced-credential" and O5f.4
+    "the-demonstration-breaks-it-in-both-polarities".
+
+    V22 was KNOWN-VIOLATED because the check returned False when the file did
+    not exist, so absence and protection were indistinguishable and the broker
+    started in both cases. The check could not see the case it was named for.
+
+    Every refusal here carries its PAIRED ACCEPTANCE in the same class. A
+    refusal-shaped test passes when its instrument is dead, and these are all
+    refusals.
+    """
+
+    def test_the_four_states_are_distinct(self, deployment):
+        """The boolean could express two of these. That was the defect."""
+        from macf.amail.broker import (CRED_UNCONFIGURED, CRED_MISSING,
+                                       CRED_EXPOSED, CRED_HELD)
+        b, cfg = deployment["broker"], deployment["cfg"]
+        cred = cfg.credentials_path
+
+        assert b.credential_status() == CRED_HELD
+        cred.chmod(0o644)
+        assert b.credential_status() == CRED_EXPOSED
+        cred.chmod(0o600)
+        cred.unlink()
+        assert b.credential_status() == CRED_MISSING
+        cfg.credentials_path = None
+        assert b.credential_status() == CRED_UNCONFIGURED
+
+    def test_broker_refuses_to_start_on_an_EXPOSED_credential(self, deployment):
+        """Polarity one: present and readable."""
+        deployment["cfg"].credentials_path.chmod(0o644)
+        with pytest.raises(PermissionError, match="readable by group"):
+            deployment["broker"].assert_credential_custody()
+
+    def test_broker_refuses_to_start_on_a_MISSING_credential(self, deployment):
+        """Polarity two, AND THE ONE THAT DID NOT WORK. A configured path with
+        nothing at it means the broker holds no credential while believing it
+        holds a protected one. Starting defers the failure to the first send,
+        where it surfaces as a transport error and reads as a network problem
+        rather than as a misprovisioned deployment."""
+        deployment["cfg"].credentials_path.unlink()
+        with pytest.raises(PermissionError, match="CONFIGURED AND ABSENT"):
+            deployment["broker"].assert_credential_custody()
+
+    def test_the_paired_acceptance_a_held_credential_starts(self, deployment):
+        """Without this, both refusals above are equally consistent with a
+        broker that refuses to start under every condition."""
+        deployment["broker"].assert_credential_custody()  # must not raise
+
+    def test_an_unconfigured_credential_starts_but_is_announced(self, deployment, capsys):
+        """Legitimate while the outbound leg does not exist. Announced, so it
+        cannot be mistaken for a credential that passed its check -- which is
+        precisely the confusion the old boolean created."""
+        deployment["cfg"].credentials_path = None
+        deployment["broker"].assert_credential_custody()  # must not raise
+        assert "no submission credential configured" in capsys.readouterr().err
+
+    def test_the_exposure_helper_cannot_answer_the_custody_question(self, deployment):
+        """The narrow helper is retained and must stay narrow. This asserts the
+        GAP explicitly, so nobody re-derives the original defect by reaching for
+        the convenient boolean: it says False for a missing credential, and
+        False here does not mean the broker holds anything."""
+        deployment["cfg"].credentials_path.unlink()
+        assert deployment["broker"].credential_readable_by_others() is False
+        with pytest.raises(PermissionError):
+            deployment["broker"].assert_credential_custody()
 
 
 class TestEnforcementLocation:
