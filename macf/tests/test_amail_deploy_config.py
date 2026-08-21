@@ -4,17 +4,32 @@ Known-answer first: a valid config must produce exactly the BrokerConfig a
 deployment expects, before any test celebrates a refusal — a validator that
 refuses everything passes a refusal-only suite perfectly.
 """
+import tempfile
+
 import pytest
+import yaml
 from pathlib import Path
 
 from pydantic import ValidationError
 
-from macf.amail.deploy_config import AgentBinding, BrokerDeployConfig
+from macf.amail.deploy_config import (AddressingConfig, AgentBinding,
+                                      BrokerDeployConfig)
+
+# The deployment's identity lives in its own file, which the broker config
+# points at — so these tests need one on disk. Written once at import: it is
+# read-only input, and every test wants the same valid baseline.
+_ADDRESSING = Path(tempfile.mkdtemp()) / "addressing.yaml"
+_ADDRESSING.write_text(yaml.safe_dump({
+    "domain": "example.test",
+    # The agent NAME is the address local-part; the unix account name differs
+    # and must not leak into the mapping. Declared explicitly rather than by
+    # `account:` because no such account exists on a test machine.
+    "agents": {"alpha": {"home": "/home/alpha_unix", "uid": 1002,
+                         "contacts": ["peer@example.test"]}},
+}))
 
 VALID = {
-    "domain": "example.test",
-    "agents": {"alpha": {"home": "/home/alpha_unix", "uid": 1002}},
-    "contacts_path": "/etc/amail/contacts.json",
+    "addressing_path": str(_ADDRESSING),
     "audit_path": "/var/lib/amail_broker/audit.jsonl",
     "inbound_quarantine": "/var/lib/amail_broker/quarantine",
     "inbound_handoff": "/var/lib/amail/handoff",
@@ -52,7 +67,7 @@ def test_unknown_key_inside_an_agent_binding_refuses_too():
 
 def test_empty_agent_table_refuses():
     with pytest.raises(ValidationError, match="empty table"):
-        BrokerDeployConfig.model_validate(dict(VALID, agents={}))
+        AddressingConfig.model_validate({"domain": "example.test", "agents": {}})
 
 
 def test_duplicate_uid_refuses():
@@ -61,7 +76,30 @@ def test_duplicate_uid_refuses():
     two = {"alpha": {"home": "/a", "uid": 1002},
            "beta": {"home": "/b", "uid": 1002}}
     with pytest.raises(ValidationError, match="share uid"):
-        BrokerDeployConfig.model_validate(dict(VALID, agents=two))
+        AddressingConfig.model_validate({"domain": "example.test", "agents": two})
+
+
+def test_a_declared_uid_that_disagrees_with_the_account_refuses(tmp_path):
+    """A2.4/V2b. The uid table IS the authentication table, so a transcribed
+    number that has gone stale does not fail — it reassigns the agent's
+    identity to whoever now holds it. Both sources present must be compared."""
+    import pwd, os
+    me = pwd.getpwuid(os.getuid())
+    with pytest.raises(ValidationError, match="refused rather than resolved"):
+        AddressingConfig.model_validate({
+            "domain": "example.test",
+            "agents": {"alpha": {"account": me.pw_name, "uid": me.pw_uid + 7}}})
+
+
+def test_uid_and_home_resolve_from_the_account():
+    """The paired acceptance: with no uid declared, both come from the system."""
+    import pwd, os
+    me = pwd.getpwuid(os.getuid())
+    cfg = AddressingConfig.model_validate({
+        "domain": "example.test",
+        "agents": {"alpha": {"account": me.pw_name}}})
+    assert cfg.agents["alpha"].uid == me.pw_uid
+    assert cfg.agents["alpha"].home == Path(me.pw_dir)
 
 
 def test_non_integer_uid_refuses():
@@ -191,7 +229,7 @@ def test_inbound_defaults_to_the_brokers_contact_list(tmp_path):
     from an old file."""
     from macf.amail.deploy_config import InboundDeployConfig
     ic = InboundDeployConfig.model_validate(_files(tmp_path)).to_inbound_config()
-    assert str(ic.broker_config.contacts_path).endswith("contacts.json")
+    assert str(ic.broker_config.contacts_path).endswith("addressing.yaml")
 
 
 def test_a_separate_inbound_contact_list_is_an_explicit_override(tmp_path):

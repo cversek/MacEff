@@ -1,5 +1,8 @@
 
 
+from conftest import _addressing
+
+
 # --------------------------------------------- a bounce must carry its reason
 #
 # Measured on a real send: a 422 DEST_NOT_VERIFIED was recorded as `bounced`
@@ -24,7 +27,7 @@ def test_a_transport_reason_reaches_the_ledger(tmp_path, monkeypatch):
     cred.write_text("CF_ACCESS_CLIENT_ID=x.access\nCF_ACCESS_CLIENT_SECRET=y\n")
     cred.chmod(0o600)
     contacts = tmp_path / "contacts.json"
-    contacts.write_text(_json.dumps({"alpha": ["far@example.org"]}))
+    contacts.write_text(_addressing({"alpha": ["far@example.org"]}))
     (tmp_path / "alpha" / "Maildir").mkdir(parents=True)
     b = Broker(BrokerConfig(
         domain="agents.test", contacts_path=contacts, credentials_path=cred,
@@ -61,7 +64,7 @@ def test_the_trust_slot_is_not_used_for_a_transport_reason(tmp_path):
     cred.write_text("CF_ACCESS_CLIENT_ID=x.access\nCF_ACCESS_CLIENT_SECRET=y\n")
     cred.chmod(0o600)
     contacts = tmp_path / "contacts.json"
-    contacts.write_text(_json.dumps({"alpha": ["far@example.org"]}))
+    contacts.write_text(_addressing({"alpha": ["far@example.org"]}))
     (tmp_path / "alpha" / "Maildir").mkdir(parents=True)
     b = Broker(BrokerConfig(
         domain="agents.test", contacts_path=contacts, credentials_path=cred,

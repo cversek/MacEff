@@ -12,6 +12,8 @@ Everything below injects an opener. It exercises the SEQUENCE and the
 CLASSIFICATION; it does not exercise a real endpoint, a real token, or the
 peer's Access edge. V17 stays SPECIFIED-NOT-BUILT until it has.
 """
+from conftest import _addressing
+
 import json
 
 import pytest
@@ -61,7 +63,7 @@ class TestAnAbsentTransportRefusesLoudly:
     def test_rung_three_with_no_transport_refuses(self, tmp_path):
         from macf.amail.broker import Broker, BrokerConfig
         contacts = tmp_path / "c.json"
-        contacts.write_text(json.dumps({"alpha": ["them@example.org"]}))
+        contacts.write_text(_addressing({"alpha": ["them@example.org"]}))
         b = Broker(BrokerConfig(domain="ours.test", contacts_path=contacts,
                                 dispositions_dir=tmp_path / "d",
                                 agent_homes={"alpha": tmp_path / "a"}))
@@ -139,7 +141,7 @@ class TestTheBrokerCarriesTheStateIntoTheLedger:
     def wired(self, tmp_path):
         from macf.amail.broker import Broker, BrokerConfig
         contacts = tmp_path / "c.json"
-        contacts.write_text(json.dumps({"alpha": ["them@example.org"]}))
+        contacts.write_text(_addressing({"alpha": ["them@example.org"]}))
         cred = tmp_path / "cred"
         cred.write_text("CF_ACCESS_CLIENT_ID=id.access\n"
                         "CF_ACCESS_CLIENT_SECRET=secret-value\n")
@@ -238,7 +240,7 @@ class TestTheEdgeRefusalIsNotABounce:
         from macf.amail.broker import Broker, BrokerConfig
         from macf.amail.client import sent_disposition, derive_message_state
         contacts = tmp_path / "c.json"
-        contacts.write_text(json.dumps({"alpha": ["them@example.org"]}))
+        contacts.write_text(_addressing({"alpha": ["them@example.org"]}))
         cred = tmp_path / "cred"
         cred.write_text("CF_ACCESS_CLIENT_ID=id.access\n"
                         "CF_ACCESS_CLIENT_SECRET=secret-value\n")

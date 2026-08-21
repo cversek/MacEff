@@ -175,12 +175,24 @@ class ContactBook:
             raise ContactListError(f"contact list at {self.path} is unreadable: {e}") from e
 
         if not isinstance(raw, dict):
-            raise ContactListError("contact list must be a mapping of agent -> [contacts]")
+            raise ContactListError("addressing config must be a mapping")
+
+        # Contacts are nested under the agent they belong to, in the addressing
+        # config. A separate file keyed by the same agent names could disagree
+        # with the one that defines those agents.
+        agents = raw.get("agents")
+        if not isinstance(agents, dict):
+            raise ContactListError(
+                f"{self.path} has no 'agents' mapping — refusing to send with "
+                f"no policy")
 
         book: Dict[str, List[str]] = {}
         keys: Dict[Tuple[str, str], List[str]] = {}
         push: Dict[Tuple[str, str], bool] = {}
-        for agent, entries in raw.items():
+        for agent, spec in agents.items():
+            if not isinstance(spec, dict):
+                raise ContactListError(f"agent '{agent}' must be a mapping")
+            entries = spec.get("contacts", [])
             if not isinstance(entries, list):
                 raise ContactListError(f"contacts for '{agent}' must be a list")
             addrs: List[str] = []

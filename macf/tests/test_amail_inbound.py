@@ -9,6 +9,8 @@ The push-eligibility and conservation tests are the spec's own named
 controls: a generous contacts file MUST fail the run, and the conservation
 check MUST go red when fed an audit log with a terminal record removed.
 """
+from conftest import _addressing
+
 import hashlib
 import json
 import time
@@ -58,7 +60,7 @@ def deploy(tmp_path):
     home = tmp_path / "home" / AGENT
     (home / "Maildir").mkdir(parents=True)
     contacts = tmp_path / "contacts.json"
-    contacts.write_text(json.dumps({
+    contacts.write_text(_addressing({
         AGENT: [HUMAN, {"address": PUSHY, "push": True}],
     }))
     cfg = InboundConfig(
@@ -269,7 +271,7 @@ def test_push_granted_human_gets_push_wake_class(deploy):
 def test_generous_contacts_file_fails_the_run(deploy):
     # CONTROL: push granted to an address in the AGENT NAMESPACE must be
     # fatal -- not a warning, not a skip. This is the derivation, checkable.
-    deploy.broker_config.contacts_path.write_text(json.dumps({
+    deploy.broker_config.contacts_path.write_text(_addressing({
         AGENT: [{"address": f"other_agent@{DOMAIN}", "push": True}],
     }))
     deploy.broker_config.agent_homes["other_agent"] = Path("/nonexistent")
@@ -513,7 +515,7 @@ def two_agents(tmp_path):
     for h in homes.values():
         (h / "Maildir").mkdir(parents=True)
     contacts = tmp_path / "contacts.json"
-    contacts.write_text(json.dumps({
+    contacts.write_text(_addressing({
         "alpha": [f"beta@{DOMAIN}"], "beta": [f"alpha@{DOMAIN}"]}))
     contacts.chmod(0o644)
     import os as _os
@@ -601,7 +603,7 @@ def test_ingest_records_three_distinct_key_states(two_agents, tmp_path):
     # (b) key declared, message unsigned -> SUSPECT (a broken commitment)
     key = tmp_path / "alpha.pem"
     pub = generate_keypair(key)
-    two_agents["contacts"].write_text(json.dumps({
+    two_agents["contacts"].write_text(_addressing({
         "beta": [{"address": f"alpha@{DOMAIN}", "key": pub}],
         "alpha": [f"beta@{DOMAIN}"]}))
     v = _verify_at_ingest(_bundle(), two_agents["contacts"], "beta")
@@ -632,7 +634,7 @@ def test_ingest_preserves_the_signature_for_re_verification(two_agents, tmp_path
     from macf.amail.crypto import generate_keypair, load_private_key, sign
     key = tmp_path / "alpha.pem"
     pub = generate_keypair(key)
-    two_agents["contacts"].write_text(json.dumps({
+    two_agents["contacts"].write_text(_addressing({
         "beta": [{"address": f"alpha@{DOMAIN}", "key": pub}],
         "alpha": [f"beta@{DOMAIN}"]}))
     m = _bundle()
@@ -1192,7 +1194,7 @@ def test_the_real_send_path_keeps_a_copy_and_records_a_fate(tmp_path, monkeypatc
     (peer_home / "Maildir").mkdir(parents=True)
     disp = tmp_path / "disp"
     contacts = tmp_path / "contacts.json"
-    contacts.write_text(json.dumps({"alpha": ["peer@agents.test"]}))
+    contacts.write_text(_addressing({"alpha": ["peer@agents.test"]}))
     broker = Broker(BrokerConfig(domain="agents.test", dispositions_dir=disp,
                                  contacts_path=contacts,
                                  inbound_handoff=tmp_path / "handoff",
@@ -1246,7 +1248,7 @@ def test_a_denied_submission_records_a_terminal_fate_for_every_recipient(tmp_pat
     home = tmp_path / "home"
     (home / "Maildir").mkdir(parents=True)
     contacts = tmp_path / "contacts.json"
-    contacts.write_text(json.dumps({"alpha": ["ok@agents.test"]}))
+    contacts.write_text(_addressing({"alpha": ["ok@agents.test"]}))
     disp = tmp_path / "disp"
     b = Broker(BrokerConfig(domain="agents.test", contacts_path=contacts,
                             dispositions_dir=disp, agent_homes={"alpha": home}))

@@ -23,11 +23,13 @@ that dataclass is the broker's in-memory shape; this is the on-disk contract a
 deployment writes, validated at the trust boundary where operator-authored
 configuration becomes broker authority.
 """
+import pwd
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (BaseModel, ConfigDict, Field, field_validator,
+                      model_validator)
 
 from macf.amail.broker import BrokerConfig
 
@@ -90,15 +92,120 @@ class AgentBinding(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    home: Path = Field(description="the agent's home directory (its mail store lives here)")
-    uid: int = Field(
+    account: Optional[str] = Field(
+        default=None,
+        description="the unix account. Preferred form: uid and home are then "
+                    "resolved from the system, so this file cannot disagree "
+                    "with the kernel about who an agent is.")
+    home: Optional[Path] = Field(
+        default=None,
+        description="the agent's home directory (its mail store lives here). "
+                    "Resolved from `account` when omitted.")
+    uid: Optional[int] = Field(
+        default=None,
         description="the agent's unix uid. THE authentication table entry: "
                     "the kernel's view of who is on the socket is the fact; "
-                    "a submitted sender field is only a claim.")
+                    "a submitted sender field is only a claim. Resolved from "
+                    "`account` when omitted.")
+
+    @model_validator(mode="after")
+    def _resolve_from_account(self):
+        """Resolve uid and home from the account, and refuse any disagreement.
+
+        The uid mapping built from this file IS the authentication table: an
+        incoming connection's SO_PEERCRED uid is looked up in it to decide which
+        agent is speaking. A stale number therefore does not fail — it assigns
+        that agent's identity to whoever now holds the uid, and refuses the real
+        one. Accounts are renumbered exactly when they are recreated, which is
+        what a rebuild does.
+
+        Resolving from the account makes this file and the kernel read the same
+        source. When both are given they are compared, so a stale value is loud
+        rather than silent.
+        """
+        if self.account:
+            try:
+                pw = pwd.getpwnam(self.account)
+            except KeyError:
+                raise ValueError(
+                    f"account '{self.account}' does not exist on this system; "
+                    f"refusing to guess its uid")
+            if self.uid is not None and self.uid != pw.pw_uid:
+                raise ValueError(
+                    f"account '{self.account}' has uid {pw.pw_uid}, but this "
+                    f"config declares {self.uid}. The declared value would be "
+                    f"used as the authentication table entry, so the mismatch "
+                    f"is refused rather than resolved.")
+            if self.home is not None and Path(self.home) != Path(pw.pw_dir):
+                raise ValueError(
+                    f"account '{self.account}' has home {pw.pw_dir}, but this "
+                    f"config declares {self.home}")
+            self.uid = pw.pw_uid
+            self.home = Path(pw.pw_dir)
+        if self.uid is None or self.home is None:
+            raise ValueError(
+                "declare `account` (preferred — uid and home are resolved from "
+                "it), or both `uid` and `home` explicitly")
+        return self
+
+
+class AgentAddressing(AgentBinding):
+    """One agent's mailbox identity: its account, and who it may write to.
+
+    The mapping key is the address local-part, which need not equal the unix
+    account name. Contacts live here rather than in a parallel file because
+    they are per-agent facts about the same subject; a second file keyed by the
+    same agent names can disagree with this one.
+
+    Fields:
+        account   unix account; uid and home resolve from it (see AgentBinding).
+        contacts  addresses this agent may send to. Strings, or mappings with
+                  `address` and optionally `key`/`keys`, `push`, `note`.
+    """
+
+    contacts: List[Any] = Field(default_factory=list)
+
+
+class AddressingConfig(BaseModel):
+    """The amail deployment's identity: its domain, its agents, their contacts.
+
+    Separate from the broker's configuration because it answers a different
+    question. This file says WHO EXISTS and WHO THEY MAY TALK TO; the broker
+    config says how the broker behaves. It is also deployment fact — a map of
+    the correspondents this system has — so it lives outside the repository
+    while the broker's tuning does not.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    domain: str = Field(description="the address domain this deployment owns")
+    agents: Dict[str, AgentAddressing] = Field(
+        description="address local-part -> agent")
+
+    @field_validator("agents")
+    @classmethod
+    def _agents_nonempty_and_uids_unique(cls, v: Dict[str, AgentAddressing]):
+        if not v:
+            raise ValueError(
+                "no agents configured: an empty table means nobody can be "
+                "authenticated and every submission would be refused")
+        uids: Dict[int, str] = {}
+        for name, binding in v.items():
+            if binding.uid in uids:
+                raise ValueError(
+                    f"agents {uids[binding.uid]!r} and {name!r} share uid "
+                    f"{binding.uid}: the uid table is the authentication table, "
+                    "and one uid cannot be two identities")
+            uids[binding.uid] = name
+        return v
 
 
 class BrokerDeployConfig(BaseModel):
-    """The on-disk broker daemon configuration (``broker_config.json``).
+    """The on-disk broker daemon configuration (``broker_config.yaml``).
+
+    Tunes the broker: stores, limits, transport, gates. The deployment's
+    identity — domain, agents, contacts — lives in the addressing config this
+    one points at.
 
     Must be root-owned and read-only to the broker uid: the broker must not be
     able to rewrite its own authority.
@@ -106,9 +213,10 @@ class BrokerDeployConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    domain: str = Field(description="the address domain this broker owns")
-    agents: Dict[str, AgentBinding] = Field(
-        description="agent name (address local-part) -> home + uid")
+    addressing_path: Path = Field(
+        description="the deployment's addressing config: domain, agents, and "
+                    "each agent's contacts. Deployment identity lives there; "
+                    "this file tunes the broker.")
     # ------------------------------------------------------------------
     # DEFAULTS ARE FOR PLUMBING, NEVER FOR AUTHORIZATION.
     #
@@ -119,24 +227,18 @@ class BrokerDeployConfig(BaseModel):
     # guess about where things might be, it is the same fact the Dockerfile
     # asserts.
     #
-    # Two fields deliberately KEEP `None` and must be declared by every
-    # deployment that wants them: `contacts_path` and `credentials_path`.
-    # Both are security-relevant, and a security-relevant path that can be
-    # inherited silently is one a reviewer never sees. Absent contacts already
-    # fails CLOSED (`permits(...) if self.contacts else False`), so requiring
-    # the declaration costs a line and buys visibility; defaulting it would
-    # make the allowlist's location an implicit fact and turn "which addresses
-    # may this deployment write to" into a question answered somewhere else.
+    # `credentials_path` deliberately KEEPS `None` and must be declared. It is
+    # security-relevant, and a security-relevant path that can be inherited
+    # silently is one a reviewer never sees. `null` additionally MEANS
+    # something — unconfigured, which starts and announces itself — and is a
+    # distinct state from a configured-and-missing credential, which is a hard
+    # refusal. A default would erase a state the custody model depends on.
     #
-    # `credentials_path: null` additionally MEANS something — unconfigured,
-    # which starts and announces itself — and is a distinct state from a
-    # configured-and-missing credential, which is a hard refusal. Giving it a
-    # default would erase a state the custody model depends on.
+    # `addressing_path` is required for the same reason and has no default:
+    # "which addresses may this deployment write to" must be answerable by
+    # reading this file, not by knowing what the model does when a key is
+    # absent.
     # ------------------------------------------------------------------
-    contacts_path: Optional[Path] = Field(
-        default=None,
-        description="outbound allowlist, re-read on every decision. NOT "
-                    "defaulted: declare it explicitly. Absent = deny all.")
     credentials_path: Optional[Path] = Field(
         default=None,
         description="submission credential. NOT defaulted, and null MEANS "
@@ -207,23 +309,6 @@ class BrokerDeployConfig(BaseModel):
                     "text. What is forbidden is the third option, where an "
                     "unscanned part silently counts as scanned.")
 
-    @field_validator("agents")
-    @classmethod
-    def _agents_nonempty_and_uids_unique(cls, v: Dict[str, AgentBinding]):
-        if not v:
-            raise ValueError(
-                "no agents configured: an empty table means nobody can be "
-                "authenticated and every submission would be refused")
-        uids: Dict[int, str] = {}
-        for name, binding in v.items():
-            if binding.uid in uids:
-                raise ValueError(
-                    f"agents {uids[binding.uid]!r} and {name!r} share uid "
-                    f"{binding.uid}: the uid table is the authentication table, "
-                    "and one uid cannot be two identities")
-            uids[binding.uid] = name
-        return v
-
     def to_broker_config(self) -> BrokerConfig:
         """The in-memory shape the broker actually runs on.
 
@@ -233,10 +318,11 @@ class BrokerDeployConfig(BaseModel):
         does nothing — a silent partial with the shape of a complete one. The
         test suite asserts the two sides agree rather than trusting this note.
         """
+        addressing = self.load_addressing()
         return BrokerConfig(
-            domain=self.domain,
-            agent_homes={name: b.home for name, b in self.agents.items()},
-            contacts_path=self.contacts_path,
+            domain=addressing.domain,
+            agent_homes={name: b.home for name, b in addressing.agents.items()},
+            contacts_path=self.addressing_path,
             audit_path=self.audit_path,
             socket_path=self.socket_path,
             credentials_path=self.credentials_path,
@@ -247,8 +333,13 @@ class BrokerDeployConfig(BaseModel):
             transport=self._build_transport(),
             opsec_scan=self._build_scan() if self.opsec_scan else None,
             refuse_unscanned=self.refuse_unscanned,
-            agent_uids={b.uid: name for name, b in self.agents.items()},
+            agent_uids={b.uid: name for name, b in addressing.agents.items()},
         )
+
+    def load_addressing(self) -> "AddressingConfig":
+        """Load and validate the deployment's addressing config."""
+        return AddressingConfig.model_validate(
+            load_declarative_config(self.addressing_path))
 
     def _build_transport(self):
         """The outbound transport, or None when no endpoint is declared.

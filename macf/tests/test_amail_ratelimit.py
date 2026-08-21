@@ -8,6 +8,8 @@ Time is INJECTED, never slept. A test that sleeps to cross a window is slow and
 flaky, and flaky tests get disabled -- which removes the control rather than
 the flake.
 """
+from conftest import _addressing
+
 import json
 
 import pytest
@@ -136,7 +138,7 @@ class TestTheBrokerEnforcesIt:
         peer_home = tmp_path / "peer"
         (peer_home / "Maildir").mkdir(parents=True)
         contacts = tmp_path / "contacts.json"
-        contacts.write_text(json.dumps({"alpha": ["peer@agents.test"],
+        contacts.write_text(_addressing({"alpha": ["peer@agents.test"],
                                         "beta": ["other@example.org"]}))
         cfg = BrokerConfig(
             domain="agents.test", contacts_path=contacts,
@@ -209,9 +211,9 @@ class TestContactsAuthorityIsPerAgent:
 
     def test_an_agent_cannot_reach_another_agents_contact(self, tmp_path):
         from macf.amail.contacts import ContactBook
-        p = tmp_path / "contacts.json"
-        p.write_text(json.dumps({"alpha": ["friend-of-alpha@example.org"],
-                                 "beta": ["friend-of-beta@example.org"]}))
+        p = tmp_path / "addressing.yaml"
+        p.write_text(_addressing({"alpha": ["friend-of-alpha@example.org"],
+                                  "beta": ["friend-of-beta@example.org"]}))
         book = ContactBook(p)
         # THE SECURITY HALF: beta's correspondent is not alpha's to write to.
         assert book.permits("alpha", "friend-of-beta@example.org") is False
@@ -231,8 +233,8 @@ class TestContactsAuthorityIsPerAgent:
         key_a = generate_keypair(tmp_path / "a.key")
         key_b = generate_keypair(tmp_path / "b.key")
         assert key_a != key_b
-        p = tmp_path / "contacts.json"
-        p.write_text(json.dumps({
+        p = tmp_path / "addressing.yaml"
+        p.write_text(_addressing({
             "alpha": [{"address": "shared@example.org", "keys": [key_a]}],
             "beta": [{"address": "shared@example.org", "keys": [key_b]}],
         }))

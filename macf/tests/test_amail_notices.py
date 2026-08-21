@@ -7,6 +7,8 @@ are tested as deliberately as the sends: silence is this module's most common
 CORRECT outcome, which makes it the one most easily confused with a step that
 never ran.
 """
+from conftest import _addressing
+
 import json
 
 import pytest
@@ -220,7 +222,7 @@ def deploy_with_notices(tmp_path):
     home = tmp_path / "home" / AGENT
     (home / "Maildir").mkdir(parents=True)
     contacts = tmp_path / "contacts.json"
-    contacts.write_text(json.dumps({AGENT: ["friend@example.org"]}))
+    contacts.write_text(_addressing({AGENT: ["friend@example.org"]}))
     cfg = InboundConfig(
         broker_config=BrokerConfig(
             domain=DOMAIN, agent_homes={AGENT: home}, contacts_path=contacts,

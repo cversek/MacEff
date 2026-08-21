@@ -11,6 +11,19 @@ because a test that used this host's real name to check the hostname rule would
 be committing the disclosure the rule exists to prevent -- and it would leak it
 into a public repo, where the rule cannot reach.
 """
+from conftest import _addressing
+
+
+def _addr(tmp_path, agent="alpha"):
+    """An addressing config on disk, for tests about the BROKER's config.
+
+    The broker config points at this file rather than carrying identity itself,
+    so a test exercising broker tuning still needs one to exist.
+    """
+    p = tmp_path / "addressing.yaml"
+    p.write_text(_addressing({agent: []}, domain="agents.test"))
+    return p
+
 import pytest
 
 from macf import opsec
@@ -198,7 +211,7 @@ def _gated_broker(tmp_path, **cfg_kw):
     peer_home = tmp_path / "peer"
     (peer_home / "Maildir").mkdir(parents=True)
     contacts = tmp_path / "contacts.json"
-    contacts.write_text(json.dumps({"alpha": ["peer@agents.test"]}))
+    contacts.write_text(_addressing({"alpha": ["peer@agents.test"]}))
     return Broker(BrokerConfig(
         domain="agents.test", contacts_path=contacts,
         dispositions_dir=tmp_path / "disp",
@@ -333,7 +346,8 @@ def test_every_declared_field_reaches_the_broker(tmp_path):
     # exemption list that only needs a NAME added is a guard that whoever trips
     # it can neuter, which would make this check worse than absent.
     TRANSFORMED = {
-        "agents": "-> agent_homes + agent_uids",
+        "addressing_path": "-> domain + agent_homes + agent_uids + contacts_path, "
+                           "loaded from the addressing config it names",
         "rate_limit_dir": "-> rate_limiter (RateLimiter state dir)",
         "rate_limit_per_agent": "-> rate_limiter (per-agent RateLimit)",
         "rate_limit_broker": "-> rate_limiter (broker-principal RateLimit)",
@@ -352,8 +366,7 @@ def test_a_deployment_carries_the_disposition_store_and_the_gate(tmp_path):
     would pass on a field that is carried as a constant."""
     from macf.amail.deploy_config import BrokerDeployConfig
     cfg = BrokerDeployConfig(
-        domain="agents.test",
-        agents={"alpha": {"home": tmp_path / "alpha", "uid": 1001}},
+        addressing_path=_addr(tmp_path),
         dispositions_dir=tmp_path / "disp",
     ).to_broker_config()
     assert cfg.dispositions_dir == tmp_path / "disp"
@@ -366,8 +379,7 @@ def test_the_gate_can_be_turned_off_deliberately(tmp_path):
     and a knob with one tested position is a constant."""
     from macf.amail.deploy_config import BrokerDeployConfig
     cfg = BrokerDeployConfig(
-        domain="agents.test",
-        agents={"alpha": {"home": tmp_path / "alpha", "uid": 1001}},
+        addressing_path=_addr(tmp_path),
         opsec_scan=False,
     ).to_broker_config()
     assert cfg.opsec_scan is None

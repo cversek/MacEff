@@ -11,11 +11,15 @@ mechanism and proves the test notices.
 """
 from __future__ import annotations
 
+from conftest import _addressing
+
 import json
 import os
 import stat
 import time
 from pathlib import Path
+
+import yaml
 
 import pytest
 
@@ -42,10 +46,13 @@ def deployment(tmp_path):
     homes = {a: tmp_path / a for a in ("alpha", "beta")}
     for h in homes.values():
         h.mkdir(parents=True)
-    contacts = tmp_path / "contacts.json"
-    contacts.write_text(json.dumps({
-        "alpha": [f"beta@{DOMAIN}"],
-        "beta": [f"alpha@{DOMAIN}"],
+    contacts = tmp_path / "addressing.yaml"
+    contacts.write_text(yaml.safe_dump({
+        "domain": DOMAIN,
+        "agents": {
+            "alpha": {"contacts": [f"beta@{DOMAIN}"]},
+            "beta": {"contacts": [f"alpha@{DOMAIN}"]},
+        },
     }))
     # Explicit, because the ambient umask writes 0664 here and the broker
     # correctly refuses to start on a group-writable policy file. The check found
@@ -360,7 +367,7 @@ class TestContactListSemantics:
         assert b.submit("alpha", msg(to="late@example.test"))["ok"] is False
         deployment["cfg"].agent_homes["late"] = deployment["tmp"] / "late"
         (deployment["tmp"] / "late").mkdir()
-        deployment["contacts"].write_text(json.dumps({
+        deployment["contacts"].write_text(_addressing({
             "alpha": [f"beta@{DOMAIN}", f"late@{DOMAIN}"], "beta": [f"alpha@{DOMAIN}"]}))
         assert b.submit("alpha", msg(to=f"late@{DOMAIN}"))["ok"] is True
 
@@ -368,15 +375,15 @@ class TestContactListSemantics:
     def test_entries_encoding_a_route_are_rejected(self, tmp_path, key):
         """A contact names a correspondent, never a route. Reachability is runtime
         state; in config it guarantees drift on every topology change."""
-        p = tmp_path / "c.json"
-        p.write_text(json.dumps({"alpha": [{"address": "x@y.test", key: "somewhere"}]}))
+        p = tmp_path / "addressing.yaml"
+        p.write_text(_addressing({"alpha": [{"address": "x@y.test", key: "somewhere"}]}))
         with pytest.raises(ContactListError, match="records reachability"):
             ContactBook(p).contacts_for("alpha")
 
     def test_plain_object_entry_without_route_is_accepted(self, tmp_path):
         """Negative control for the rule above: the same shape minus the route key."""
-        p = tmp_path / "c.json"
-        p.write_text(json.dumps({"alpha": [{"address": "x@y.test", "note": "a peer"}]}))
+        p = tmp_path / "addressing.yaml"
+        p.write_text(_addressing({"alpha": [{"address": "x@y.test", "note": "a peer"}]}))
         assert ContactBook(p).contacts_for("alpha") == ["x@y.test"]
 
 
@@ -1015,7 +1022,7 @@ class TestInboundIsCanonicalised:
                        date="1999-01-01T00:00:00+00:00")
 
     def test_remote_message_id_cannot_shadow_a_local_one(self, deployment):
-        deployment["contacts"].write_text(json.dumps({
+        deployment["contacts"].write_text(_addressing({
             "alpha": [f"beta@{DOMAIN}"], "beta": ["stranger@elsewhere.test"]}))
         deployment["contacts"].chmod(0o644)
         m = self._hostile()
@@ -1023,7 +1030,7 @@ class TestInboundIsCanonicalised:
         assert m.message_id != "msg-1-aaaaaaaaaaaa"
 
     def test_remote_identifier_fields_are_not_free_text(self, deployment):
-        deployment["contacts"].write_text(json.dumps({
+        deployment["contacts"].write_text(_addressing({
             "alpha": [f"beta@{DOMAIN}"], "beta": ["stranger@elsewhere.test"]}))
         deployment["contacts"].chmod(0o644)
         m = self._hostile()
@@ -1031,7 +1038,7 @@ class TestInboundIsCanonicalised:
         assert len(m.thread_id) < 100 and m.parent is None
 
     def test_remote_date_cannot_control_reader_ordering(self, deployment):
-        deployment["contacts"].write_text(json.dumps({
+        deployment["contacts"].write_text(_addressing({
             "alpha": [f"beta@{DOMAIN}"], "beta": ["stranger@elsewhere.test"]}))
         deployment["contacts"].chmod(0o644)
         m = self._hostile()
@@ -1060,7 +1067,7 @@ class TestAuditCompleteness:
     alone triggered it."""
 
     def test_delivery_is_audited_even_when_a_later_recipient_throws(self, deployment, monkeypatch):
-        deployment["contacts"].write_text(json.dumps({
+        deployment["contacts"].write_text(_addressing({
             "alpha": [f"beta@{DOMAIN}", f"gamma@{DOMAIN}"], "beta": [f"alpha@{DOMAIN}"]}))
         deployment["contacts"].chmod(0o644)
         deployment["cfg"].agent_homes["gamma"] = deployment["tmp"] / "gamma"
@@ -1590,7 +1597,7 @@ class TestConfigDirectoryCustody:
         cfgdir = tmp_path / "cfg"
         cfgdir.mkdir()
         contacts = cfgdir / "contacts.json"
-        contacts.write_text(json.dumps({"alpha": []}))
+        contacts.write_text(_addressing({"alpha": []}))
         contacts.chmod(0o644)
         cfgdir.chmod(0o775)  # group-writable: anyone in the group can swap the file
         deployment["cfg"].contacts_path = contacts
@@ -1601,7 +1608,7 @@ class TestConfigDirectoryCustody:
         cfgdir = tmp_path / "cfg2"
         cfgdir.mkdir()
         contacts = cfgdir / "contacts.json"
-        contacts.write_text(json.dumps({"alpha": []}))
+        contacts.write_text(_addressing({"alpha": []}))
         contacts.chmod(0o644)
         cfgdir.chmod(0o777)
         deployment["cfg"].contacts_path = contacts
@@ -1614,7 +1621,7 @@ class TestConfigDirectoryCustody:
         cfgdir.mkdir()
         cfgdir.chmod(0o755)
         contacts = cfgdir / "contacts.json"
-        contacts.write_text(json.dumps({"alpha": []}))
+        contacts.write_text(_addressing({"alpha": []}))
         contacts.chmod(0o644)
         cred = cfgdir / "smarthost.cred"
         cred.write_text("secret")
@@ -1891,7 +1898,7 @@ class TestCustodyCoversEveryConfigObject:
         d.mkdir()
         d.chmod(0o755)
         contacts, cred, audit = d / "contacts.json", d / "cred", d / "audit.jsonl"
-        contacts.write_text(json.dumps({"alpha": []}))
+        contacts.write_text(_addressing({"alpha": []}))
         contacts.chmod(0o644)
         cred.write_text("secret")
         cred.chmod(0o600)
@@ -2043,7 +2050,7 @@ def keyed(deployment, tmp_path):
     keydir = tmp_path / "keys"
     beta_key = keydir / "beta.pem"
     beta_pub = generate_keypair(beta_key)
-    deployment["contacts"].write_text(json.dumps({
+    deployment["contacts"].write_text(_addressing({
         "alpha": [{"address": f"beta@{DOMAIN}", "key": beta_pub}],
         "beta": [f"alpha@{DOMAIN}"],
     }))
@@ -2258,7 +2265,7 @@ class TestTrustIsMintedNotAccepted:
         flattering one.
         """
         # beta declares a key for alpha, and alpha sends unsigned.
-        keyed["contacts"].write_text(json.dumps({
+        keyed["contacts"].write_text(_addressing({
             "alpha": [f"beta@{DOMAIN}"],
             "beta": [{"address": f"alpha@{DOMAIN}", "key": keyed["beta_pub"]}],
         }))
@@ -2275,7 +2282,7 @@ class TestTrustIsMintedNotAccepted:
         """§9.2 says a compromised agent stripping its own signature makes its
         own mail unverified. That was FALSE — the stripped message still arrived
         labelled as signed. It has to be true, or the sentence comes out."""
-        keyed["contacts"].write_text(json.dumps({
+        keyed["contacts"].write_text(_addressing({
             "alpha": [f"beta@{DOMAIN}"],
             "beta": [{"address": f"alpha@{DOMAIN}", "key": keyed["beta_pub"]}],
         }))
@@ -2368,7 +2375,7 @@ class TestContactKeys:
     def test_a_malformed_key_is_refused_at_load_not_at_first_use(self, deployment):
         """A broken key discovered mid-classification leaves the classifier
         deciding what to do about configuration, inside a security decision."""
-        deployment["contacts"].write_text(json.dumps({
+        deployment["contacts"].write_text(_addressing({
             "alpha": [{"address": f"beta@{DOMAIN}", "key": "ed25519:not-base64!!"}]}))
         deployment["contacts"].chmod(0o644)
         with pytest.raises(ContactListError):
@@ -2384,7 +2391,7 @@ class TestContactKeys:
         """Classification is not permission. A proof of identity is not a grant
         of access."""
         k = generate_keypair(tmp_path / "s.pem")
-        deployment["contacts"].write_text(json.dumps({
+        deployment["contacts"].write_text(_addressing({
             "alpha": [f"beta@{DOMAIN}"],
             "beta": [{"address": f"alpha@{DOMAIN}", "key": k}],
         }))
@@ -2840,7 +2847,7 @@ class TestContactCacheRespectsEdits:
         book = deployment["broker"].contacts
         assert book.permits("alpha", f"beta@{DOMAIN}") is True
         time.sleep(0.01)
-        deployment["contacts"].write_text(json.dumps({"alpha": [], "beta": []}))
+        deployment["contacts"].write_text(_addressing({"alpha": [], "beta": []}))
         deployment["contacts"].chmod(0o644)
         assert book.permits("alpha", f"beta@{DOMAIN}") is False, \
             "a contact-list edit did not take effect"
@@ -2870,7 +2877,7 @@ class TestAuditRecordsEveryRecipientsVerdict:
         homes["gamma"].mkdir(parents=True, exist_ok=True)
         deployment["cfg"].agent_homes = homes
         key = generate_keypair(tmp_path / "alpha.pem")
-        deployment["contacts"].write_text(json.dumps({
+        deployment["contacts"].write_text(_addressing({
             "alpha": [f"beta@{DOMAIN}", f"gamma@{DOMAIN}"],
             "beta": [{"address": f"alpha@{DOMAIN}", "key": key}],   # beta knows the key
             "gamma": [f"alpha@{DOMAIN}"],                            # gamma does not
