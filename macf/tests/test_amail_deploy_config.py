@@ -47,6 +47,26 @@ def test_valid_config_produces_the_expected_broker_config():
     assert cfg.credentials_path is None  # outbound leg absent, honestly
 
 
+def test_per_agent_rate_limits_are_built_for_the_agents_in_the_ADDRESSING_config(tmp_path):
+    """The agent roster moved out of this file, and the rate limiter needs it.
+
+    Caught by a live container rather than by this suite: `_build_rate_limiter`
+    still read a field that had moved, and every existing test either omitted
+    the per-agent cap or never inspected the limiter's principals — so nothing
+    exercised the path that reads the roster.
+    """
+    addr = tmp_path / "addressing.yaml"
+    addr.write_text(yaml.safe_dump({
+        "domain": "example.test",
+        "agents": {"alpha": {"uid": 1002, "home": "/h/a"},
+                   "beta": {"uid": 1003, "home": "/h/b"}}}))
+    cfg = BrokerDeployConfig.model_validate(dict(
+        VALID, addressing_path=str(addr),
+        rate_limit_dir=str(tmp_path / "rl"),
+        rate_limit_per_agent=5, rate_limit_broker=5)).to_broker_config()
+    assert set(cfg.rate_limiter.limits) == {"alpha", "beta", "__broker__"}
+
+
 def test_socket_path_defaults_without_being_named():
     cfg = BrokerDeployConfig.model_validate(VALID).to_broker_config()
     assert cfg.socket_path == Path("/run/amail/broker.sock")

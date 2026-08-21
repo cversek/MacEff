@@ -164,6 +164,11 @@ class AgentAddressing(AgentBinding):
     """
 
     contacts: List[Any] = Field(default_factory=list)
+    rate_limit: Optional[int] = Field(
+        default=None,
+        description="this agent's submission cap per window, overriding the "
+                    "broker's default. Stated beside the agent so the "
+                    "exception is visible to whoever reads about it.")
 
 
 class AddressingConfig(BaseModel):
@@ -329,7 +334,7 @@ class BrokerDeployConfig(BaseModel):
             inbound_quarantine=self.inbound_quarantine,
             inbound_handoff=self.inbound_handoff,
             dispositions_dir=self.dispositions_dir,
-            rate_limiter=self._build_rate_limiter(),
+            rate_limiter=self._build_rate_limiter(addressing.agents),
             transport=self._build_transport(),
             opsec_scan=self._build_scan() if self.opsec_scan else None,
             refuse_unscanned=self.refuse_unscanned,
@@ -368,7 +373,7 @@ class BrokerDeployConfig(BaseModel):
         from macf.amail.transport import HttpTransport
         return HttpTransport(self.transport_endpoint, timeout=self.transport_timeout)
 
-    def _build_rate_limiter(self):
+    def _build_rate_limiter(self, agents=None):
         """The limiter, or None when the deployment declares no budget.
 
         Requires BOTH a state directory and at least one cap. A cap with
@@ -379,12 +384,19 @@ class BrokerDeployConfig(BaseModel):
         """
         if not self.rate_limit_dir:
             return None
+        agents = agents or {}
         limits = {}
         if self.rate_limit_per_agent:
             from macf.amail.ratelimit import RateLimit
-            for name in self.agents:
-                limits[name] = RateLimit(self.rate_limit_per_agent,
-                                         self.rate_limit_window_seconds)
+            for name, binding in agents.items():
+                # A UNIFORM CAP HAS TO BE SIZED FOR THE NOISIEST AGENT, which
+                # defeats the control: reputation aggregates at the
+                # organisational domain, so provisioning every agent for the
+                # loudest one spends an asset belonging to all of them. The
+                # per-agent override sits beside the agent in the addressing
+                # config, where a reviewer reading about that agent sees it.
+                cap = binding.rate_limit or self.rate_limit_per_agent
+                limits[name] = RateLimit(cap, self.rate_limit_window_seconds)
         if self.rate_limit_broker:
             from macf.amail.ratelimit import RateLimit, BROKER_PRINCIPAL
             limits[BROKER_PRINCIPAL] = RateLimit(self.rate_limit_broker,
