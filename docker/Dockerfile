@@ -75,6 +75,82 @@ RUN chmod +x /usr/local/bin/start.sh
 # Each deployment's Dockerfile should COPY start.py after this base layer
 # This optimization prevents base image rebuilds when start.py changes
 
+# ---------------------------------------------------------------------------
+# amail infrastructure — the runtime, its uids, and its stores
+# ---------------------------------------------------------------------------
+# THIS BLOCK EXISTS BECAUSE NONE OF IT EXISTED. The first deployment to run
+# amail had its entire runtime, both service uids, every store and both configs
+# living ONLY in a running container's writable layer, placed by hand. Nothing
+# in any Dockerfile, compose file or script produced any of it. `docker compose
+# down && up` would have destroyed a working mail path, its audit ledger and its
+# conservation records, and the first symptom was an inbound outage that lasted
+# a day because a hand-copied file had no execute bit.
+#
+# It lives in the BASE image so a second deployment consumes it by declaring
+# configuration rather than by copying ten files, because copies drift and that
+# drift has already bitten once.
+#
+# The runtime is deployment-agnostic by construction: every path and endpoint
+# comes from AMAIL_BROKER_CONFIG / AMAIL_INBOUND_CONFIG or an env default, and
+# the sources carry no deployment identifiers. That is what makes it base-image
+# material rather than a deployment's business.
+
+# TWO SERVICE UIDS, FIXED. Identity separation is the PRECONDITION for every
+# owner-scoped guarantee this subsystem makes -- a credential that "only the
+# broker can read" is an unstatable rule without an owner to match. Fixed ids
+# so ownership survives a rebuild: state on a volume outlives the image that
+# created it, and uid drift would silently orphan every stored file.
+#   amail_broker  authorizes, holds the submission credential, owns the ledgers
+#   amail_ingest  accepts inbound and writes the spool; may NOT read the above
+RUN set -eux; \
+    groupadd -g 998 amail_broker; \
+    useradd  -u 998 -g 998 -M -N -s /usr/sbin/nologin \
+             -d /var/lib/amail_broker amail_broker; \
+    groupadd -g 999 amail_ingest; \
+    useradd  -u 999 -g 999 -M -N -s /usr/sbin/nologin \
+             -d /var/lib/amail_ingest amail_ingest; \
+    id amail_broker; id amail_ingest
+
+# THE STORES, WITH THE MODES AS PROVISIONING RATHER THAN AS HAND-REPAIR.
+# dispositions/ and ratelimit/ are deliberately AGENT-READABLE: a sender reads
+# the fate of its own mail and its own remaining budget with no broker call, so
+# the files are 0644 and the directories MUST be traversable. Creating them 0700
+# makes those file modes decorative -- done by hand once, caught a minute later,
+# and the reason this is a build step now.
+# quarantine/ is broker-only: it holds refused inbound, which is attacker-
+# supplied bytes that no agent should be able to read by accident.
+RUN set -eux; \
+    install -d -o amail_broker -g amail_broker -m 0755 /var/lib/amail_broker; \
+    install -d -o amail_broker -g amail_broker -m 0755 /var/lib/amail_broker/dispositions; \
+    install -d -o amail_broker -g amail_broker -m 0755 /var/lib/amail_broker/ratelimit; \
+    install -d -o amail_broker -g amail_broker -m 0700 /var/lib/amail_broker/quarantine; \
+    install -d -o amail_broker -g amail_broker -m 0755 /var/lib/amail_broker/received; \
+    install -d -o amail_ingest -g amail_ingest  -m 0755 /var/lib/amail_ingest; \
+    install -d -o amail_ingest -g amail_broker  -m 2770 /var/lib/amail_ingest/spool; \
+    install -d -o root -g root -m 0755 /etc/amail; \
+    install -d -o root -g root -m 0700 /run/maceff-secrets; \
+    [ "$(stat -c %U:%a /var/lib/amail_broker/quarantine)" = "amail_broker:700" ]; \
+    [ "$(stat -c %U:%a /var/lib/amail_broker/dispositions)" = "amail_broker:755" ]; \
+    [ "$(stat -c %a  /run/maceff-secrets)" = "700" ]
+
+# THE RUNTIME, WITH ITS EXECUTE BITS ASSERTED.
+# `docker cp` does not carry intent, and the file that lost its execute bit is
+# exactly the one whose absence took inbound down for a day: a watcher restart
+# ran `setsid <script>`, which needs +x, and reported the refusal to a log
+# nobody reads. Both halves are fixed -- the bit is provisioned here, and the
+# invocation names the interpreter explicitly so a lost bit cannot repeat it.
+COPY docker/amail_ingest/run_broker.py \
+     docker/amail_ingest/run_inbound.py \
+     docker/amail_ingest/amail_ingest_receiver.py \
+     /opt/amail_ingest/
+RUN set -eux; \
+    chmod 0755 /opt/amail_ingest/*.py; \
+    chown root:root /opt/amail_ingest/*.py; \
+    for f in run_broker.py run_inbound.py amail_ingest_receiver.py; do \
+        [ -x "/opt/amail_ingest/$f" ] || { echo "NOT EXECUTABLE: $f" >&2; exit 1; }; \
+    done; \
+    python3 -m py_compile /opt/amail_ingest/*.py
+
 EXPOSE 22
 ENTRYPOINT ["/usr/bin/tini","--"]
 CMD ["python3", "/usr/local/bin/start.py"]
