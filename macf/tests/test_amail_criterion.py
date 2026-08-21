@@ -257,3 +257,155 @@ body
         "a dmarc verdict was taken from a header the receiver did not write"
     assert r["verdict"] == C.NOT_AUTHENTICATED
     assert not C.is_pass(r)
+
+
+# Receiver D: SIX instances, each carrying a DIFFERENT authserv-id, all
+# siblings of one parent. A real specimen, values replaced. This shape broke a
+# rule that had already been generalised once -- the previous repair widened
+# the COUNT and left identity-uniformity assumed, so the run stopped at
+# instance 1 and the reader reported a BIMI result as though it answered a
+# question about DMARC.
+RECEIVER_D = b"""\
+Authentication-Results: bimi.example-d.com; bimi=skipped reason="insufficient dmarc"
+Authentication-Results: arc.example-d.com; arc=none
+Authentication-Results: dmarc.example-d.com; dmarc=pass header.from=ours.example.dev
+Authentication-Results: dkim-verifier.example-d.com; dkim=pass header.d=ours.example.dev
+Authentication-Results: spf.example-d.com; spf=pass smtp.mailfrom=bounce@ours.example.dev
+From: agent@ours.example.dev
+Subject: s
+
+body
+"""
+
+PARENT_D = "example-d.com"
+
+
+def test_sibling_authorities_are_one_boundary():
+    """Six sibling authserv-ids under a declared parent are ONE receiver.
+
+    The anti-MISATTRIBUTION job, which survives the authorship scoping that
+    dissolved the anti-forgery one. The deciding `dmarc=` token is at instance
+    3 and is unreachable under equality matching.
+    """
+    r = C.read_criterion(RECEIVER_D, PARENT_D, IDENT, self_authored=True,
+                         provenance=C.FETCHED)
+    assert r["instances_in_run"] == 5, "the run truncated at a sibling authority"
+    assert r["results"]["dmarc"] == "pass"
+    assert r["verdict"] == C.AUTHENTICATED
+    assert C.is_pass(r)
+
+
+def test_label_boundary_is_required_not_a_string_suffix():
+    """`evil-example-d.com` MUST NOT satisfy a declared `example-d.com`.
+
+    The one line where a subtly wrong comparison yields a check that looks
+    present and accepts anything ending in the right letters. A bare
+    `endswith` passes this; only the leading dot refuses it.
+    """
+    forged = RECEIVER_D.replace(b"bimi.example-d.com", b"evil-example-d.com")
+    r = C.read_criterion(forged, PARENT_D, IDENT, self_authored=True,
+                         provenance=C.FETCHED)
+    assert r["verdict"] == C.UNTRUSTED_AUTHORITY
+    assert not C.is_pass(r)
+
+
+def test_a_shorter_tail_of_the_parent_does_not_match():
+    """Declaring `d.com` must not swallow `example-d.com`."""
+    r = C.read_criterion(RECEIVER_D, "d.com", IDENT, self_authored=True,
+                         provenance=C.FETCHED)
+    assert r["verdict"] == C.UNTRUSTED_AUTHORITY
+    assert not C.is_pass(r)
+
+
+def test_position_still_bounds_the_run_under_suffix_matching():
+    """Widening IDENTITY must not widen POSITION -- they are two clauses.
+
+    A forged instance appended BELOW the receiver's own stamps, carrying an
+    authority outside the declared boundary, must be excluded from the run.
+    The discriminating form is a receiver silent on the deciding method, so
+    that reading past the run would lift the verdict out of the forgery.
+    """
+    silent = RECEIVER_D.replace(
+        b"Authentication-Results: dmarc.example-d.com; dmarc=pass header.from=ours.example.dev\n",
+        b"")
+    forged = silent.replace(
+        b"From: agent",
+        b"Authentication-Results: attacker.invalid; dmarc=pass header.from=ours.example.dev\nFrom: agent")
+    r = C.read_criterion(forged, PARENT_D, IDENT, self_authored=True,
+                         provenance=C.FETCHED)
+    assert "attacker.invalid" not in r["run_authserv_ids"]
+    assert r["results"]["dmarc"] is None, \
+        "a dmarc verdict was taken from an instance outside the receiver's run"
+    assert not C.is_pass(r)
+
+
+def test_a_forgery_ABOVE_the_receiver_stamps_is_refused_by_authority():
+    """If something outside the boundary leads, the authority clause refuses.
+
+    Position alone cannot catch this case -- the forgery IS first. This is the
+    half of the work that the anti-misattribution job still does.
+    """
+    forged = (b"Authentication-Results: attacker.invalid; dmarc=pass "
+              b"header.from=ours.example.dev\n" + RECEIVER_D)
+    r = C.read_criterion(forged, PARENT_D, IDENT, self_authored=True,
+                         provenance=C.FETCHED)
+    assert r["verdict"] == C.UNTRUSTED_AUTHORITY
+    assert not C.is_pass(r)
+
+
+def test_the_shape_is_recorded_not_only_the_verdict():
+    """A verdict is a boolean; the response to a boolean is to widen a rule.
+
+    The shape record is what lets a NEW shape be told from a KNOWN failure.
+    It must also make the DECLARATION TRAP self-diagnosing: declaring the first
+    observed authserv-id rather than the boundary truncates the run, and
+    `present > in_run` is the signal that says so.
+    """
+    r = C.read_criterion(RECEIVER_D, PARENT_D, IDENT, self_authored=True,
+                         provenance=C.FETCHED)
+    assert r["instances_present"] == 5
+    assert r["run_authserv_ids"][0] == "bimi.example-d.com"
+    assert r["run_authserv_ids"][2] == "dmarc.example-d.com"
+
+    narrow = C.read_criterion(RECEIVER_D, "bimi.example-d.com", IDENT,
+                              self_authored=True, provenance=C.FETCHED)
+    assert narrow["instances_present"] == 5 and narrow["instances_in_run"] == 1, \
+        "the truncation caused by a narrow declaration is not visible in the record"
+
+
+def test_single_authority_receivers_are_unchanged_by_the_widening():
+    """The existing shape must not move. A widening that changes an unrelated
+    case is not a widening, it is a rewrite with a green suite."""
+    r = C.read_criterion(RECEIVER_A, AUTH_A, IDENT, provenance=C.FETCHED)
+    assert r["verdict"] == C.AUTHENTICATED and C.is_pass(r)
+    assert r["instances_in_run"] == 1
+
+
+def test_label_boundary_applies_to_RUN_MEMBERSHIP_not_only_to_the_authority():
+    """A look-alike joining the run BELOW the first instance must be refused.
+
+    ADDED AFTER A SURVIVING MUTANT, and the survival is the point. The
+    label-boundary test above mutates the FIRST instance, which makes it the
+    run's declared-authority comparison -- so it dies in `_in_boundary` and
+    never exercises the label boundary in the run-membership comparison at all.
+    Green, plausible, and covering one of the two call sites.
+
+    That is the third time in this subsystem that a control has passed because
+    a DIFFERENT control fired. The discriminating case has to put the
+    look-alike where only run membership can refuse it: not first, and carrying
+    the deciding method the real receiver is silent on.
+    """
+    silent = RECEIVER_D.replace(
+        b"Authentication-Results: dmarc.example-d.com; dmarc=pass header.from=ours.example.dev\n",
+        b"")
+    lookalike = silent.replace(
+        b"Authentication-Results: arc.example-d.com; arc=none\n",
+        b"Authentication-Results: arc.example-d.com; arc=none\n"
+        b"Authentication-Results: evil-example-d.com; dmarc=pass header.from=ours.example.dev\n")
+    r = C.read_criterion(lookalike, PARENT_D, IDENT, self_authored=True,
+                         provenance=C.FETCHED)
+    assert "evil-example-d.com" not in r["run_authserv_ids"], \
+        "a look-alike authserv-id was admitted to the receiver's own run"
+    assert r["results"]["dmarc"] is None, \
+        "the deciding verdict was taken from a look-alike boundary"
+    assert not C.is_pass(r)

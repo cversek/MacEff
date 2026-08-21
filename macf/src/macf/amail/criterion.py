@@ -54,6 +54,63 @@ _METHOD_RE = {m: re.compile(r"(?<![.\w])%s\s*=\s*([a-z]+)" % m, re.I) for m in M
 _FROM_RE = re.compile(r"header\.from\s*=\s*([^\s;,]+)", re.I)
 _FIRST_TOKEN_RE = re.compile(r"^\s*([^\s;]+)")
 
+
+def _in_boundary(observed: Optional[str], declared: Optional[str]) -> bool:
+    """Does one observed authserv-id belong to the DECLARED boundary?
+
+    Exact match, or a LABEL-BOUNDED subdomain of it. The label boundary is the
+    load-bearing character: a bare `endswith` would accept `evil-icloud.com`
+    for a declared `icloud.com`, which is a check that looks present and admits
+    anything ending in the right letters. The leading dot is what makes it a
+    statement about DNS structure rather than about string tails.
+
+    A deployment declaring a broad parent is making a broad claim knowingly;
+    declaring the exact authserv-id keeps the old strict behaviour unchanged,
+    which is why every existing single-authority receiver is unaffected.
+    """
+    if observed is None or declared is None:
+        return False
+    observed = observed.lower().rstrip(".")
+    declared = declared.lower().rstrip(".")
+    return observed == declared or observed.endswith("." + declared)
+
+
+def _same_boundary(this_id: Optional[str], expected: Optional[str],
+                   declared: Optional[str]) -> bool:
+    """Do two authserv-ids denote the SAME receiving boundary?
+
+    The anti-misattribution question, and the only question the identity check
+    is still asking once authorship scoping has dissolved the anti-forgery one.
+
+    A receiver may stamp each verifier subsystem under its own sibling name --
+    `dmarc.<parent>`, `spf.<parent>`, `dkim-verifier.<parent>` -- and those are
+    one boundary's subsystems, not several boundaries. Equality is therefore too
+    strict and reports a legitimate multi-subsystem receiver as a truncated run.
+
+    THE SUFFIX IS ANCHORED TO THE DECLARED PARENT, NOT INFERRED FROM THE FIRST
+    INSTANCE. Deriving the parent from what arrived would let the message decide
+    what counts as its own receiver, which is the shape of every defect this
+    module has had -- a gate whose reading its subject writes. With no
+    declaration there is nothing to anchor to, so the rule falls back to
+    equality, which is strict and wrong-in-the-safe-direction.
+
+    A LABEL BOUNDARY IS REQUIRED. `evil-icloud.com` must not match a declared
+    `icloud.com`, so the match is on a leading dot or exact equality and never
+    on a bare string suffix. This is the one line where getting the comparison
+    subtly wrong yields a check that looks present and accepts anything ending
+    in the right letters.
+    """
+    if this_id is None or expected is None:
+        return this_id == expected
+    this_id = this_id.lower().rstrip(".")
+    expected = expected.lower().rstrip(".")
+    if this_id == expected:
+        return True
+    if not declared:
+        return False
+    parent = declared.lower().rstrip(".")
+    return all(x == parent or x.endswith("." + parent) for x in (this_id, expected))
+
 #: Verdicts. UNKNOWN is never collapsed toward pass or fail (spec 5i): a test
 #: claiming authentication MUST report an inconclusive run as inconclusive.
 AUTHENTICATED = "AUTHENTICATED"
@@ -144,10 +201,26 @@ def read_criterion(raw: bytes, authority: Optional[str], identity: str, *,
     headers = BytesHeaderParser(policy=compat32).parsebytes(raw)
     instances = headers.get_all("Authentication-Results") or []
 
+    # THE SHAPE IS RECORDED, NOT ONLY THE VERDICT.
+    #
+    # A verdict is a boolean, and the response to a boolean that says no is to
+    # widen a rule until it says yes -- which is how the identity assumption
+    # survived the last repair. A reading that reports "six authorities, sibling
+    # suffixes, dmarc token at instance 3 of 6" is DIAGNOSTIC: the next reader
+    # can tell a NEW shape from a KNOWN failure without re-deriving it from raw
+    # bytes, and a shape nobody has seen announces itself instead of arriving as
+    # an unexplained NOT_AUTHENTICATED.
+    #
+    # Same discipline, and the same reason, as the disposition being a HISTORY
+    # rather than a last value: `bounced after three deferrals` and `bounced
+    # immediately` are different facts, and collapsing them loses the one that
+    # explains the other.
     out: Dict[str, Any] = {
         "provenance": provenance,
         "self_authored": self_authored,
         "instances_present": len(instances),
+        "instances_in_run": 0,
+        "run_authserv_ids": [],
         "authserv_id": None,
         "authority_ok": False,
         "results": {m: None for m in METHODS},
@@ -176,18 +249,64 @@ def read_criterion(raw: bytes, authority: Optional[str], identity: str, *,
     # ours, which is precisely where a forgery would begin. Reading further
     # would build a gate whose reading the attacker writes; reading less
     # reports a method the receiver did state as absent.
+    # TWO CLAUSES, NOT ONE COMPOUND RULE, and the separation is the repair.
+    #
+    #   POSITION  bounds "was this stamped by the receiving boundary AT ALL"
+    #   IDENTITY  bounds "by WHICH boundary"
+    #
+    # They were previously one rule -- "contiguous run carrying the SAME
+    # authserv-id" -- and that compounding is exactly how the identity
+    # assumption hid. A fourth receiver stamps SIX instances, each with a
+    # DIFFERENT authserv-id, all siblings of one parent: `bimi.<p>`,
+    # `arc.<p>`, `dmarc.<p>`, `dkim-verifier.<p>`, `spf.<p>`. Under the
+    # compound rule the run stopped at instance 1, which carries `bimi=skipped`
+    # and nothing else, so the reader reported on BIMI while answering a
+    # question about DMARC.
+    #
+    # WHY IDENTITY IS STILL CHECKED AT ALL, now that the authorship scoping
+    # dissolved the anti-forgery job. The check was doing TWO jobs and only one
+    # of them was about adversaries:
+    #
+    #   ANTI-FORGERY        -- refuse to read a verdict the SENDER appended.
+    #                          Dissolved for self-authored mail, at EVERY
+    #                          receiver, because the sender is us.
+    #   ANTI-MISATTRIBUTION -- WHICH boundary said this? Untouched, and it
+    #                          NEEDS NO ADVERSARY. The six-authority receiver
+    #                          is the existence proof: an honest receiver doing
+    #                          ordinary things, and a reader bounded by
+    #                          position alone misattributes a BIMI result as a
+    #                          DMARC one.
+    #
+    # So identity is bounded by BOUNDARY SUFFIX under a declared parent, which
+    # is the question anti-misattribution actually asks -- not by "no attacker
+    # could have stamped this", which is an argument from failure of
+    # imagination and was refused elsewhere in this same review.
+    #
+    # AXES VARIED AND AXES ASSUMED, stated because the last generalisation here
+    # widened the axis that happened to vary and silently hardened the ones that
+    # did not -- and an assumption that was never a decision is not even
+    # locatable, let alone falsifiable. Three receivers have now each broken a
+    # DIFFERENT axis: presence (no authserv-id), count (four instances),
+    # identity-uniformity (six sibling authorities).
+    #   VARIED over: count, identity-uniformity, presence.
+    #   ASSUMED still: that the receiver's own stamps LEAD the field (position);
+    #     that instances are not interleaved with sender-supplied ones; that a
+    #     sibling suffix denotes one boundary rather than a delegated third
+    #     party. SHAPE FOUR EXISTS and will break one of these.
     trusted = []
     for inst in instances:
         flat = " ".join(inst.split())
         tok = _FIRST_TOKEN_RE.match(flat)
         cand = tok.group(1) if tok else None
         this_id = cand if (cand is not None and "=" not in cand) else None
+        if trusted and not _same_boundary(this_id, expected, authority):
+            break                          # no longer the receiver's own stamps
         if not trusted:
             expected = this_id            # the run's authority is the first's
-        elif this_id != expected:
-            break                          # no longer the receiver's own stamps
         trusted.append(flat)
+        out["run_authserv_ids"].append(this_id)
     first = " ".join(trusted)
+    out["instances_in_run"] = len(trusted)
 
     # THE AUTHSERV-ID IS DETECTED, NOT ASSUMED. RFC 8601 makes it the mandatory
     # first token, and a major provider omits it, so the field can begin with a
@@ -198,7 +317,12 @@ def read_criterion(raw: bytes, authority: Optional[str], identity: str, *,
     candidate = tok.group(1) if tok else None
     if candidate is not None and "=" not in candidate:
         out["authserv_id"] = candidate
-        out["authority_ok"] = candidate == authority
+        # THE SAME BOUNDARY QUESTION AS THE RUN, ASKED THE SAME WAY. Exact
+        # equality here would accept the run's sibling instances and then reject
+        # the run's own leading authserv-id whenever a deployment declares the
+        # parent -- two comparisons answering one question in two different
+        # ways, which is the compounding this repair exists to undo.
+        out["authority_ok"] = _in_boundary(candidate, authority)
 
     for meth, rx in _METHOD_RE.items():
         hit = rx.search(first)
