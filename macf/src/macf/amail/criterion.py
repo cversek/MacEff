@@ -299,7 +299,15 @@ def read_criterion(raw: bytes, authority: Optional[str], identity: str, *,
         tok = _FIRST_TOKEN_RE.match(flat)
         cand = tok.group(1) if tok else None
         this_id = cand if (cand is not None and "=" not in cand) else None
-        if trusted and not _same_boundary(this_id, expected, authority):
+        # noqa justified, and the ordering is the whole argument: `expected` is
+        # READ only when `trusted` is non-empty, and `trusted` becomes non-empty
+        # only on the iteration AFTER `expected` is assigned below. A static
+        # checker cannot prove that, so it reports an undefined name. Do not
+        # "fix" it by hoisting an initial value -- a pre-seeded `expected` would
+        # silently make the FIRST instance compare against a sentinel instead of
+        # establishing the run's authority, which is the anti-misattribution
+        # clause this loop exists to enforce.
+        if trusted and not _same_boundary(this_id, expected, authority):  # noqa: F821
             break                          # no longer the receiver's own stamps
         if not trusted:
             expected = this_id            # the run's authority is the first's

@@ -29,6 +29,14 @@ test = [
 viz = [
     "markdown>=3.0",  # Markdown-to-HTML for CA presentation
 ]
+lint = [
+    # The style gate in tools/lint_staged.sh, configured by ruff.toml at the
+    # repo root. DECLARED rather than installed ambiently: a tool a gate depends
+    # on and nothing records is undeclared state, and the gate refuses to run
+    # rather than skip when it is absent — so a missing ruff blocks commits
+    # instead of silently disabling the check.
+    "ruff>=0.6",
+]
 proxy = [
     "aiohttp>=3.9.0",  # For API proxy streaming
 ]
