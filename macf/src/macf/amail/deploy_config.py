@@ -1,24 +1,83 @@
 """Declarative deployment configuration for the amail broker daemon.
 
-A deployment describes the broker in a root-owned JSON file; the daemon entry
-point loads it through these models. Pydantic is the framework convention for
-declarative config (the agents.yaml account model set the precedent), and it
-buys the property a hand-rolled ``raw["key"]`` parser cannot offer honestly:
-**a misspelled or unknown key refuses to start** (``extra="forbid"``) instead
-of being ignored — an ignored key in a security config silently changes what
-the broker enforces, which is the config-file form of a silent failure.
+A deployment describes the broker in a root-owned **YAML** file; the daemon
+entry point loads it through these models. Pydantic is the framework convention
+for declarative config (the ``agents.yaml`` account model set the precedent),
+and it buys the property a hand-rolled ``raw["key"]`` parser cannot offer
+honestly: **a misspelled or unknown key refuses to start** (``extra="forbid"``)
+instead of being ignored — an ignored key in a security config silently changes
+what the broker enforces, which is the config-file form of a silent failure.
+
+**YAML, NOT JSON, AND THE REASON IS THE COMMENT.** These files are
+hand-authored and hand-maintained; nothing generates them. Combining JSON with
+``extra="forbid"`` produced a format in which a deployment literally could not
+record why it set a value or which model governs the schema — an unknown key is
+refused, and JSON has no comment syntax, so annotation was impossible. The
+strictness is right and stays; a format that forbids strictness AND annotation
+is hostile to the next person editing it, and that person usually has no idea
+which Python class governs the file. YAML also matches the convention every
+other first-class MacEff subsystem already follows.
 
 The file is deliberately separate from :class:`~macf.amail.broker.BrokerConfig`:
 that dataclass is the broker's in-memory shape; this is the on-disk contract a
 deployment writes, validated at the trust boundary where operator-authored
-JSON becomes broker authority.
+configuration becomes broker authority.
 """
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
+import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from macf.amail.broker import BrokerConfig
+
+
+class ConfigError(Exception):
+    """A declarative config could not be read or parsed.
+
+    Distinct from Pydantic's ValidationError, which means the file parsed and
+    said something wrong. This means we never got far enough to find out --
+    a distinction the caller needs, because one points at the file's CONTENT
+    and the other at the file itself.
+    """
+
+
+def load_declarative_config(path: Path) -> Dict[str, Any]:
+    """Read one YAML config into a mapping, or raise with a usable reason.
+
+    ABSENCE, UNREADABILITY AND MALFORMEDNESS ARE THREE DIFFERENT FACTS and each
+    sends the reader somewhere different: place the file, fix its permissions,
+    or fix its syntax. Collapsing them into "config error" makes the reader
+    check all three.
+
+    A file that parses to something other than a mapping is refused rather than
+    coerced. An empty file yields ``None`` from the YAML parser, and treating
+    that as ``{}`` would hand Pydantic an empty mapping and produce a
+    complaint about missing required keys -- pointing at the schema when the
+    real fault is an empty file.
+    """
+    path = Path(path)
+    try:
+        text = path.read_text()
+    except FileNotFoundError as e:
+        raise ConfigError(f"no config at {path}; nothing to start from") from e
+    except OSError as e:
+        raise ConfigError(f"config at {path} could not be read: {e}") from e
+
+    try:
+        raw = yaml.safe_load(text)
+    except yaml.YAMLError as e:
+        raise ConfigError(f"config at {path} is not valid YAML: {e}") from e
+
+    if raw is None:
+        raise ConfigError(
+            f"config at {path} is empty. Reported as empty rather than passed "
+            f"on as an empty mapping, which would surface as a complaint about "
+            f"missing required keys and point at the schema instead of the file.")
+    if not isinstance(raw, dict):
+        raise ConfigError(
+            f"config at {path} parsed as {type(raw).__name__}, not a mapping")
+    return raw
 
 
 class AgentBinding(BaseModel):
@@ -50,32 +109,62 @@ class BrokerDeployConfig(BaseModel):
     domain: str = Field(description="the address domain this broker owns")
     agents: Dict[str, AgentBinding] = Field(
         description="agent name (address local-part) -> home + uid")
+    # ------------------------------------------------------------------
+    # DEFAULTS ARE FOR PLUMBING, NEVER FOR AUTHORIZATION.
+    #
+    # The store paths below default to the locations the BASE IMAGE actually
+    # provisions, so a deployment states only what differs from the standard
+    # layout. That is safe precisely because the base image creates those exact
+    # directories with those exact owners and modes — the default is not a
+    # guess about where things might be, it is the same fact the Dockerfile
+    # asserts.
+    #
+    # Two fields deliberately KEEP `None` and must be declared by every
+    # deployment that wants them: `contacts_path` and `credentials_path`.
+    # Both are security-relevant, and a security-relevant path that can be
+    # inherited silently is one a reviewer never sees. Absent contacts already
+    # fails CLOSED (`permits(...) if self.contacts else False`), so requiring
+    # the declaration costs a line and buys visibility; defaulting it would
+    # make the allowlist's location an implicit fact and turn "which addresses
+    # may this deployment write to" into a question answered somewhere else.
+    #
+    # `credentials_path: null` additionally MEANS something — unconfigured,
+    # which starts and announces itself — and is a distinct state from a
+    # configured-and-missing credential, which is a hard refusal. Giving it a
+    # default would erase a state the custody model depends on.
+    # ------------------------------------------------------------------
     contacts_path: Optional[Path] = Field(
-        default=None, description="outbound allowlist, re-read on every decision")
+        default=None,
+        description="outbound allowlist, re-read on every decision. NOT "
+                    "defaulted: declare it explicitly. Absent = deny all.")
+    credentials_path: Optional[Path] = Field(
+        default=None,
+        description="submission credential. NOT defaulted, and null MEANS "
+                    "unconfigured (starts, announces itself) as distinct from "
+                    "configured-and-absent (hard refusal). When set: 0600, "
+                    "owned by the broker uid — serve() refuses otherwise.")
+
     audit_path: Optional[Path] = Field(
-        default=None, description="broker-owned audit log (jsonl)")
+        default=Path("/var/lib/amail_broker/audit.jsonl"),
+        description="broker-owned audit log (jsonl)")
     socket_path: Path = Field(
         default=Path("/run/amail/broker.sock"),
         description="the submission socket the broker binds")
-    credentials_path: Optional[Path] = Field(
-        default=None,
-        description="smarthost credential; null until the outbound leg exists. "
-                    "When set: 0600, owned by the broker uid — serve() refuses "
-                    "to start otherwise.")
     inbound_quarantine: Optional[Path] = Field(
-        default=None, description="broker-owned quarantine for refused internet mail")
+        default=Path("/var/lib/amail_broker/quarantine"),
+        description="broker-owned quarantine for refused internet mail")
     inbound_handoff: Optional[Path] = Field(
-        default=None,
+        default=Path("/var/lib/amail/handoff"),
         description="pickup boxes: handoff/<agent>/ owned by the broker, "
                     "group = the recipient's group; the recipient ingests as itself")
     dispositions_dir: Optional[Path] = Field(
-        default=None,
+        default=Path("/var/lib/amail_broker/dispositions"),
         description="broker-owned, agent-READABLE records of what became of "
                     "each submitted message. Without it a sender holds a copy "
                     "of what it sent and cannot learn whether it left, which "
                     "is the outbound face of a silent drop.")
     rate_limit_dir: Optional[Path] = Field(
-        default=None,
+        default=Path("/var/lib/amail_broker/ratelimit"),
         description="broker-owned, agent-READABLE rate-limit state. On disk "
                     "rather than in memory: a budget held in memory resets "
                     "when the broker restarts, which turns a restart into a "
@@ -293,11 +382,10 @@ class InboundDeployConfig(BaseModel):
         That is the whole point: the previous arrangement required remembering,
         and the remembering did not happen.
         """
-        import json as _json
         from macf.amail.inbound import InboundConfig
 
         bc = BrokerDeployConfig.model_validate(
-            _json.loads(Path(self.broker_config_path).read_text())).to_broker_config()
+            load_declarative_config(self.broker_config_path)).to_broker_config()
         outbound_audit = bc.audit_path
         if self.contacts_path is not None:
             bc.contacts_path = self.contacts_path

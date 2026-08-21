@@ -36,10 +36,11 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from macf.amail import Broker, serve
-from macf.amail.deploy_config import BrokerDeployConfig
+from macf.amail.deploy_config import (BrokerDeployConfig, ConfigError,
+                                      load_declarative_config)
 
 CONFIG_PATH = Path(os.environ.get("AMAIL_BROKER_CONFIG",
-                                  "/etc/amail/broker_config.json"))
+                                  "/etc/amail/broker_config.yaml"))
 
 
 def main() -> int:
@@ -49,13 +50,12 @@ def main() -> int:
               "a convenience. Run as the dedicated broker uid.", file=sys.stderr)
         return 1
     try:
-        raw = json.loads(CONFIG_PATH.read_text())
-    except FileNotFoundError:
-        print(f"refusing to start: no config at {CONFIG_PATH}", file=sys.stderr)
-        return 1
-    except (OSError, json.JSONDecodeError) as e:
-        print(f"refusing to start: config at {CONFIG_PATH} unreadable or "
-              f"malformed: {e}", file=sys.stderr)
+        raw = load_declarative_config(CONFIG_PATH)
+    except ConfigError as e:
+        # The loader distinguishes absent / unreadable / malformed / empty and
+        # says which -- each sends the reader somewhere different, and
+        # collapsing them to "config error" makes them check all four.
+        print(f"refusing to start: {e}", file=sys.stderr)
         return 1
     try:
         cfg = BrokerDeployConfig.model_validate(raw).to_broker_config()

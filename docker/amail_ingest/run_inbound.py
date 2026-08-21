@@ -68,21 +68,30 @@ def load_config():
     It also re-declared domain, agents, contacts and audit, all of which the
     broker config already carries, so the two could drift apart and did.
     """
-    from macf.amail.deploy_config import InboundDeployConfig
+    from macf.amail.deploy_config import (InboundDeployConfig, ConfigError,
+                                          load_declarative_config)
     from pydantic import ValidationError
     try:
-        raw = json.loads(CONFIG_PATH.read_text())
-    except (OSError, json.JSONDecodeError) as e:
-        print(f"refusing to run: config at {CONFIG_PATH} unreadable or "
-              f"malformed: {e}", file=sys.stderr)
+        raw = load_declarative_config(CONFIG_PATH)
+    except ConfigError as e:
+        print(f"refusing to run: {e}", file=sys.stderr)
         raise SystemExit(2)
     try:
         return InboundDeployConfig.model_validate(raw).to_inbound_config()
-    except (ValidationError, OSError, json.JSONDecodeError) as e:
+    except ValidationError as e:
         # An unknown key refuses to start rather than being ignored: an ignored
         # key in a security config silently changes what the broker enforces.
         print(f"refusing to run: {CONFIG_PATH} did not validate: {e}",
               file=sys.stderr)
+        raise SystemExit(2)
+    except ConfigError as e:
+        # SEPARATE, because this one is about a DIFFERENT FILE. to_inbound_config
+        # reads the broker config too, so a failure here is not a fault in the
+        # file named above -- and the old handler caught it alongside
+        # ValidationError and reported it as "{CONFIG_PATH} did not validate",
+        # naming the wrong file to whoever had to fix it.
+        print(f"refusing to run: {CONFIG_PATH} is valid, but the broker config "
+              f"it references could not be loaded: {e}", file=sys.stderr)
         raise SystemExit(2)
 
 

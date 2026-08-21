@@ -16,11 +16,14 @@ disclose it to a permitted correspondent.
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
+import yaml
+from pydantic import (BaseModel, ConfigDict, ValidationError, field_validator,
+                      model_validator)
+
 from .crypto import SigningError, parse_public_key
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 
 class ContactListError(ValueError):
@@ -29,6 +32,97 @@ class ContactListError(ValueError):
 
 # Keys that would encode a route rather than an identity.
 _ROUTE_KEYS = {"host", "hostname", "transport", "via", "route", "network", "tailnet", "relay"}
+
+
+class ContactEntry(BaseModel):
+    """One correspondent an agent may write to.
+
+    Fields:
+        address  the correspondent's address; normalised to lowercase.
+        key      Ed25519 public key, or a list of them. A bare string is
+                 accepted for the single-key case.
+        keys     alias for `key`; at most one of the two may be given.
+        push     push-wake grant. Whether the address may hold the grant at
+                 all is the inbound module's derivation; this layer only
+                 guarantees the field is a boolean.
+
+    Unknown fields are rejected. In an authorisation file a misspelled key
+    would otherwise read as authorised and silently not be.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    address: str
+    key: Optional[Union[str, List[str]]] = None
+    keys: Optional[Union[str, List[str]]] = None
+    push: Optional[bool] = None
+    #: Free text, ignored by every consumer. Declared rather than allowed by
+    #: laxness so that a misspelled `notes:` is still refused.
+    note: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _declared_null_is_not_absent(self):
+        """A field written as `null` is DECLARED, and must not read as absent.
+
+        `Optional[...] = None` cannot tell "not provided" from "provided as
+        null" — both arrive as None. For `key` that difference is
+        security-relevant: a declared-but-null key read as keyless moves a
+        correspondent from SUSPECT to UNVERIFIED by configuration rather than by
+        evidence. `model_fields_set` carries what the file actually wrote.
+        """
+        for field in ("key", "keys"):
+            if field in self.model_fields_set and getattr(self, field) is None:
+                raise ValueError(
+                    f"contact '{self.address}' declares '{field}' as null. "
+                    f"Omit it to mean 'no key'; null means a key was intended "
+                    f"and is missing.")
+        return self
+
+    @field_validator("address")
+    @classmethod
+    def _normalise_address(cls, v: str) -> str:
+        v = (v or "").strip().lower()
+        if not v:
+            raise ValueError("contact entry has an empty address")
+        return v
+
+    @field_validator("key", "keys")
+    @classmethod
+    def _declared_keys_are_usable(cls, v):
+        """Normalise to a list and reject unusable key material.
+
+        Parsed here rather than at first use: a malformed key found while
+        classifying a message would put broken configuration inside a security
+        decision. A declared-but-empty key is an error, not "keyless" — the two
+        mean different things to the classifier.
+        """
+        if v is None:
+            return v
+        declared = [v] if isinstance(v, str) else v
+        if not declared or not all(isinstance(x, str) and x.strip() for x in declared):
+            raise ValueError(
+                "contact key must be a string or a non-empty list of strings")
+        for k in declared:
+            try:
+                parse_public_key(k)
+            except SigningError as ex:
+                raise ValueError(f"contact key is unusable: {ex}") from ex
+        return declared
+
+    @classmethod
+    def reject_routes(cls, raw: Dict[str, Any], agent: str) -> None:
+        """Refuse an entry carrying reachability, with a reason.
+
+        `extra="forbid"` would refuse these anyway, but as "unknown field",
+        which does not tell the deployer what to do instead.
+        """
+        offending = _ROUTE_KEYS & {k.lower() for k in raw}
+        if offending:
+            raise ContactListError(
+                f"contact entry for '{agent}' records reachability "
+                f"({', '.join(sorted(offending))}). A contact names a "
+                "correspondent, never a route — the broker decides how "
+                "to deliver at send time.")
 
 
 class ContactBook:
@@ -76,12 +170,12 @@ class ContactBook:
                 f"contact list not found at {self.path} — refusing to send with no policy"
             )
         try:
-            raw = json.loads(self.path.read_text())
-        except (OSError, ValueError) as e:
+            raw = yaml.safe_load(self.path.read_text())
+        except (OSError, yaml.YAMLError) as e:
             raise ContactListError(f"contact list at {self.path} is unreadable: {e}") from e
 
         if not isinstance(raw, dict):
-            raise ContactListError("contact list must be an object of agent -> [addresses]")
+            raise ContactListError("contact list must be a mapping of agent -> [contacts]")
 
         book: Dict[str, List[str]] = {}
         keys: Dict[Tuple[str, str], List[str]] = {}
@@ -92,69 +186,62 @@ class ContactBook:
             addrs: List[str] = []
             for e in entries:
                 if isinstance(e, dict):
-                    offending = _ROUTE_KEYS & {k.lower() for k in e}
-                    if offending:
+                    # Reachability gets its own message ahead of the schema's
+                    # generic unknown-field error, which would not say what to
+                    # do instead.
+                    ContactEntry.reject_routes(e, agent)
+                    try:
+                        entry = ContactEntry.model_validate(e)
+                    except ValidationError as ex:
                         raise ContactListError(
-                            f"contact entry for '{agent}' records reachability "
-                            f"({', '.join(sorted(offending))}). A contact names a "
-                            "correspondent, never a route — the broker decides how "
-                            "to deliver at send time."
-                        )
-                    if "address" not in e:
-                        raise ContactListError(f"contact entry for '{agent}' has no address")
-                    addr = str(e["address"]).strip().lower()
+                            f"contact entry for '{agent}' is invalid: {ex}") from ex
+                    if entry.key is not None and entry.keys is not None:
+                        raise ContactListError(
+                            f"contact entry for '{entry.address}' declares both "
+                            f"'key' and 'keys'; use one")
+                    addr = entry.address
                     addrs.append(addr)
-                    # `in`, not `or`. `e.get("key") or e.get("keys")` collapses
-                    # every falsy value — "", null, 0, false, [] — to None, so a
-                    # contact that DECLARED a key silently became keyless and the
-                    # explicit "must be a non-empty list" guard below was
-                    # unreachable. That downgrades SUSPECT to UNVERIFIED for that
-                    # correspondent by configuration rather than by evidence,
-                    # which is the one direction this module must never move in.
-                    has_key = "key" in e or "keys" in e
-                    declared = e.get("key", e.get("keys"))
-                    if has_key:
-                        if isinstance(declared, str):
-                            declared = [declared]
-                        if not isinstance(declared, list) or not declared or \
-                                not all(isinstance(x, str) and x.strip() for x in declared):
-                            raise ContactListError(
-                                f"contact key for '{addr}' must be a string or a "
-                                "non-empty list of strings")
-                        for k in declared:
-                            if not isinstance(k, str):
-                                raise ContactListError(
-                                    f"contact key for '{addr}' must be a string")
-                            # Parsed at LOAD, not at first use. A malformed key
-                            # discovered while classifying a message would leave
-                            # the classifier deciding what to do about broken
-                            # configuration, in the middle of a security
-                            # decision. Refusing here means a deployment learns
-                            # its config is wrong when it writes it.
-                            try:
-                                parse_public_key(k)
-                            except SigningError as ex:
-                                raise ContactListError(
-                                    f"contact key for '{addr}' is unusable: {ex}"
-                                ) from ex
+                    # Absent and present-but-empty are different facts: a
+                    # declared-but-empty key is rejected by the validator rather
+                    # than read as keyless, which would move a correspondent
+                    # from SUSPECT to UNVERIFIED by configuration instead of by
+                    # evidence.
+                    declared = entry.key if entry.key is not None else entry.keys
+                    if declared is not None:
+                        # Scoped by (agent, address), never address alone: two
+                        # agents may know the same correspondent under different
+                        # keys, and merging would let one agent's contact list
+                        # decide what another agent is willing to believe.
                         keys[(agent, addr)] = list(declared)
-                    # push-wake grant. Validated at LOAD
-                    # like the keys, and for the same reason: a malformed
-                    # grant discovered mid-authorization would put broken
-                    # configuration inside a security decision. Whether the
-                    # ADDRESS may hold the grant at all is the inbound
-                    # module's derivation (agent-namespace check) -- this
-                    # layer only guarantees the field is an honest boolean.
-                    if "push" in e:
-                        if not isinstance(e["push"], bool):
-                            raise ContactListError(
-                                f"contact 'push' for '{addr}' must be a boolean, "
-                                f"got {type(e['push']).__name__}")
-                        push[(agent, addr)] = e["push"]
+                    # PUSH-WAKE GRANT: permits this correspondent's inbound mail
+                    # to WAKE the recipient agent, rather than waiting to be
+                    # collected on the agent's next cycle. Default is no grant;
+                    # exceptions are rare and deliberate.
+                    #
+                    # THE RISK IS INSIDE THE ALLOWLIST, NOT OUTSIDE IT. A
+                    # stranger cannot abuse this — a stranger is not a contact.
+                    # The case this bounds is two AGENTS who can wake each other:
+                    # every individual wake is authorised, and the aggregate is a
+                    # self-sustaining loop that no human is watching and that
+                    # nothing in a per-message authorisation check can see. An
+                    # allowlist bounds WHO may communicate; it does not bound the
+                    # DYNAMICS between two parties who are both permitted.
+                    #
+                    # TODO: the wake mechanism is SPECIFIED-NOT-BUILT (V9/V10,
+                    # the separate inbound gate). The field is recorded and
+                    # carried; nothing consumes it yet. A reader must not infer
+                    # from its presence that waking works today.
+                    #
+                    # This layer only guarantees the field is an honest boolean.
+                    # Whether an address may hold the grant at all is the inbound
+                    # module's derivation (the agent-namespace check).
+                    if entry.push is not None:
+                        push[(agent, addr)] = entry.push
                 elif isinstance(e, str):
                     addrs.append(e.strip().lower())
                 else:
-                    raise ContactListError(f"contact entry for '{agent}' must be a string or object")
+                    raise ContactListError(
+                        f"contact entry for '{agent}' must be a string or a mapping")
             book[agent] = addrs
         return book, keys, push
 
