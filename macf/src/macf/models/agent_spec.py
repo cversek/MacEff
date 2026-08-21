@@ -432,6 +432,46 @@ class DefaultsConfig(BaseModel):
     )
 
 
+class SecretSpec(BaseModel):
+    """One credential a service needs, declared by NAME and DESTINATION.
+
+    Declaration lives beside the account that needs it, so a reviewer reading
+    the deployment sees what each service may hold -- the same reasoning that
+    puts `ssh_keys` next to the account it authorises. The VALUE never appears
+    here; only where it comes from and what custody it must end up under.
+
+    The source is resolved as `<secrets mount>/<name>` from a read-only host
+    directory whose mount point is 0700 root-owned, so no agent uid can reach
+    it even before placement. Provisioning copies, chowns, chmods and then
+    VERIFIES -- and a declared-but-absent secret is a hard startup refusal,
+    because a configured-and-missing credential passes every naive truthiness
+    check and then fails at the edge, where the diagnosis reads as somebody
+    else's network problem rather than as ours.
+    """
+
+    name: str = Field(..., description="File name under the secrets mount")
+    dest: str = Field(..., description="Absolute path to place it at")
+    owner: str = Field(..., description="Owning user after placement")
+    group: Optional[str] = Field(default=None, description="Owning group (defaults to owner)")
+    mode: str = Field(default="0600", description="Octal mode after placement")
+
+
+class ServiceSpec(BaseModel):
+    """A non-agent service account the deployment provisions.
+
+    Distinct from an AgentSpec because these have no home, no personality and no
+    consciousness artifacts -- they exist to hold a capability an agent must NOT
+    have. Identity separation is the precondition that makes any owner-scoped
+    guarantee statable at all: "only the broker may read this credential" is not
+    a weaker rule without a separate uid, it is an INEXPRESSIBLE one.
+    """
+
+    secrets: List[SecretSpec] = Field(
+        default_factory=list,
+        description="Credentials this service holds"
+    )
+
+
 class AgentsConfig(BaseModel):
     """
     Root configuration model for agents.yaml.
@@ -468,4 +508,9 @@ class AgentsConfig(BaseModel):
     defaults: Optional[DefaultsConfig] = Field(
         default=None,
         description="Global defaults for agent configuration"
+    )
+
+    services: Dict[str, ServiceSpec] = Field(
+        default_factory=dict,
+        description="Non-agent service accounts and the secrets they hold"
     )

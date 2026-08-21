@@ -1839,6 +1839,142 @@ def apply_egress_policy(agents_config: AgentsConfig) -> None:
                 f"(uid {uids[username]}) denied tcp/{','.join(str(p) for p in ports)}")
 
 
+#: Where compose mounts the host's secrets/ directory, read-only. The base image
+#: creates this 0700 root-owned so no agent uid can traverse to it even before
+#: anything is placed.
+SECRETS_MOUNT = Path('/run/maceff-secrets')
+
+#: Policy pointers for refusals. capability_boundaries requires every refusal to
+#: name where its reasoning lives -- the reader who has just been stopped is the
+#: one most in need of the explanation and the least likely to go looking. No
+#: section numbers: a section reference breaks SILENTLY when a policy is
+#: reorganised, still reading plausibly while pointing at whatever now occupies
+#: that number.
+SECRETS_POLICY_POINTER = (
+    "  macf_tools policy navigate capability_boundaries\n"
+    "  macf_tools policy navigate amail\n"
+    "  Related: credential custody, identity separation, provisioning"
+)
+
+
+def place_secrets(agents_config: AgentsConfig) -> None:
+    """Place declared secrets from the read-only mount, as root, before agents exist.
+
+    WHY PROVISIONING MAY DO THIS WHEN AN AGENT MAY NOT. The rule that a person
+    performs the privileged placement exists because an AGENT doing it collapses
+    the custody boundary the four-state check protects. This runs as root at
+    container start, before any agent process exists, in the same trusted context
+    as the image build that created the uids. The rule is about agents, not about
+    automation.
+
+    THE HOST DIRECTORY IS THE SOURCE OF TRUTH and the container holds a placed
+    copy. Getting that backwards -- treating the container as authoritative --
+    is what produced a deployment whose credential existed nowhere else and
+    could not be rescued without reading it out of a running container.
+
+    A DECLARED-BUT-ABSENT SECRET IS A HARD REFUSAL, never a warning and never a
+    prompt. Same four-state model as the broker's own credential check:
+    unconfigured starts and announces itself, configured-and-absent refuses.
+    Prompting would block an unattended restart at 3am and would train whoever
+    is on call to automate the prompt away.
+    """
+    declared = []
+    for svc_name, spec in (getattr(agents_config, 'services', None) or {}).items():
+        for s in (spec.secrets or []):
+            declared.append((svc_name, s))
+
+    if not declared:
+        log("amail secrets: none declared (unconfigured) -- ANNOUNCED rather "
+            "than silent, so an absent declaration is never mistaken for a "
+            "credential that passed a check")
+        return
+
+    for owner_svc, s in declared:
+        src = SECRETS_MOUNT / s.name
+        dest = Path(s.dest)
+        group = s.group or s.owner
+        want_mode = s.mode.zfill(4)
+
+        if not src.exists():
+            log(f"REFUSING TO START: secret '{s.name}' is declared by "
+                f"'{owner_svc}' and ABSENT from {SECRETS_MOUNT}.\n"
+                f"  A configured-and-missing credential is the dangerous state: "
+                f"it passes every naive truthiness check and then fails at the "
+                f"edge, where the diagnosis lands in somebody else's log and "
+                f"reads as a network problem rather than as ours.\n"
+                f"  Place it at ./secrets/{s.name} on the HOST (mode 0600), or "
+                f"remove the declaration from agents.yaml.\n"
+                f"{SECRETS_POLICY_POINTER}")
+            raise RuntimeError(f"declared secret absent: {s.name}")
+
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, dest)
+        run_command(['chown', f'{s.owner}:{group}', str(dest)])
+        run_command(['chmod', want_mode, str(dest)])
+
+        # VERIFY rather than trust the chmod's exit code. Placement and custody
+        # are two different claims and only the second one is the property.
+        st = dest.stat()
+        actual_mode = oct(st.st_mode & 0o777)[2:].zfill(4)
+        try:
+            actual_owner = pwd.getpwuid(st.st_uid).pw_name
+        except KeyError:
+            actual_owner = str(st.st_uid)
+        if actual_mode != want_mode or actual_owner != s.owner:
+            log(f"REFUSING TO START: secret '{s.name}' was placed but does not "
+                f"hold its declared custody -- wanted {s.owner}:{want_mode}, "
+                f"got {actual_owner}:{actual_mode}. A credential under the wrong "
+                f"custody is worse than an absent one, because it starts.\n"
+                f"{SECRETS_POLICY_POINTER}")
+            raise RuntimeError(f"secret custody verification failed: {s.name}")
+
+        log(f"amail secret '{s.name}' -> {dest} "
+            f"({actual_owner}:{actual_mode}) placed and VERIFIED")
+
+
+def start_amail_services(agents_config: AgentsConfig) -> None:
+    """Start the broker and the inbound watcher, and schedule the sweep.
+
+    THE SWEEP IS THE LOAD-BEARING HALF. A watcher that supervises itself cannot
+    report its own absence, and this deployment proved it: inbound was down for
+    over a day while the receiver kept spooling and the broker kept serving. The
+    watcher's own docstring already prescribed the remedy -- "schedule this even
+    when a watcher runs, it is what notices the watcher died" -- and what was
+    missing was never the mechanism, only its provisioning.
+
+    THE INTERPRETER IS NAMED EXPLICITLY rather than relying on the execute bit.
+    The bit is provisioned in the image now, but the outage was a `setsid
+    <script>` failing on a missing +x and reporting it to a log nobody reads, so
+    the invocation is made not to depend on the thing that broke.
+    """
+    if not Path('/etc/amail/broker_config.json').exists():
+        log("amail: no broker_config.json -- deployment does not run amail, skipping")
+        return
+
+    venv_py = '/opt/maceff-venv/bin/python'
+    interp = venv_py if Path(venv_py).exists() else '/usr/bin/python3'
+
+    for svc, script, logfile in (
+        ('broker', 'run_broker.py', '/var/lib/amail_broker/broker.out'),
+        ('inbound watcher', 'run_inbound.py', '/var/lib/amail_broker/watch.out'),
+    ):
+        args = [interp, f'/opt/amail_ingest/{script}']
+        if script == 'run_inbound.py':
+            args.append('watch')
+        try:
+            subprocess.Popen(
+                ['setpriv', '--reuid=amail_broker', '--regid=amail_broker',
+                 '--clear-groups', '--'] + args,
+                stdout=open(logfile, 'a'), stderr=subprocess.STDOUT,
+                start_new_session=True)
+            log(f"amail {svc} started ({' '.join(args)})")
+        except (OSError, subprocess.SubprocessError) as e:
+            # Loud, and to the startup log the operator actually reads -- the
+            # previous failure went to a file nobody opened for a day.
+            log(f"⚠️ MACF: amail {svc} failed to start ({e}); inbound mail will "
+                f"spool unprocessed until this is repaired.\n{SECRETS_POLICY_POINTER}")
+
+
 def main() -> int:
     """
     Container startup entry point.
@@ -2010,6 +2146,12 @@ def main() -> int:
         import subprocess as _sp
         sshd_proc = _sp.Popen(['/usr/sbin/sshd', '-D'])
         log(f"sshd started (pid {sshd_proc.pid})")
+
+        # Place declared secrets, then start amail. Order matters: the broker
+        # refuses to start on a configured-and-absent credential, so placement
+        # must precede it or a correct deployment looks like a broken one.
+        place_secrets(agents_config)
+        start_amail_services(agents_config)
 
         # Build policy index for first PA (required for search service)
         build_policy_index(agents_config)
