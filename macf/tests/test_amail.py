@@ -50,8 +50,15 @@ def deployment(tmp_path):
     contacts.write_text(yaml.safe_dump({
         "domain": DOMAIN,
         "agents": {
-            "alpha": {"contacts": [f"beta@{DOMAIN}"]},
-            "beta": {"contacts": [f"alpha@{DOMAIN}"]},
+            # "both": these two correspond in each direction, which is what
+            # "permitting each to write to the other" meant when direction was
+            # not expressible. Stated rather than assumed, because most tests
+            # below exercise one direction and would pass against a list that
+            # authorised only that one.
+            "alpha": {"contacts": [{"address": f"beta@{DOMAIN}",
+                                    "direction": "both"}]},
+            "beta": {"contacts": [{"address": f"alpha@{DOMAIN}",
+                                   "direction": "both"}]},
         },
     }))
     # Explicit, because the ambient umask writes 0664 here and the broker
@@ -112,7 +119,7 @@ class TestContactRestriction:
     def test_unlisted_recipient_is_refused(self, deployment):
         r = deployment["broker"].submit("alpha", msg(to="stranger@elsewhere.test"))
         assert r["ok"] is False
-        assert "not in the contact list" in r["refused"][0]
+        assert "not in the outbound contact list" in r["refused"][0]
 
     def test_refusal_delivers_nothing_anywhere(self, deployment):
         """Negative control on the refusal itself: a refused message must not
@@ -150,7 +157,7 @@ class TestContactRestriction:
         """An absent list is 'not configured', never 'no restriction'."""
         deployment["contacts"].unlink()
         with pytest.raises(ContactListError):
-            ContactBook(deployment["contacts"]).contacts_for("alpha")
+            ContactBook(deployment["contacts"]).contacts_for("alpha", direction="outbound")
 
     def test_negative_control_removing_the_check_delivers_to_a_stranger(self, deployment, monkeypatch):
         """THE control that makes the tests above meaningful.
@@ -336,7 +343,7 @@ class TestAudit:
         deployment["broker"].submit("alpha", msg(to="stranger@elsewhere.test"))
         refusals = deployment["broker"].audit.refusals()
         assert len(refusals) == 1
-        assert "not in the contact list" in refusals[0]["reason"]
+        assert "not in the outbound contact list" in refusals[0]["reason"]
 
     def test_log_is_append_only_across_decisions(self, deployment):
         b = deployment["broker"]
@@ -378,13 +385,13 @@ class TestContactListSemantics:
         p = tmp_path / "addressing.yaml"
         p.write_text(_addressing({"alpha": [{"address": "x@y.test", key: "somewhere"}]}))
         with pytest.raises(ContactListError, match="records reachability"):
-            ContactBook(p).contacts_for("alpha")
+            ContactBook(p).contacts_for("alpha", direction="outbound")
 
     def test_plain_object_entry_without_route_is_accepted(self, tmp_path):
         """Negative control for the rule above: the same shape minus the route key."""
         p = tmp_path / "addressing.yaml"
         p.write_text(_addressing({"alpha": [{"address": "x@y.test", "note": "a peer"}]}))
-        assert ContactBook(p).contacts_for("alpha") == ["x@y.test"]
+        assert ContactBook(p).contacts_for("alpha", direction="outbound") == ["x@y.test"]
 
 
 # ---------------------------------------------------------------------------
@@ -528,7 +535,7 @@ class TestInbound:
         q = next((deployment["cfg"].inbound_quarantine).glob("*.json"))
         meta = json.loads(q.read_text())
         assert meta["authorization"]["outcome"] == "deny"
-        assert "not in the contact list" in meta["authorization"]["reason"]
+        assert "not in the inbound contact list" in meta["authorization"]["reason"]
         assert meta["sender"] == "stranger@elsewhere.test"
 
     def test_inbound_decisions_are_audited(self, deployment):
@@ -2379,13 +2386,13 @@ class TestContactKeys:
             "alpha": [{"address": f"beta@{DOMAIN}", "key": "ed25519:not-base64!!"}]}))
         deployment["contacts"].chmod(0o644)
         with pytest.raises(ContactListError):
-            deployment["broker"].contacts.contacts_for("alpha")
+            deployment["broker"].contacts.contacts_for("alpha", direction="outbound")
 
     def test_a_key_does_not_change_who_is_permitted(self, keyed):
         """Permission and authenticity are separate questions, and configuration
         must keep them separable."""
-        assert keyed["broker"].contacts.permits("alpha", f"beta@{DOMAIN}") is True
-        assert keyed["broker"].contacts.permits("alpha", "stranger@elsewhere.test") is False
+        assert keyed["broker"].contacts.permits("alpha", f"beta@{DOMAIN}", direction="outbound") is True
+        assert keyed["broker"].contacts.permits("alpha", "stranger@elsewhere.test", direction="outbound") is False
 
     def test_attested_mail_from_an_unlisted_sender_is_still_quarantined(self, deployment, tmp_path):
         """Classification is not permission. A proof of identity is not a grant
@@ -2817,7 +2824,7 @@ class TestFalsyContactKeysAreRefused:
             '{"alpha": [{"address": "beta@%s", "key": %s}]}' % (DOMAIN, value))
         deployment["contacts"].chmod(0o644)
         with pytest.raises(ContactListError):
-            deployment["broker"].contacts.contacts_for("alpha")
+            deployment["broker"].contacts.contacts_for("alpha", direction="outbound")
 
 
 class TestVerifyNeverRaises:
@@ -2845,21 +2852,21 @@ class TestContactCacheRespectsEdits:
         effect without a rebuild' still holds. Caching on process start would
         break it; caching on identity does not."""
         book = deployment["broker"].contacts
-        assert book.permits("alpha", f"beta@{DOMAIN}") is True
+        assert book.permits("alpha", f"beta@{DOMAIN}", direction="outbound") is True
         time.sleep(0.01)
         deployment["contacts"].write_text(_addressing({"alpha": [], "beta": []}))
         deployment["contacts"].chmod(0o644)
-        assert book.permits("alpha", f"beta@{DOMAIN}") is False, \
+        assert book.permits("alpha", f"beta@{DOMAIN}", direction="outbound") is False, \
             "a contact-list edit did not take effect"
 
     def test_repeated_checks_do_not_reparse_an_unchanged_file(self, deployment, monkeypatch):
         book = deployment["broker"].contacts
-        book.contacts_for("alpha")
+        book.contacts_for("alpha", direction="outbound")
         parses = []
         real = book._parse
         monkeypatch.setattr(book, "_parse", lambda: (parses.append(1), real())[1])
         for _ in range(50):
-            book.permits("alpha", f"beta@{DOMAIN}")
+            book.permits("alpha", f"beta@{DOMAIN}", direction="outbound")
         assert parses == [], "an unchanged contact list was re-parsed per check"
 
 

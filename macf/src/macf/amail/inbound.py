@@ -323,8 +323,9 @@ def authorize(cfg: InboundConfig, recipient_agent: str, raw: bytes) -> Tuple[str
     if not authenticated:
         return DENY, why
 
-    if not contacts.permits(recipient_agent, sender):
-        return DENY, (contacts.refuse_reason(recipient_agent, sender)
+    if not contacts.permits(recipient_agent, sender, direction="inbound"):
+        return DENY, (contacts.refuse_reason(recipient_agent, sender,
+                                             direction="inbound")
                       or f"'{sender}' is not a contact of '{recipient_agent}'")
 
     if contacts.push_granted(recipient_agent, sender):

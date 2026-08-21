@@ -216,9 +216,9 @@ class TestContactsAuthorityIsPerAgent:
                                   "beta": ["friend-of-beta@example.org"]}))
         book = ContactBook(p)
         # THE SECURITY HALF: beta's correspondent is not alpha's to write to.
-        assert book.permits("alpha", "friend-of-beta@example.org") is False
+        assert book.permits("alpha", "friend-of-beta@example.org", direction="outbound") is False
         # THE PAIRED FUNCTIONAL HALF, which alone would prove nothing.
-        assert book.permits("alpha", "friend-of-alpha@example.org") is True
+        assert book.permits("alpha", "friend-of-alpha@example.org", direction="outbound") is True
 
     def test_keys_do_not_merge_across_agents(self, tmp_path):
         """Two agents may know the same correspondent under different keys, and

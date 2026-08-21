@@ -1,6 +1,17 @@
-"""Contact lists — who an agent is permitted to send to.
+"""Contact lists — who an agent is permitted to correspond with, and which way.
 
-Two rules from the amail policy are enforced here rather than documented:
+Every entry declares a DIRECTION, so who-may-write-to-me and who-I-may-write-to
+are one field rather than two files. Two files keyed by the same agent names can
+disagree; a field cannot disagree with itself.
+
+The fourth direction, `neither`, is a REVOCATION RECORD rather than an absence.
+Deleting a line says nothing afterwards — a reader cannot tell "never a
+correspondent" from "was one, and is not now". A revoked entry states it, and
+that turns the record into a detector: nothing in legitimate operation ever
+addresses a revoked correspondent, so an attempt against one is a signal that
+something is running on stale authority, not merely a refusal to count.
+
+Three rules from the amail policy are enforced here rather than documented:
 
 1. A contact entry names a correspondent and NEVER records how to reach one.
    Reachability is runtime state; encoding it in configuration means every
@@ -16,6 +27,7 @@ disclose it to a permitted correspondent.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
@@ -23,7 +35,102 @@ from pydantic import (BaseModel, ConfigDict, ValidationError, field_validator,
                       model_validator)
 
 from .crypto import SigningError, parse_public_key
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+
+#: Which way a contact entry authorises correspondence.
+#:
+#: `neither` is not "no entry" — it is a correspondent explicitly withdrawn, and
+#: it is the reason this is a four-valued field rather than two booleans. Two
+#: booleans can both be false, but nothing distinguishes that from an entry
+#: nobody has filled in yet.
+Direction = Literal["inbound", "outbound", "both", "neither"]
+
+#: Directions that authorise sending TO a correspondent, and receiving FROM one.
+_SENDS_TO = {"outbound", "both"}
+_ACCEPTS_FROM = {"inbound", "both"}
+
+
+def normalise_address(value: Optional[str]) -> str:
+    """The one way an address becomes a lookup key.
+
+    Mail addresses are case-insensitive, so a restriction that can be stepped
+    around by capitalising a letter is not one.
+
+    THIS EXISTS AS A FUNCTION BECAUSE TWO SIDES MUST AGREE. The parse side
+    normalises when it builds the keys; every lookup must normalise the same way
+    or it misses. A drift between them does not raise — the dict simply has no
+    such key — and the miss is not uniformly safe: a lookup that misses makes
+    `permits` refuse (fail-closed, merely wrong) but makes `is_revoked` answer
+    False, which retires the alert on exactly the correspondent the deployment
+    withdrew. One function, so the two sides cannot disagree.
+    """
+    return (value or "").strip().lower()
+
+
+@dataclass(frozen=True, kw_only=True)
+class ParsedContacts:
+    """One parse of the contact file, addressed BY NAME rather than by position.
+
+    Returned instead of a tuple. A tuple couples every caller to the ARITY AND
+    ORDER of this function: adding a field breaks each unpacking site, and
+    REORDERING two fields of the same type breaks nothing visibly and silently
+    swaps their meaning. Neither failure is reported where the change was made.
+
+    This is the same defect the coding standards already name for filesystem
+    paths (`.parent.parent.parent` hardcodes structure) and that the policy
+    standards name for section-number references — position couples to a shape
+    the callee is free to change. Names do not move when the shape does.
+
+    `kw_only` so that CONSTRUCTION is name-based too, not only access. Without
+    it the class is a tuple wearing field names: positional construction still
+    compiles, still runs, and a dataclass does not check types at runtime — so
+    two same-shaped fields could be swapped at the one site that builds this and
+    every reader downstream would be confidently wrong. Enforcing the rule on
+    the way out while merely expressing it on the way in leaves the hole open at
+    the only place it can be introduced.
+    """
+
+    #: agent -> every address declared for it, in file order, ALL directions.
+    #: Filtering is the caller's question; this is the raw declaration.
+    by_agent: Dict[str, List[str]]
+    #: (agent, address) -> declared Ed25519 keys
+    keys: Dict[Tuple[str, str], List[str]]
+    #: (agent, address) -> push-wake grant, only where the file stated one
+    push: Dict[Tuple[str, str], bool]
+    #: (agent, address) -> declared Direction. Absent means the pair is not in
+    #: the file at all, which is a different fact from a declared "neither".
+    direction: Dict[Tuple[str, str], str]
+
+    @staticmethod
+    def _key(agent: str, correspondent: str) -> Tuple[str, str]:
+        """The lookup key for a correspondent OF a given agent.
+
+        Scoped by (agent, address) rather than by address alone: two agents may
+        know the same correspondent under different keys and different
+        directions, and merging them would let one agent's contact list decide
+        what another agent may do.
+
+        Built here rather than at each call site for the reason the whole class
+        exists — the key is itself a positional structure, so every site that
+        assembles one by hand is coupled to its order and arity.
+        """
+        return (agent, normalise_address(correspondent))
+
+    def keys_for(self, agent: str, correspondent: str) -> List[str]:
+        return self.keys.get(self._key(agent, correspondent), [])
+
+    def push_for(self, agent: str, correspondent: str) -> bool:
+        return self.push.get(self._key(agent, correspondent), False)
+
+    def direction_for(self, agent: str, correspondent: str) -> Optional[str]:
+        """The declared direction, or None when the pair is not in the file.
+
+        None and "neither" are returned differently ON PURPOSE: "not declared"
+        and "declared as withdrawn" are the distinction the fourth value exists
+        to carry, and collapsing them here would discard it before any caller
+        could act on it.
+        """
+        return self.direction.get(self._key(agent, correspondent))
 
 
 class ContactListError(ValueError):
@@ -38,13 +145,24 @@ class ContactEntry(BaseModel):
     """One correspondent an agent may write to.
 
     Fields:
-        address  the correspondent's address; normalised to lowercase.
-        key      Ed25519 public key, or a list of them. A bare string is
-                 accepted for the single-key case.
-        keys     alias for `key`; at most one of the two may be given.
-        push     push-wake grant. Whether the address may hold the grant at
-                 all is the inbound module's derivation; this layer only
-                 guarantees the field is a boolean.
+        address    the correspondent's address; normalised to lowercase.
+        direction  REQUIRED. One of inbound / outbound / both / neither —
+                   which way correspondence with this address is authorised.
+                   `neither` records a withdrawn correspondent and refuses
+                   both ways; see the module docstring for why that is a
+                   value rather than a deletion.
+        key        Ed25519 public key, or a list of them. A bare string is
+                   accepted for the single-key case.
+        keys       alias for `key`; at most one of the two may be given.
+        push       push-wake grant. Whether the address may hold the grant at
+                   all is the inbound module's derivation; this layer only
+                   guarantees the field is a boolean.
+
+    `direction` has NO DEFAULT, deliberately. Every other field here describes a
+    correspondent; this one grants authority, and a default would let an entry
+    enter the list without anyone stating what it may do. A permissive default
+    would be worse still: it widens authority for every entry that omits the
+    field, which is precisely the set nobody considered.
 
     Unknown fields are rejected. In an authorisation file a misspelled key
     would otherwise read as authorised and silently not be.
@@ -53,6 +171,7 @@ class ContactEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     address: str
+    direction: Direction
     key: Optional[Union[str, List[str]]] = None
     keys: Optional[Union[str, List[str]]] = None
     push: Optional[bool] = None
@@ -133,9 +252,9 @@ class ContactBook:
         self._cache: Optional[Tuple[Tuple[int, int, int], Any]] = None
 
     def _load(self) -> Dict[str, List[str]]:
-        return self._load_full()[0]
+        return self._load_full().by_agent
 
-    def _load_full(self) -> Tuple[Dict[str, List[str]], Dict[Tuple[str, str], List[str]], Dict[Tuple[str, str], bool]]:
+    def _load_full(self) -> ParsedContacts:
         """Parsed fresh whenever the FILE changes, not once per process.
 
         v1.1 moved Ed25519 key parsing inside this function, which is re-entered
@@ -161,7 +280,7 @@ class ContactBook:
             self._cache = (stamp, parsed)
         return parsed
 
-    def _parse(self) -> Tuple[Dict[str, List[str]], Dict[Tuple[str, str], List[str]], Dict[Tuple[str, str], bool]]:
+    def _parse(self) -> ParsedContacts:
         if not self.path.exists():
             # Fail closed. An absent contact list is not an empty restriction;
             # it means the deployment is not configured, and sending under that
@@ -189,6 +308,7 @@ class ContactBook:
         book: Dict[str, List[str]] = {}
         keys: Dict[Tuple[str, str], List[str]] = {}
         push: Dict[Tuple[str, str], bool] = {}
+        direction: Dict[Tuple[str, str], str] = {}
         for agent, spec in agents.items():
             if not isinstance(spec, dict):
                 raise ContactListError(f"agent '{agent}' must be a mapping")
@@ -249,16 +369,65 @@ class ContactBook:
                     # module's derivation (the agent-namespace check).
                     if entry.push is not None:
                         push[(agent, addr)] = entry.push
+                    direction[(agent, addr)] = entry.direction
                 elif isinstance(e, str):
-                    addrs.append(e.strip().lower())
+                    # A bare address cannot state a direction, and direction is
+                    # the field that grants authority. Accepting the shorthand
+                    # would mean inventing one, which is the permissive default
+                    # this schema exists to refuse.
+                    raise ContactListError(
+                        f"contact entry '{e}' for '{agent}' is a bare address. "
+                        f"Write it as a mapping with a 'direction' of inbound, "
+                        f"outbound, both or neither — an entry that does not "
+                        f"say which way it authorises correspondence is not a "
+                        f"policy.")
                 else:
                     raise ContactListError(
-                        f"contact entry for '{agent}' must be a string or a mapping")
+                        f"contact entry for '{agent}' must be a mapping")
             book[agent] = addrs
-        return book, keys, push
+        return ParsedContacts(by_agent=book, keys=keys, push=push,
+                              direction=direction)
 
-    def contacts_for(self, agent: str) -> List[str]:
-        return self._load().get(agent, [])
+    def contacts_for(self, agent: str, *, direction: str) -> List[str]:
+        """Addresses this agent may correspond with IN THE GIVEN DIRECTION.
+
+        `direction` is keyword-only and required: the caller must say which
+        question it is asking. The undirected form answered "is this address in
+        the list", which is the same answer to two different questions — and the
+        separation lived only in a deployment pointing two consumers at two
+        files.
+
+        `neither` entries are in the list and appear in no direction, so they are
+        refused by the ordinary path without a special case.
+        """
+        if direction not in ("outbound", "inbound"):
+            raise ValueError(
+                f"direction must be 'outbound' or 'inbound' to ask this "
+                f"question, not {direction!r}")
+        allowed = _SENDS_TO if direction == "outbound" else _ACCEPTS_FROM
+        parsed = self._load_full()
+        return [a for a in parsed.by_agent.get(agent, [])
+                if parsed.direction_for(agent, a) in allowed]
+
+    def declared_direction(self, agent: str, correspondent: str) -> Optional[str]:
+        """The direction declared for this correspondent, or None if unlisted.
+
+        Distinguishing "declared as `neither`" from "not declared at all" is the
+        whole point of the fourth value, so this returns them differently.
+        """
+        return self._load_full().direction_for(agent, correspondent)
+
+    def is_revoked(self, agent: str, correspondent: str) -> bool:
+        """True when this correspondent is explicitly withdrawn.
+
+        Callers should treat a hit as an ALERT rather than an ordinary refusal.
+        Legitimate operation never addresses a revoked correspondent, so the
+        false-positive rate is near zero by construction — which is what makes
+        this worth raising rather than counting. It catches a consumer running
+        on a stale allowlist, a replayed former relationship, and a compromised
+        component reaching for a correspondent the deployment has cut off.
+        """
+        return self.declared_direction(agent, correspondent) == "neither"
 
     def keys_for(self, agent: str, correspondent: str) -> List[str]:
         """Public keys this agent has declared for that correspondent.
@@ -269,8 +438,7 @@ class ContactBook:
         same correspondent under different keys, and merging them would let one
         agent's contact list decide what another agent is willing to believe.
         """
-        _, keys, _ = self._load_full()
-        return keys.get((agent, (correspondent or "").strip().lower()), [])
+        return self._load_full().keys_for(agent, correspondent)
 
     def push_granted(self, agent: str, correspondent: str) -> bool:
         """True when the contacts file grants push-wake for this correspondent.
@@ -280,36 +448,54 @@ class ContactBook:
         backstop), which runs at every decision. Read per-decision like
         everything else here, so revoking push takes effect without a restart.
         """
-        _, _, push = self._load_full()
-        return push.get((agent, (correspondent or "").strip().lower()), False)
+        return self._load_full().push_for(agent, correspondent)
 
     def push_grants(self) -> Dict[Tuple[str, str], bool]:
         """Every (agent, address) push grant in the file, for boot/derivation
         sweeps -- the inbound module's refuse-to-start check needs the full
         set, not one lookup."""
-        _, _, push = self._load_full()
-        return dict(push)
+        return dict(self._load_full().push)
 
-    def permits(self, agent: str, recipient: str) -> bool:
-        """True when `agent` may send to `recipient`.
+    def permits(self, agent: str, correspondent: str, *, direction: str) -> bool:
+        """True when this agent may correspond with this address THAT WAY.
 
-        Case-insensitive on the address, because mail addresses are, and a
-        restriction that can be stepped around by capitalising a letter is not one.
+        `direction` is required because the two questions have two answers. The
+        undirected form took `recipient` and was called with a SENDER by the
+        inbound path — one membership test standing in for both, with the
+        separation living only in a deployment that pointed the two consumers at
+        two different files.
         """
-        return recipient.strip().lower() in self.contacts_for(agent)
+        return normalise_address(correspondent) in self.contacts_for(
+            agent, direction=direction)
 
-    def refuse_reason(self, agent: str, recipient: str) -> Optional[str]:
+    def refuse_reason(self, agent: str, correspondent: str, *,
+                      direction: str) -> Optional[str]:
         """None when permitted; otherwise a message the agent can act on.
 
         Refusals are returned rather than swallowed: an agent that cannot tell a
         message was refused learns to believe mail was delivered.
+
+        A REVOKED correspondent gets its own reason, and that is the point of
+        the fourth direction rather than a nicety. "Not in the list" and "was in
+        the list and was withdrawn" send a reader to different places: the first
+        to add a contact, the second to ask why it was removed and who is still
+        trying to reach it. Collapsing them would discard the only signal that
+        distinguishes a misconfiguration from a component running on stale
+        authority.
         """
-        if self.permits(agent, recipient):
+        if self.permits(agent, correspondent, direction=direction):
             return None
-        known = self.contacts_for(agent)
+        if self.is_revoked(agent, correspondent):
+            return (
+                f"'{correspondent}' is REVOKED for '{agent}' — declared "
+                f"'neither', so correspondence is withdrawn in both directions. "
+                f"This is a withdrawn contact rather than an unknown one; if it "
+                f"is being addressed, something is acting on stale authority.")
+        known = self.contacts_for(agent, direction=direction)
         if not known:
-            return f"'{agent}' has no contacts declared; every recipient is refused"
+            return (f"'{agent}' has no {direction} contacts declared; "
+                    f"every correspondent is refused")
         return (
-            f"'{recipient}' is not in the contact list for '{agent}' "
-            f"({len(known)} permitted)"
+            f"'{correspondent}' is not in the {direction} contact list for "
+            f"'{agent}' ({len(known)} permitted)"
         )

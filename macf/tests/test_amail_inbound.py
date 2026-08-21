@@ -237,7 +237,7 @@ def test_unlisted_sender_is_quarantined_with_reason_artifact(deploy):
     assert result["disposition"] == QUARANTINED
     # Quarantine is an ARTIFACT, not an alert: content + reason inspectable.
     assert (deploy.quarantine_dir / eml.name).exists()
-    assert "not in the contact list" in \
+    assert "not in the inbound contact list" in \
         (deploy.quarantine_dir / f"{eml.stem}.reason").read_text()
 
 

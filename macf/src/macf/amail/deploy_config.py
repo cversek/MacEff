@@ -421,7 +421,7 @@ class BrokerDeployConfig(BaseModel):
 
 
 class InboundDeployConfig(BaseModel):
-    """The on-disk INBOUND configuration (``inbound_config.json``).
+    """The on-disk INBOUND configuration (``inbound_config.yaml``).
 
     THIS EXISTS BECAUSE THE INBOUND ENTRY POINT HAND-ROLLED ITS CONFIG. The
     broker daemon loads its file through :class:`BrokerDeployConfig` — validated,
@@ -459,7 +459,7 @@ class InboundDeployConfig(BaseModel):
         description="while the wake mechanism is unbuilt this stays false and "
                     "no path may produce the push-wake outcome")
     broker_config_path: Path = Field(
-        default=Path("/etc/amail/broker_config.json"),
+        default=Path("/etc/amail/broker_config.yaml"),
         description="the BROKER's deployment config. Read through the same "
                     "validated model the broker daemon uses, so both entry "
                     "points agree by construction rather than by discipline.")

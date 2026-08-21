@@ -30,20 +30,26 @@ driven step by step by the OPERATOR rather than fired as a side effect:
                runs -- it is what notices the watcher died.
     reconcile  the conservation check: spooled == terminals + in-flight.
 
-Config (/etc/amail/inbound_config.json):
-    domain             mail domain for local agents
-    agents             {agent_name: {"home": path}}
-                       agent_name is the ADDRESS LOCAL PART; the home may
-                       belong to a differently-named account
-    contacts_path      the inbound contacts/allowlist file
-    audit_path         broker audit log (jsonl)
-    spool_dir          the receiver's spool (group-readable to the broker)
-    quarantine_dir     broker-owned quarantine
-    handoff_dir        broker-owned pickup boxes, handoff_dir/<agent>/ with
-                       the agent's group and setgid set by provisioning
-    verdict_authority  the authserv-id this deployment trusts
-    push_wake_enabled  optional, default false (the wake mechanism is not
-                       built; a granted sender delivers as pull, visibly)
+Config (/etc/amail/inbound_config.yaml), validated by InboundDeployConfig,
+which forbids unknown keys. Required:
+    spool_dir          the receiver's spool; this consumer's input
+    quarantine_dir     broker-owned quarantine for refused mail
+Optional, with defaults:
+    handoff_dir        pickup boxes, handoff_dir/<agent>/, broker-owned and
+                       recipient-group readable
+    verdict_authority  the authserv-id this deployment trusts in
+                       Authentication-Results. A verdict stamped by anyone
+                       else is treated as ABSENT, never as a failure.
+    push_wake_enabled  default false while the wake mechanism is unbuilt
+    broker_config_path the BROKER's deployment config, read through the same
+                       validated model the broker daemon uses
+    contacts_path      OPTIONAL override of the broker's contact list for
+                       INBOUND authorization. Null means use the broker's.
+    audit_path         OPTIONAL override of the broker's audit log
+
+Domain, agents and the outbound contact authority are NOT here: they come from
+the broker's own file via broker_config_path, so a control added there reaches
+this entry point without being added in a second place.
 """
 import json
 import os
@@ -52,7 +58,7 @@ import sys
 import time
 from pathlib import Path
 
-CONFIG_PATH = Path("/etc/amail/inbound_config.json")
+CONFIG_PATH = Path("/etc/amail/inbound_config.yaml")
 
 
 def load_config():

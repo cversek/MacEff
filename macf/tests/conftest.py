@@ -49,8 +49,24 @@ def _addressing(flat, domain="agents.test"):
     nesting. This keeps that intent at the call site — `{"alpha": [...]}` —
     while producing the real shape the parser consumes, so the tests exercise
     the actual format rather than a fixture-only one.
+
+    A bare-string contact is expanded to `{address, direction: "both"}`, and a
+    mapping without a direction gets the same. THIS IS A STATED FIXTURE
+    ASSUMPTION, not a shim over the parser: it means "this test is not about
+    direction, and assumes full authority". The parser itself accepts neither
+    form — `test_amail_contact_direction.py` pins that a bare address and a
+    missing direction are both REFUSED, so this convenience cannot mask the
+    requirement. Tests that ARE about direction state it explicitly and get
+    exactly what they wrote.
     """
     import yaml
+
+    def _entry(c):
+        if isinstance(c, str):
+            return {"address": c, "direction": "both"}
+        return c if "direction" in c else {**c, "direction": "both"}
+
+    flat = {a: [_entry(c) for c in cs] for a, cs in flat.items()}
     # uid and home are declared rather than resolved from `account`, because no
     # such accounts exist on a test machine. Uids are distinct per agent: the
     # uid table is the authentication table and the model refuses duplicates,

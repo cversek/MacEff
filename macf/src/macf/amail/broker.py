@@ -297,7 +297,7 @@ class Broker:
             return ["no contact list configured; refusing to send"]
         reasons: List[str] = []
         for r in recipients:
-            why = self.contacts.refuse_reason(sender, r)
+            why = self.contacts.refuse_reason(sender, r, direction="outbound")
             if why:
                 reasons.append(why)
         return reasons
@@ -1176,13 +1176,22 @@ class Broker:
         # grows as mail lands, so the cost per hostile message rises with the
         # traffic the attacker has already sent. Nothing that only matters for
         # DELIVERED mail may run before we know the mail will be delivered.
-        permitted = self.contacts.permits(agent, message.sender) if self.contacts else False
+        permitted = self.contacts.permits(
+            agent, message.sender, direction="inbound") if self.contacts else False
         if not permitted:
             # Identifiers are dropped rather than preserved: quarantined mail is
             # hostile by assumption, and a reader inspecting it should not find
             # it threaded against a real conversation.
             message.parent, message.thread_id = None, new_id("thr")
-            reason = f"sender '{message.sender}' is not in the contact list for '{agent}'"
+            # ASKED OF THE CONTACT BOOK rather than composed here. A refusal
+            # message built at the call site cannot know WHY the address was
+            # refused, so a REVOKED sender — the case worth alerting on —
+            # reached the quarantine artifact indistinguishable from an ordinary
+            # unlisted one, at exactly the record an investigator reads.
+            reason = (self.contacts.refuse_reason(agent, message.sender,
+                                                  direction="inbound")
+                      if self.contacts else
+                      "no contact list configured; refusing every sender")
             # BROKER-OWNED quarantine, not the agent's. Refused evidence must
             # live where the refused party cannot edit it, and the agent owns
             # its home — the same reason the internet path quarantines
