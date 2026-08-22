@@ -376,36 +376,77 @@ def find_live_supervisor_by_name(name: str, exclude_pid: int = 0) -> dict | None
     return max(matches, key=lambda d: d.get("created", 0))
 
 
-def _find_own_supervisor() -> dict | None:
-    """Find the RUNNING supervisor whose child is *this* session.
+def _ppid(pid: int) -> int:
+    """Parent pid of *pid*, or 0 when it cannot be determined.
 
-    tmux sessions are named with the CC session id as a suffix
-    (see ``launch_in_terminal``), so an agent can locate its own supervisor by
-    matching the current session id against each registry entry's
-    ``tmux_session``. Returns the most recently created match, or None when the
-    session is unsupervised / not tmux-backed.
+    ``/proc`` where it exists, ``ps`` otherwise, because this runs on Linux
+    hosts and macOS laptops alike. In ``/proc/<pid>/stat`` the command name is
+    parenthesised and may itself contain spaces or parens, so the fields are
+    taken after the LAST ``)`` rather than by splitting the whole line.
     """
-    import os
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+        return int(stat.rsplit(")", 1)[1].split()[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    try:
+        out = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)],
+                             capture_output=True, text=True, timeout=5)
+        return int(out.stdout.strip())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 0
+
+
+def _ancestor_pids(limit: int = 32) -> set:
+    """This process and its ancestors, walking up until init.
+
+    *limit* bounds the walk: a pid whose parent chain loops or lies would
+    otherwise spin here, and this runs inside a CLI an agent invokes.
+    """
+    pids, pid = set(), os.getpid()
+    while pid > 1 and len(pids) < limit:
+        pids.add(pid)
+        parent = _ppid(pid)
+        if parent <= 0 or parent in pids:
+            break
+        pid = parent
+    return pids
+
+
+def _find_own_supervisor() -> dict | None:
+    """The RUNNING supervisor supervising *this* client, or None.
+
+    Resolved by **process ancestry**. The registry records both the
+    supervisor's pid and the pid of the client it launched, and a caller
+    running inside that client is a descendant of both. A pid is an identity,
+    so a match cannot land on another agent's supervisor — which is the
+    property that matters here, because a misresolution types the caller's
+    command into someone else's pane and the send SUCCEEDS.
+
+    The fallback matches the CC session id against ``tmux_session``, for a
+    caller that is not a descendant of its own client (driving it from a
+    separate ssh session, say). That is a **naming convention**, not an
+    identity: ``launch_in_terminal`` suffixes the session id, but a deployment
+    naming its sessions by agent moniker never satisfies it — which is exactly
+    what happened on the first live use of ``inject``, against a supervisor
+    that was running the whole time.
+    """
+    lineage = _ancestor_pids()
+    own = [data for data in _iter_live_supervisors()
+           if data.get("supervisor_pid") in lineage or data.get("child_pid") in lineage]
+    if own:
+        return max(own, key=lambda d: d.get("created", 0))
+
     sid = os.environ.get("CLAUDE_CODE_SESSION_ID") or _latest_session_id()
-    if not sid or not REGISTRY_DIR.exists():
+    if not sid:
         return None
     short = sid.split("-")[0]
-    matches = []
-    for entry in REGISTRY_DIR.glob("*.json"):
-        if entry.name == "supervisor_crash.log":
-            continue
-        try:
-            data = json.loads(entry.read_text())
-        except (json.JSONDecodeError, OSError):
-            continue
-        if not _is_alive(data.get("supervisor_pid", 0)):
-            continue
-        ts = data.get("tmux_session") or ""
-        if sid in ts or (short and short in ts):
-            matches.append(data)
-    if not matches:
+    named = [data for data in _iter_live_supervisors()
+             if sid in (data.get("tmux_session") or "")
+             or (short and short in (data.get("tmux_session") or ""))]
+    if not named:
         return None
-    return max(matches, key=lambda d: d.get("created", 0))
+    return max(named, key=lambda d: d.get("created", 0))
 
 
 def send_slash_to_self(command: str, target: str = "") -> int:
@@ -429,10 +470,22 @@ def send_slash_to_self(command: str, target: str = "") -> int:
         return send_keys(target, [cmd], enter=True)
     data = _find_own_supervisor()
     if not data:
-        print("[inject] Could not find a running supervisor for this session. "
-              "This session may be unsupervised or not tmux-backed. "
-              "Pass an explicit --target <name|pid> (see `auto-restart list`).",
-              file=sys.stderr)
+        # Two different situations, and the reader has to do different things
+        # about them: with no supervisor running there is nothing to inject
+        # into, while with supervisors running the resolution failed and
+        # --target is the answer. The earlier single message asserted the
+        # first while the second was true.
+        live = [d.get("name") or str(d.get("supervisor_pid"))
+                for d in _iter_live_supervisors()]
+        if live:
+            print(f"[inject] Could not tell which of these live supervisors owns this "
+                  f"session: {', '.join(live)}. Pass --target <name|pid>.",
+                  file=sys.stderr)
+        else:
+            print("[inject] No supervisor is running, so there is no pane to inject "
+                  "into. Start one with `auto-restart launch`, or pass "
+                  "--target <name|pid> (see `auto-restart list`).",
+                  file=sys.stderr)
         return 1
     return send_keys(data.get("name") or str(data.get("supervisor_pid")),
                      [cmd], enter=True)
