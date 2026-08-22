@@ -37,6 +37,11 @@ driven step by step by the OPERATOR rather than fired as a side effect:
                NON-ZERO when unhealthy. The surface a scheduler or an operator
                outside the container calls -- the point where the supervision
                chain reaches something a human sees.
+    validate   check the configuration the deployment OBEYS, touching nothing.
+               `--contacts <path>` validates a CANDIDATE file that is not
+               installed yet, so the operator's sequence is validate-then-
+               replace and no window exists in which the deployment obeys
+               something nobody checked. Exits non-zero on any failure.
     reconcile  the conservation check: spooled == terminals + in-flight.
 
 Config (/etc/amail/inbound_config.yaml), validated by InboundDeployConfig,
@@ -67,6 +72,8 @@ import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from macf.utils.json_io import write_json_safely
 
 CONFIG_PATH = Path("/etc/amail/inbound_config.yaml")
 
@@ -162,34 +169,82 @@ def watch(cfg, inbound) -> int:
     signal.signal(signal.SIGINT, _stop)
 
     last_sweep = 0.0
+    failures = 0
+    last_error = ""
     while not stop["now"]:
         cycle_started = time.time()
-        results = inbound.process_spool(cfg)
+        # THE LOOP SURVIVES ITS INPUT. This call parses files the watcher does
+        # not control -- a spool the receiver writes, and an authorization file
+        # a human edits. A malformed contacts file used to raise here and end
+        # the process permanently, while the receiver went on accepting mail
+        # nothing would drain: an outage that ACCUMULATED and looked healthy
+        # from outside, because the two live services were still answering.
+        #
+        # A loop-scoped failure has no caller waiting, so "report and return"
+        # ends the service rather than answering anyone. Report and CONTINUE:
+        # the file may be mid-edit, and the next cycle costs seconds.
+        try:
+            results = inbound.process_spool(cfg)
+            if failures:
+                print(f"✅ MACF: spool processing RECOVERED after {failures} "
+                      f"consecutive failure(s)", file=sys.stderr, flush=True)
+            failures, last_error = 0, ""
+        except Exception as e:
+            # Broad ON PURPOSE, and this is the one place in the subsystem
+            # where that is right: any exception reaching here kills a service
+            # no caller is waiting on. Narrowing it means the next unforeseen
+            # parse error ends the watcher again, which is the exact defect.
+            failures += 1
+            last_error = f"{type(e).__name__}: {e}"
+            results = []
+            print(f"⚠️ MACF: spool processing FAILED ({last_error}); this is "
+                  f"consecutive failure {failures}. The watcher is STILL "
+                  f"RUNNING and will retry in {interval}s -- mail is spooling "
+                  f"and NOT being drained until this clears.",
+                  file=sys.stderr, flush=True)
         for r in results:
             print(json.dumps(r, default=str), flush=True)
         if cycle_started - last_sweep >= sweep_every:
-            report = inbound.sweep_aged(cfg)
+            # Same rule one level down: the sweep is the thing that reports
+            # stuck mail, so losing it to an unreadable spool entry would
+            # remove the alarm exactly when it applies.
+            try:
+                report = inbound.sweep_aged(cfg)
+                if report["alerts"]:
+                    print(json.dumps({"sweep": report}, default=str), flush=True)
+            except Exception as e:
+                print(f"⚠️ MACF: in-loop sweep failed ({type(e).__name__}: {e}); "
+                      f"the watchdog's sweep is unaffected", file=sys.stderr,
+                      flush=True)
             last_sweep = cycle_started
-            if report["alerts"]:
-                print(json.dumps({"sweep": report}, default=str), flush=True)
-        try:
-            HEARTBEAT.parent.mkdir(parents=True, exist_ok=True)
-            HEARTBEAT.write_text(json.dumps({
+        # ATOMIC, because the whole point of this file is that ANOTHER process
+        # reads it while this one writes. A plain write publishes a truncated
+        # heartbeat for the width of the write, and a torn read is reported as
+        # UNREADABLE -- which is correctly not-alive, and would page someone
+        # about a perfectly healthy watcher.
+        if not write_json_safely(HEARTBEAT, {
                 "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                 "epoch": int(cycle_started),
                 "pid": os.getpid(),
                 "processed_last_cycle": len(results),
+                # ALIVE AND FAILING IS NOT ALIVE, and an observer that only
+                # asks "is the stamp fresh" cannot tell them apart. Now that
+                # the loop survives its input, a wedged watcher stamps a
+                # perfectly healthy heartbeat forever while draining nothing --
+                # so the fix for one silent failure would have created another
+                # if this were not published alongside it.
+                "consecutive_failures": failures,
+                "last_error": last_error,
                 # PUBLISHED so the observer derives its staleness bound from
                 # the real cadence instead of restating it. Two places
                 # configuring one interval drift, and the drift is invisible
                 # until the bound is wrong in the direction that stays quiet.
                 "interval_s": interval,
-            }) + "\n")
-        except OSError as e:
+        }):
             # A watcher that cannot publish liveness is a watcher nobody can
             # supervise. Say so every cycle rather than degrading quietly.
-            print(f"⚠️ MACF: heartbeat write failed ({e}); this watcher is "
-                  f"running UNSUPERVISED", file=sys.stderr, flush=True)
+            print(f"⚠️ MACF: heartbeat write failed; this watcher is running "
+                  f"UNSUPERVISED", file=sys.stderr, flush=True)
         slept = 0.0
         while slept < interval and not stop["now"]:
             time.sleep(0.5)
@@ -236,11 +291,13 @@ def _alert(kind: str, detail: str, **fields) -> Dict[str, Any]:
 def heartbeat_verdict(now: Optional[float] = None) -> Dict[str, Any]:
     """Is the inbound watcher alive? Decided from ITS file, by ANOTHER process.
 
-    Three outcomes and they are deliberately not two: a MISSING heartbeat means
-    the watcher never started (or was never meant to), while a STALE one means
-    it started and stopped. Collapsing them would report a deployment that runs
-    the watcher and a deployment that does not as the same condition, and only
-    one of those is an outage.
+    Four outcomes and they are deliberately not two. A MISSING heartbeat means
+    the watcher never started (or was never meant to); a STALE one means it
+    started and stopped; an UNREADABLE one means liveness is unknown, which is
+    not the same as healthy; and a FAILING one means it is running and stamping
+    while draining nothing. Collapsing any pair sends the reader to the wrong
+    remedy -- and FAILING in particular reports as ALIVE to anyone who only
+    asks whether the stamp is fresh.
     """
     now = time.time() if now is None else now
     if not HEARTBEAT.exists():
@@ -263,6 +320,20 @@ def heartbeat_verdict(now: Optional[float] = None) -> Dict[str, Any]:
                 "detail": f"the inbound watcher last stamped {int(age)}s ago "
                           f"(bound {bound}s): it is DEAD, and mail is spooling "
                           f"with nothing draining it"}
+    # A FOURTH STATE, added with the retry loop that made it possible. Once the
+    # watcher survives a malformed input it keeps stamping a perfectly fresh
+    # heartbeat while draining nothing -- so the repair for one silent failure
+    # manufactures another unless the observer can see the difference. Fresh is
+    # not the same as working.
+    failures = int(data.get("consecutive_failures", 0) or 0)
+    if failures:
+        return {"state": "failing", "age_s": int(age), "bound_s": bound,
+                "pid": data.get("pid"), "consecutive_failures": failures,
+                "last_error": data.get("last_error", ""),
+                "detail": f"the inbound watcher is ALIVE but has failed to "
+                          f"process the spool {failures} time(s) in a row "
+                          f"({data.get('last_error', 'no detail')}): mail is "
+                          f"arriving and NOT being drained"}
     return {"state": "alive", "age_s": int(age), "bound_s": bound,
             "pid": data.get("pid")}
 
@@ -334,16 +405,13 @@ def watchdog(cfg, inbound) -> int:
     while not stop["now"]:
         started = time.time()
         alarms = _check_once(cfg, inbound)
-        try:
-            WD_HEARTBEAT.parent.mkdir(parents=True, exist_ok=True)
-            WD_HEARTBEAT.write_text(json.dumps({
+        if not write_json_safely(WD_HEARTBEAT, {
                 "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                 "epoch": int(started), "pid": os.getpid(),
                 "alarms_last_pass": len(alarms), "interval_s": interval,
-            }) + "\n")
-        except OSError as e:
-            print(f"⚠️ MACF: watchdog heartbeat write failed ({e}); NOTHING "
-                  f"can age this watchdog out", file=sys.stderr, flush=True)
+        }):
+            print(f"⚠️ MACF: watchdog heartbeat write failed; NOTHING can age "
+                  f"this watchdog out", file=sys.stderr, flush=True)
         slept = 0.0
         while slept < interval and not stop["now"]:
             time.sleep(0.5)
@@ -393,6 +461,91 @@ def health(cfg, inbound) -> int:
     report["healthy"] = healthy
     print(json.dumps(report, indent=1, default=str))
     return 0 if healthy else 1
+
+
+def validate(cfg, candidate_contacts: Optional[str] = None) -> int:
+    """Check the configuration a running deployment OBEYS, without touching it.
+
+    THE POINT IS THE CANDIDATE. Validating the installed file tells you what
+    the broker is already enforcing; by then a bad edit has been live since the
+    moment it was saved. `--contacts <path>` validates a file that has not been
+    installed yet, so the operator's sequence is validate-then-replace and there
+    is no window in which the deployment obeys something nobody checked.
+
+    Reports every check rather than stopping at the first failure: an operator
+    fixing a config wants the whole list, and a validator that reveals problems
+    one run at a time trains people to stop running it.
+
+    Exits non-zero if ANY check fails.
+    """
+    from macf.amail.contacts import ContactBook, ContactListError
+
+    checks: List[Dict[str, Any]] = []
+
+    def record(name, ok, detail=""):
+        checks.append({"check": name, "ok": bool(ok), "detail": detail})
+
+    # The two configs already loaded through their validated models to get here.
+    record("inbound_config", True, f"{CONFIG_PATH} parsed and validated")
+    record("broker_config", True,
+           f"referenced broker config parsed; domain={cfg.broker_config.domain!r}")
+
+    contacts_path = Path(candidate_contacts) if candidate_contacts \
+        else cfg.broker_config.contacts_path
+    if not contacts_path:
+        record("contacts", False, "no contacts path configured; the broker "
+                                  "refuses every send with no policy")
+    else:
+        book = ContactBook(Path(contacts_path))
+        try:
+            parsed = book._load_full()
+            record("contacts_parse", True,
+                   f"{contacts_path} parsed; {len(parsed.by_agent)} agent(s), "
+                   f"{sum(len(v) for v in parsed.by_agent.values())} contact(s)")
+
+            # TWO POLICY STORES MUST AGREE. Contacts and the agent roster are
+            # both operator-authored, so a contacts entry naming an agent the
+            # deployment does not define is a CONFIGURATION ERROR rather than a
+            # signal -- declare, compare, refuse. (Contrast a policy store
+            # against a STATE store, where disagreement is the signal and
+            # forcing agreement is the bug.)
+            roster = set(cfg.broker_config.agent_homes or {})
+            if roster:
+                unknown = sorted(set(parsed.by_agent) - roster)
+                record("contacts_roster_agreement", not unknown,
+                       f"contacts name agent(s) the deployment does not define: "
+                       f"{unknown}" if unknown
+                       else f"every agent named in contacts is defined "
+                            f"({len(roster)} in the roster)")
+            else:
+                record("contacts_roster_agreement", True,
+                       "no roster declared in the broker config; nothing to "
+                       "compare against — NOT a pass, an absence")
+
+            # A direction of "neither" is a revocation RECORD, not a mistake.
+            # Surfaced rather than counted as a fault, because it is the one
+            # entry an operator most wants to see when reading a config back.
+            revoked = [f"{a}/{c}" for (a, c), d in parsed.direction.items()
+                       if d == "neither"]
+            if revoked:
+                record("contacts_revocations", True,
+                       f"{len(revoked)} withdrawn contact(s) recorded: {revoked}")
+        except ContactListError as e:
+            record("contacts_parse", False, str(e))
+        except (OSError, ValueError) as e:
+            record("contacts_parse", False,
+                   f"{type(e).__name__}: {e}")
+
+    failed = [c for c in checks if not c["ok"]]
+    print(json.dumps({"contacts_path": str(contacts_path) if contacts_path else None,
+                      "candidate": bool(candidate_contacts),
+                      "checks": checks,
+                      "valid": not failed}, indent=1))
+    if failed:
+        print(f"VALIDATION FAILED: {len(failed)} check(s) — "
+              f"{', '.join(c['check'] for c in failed)}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def main() -> int:
@@ -446,6 +599,16 @@ def main() -> int:
         return 1 if report["alerts"] else 0
     if verb == "watch":
         return watch(cfg, inbound)
+    if verb == "validate":
+        # `--contacts <path>` validates a file that is NOT installed yet.
+        cand = None
+        if "--contacts" in sys.argv:
+            k = sys.argv.index("--contacts")
+            if k + 1 >= len(sys.argv):
+                print("validate: --contacts needs a path", file=sys.stderr)
+                return 2
+            cand = sys.argv[k + 1]
+        return validate(cfg, cand)
     if verb == "watchdog":
         return watchdog(cfg, inbound)
     if verb == "health":
@@ -454,8 +617,8 @@ def main() -> int:
         report = inbound.reconcile(cfg)
         print(json.dumps(report, indent=1))
         return 0 if report.get("balanced") else 1
-    print(f"unknown verb {verb!r}: use check | process | watch | watchdog | "
-          f"health | sweep | reconcile", file=sys.stderr)
+    print(f"unknown verb {verb!r}: use check | validate | process | watch | "
+          f"watchdog | health | sweep | reconcile", file=sys.stderr)
     return 2
 
 
