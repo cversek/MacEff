@@ -1976,6 +1976,24 @@ def start_amail_services(agents_config: AgentsConfig) -> None:
         log(f"⚠️ MACF: could not provision {run_dir} ({e}); the broker cannot "
             f"bind its socket and no agent will be able to send mail.")
 
+    # The ingest ledger records what was ACCEPTED -- a fact about what happened,
+    # so it lives apart from the spool, which is a retryable queue and may be
+    # tiered for loss. Separate from the broker's store too: the receiver writes
+    # this and the broker owns that store, and one uid writing into the other's
+    # store is the separation these two accounts exist to maintain.
+    #
+    # Provisioned here rather than in the image because it is a volume
+    # mountpoint -- Docker creates it root-owned, and the receiver's ownership
+    # has to be applied on the running container.
+    records_dir = Path('/var/lib/amail_ingest_records')
+    try:
+        records_dir.mkdir(parents=True, exist_ok=True)
+        shutil.chown(records_dir, user='amail_ingest', group='amail_ingest')
+        records_dir.chmod(0o755)
+    except (OSError, KeyError, LookupError) as e:
+        log(f"⚠️ MACF: could not provision {records_dir} ({e}); the ingest "
+            f"ledger will not be writable and acceptances will go unrecorded.")
+
     venv_py = '/opt/maceff-venv/bin/python'
     interp = venv_py if Path(venv_py).exists() else '/usr/bin/python3'
 
