@@ -62,4 +62,14 @@ DEBT=$(ruff check --force-exclude --statistics -- "${FILES[@]}" 2>/dev/null \
 if [ "${DEBT:-0}" -gt 0 ]; then
   echo "[lint] ${DEBT} non-blocking finding(s) in these files (ruff check .) -- not gating."
 fi
+
+# ---- MacEff rules ruff cannot express ---------------------------------------
+# These have real backlogs, so a zero-count gate is unavailable; the ratchet
+# blocks only an INCREASE. Run repo-wide because the counts are repo-wide --
+# and only when Python is staged, since nothing else can move them.
+STYLE="$REPO_ROOT/tools/style_check.py"
+if [ -x "$STYLE" ]; then
+  "$STYLE" || exit 1
+fi
+
 exit 0
