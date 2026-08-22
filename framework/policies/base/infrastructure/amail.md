@@ -805,6 +805,19 @@ whoever did.
   contact lists.
 - **Security posture** for inbound content follows §6.2 and the framework's general
   treatment of external input as data.
+- **Supervision of the broker, the spool consumer and the receiver** is governed by
+  `service_supervision.md` and is NOT restated here. Those rules — a supervisor may
+  not share a process with its subject, a heartbeat needs a reader, an acceptor is
+  coupled to its processor's liveness, and the chain terminates outside the
+  deployment at a channel a person receives — are general to every long-lived MacEff
+  process, and they were discovered here only because this is where the outage
+  happened. A general control kept inside the subsystem that discovered it is
+  invisible to everyone not reading about that subsystem.
+
+  What is specific to mail, and therefore does belong here: the spool is the queue
+  whose acceptor (the receiver) must be coupled to its processor (the inbound
+  watcher), and the orphan sweep's age bound is the mail-specific instance of the
+  liveness signal that policy requires someone outside to read.
 
 ---
 
