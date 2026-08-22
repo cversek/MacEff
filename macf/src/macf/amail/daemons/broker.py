@@ -25,7 +25,7 @@ path, so privilege there does not violate the no-privilege property):
     recipient's group, mode 2770 (the inbound consumer also creates these
     on demand).
 
-Run:  su -s /bin/sh amail_broker -c '/opt/amail_ingest/run_broker.py'
+Run:  su -s /bin/sh amail_broker -c 'python -m macf.amail.daemons.broker'
 """
 import json
 import os

@@ -44,7 +44,11 @@ SHARED_WORKSPACE = Path('/shared_workspace')
 # install_macf_tools() — explicit deps installed alongside the editable macf package.
 # Lifted from inline strings into a module-level constant so it participates in the
 # fingerprint that gates re-installation (see _compute_install_fingerprint).
-INSTALL_EXTRA_DEPS = ["lancedb", "sentence-transformers"]
+#   PyJWT is required by macf.amail.daemons.receiver to verify Cloudflare
+#   Access assertions. Declared here rather than left to a hand-install: it is
+#   the library that decides whether an inbound request is authenticated, and
+#   an undeclared security dependency is one a rebuild silently omits.
+INSTALL_EXTRA_DEPS = ["lancedb", "sentence-transformers", "PyJWT"]
 
 
 def log(msg: str) -> None:
@@ -1997,12 +2001,12 @@ def start_amail_services(agents_config: AgentsConfig) -> None:
     venv_py = '/opt/maceff-venv/bin/python'
     interp = venv_py if Path(venv_py).exists() else '/usr/bin/python3'
 
-    for svc, script, logfile in (
-        ('broker', 'run_broker.py', '/var/lib/amail_broker/broker.out'),
-        ('inbound watcher', 'run_inbound.py', '/var/lib/amail_broker/watch.out'),
+    for svc, module, logfile in (
+        ('broker', 'macf.amail.daemons.broker', '/var/lib/amail_broker/broker.out'),
+        ('inbound watcher', 'macf.amail.daemons.inbound', '/var/lib/amail_broker/watch.out'),
     ):
-        args = [interp, f'/opt/amail_ingest/{script}']
-        if script == 'run_inbound.py':
+        args = [interp, '-m', module]
+        if module.endswith('.inbound'):
             args.append('watch')
         try:
             subprocess.Popen(
@@ -2041,9 +2045,8 @@ def _start_inbound_transport(interp: str) -> None:
     failed to start" must not look alike from the log, because the first is a
     deployment choice and the second is an outage.
     """
-    receiver = Path('/opt/amail_ingest/amail_ingest_receiver.py')
     env_file = Path('/opt/amail_ingest/receiver.env')
-    if receiver.exists() and env_file.exists():
+    if env_file.exists():
         try:
             env = dict(os.environ)
             for raw in env_file.read_text().splitlines():
@@ -2053,14 +2056,15 @@ def _start_inbound_transport(interp: str) -> None:
                     env[key.strip()] = value.strip()
             subprocess.Popen(
                 ['setpriv', '--reuid=amail_ingest', '--regid=amail_ingest',
-                 '--clear-groups', '--', interp, str(receiver)],
+                 '--clear-groups', '--', interp, '-m',
+                 'macf.amail.daemons.receiver'],
                 stdout=open('/var/lib/amail_ingest/receiver.out', 'a'),
                 stderr=subprocess.STDOUT, start_new_session=True, env=env)
             log("amail ingest receiver started")
         except (OSError, subprocess.SubprocessError) as e:
             log(f"⚠️ MACF: amail ingest receiver failed to start ({e}); inbound "
                 f"mail cannot be ACCEPTED at all until this is repaired.")
-    elif receiver.exists():
+    else:
         log("amail ingest receiver: no receiver.env -- not started. Declare it "
             "as a secret if this deployment accepts inbound mail.")
 

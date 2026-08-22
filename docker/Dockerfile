@@ -133,23 +133,16 @@ RUN set -eux; \
     [ "$(stat -c %U:%a /var/lib/amail_broker/dispositions)" = "amail_broker:755" ]; \
     [ "$(stat -c %a  /run/maceff-secrets)" = "700" ]
 
-# THE RUNTIME, WITH ITS EXECUTE BITS ASSERTED.
-# `docker cp` does not carry intent, and the file that lost its execute bit is
-# exactly the one whose absence took inbound down for a day: a watcher restart
-# ran `setsid <script>`, which needs +x, and reported the refusal to a log
-# nobody reads. Both halves are fixed -- the bit is provisioned here, and the
-# invocation names the interpreter explicitly so a lost bit cannot repeat it.
-COPY docker/amail_ingest/run_broker.py \
-     docker/amail_ingest/run_inbound.py \
-     docker/amail_ingest/amail_ingest_receiver.py \
-     /opt/amail_ingest/
-RUN set -eux; \
-    chmod 0755 /opt/amail_ingest/*.py; \
-    chown root:root /opt/amail_ingest/*.py; \
-    for f in run_broker.py run_inbound.py amail_ingest_receiver.py; do \
-        [ -x "/opt/amail_ingest/$f" ] || { echo "NOT EXECUTABLE: $f" >&2; exit 1; }; \
-    done; \
-    python3 -m py_compile /opt/amail_ingest/*.py
+# THE AMAIL DAEMONS ARE NOT COPIED HERE. They are package modules
+# (macf.amail.daemons.*), so they arrive with the macf install and a deployment
+# that mounts the package editable picks up a change on restart instead of on
+# rebuild. As image content they were build-tier, and every derived image
+# inherits a base rebuild -- a one-line fix to a mail daemon cost a full
+# toolchain rebuild in images that have nothing to do with mail.
+#
+# /opt/amail_ingest remains as the deployment's drop point for its own runtime
+# configuration (receiver.env and any transport it supplies).
+RUN install -d -o root -g root -m 0755 /opt/amail_ingest
 
 EXPOSE 22
 ENTRYPOINT ["/usr/bin/tini","--"]
