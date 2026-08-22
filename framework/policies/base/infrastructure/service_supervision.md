@@ -54,6 +54,8 @@ does not exist.
 - I added a supervisor for the supervisor. Am I done?
 - The service manager records failures. Isn't that the terminus?
 - What must an external check distinguish, and why three states rather than two?
+- The alarm goes over a channel I already have. What does that couple together?
+- When is a shortcut here a decision rather than a gap?
 
 **5 Provisioning**
 - The start log says the service started. Does it?
@@ -207,6 +209,44 @@ token.
 happen, the alarm is still recorded durably and still loud on the process's error
 stream. Degrading to a quieter channel is acceptable; degrading to no channel is
 the failure being guarded against.
+
+### 4.5 The alert path should not share a fate with the agent's
+
+§1 applies to the notification path too, and it is easy to miss because the
+notifier is not a daemon and the channel does not look like a component.
+
+The reference implementation pushes through the **agent's own bot credential**,
+into the operator's ordinary conversation. That was the right thing to reach for
+first — an existing, proven channel beats an unbuilt one, and a working alarm
+today is worth more than a well-separated alarm next month. But it couples four
+things that have no reason to be coupled:
+
+- **Rate limit.** Agent and alarm are two producers on one bounded channel with
+  no coordination. A long agent report and an alarm arriving together contend,
+  and the notifier's degraded path on a throttle is a recorded-but-quiet
+  failure — so a chatty session can silence the channel that reports the
+  session's own deployment is dead.
+- **Credential.** Rotating or revoking the agent's token — a thing you do when a
+  secret is suspected — takes the infrastructure alarms down with it, silently.
+- **Attribution.** The alarm presents as agent output when it is host
+  infrastructure that runs whether or not any agent exists. The reader cannot
+  tell *my agent is telling me something* from *a timer fired while nobody was
+  home*.
+- **Privilege.** A credential that can send **as the agent** now lives in a shell
+  script whose only job is to post an alarm. That is a wider grant than the task
+  needs (see `capability_boundaries.md`).
+
+**The separated form**: a credential scoped to an alerts destination and nothing
+else, held by the host, absent from every agent environment — readable by the
+agent, writable only by the gate.
+
+Record the coupling where the alarm is configured rather than treating a channel
+as a channel, and name the **measurable trigger** for separating: the first
+throttled push, or the first alarm missed during an active session. An
+acknowledged shortcut with a stated trigger is a decision; the same shortcut
+undocumented is a control that quietly does not hold.
+
+---
 
 ---
 
