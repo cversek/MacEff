@@ -170,6 +170,14 @@ def watch(cfg, inbound) -> int:
 
     last_sweep = 0.0
     failures = 0
+    # CUMULATIVE, because the consecutive count is a LEVEL and an observer only
+    # samples it. A watcher that fails twice and recovers between every
+    # watchdog pass reports zero forever and reads as perfectly healthy --
+    # found by measuring rather than by reasoning: a live break/repair cleared
+    # inside one watchdog interval and left no trace an observer could see.
+    # Flapping is the failure a level cannot express, so publish a counter that
+    # only ever goes up.
+    failures_total = 0
     last_error = ""
     while not stop["now"]:
         cycle_started = time.time()
@@ -195,6 +203,7 @@ def watch(cfg, inbound) -> int:
             # no caller is waiting on. Narrowing it means the next unforeseen
             # parse error ends the watcher again, which is the exact defect.
             failures += 1
+            failures_total += 1
             last_error = f"{type(e).__name__}: {e}"
             results = []
             print(f"⚠️ MACF: spool processing FAILED ({last_error}); this is "
@@ -234,6 +243,7 @@ def watch(cfg, inbound) -> int:
                 # so the fix for one silent failure would have created another
                 # if this were not published alongside it.
                 "consecutive_failures": failures,
+                "failures_total": failures_total,
                 "last_error": last_error,
                 # PUBLISHED so the observer derives its staleness bound from
                 # the real cadence instead of restating it. Two places
@@ -335,7 +345,12 @@ def heartbeat_verdict(now: Optional[float] = None) -> Dict[str, Any]:
                           f"({data.get('last_error', 'no detail')}): mail is "
                           f"arriving and NOT being drained"}
     return {"state": "alive", "age_s": int(age), "bound_s": bound,
-            "pid": data.get("pid")}
+            "pid": data.get("pid"),
+            # Carried on the ALIVE verdict too: a flapping watcher is alive at
+            # every sampling instant, so this is the only place the flapping
+            # is visible. An observer compares it across passes; a rise between
+            # two healthy readings is failure the level could not report.
+            "failures_total": int(data.get("failures_total", 0) or 0)}
 
 
 def _check_once(cfg, inbound) -> List[Dict[str, Any]]:

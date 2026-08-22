@@ -98,6 +98,29 @@ class TestItPublishesThatItIsFailing:
         hb = loop(_Inbound())
         assert hb["consecutive_failures"] == 0
 
+    def test_the_cumulative_count_survives_recovery(self, loop):
+        """THE FLAPPING CASE, and it was found by measuring rather than by
+        reasoning: a live break/repair cleared inside one watchdog interval and
+        left nothing an observer could see. The consecutive count is a LEVEL
+        and an observer only samples it, so a watcher that fails and recovers
+        between every pass reports zero forever. This counter only goes up."""
+        inbound = _Inbound(raises=ValueError("bad"), fail_times=1, stop_after=4)
+        hb = loop(inbound)
+        assert hb["consecutive_failures"] == 0, "recovered, so the level clears"
+        assert hb["failures_total"] == 1, "but the failure still happened"
+
+    def test_the_alive_verdict_carries_the_cumulative_count(
+            self, tmp_path, monkeypatch):
+        """It must ride on ALIVE specifically — a flapping watcher is alive at
+        every sampling instant, so that is the only verdict it can appear on."""
+        import time as _t
+        monkeypatch.setattr(daemon, "HEARTBEAT", tmp_path / "hb")
+        daemon.HEARTBEAT.write_text(json.dumps({
+            "epoch": _t.time(), "pid": 7, "interval_s": 15,
+            "consecutive_failures": 0, "failures_total": 9}) + "\n")
+        v = daemon.heartbeat_verdict()
+        assert v["state"] == "alive" and v["failures_total"] == 9
+
 
 class TestFailingIsNotAlive:
     """The hazard the repair introduced. A wedged watcher stamps a perfectly
