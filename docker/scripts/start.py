@@ -1957,6 +1957,25 @@ def start_amail_services(agents_config: AgentsConfig) -> None:
         log(f"amail: no {broker_config} -- deployment does not run amail, skipping")
         return
 
+    # THE SOCKET DIRECTORY IS CREATED HERE AND NOT IN THE IMAGE, because /run is
+    # repopulated on every container start -- a Dockerfile mkdir would be
+    # provisioned once and gone by the time anything needed it.
+    #
+    # It was created by hand in a long-lived container and by nothing else, so
+    # the broker started for weeks on a directory no build produced. The first
+    # recreate refused with "Permission denied: /run/amail" -- correctly, and
+    # only because the recreate finally happened. Everything else about that
+    # container was reproducible; this one directory was not, and it is the one
+    # the mail path cannot open a socket without.
+    run_dir = Path('/run/amail')
+    try:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        shutil.chown(run_dir, user='amail_broker', group='amail_broker')
+        run_dir.chmod(0o755)
+    except (OSError, KeyError, LookupError) as e:
+        log(f"⚠️ MACF: could not provision {run_dir} ({e}); the broker cannot "
+            f"bind its socket and no agent will be able to send mail.")
+
     venv_py = '/opt/maceff-venv/bin/python'
     interp = venv_py if Path(venv_py).exists() else '/usr/bin/python3'
 
