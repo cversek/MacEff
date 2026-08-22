@@ -1947,8 +1947,14 @@ def start_amail_services(agents_config: AgentsConfig) -> None:
     <script>` failing on a missing +x and reporting it to a log nobody reads, so
     the invocation is made not to depend on the thing that broke.
     """
-    if not Path('/etc/amail/broker_config.json').exists():
-        log("amail: no broker_config.json -- deployment does not run amail, skipping")
+    broker_config = Path('/etc/amail/broker_config.yaml')
+    if not broker_config.exists():
+        # NAME THE PATH. The previous form checked for a `.json` the framework
+        # no longer emits and reported "deployment does not run amail" -- a
+        # silent skip that would have made a successful-looking start with no
+        # mail path at all. An absent-config message that does not say WHICH
+        # file was looked for cannot be checked against reality by its reader.
+        log(f"amail: no {broker_config} -- deployment does not run amail, skipping")
         return
 
     venv_py = '/opt/maceff-venv/bin/python'
@@ -1973,6 +1979,72 @@ def start_amail_services(agents_config: AgentsConfig) -> None:
             # previous failure went to a file nobody opened for a day.
             log(f"⚠️ MACF: amail {svc} failed to start ({e}); inbound mail will "
                 f"spool unprocessed until this is repaired.\n{SECRETS_POLICY_POINTER}")
+
+    _start_inbound_transport(interp)
+
+
+def _start_inbound_transport(interp: str) -> None:
+    """Start the receiver, and the tunnel if this deployment supplies one.
+
+    THESE TWO CARRY MAIL AND NEITHER WAS PROVISIONED. Both ran for weeks from
+    a container's writable layer, placed by hand, so a recreate would have taken
+    the inbound path with them -- and the tunnel credential is not reissuable
+    from anything this side holds. Provisioning covered the components with a
+    home in the framework and missed the two that exist only in a deployment,
+    which is discovery-order-is-not-ownership running in the other direction.
+
+    THE TUNNEL IS OPTIONAL AND THE BASE IMAGE STAYS AGNOSTIC. It does not ship
+    cloudflared: which transport fronts the receiver is a deployment's choice,
+    and baking one in would make every deployment carry a 40MB binary for a
+    vendor it may not use. A deployment that wants it installs it in its own
+    image and supplies the config; this starts it when BOTH are present and says
+    which half is missing when they are not.
+
+    ANNOUNCE THE UNCONFIGURED CASE. "No tunnel configured" and "the tunnel
+    failed to start" must not look alike from the log, because the first is a
+    deployment choice and the second is an outage.
+    """
+    receiver = Path('/opt/amail_ingest/amail_ingest_receiver.py')
+    env_file = Path('/opt/amail_ingest/receiver.env')
+    if receiver.exists() and env_file.exists():
+        try:
+            env = dict(os.environ)
+            for raw in env_file.read_text().splitlines():
+                line = raw.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    env[key.strip()] = value.strip()
+            subprocess.Popen(
+                ['setpriv', '--reuid=amail_ingest', '--regid=amail_ingest',
+                 '--clear-groups', '--', interp, str(receiver)],
+                stdout=open('/var/lib/amail_ingest/receiver.out', 'a'),
+                stderr=subprocess.STDOUT, start_new_session=True, env=env)
+            log("amail ingest receiver started")
+        except (OSError, subprocess.SubprocessError) as e:
+            log(f"⚠️ MACF: amail ingest receiver failed to start ({e}); inbound "
+                f"mail cannot be ACCEPTED at all until this is repaired.")
+    elif receiver.exists():
+        log("amail ingest receiver: no receiver.env -- not started. Declare it "
+            "as a secret if this deployment accepts inbound mail.")
+
+    tunnel_config = Path('/etc/cloudflared/config.yml')
+    have_binary = shutil.which('cloudflared')
+    if tunnel_config.exists() and have_binary:
+        try:
+            subprocess.Popen(
+                [have_binary, 'tunnel', '--config', str(tunnel_config), 'run'],
+                stdout=open('/var/lib/amail_ingest/tunnel.out', 'a'),
+                stderr=subprocess.STDOUT, start_new_session=True)
+            log(f"amail inbound tunnel started ({have_binary})")
+        except (OSError, subprocess.SubprocessError) as e:
+            log(f"⚠️ MACF: inbound tunnel failed to start ({e}); mail will not "
+                f"REACH the receiver until this is repaired.")
+    elif tunnel_config.exists():
+        log("⚠️ MACF: /etc/cloudflared/config.yml is present but cloudflared is "
+            "not installed -- this deployment declared a tunnel its image does "
+            "not provide. Inbound mail cannot reach the receiver.")
+    else:
+        log("amail inbound tunnel: none configured (deployment choice)")
 
 
 def main() -> int:
