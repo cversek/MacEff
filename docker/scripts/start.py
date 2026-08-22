@@ -21,6 +21,7 @@ import subprocess
 import pwd
 import grp
 import secrets
+import time
 from pathlib import Path
 from typing import Dict, List, Optional
 from datetime import datetime
@@ -1936,6 +1937,13 @@ def place_secrets(agents_config: AgentsConfig) -> None:
             f"({actual_owner}:{actual_mode}) placed and VERIFIED")
 
 
+#: How long provisioning waits before asking whether a service it launched is
+#: still there. The failure this guards against -- a daemon refusing on a
+#: missing directory -- resolved in well under a second, so a short grace
+#: catches it; anything that dies later is the watchdog's job, not this one's.
+START_GRACE_S = 1.5
+
+
 def start_amail_services(agents_config: AgentsConfig) -> None:
     """Start the broker and the inbound watcher, and schedule the sweep.
 
@@ -1945,6 +1953,17 @@ def start_amail_services(agents_config: AgentsConfig) -> None:
     watcher's own docstring already prescribed the remedy -- "schedule this even
     when a watcher runs, it is what notices the watcher died" -- and what was
     missing was never the mechanism, only its provisioning.
+
+    So the watchdog is started HERE, as its own process. The sweep the watcher
+    runs internally covers stuck mail only while the watcher is alive, which is
+    the one condition under which nothing needs reporting.
+
+    THE CHAIN DOES NOT TERMINATE IN THIS CONTAINER. The watchdog publishes its
+    own heartbeat and `inbound health` returns non-zero over both, so something
+    outside can age the whole stack out. Until that outside caller is
+    provisioned, this buys detection and not yet notification -- stated plainly
+    because a partial control described as a whole one is the thing this
+    function got wrong before.
 
     THE INTERPRETER IS NAMED EXPLICITLY rather than relying on the execute bit.
     The bit is provisioned in the image now, but the outage was a `setsid
@@ -2001,25 +2020,50 @@ def start_amail_services(agents_config: AgentsConfig) -> None:
     venv_py = '/opt/maceff-venv/bin/python'
     interp = venv_py if Path(venv_py).exists() else '/usr/bin/python3'
 
-    for svc, module, logfile in (
-        ('broker', 'macf.amail.daemons.broker', '/var/lib/amail_broker/broker.out'),
-        ('inbound watcher', 'macf.amail.daemons.inbound', '/var/lib/amail_broker/watch.out'),
+    for svc, module, verb, logfile in (
+        ('broker', 'macf.amail.daemons.broker', '',
+         '/var/lib/amail_broker/broker.out'),
+        ('inbound watcher', 'macf.amail.daemons.inbound', 'watch',
+         '/var/lib/amail_broker/watch.out'),
+        # THE SUPERVISOR, AND IT IS A SEPARATE PROCESS ON PURPOSE. The watcher
+        # already sweeps on its own cadence, which covers stuck mail while the
+        # watcher lives and covers nothing at all once it does not -- the sweep
+        # meant to report the watcher's death shared the process that died. A
+        # supervisor has to sit at a higher scope than the thing it watches.
+        ('watchdog', 'macf.amail.daemons.inbound', 'watchdog',
+         '/var/lib/amail_broker/watchdog.out'),
     ):
-        args = [interp, '-m', module]
-        if module.endswith('.inbound'):
-            args.append('watch')
+        args = [interp, '-m', module] + ([verb] if verb else [])
         try:
-            subprocess.Popen(
+            proc = subprocess.Popen(
                 ['setpriv', '--reuid=amail_broker', '--regid=amail_broker',
                  '--clear-groups', '--'] + args,
                 stdout=open(logfile, 'a'), stderr=subprocess.STDOUT,
                 start_new_session=True)
-            log(f"amail {svc} started ({' '.join(args)})")
         except (OSError, subprocess.SubprocessError) as e:
             # Loud, and to the startup log the operator actually reads -- the
             # previous failure went to a file nobody opened for a day.
             log(f"⚠️ MACF: amail {svc} failed to start ({e}); inbound mail will "
                 f"spool unprocessed until this is repaired.\n{SECRETS_POLICY_POINTER}")
+            continue
+
+        # A LAUNCH IS NOT A LIFE. The Popen succeeding means the fork
+        # succeeded; it says nothing about whether the process is still there.
+        # This log line read "amail broker started" while the broker had
+        # already refused on a missing socket directory and exited -- true
+        # about the act, silent about the outcome, and a success line closes a
+        # question that silence would have left open.
+        time.sleep(START_GRACE_S)
+        rc = proc.poll()
+        if rc is None:
+            log(f"amail {svc} started and STILL RUNNING after "
+                f"{START_GRACE_S}s (pid {proc.pid}: {' '.join(args)})")
+        else:
+            # Reported here, not raised: one service failing to stay up must
+            # not stop the others from being started.
+            log(f"⚠️ MACF: amail {svc} started and EXITED IMMEDIATELY "
+                f"(rc {rc}); it is NOT running. See {logfile} for why.\n"
+                f"{SECRETS_POLICY_POINTER}")
 
     _start_inbound_transport(interp)
 

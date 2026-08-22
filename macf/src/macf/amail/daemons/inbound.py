@@ -28,6 +28,15 @@ driven step by step by the OPERATOR rather than fired as a side effect:
                a scheduler treats a stuck message as a failure rather than
                as output nobody read. Schedule this even when a watcher
                runs -- it is what notices the watcher died.
+    watchdog   `sweep` plus watcher liveness, on a cadence, IN ITS OWN
+               PROCESS. The sweep that runs inside `watch` cannot report the
+               watcher's death because it dies with it; this is the one that
+               can. Alarms are appended to a durable file and never end the
+               loop.
+    health     one-shot verdict over both heartbeats and the aged sweep,
+               NON-ZERO when unhealthy. The surface a scheduler or an operator
+               outside the container calls -- the point where the supervision
+               chain reaches something a human sees.
     reconcile  the conservation check: spooled == terminals + in-flight.
 
 Config (/etc/amail/inbound_config.yaml), validated by InboundDeployConfig,
@@ -57,6 +66,7 @@ import signal
 import sys
 import time
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 CONFIG_PATH = Path("/etc/amail/inbound_config.yaml")
 
@@ -169,6 +179,11 @@ def watch(cfg, inbound) -> int:
                 "epoch": int(cycle_started),
                 "pid": os.getpid(),
                 "processed_last_cycle": len(results),
+                # PUBLISHED so the observer derives its staleness bound from
+                # the real cadence instead of restating it. Two places
+                # configuring one interval drift, and the drift is invisible
+                # until the bound is wrong in the direction that stays quiet.
+                "interval_s": interval,
             }) + "\n")
         except OSError as e:
             # A watcher that cannot publish liveness is a watcher nobody can
@@ -180,6 +195,204 @@ def watch(cfg, inbound) -> int:
             time.sleep(0.5)
             slept += 0.5
     return 0
+
+
+#: Where the watchdog records what it found. Durable because an alarm printed
+#: to a stream nobody tails is the failure it is trying to report.
+ALERTS = Path(os.environ.get("AMAIL_ALERTS",
+                             "/var/lib/amail_broker/alerts.jsonl"))
+
+#: Where the watchdog stamps its OWN liveness, so the chain does not simply
+#: move one level up and stop there.
+WD_HEARTBEAT = Path(os.environ.get("AMAIL_WATCHDOG_HEARTBEAT",
+                                   "/var/lib/amail_broker/watchdog.heartbeat"))
+
+#: Floor for the staleness bound, in seconds, when the heartbeat does not
+#: publish a cadence. Only reached by a watcher predating `interval_s`.
+HEARTBEAT_BOUND_FLOOR_S = 300
+
+
+def _alert(kind: str, detail: str, **fields) -> Dict[str, Any]:
+    """Record one alarm, durably and on stderr, and return it.
+
+    Appending is best-effort on purpose: an unwritable alert file must not end
+    the watchdog. It degrades to stderr and keeps checking, because the
+    alternative is that the supervisor dies of the same class of fault it
+    exists to survive.
+    """
+    rec = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "kind": kind,
+           "detail": detail, **fields}
+    print(f"⚠️ MACF: amail {kind}: {detail}", file=sys.stderr, flush=True)
+    try:
+        ALERTS.parent.mkdir(parents=True, exist_ok=True)
+        with ALERTS.open("a") as fh:
+            fh.write(json.dumps(rec, default=str) + "\n")
+    except OSError as e:
+        print(f"⚠️ MACF: alert could not be recorded to {ALERTS} ({e}); it "
+              f"exists only in this stream", file=sys.stderr, flush=True)
+    return rec
+
+
+def heartbeat_verdict(now: Optional[float] = None) -> Dict[str, Any]:
+    """Is the inbound watcher alive? Decided from ITS file, by ANOTHER process.
+
+    Three outcomes and they are deliberately not two: a MISSING heartbeat means
+    the watcher never started (or was never meant to), while a STALE one means
+    it started and stopped. Collapsing them would report a deployment that runs
+    the watcher and a deployment that does not as the same condition, and only
+    one of those is an outage.
+    """
+    now = time.time() if now is None else now
+    if not HEARTBEAT.exists():
+        return {"state": "absent", "detail": f"no heartbeat at {HEARTBEAT}: "
+                f"the inbound watcher has never run in this container"}
+    try:
+        data = json.loads(HEARTBEAT.read_text())
+        epoch = float(data.get("epoch", 0))
+    except (OSError, ValueError, TypeError) as e:
+        return {"state": "unreadable", "detail": f"heartbeat at {HEARTBEAT} "
+                f"could not be read ({e}); watcher liveness is UNKNOWN, which "
+                f"is not the same as healthy"}
+    published = data.get("interval_s")
+    bound = max(HEARTBEAT_BOUND_FLOOR_S, int(published) * 10) if published \
+        else HEARTBEAT_BOUND_FLOOR_S
+    age = now - epoch
+    if age > bound:
+        return {"state": "stale", "age_s": int(age), "bound_s": bound,
+                "pid": data.get("pid"),
+                "detail": f"the inbound watcher last stamped {int(age)}s ago "
+                          f"(bound {bound}s): it is DEAD, and mail is spooling "
+                          f"with nothing draining it"}
+    return {"state": "alive", "age_s": int(age), "bound_s": bound,
+            "pid": data.get("pid")}
+
+
+def _check_once(cfg, inbound) -> List[Dict[str, Any]]:
+    """One supervision pass: watcher liveness, then the orphan sweep.
+
+    Returns the alarms raised. Sweep failure is itself an alarm rather than an
+    exception out of the loop -- the sweep reads a spool an unprivileged uid
+    may lose access to, and losing the sweep silently is the condition being
+    guarded against.
+    """
+    alarms: List[Dict[str, Any]] = []
+    hb = heartbeat_verdict()
+    if hb["state"] != "alive":
+        alarms.append(_alert(f"watcher_{hb['state']}", hb["detail"],
+                             **{k: v for k, v in hb.items()
+                                if k not in ("state", "detail")}))
+    if cfg is None:
+        alarms.append(_alert("sweep_unavailable",
+                             "config did not load, so the orphan sweep cannot "
+                             "run; watcher liveness is still being checked"))
+        return alarms
+    try:
+        report = inbound.sweep_aged(cfg)
+    except OSError as e:
+        alarms.append(_alert("sweep_failed", f"the orphan sweep could not "
+                                             f"complete ({e})"))
+        return alarms
+    if report["alerts"]:
+        alarms.append(_alert("aged_entries",
+                             f"{report['alerts']} aged entr(ies): "
+                             f"{len(report['aged_spool'])} in the spool, "
+                             f"{len(report['aged_pickup'])} undrained in "
+                             f"pickup boxes",
+                             aged_spool=report["aged_spool"],
+                             aged_pickup=report["aged_pickup"]))
+    return alarms
+
+
+def watchdog(cfg, inbound) -> int:
+    """SUPERVISE THE WATCHER FROM OUTSIDE IT, and sweep on a cadence.
+
+    This exists because the only scheduled sweep in this deployment ran inside
+    the watcher's own loop -- co-located with the process whose death it was
+    meant to detect, so the two died together, silently, and the receiver went
+    on spooling mail nothing would drain. A supervisor must be visible at a
+    HIGHER scope than the thing it watches; one that shares a process with it
+    is not a supervisor, it is a second symptom.
+
+    It never exits on an alarm. An alarm is the output, not a fault: the
+    condition it reports is usually ongoing, and a supervisor that terminates
+    on the first thing it finds stops reporting the second. It exits only on a
+    stop signal.
+    """
+    interval = int(os.environ.get("AMAIL_WATCHDOG_INTERVAL", "300"))
+    print(f"amail watchdog: every {interval}s, watching {HEARTBEAT}, "
+          f"alerts to {ALERTS}", flush=True)
+
+    stop = {"now": False}
+
+    def _stop(signum, _frame):
+        print(f"watchdog stopping on {signal.Signals(signum).name}", flush=True)
+        stop["now"] = True
+
+    signal.signal(signal.SIGTERM, _stop)
+    signal.signal(signal.SIGINT, _stop)
+
+    while not stop["now"]:
+        started = time.time()
+        alarms = _check_once(cfg, inbound)
+        try:
+            WD_HEARTBEAT.parent.mkdir(parents=True, exist_ok=True)
+            WD_HEARTBEAT.write_text(json.dumps({
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                "epoch": int(started), "pid": os.getpid(),
+                "alarms_last_pass": len(alarms), "interval_s": interval,
+            }) + "\n")
+        except OSError as e:
+            print(f"⚠️ MACF: watchdog heartbeat write failed ({e}); NOTHING "
+                  f"can age this watchdog out", file=sys.stderr, flush=True)
+        slept = 0.0
+        while slept < interval and not stop["now"]:
+            time.sleep(0.5)
+            slept += 0.5
+    return 0
+
+
+def health(cfg, inbound) -> int:
+    """One-shot verdict for a scheduler or a human. NON-ZERO when unhealthy.
+
+    The watchdog reports continuously into a file; this is the surface that
+    turns that into an exit code something outside the container can act on.
+    Both watcher and watchdog liveness are reported, because a green watcher
+    checked by a dead watchdog is a reading nobody should trust.
+    """
+    now = time.time()
+    hb = heartbeat_verdict(now)
+    report: Dict[str, Any] = {"watcher": hb}
+
+    wd: Dict[str, Any] = {"state": "absent",
+                          "detail": f"no watchdog heartbeat at {WD_HEARTBEAT}"}
+    if WD_HEARTBEAT.exists():
+        try:
+            data = json.loads(WD_HEARTBEAT.read_text())
+            age = now - float(data.get("epoch", 0))
+            bound = max(HEARTBEAT_BOUND_FLOOR_S,
+                        int(data.get("interval_s", 0)) * 3)
+            wd = {"state": "alive" if age <= bound else "stale",
+                  "age_s": int(age), "bound_s": bound, "pid": data.get("pid")}
+        except (OSError, ValueError, TypeError) as e:
+            wd = {"state": "unreadable", "detail": str(e)}
+    report["watchdog"] = wd
+
+    if cfg is not None:
+        try:
+            sweep = inbound.sweep_aged(cfg)
+            report["aged"] = {"alerts": sweep["alerts"],
+                              "spool": sweep["aged_spool"],
+                              "pickup": sweep["aged_pickup"]}
+        except OSError as e:
+            report["aged"] = {"error": str(e)}
+    else:
+        report["aged"] = {"error": "config did not load"}
+
+    healthy = (hb["state"] == "alive" and wd.get("state") == "alive"
+               and report["aged"].get("alerts") == 0)
+    report["healthy"] = healthy
+    print(json.dumps(report, indent=1, default=str))
+    return 0 if healthy else 1
 
 
 def main() -> int:
@@ -233,12 +446,16 @@ def main() -> int:
         return 1 if report["alerts"] else 0
     if verb == "watch":
         return watch(cfg, inbound)
+    if verb == "watchdog":
+        return watchdog(cfg, inbound)
+    if verb == "health":
+        return health(cfg, inbound)
     if verb == "reconcile":
         report = inbound.reconcile(cfg)
         print(json.dumps(report, indent=1))
         return 0 if report.get("balanced") else 1
-    print(f"unknown verb {verb!r}: use check | process | watch | sweep | "
-          f"reconcile", file=sys.stderr)
+    print(f"unknown verb {verb!r}: use check | process | watch | watchdog | "
+          f"health | sweep | reconcile", file=sys.stderr)
     return 2
 
 
