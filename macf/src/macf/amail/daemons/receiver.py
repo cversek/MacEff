@@ -88,6 +88,117 @@ def log_event(record: dict) -> None:
         fh.write(json.dumps(record) + "\n")
 
 
+#: How stale the oldest spool entry may get before the receiver says so.
+#: The receiver's own output is the evidence: if entries are piling up, the
+#: thing that consumes them is not consuming them, whatever anyone reports.
+DRAIN_BOUND_S = int(os.environ.get("AMAIL_DRAIN_BOUND_S", "900"))
+
+#: Minimum gap between drain alarms. The condition persists across every
+#: message that arrives during an outage, and an alarm per message would bury
+#: the one that mattered under thousands of identical lines.
+DRAIN_ALARM_INTERVAL_S = int(os.environ.get("AMAIL_DRAIN_ALARM_INTERVAL_S", "300"))
+
+#: The watcher's self-report, read only to make the alarm SPECIFIC. It is
+#: corroboration, never the trigger.
+WATCH_HEARTBEAT = Path(os.environ.get("AMAIL_WATCH_HEARTBEAT",
+                                      "/var/lib/amail_broker/watch.heartbeat"))
+
+ALERTS = Path(os.environ.get("AMAIL_ALERTS",
+                             "/var/lib/amail_ingest/alerts.jsonl"))
+
+_last_drain_alarm = 0.0
+
+
+def _watcher_says() -> str:
+    """What the consumer claims about itself, for the alarm text only.
+
+    Deliberately NOT the trigger. A heartbeat is a REPORT; the spool is the
+    WORLD, and the world is what the receiver can observe without trusting
+    anyone. The report earns its place by making the alarm actionable: a
+    consumer that says it is dead and a consumer that says it is fine while
+    draining nothing need completely different remedies, and an alarm that
+    cannot tell them apart sends the reader to guess.
+    """
+    try:
+        d = json.loads(WATCH_HEARTBEAT.read_text())
+    except (OSError, ValueError, TypeError):
+        return ("the consumer publishes no readable heartbeat, so its state is "
+                "UNKNOWN")
+    age = int(time.time() - float(d.get("epoch", 0)))
+    fails = int(d.get("consecutive_failures", 0) or 0)
+    if age > 300:
+        return f"the consumer last reported {age}s ago and is probably DEAD"
+    if fails:
+        return (f"the consumer is ALIVE but failing ({fails} in a row: "
+                f"{d.get('last_error', 'no detail')})")
+    return ("the consumer reports HEALTHY, so it is running and NOT draining "
+            "THIS spool -- check that it can read it, and that it is pointed "
+            "at this directory")
+
+
+def check_drain() -> None:
+    """Alarm when the spool is not being drained. NEVER refuse the message.
+
+    THE ACCEPTOR IS COUPLED TO ITS PROCESSOR'S LIVENESS, which is the rule this
+    implements: a component that accepts work must not be indifferent to
+    whether anything processes it. Left uncoupled, a stopped consumer turns
+    into an ACCUMULATING failure rather than an outage -- the queue grows with
+    no bound while the deployment presents as healthy, because every surface a
+    caller touches is still answering. That is exactly how inbound stayed down
+    for over a day here.
+
+    ALARM-ONLY, DELIBERATELY, and the operator made this call. Refusing at the
+    edge would bound the queue, and it would bounce real senders during an
+    outage that is now detected in seconds -- spending other people's mail to
+    fix a problem whose danger was that NOBODY KNEW. That part is fixed. The
+    accumulation is now bounded by detection rather than by luck, so the
+    cheaper half of the coupling is the right half.
+
+    Best-effort throughout: this runs on the accept path, and a receiver that
+    fails to deliver mail because its own health check raised would be a worse
+    bug than the one it watches for.
+    """
+    global _last_drain_alarm
+    try:
+        now = time.time()
+        entries = list(SPOOL.glob("*.eml"))
+        if not entries:
+            return
+        oldest = min(e.stat().st_mtime for e in entries)
+        age = now - oldest
+        if age < DRAIN_BOUND_S:
+            return
+        if now - _last_drain_alarm < DRAIN_ALARM_INTERVAL_S:
+            return
+        _last_drain_alarm = now
+        detail = (f"the oldest spool entry is {int(age)}s old (bound "
+                  f"{DRAIN_BOUND_S}s) and {len(entries)} entr(ies) are waiting; "
+                  f"{_watcher_says()}. Mail is still being ACCEPTED and is "
+                  f"accumulating.")
+        print(f"⚠️ MACF: amail spool is not draining: {detail}",
+              file=sys.stderr, flush=True)
+        log_event({"outcome": "drain_alarm", "oldest_age_s": int(age),
+                   "waiting": len(entries)})
+        try:
+            ALERTS.parent.mkdir(parents=True, exist_ok=True)
+            with ALERTS.open("a") as fh:
+                fh.write(json.dumps({
+                    "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                    "source": "amail-receiver", "kind": "spool_not_draining",
+                    "detail": detail}) + "\n")
+        except OSError as e:
+            print(f"⚠️ MACF: drain alarm could not be recorded to {ALERTS} "
+                  f"({e}); it exists only in this stream", file=sys.stderr,
+                  flush=True)
+    except (OSError, ValueError) as e:
+        # NOT SILENT. The check must not raise into the accept path, but
+        # swallowing it without a word would make the drain alarm itself fail
+        # quietly -- the exact shape it exists to report, one level up. Say so
+        # and carry on.
+        print(f"⚠️ MACF: the drain check could not run ({type(e).__name__}: "
+              f"{e}); spool draining is UNVERIFIED", file=sys.stderr, flush=True)
+
+
 def verify_assertion(token: str) -> dict:
     """Return validated claims or raise. Alg pinned to RS256: an assertion
     claiming any other algorithm is refused unexamined -- alg-confusion is
@@ -231,6 +342,9 @@ class IngestHandler(BaseHTTPRequestHandler):
                    "size": len(raw), "common_name": claims.get("common_name"),
                    "spool": base.name})
         self._reply(200, {"accepted": True, "raw_sha256": actual_sha})
+        # AFTER the reply, so a slow or failing check can never delay or
+        # affect delivery. The coupling is an alarm, not a gate.
+        check_drain()
 
     # Anything that is not POST /inbound is refused loudly.
     def do_GET(self):
