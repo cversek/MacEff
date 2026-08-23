@@ -69,6 +69,16 @@ def main() -> int:
         return 1
     try:
         cfg = BrokerDeployConfig.model_validate(raw).to_broker_config()
+    except ConfigError as e:
+        # SEPARATE, because this one is about a DIFFERENT FILE.
+        # to_broker_config() loads the ADDRESSING file the broker config points
+        # at, so a failure here is not a fault in the file named above. Without
+        # this arm the failure escaped as a traceback -- the inbound entry point
+        # has carried the same handler for a while and this one never did, which
+        # is what two entry points to one deployment drifting looks like.
+        print(f"refusing to start: {CONFIG_PATH} is valid, but the addressing "
+              f"file it references could not be loaded: {e}", file=sys.stderr)
+        return 1
     except ValidationError as e:
         # Pydantic names every offending key and why; the wrapper adds the one
         # thing Pydantic cannot know -- that unknown keys are also the exact
