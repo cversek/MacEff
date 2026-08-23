@@ -2020,9 +2020,30 @@ def start_amail_services(agents_config: AgentsConfig) -> None:
     venv_py = '/opt/maceff-venv/bin/python'
     interp = venv_py if Path(venv_py).exists() else '/usr/bin/python3'
 
-    for svc, module, verb, logfile in (
+    # THE INBOUND PATH IS OPTIONAL AND WAS TREATED AS UNIVERSAL. A deployment
+    # can run the broker -- agent-to-agent mail inside the container -- without
+    # any inbound transport at all: no tunnel, no courier, no domain. This
+    # function gated on the broker config and then started the spool consumer
+    # and its watchdog regardless, so such a deployment got two daemons
+    # refusing on a config it has no reason to own, reported (correctly, and
+    # unhelpfully) as EXITED IMMEDIATELY on every single start.
+    #
+    # Found by bringing amail up on a SECOND deployment, which is the entire
+    # argument for doing that: the first deployment cannot reveal an assumption
+    # that was true of it.
+    inbound_config = Path('/etc/amail/inbound_config.yaml')
+    runs_inbound = inbound_config.exists()
+    if not runs_inbound:
+        log(f"amail: no {inbound_config} -- this deployment runs the broker "
+            f"but NOT the inbound path; the spool consumer and its watchdog "
+            f"are not started. This is a STATED configuration, not a failure.")
+
+    services = [
         ('broker', 'macf.amail.daemons.broker', '',
          '/var/lib/amail_broker/broker.out'),
+    ]
+    if runs_inbound:
+        services += [
         ('inbound watcher', 'macf.amail.daemons.inbound', 'watch',
          '/var/lib/amail_broker/watch.out'),
         # THE SUPERVISOR, AND IT IS A SEPARATE PROCESS ON PURPOSE. The watcher
@@ -2032,7 +2053,9 @@ def start_amail_services(agents_config: AgentsConfig) -> None:
         # supervisor has to sit at a higher scope than the thing it watches.
         ('watchdog', 'macf.amail.daemons.inbound', 'watchdog',
          '/var/lib/amail_broker/watchdog.out'),
-    ):
+        ]
+
+    for svc, module, verb, logfile in services:
         args = [interp, '-m', module] + ([verb] if verb else [])
         try:
             proc = subprocess.Popen(
@@ -2065,7 +2088,8 @@ def start_amail_services(agents_config: AgentsConfig) -> None:
                 f"(rc {rc}); it is NOT running. See {logfile} for why.\n"
                 f"{SECRETS_POLICY_POINTER}")
 
-    _start_inbound_transport(interp)
+    if runs_inbound:
+        _start_inbound_transport(interp)
 
 
 def _start_inbound_transport(interp: str) -> None:
