@@ -1969,6 +1969,22 @@ def place_secrets(agents_config: AgentsConfig) -> None:
 START_GRACE_S = 1.5
 
 
+def broker_cfg_handoff_root(broker_config: Path) -> str:
+    """Where the broker will put pickup boxes, read from ITS config.
+
+    Derived rather than restated: the broker decides this from
+    `inbound_handoff`, and provisioning a different path would create a
+    directory nobody uses while the one that matters stays missing. The default
+    matches BrokerConfig's own so an unset key provisions what the broker will
+    actually reach for.
+    """
+    try:
+        raw = yaml.safe_load(broker_config.read_text()) or {}
+        return str(raw.get('inbound_handoff') or '/var/lib/amail/handoff')
+    except (OSError, yaml.YAMLError):
+        return '/var/lib/amail/handoff'
+
+
 def start_amail_services(agents_config: AgentsConfig) -> None:
     """Start the broker and the inbound watcher, and schedule the sweep.
 
@@ -2041,6 +2057,25 @@ def start_amail_services(agents_config: AgentsConfig) -> None:
     except (OSError, KeyError, LookupError) as e:
         log(f"⚠️ MACF: could not provision {records_dir} ({e}); the ingest "
             f"ledger will not be writable and acceptances will go unrecorded.")
+
+    # THE HANDOFF ROOT, and it existed in NEITHER deployment. The broker
+    # delivers agent-to-agent mail into a per-recipient pickup box beneath it
+    # and creates those boxes itself, but it is unprivileged and cannot create
+    # the root under a directory it does not own -- so the first send fails with
+    # a bare PermissionError naming a path nothing ever made.
+    #
+    # The first deployment hid this the way it hid the crypto backend: the
+    # directory was there from an earlier hand-run, on a volume no recreate
+    # rebuilds. A deployment with an empty tree hits it on its first message.
+    handoff_root = Path(broker_cfg_handoff_root(broker_config))
+    try:
+        handoff_root.mkdir(parents=True, exist_ok=True)
+        shutil.chown(handoff_root, user='amail_broker', group='amail_broker')
+        handoff_root.chmod(0o755)
+    except (OSError, KeyError, LookupError) as e:
+        log(f"⚠️ MACF: could not provision {handoff_root} ({e}); the broker "
+            f"cannot create pickup boxes and every agent-to-agent send will "
+            f"fail at delivery.")
 
     venv_py = '/opt/maceff-venv/bin/python'
     interp = venv_py if Path(venv_py).exists() else '/usr/bin/python3'
