@@ -134,3 +134,57 @@ class TestItFailsClosed:
     def test_an_undeclared_pair_is_refused(self):
         b = _broker({})
         assert b._local_acceptance_refusal("b", A_ADDR) != ""
+
+
+class TestAgainstTheRealContactBook:
+    """The classes above assert the BROKER's logic against a stub of the book.
+
+    That proves the rule and not the wiring: a stub agrees with whatever the
+    test author believed the parser does. These run the same three arms through
+    the real `ContactBook`, parsing a real addressing file, so a divergence
+    between the parser's answer and the broker's expectation of it fails here
+    rather than in a deployment.
+    """
+
+    def _broker_with_real_book(self, tmp_path, flat, domain="agents.test"):
+        from conftest import _addressing
+        from macf.amail.contacts import ContactBook
+        p = tmp_path / "addressing.yaml"
+        p.write_text(_addressing(flat, domain=domain))
+        b = Broker.__new__(Broker)
+        b.contacts = ContactBook(p)
+        b.config = _Config({"alpha": f"alpha@{domain}", "beta": f"beta@{domain}"})
+        return b
+
+    def test_the_edge_implies_the_receiving_half(self, tmp_path):
+        b = self._broker_with_real_book(tmp_path, {
+            "alpha": [{"address": "beta@agents.test", "direction": "outbound"}],
+            "beta": [],
+        })
+        assert b._local_acceptance_refusal("beta", "alpha@agents.test") == ""
+
+    def test_the_reverse_is_not_implied(self, tmp_path):
+        b = self._broker_with_real_book(tmp_path, {
+            "alpha": [{"address": "beta@agents.test", "direction": "outbound"}],
+            "beta": [],
+        })
+        assert b._local_acceptance_refusal("alpha", "beta@agents.test") != ""
+
+    def test_an_explicit_refusal_outranks_the_implication(self, tmp_path):
+        """THE ONE THAT WAS BROKEN IN PRODUCTION, through the real parser."""
+        b = self._broker_with_real_book(tmp_path, {
+            "alpha": [{"address": "beta@agents.test", "direction": "outbound"}],
+            "beta": [{"address": "alpha@agents.test", "direction": "neither"}],
+        })
+        refusal = b._local_acceptance_refusal("beta", "alpha@agents.test")
+        assert "WITHDRAWN" in refusal and "outranks" in refusal
+
+    def test_a_differently_cased_address_is_still_the_same_edge(self, tmp_path):
+        """Addresses are case-insensitive, so an edge declared in one casing
+        must not be a different edge from the same one written in another —
+        the normalisation and the implication have to agree."""
+        b = self._broker_with_real_book(tmp_path, {
+            "alpha": [{"address": "BETA@Agents.Test", "direction": "outbound"}],
+            "beta": [],
+        })
+        assert b._local_acceptance_refusal("beta", "alpha@agents.test") == ""
