@@ -1985,6 +1985,68 @@ def broker_cfg_handoff_root(broker_config: Path) -> str:
         return '/var/lib/amail/handoff'
 
 
+def provision_pickup_boxes(broker_config: Path, handoff_root: Path) -> None:
+    """Create one pickup box per agent, owned by the broker, GROUPED TO THE
+    RECIPIENT.
+
+    THE MOST INSTRUCTIVE OF THE UNDECLARED THINGS, because it was written down
+    as a provisioning requirement and never built. The deployment README states
+    it plainly -- broker-owned, group = the recipient's group, mode 2770,
+    "required, not optional" -- and records the outage it caused: "submission
+    reported success, the box held the message, and the recipient's pull found
+    nothing."
+
+    That failure reproduces exactly on a deployment with an empty tree, because
+    the broker is UNPRIVILEGED and cannot chgrp into a group it does not belong
+    to. A box it auto-creates therefore carries the BROKER's group, and the
+    recipient cannot read its own mail. The send is not wrong and the delivery
+    is not wrong; the message simply sits in a directory whose owner is the
+    only party who can open it.
+
+    Setgid on the box (2770) makes each delivered file inherit the group, so
+    the property holds for the messages and not merely for the directory.
+
+    Group is resolved from the ACCOUNT DATABASE via the account each agent
+    declares, never transcribed: a gid written into a config drifts from the
+    account it names and the drift is silent until someone cannot read their
+    mail.
+    """
+    try:
+        raw = yaml.safe_load(broker_config.read_text()) or {}
+        addressing_path = raw.get('addressing_path')
+        if not addressing_path:
+            return
+        addressing = yaml.safe_load(Path(addressing_path).read_text()) or {}
+    except (OSError, yaml.YAMLError) as e:
+        log(f"⚠️ MACF: could not read addressing to provision pickup boxes "
+            f"({e}); agent-to-agent delivery will land in boxes the recipients "
+            f"cannot read.")
+        return
+
+    for agent, spec in (addressing.get('agents') or {}).items():
+        account = (spec or {}).get('account')
+        if not account:
+            # uid/home declared directly rather than by account. The group is
+            # the account database's answer and there is no account to ask, so
+            # say which agent was skipped rather than skipping quietly.
+            log(f"⚠️ MACF: agent {agent!r} declares no `account`, so its pickup "
+                f"box group cannot be resolved; skipping. Mail to it will be "
+                f"delivered into a box it cannot read.")
+            continue
+        box = handoff_root / agent
+        try:
+            pw = pwd.getpwnam(account)
+            box.mkdir(parents=True, exist_ok=True)
+            os.chown(box, pwd.getpwnam('amail_broker').pw_uid, pw.pw_gid)
+            box.chmod(0o2770)
+            log(f"amail pickup box {box} -> amail_broker:{account}'s group "
+                f"(2770) provisioned")
+        except (OSError, KeyError) as e:
+            log(f"⚠️ MACF: could not provision pickup box for {agent!r} ({e}); "
+                f"mail delivered to it will be unreadable BY ITS RECIPIENT, "
+                f"while every send reports success.")
+
+
 def start_amail_services(agents_config: AgentsConfig) -> None:
     """Start the broker and the inbound watcher, and schedule the sweep.
 
@@ -2076,6 +2138,7 @@ def start_amail_services(agents_config: AgentsConfig) -> None:
         log(f"⚠️ MACF: could not provision {handoff_root} ({e}); the broker "
             f"cannot create pickup boxes and every agent-to-agent send will "
             f"fail at delivery.")
+    provision_pickup_boxes(broker_config, handoff_root)
 
     venv_py = '/opt/maceff-venv/bin/python'
     interp = venv_py if Path(venv_py).exists() else '/usr/bin/python3'
