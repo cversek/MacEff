@@ -37,6 +37,8 @@ from pydantic import ValidationError
 
 from macf.amail import Broker, serve
 from macf.amail.deploy_config import (BrokerDeployConfig, ConfigError,
+                                      assert_package_current,
+                                      explain_validation_error,
                                       load_declarative_config)
 
 CONFIG_PATH = Path(os.environ.get("AMAIL_BROKER_CONFIG",
@@ -58,10 +60,20 @@ def main() -> int:
         print(f"refusing to start: {e}", file=sys.stderr)
         return 1
     try:
+        # BEFORE the fields. A package behind its config rejects every newer
+        # key as unknown, and that refusal describes the wrong thing -- so the
+        # version is compared first, where the reader will actually see it.
+        assert_package_current(raw.get("requires_macf"), CONFIG_PATH)
+    except ConfigError as e:
+        print(f"refusing to start: {e}", file=sys.stderr)
+        return 1
+    try:
         cfg = BrokerDeployConfig.model_validate(raw).to_broker_config()
     except ValidationError as e:
-        # Pydantic names every offending key and why; that is the whole message.
-        print(f"refusing to start: config at {CONFIG_PATH} is invalid:\n{e}",
+        # Pydantic names every offending key and why; the wrapper adds the one
+        # thing Pydantic cannot know -- that unknown keys are also the exact
+        # signature of a package older than the config it is being handed.
+        print(f"refusing to start: {explain_validation_error(CONFIG_PATH, e)}",
               file=sys.stderr)
         return 1
 

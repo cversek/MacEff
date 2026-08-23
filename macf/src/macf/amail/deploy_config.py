@@ -44,6 +44,108 @@ class ConfigError(Exception):
     """
 
 
+class StalePackageError(ConfigError):
+    """The installed macf is older than this deployment's config requires.
+
+    Its own class because the remedy is not in the file the reader is looking
+    at: nothing about the config is wrong, and editing it is the wrong move.
+    """
+
+
+def running_macf() -> str:
+    """The version actually imported, which is the only one that matters."""
+    try:
+        import macf
+        return getattr(macf, "__version__", "unknown")
+    except Exception:  # pragma: no cover - macf is importing this module
+        return "unknown"
+
+
+def _version_tuple(v: str):
+    """(major, minor, patch) from a version string, ignoring any suffix.
+
+    A dev suffix is dropped rather than ordered: `0.5.1.dev0` claims to BE
+    0.5.1's line, and refusing to start a development checkout because it is
+    not a final release would make the check fire on exactly the deployments
+    that need it least.
+    """
+    parts = []
+    for chunk in str(v).split("."):
+        digits = "".join(c for c in chunk if c.isdigit())
+        if not digits:
+            break
+        parts.append(int(digits))
+    return tuple(parts[:3] + [0] * (3 - len(parts[:3])))
+
+
+def assert_package_current(required: Optional[str], path: Path) -> None:
+    """Refuse to start when the installed package is behind what *path* declares.
+
+    THE FAILURE THIS REPLACES IS A MISDIAGNOSIS, not a missing check. A
+    container editable-installs macf from a submodule; when that pin lags the
+    configuration, every field the newer models added is unknown to the older
+    models, and `extra="forbid"` refuses them. The refusal is CORRECT and it
+    describes the wrong thing: the operator reads "unknown key" and goes to
+    edit a config file that is perfectly good, while the actual remedy is to
+    advance a pin nothing has mentioned.
+
+    So the version is compared BEFORE the fields are, and the diagnostic names
+    the pin. A check that fires after the confusing error would still leave the
+    confusing error first.
+    """
+    if not required:
+        return
+    running = running_macf()
+    if _version_tuple(running) < _version_tuple(required):
+        raise StalePackageError(
+            f"{path} declares requires_macf: {required!r}, but the running "
+            f"macf is {running} (imported from {_package_dir()}). THE CONFIG "
+            f"IS NOT THE PROBLEM: this deployment's package is behind its "
+            f"configuration. Advance the checkout the container installs macf "
+            f"from, then restart. Editing the config to satisfy the older "
+            f"package would silently give up whatever the newer fields control."
+        )
+
+
+def _package_dir() -> str:
+    try:
+        import macf
+        return str(Path(macf.__file__).parent)
+    except Exception:  # pragma: no cover
+        return "unknown"
+
+
+def explain_validation_error(path: Path, exc) -> str:
+    """Render a Pydantic failure, naming a stale package when it looks like one.
+
+    Belt and braces for `assert_package_current`: an operator who adds a field
+    without bumping `requires_macf` gets the unknown-key refusal with no
+    version check to catch it first. Unknown keys are the exact signature of a
+    package behind its config, so the hypothesis is offered HERE too rather
+    than relying on someone having declared the minimum.
+
+    Offered, not asserted. A misspelling produces the same signature, and the
+    message says so -- a diagnostic that confidently names the wrong cause is
+    worse than one that names two and lets the reader look.
+    """
+    errors = exc.errors() if hasattr(exc, "errors") else []
+    unknown = [".".join(str(x) for x in e.get("loc", ()))
+               for e in errors if e.get("type") == "extra_forbidden"]
+    msg = f"refusing to run: {path} did not validate: {exc}"
+    if unknown:
+        msg += (
+            f"\n\nUNKNOWN KEY(S): {', '.join(unknown)}"
+            f"\nTwo causes produce this, and they have opposite remedies:"
+            f"\n  1. THE PACKAGE IS BEHIND THE CONFIG. Running macf "
+            f"{running_macf()} from {_package_dir()}. If these keys are newer "
+            f"than that, advance the checkout -- the config is right."
+            f"\n  2. The key is misspelled or was removed. Then fix the file."
+            f"\nDeclare `requires_macf` in this config to have case 1 refuse "
+            f"with a version message instead of this one."
+        )
+    return msg
+
+
 def load_declarative_config(path: Path) -> Dict[str, Any]:
     """Read one YAML config into a mapping, or raise with a usable reason.
 
@@ -206,6 +308,11 @@ class AddressingConfig(BaseModel):
 
 
 class BrokerDeployConfig(BaseModel):
+    #: Minimum macf this configuration needs. Optional, and checked BEFORE the
+    #: fields are, so a lagging package says so instead of rejecting keys it has
+    #: simply never heard of.
+    requires_macf: Optional[str] = None
+
     """The on-disk broker daemon configuration (``broker_config.yaml``).
 
     Tunes the broker: stores, limits, transport, gates. The deployment's
@@ -421,6 +528,11 @@ class BrokerDeployConfig(BaseModel):
 
 
 class InboundDeployConfig(BaseModel):
+    #: Minimum macf this configuration needs. Optional, and checked BEFORE the
+    #: fields are, so a lagging package says so instead of rejecting keys it has
+    #: simply never heard of.
+    requires_macf: Optional[str] = None
+
     """The on-disk INBOUND configuration (``inbound_config.yaml``).
 
     THIS EXISTS BECAUSE THE INBOUND ENTRY POINT HAND-ROLLED ITS CONFIG. The

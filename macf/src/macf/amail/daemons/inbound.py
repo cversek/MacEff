@@ -75,7 +75,11 @@ from typing import Any, Dict, List, Optional
 
 from macf.utils.json_io import write_json_safely
 
-CONFIG_PATH = Path("/etc/amail/inbound_config.yaml")
+#: Overridable for the same reason the broker's is: a startup refusal that can
+#: only be demonstrated by editing the file the live deployment obeys cannot be
+#: demonstrated safely, so it does not get demonstrated.
+CONFIG_PATH = Path(os.environ.get("AMAIL_INBOUND_CONFIG",
+                                  "/etc/amail/inbound_config.yaml"))
 
 
 def load_config():
@@ -92,6 +96,8 @@ def load_config():
     broker config already carries, so the two could drift apart and did.
     """
     from macf.amail.deploy_config import (InboundDeployConfig, ConfigError,
+                                          assert_package_current,
+                                          explain_validation_error,
                                           load_declarative_config)
     from pydantic import ValidationError
     try:
@@ -100,12 +106,20 @@ def load_config():
         print(f"refusing to run: {e}", file=sys.stderr)
         raise SystemExit(2)
     try:
+        # BEFORE the fields, deliberately. A package behind its config rejects
+        # every newer key as unknown, and that refusal describes the wrong
+        # thing -- checking the version afterwards would leave the misleading
+        # error first, which is where the reader stops.
+        assert_package_current(raw.get("requires_macf"), CONFIG_PATH)
+    except ConfigError as e:
+        print(f"refusing to run: {e}", file=sys.stderr)
+        raise SystemExit(2)
+    try:
         return InboundDeployConfig.model_validate(raw).to_inbound_config()
     except ValidationError as e:
         # An unknown key refuses to start rather than being ignored: an ignored
         # key in a security config silently changes what the broker enforces.
-        print(f"refusing to run: {CONFIG_PATH} did not validate: {e}",
-              file=sys.stderr)
+        print(explain_validation_error(CONFIG_PATH, e), file=sys.stderr)
         raise SystemExit(2)
     except ConfigError as e:
         # SEPARATE, because this one is about a DIFFERENT FILE. to_inbound_config
