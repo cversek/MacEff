@@ -119,7 +119,8 @@ def load_config():
     except ValidationError as e:
         # An unknown key refuses to start rather than being ignored: an ignored
         # key in a security config silently changes what the broker enforces.
-        print(explain_validation_error(CONFIG_PATH, e), file=sys.stderr)
+        print(f"refusing to run: {explain_validation_error(CONFIG_PATH, e)}",
+              file=sys.stderr)
         raise SystemExit(2)
     except ConfigError as e:
         # SEPARATE, because this one is about a DIFFERENT FILE. to_inbound_config

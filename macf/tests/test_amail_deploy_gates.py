@@ -66,6 +66,13 @@ class TestUnknownKeysOfferTheStaleHypothesis:
             return dc.explain_validation_error("cfg.yaml", e)
         raise AssertionError("expected a validation error")
 
+    def test_the_message_carries_no_prefix_of_its_own(self, tmp_path):
+        """Callers own their prefix. Baking one in here produced "refusing to
+        start: refusing to run:" — a doubled prefix reliably signals two layers
+        of handler nobody reconciled."""
+        msg = self._bad("definitely_not_a_field", tmp_path)
+        assert not msg.startswith("refusing")
+
     def test_an_unknown_key_mentions_the_running_package(self, tmp_path):
         msg = self._bad("definitely_not_a_field", tmp_path)
         assert "definitely_not_a_field" in msg

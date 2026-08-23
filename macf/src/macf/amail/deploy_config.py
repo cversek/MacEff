@@ -131,7 +131,11 @@ def explain_validation_error(path: Path, exc) -> str:
     errors = exc.errors() if hasattr(exc, "errors") else []
     unknown = [".".join(str(x) for x in e.get("loc", ()))
                for e in errors if e.get("type") == "extra_forbidden"]
-    msg = f"refusing to run: {path} did not validate: {exc}"
+    # NO PREFIX. Each caller owns its own ("refusing to start" / "refusing to
+    # run"), and baking one in here produced "refusing to start: refusing to
+    # run:" in the broker's output — a doubled prefix is a small thing that
+    # reliably signals two layers of handler nobody reconciled.
+    msg = f"{path} did not validate: {exc}"
     if unknown:
         msg += (
             f"\n\nUNKNOWN KEY(S): {', '.join(unknown)}"
