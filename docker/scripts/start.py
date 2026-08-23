@@ -51,6 +51,23 @@ SHARED_WORKSPACE = Path('/shared_workspace')
 #   an undeclared security dependency is one a rebuild silently omits.
 INSTALL_EXTRA_DEPS = ["lancedb", "sentence-transformers", "PyJWT"]
 
+# Extras installed WITH the editable macf package, so their version constraints
+# stay in pyproject.toml rather than being restated here where they would drift.
+#
+#   amail  pulls the crypto backend. amail REFUSES TO IMPORT without it, and it
+#          is right to: signature verification is how inbound authorship is
+#          established, so a missing backend would classify every message as
+#          unverified while appearing to work.
+#
+# THIS WAS THE EIGHTH UNDECLARED THING. The first deployment had the backend
+# installed BY HAND -- `pip show` reports it required by nothing -- and the
+# c_24 recreate that found the other seven could not find this one, because
+# the venv is a NAMED VOLUME and a container recreate does not rebuild it. A
+# hand-installed package survives the exact test designed to catch hand-placed
+# state, and looks provisioned afterwards. A second deployment, with its own
+# empty venv, found it in one start.
+INSTALL_EXTRAS = ["amail"]
+
 
 def log(msg: str) -> None:
     """Log message with timestamp."""
@@ -1337,7 +1354,7 @@ def _compute_install_fingerprint(macf_tools_src: Path) -> str:
     """Compute a stable fingerprint for the macf install state.
 
     Hashes Python interpreter version + macf pyproject.toml + the
-    INSTALL_EXTRA_DEPS constant. Drift in any of these invalidates the
+    INSTALL_EXTRA_DEPS and INSTALL_EXTRAS constants. Drift in any of these invalidates the
     sentinel and triggers a reinstall on next container start.
 
     Returns:
@@ -1353,6 +1370,10 @@ def _compute_install_fingerprint(macf_tools_src: Path) -> str:
     if pyproject.exists():
         h.update(pyproject.read_bytes())
     h.update(','.join(INSTALL_EXTRA_DEPS).encode())
+    # Extras participate too, or adding one would leave every existing
+    # deployment on a sentinel that says the install is current when the new
+    # extra is absent -- a fingerprint that ignores an input it depends on.
+    h.update(','.join(INSTALL_EXTRAS).encode())
     return h.hexdigest()
 
 
@@ -1408,7 +1429,10 @@ def install_macf_tools() -> None:
     log("Installing MACF into /opt/maceff-venv (fingerprint changed or first run; expect 2-3 min)...")
 
     # Install with uv (editable — links against the bind-mounted /opt/macf_tools)
-    run_command(['uv', 'pip', 'install', '--python', str(venv_path / 'bin' / 'python'), '-e', str(macf_tools_src)], check=False)
+    editable = str(macf_tools_src)
+    if INSTALL_EXTRAS:
+        editable += f"[{','.join(INSTALL_EXTRAS)}]"
+    run_command(['uv', 'pip', 'install', '--python', str(venv_path / 'bin' / 'python'), '-e', editable], check=False)
 
     # Install search service dependencies (INSTALL_EXTRA_DEPS).
     # These enable the warm-cache search service for 89x faster policy recommendations.
@@ -1429,6 +1453,7 @@ def install_macf_tools() -> None:
         f"python={sys.version.split()[0]}\n"
         f"installed_at={datetime.utcnow().isoformat()}Z\n"
         f"extra_deps={','.join(INSTALL_EXTRA_DEPS)}\n"
+        f"extras={','.join(INSTALL_EXTRAS)}\n"
     )
     sentinel.write_text(sentinel_content)
     log(f"MACF install complete; sentinel written to {sentinel}")
