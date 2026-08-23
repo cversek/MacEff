@@ -167,6 +167,15 @@ class TestContactRestriction:
         refusals came from the contact check and not from delivery failing anyway.
         """
         monkeypatch.setattr(Broker, "_check", lambda self, s, r: [])
+        # TWO GATES NOW, and both must be stubbed for this control to isolate
+        # what it claims to. The sender's outbound permission is checked at
+        # submit; the RECIPIENT's acceptance is checked again on the local
+        # handoff, because local delivery used to consult only the sender and a
+        # recipient could not refuse a correspondent inside its own deployment.
+        # Stubbing one and asserting delivery would now prove nothing about the
+        # other -- see the companion test that removes them one at a time.
+        monkeypatch.setattr(Broker, "_local_acceptance_refusal",
+                            lambda self, agent, sender: "")
         deployment["cfg"].agent_homes["stranger"] = deployment["tmp"] / "stranger"
         (deployment["tmp"] / "stranger").mkdir()
         monkeypatch.setattr(deployment["cfg"], "domain", "elsewhere.test")
@@ -180,6 +189,34 @@ class TestContactRestriction:
         ingest(deployment["tmp"] / "stranger",
                deployment["cfg"].inbound_handoff / "stranger")
         assert len(store.read_all(deployment["tmp"] / "stranger")) == 1
+
+
+    def test_each_gate_alone_still_refuses(self, deployment, monkeypatch):
+        """DEFENCE IN DEPTH, demonstrated rather than asserted.
+
+        Remove one gate at a time and the stranger is still refused. That is
+        what makes the control above honest: it needs BOTH stubbed to deliver,
+        so neither gate is carrying the result on its own.
+        """
+        deployment["cfg"].agent_homes["stranger"] = deployment["tmp"] / "stranger"
+        (deployment["tmp"] / "stranger").mkdir()
+        monkeypatch.setattr(deployment["cfg"], "domain", "elsewhere.test")
+        m = msg(to="stranger@elsewhere.test", sender="alpha@elsewhere.test")
+
+        # Outbound gate removed; the recipient-side gate must still refuse.
+        with monkeypatch.context() as mp:
+            mp.setattr(Broker, "_check", lambda self, s, r: [])
+            r = deployment["broker"].submit("alpha", m)
+        assert len(store.read_all(deployment["tmp"] / "stranger")) == 0, (
+            "the recipient-side gate did not refuse with the outbound gate removed")
+
+        # Recipient gate removed; the outbound gate must still refuse.
+        with monkeypatch.context() as mp:
+            mp.setattr(Broker, "_local_acceptance_refusal",
+                       lambda self, agent, sender: "")
+            r = deployment["broker"].submit("alpha", m)
+        assert r["ok"] is False, (
+            "the outbound gate did not refuse with the recipient gate removed")
 
 
 class TestCredentialCustody:

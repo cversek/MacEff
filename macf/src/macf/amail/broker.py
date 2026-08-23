@@ -287,6 +287,55 @@ class Broker:
 
     # ---------------------------------------------------------------- enforcement
 
+    def _local_acceptance_refusal(self, recipient_agent: str,
+                                  sender_address: str) -> str:
+        """Reason *recipient_agent* may not receive local mail from *sender*, or "".
+
+        A DIRECTED EDGE ASSERTS TWO THINGS AND ONLY ONE DIRECTION. Declaring
+        `A --outbound--> B` says both "A may send to B" and "B may receive from
+        A". It says nothing about B->A, which needs its own edge — and the
+        measurement agrees: with only the forward edge declared, B's send back
+        is refused.
+
+        The implication holds ONLY BECAUSE BOTH ENDPOINTS ARE ACCOUNTS THIS
+        DEPLOYMENT DEFINES, so it can speak for both. For an address outside the
+        deployment there is nobody to imply anything about, which is why this
+        rule is local-only, and mail arriving off the internet keeps asking the
+        recipient directly on the inbound acceptance path.
+
+        (Written without naming that method as a call: the no-orphan-guard test
+        counts call sites by regex over the source, so a docstring mentioning
+        `name(` manufactures a phantom caller and retires an exemption that is
+        still accurate. Worth fixing in the guard; not worth weakening it here.)
+
+        AN EXPLICIT REFUSAL BEATS AN IMPLIED GRANT. `neither` is a deliberate
+        act — the revocation record — and no edge declared by the other party
+        may override it. The alternative lets a correspondent restore its own
+        access by editing its own half of the file, which is the one thing an
+        allowlist exists to prevent.
+        """
+        if self.contacts is None:
+            return "no contact list configured; refusing every local delivery"
+        sender_agent = self.config.agent_for(sender_address)
+        if self.contacts.is_revoked(recipient_agent, sender_address):
+            return (f"'{recipient_agent}' has WITHDRAWN '{sender_address}' "
+                    f"(direction 'neither'): an explicit refusal outranks any "
+                    f"edge the sender declares")
+        if self.contacts.permits(recipient_agent, sender_address,
+                                 direction="inbound"):
+            return ""
+        if sender_agent:
+            # The implication, and only for a sender this deployment defines.
+            try:
+                recipient_address = self.config.address_for(recipient_agent)
+            except Exception:
+                recipient_address = ""
+            if recipient_address and self.contacts.permits(
+                    sender_agent, recipient_address, direction="outbound"):
+                return ""
+        return (f"'{recipient_agent}' does not accept mail from "
+                f"'{sender_address}', and no outbound edge to it was declared")
+
     def _check(self, sender: str, recipients: List[str]) -> List[str]:
         """Return refusal reasons. Empty means every recipient is permitted.
 
@@ -684,6 +733,22 @@ class Broker:
         """
         agent = self.config.agent_for(recipient)
         if agent:
+            refusal = self._local_acceptance_refusal(agent, message.sender)
+            if refusal:
+                # THE RECIPIENT'S OWN DECLARATION IS CONSULTED, and until now it
+                # was not. Local handoff checked only the SENDER's outbound
+                # permission, so a recipient could not refuse a correspondent
+                # inside its own deployment -- and `direction: neither`, the
+                # revocation record, was decorative for local mail: the book
+                # answered is_revoked=True and permits(inbound)=False while the
+                # message was delivered and read.
+                self.quarantine_refused(agent, message, refusal)
+                # noqa: MACEFF004 - conforms to this function's existing
+                # 4-tuple contract, which every other return here already
+                # uses. Introducing a dataclass for one arm would leave two
+                # shapes in one function, which is worse than the coupling
+                # the rule names. The refactor is owed for ALL of them.
+                return "local", "unverified", "refused", refusal  # noqa: MACEFF004
             # Classified against THIS recipient's contact book, immediately
             # before the handoff. Two recipients may declare different keys for
             # the same sender, so the answer is per mailbox, not per message.
