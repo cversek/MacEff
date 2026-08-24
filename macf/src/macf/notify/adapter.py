@@ -120,6 +120,18 @@ def dedup_key(arrival_id: str, session_id: Optional[str]) -> str:
     So the key is (arrival, conversation). A session id is required; without one
     the caller is addressing a process rather than an agent, and that is recorded
     in the key rather than papered over.
+
+    KNOWN BOUND, and it is not fixable from here. The client MUTATES a session's
+    conversation id in place when a session is resumed -- the id changes under a
+    process that never restarted. So this key is stable for a conversation, not
+    for a process lifetime, and a resume can make an already-delivered arrival
+    look undelivered. The failure is a REDELIVERY, not a drop, which is the
+    survivable direction: the notice licenses one store read, and a second read
+    of an unchanged store yields "nothing happened".
+
+    Documented rather than worked around, because every workaround available here
+    would substitute an identity the client does not agree with -- and an identity
+    only we believe in is worse than one that occasionally changes.
     """
     return f"{arrival_id}@{session_id or 'unknown-conversation'}"
 
