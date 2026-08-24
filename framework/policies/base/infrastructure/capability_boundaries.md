@@ -366,6 +366,44 @@ declared the same way and would inherit this policy's verification requirements.
 component being restricted, it is not a boundary. If it cannot be verified by an
 attempt that fails, it is not verifiable. Both must hold before it belongs here.
 
+### 5.1 Self-Directed Session Control (`macf_tools inject`)
+
+An agent can queue a slash command into its own live pane, which lets an operator
+away from the keyboard direct a running agent to compact itself. This is a
+SELF-AFFECTING capability, so it is recorded here rather than left implicit in a
+command's help text.
+
+**Why it is bounded rather than forbidden.** The rule that a capability an agent
+most wants to self-grant is the one the boundary must sit outside of would, read
+carelessly, forbid this outright. That reading is wrong, and the distinction is
+the useful part: the boundary must sit outside the capability, not outside the
+agent's *use* of it. Here the boundary is the permission layer, which is
+configured by the operator and cannot be edited by the agent it governs. The
+agent may invoke; it may not grant itself the right to invoke.
+
+**What it may and may not do.** It types a slash command into the pane of the
+supervisor whose child is this session, self-resolved by session id. It does not
+create supervisors, does not target another agent's pane without an explicit
+`--target`, and has no privileged path — it is a wrapper over a send-keys side
+channel that already existed.
+
+**Sent mid-turn, it QUEUES and fires when the turn yields.** So an agent invoking
+it is scheduling its own discontinuity, not triggering one mid-thought. Anything
+that must survive should be durable before the call, for the same reason a frame
+must be durable before it is interrupted.
+
+**The default is denied.** Under a permission classifier this is refused unless a
+deployment allows it, and that refusal is correct rather than an obstacle: an
+agent that meets it should stop and ask rather than reach for the underlying
+send-keys path, which is the same capability with the gate removed. Routing
+around the denial by a different mechanism is the anti-pattern, and it is not
+made acceptable by the mechanism differing.
+
+**Operator note.** Granting this is a permission rule, and it is reasonable to
+grant: an operator directing an agent remotely has no other way to trigger a
+compaction, and the alternative is hand-typing raw send-keys, which is the same
+act with less auditability.
+
 ---
 
 ## 6 Integration with Other Policies
