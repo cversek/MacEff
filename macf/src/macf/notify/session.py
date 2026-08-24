@@ -162,6 +162,129 @@ def find_socket(pid: int) -> Optional[Path]:
     return path
 
 
+@dataclass(frozen=True)
+class SessionInfo:
+    """What the client publishes about a session, beside the credential.
+
+    MEASURED: the sidecar `<pid>.json` is world-readable (0664) while the
+    credential is 0600. It carries the CONVERSATION identity, which is what makes
+    the ambiguous-target problem tractable at all -- two processes serving one
+    conversation share a `sessionId` and are otherwise indistinguishable from two
+    unrelated agents.
+
+    `status` is TURN STATE, not liveness. It is stamped at transitions, so a
+    session that died mid-turn leaves `busy` behind forever. Never age it as a
+    heartbeat; pair it with /proc.
+    """
+
+    pid: int
+    session_id: str
+    status: str
+    kind: str
+    cwd: str
+    socket_path: str
+    proc_start: str
+    updated_at: float
+    tmux: Optional[str] = None
+
+
+def read_session_info(pid: int) -> Optional[SessionInfo]:
+    """Read the sidecar. Returns None with a stated reason, never a partial."""
+    path = sessions_dir() / f"{pid}.json"
+    try:
+        with open(path) as fh:
+            data = json.load(fh)
+    except (FileNotFoundError, PermissionError, OSError) as e:
+        print(f"⚠️ MACF: session sidecar unreadable for pid {pid}: {e}", file=sys.stderr)
+        return None
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        print(f"⚠️ MACF: session sidecar malformed for pid {pid}: {e}", file=sys.stderr)
+        return None
+    session_id = data.get("sessionId")
+    if not session_id:
+        print(f"⚠️ MACF: session sidecar for pid {pid} names no sessionId", file=sys.stderr)
+        return None
+    return SessionInfo(
+        pid=pid,
+        session_id=session_id,
+        status=str(data.get("status") or "unknown"),
+        kind=str(data.get("kind") or "unknown"),
+        cwd=str(data.get("cwd") or ""),
+        # Prefer the path the client PUBLISHED over one we construct. Constructing
+        # it duplicates the client's layout decision in our code, where it drifts.
+        socket_path=str(data.get("messagingSocketPath") or (socket_dir() / f"{pid}.sock")),
+        proc_start=str(data.get("procStart") or ""),
+        updated_at=float(data.get("updatedAt") or 0) / 1000.0,
+        tmux=data.get("tmux"),
+    )
+
+
+def live_sessions() -> list:
+    """Every session with a sidecar whose process is still alive."""
+    out = []
+    try:
+        names = os.listdir(sessions_dir())
+    except (FileNotFoundError, PermissionError, OSError) as e:
+        print(f"⚠️ MACF: session dir unreadable (cannot enumerate): {e}", file=sys.stderr)
+        return out
+    for name in names:
+        if not name.endswith(".json"):
+            continue
+        try:
+            pid = int(name[: -len(".json")])
+        except ValueError:
+            continue
+        if proc_start_ticks(pid) is None:
+            continue
+        info = read_session_info(pid)
+        if info is not None:
+            out.append(info)
+    return sorted(out, key=lambda i: i.pid)
+
+
+def resolve_target(session_id: str):
+    """Choose ONE process for a conversation, and report any ambiguity.
+
+    THE AMBIGUOUS TARGET IS REAL AND WAS OBSERVED, NOT IMAGINED. Interrupting and
+    restarting a supervised session can leave a background twin that resumes the
+    same conversation and inherits the same subscriptions. Both processes are
+    legitimate and live, so the incarnation check does not help: it guards a
+    RECYCLED pid, not a DELIBERATE fork.
+
+    Returns (chosen_or_None, all_candidates). The caller MUST surface a
+    len(candidates) > 1 result rather than resolving it invisibly -- an agent may
+    decline to be told about the WORLD but never about ITSELF, and "there are two
+    of you" is about itself.
+
+    THE CHOICE RULE IS A HEURISTIC AND IS LABELLED AS ONE. Newest process start
+    wins, on the reasoning that a restart creates the new process while the twin
+    is the one that failed to die -- so the newest is the one a human is looking
+    at. NOT YET MEASURED. What would confirm it: induce a fork, then check which
+    pid owns the foreground terminal. Until then this is a stated assumption, not
+    a finding, and it is written here so the next reader can attack it.
+    """
+    candidates = [s for s in live_sessions() if s.session_id == session_id]
+    if not candidates:
+        return None, []
+    if len(candidates) == 1:
+        return candidates[0], candidates
+
+    def start_key(info):
+        try:
+            return int(info.proc_start)
+        except (TypeError, ValueError):
+            return -1
+
+    ranked = sorted(candidates, key=start_key, reverse=True)
+    print(
+        f"⚠️ MACF: {len(candidates)} live processes serve conversation "
+        f"{session_id[:8]} (pids {[c.pid for c in candidates]}) -- delivering to "
+        f"{ranked[0].pid} by newest-start heuristic, and recording the ambiguity",
+        file=sys.stderr,
+    )
+    return ranked[0], candidates
+
+
 def addressable_sessions() -> list:
     """Every pid that currently has BOTH a credential and a live socket.
 

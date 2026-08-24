@@ -54,7 +54,7 @@ def test_one_arrival_delivers_once_even_when_offered_repeatedly(runtime, home):
     """Edge-triggered. The dedup store is consulted before anything else."""
     notice = amail_notice("arr-c", count=1)
     assert adapter.already_delivered("arr-c") is False
-    adapter._record_seen("arr-c")
+    adapter._record_seen(adapter.dedup_key("arr-c", None))
     assert adapter.already_delivered("arr-c") is True
 
     result = adapter.deliver(os.getpid(), notice)
@@ -62,6 +62,32 @@ def test_one_arrival_delivers_once_even_when_offered_repeatedly(runtime, home):
     # and a DIFFERENT arrival is not suppressed by it
     other = adapter.deliver(os.getpid(), amail_notice("arr-d", count=1))
     assert other.outcome != adapter.SUPPRESSED_DUPLICATE
+
+
+def test_dedup_is_keyed_on_the_CONVERSATION_not_the_arrival_alone(runtime, home):
+    """Two processes serving one conversation must not both be told.
+
+    Keyed on the arrival alone, the first delivery suppresses the second and the
+    target is chosen by directory order -- an invisible choice. Keyed per-pid,
+    both are told and the agent acts twice on one arrival. The conversation is
+    the agent, so that is the key.
+    """
+    a = adapter.dedup_key("arr-x", "conv-1")
+    b = adapter.dedup_key("arr-x", "conv-2")
+    assert a != b, "the same arrival to two different agents is two deliveries"
+
+    adapter._record_seen(a)
+    assert adapter.already_delivered("arr-x", "conv-1") is True
+    assert adapter.already_delivered("arr-x", "conv-2") is False, (
+        "suppressing a different conversation would silently drop its notice"
+    )
+
+
+def test_a_missing_conversation_is_recorded_in_the_key_not_papered_over(runtime, home):
+    """Addressing a process rather than an agent is a distinguishable state."""
+    k = adapter.dedup_key("arr-y", None)
+    assert "unknown-conversation" in k
+    assert k != adapter.dedup_key("arr-y", "conv-1")
 
 
 def test_dedup_store_is_bounded(runtime, home):
@@ -98,3 +124,38 @@ def test_deliver_and_publish_refreshes_liveness_even_when_delivery_fails(runtime
     assert result.ok is False
     after = liveness.read()
     assert after.verdict == liveness.ALIVE
+
+
+def test_transport_failure_FAILS_OPEN_and_never_raises(runtime, home, monkeypatch, capsys):
+    """A notifier's death must never become the agent's stall.
+
+    The socket path exists but is not a socket, so connect() raises. The adapter
+    must convert that into an OUTCOME, not propagate it: anything that can be
+    called from near an agent's working path must not throw.
+
+    SCOPE, stated so this is not read as more than it is: this exercises fail-open
+    on a transport ERROR. It does not exercise a HANG. The bounded timeout below
+    is asserted as configuration, not demonstrated against a stalled peer -- that
+    needs a socket that accepts and never reads, and is owed.
+    """
+    pid = os.getpid()
+    (home / f"{pid}.deadbeef.key").write_text(json.dumps({
+        "peerToken": "tok",
+        "procStart": str(__import__("macf.notify.session", fromlist=["x"]).proc_start_ticks(pid)),
+    }))
+    sockdir = runtime / "cc-socks"
+    sockdir.mkdir(parents=True, exist_ok=True)
+    (sockdir / f"{pid}.sock").write_text("not a socket")
+
+    result = adapter.deliver(pid, amail_notice("arr-open", count=1))
+    assert result.outcome == adapter.FAILED_TRANSPORT
+    assert result.ok is False
+    assert "MACF" in capsys.readouterr().err
+
+    # a failed delivery must NOT be recorded as delivered, or the retry is lost
+    assert adapter.already_delivered("arr-open") is False
+
+
+def test_the_connect_timeout_is_bounded():
+    """An unbounded timeout is a synchronous path wearing a disguise."""
+    assert 0 < adapter.CONNECT_TIMEOUT_S <= 5.0

@@ -33,6 +33,8 @@ from .session import (
     find_credential_path,
     find_socket,
     read_credential,
+    read_session_info,
+    resolve_target,
     verify_incarnation,
 )
 
@@ -103,8 +105,27 @@ def _record_seen(arrival_id: str) -> None:
         print(f"⚠️ MACF: dedup store write failed (a redelivery is now possible): {e}", file=sys.stderr)
 
 
-def already_delivered(arrival_id: str) -> bool:
-    return arrival_id in _load_seen()
+def dedup_key(arrival_id: str, session_id: Optional[str]) -> str:
+    """THE CONVERSATION IS THE AGENT, NOT THE PROCESS.
+
+    Keying dedup on the arrival alone was wrong in a way that only appears when
+    two processes serve one conversation: the first delivery would suppress the
+    second, so the target was chosen by whichever pid the enumeration reached
+    first -- an invisible choice, made by directory order.
+
+    Keying it per-PID is wrong in the opposite direction: two processes sharing a
+    conversation would each be told, and the agent would act twice on one arrival,
+    which is precisely what idempotency exists to prevent.
+
+    So the key is (arrival, conversation). A session id is required; without one
+    the caller is addressing a process rather than an agent, and that is recorded
+    in the key rather than papered over.
+    """
+    return f"{arrival_id}@{session_id or 'unknown-conversation'}"
+
+
+def already_delivered(arrival_id: str, session_id: Optional[str] = None) -> bool:
+    return dedup_key(arrival_id, session_id) in _load_seen()
 
 
 def _emit(event: str, payload: dict) -> None:
@@ -123,10 +144,15 @@ def _emit(event: str, payload: dict) -> None:
 def deliver(pid: int, notice: Notice, force: bool = False) -> DeliveryResult:
     """Wake one session with one notice. Idempotent on `notice.arrival_id`."""
     arrival_id = notice.arrival_id
+    info = read_session_info(pid)
+    session_id = info.session_id if info else None
 
-    if not force and already_delivered(arrival_id):
-        _emit("notify_suppressed", {"pid": pid, "arrival_id": arrival_id, "reason": "duplicate"})
-        return DeliveryResult(SUPPRESSED_DUPLICATE, pid, arrival_id, "already delivered")
+    if not force and already_delivered(arrival_id, session_id):
+        _emit("notify_suppressed", {
+            "pid": pid, "arrival_id": arrival_id,
+            "session_id": session_id, "reason": "duplicate",
+        })
+        return DeliveryResult(SUPPRESSED_DUPLICATE, pid, arrival_id, "already delivered to this conversation")
 
     cred_path = find_credential_path(pid)
     if cred_path is None:
@@ -170,8 +196,9 @@ def deliver(pid: int, notice: Notice, force: bool = False) -> DeliveryResult:
         except OSError as e:
             print(f"⚠️ MACF: socket close failed after delivery: {e}", file=sys.stderr)
 
-    _record_seen(arrival_id)
+    _record_seen(dedup_key(arrival_id, session_id))
     _emit("notify_delivered", {
+        "session_id": session_id,
         "pid": pid,
         "arrival_id": arrival_id,
         "source": notice.source,
@@ -180,6 +207,34 @@ def deliver(pid: int, notice: Notice, force: bool = False) -> DeliveryResult:
         "count_hint": notice.count,
     })
     return DeliveryResult(DELIVERED, pid, arrival_id, f"{len(text)} bytes")
+
+
+def deliver_to_conversation(session_id: str, notice: Notice) -> DeliveryResult:
+    """Address an AGENT rather than a process, resolving the target and surfacing
+    any ambiguity instead of silently picking.
+
+    A conversation served by two live processes is a runtime fault, not a routing
+    preference. This does not hide it: the ambiguity is emitted as its own event
+    and recorded in the liveness record the agent can read, because an agent may
+    not decline to be told about itself.
+    """
+    chosen, candidates = resolve_target(session_id)
+    if chosen is None:
+        _emit("notify_refused", {
+            "session_id": session_id, "arrival_id": notice.arrival_id,
+            "reason": "no_live_process_for_conversation",
+        })
+        return DeliveryResult(REFUSED_NO_SOCKET, -1, notice.arrival_id, "no live process serves this conversation")
+
+    if len(candidates) > 1:
+        _emit("notify_target_ambiguous", {
+            "session_id": session_id,
+            "candidate_pids": [c.pid for c in candidates],
+            "chosen_pid": chosen.pid,
+            "rule": "newest-proc-start (HEURISTIC, unmeasured)",
+        })
+
+    return deliver(chosen.pid, notice)
 
 
 def deliver_and_publish(pid: int, notice: Notice, cadence_s: float = liveness.DEFAULT_CADENCE_S) -> DeliveryResult:
