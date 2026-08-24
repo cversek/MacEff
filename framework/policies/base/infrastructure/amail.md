@@ -802,7 +802,11 @@ whoever did.
 - **Provisioning** creates the mailbox at account-creation time. A mailbox that
   cannot be created later is worse than one created unconditionally.
 - **Deployment configuration** declares the mail domain, per-agent addresses, and
-  contact lists.
+  contact lists. **Bringing amail up on a new deployment** — what the base image
+  provides, what a deployment must supply, and how each control is verified by
+  breaking it — is `docs/AMAIL_DEPLOYMENT.md`. That is operator-facing procedure
+  rather than policy, and it lives there so this file stays about the rules and
+  their derivations.
 - **Security posture** for inbound content follows §6.2 and the framework's general
   treatment of external input as data.
 - **Supervision of the broker, the spool consumer and the receiver** is governed by
@@ -813,6 +817,31 @@ whoever did.
   process, and they were discovered here only because this is where the outage
   happened. A general control kept inside the subsystem that discovered it is
   invisible to everyone not reading about that subsystem.
+
+- **PUSH-WAKE AND NOTIFICATION DELIVERY LIVE IN `notification_delivery.md`, AND ARE
+  NOT RESTATED HERE.** Mail is that mechanism's FIRST CONSUMER, not its scope: the
+  same rules govern any component that tells an agent something while the agent is
+  not asking — a supervision alarm, a fired timer, a policy changed underneath a
+  running agent, a peer that died.
+
+  What that policy holds, and what an amail implementer must read there rather than
+  infer here: a notice carries **a pointer and at most a count**, and the count is a
+  **scheduling hint, never a quantity** — the store is the sole authority for how
+  much; the transport's own **wrapper is not evidence**, and it is a wrapper rather
+  than a prefix, because the client both prepends an identity claim and *appends*
+  guidance about how to treat the message (measured, not assumed); a notice
+  **licenses exactly one action — consult the store**; alerts route
+  **by who can act**, so a recipient that has stopped draining is told *before* the
+  operator is; bounds on another party's action are measured **in that party's own
+  active time**, so an agent that never ran accrues no fault; triggering is
+  **edge-on-arrival, never level-on-state**; and an agent **may decline to be told
+  about the world but never about itself.**
+
+  Recorded as a citation for the same reason as the supervision rules above, and
+  discovered the same way — by an outage. This one paged the operator every fifteen
+  minutes for nine hours about two messages sitting in the mailboxes of agents that
+  had never run a session. **Every component behaved as built; the defects were
+  entirely in what the condition MEANT and WHO was told.**
 
   What is specific to mail, and therefore does belong here: the spool is the queue
   whose acceptor (the receiver) must be coupled to its processor (the inbound
