@@ -126,3 +126,58 @@ def test_a_sidecar_without_a_conversation_id_is_REFUSED_not_given_one(home, caps
     assert "names no sessionId" in capsys.readouterr().err
     # and it must not appear as a live session at all
     assert [s.pid for s in session.live_sessions()] == []
+
+
+def test_a_supervisor_CLAIM_beats_the_newest_start_ordering(home, monkeypatch, capsys):
+    """An ORDERING is a weaker answer than an IDENTITY.
+
+    The measured mechanism: a supervised client is spawned into its own session,
+    so an interrupt in the pane reaches the SUPERVISOR rather than the client. If
+    the supervisor dies there the client is orphaned, and the next supervisor
+    spawns a fresh one -- two processes, one conversation. The orphan is older.
+
+    Newest-start therefore usually picks correctly, but the supervisor RECORDS
+    which child it spawned, and asking the party that made the decision is not a
+    guess. Here the claim points at the OLDER pid, so only an implementation that
+    actually consults it can pass.
+    """
+    live, ticks = os.getpid(), 100
+    _sidecar(home, live, "conv-sup", ticks)
+    _sidecar(home, live + 1, "conv-sup", ticks + 500)   # newer
+    monkeypatch.setattr(session, "proc_start_ticks", lambda pid: ticks)
+    monkeypatch.setattr(session, "supervised_child_pids", lambda: {live})
+
+    chosen, candidates = session.resolve_target("conv-sup")
+    assert len(candidates) == 2
+    assert chosen.pid == live, "the supervisor's claim must outrank the ordering"
+    assert "authoritative" in capsys.readouterr().err
+
+
+def test_it_falls_back_to_newest_start_when_no_supervisor_claims_one(home, monkeypatch, capsys):
+    """An unsupervised session is ordinary, not an error.
+
+    Fail-closed here would refuse to notify a perfectly healthy agent, on an
+    advisory path, because a supervision registry had nothing to say about it.
+    """
+    live, ticks = os.getpid(), 100
+    _sidecar(home, live, "conv-nosup", ticks)
+    _sidecar(home, live + 1, "conv-nosup", ticks + 500)
+    monkeypatch.setattr(session, "proc_start_ticks", lambda pid: ticks)
+    monkeypatch.setattr(session, "supervised_child_pids", lambda: set())
+
+    chosen, _ = session.resolve_target("conv-nosup")
+    assert chosen.pid == live + 1, "newest wins when nothing authoritative applies"
+    err = capsys.readouterr().err
+    assert "fallback" in err, "the report must say WHICH rule decided"
+
+
+def test_an_unreadable_supervisor_registry_does_not_block_delivery(monkeypatch, capsys):
+    """Advisory refinement. Its failure must not become a missed notice."""
+    import macf.supervisor as sup
+
+    def boom():
+        raise OSError("registry gone")
+
+    monkeypatch.setattr(sup, "_iter_live_supervisors", boom)
+    assert session.supervised_child_pids() == set()
+    assert "falling back to newest-start" in capsys.readouterr().err

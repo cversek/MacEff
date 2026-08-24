@@ -256,12 +256,34 @@ def resolve_target(session_id: str):
     decline to be told about the WORLD but never about ITSELF, and "there are two
     of you" is about itself.
 
-    THE CHOICE RULE IS A HEURISTIC AND IS LABELLED AS ONE. Newest process start
-    wins, on the reasoning that a restart creates the new process while the twin
-    is the one that failed to die -- so the newest is the one a human is looking
-    at. NOT YET MEASURED. What would confirm it: induce a fork, then check which
-    pid owns the foreground terminal. Until then this is a stated assumption, not
-    a finding, and it is written here so the next reader can attack it.
+    THE MECHANISM IS NOW MEASURED, so the rule is no longer only a heuristic.
+
+    A supervised session's process tree is:
+
+        tmux pane -> supervisor -> client        (client in its OWN session)
+
+    The client is spawned with a new session id, which detaches it from the
+    pane's controlling terminal. So an interrupt typed in the pane goes to the
+    SUPERVISOR's foreground process group and NOT to the client. If the
+    supervisor dies there, the client is orphaned and keeps running; the next
+    supervisor spawns a fresh client with a continue flag, and two processes then
+    serve one conversation. The setsid that causes this was introduced to fix a
+    terminal file-descriptor leak -- one fix's remedy is the other's cause, which
+    is why it reads as mysterious from either end alone.
+
+    The twin is therefore the OLDER process (the orphan) and the current one is
+    NEWER, which is what newest-start selects. But an ORDERING is a weaker answer
+    than an IDENTITY, and an authoritative one exists:
+
+    **THE SUPERVISOR REGISTRY NAMES ITS OWN CURRENT CHILD.** A live supervisor
+    records the pid it spawned. Asking it is not a guess -- it is the answer from
+    the party that made the decision. So: prefer the live supervisor's registered
+    child, and fall back to newest-start only when no supervisor claims any
+    candidate (an unsupervised session, or a registry we cannot read).
+
+    Fallback rather than requirement, deliberately: an unsupervised session is
+    ordinary, not an error, and a notifier that refuses to address one would fail
+    closed on an advisory path.
     """
     candidates = [s for s in live_sessions() if s.session_id == session_id]
     if not candidates:
@@ -276,13 +298,44 @@ def resolve_target(session_id: str):
             return -1
 
     ranked = sorted(candidates, key=start_key, reverse=True)
+    supervised = supervised_child_pids()
+    claimed = [c for c in ranked if c.pid in supervised]
+    if claimed:
+        chosen, rule = claimed[0], "live supervisor's registered child (authoritative)"
+    else:
+        chosen, rule = ranked[0], "newest process start (fallback -- no supervisor claims one)"
     print(
         f"⚠️ MACF: {len(candidates)} live processes serve conversation "
         f"{session_id[:8]} (pids {[c.pid for c in candidates]}) -- delivering to "
-        f"{ranked[0].pid} by newest-start heuristic, and recording the ambiguity",
+        f"{chosen.pid} by {rule}, and recording the ambiguity",
         file=sys.stderr,
     )
-    return ranked[0], candidates
+    return chosen, candidates
+
+
+def supervised_child_pids() -> set:
+    """Pids that a LIVE supervisor currently claims as its own child.
+
+    Authoritative where it answers, and silent where it does not. Import is
+    deferred and failure is swallowed to a warning because this is an ADVISORY
+    refinement: a notifier must not fail to deliver because a supervision
+    registry could not be read.
+    """
+    try:
+        from ..supervisor import _iter_live_supervisors
+    except ImportError as e:
+        print(f"⚠️ MACF: supervisor registry unavailable (falling back to newest-start): {e}", file=sys.stderr)
+        return set()
+    pids = set()
+    try:
+        for data in _iter_live_supervisors():
+            child = data.get("child_pid")
+            if isinstance(child, int):
+                pids.add(child)
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        print(f"⚠️ MACF: supervisor registry unreadable (falling back to newest-start): {e}", file=sys.stderr)
+        return set()
+    return pids
 
 
 def addressable_sessions() -> list:
