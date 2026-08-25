@@ -20,7 +20,7 @@ import pytest
 
 pytest.importorskip("cryptography", reason="amail requires the crypto extra")
 
-from macf.amail import inbound
+from macf.amail import alerting, inbound
 from macf.amail.broker import BrokerConfig
 from macf.amail.inbound import (
     HANDED_OFF, DELIVER_PULL, DELIVER_PUSH_WAKE, QUARANTINED,
@@ -719,10 +719,22 @@ def test_aged_spool_entry_is_audited_so_conservation_still_balances(deploy):
     assert "aged out of the spool" in terminals[0]["reason"]
 
 
-def test_aged_pickup_entry_alerts_but_is_left_in_the_box(deploy, capsys):
+def test_aged_pickup_entry_is_reported_but_left_in_the_box(deploy, capsys):
     """Custody was handed to the recipient. Pulling mail back out of its box
-    would undo the transfer the whole model rests on, so the alert IS the
-    remedy rather than a repair."""
+    would undo the transfer the whole model rests on, so reporting IS the
+    remedy rather than a repair.
+
+    UPDATED with the wall-clock fix, and the old assertion is worth recording
+    rather than just replacing. It asserted the message
+    "the recipient has stopped draining, or cannot read its own box" -- which
+    states a RECIPIENT FAULT unconditionally, on nothing but elapsed time. That
+    wording was the defect in one line: it named a culprit the check had no
+    evidence about, and it paged an operator 36 times in nine hours about the
+    mailboxes of agents that had never run.
+
+    The observation is unchanged and still reported. What changed is that the
+    MEANING is now conditional on the recipient's own clock.
+    """
     inbound.process_entry(deploy, *spool(deploy, make_raw()))
     box = deploy.handoff_dir / AGENT
     entry = next(box.glob("*.eml"))
@@ -730,8 +742,40 @@ def test_aged_pickup_entry_alerts_but_is_left_in_the_box(deploy, capsys):
         deploy, now=time.time() + deploy.pickup_age_bound_s + 60)
     assert report["aged_pickup"] == [f"{AGENT}/{entry.name}"]
     assert entry.exists(), "an aged pickup entry must NOT be taken back"
-    assert "stopped draining, or cannot read its own box" in capsys.readouterr().err, \
-        "the alert must name the mis-provisioned box, which is silent at the sender"
+    # With no liveness probe supplied, the honest answer is that we cannot tell.
+    assert "cannot measure whether the recipient has been active" in capsys.readouterr().err
+    assert [f.kind for f in report["findings"]] == [alerting.INSTRUMENT_GAP]
+
+
+def test_an_inactive_recipient_produces_NO_alert_however_old_the_mail(deploy, capsys):
+    """The incident, as a regression test on the production path.
+
+    Two messages sat in the boxes of agents that had never run a session, aged
+    past a wall-clock bound, and paged every fifteen minutes for nine hours.
+    """
+    inbound.process_entry(deploy, *spool(deploy, make_raw()))
+    report = inbound.sweep_aged(
+        deploy, now=time.time() + deploy.pickup_age_bound_s + 86_400,
+        liveness=lambda box: (alerting.INACTIVE, 0.0))
+    assert report["alerts"] == 0, "an agent that never ran has accrued nothing"
+    assert report["findings"] == []
+    # the signal is DEMOTED, never deleted
+    assert len(report["aged_pickup"]) == 1
+
+
+def test_an_ACTIVE_recipient_that_has_not_drained_is_routed_to_the_AGENT(deploy):
+    """Both polarities: the fault still fires, and it goes to the party that
+    can actually drain the box."""
+    inbound.process_entry(deploy, *spool(deploy, make_raw()))
+    bound = deploy.pickup_age_bound_s
+    report = inbound.sweep_aged(
+        deploy, now=time.time() + bound + 86_400,
+        liveness=lambda box: (alerting.ALIVE, bound * 3))
+    assert report["alerts"] == 1
+    finding = report["findings"][0]
+    assert finding.kind == alerting.RECIPIENT_FAULT
+    assert finding.route == alerting.AGENT
+    assert finding.pages is False, "the operator is the terminus of LAST resort"
 
 
 def test_the_two_populations_are_reported_separately(deploy):

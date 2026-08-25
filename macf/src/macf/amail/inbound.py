@@ -40,10 +40,11 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Callable, Any, Dict, Iterator, List, Optional, Tuple
 
 from .broker import BrokerConfig
 from .contacts import ContactBook, ContactListError
+from . import alerting
 from .audit import AuditLog
 from . import store
 
@@ -562,7 +563,8 @@ def process_spool(cfg: InboundConfig) -> List[Dict[str, Any]]:
 
 # --------------------------------------------------------------- aged sweep
 
-def sweep_aged(cfg: InboundConfig, now: Optional[float] = None) -> Dict[str, Any]:
+def sweep_aged(cfg: InboundConfig, now: Optional[float] = None,
+               liveness: Optional[Callable[[str], tuple]] = None) -> Dict[str, Any]:
     """THE ORPHAN SWEEP: find entries nobody has moved, and SAY SO.
 
     Never deletes content — that is the whole discipline. Mail that could not
@@ -594,7 +596,7 @@ def sweep_aged(cfg: InboundConfig, now: Optional[float] = None) -> Dict[str, Any
     now = time.time() if now is None else now
     report: Dict[str, Any] = {
         "swept_at": time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(now)),
-        "aged_spool": [], "aged_pickup": [], "alerts": 0}
+        "aged_spool": [], "aged_pickup": [], "alerts": 0, "findings": []}
     audit = (AuditLog(cfg.broker_config.audit_path)
              if cfg.broker_config.audit_path else None)
 
@@ -627,6 +629,10 @@ def sweep_aged(cfg: InboundConfig, now: Optional[float] = None) -> Dict[str, Any
                               message_id=eml.stem, decision=QUARANTINED,
                               reason=reason)
             report["aged_spool"].append(eml.name)
+            report["findings"].append(alerting.classify_system(
+                key=f"spool:{eml.name}",
+                message=f"spool entry {eml.name}: {reason}",
+                entry=eml.name, reason=reason))
             report["alerts"] += 1
 
     hdir = Path(cfg.handoff_dir) if cfg.handoff_dir else None
@@ -642,12 +648,25 @@ def sweep_aged(cfg: InboundConfig, now: Optional[float] = None) -> Dict[str, Any
                     continue
                 if age < cfg.pickup_age_bound_s:
                     continue
-                print(f"⚠️ MACF: pickup entry {entry.name} in box "
-                      f"'{box.name}' un-ingested after {int(age)}s (bound "
-                      f"{cfg.pickup_age_bound_s}s): the recipient has stopped "
-                      f"draining, or cannot read its own box",
-                      file=sys.stderr)
+                # THE OBSERVATION IS ALWAYS KEPT. What changed is what it MEANS
+                # and WHO is told: un-ingested mail for a recipient that has not
+                # been running is EXPECTED STATE, and it is how an agent nobody
+                # ever started becomes visible. Demote the alarm, keep the signal.
+                state, active_s = (liveness(box.name) if liveness
+                                   else (alerting.UNKNOWN, None))
+                finding = alerting.classify_aged_pickup(
+                    box=box.name, entry=entry.name, age_s=age,
+                    bound_s=cfg.pickup_age_bound_s, liveness=state,
+                    active_s=active_s)
                 report["aged_pickup"].append(f"{box.name}/{entry.name}")
+                if finding.kind == alerting.EXPECTED_STATE:
+                    continue
+                if any(f.key == finding.key for f in report["findings"]):
+                    # One broken liveness probe is ONE instrument problem, not
+                    # one per message sitting behind it.
+                    continue
+                print(f"⚠️ MACF: {finding.message}", file=sys.stderr)
+                report["findings"].append(finding)
                 report["alerts"] += 1
     return report
 
