@@ -332,6 +332,8 @@ class TranscriptMonitor:
         self.jsonl_path = jsonl_path
         self.poll_interval = poll_interval
         self.detectors = detectors or list(DEFAULT_DETECTORS)
+        self.sources = []
+        self.sinks = []
         self.running = False
 
         # Stats
@@ -339,6 +341,8 @@ class TranscriptMonitor:
         self.events_emitted = 0
         self.unparsed_lines = 0
         self.stat_failures = 0
+        self.source_failures = 0
+        self.sink_failures = 0
         self.last_file_size = 0
 
         # Channel forwarding: USER_REMOTE state, re-checked at most every 5s so a
@@ -350,6 +354,49 @@ class TranscriptMonitor:
         """Register an additional detector. Returns self for chaining."""
         self.detectors.append(detector)
         return self
+
+    def add_source(self, source) -> "TranscriptMonitor":
+        """Register a polled source. Returns self for chaining.
+
+        A detector is FED a transcript entry; a source is ASKED what is new.
+        Sources are polled when the transcript is idle, so a busy transcript
+        never delays them beyond one poll interval and a quiet one costs a
+        directory listing.
+        """
+        self.sources.append(source)
+        return self
+
+    def add_sink(self, sink) -> "TranscriptMonitor":
+        """Register a callable invoked with every Detection a source produced.
+
+        Sinks see source detections only. Transcript detectors already have a
+        terminus in the event log, and routing them here would silently widen
+        what gets delivered to an agent.
+        """
+        self.sinks.append(sink)
+        return self
+
+    def _poll_sources(self) -> None:
+        """Ask every source what is new, emit it, and offer it to every sink."""
+        for source in self.sources:
+            try:
+                detections = source.poll()
+            except Exception as e:  # noqa: BLE001 - GUARD, not handler: see coding_standards
+                # A source is an optional input. Its failure must not stop the
+                # monitor observing the transcript, which is its primary job.
+                self.source_failures += 1
+                print(f"⚠️ MACF: source poll failed (monitor continues): {e}", file=sys.stderr)
+                continue
+            for detection in detections or ():
+                append_event(detection.event_name, detection.data)
+                self.events_emitted += 1
+                for sink in self.sinks:
+                    try:
+                        sink(detection)
+                    except Exception as e:  # noqa: BLE001 - GUARD, not handler
+                        self.sink_failures += 1
+                        print(f"⚠️ MACF: sink failed for {detection.event_name} "
+                              f"(event still recorded): {e}", file=sys.stderr)
 
     def _process_line(self, line: str) -> None:
         """Parse a JSONL line and run all detectors."""
@@ -488,6 +535,11 @@ class TranscriptMonitor:
                         else:
                             self.stat_failures = 0
 
+                        # Sources are polled on the idle path deliberately: the
+                        # transcript is the primary input and must never wait
+                        # behind a directory listing.
+                        self._poll_sources()
+
                         time.sleep(self.poll_interval)
 
         except KeyboardInterrupt:
@@ -514,8 +566,12 @@ class TranscriptMonitor:
             "events_emitted": self.events_emitted,
             "unparsed_lines": self.unparsed_lines,
             "stat_failures": self.stat_failures,
+            "source_failures": self.source_failures,
+            "sink_failures": self.sink_failures,
             "running": self.running,
             "detectors": len(self.detectors),
+            "sources": len(self.sources),
+            "sinks": len(self.sinks),
             "poll_interval": self.poll_interval,
         }
 
