@@ -652,8 +652,11 @@ def sweep_aged(cfg: InboundConfig, now: Optional[float] = None,
                 # and WHO is told: un-ingested mail for a recipient that has not
                 # been running is EXPECTED STATE, and it is how an agent nobody
                 # ever started becomes visible. Demote the alarm, keep the signal.
-                state, active_s = (liveness(box.name) if liveness
-                                   else (alerting.UNKNOWN, None))
+                # PER-ENTRY, not per-box: two messages in one box can land
+                # hours apart, and the recipient may have accrued time against
+                # one and none against the other.
+                state, active_s = (liveness(box.name, entry.stat().st_mtime)
+                                   if liveness else (alerting.UNKNOWN, None))
                 finding = alerting.classify_aged_pickup(
                     box=box.name, entry=entry.name, age_s=age,
                     bound_s=cfg.pickup_age_bound_s, liveness=state,

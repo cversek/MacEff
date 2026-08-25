@@ -127,6 +127,72 @@ def classify_aged_pickup(
         detail={**base, "active_s": int(accrued)})
 
 
+EVENT_LOG_RELPATH = Path(".maceff") / "agent_events_log.jsonl"
+
+
+def event_log_liveness_probe(homes_root):
+    """Build the liveness probe the sweep needs, from a marker that already exists.
+
+    An agent's event log is this framework's canonical record that an agent DID
+    SOMETHING. It is already the marker used to locate an agent's root, so it is
+    a first-class fact rather than something invented for this check.
+
+    THE ANSWER IS RELATIVE TO THE MAIL, not absolute. "Has this agent ever run?"
+    is the wrong question -- an agent that ran for months and then stopped before
+    the mail arrived has still accrued nothing against THIS delivery. So the
+    probe compares the agent's last activity against the arrival it is judging.
+
+    **THE PROBE IS THEREFORE PER-ENTRY, NOT PER-BOX**, and the first wiring of it
+    got this wrong: it asked the question once per mailbox. Two messages in one
+    box can land hours apart, and an agent that ran between them has accrued time
+    against the older and none against the newer. A box-level answer silently
+    applies the oldest entry's verdict to every entry beside it.
+
+    Three outcomes, and the third is the one that matters most:
+
+      log absent                  -> INACTIVE, zero accrued. The agent has never
+                                     run. This is the incident's exact case.
+      last activity <= arrival    -> INACTIVE for this entry. It has not run
+                                     since the mail landed, so it has had no
+                                     opportunity to drain it.
+      last activity  > arrival    -> ALIVE, accruing from arrival to last
+                                     activity.
+      CANNOT STAT                 -> UNKNOWN, never INACTIVE. "I could not see
+                                     it" is not "it never ran", and silently
+                                     converting the first into the second would
+                                     excuse a real fault on the strength of a
+                                     permissions error.
+
+    **This is a PROXY and is labelled as one.** The accrued figure spans arrival
+    to last activity, which INCLUDES idle gaps in between -- so it OVER-counts
+    active time and will call a fault slightly earlier than a true activity
+    ledger would. That direction is deliberate: over-counting risks telling an
+    agent about mail it is already handling, while under-counting risks the
+    silence this subsystem exists to end. A real ledger would replace it without
+    changing any caller.
+    """
+    root = Path(homes_root)
+
+    def probe(box: str, arrived: Optional[float] = None):
+        log = root / box / EVENT_LOG_RELPATH
+        try:
+            last_active = log.stat().st_mtime
+        except FileNotFoundError:
+            # Never ran. The one case the wall-clock check could not see.
+            return (INACTIVE, 0.0)
+        except (PermissionError, OSError) as e:
+            print(f"⚠️ MACF: cannot stat activity marker for '{box}' "
+                  f"(liveness UNKNOWN, not assumed): {e}", file=sys.stderr)
+            return (UNKNOWN, None)
+        if arrived is None:
+            return (ALIVE, None)
+        if last_active <= arrived:
+            return (INACTIVE, 0.0)
+        return (ALIVE, last_active - arrived)
+
+    return probe
+
+
 def classify_system(key: str, message: str, **detail) -> Finding:
     """A fault only the operator can remedy -- including every fault whose nature
     means the agent may not be running to be told about it."""

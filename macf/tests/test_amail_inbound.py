@@ -756,7 +756,7 @@ def test_an_inactive_recipient_produces_NO_alert_however_old_the_mail(deploy, ca
     inbound.process_entry(deploy, *spool(deploy, make_raw()))
     report = inbound.sweep_aged(
         deploy, now=time.time() + deploy.pickup_age_bound_s + 86_400,
-        liveness=lambda box: (alerting.INACTIVE, 0.0))
+        liveness=lambda box, arrived: (alerting.INACTIVE, 0.0))
     assert report["alerts"] == 0, "an agent that never ran has accrued nothing"
     assert report["findings"] == []
     # the signal is DEMOTED, never deleted
@@ -770,7 +770,7 @@ def test_an_ACTIVE_recipient_that_has_not_drained_is_routed_to_the_AGENT(deploy)
     bound = deploy.pickup_age_bound_s
     report = inbound.sweep_aged(
         deploy, now=time.time() + bound + 86_400,
-        liveness=lambda box: (alerting.ALIVE, bound * 3))
+        liveness=lambda box, arrived: (alerting.ALIVE, bound * 3))
     assert report["alerts"] == 1
     finding = report["findings"][0]
     assert finding.kind == alerting.RECIPIENT_FAULT
