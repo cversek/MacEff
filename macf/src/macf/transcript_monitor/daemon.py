@@ -389,7 +389,10 @@ class TranscriptMonitor:
                     prefix, text = fwd
                     from ..channels.telegram import send_telegram_notification
                     send_telegram_notification(text[:1500], prefix=prefix)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - GUARD, not handler: see coding_standards
+            # Mirroring to the channel is best-effort and must never take down
+            # the monitor. Nothing here depends on which exception occurred, so
+            # enumerating types would only add a way to crash.
             print(f"⚠️ TM: channel forward failed (non-blocking): {e}", file=sys.stderr)
 
     def _forward_to_channel_enabled(self) -> bool:
@@ -407,7 +410,7 @@ class TranscriptMonitor:
             from ..modes.detection import _detect_user_remote
             from ..utils import get_current_session_id
             self._fwd_cached = bool(_detect_user_remote(get_current_session_id()))
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - GUARD, not handler: see coding_standards
             # Deliberately broad: this is a GUARD, not a handler. Mode detection
             # is best-effort and must never take down the monitor, so an
             # enumerated list would eventually miss a type and crash for exactly
