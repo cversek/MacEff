@@ -10,7 +10,7 @@ import os
 import pytest
 
 from macf.notify import adapter, liveness
-from macf.notify.notice import amail_notice
+from macf.notify.notice import Notice, amail_notice
 
 
 @pytest.fixture
@@ -159,3 +159,73 @@ def test_transport_failure_FAILS_OPEN_and_never_raises(runtime, home, monkeypatc
 def test_the_connect_timeout_is_bounded():
     """An unbounded timeout is a synchronous path wearing a disguise."""
     assert 0 < adapter.CONNECT_TIMEOUT_S <= 5.0
+
+
+@pytest.mark.integration
+def test_a_STALLED_peer_times_out_instead_of_hanging_the_caller(runtime, home):
+    """The control owed since the fail-open test was first written.
+
+    That test exercised a transport ERROR -- a path that raises immediately. This
+    exercises a HANG, which is the case the timeout exists for and the only one
+    that can actually stall an agent. A peer that accepts the connection and then
+    never reads is indistinguishable from a healthy one until the buffers fill.
+
+    The listener accepts, sets a tiny receive buffer, and reads nothing. The
+    payload is sized past that buffer so sendall must block. The assertion is
+    twofold: the call RETURNS (an outcome, not an exception), and it returns
+    within the configured bound rather than whenever the peer feels like it.
+    """
+    import socket as _socket
+    import threading
+    import time as _time
+    from macf.notify import session as _session
+
+    pid = os.getpid()
+    (home / f"{pid}.deadbeef.key").write_text(json.dumps({
+        "peerToken": "tok",
+        "procStart": str(_session.proc_start_ticks(pid)),
+    }))
+
+    sockdir = runtime / "cc-socks"
+    sockdir.mkdir(parents=True, exist_ok=True)
+    sock_path = str(sockdir / f"{pid}.sock")
+
+    listener = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    listener.setsockopt(_socket.SOL_SOCKET, _socket.SO_RCVBUF, 1024)
+    listener.bind(sock_path)
+    listener.listen(1)
+    accepted = []
+
+    def accept_and_stall():
+        try:
+            conn, _ = listener.accept()
+            conn.setsockopt(_socket.SOL_SOCKET, _socket.SO_RCVBUF, 1024)
+            accepted.append(conn)
+            # Read NOTHING. This is the whole point.
+            _time.sleep(30)
+        except OSError:
+            pass
+
+    t = threading.Thread(target=accept_and_stall, daemon=True)
+    t.start()
+    _time.sleep(0.2)
+
+    # Large enough that it cannot fit in the peer's receive buffer.
+    fat = Notice(source="amail", arrival_id="arr-stall",
+                 pointer="x" * 4_000_000, count=1)
+
+    started = _time.monotonic()
+    try:
+        result = adapter.deliver(pid, fat)
+    finally:
+        for c in accepted:
+            c.close()
+        listener.close()
+    elapsed = _time.monotonic() - started
+
+    assert result.outcome == adapter.FAILED_TRANSPORT, (
+        f"a stalled peer must yield an outcome, not a hang (got {result.outcome})")
+    assert elapsed < adapter.CONNECT_TIMEOUT_S * 4, (
+        f"returned in {elapsed:.1f}s -- the bound must actually bind")
+    # and a stalled delivery is NOT recorded as delivered
+    assert adapter.already_delivered("arr-stall") is False
