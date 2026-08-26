@@ -2915,7 +2915,22 @@ def cmd_policy_list(args: argparse.Namespace) -> int:
         print("=" * 50)
 
         if not policies:
-            print("No policies found")
+            # "None found" and "cannot look" are different facts, and reporting
+            # the second as the first sends the reader after a missing corpus
+            # when the corpus is there and unreadable. Measured: a policy tree
+            # provisioned group-only reported exactly this to every agent.
+            from .utils import get_framework_policies_path
+            root = get_framework_policies_path()
+            if root is None:
+                print("No policies found (framework policies directory could not be located)")
+            elif not root.exists():
+                print(f"No policies found ({root} does not exist)")
+            elif not os.access(root, os.R_OK | os.X_OK):
+                print(f"⚠️ MACF: {root} is NOT READABLE by this user — "
+                      f"policies may exist but cannot be listed")
+                print(f"   check the directory's group and mode: stat -c '%a %U:%G' {root}")
+            else:
+                print("No policies found")
             return 0
 
         # Group by category for display

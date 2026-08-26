@@ -1452,8 +1452,23 @@ def setup_policy_editors() -> None:
     policies_dir = FRAMEWORK_ROOT / 'policies'
 
     run_command(['chgrp', '-R', 'policyeditors', str(policies_dir)], check=False)
-    run_command(['find', str(policies_dir), '-type', 'd', '-exec', 'chmod', '2770', '{}', '+'], check=False)
-    run_command(['find', str(policies_dir), '-type', 'f', '-exec', 'chmod', '0660', '{}', '+'], check=False)
+
+    # WORLD-READABLE, GROUP-WRITABLE. The group controls who may EDIT policy;
+    # it must not control who may READ it.
+    #
+    # These were 2770 / 0660 -- no "other" bits at all -- while POLICY_EDITORS
+    # defaults to empty, so the group had no members and EVERY agent got
+    # "Permission denied" walking the policy tree. `macf_tools policy list`
+    # then reported "No policies found", which reads as *there are none* rather
+    # than *you cannot see them*.
+    #
+    # That contradicted the framework's premise: policy is discovered on demand
+    # by every agent, so read access is the whole point of shipping it. The
+    # tempting repair -- adding each agent to policyeditors -- would have traded
+    # an edit boundary for a read convenience and granted every agent the right
+    # to rewrite its own governance. Read is widened; write is not.
+    run_command(['find', str(policies_dir), '-type', 'd', '-exec', 'chmod', '2775', '{}', '+'], check=False)
+    run_command(['find', str(policies_dir), '-type', 'f', '-exec', 'chmod', '0664', '{}', '+'], check=False)
 
     # Add configured policy editors
     policy_editors = os.getenv('POLICY_EDITORS', '').split()
