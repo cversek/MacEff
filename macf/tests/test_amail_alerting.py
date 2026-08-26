@@ -228,3 +228,77 @@ def test_the_probe_answers_PER_ENTRY_not_per_box(homes):
     new_state, new_accrued = probe("pa_mixed", 9000.0)   # arrived AFTER activity
     assert (old_state, old_accrued) == (a.ALIVE, 2000.0)
     assert (new_state, new_accrued) == (a.INACTIVE, 0.0)
+
+
+# ---- the box-marker probe: the one that works where the broker is isolated ----
+
+@pytest.fixture
+def handoff(tmp_path):
+    d = tmp_path / "handoff"
+    (d / "agent01").mkdir(parents=True)
+    return d
+
+
+def test_no_marker_means_the_recipient_has_never_run(handoff):
+    probe = a.box_marker_liveness_probe(handoff)
+    assert probe("agent01", 5000.0) == (a.INACTIVE, 0.0)
+
+
+def test_a_marker_older_than_the_mail_accrues_nothing(handoff):
+    import os
+    m = handoff / "agent01" / a.LIVENESS_MARKER
+    m.touch(); os.utime(m, (1000.0, 1000.0))
+    probe = a.box_marker_liveness_probe(handoff)
+    assert probe("agent01", 5000.0) == (a.INACTIVE, 0.0)
+
+
+def test_a_marker_newer_than_the_mail_accrues_from_arrival(handoff):
+    import os
+    m = handoff / "agent01" / a.LIVENESS_MARKER
+    m.touch(); os.utime(m, (9000.0, 9000.0))
+    probe = a.box_marker_liveness_probe(handoff)
+    assert probe("agent01", 5000.0) == (a.ALIVE, 4000.0)
+
+
+def test_an_unstattable_box_is_UNKNOWN_never_inactive(handoff, monkeypatch, capsys):
+    (handoff / "agent01" / a.LIVENESS_MARKER).touch()
+
+    def denied(self):
+        raise PermissionError("broker cannot read this box")
+
+    monkeypatch.setattr("pathlib.Path.stat", denied)
+    probe = a.box_marker_liveness_probe(handoff)
+    assert probe("agent01") == (a.UNKNOWN, None)
+    assert "not assumed" in capsys.readouterr().err
+
+
+def test_the_marker_is_a_DOTFILE_so_neither_reader_mistakes_it_for_mail(handoff):
+    """The sweep globs message suffixes and the store source filters on them.
+
+    A marker that could be read as mail would make the liveness signal generate
+    the very alerts it exists to suppress.
+    """
+    assert a.LIVENESS_MARKER.startswith(".")
+    assert not a.LIVENESS_MARKER.endswith((".eml", ".amsg"))
+    from macf.transcript_monitor.sources import StoreSource
+    (handoff / "agent01" / a.LIVENESS_MARKER).touch()
+    src = StoreSource(handoff / "agent01").prime()
+    (handoff / "agent01" / a.LIVENESS_MARKER).touch()
+    assert src.poll() == [], "touching the marker must not look like an arrival"
+
+
+def test_the_toucher_and_the_probe_compose(handoff):
+    """Both halves, together: what the recipient writes is what the broker reads."""
+    assert a.touch_liveness_marker(handoff, "agent01") is True
+    state, accrued = a.box_marker_liveness_probe(handoff)("agent01", 0.0)
+    assert state == a.ALIVE and accrued > 0
+
+
+def test_the_toucher_reports_failure_rather_than_raising(handoff, tmp_path, monkeypatch, capsys):
+    """A liveness marker that cannot be written must not stop an agent working."""
+    def denied(self, *a_, **k):
+        raise PermissionError("read-only box")
+
+    monkeypatch.setattr("pathlib.Path.touch", denied)
+    assert a.touch_liveness_marker(handoff, "agent01") is False
+    assert "will be reported as INACTIVE" in capsys.readouterr().err

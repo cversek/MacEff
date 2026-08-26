@@ -193,6 +193,82 @@ def event_log_liveness_probe(homes_root):
     return probe
 
 
+LIVENESS_MARKER = ".last-seen"
+
+
+def box_marker_liveness_probe(handoff_root):
+    """Liveness from a marker the recipient writes into its OWN pickup box.
+
+    The event-log probe cannot be used where the broker is properly isolated: a
+    deployment that separates broker and agent uids denies the broker any read
+    into an agent home, which is the custody boundary doing its job. Measured in
+    a real deployment: every stat of an agent's event log returns EACCES, and
+    granting the broker that access to obtain a liveness signal would trade the
+    boundary for a timestamp.
+
+    The pickup box is the one surface both principals already share. It is
+    broker-owned and setgid to the recipient's group, so the recipient can
+    already create and remove entries there -- draining requires it -- and the
+    broker can already stat it. A marker costs no new grant to either side.
+
+    The marker is a DOTFILE and both readers ignore dotfiles: the sweep globs
+    message suffixes and the store source filters on them, so a marker is not
+    mail and cannot be mistaken for it.
+
+    Outcomes match the event-log probe exactly, so the two are interchangeable
+    at the call site:
+
+      marker absent                -> INACTIVE, zero accrued.
+      last touch <= arrival        -> INACTIVE for this entry.
+      last touch  > arrival        -> ALIVE, accruing from arrival.
+      cannot stat the box          -> UNKNOWN, never INACTIVE.
+
+    DEPLOYMENT REQUIREMENT, stated because the probe is inert without it: some
+    agent-side act must touch the marker when the agent runs. Nothing here does
+    that, and until something does, this probe reports every recipient INACTIVE
+    -- which suppresses alerts rather than raising false ones, so it fails in
+    the quiet direction and must not be mistaken for a working signal.
+    """
+    root = Path(handoff_root)
+
+    def probe(box: str, arrived: Optional[float] = None):
+        marker = root / box / LIVENESS_MARKER
+        try:
+            last_active = marker.stat().st_mtime
+        except FileNotFoundError:
+            return (INACTIVE, 0.0)
+        except (PermissionError, OSError) as e:
+            print(f"⚠️ MACF: cannot stat liveness marker for '{box}' "
+                  f"(liveness UNKNOWN, not assumed): {e}", file=sys.stderr)
+            return (UNKNOWN, None)
+        if arrived is None:
+            return (ALIVE, None)
+        if last_active <= arrived:
+            return (INACTIVE, 0.0)
+        return (ALIVE, last_active - arrived)
+
+    return probe
+
+
+def touch_liveness_marker(handoff_root, box: str) -> bool:
+    """Record that this recipient is running. Called BY the recipient.
+
+    Writes into the recipient's own pickup box, which it already has rights to
+    modify. Returns False with a stated reason rather than raising: a liveness
+    marker that cannot be written must not stop an agent working.
+    """
+    marker = Path(handoff_root) / box / LIVENESS_MARKER
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch()
+        return True
+    except (FileNotFoundError, PermissionError, OSError) as e:
+        print(f"⚠️ MACF: could not touch liveness marker for '{box}' -- this agent "
+              f"will be reported as INACTIVE and its undrained mail will not "
+              f"alert: {e}", file=sys.stderr)
+        return False
+
+
 def classify_system(key: str, message: str, **detail) -> Finding:
     """A fault only the operator can remedy -- including every fault whose nature
     means the agent may not be running to be told about it."""
