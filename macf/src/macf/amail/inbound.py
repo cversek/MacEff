@@ -635,6 +635,8 @@ def sweep_aged(cfg: InboundConfig, now: Optional[float] = None,
                 entry=eml.name, reason=reason))
             report["alerts"] += 1
 
+    #: box name -> (worst finding, its age, how many entries in that box)
+    per_box: Dict[str, Any] = {}
     hdir = Path(cfg.handoff_dir) if cfg.handoff_dir else None
     if hdir and hdir.is_dir():
         for box in sorted(hdir.iterdir()):
@@ -652,9 +654,12 @@ def sweep_aged(cfg: InboundConfig, now: Optional[float] = None,
                 # and WHO is told: un-ingested mail for a recipient that has not
                 # been running is EXPECTED STATE, and it is how an agent nobody
                 # ever started becomes visible. Demote the alarm, keep the signal.
-                # PER-ENTRY, not per-box: two messages in one box can land
-                # hours apart, and the recipient may have accrued time against
-                # one and none against the other.
+                #
+                # Liveness is asked PER ENTRY -- two messages in one box can land
+                # hours apart and the recipient may have accrued time against one
+                # and none against the other -- but the resulting FINDINGS are
+                # aggregated per box below. One box that is not draining is one
+                # condition, however many messages are sitting in it.
                 state, active_s = (liveness(box.name, entry.stat().st_mtime)
                                    if liveness else (alerting.UNKNOWN, None))
                 finding = alerting.classify_aged_pickup(
@@ -664,13 +669,17 @@ def sweep_aged(cfg: InboundConfig, now: Optional[float] = None,
                 report["aged_pickup"].append(f"{box.name}/{entry.name}")
                 if finding.kind == alerting.EXPECTED_STATE:
                     continue
-                if any(f.key == finding.key for f in report["findings"]):
-                    # One broken liveness probe is ONE instrument problem, not
-                    # one per message sitting behind it.
-                    continue
-                print(f"⚠️ MACF: {finding.message}", file=sys.stderr)
-                report["findings"].append(finding)
-                report["alerts"] += 1
+                worst = per_box.get(box.name)
+                if worst is None or age > worst[1]:
+                    per_box[box.name] = (finding, age, worst[2] + 1 if worst else 1)
+                elif worst is not None:
+                    per_box[box.name] = (worst[0], worst[1], worst[2] + 1)
+
+    for box_name, (finding, _, count) in sorted(per_box.items()):
+        finding = alerting.with_count(finding, count)
+        print(f"⚠️ MACF: {finding.message}", file=sys.stderr)
+        report["findings"].append(finding)
+        report["alerts"] += 1
     return report
 
 

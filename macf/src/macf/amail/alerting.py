@@ -269,6 +269,26 @@ def touch_liveness_marker(handoff_root, box: str) -> bool:
         return False
 
 
+def with_count(finding: Finding, count: int) -> Finding:
+    """Restate a per-entry finding as the per-box condition it actually is.
+
+    One box that is not draining is ONE condition however many messages sit in
+    it. Reporting each message separately turns a single fact into a burst, and
+    keys each one into the edge ledger so every new arrival re-alerts.
+
+    The worst entry supplies the message; the count supplies the scale.
+    """
+    if count <= 1:
+        return finding
+    return Finding(
+        key=f"box:{finding.detail.get('box', '?')}",
+        kind=finding.kind,
+        route=finding.route,
+        message=f"{finding.message} ({count} entries in this box; oldest shown)",
+        detail={**finding.detail, "entry_count": count},
+    )
+
+
 def classify_system(key: str, message: str, **detail) -> Finding:
     """A fault only the operator can remedy -- including every fault whose nature
     means the agent may not be running to be told about it."""

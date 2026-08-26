@@ -1309,3 +1309,51 @@ def test_a_denied_submission_records_a_terminal_fate_for_every_recipient(tmp_pat
         "the permitted recipient needs a record too, or the derivation has nothing to read"
     assert all(e["history"][-1]["state"] == "denied" for e in rec["recipients"].values())
     assert derive_message_state(rec) == "denied"
+
+
+def test_MANY_undrained_messages_in_ONE_box_are_ONE_finding(deploy):
+    """Found by running the real deployment, not by a unit test.
+
+    Every test above used a single message, so nothing noticed that a
+    recipient-fault keyed per ENTRY while an instrument-gap keyed per BOX. Ten
+    undrained messages produced ten findings -- one fact rendered as a burst,
+    which is the same disease as the original storm on a different axis, and
+    each one keys separately into the edge ledger so every new arrival
+    re-alerts forever.
+
+    One box that is not draining is ONE condition.
+    """
+    # Distinct bodies: identical messages share a content hash and collapse to
+    # one box entry, which would make this test pass for the wrong reason.
+    for i in range(10):
+        inbound.process_entry(deploy, *spool(deploy, make_raw(body=f"msg {i}")))
+    bound = deploy.pickup_age_bound_s
+    report = inbound.sweep_aged(
+        deploy, now=time.time() + bound + 86_400,
+        liveness=lambda box, arrived: (alerting.ALIVE, bound * 3))
+
+    assert len(report["aged_pickup"]) == 10, "every entry is still observed"
+    assert report["alerts"] == 1, "ten messages, one condition, one alert"
+    finding = report["findings"][0]
+    assert finding.kind == alerting.RECIPIENT_FAULT
+    assert finding.detail["entry_count"] == 10, "the count carries the scale"
+    assert "10 entries in this box" in finding.message
+
+
+def test_two_DIFFERENT_boxes_remain_two_findings(deploy):
+    """Both polarities: aggregation must not merge distinct recipients.
+
+    Collapsing across boxes would tell one agent about another's mail and hide
+    a second non-draining recipient behind the first.
+    """
+    inbound.process_entry(deploy, *spool(deploy, make_raw()))
+    other = deploy.handoff_dir / "someone_else"
+    other.mkdir(parents=True, exist_ok=True)
+    (other / "m.eml").write_text("From: t\nSubject: t\n\nt\n")
+
+    bound = deploy.pickup_age_bound_s
+    report = inbound.sweep_aged(
+        deploy, now=time.time() + bound + 86_400,
+        liveness=lambda box, arrived: (alerting.ALIVE, bound * 3))
+    assert report["alerts"] == 2
+    assert len({f.key for f in report["findings"]}) == 2
