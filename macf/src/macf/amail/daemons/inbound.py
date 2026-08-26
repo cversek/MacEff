@@ -73,6 +73,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from macf.amail import alerting
 from macf.utils.json_io import write_json_safely
 
 #: Overridable for the same reason the broker's is: a startup refusal that can
@@ -368,6 +369,17 @@ def heartbeat_verdict(now: Optional[float] = None) -> Dict[str, Any]:
             "failures_total": int(data.get("failures_total", 0) or 0)}
 
 
+def _edge_state_path(cfg) -> Path:
+    """Where the edge ledger lives.
+
+    Beside the spool rather than in a runtime directory: the ledger must outlive
+    a container restart, or every restart re-raises every standing condition and
+    level-triggered behaviour returns by the back door.
+    """
+    base = Path(cfg.spool_dir).parent if getattr(cfg, "spool_dir", None) else Path("/var/lib/amail")
+    return base / "alert_edge_state.json"
+
+
 def _check_once(cfg, inbound) -> List[Dict[str, Any]]:
     """One supervision pass: watcher liveness, then the orphan sweep.
 
@@ -393,14 +405,33 @@ def _check_once(cfg, inbound) -> List[Dict[str, Any]]:
         alarms.append(_alert("sweep_failed", f"the orphan sweep could not "
                                              f"complete ({e})"))
         return alarms
-    if report["alerts"]:
+    # EDGE-TRIGGERED ON ARRIVAL, NEVER LEVEL-TRIGGERED ON STATE. Without this
+    # the sweep re-raises every standing condition on every pass, which is how
+    # two undrained messages became thirty-six pages in nine hours. Recovery is
+    # a notice too: a reader told when something breaks and never when it heals
+    # cannot learn the current state except by asking.
+    edge = alerting.EdgeState(_edge_state_path(cfg))
+    findings = report.get("findings") or []
+    t = edge.transitions(findings)
+
+    for key in t.recovered:
+        alarms.append(_alert("cleared", f"resolved: {key}", resolved_key=key))
+
+    if t.new:
         alarms.append(_alert("aged_entries",
-                             f"{report['alerts']} aged entr(ies): "
+                             f"{len(t.new)} new condition(s), "
+                             f"{len(t.ongoing)} still standing: "
                              f"{len(report['aged_spool'])} in the spool, "
                              f"{len(report['aged_pickup'])} undrained in "
                              f"pickup boxes",
                              aged_spool=report["aged_spool"],
-                             aged_pickup=report["aged_pickup"]))
+                             aged_pickup=report["aged_pickup"],
+                             new_keys=[f.key for f in t.new],
+                             ongoing_keys=[f.key for f in t.ongoing]))
+
+    # Committed AFTER the alarms are built, so a crash between the two re-raises
+    # rather than swallows. A lost notice is worse than a repeated one.
+    edge.commit(findings)
     return alarms
 
 

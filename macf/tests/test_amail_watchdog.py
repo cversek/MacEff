@@ -15,6 +15,7 @@ import time
 
 import pytest
 
+from macf.amail import alerting
 from macf.amail.daemons import inbound as daemon
 
 
@@ -25,6 +26,20 @@ def paths(tmp_path, monkeypatch):
     monkeypatch.setattr(daemon, "WD_HEARTBEAT", tmp_path / "watchdog.heartbeat")
     monkeypatch.setattr(daemon, "ALERTS", tmp_path / "alerts.jsonl")
     return tmp_path
+
+
+class _FakeCfg:
+    """Minimal cfg carrying only what the edge ledger path needs.
+
+    A bare object() sends the ledger to the real deployment path, which is not
+    writable from a test -- and the failure mode there is worth naming: an
+    unwritable ledger degrades to LEVEL-TRIGGERED, re-raising every standing
+    condition. The commit warns when that happens.
+    """
+
+    def __init__(self, tmp_path):
+        self.spool_dir = tmp_path / "amail" / "spool"
+        self.spool_dir.mkdir(parents=True, exist_ok=True)
 
 
 def _stamp(path, *, epoch, interval_s=15, pid=4242):
@@ -92,7 +107,8 @@ class TestTheBoundIsDerivedNotRestated:
 
 class _FakeInbound:
     def __init__(self, report=None, raises=None):
-        self.report = report or {"alerts": 0, "aged_spool": [], "aged_pickup": []}
+        self.report = report or {"alerts": 0, "aged_spool": [], "aged_pickup": [],
+                                 "findings": []}
         self.raises = raises
         self.calls = 0
 
@@ -116,11 +132,96 @@ class TestOnePass:
     def test_aged_entries_raise_an_alarm_naming_both_populations(self, paths):
         _stamp(daemon.HEARTBEAT, epoch=time.time())
         fake = _FakeInbound({"alerts": 2, "aged_spool": ["a.eml"],
-                             "aged_pickup": ["bob/b.eml"]})
+                             "aged_pickup": ["bob/b.eml"],
+                             "findings": [alerting.classify_system("spool:a.eml", "aged"),
+                                          alerting.classify_system("pickup:bob/b.eml", "aged")]})
         alarms = daemon._check_once(object(), fake)
         assert alarms[0]["kind"] == "aged_entries"
         assert alarms[0]["aged_spool"] == ["a.eml"]
         assert alarms[0]["aged_pickup"] == ["bob/b.eml"]
+
+    def test_a_STANDING_condition_alarms_ONCE_across_repeated_passes(self, paths):
+        """The wiring, at the level the deployment actually runs.
+
+        The edge ledger was built, unit-tested and connected to nothing: the
+        sweep re-raised every standing condition on every pass, which is how two
+        undrained messages became thirty-six pages in nine hours. The unit tests
+        exercised the ledger; nothing exercised the caller.
+        """
+        _stamp(daemon.HEARTBEAT, epoch=time.time())
+        report = {"alerts": 1, "aged_spool": ["a.eml"], "aged_pickup": [],
+                  "findings": [alerting.classify_system("spool:a.eml", "aged")]}
+
+        cfg = _FakeCfg(paths)
+        first = daemon._check_once(cfg, _FakeInbound(report))
+        assert [a["kind"] for a in first] == ["aged_entries"]
+
+        for _ in range(35):
+            again = daemon._check_once(cfg, _FakeInbound(report))
+            assert again == [], "a true-and-persisting condition must not re-alarm"
+
+    def test_RECOVERY_is_announced_when_the_condition_clears(self, paths):
+        """Told when it breaks and never when it heals, a reader cannot learn
+        the current state except by asking."""
+        _stamp(daemon.HEARTBEAT, epoch=time.time())
+        report = {"alerts": 1, "aged_spool": ["a.eml"], "aged_pickup": [],
+                  "findings": [alerting.classify_system("spool:a.eml", "aged")]}
+        cfg = _FakeCfg(paths)
+        daemon._check_once(cfg, _FakeInbound(report))
+
+        clean = {"alerts": 0, "aged_spool": [], "aged_pickup": [], "findings": []}
+        alarms = daemon._check_once(cfg, _FakeInbound(clean))
+        assert [a["kind"] for a in alarms] == ["cleared"]
+        assert alarms[0]["resolved_key"] == "spool:a.eml"
+
+    def test_a_CRASH_between_detection_and_alarm_RE_RAISES_rather_than_swallows(
+            self, paths, monkeypatch):
+        """Ordering that is invisible until something dies.
+
+        Committing the ledger before the alarm is built produces identical
+        behaviour in every run that completes -- which is why the mutation for
+        it survived a full suite. The orderings differ only when the process
+        dies in between, and then they differ in the direction that matters: a
+        lost notice is worse than a repeated one.
+        """
+        _stamp(daemon.HEARTBEAT, epoch=time.time())
+        cfg = _FakeCfg(paths)
+        report = {"alerts": 1, "aged_spool": ["a.eml"], "aged_pickup": [],
+                  "findings": [alerting.classify_system("spool:a.eml", "aged")]}
+
+        real_alert = daemon._alert
+
+        def dies(kind, *a, **k):
+            if kind == "aged_entries":
+                raise RuntimeError("process died building the alarm")
+            return real_alert(kind, *a, **k)
+
+        monkeypatch.setattr(daemon, "_alert", dies)
+        with pytest.raises(RuntimeError):
+            daemon._check_once(cfg, _FakeInbound(report))
+
+        # The condition must still be unseen, so the next pass raises it.
+        monkeypatch.setattr(daemon, "_alert", real_alert)
+        alarms = daemon._check_once(cfg, _FakeInbound(report))
+        assert [a["kind"] for a in alarms] == ["aged_entries"], (
+            "a condition lost to a crash must be re-raised, not swallowed")
+
+    def test_a_NEW_condition_beside_a_standing_one_still_alarms(self, paths):
+        """Both polarities: suppression must not become deafness."""
+        _stamp(daemon.HEARTBEAT, epoch=time.time())
+        one = {"alerts": 1, "aged_spool": ["a.eml"], "aged_pickup": [],
+               "findings": [alerting.classify_system("spool:a.eml", "aged")]}
+        cfg = _FakeCfg(paths)
+        daemon._check_once(cfg, _FakeInbound(one))
+        assert daemon._check_once(cfg, _FakeInbound(one)) == []
+
+        two = {"alerts": 2, "aged_spool": ["a.eml", "b.eml"], "aged_pickup": [],
+               "findings": [alerting.classify_system("spool:a.eml", "aged"),
+                            alerting.classify_system("spool:b.eml", "aged")]}
+        alarms = daemon._check_once(cfg, _FakeInbound(two))
+        assert [a["kind"] for a in alarms] == ["aged_entries"]
+        assert alarms[0]["new_keys"] == ["spool:b.eml"]
+        assert alarms[0]["ongoing_keys"] == ["spool:a.eml"]
 
     def test_a_sweep_that_raises_becomes_an_alarm_not_an_exception(self, paths):
         """THE LOOP-SCOPED RULE, at the one place it decides whether the
