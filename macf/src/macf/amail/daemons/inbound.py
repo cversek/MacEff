@@ -372,12 +372,22 @@ def heartbeat_verdict(now: Optional[float] = None) -> Dict[str, Any]:
 def _edge_state_path(cfg) -> Path:
     """Where the edge ledger lives.
 
-    Beside the spool rather than in a runtime directory: the ledger must outlive
-    a container restart, or every restart re-raises every standing condition and
-    level-triggered behaviour returns by the back door.
+    Derived from a path the broker demonstrably WRITES -- its own audit log --
+    because in a separated deployment the spool belongs to the ingest identity.
+    A ledger placed beside the spool cannot be written by the process that
+    maintains it, and that failure is a silent degradation to level-triggered
+    rather than an error.
+
+    Durable rather than a runtime directory: the ledger must outlive a container
+    restart, or every restart re-raises every standing condition.
     """
-    base = Path(cfg.spool_dir).parent if getattr(cfg, "spool_dir", None) else Path("/var/lib/amail")
-    return base / "alert_edge_state.json"
+    audit = getattr(getattr(cfg, "broker_config", None), "audit_path", None)
+    if audit:
+        return Path(audit).parent / "alert_edge_state.json"
+    quarantine = getattr(cfg, "quarantine_dir", None)
+    if quarantine:
+        return Path(quarantine).parent / "alert_edge_state.json"
+    return Path("/var/lib/amail") / "alert_edge_state.json"
 
 
 def _check_once(cfg, inbound) -> List[Dict[str, Any]]:

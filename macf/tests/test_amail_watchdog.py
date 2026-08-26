@@ -37,9 +37,18 @@ class _FakeCfg:
     condition. The commit warns when that happens.
     """
 
+    class _Broker:
+        def __init__(self, audit_path):
+            self.audit_path = audit_path
+
     def __init__(self, tmp_path):
-        self.spool_dir = tmp_path / "amail" / "spool"
+        # Two identities, as a real deployment has: the spool belongs to the
+        # ingest side, the audit log to the broker.
+        self.spool_dir = tmp_path / "ingest" / "spool"
         self.spool_dir.mkdir(parents=True, exist_ok=True)
+        broker_dir = tmp_path / "broker"
+        broker_dir.mkdir(parents=True, exist_ok=True)
+        self.broker_config = _FakeCfg._Broker(broker_dir / "audit.jsonl")
 
 
 def _stamp(path, *, epoch, interval_s=15, pid=4242):
@@ -302,3 +311,18 @@ class TestTheWatcherPublishesItsCadence:
         is wrong in the quiet direction for any slow cadence."""
         import inspect
         assert "interval_s" in inspect.getsource(daemon.watch)
+
+
+def test_the_edge_ledger_lands_where_the_BROKER_can_write(tmp_path):
+    """Measured in a real deployment: the spool belongs to the ingest identity.
+
+    A ledger derived from the spool cannot be written by the broker that
+    maintains it, and the failure is not an error -- it is a SILENT degradation
+    back to level-triggered, which is the exact behaviour the ledger exists to
+    remove. Derive it from a path the broker demonstrably writes instead.
+    """
+    cfg = _FakeCfg(tmp_path)
+    path = daemon._edge_state_path(cfg)
+    assert path.parent == cfg.broker_config.audit_path.parent
+    assert path.parent != cfg.spool_dir.parent, (
+        "the spool's parent is the ingest identity's directory, not the broker's")
