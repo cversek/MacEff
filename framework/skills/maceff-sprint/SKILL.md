@@ -74,6 +74,32 @@ macf_tools policy read autonomous_sprint
 macf_tools policy navigate task_management
 ```
 
+**If the sprint involves code development — the usual case — also engage the
+testing policy before the first edit, not after the first failure:**
+
+```bash
+macf_tools policy navigate testing
+macf_tools policy read testing --section <CEP_MATCH>
+```
+
+Extract answers to:
+
+- **What granularity of test run does the policy specify during a sprint, and what
+  should be run in place of the full suite?** Getting this wrong is expensive in
+  both directions: running everything after each edit burns minutes per change,
+  and running nothing lets a regression get built on top of.
+- What verbosity level does the policy specify, and what does full verbose output
+  cost when the tests pass?
+- How many tests does the policy want per feature, and what is the anti-pattern
+  that number exists to prevent?
+- When does the policy require a red proof before trusting a green one?
+
+Add the language-specific standards for whatever the sprint is written in — the
+base policy names the layering and the language policy carries the specifics.
+
+`<CEP_MATCH>` is a metavar: read the section whose CEP heading answers the
+question you actually have. It stays correct when the policy reorganises.
+
 Extract requirements by answering:
 - (task_management) What must I read to know which work frames are open and which one attention last left, and when is reading it required? (Applies when the sprint's live context was actually lost — compaction, a cleared session, or scoped work last touched in an earlier cycle. A session resume does not qualify: the conversation continues, so the context is intact.)
 - What defines the scoped task set and how should it be declared?
