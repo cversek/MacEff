@@ -5366,11 +5366,17 @@ def cmd_task_metadata_set(args: argparse.Namespace) -> int:
     # both sides to str() to also catch tasks that were already mutated
     # by the prior int-coercing version. Closes cversek/MacEff#112 Bug 1.
     if field == "parent_id" and value != "null":
-        # Light validation: must be a positive integer literal or the sentinel.
-        if not (value.isdigit() or value == "000"):
-            print(f"❌ parent_id must be a digit string (e.g. '000', '42') or 'null'")
+        # Normalise rather than merely validate. "0" passes isdigit(), so the
+        # old check accepted it and stored a parent that does not exist —
+        # #208 fixed exactly this on `task create` and the repair never
+        # reached here. A property that holds on the path that was fixed and
+        # not on its siblings is a coincidence of coverage, not a property.
+        from .task.create import normalize_parent_id
+        try:
+            value = normalize_parent_id(value)
+        except ValueError as e:
+            print(f"❌ {e}")
             return 1
-        # Keep as-is (string) — preserves "000" sentinel exactly.
     elif field == "created_cycle" and value != "null":
         try:
             value = int(value)
@@ -5515,14 +5521,22 @@ def cmd_task_reparent(args: argparse.Namespace) -> int:
         return 1
 
     new_parent_raw = args.parent
-    # Validate parent argument: must be digit string or the literal "null"
-    if new_parent_raw != "null" and not (new_parent_raw.isdigit() or new_parent_raw == "000"):
-        print(f"❌ <parent> must be a digit string (e.g. '000', '42') or 'null'")
-        return 1
-
-    # Normalise: "null" maps to None inside MTMD but we store "null" as sentinel
-    # on the wire so callers see consistent string output.
-    new_parent = new_parent_raw  # keep as string throughout
+    # "null" maps to None inside MTMD but is stored as the literal on the wire
+    # so callers see consistent string output. Everything else goes through the
+    # shared normaliser: `reparent 204 0` used to report success and attach the
+    # task to a parent that does not exist, dropping it out of the tree
+    # entirely. Agents reach for `0` because the tree PRINTS the root as #000
+    # and 0 is the obvious integer for it — so the fix belongs at the boundary,
+    # once, rather than as a formatting rule every caller has to know.
+    if new_parent_raw == "null":
+        new_parent = "null"
+    else:
+        from .task.create import normalize_parent_id
+        try:
+            new_parent = normalize_parent_id(new_parent_raw)
+        except ValueError as e:
+            print(f"❌ {e}")
+            return 1
 
     # Reject self-as-parent
     if new_parent != "null" and str(task_id) == new_parent:
@@ -6077,6 +6091,35 @@ def _doctor_check_gh_state(tasks, include_completed: bool = False):
     return findings
 
 
+def _doctor_check_parent_exists(tasks):
+    """Tasks whose parent_id names no existing task, as (task_id, parent_id).
+
+    The marker check is INTERNAL consistency — does the [^#N] marker agree with
+    parent_id on the same object. A task orphaned onto a non-existent parent is
+    perfectly self-consistent and completely unreachable, so that check passes
+    while the tree is silently short by one. Referential integrity is a
+    different property and needs its own question asked.
+
+    The root is its own parent-of-last-resort and is not required to exist as a
+    child of anything.
+    """
+    known = {str(t.id) for t in tasks}
+    known.add("000")
+    findings = []
+    for t in tasks:
+        pid = getattr(t, "parent_id", None)
+        if pid is None:
+            continue
+        pid = str(pid).lstrip("#")
+        if pid in ("", "null", "None"):
+            continue
+        if str(t.id) == "000":
+            continue
+        if pid not in known:
+            findings.append((str(t.id), pid))
+    return findings
+
+
 def cmd_task_doctor(args: argparse.Namespace) -> int:
     """Reconcile stored task records against the authorities they derive from.
 
@@ -6111,6 +6154,19 @@ def cmd_task_doctor(args: argparse.Namespace) -> int:
                 print("     ✅ healed")
             else:
                 print(f"     ❌ could not write #{task_id}")
+
+    orphan_findings = _doctor_check_parent_exists(tasks)
+    print()
+    print(f"Referential integrity: {len(orphan_findings)} orphan(s)")
+    if not orphan_findings:
+        print("   ✅ every parent_id names a task that exists")
+    for task_id, pid in orphan_findings:
+        print(f"   #{task_id} names parent #{pid}, which does not exist.")
+        print("     It is unreachable from the tree. Reparent it to a real task or to the root:")
+        print(f"        macf_tools task reparent {task_id} 000")
+    # Deliberately not healed by --fix. Reparenting to the root makes the task
+    # reachable but asserts a placement nobody chose; where it actually belongs
+    # is a judgement the record no longer carries.
 
     gh_findings = []
     print()
@@ -7122,6 +7178,18 @@ def cmd_task_grant_update(args: argparse.Namespace) -> int:
     # Validate --value requires --field
     field = getattr(args, 'field', None)
     value = getattr(args, 'value', None)
+    # Normalise a parent_id grant to the same canonical form the write path
+    # uses. The grant is looked up BY VALUE, so a grant issued for "0" would
+    # stop matching a write normalised to "000" — the two halves have to agree
+    # on the spelling or the fix reads as a new permissions bug.
+    if field == "parent_id" and value is not None and value != "null":
+        from .task.create import normalize_parent_id
+        try:
+            value = normalize_parent_id(value)
+        except ValueError as e:
+            print(f"❌ {e}")
+            return 1
+
     if value is not None and field is None:
         print("❌ --value requires --field to be specified")
         return 1
