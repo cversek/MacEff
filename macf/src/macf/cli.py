@@ -1540,6 +1540,7 @@ def cmd_harness_install(args: argparse.Namespace) -> int:
         render_start,
         render_tmux_conf,
         render_unit,
+        render_watchdog,
         save_settings,
     )
 
@@ -3060,7 +3061,8 @@ def cmd_policy_recommend(args: argparse.Namespace) -> int:
               file=sys.stderr)
         print("   Start service: macf_tools search-service start", file=sys.stderr)
         try:
-            from .utils.recommend import get_recommendations
+            from .utils.recommend import (format_verbose_output,
+                                          get_recommendations)
             formatted, explanations = get_recommendations(query)
         except ImportError as e:
             print("⚠️ Policy recommend requires optional dependencies:")
@@ -5886,7 +5888,7 @@ def _ensure_store_gitignored_for_migration(target: Path) -> None:
         print(f"Warning: could not gitignore {target}: {e}", file=sys.stderr)
 
 
-def _gh_live_state(kind: str, repo_slug: str, number: str) -> "Optional[str]":
+def _gh_live_state(kind: str, repo_slug: str, number: str) -> "str | None":
     """Query GitHub for the current state of an issue or PR.
 
     Args:
