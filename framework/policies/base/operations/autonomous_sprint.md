@@ -36,6 +36,12 @@ A 🏃 SPRINT is a **workload-defined autonomous work session**. The agent execu
 - How does idea capture work during a sprint?
 - How do I handle mid-sprint scope additions?
 
+**3.1.2 Work the Sprint Generates**
+- An issue filed mid-sprint — does it need a task?
+- When do I create it, and why not at sprint close?
+- How do I decide whether it enters scope?
+- What must I record when it does NOT enter scope?
+
 **4 Gate Mechanics**
 - What is the scope gate and when does it fire?
 - Does the SPRINT use a timer gate?
@@ -169,6 +175,52 @@ macf_tools task create sprint "Goal description" \
 **Mid-sprint additions**: If you realize a task must be added during the sprint, re-invoke `scope set` with the full updated list — the command replaces the scope, so include everything you want tracked.
 
 **NEVER use `scope clear`** to exit a sprint. It triggers a permissions prompt (halts sprint when user is away) and destroys tracking without completion reports.
+
+#### 3.1.2 Work the Sprint Generates
+
+§3.1 scopes the workload a sprint *starts* with. Sprints also **produce** work,
+and that half has no rule.
+
+Investigating one scoped bug routinely surfaces adjacent defects, and filing them
+is the right response — better than absorbing an unrelated fix into the branch in
+front of you. But a filed issue is a commitment the task tree cannot see, and the
+`💡` note in §3.2 does not cover it: that records an *idea*, not an obligation
+with an issue number attached.
+
+**Create the task at the moment of filing**, not at sprint close. Same reason a
+frame is pushed *before* the interruption rather than after it: by close, the
+context that made it worth filing is gone, and what remains is a list of numbers
+whose significance has to be reconstructed.
+
+Then decide scope **explicitly, and record the decision either way**:
+
+- **In scope** — re-invoke `scope set` with the full updated list (§3.1).
+- **Out of scope** — note why on the sprint task. Legitimate reasons: work that
+  cannot be completed at all (a defect with no reproduction), a standing
+  discussion item with no terminal state, work belonging to another owner, or
+  work too large for the remaining budget.
+
+**The reason matters more than the choice.** An untracked issue and a
+deliberately-unscoped one are indistinguishable at sprint close; only the note
+tells them apart. Without it, a later reader cannot tell a judgement from an
+oversight, and will re-litigate both.
+
+The same applies to a **pull request opened during the sprint**. A PR is its own
+unit of work with its own terminal outcomes and its own failure modes — it goes
+stale, it needs a rebase, its CI goes red — and tracking only the issues it
+closes leaves all of that invisible. Use the PR task type.
+
+**Why this needs stating at all.** Neither act feels like adding to the workload.
+Filing an issue feels like clearing something; opening a PR feels like finishing
+something. So the addition is never *recognised* as one, and the tree diverges
+from reality while every individual step looks like progress. Observed: a sprint
+whose scope read 18 while 23 existed, a 28% divergence that the sprint's own
+completion report would have described without recording.
+
+**Relation to the anti-patterns in §5.** Close to Scope Gate Fatigue and the
+ASCII Duck, and distinct from both: those are about doing the *wrong* work, while
+this is doing the right work and leaving no trace of it. The corrective is
+opposite — record it, rather than stop doing it.
 
 ### 3.2 Task Note Discipline
 
