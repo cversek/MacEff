@@ -33,9 +33,9 @@ viz = [
 lint = [
     # The style gate in tools/lint_staged.sh, configured by ruff.toml at the
     # repo root. DECLARED rather than installed ambiently: a tool a gate depends
-    # on and nothing records is undeclared state, and the gate refuses to run
-    # rather than skip when it is absent — so a missing ruff blocks commits
-    # instead of silently disabling the check.
+    # on and nothing records is undeclared state. The gate REFUSES to run rather
+    # than skip when it is absent, so a missing ruff blocks commits instead of
+    # silently disabling the check.
     "ruff>=0.6",
 ]
 proxy = [

@@ -16,13 +16,36 @@ RUN --mount=type=cache,target=/var/cache/apt \
       ca-certificates curl wget gnupg sudo openssh-server \
       git git-lfs vim less build-essential python3 python3-venv python3-pip \
       python3-yaml \
-      nodejs npm \
       acl jq tini \
       tree \
       tmux rsync \
       libgl1 libxrender1 libxext6 libx11-6 libosmesa6 \
  && rm -rf /var/lib/apt/lists/* \
  && git lfs install --system
+
+# Node.js from NodeSource, PINNED to a major line.
+#
+# Ubuntu's `nodejs` package was v18. Claude Code declares `engines: node >= 22`,
+# and npm treats an unmet engine as a WARNING -- it installs anyway, the build
+# succeeds, and nothing reports that the runtime is unsupported. That is the
+# quiet failure this image kept shipping: a working-looking install on an engine
+# its author does not support.
+#
+# It genuinely ran (--help and `mcp list` both returned 0 on 18), which is
+# exactly why it survived: "it works" is not "it is supported", and the gap only
+# becomes visible when some feature reaches for a runtime API that is not there.
+#
+# Asserted rather than assumed, because an apt/NodeSource mix can leave two node
+# binaries and PATH decides which one anything actually gets.
+ARG NODE_MAJOR=22
+RUN set -eux; \
+    curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash -; \
+    apt-get install -y --no-install-recommends nodejs; \
+    rm -rf /var/lib/apt/lists/*; \
+    node --version; \
+    test "$(node --version | cut -d. -f1)" = "v${NODE_MAJOR}" \
+        || { echo "BUILD FAILED: node $(node --version) is not v${NODE_MAJOR}"; exit 1; }; \
+    echo "node ${NODE_MAJOR} OK ($(node --version), npm $(npm --version))"
 
 # Install pydantic v2 via pip (code requires field_validator from v2)
 RUN pip3 install --break-system-packages pydantic>=2.0

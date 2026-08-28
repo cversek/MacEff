@@ -2072,7 +2072,6 @@ def provision_pickup_boxes(broker_config: Path, handoff_root: Path) -> None:
                 f"mail delivered to it will be unreadable BY ITS RECIPIENT, "
                 f"while every send reports success.")
 
-
 def start_amail_services(agents_config: AgentsConfig) -> None:
     """Start the broker and the inbound watcher, and schedule the sweep.
 
@@ -2093,7 +2092,6 @@ def start_amail_services(agents_config: AgentsConfig) -> None:
     provisioned, this buys detection and not yet notification -- stated plainly
     because a partial control described as a whole one is the thing this
     function got wrong before.
-
     THE INTERPRETER IS NAMED EXPLICITLY rather than relying on the execute bit.
     The bit is provisioned in the image now, but the outage was a `setsid
     <script>` failing on a missing +x and reporting it to a log nobody reads, so

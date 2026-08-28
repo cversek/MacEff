@@ -246,13 +246,13 @@ def get_session_dir(
     """
     # Auto-detect session_id
     if not session_id:
-        # DEFERRED DELIBERATELY: session.py imports find_project_root from this
-        # module, so a module-level import here is circular. This is the
+        # DEFERRED DELIBERATELY: session.py imports find_project_root from
+        # this module, so a module-level import here is circular. This is the
         # justified-deferred-import case the coding standards name, and it is
-        # scoped to the one function that uses it -- the hazard that policy
-        # forbids is a function-level import whose name is then used in ANOTHER
-        # scope, which is how it becomes a NameError nobody sees until the
-        # branch runs.
+        # scoped to the one function that uses it -- the hazard the policy
+        # forbids is a function-level import whose name is then used in
+        # ANOTHER scope, which is how it becomes a NameError nobody sees
+        # until that branch runs.
         from .session import get_current_session_id
         session_id = get_current_session_id()
 

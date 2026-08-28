@@ -9731,6 +9731,19 @@ def _cmd_ar_send_keys(args):
     return send_keys(args.target, keys, enter=not getattr(args, 'no_enter', False))
 
 
+def _cmd_inject(args):
+    """Queue a slash command into this agent's own live CC pane.
+
+    Ergonomic, self-targeting wrapper over the supervisor send-keys side
+    channel: `macf_tools inject compact` self-resolves the supervisor whose
+    child is this session and types `/compact` into its pane (queues if sent
+    mid-turn). The canonical use is an operator, away from the keyboard,
+    directing the agent to compact itself.
+    """
+    from .supervisor import send_slash_to_self
+    return send_slash_to_self(args.command, target=getattr(args, "target", "") or "")
+
+
 def cmd_idea_create(args: argparse.Namespace) -> int:
     """Create a new idea."""
     from .ideas import create_idea
@@ -11158,6 +11171,16 @@ def _build_parser() -> argparse.ArgumentParser:
     transcripts_list_parser.add_argument("--json", dest="json_output", action="store_true",
                                          help="output as JSON")
     transcripts_list_parser.set_defaults(func=cmd_transcripts_list)
+
+    # inject: queue a slash command into this agent's own live pane
+    inject_parser = sub.add_parser(
+        "inject",
+        help="queue a slash command into this agent's own CC pane (e.g. inject compact)")
+    inject_parser.add_argument("command", help="slash command without the slash, e.g. 'compact'")
+    inject_parser.add_argument("--target", default="",
+                               help="supervisor name/pid to target directly "
+                                    "(default: self-resolve from this session id)")
+    inject_parser.set_defaults(func=lambda args: _cmd_inject(args))
 
     # auto-restart: process supervisor
     ar_parser = sub.add_parser("auto-restart", help="auto-restarting process supervisor")
