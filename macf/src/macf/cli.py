@@ -4509,6 +4509,77 @@ def get_tasks_mtime(tasks_dir) -> float:
         return 0.0
 
 
+PARENT_FINALIZATION_HINTS = {
+    "EXPERIMENT": ("Record any addenda **as subtasks** first, then write the analysis "
+                   "and the crystallization decision."),
+    "MISSION": ("Confirm the roadmap's success criteria are ticked with evidence "
+                "before closing."),
+    "PHASE": ("Roll their outcomes into this phase's completion report rather than "
+              "leaving them only in the children."),
+    "SPRINT": ("Scope is fully resolved. Close via the sprint's own completion path "
+               "rather than leaving the umbrella open."),
+    "PLAY_TIME": ("Scope is fully resolved. Close via the sprint's own completion path "
+                  "rather than leaving the umbrella open."),
+}
+
+
+def parent_finalization_reminder(completed_task_id, reader):
+    """Text to print when a completion leaves its parent with no open children.
+
+    `task complete` guards the PREMATURE direction — a parent closing over open
+    children refuses. The mirror case was silent: completing the LAST open child
+    left the parent in_progress with nothing to prompt the wrap-up, so the CLI
+    protected against premature closure and said nothing about stalled closure.
+
+    That asymmetry costs most on an EXPERIMENT parent, which carries the terminal
+    artifact: the analysis and the crystallization decision that says what the
+    results feed into. Every phase can be individually satisfying while the thing
+    the experiment was FOR never gets written.
+
+    Non-blocking by design. A hard gate would fire on every legitimate
+    intermediate state — a parent that genuinely has more children coming — and a
+    gate that is routinely dismissed reads as coverage while providing none.
+
+    Returns None when there is nothing to say, which is the common path.
+    """
+    task = reader.read_task(completed_task_id)
+    if task is None or not task.mtmd:
+        return None
+    parent_id = str(getattr(task.mtmd, "parent_id", "") or "").lstrip("#")
+    if not parent_id or parent_id == "000":
+        return None
+    parent = reader.read_task(parent_id)
+    if parent is None or is_terminal_status(parent.status):
+        return None
+
+    # A paused task reads as `pending`, so it counts as open and suppresses the
+    # reminder. That is the intended reading: paused work is deferred, not
+    # resolved, and a parent above it is not ready to finalize.
+    still_open = [
+        t.id for t in reader.read_all_tasks()
+        if t.mtmd
+        and str(getattr(t.mtmd, "parent_id", "") or "").lstrip("#") == parent_id
+        and str(t.id) != str(completed_task_id)
+        and t.status in ("pending", "in_progress")
+    ]
+    if still_open:
+        return None
+
+    ptype = getattr(parent.mtmd, "task_type", None) if parent.mtmd else None
+    hint = PARENT_FINALIZATION_HINTS.get(ptype)
+    lines = [f"📎 All children of #{parent_id} are now complete."]
+    if hint:
+        _article = "an" if ptype[:1] in "AEIOU" else "a"
+        lines.append(f"   #{parent_id} is {_article} {ptype} and is still open. "
+                     f"Before completing it:")
+        lines.append(f"   {hint}")
+    else:
+        # An unknown or absent type falls back rather than printing nothing —
+        # the state is worth surfacing even when the guidance is generic.
+        lines.append(f"   #{parent_id} is still open; all its children are complete.")
+    return "\n".join(lines)
+
+
 def unsatisfied_blockers(task, reader):
     """Blockers of `task` that have not been resolved, as (id, status) pairs.
 
@@ -8857,6 +8928,16 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
 
         print(f"✅ Task #{task_id} marked complete")
         print(f"   Breadcrumb: {breadcrumb}")
+        try:
+            _reminder = parent_finalization_reminder(task_id, reader)
+        except (AttributeError, OSError, ValueError) as e:
+            # A reminder is an advisory; failing to compute one must never
+            # jeopardise a completion that already succeeded on disk.
+            print(f"⚠️ MACF: could not check parent finalization (non-blocking): {e}",
+                  file=sys.stderr)
+            _reminder = None
+        if _reminder:
+            print(_reminder)
         print(f"   Report: {args.report[:80]}{'...' if len(args.report) > 80 else ''}")
         if task_type == "GH_ISSUE":
             if args.commit:
