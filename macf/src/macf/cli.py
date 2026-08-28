@@ -7479,22 +7479,43 @@ def cmd_task_start(args: argparse.Namespace) -> int:
         "plan_ca_ref": plan_ca_ref,
     })
 
-    # Auto-inject policies mapped to this task type via manifest
+    # Auto-inject policies mapped to this task type via manifest, ONCE PER
+    # POLICY PER CYCLE. The guide earns its cost for an agent opening its first
+    # task after a context loss; nothing distinguished that from the fourth
+    # task-start of the same cycle, so identical guides were re-injected
+    # verbatim. The repeat is not merely wasted context — a block that arrives
+    # unchanged for the fourth time gets skimmed, and thereafter so does the
+    # first one.
     injected_policies = []
+    repeat_policies = []
     if task_type:
         from .utils.manifest import get_policies_for_task_type
         from .utils import find_policy_file
+        try:
+            from .event_queries import get_policies_surfaced_this_cycle
+            already = get_policies_surfaced_this_cycle()
+        except (ImportError, OSError, ValueError) as e:
+            # Falling back to injecting is the safe direction: a guide too many
+            # costs context, a guide too few costs the recovery case this exists
+            # for. Say so rather than silently changing behaviour.
+            print(f"⚠️ MACF: could not check prior nav-guide injections, injecting: {e}",
+                  file=sys.stderr)
+            already = {}
         policies = get_policies_for_task_type(task_type)
         for policy_name in policies:
             policy_path = find_policy_file(policy_name)
-            if policy_path:
-                append_event("policy_injection_activated", {
-                    "policy_name": policy_name,
-                    "policy_path": str(policy_path),
-                    "source": "task_type_auto",
-                    "task_id": str(task_id),
-                })
-                injected_policies.append(policy_name)
+            if not policy_path:
+                continue
+            if policy_name in already:
+                repeat_policies.append((policy_name, already[policy_name]))
+                continue
+            append_event("policy_injection_activated", {
+                "policy_name": policy_name,
+                "policy_path": str(policy_path),
+                "source": "task_type_auto",
+                "task_id": str(task_id),
+            })
+            injected_policies.append(policy_name)
 
     # Cascade upstream (#115 / GH#212): a phase in_progress under an ancestor
     # still 'pending' makes the tree misreport where work stands — orientation
@@ -7523,6 +7544,10 @@ def cmd_task_start(args: argparse.Namespace) -> int:
         print("      (a phase cannot truly be underway while an ancestor reads 'pending')")
     if injected_policies:
         print(f"   Auto-injected policies: {injected_policies}")
+    for _pname, _first in repeat_policies:
+        # One line instead of a wall: preserves the reminder and the pointer to
+        # where the content already is.
+        print(f"   nav guide for {_pname} already surfaced this cycle (first at #{_first})")
     if stale:
         _print_stale_resume_banner(task_id, stale[0], stale[1], stale[2])
     return 0
