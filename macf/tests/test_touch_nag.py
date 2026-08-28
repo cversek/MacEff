@@ -26,7 +26,12 @@ def nag_env(tmp_path, monkeypatch):
 
     class FakeReader:
         def __init__(self):
+            # `session_path` is what the nag reads: the RESOLVED store, which
+            # honours task_store.mode. `tasks_dir` is the legacy per-session
+            # root and is kept here only because it is still the accessor a
+            # reader of this fixture expects to see named.
             self.tasks_dir = tasks_dir
+            self.session_path = tasks_dir
 
     import macf.task
     import macf.utils
