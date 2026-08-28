@@ -379,3 +379,66 @@ class TestReadyIsEarnedNotInferred:
             _Task("2", "in_progress", [_Update(900)]),
         ]
         assert self._states(tasks)["1"] == "ready"
+
+
+class TestAttentionIsHandedBackOnCompletion:
+    """Completion is when a frame closes and attention has nowhere assigned.
+
+    It used to end in silence, so the next move got chosen from whatever was
+    loudest in context rather than from the stack.
+
+    The output is asymmetric on purpose: a routine completion needs one line,
+    a completion that FREES a parked frame needs the whole board, because a
+    cleared blocker changes the ordering of everything remaining rather than
+    just the next item.
+    """
+
+    class _Reader:
+        def __init__(self, tasks):
+            self._t = tasks
+
+        def read_all_tasks(self):
+            return list(self._t)
+
+    def _run(self, tasks, completed):
+        import io
+        import contextlib
+        from macf.cli import _hand_attention_back
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            _hand_attention_back(completed, self._Reader(tasks))
+        return buf.getvalue()
+
+    def test_a_routine_completion_prints_one_stack_line(self):
+        tasks = [
+            _Task("1", "in_progress", [_Update(100)]),
+            _Task("2", "in_progress", [_Update(900)]),
+        ]
+        out = self._run(tasks, "9")
+        assert "Stack: #1" in out
+        assert "completion criteria" in out
+        assert "re-ordered" not in out, "nothing was freed; the board is not needed"
+
+    def test_freeing_a_parked_frame_prints_the_whole_board(self):
+        tasks = [
+            _Task("1", "in_progress", [_Update(100)], blocked_by=["9"]),
+            _Task("9", "completed", [_Update(50)]),
+            _Task("2", "in_progress", [_Update(900)]),
+        ]
+        out = self._run(tasks, "9")
+        assert "freed 1 parked frame" in out
+        assert "#1" in out and "#2" in out, "re-sequencing needs every frame, not the head"
+
+    def test_credit_goes_only_to_the_blocker_that_actually_cleared(self):
+        """A frame freed by something else must not be attributed to this task."""
+        tasks = [
+            _Task("1", "in_progress", [_Update(100)], blocked_by=["9"]),
+            _Task("9", "completed", [_Update(50)]),
+            _Task("2", "in_progress", [_Update(900)]),
+        ]
+        out = self._run(tasks, "7")          # 7 blocked nothing
+        assert "freed" not in out
+
+    def test_silence_when_nothing_is_owed(self):
+        """A completion that empties the stack should not manufacture advice."""
+        assert self._run([_Task("2", "in_progress", [_Update(900)])], "9") == ""

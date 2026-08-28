@@ -5706,6 +5706,74 @@ def cmd_task_reparent(args: argparse.Namespace) -> int:
         return 1
 
 
+_FRAME_ICON = {"active": "▶️ ", "enclosing": "📂", "parked": "⏸️ ",
+               "ready": "🟢", "deferred": "⚠️ "}
+
+
+def _render_frames(frames) -> None:
+    """Print the work stack. Shared so `trace` and a completion cannot diverge.
+
+    Two callers render this now, and a second copy would drift — the states are
+    a published taxonomy, so two renderings of them would eventually disagree
+    about what the vocabulary means.
+    """
+    for f in frames:
+        when = _rel_age_short(f.last_touch) if f.last_touch else "never"
+        print(f"   {_FRAME_ICON.get(f.state, '  ')} #{f.task_id:<6} {f.state:<10} last touched {when}")
+        print(f"        {_strip_ansi(f.subject)[:96]}")
+        if f.blockers_open:
+            print(f"        ⏸  waiting on {', '.join('#' + b for b in f.blockers_open)}")
+        elif f.state == "ready" and f.blockers_resolved:
+            # The transition, stated. This is the fact an operator scans for
+            # during a lull: not "what did I drop" but "what is ripe to resume".
+            print(f"        🟢 unblocked — {', '.join('#' + b for b in f.blockers_resolved)} "
+                  f"{'have' if len(f.blockers_resolved) > 1 else 'has'} since resolved")
+        if f.parent_completed and f.state != "active":
+            print(f"        ⚠️  its parent is marked COMPLETE while this is still running")
+
+
+def _hand_attention_back(completed_task_id, reader) -> None:
+    """After a completion, say where attention is owed next.
+
+    Completion is the moment a frame closes and attention has nowhere assigned.
+    It used to end in silence, so the next move got chosen from whatever was
+    loudest in context rather than from the stack — which is how a frame stays
+    open for hours while every individual step looks like progress.
+
+    The output is deliberately asymmetric. A routine completion prints ONE line:
+    the frame attention is owed to, plus a reminder that a completion report is
+    a claim about verification. A completion that FREES a parked frame prints
+    the whole trace, because a cleared blocker changes the ORDERING of
+    everything remaining, not just the next item — and re-sequencing is a
+    decision that needs the whole board, not a headline.
+    """
+    from .task.trace import open_frames
+    tasks = reader.read_all_tasks()
+    frames = open_frames(tasks)
+
+    # Did this completion earn any frame its `ready` state? A frame is freed by
+    # THIS task only if it declared it as a blocker; asking that directly avoids
+    # crediting this completion for a state something else produced.
+    freed = [
+        f for f in frames
+        if f.state == "ready" and str(completed_task_id) in f.blockers_resolved
+    ]
+    if freed:
+        print(f"\n🟢 completing #{completed_task_id} freed "
+              f"{len(freed)} parked frame(s) — the stack has re-ordered:")
+        _render_frames(frames)
+        return
+
+    owed = [f for f in frames if f.state not in ("active", "enclosing")]
+    if not owed:
+        return
+    top = owed[0]
+    when = _rel_age_short(top.last_touch) if top.last_touch else "never"
+    print(f"\n🧵 Stack: #{top.task_id} ({top.state}, last touched {when}) is owed a return")
+    print(f"        {_strip_ansi(top.subject)[:88]}")
+    print("        Confirm this task's completion criteria were met, then return to it.")
+
+
 def cmd_task_trace(args: argparse.Namespace) -> int:
     """Show where attention has been, and what it owes a return to.
 
@@ -5750,21 +5818,7 @@ def cmd_task_trace(args: argparse.Namespace) -> int:
         print("   ✅ nothing in progress")
         return 0
 
-    icon = {"active": "▶️ ", "enclosing": "📂", "parked": "⏸️ ",
-            "ready": "🟢", "deferred": "⚠️ "}
-    for f in frames:
-        when = _rel_age_short(f.last_touch) if f.last_touch else "never"
-        print(f"   {icon.get(f.state, '  ')} #{f.task_id:<6} {f.state:<10} last touched {when}")
-        print(f"        {_strip_ansi(f.subject)[:96]}")
-        if f.blockers_open:
-            print(f"        ⏸  waiting on {', '.join('#' + b for b in f.blockers_open)}")
-        elif f.state == "ready" and f.blockers_resolved:
-            # The transition, stated. This is the fact an operator scans for
-            # during a lull: not "what did I drop" but "what is ripe to resume".
-            print(f"        🟢 unblocked — {', '.join('#' + b for b in f.blockers_resolved)} "
-                  f"{'have' if len(f.blockers_resolved) > 1 else 'has'} since resolved")
-        if f.parent_completed and f.state != "active":
-            print(f"        ⚠️  its parent is marked COMPLETE while this is still running")
+    _render_frames(frames)
 
     # Recommend a frame that can actually be worked. Pointing at a parked frame
     # sends the agent at something legitimately waiting on a blocker, and this
@@ -9032,6 +9086,13 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
             _reminder = None
         if _reminder:
             print(_reminder)
+        try:
+            _hand_attention_back(task_id, reader)
+        except (AttributeError, OSError, ValueError, ImportError) as e:
+            # Advisory, like the reminder above: a completion that already
+            # succeeded on disk must not be jeopardised by a display step.
+            print(f"⚠️ MACF: could not render the stack after completion "
+                  f"(non-blocking): {e}", file=sys.stderr)
         print(f"   Report: {args.report[:80]}{'...' if len(args.report) > 80 else ''}")
         if task_type == "GH_ISSUE":
             if args.commit:
