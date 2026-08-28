@@ -352,3 +352,20 @@ This policy evolves through:
      Link what this policy GOVERNS, never what it merely mentions. -->
 
 [[verification]] [[coverage]] [[methodology]]
+
+---
+
+## Distinguish Errors by What the Reader Must Do Differently
+
+Not by what raised them. Two failures that demand the same response are one
+error; two that demand different responses are two, however similar their
+tracebacks.
+
+**"Unreadable or malformed" is a call site admitting it cannot tell which** — and
+it pushes that ignorance onto every reader downstream, none of whom are better
+placed to resolve it. A missing file and a corrupt one need different actions
+from a human: one is provisioning, the other is repair.
+
+Make the distinction **once, in the layer that has the context to make it**, and
+let everything above inherit an answer instead of the ambiguity.
+
