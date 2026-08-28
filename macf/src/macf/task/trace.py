@@ -15,7 +15,7 @@ This module performs the other reductions: the path attention actually took,
 and the frames it left behind without returning.
 """
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 
 SENTINEL_TASK_ID = "000"
@@ -61,16 +61,37 @@ class Frame:
         the work is proceeding one level down. A MISSION with a running phase
         is the ordinary case, and calling it a dropped frame would make the
         false-alarm rate scale with *good* decomposition discipline.
-    ``abandoned``
-        Unblocked, and attention went elsewhere without completing it. This is
-        the dropped frame.
+    ``ready``
+        Was blocked, and every declared blocker has since resolved. The frame
+        is ripe to pick back up. This is the most actionable fact the stack
+        knows, and it used to be destroyed on its way through: when a blocker
+        completed, ``blockers_open`` emptied and the task fell straight into the
+        residual, so "this was waiting on something and that something is done"
+        became indistinguishable from "nobody ever returned to this".
+    ``deferred``
+        Nothing blocking it, and attention went elsewhere without completing it.
 
-    The four states partition the open frames exhaustively: attention is here,
-    or below here, or the frame is waiting on something, or it was dropped.
-    That is why ``abandoned`` can be decided last without being a *residual* —
-    the distinction matters, because a catch-all branch assigns the most
-    alarming label to every case its author did not enumerate. ``enclosing``
-    exists precisely because hierarchy was such a case.
+    ``ready`` is EARNED by an observed transition, never inferred from current
+    state: it requires that a blocker was declared and has since cleared. A task
+    that was never blocked and simply got set down is ``deferred``. Without that
+    rule everything drifts into ``ready`` over time and the signal dies exactly
+    the way the old residual did — a state that eventually describes most of the
+    list stops discriminating, which is the failure being fixed.
+
+    ``deferred`` names the observable rather than the motive. The previous name,
+    ``abandoned``, asserted something the data cannot support: a frame set down
+    when priorities shifted and one genuinely forgotten are identical here —
+    in_progress, no open blocker, attention elsewhere. Picking the uncharitable
+    reading told operators they had dropped work they fully intended to return
+    to, and a label wrong most of the time gets discounted in the cases where it
+    is right.
+
+    The five states partition the open frames exhaustively: attention is here,
+    or below here, or the frame waits on something, or that something has
+    cleared, or it was set down. That is why the last branch can be decided last
+    without being a *residual* — a catch-all assigns its label to every case its
+    author did not enumerate, which is how both ``enclosing`` and ``ready`` came
+    to be missing.
     """
     task_id: str
     subject: str
@@ -78,6 +99,10 @@ class Frame:
     last_touch: Optional[int]
     blockers_open: List[str]
     parent_completed: bool
+    # Declared blockers that have reached a terminal status. Non-empty with an
+    # empty blockers_open is what makes a frame `ready` rather than `deferred`,
+    # and it is also the ordering signal: freshly ready outranks long-ready.
+    blockers_resolved: List[str] = field(default_factory=list)
 
 
 def _breadcrumbs(task):
@@ -160,9 +185,14 @@ def open_frames(tasks) -> List[Frame]:
     frames = []
     for task in in_progress:
         tid = str(task.id)
+        _declared = [str(b) for b in (getattr(task, "blocked_by", None) or [])]
         blockers_open = [
-            str(b) for b in (getattr(task, "blocked_by", None) or [])
-            if str(b) in by_id and by_id[str(b)].status not in ("completed", "archived")
+            b for b in _declared
+            if b in by_id and by_id[b].status not in ("completed", "archived")
+        ]
+        blockers_resolved = [
+            b for b in _declared
+            if b in by_id and by_id[b].status in ("completed", "archived")
         ]
         parent_id = getattr(getattr(task, "mtmd", None), "parent_id", None)
         parent = by_id.get(str(parent_id)) if parent_id is not None else None
@@ -177,8 +207,12 @@ def open_frames(tasks) -> List[Frame]:
             state = "enclosing"
         elif blockers_open:
             state = "parked"
+        elif blockers_resolved:
+            # A blocker was declared and has cleared: ripe to resume. Requires
+            # the declaration, so a never-blocked frame cannot arrive here.
+            state = "ready"
         else:
-            state = "abandoned"
+            state = "deferred"
 
         frames.append(Frame(
             task_id=tid,
@@ -187,6 +221,7 @@ def open_frames(tasks) -> List[Frame]:
             last_touch=last_touch(task),
             blockers_open=blockers_open,
             parent_completed=parent_completed,
+            blockers_resolved=blockers_resolved,
         ))
 
     frames.sort(key=lambda f: (f.last_touch is None, f.last_touch or 0))
