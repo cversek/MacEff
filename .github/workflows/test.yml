@@ -41,3 +41,37 @@ jobs:
           --ignore=macf/tests/test_get_token_info.py
           --ignore=macf/tests/test_handle_session_start.py
         timeout-minutes: 3
+
+  style:
+    # The gate `ruff.toml` describes as blocking. It was configured, scripted,
+    # and invoked by nothing: ruff lives in the `lint` extra, which the test job
+    # does not install, and the pre-commit hook that the config credits runs
+    # OPSEC, identity and silent-exception checks but never these. So `F821`
+    # and `E722` held at zero by nobody's enforcement.
+    #
+    # It belongs in CI rather than only in a hook because `.git/hooks/` is not
+    # versioned -- it is per-clone, so no claim of the form "enforced repo-wide
+    # by a git hook" can be true of any repository. CI is where every clone
+    # meets the same gate.
+    #
+    # Cheap enough to run unmatrixed: these are syntactic checks, and their
+    # answer does not vary by interpreter version.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install the linter
+        run: pip install -e "./macf[lint]"
+
+      - name: Blocking rules (must stay at zero)
+        # F821 caught five real latent NameErrors on its first run, including
+        # four in hook handlers that fire on every tool call -- where an
+        # undefined name is a session-wide failure, not a local one.
+        run: ruff check . --select F821,E722
+
+      - name: Style ratchet (counts must not grow)
+        run: tools/style_check.py
