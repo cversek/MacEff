@@ -3806,8 +3806,36 @@ def cmd_mode_set(args: argparse.Namespace) -> int:
                     print("✅ autoCompactEnabled set to true")
                 else:
                     print("⚠️  Could not update autoCompactEnabled")
-                if set_permission_mode("bypassPermissions"):
-                    print("✅ permissions.defaultMode set to bypassPermissions")
+                # The permission level AUTO_MODE requests is a POLICY DECISION,
+                # so it is configurable and its default is re-derivable rather
+                # than frozen into a literal.
+                #
+                # It used to hardcode "bypassPermissions", correctly, at a time
+                # when that was the only way to get unattended operation. The
+                # client has since grown a purpose-built `auto` mode, which is
+                # not another static level but a maintained CLASSIFIER with its
+                # own rules for the risk classes an agent framework actually
+                # meets -- secret-store writes, irreversible local destruction,
+                # permission grants, audit tampering. Under bypassPermissions
+                # NONE of it evaluates: the maximal level does not merely grant
+                # more, it switches the classifier off and replaces it with
+                # nothing.
+                #
+                # A deployment that genuinely needs bypassPermissions can still
+                # have it -- by DECLARING it somewhere a reviewer can see, which
+                # a hardcoded literal never allowed.
+                from .config import resolve_setting
+                _perm_mode, _perm_src = resolve_setting(
+                    "MACF_AUTO_MODE_PERMISSION_MODE",
+                    "modes.auto.permission_mode",
+                    "auto",
+                )
+                if set_permission_mode(_perm_mode):
+                    print(f"✅ permissions.defaultMode set to {_perm_mode} (from {_perm_src})")
+                    if _perm_mode == "bypassPermissions":
+                        print("   ⚠️  bypassPermissions disables the client's auto-mode "
+                              "classifier entirely — nothing evaluates secret-store "
+                              "writes, irreversible destruction, or permission grants.")
                 else:
                     print("⚠️  Could not update permissions.defaultMode")
                 if toggle_write_ask_for_auto_mode(True):
