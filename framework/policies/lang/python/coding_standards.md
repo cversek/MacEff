@@ -366,9 +366,10 @@ or the default passed as a parameter. Where a default must be chosen, choose by
 | `return None` / `return False` on miss | conflates absent with unreachable | sentinel, or explicit parameter |
 | caller relies on falsiness | the default is invisible | state the fallback where it is chosen |
 
-A new hardcoded numeric `limit=` on an event scan should be justified at the
-site with a `# noqa` and a reason, the way other suppressions are — the point is
-that the choice becomes visible, not that it is forbidden.
+This is enforced: **MACEFF006** flags a hardcoded numeric `limit=` on an event
+scan. A genuinely justified one stays possible — suppress it at the site with
+`# noqa: MACEFF006 - <reason>`, the way other exceptions are recorded. The point
+is that the choice becomes visible and auditable, not that it is forbidden.
 
 ## Anti-Pattern Examples
 

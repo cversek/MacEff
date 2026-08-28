@@ -148,6 +148,31 @@ class TestThrowawayUnpacking:
         assert "MACEFF005" not in codes("_, value = pair()\n")
 
 
+class TestEventScanRowLimit:
+    """A row limit on an event scan buys nothing and costs the honest negative.
+
+    These scans exit on their first match, so the bound is free when the event
+    exists and only takes effect when it does not — returning a miss the caller
+    reads as a fact about state. Measured consequence: USER_IDLE cleared while
+    the operator was away, because 200 of the agent's own events buried their
+    last input and `None` was read as "present".
+    """
+
+    def test_flags_a_hardcoded_row_limit(self):
+        assert "MACEFF006" in codes("for e in read_events(limit=50, reverse=True):\n    pass\n")
+
+    def test_unbounded_is_the_house_style(self):
+        assert "MACEFF006" not in codes("for e in read_events(limit=None, reverse=True):\n    pass\n")
+
+    def test_a_caller_supplied_limit_is_explicit_and_allowed(self):
+        """`limit=limit` puts the choice at the call site, which is the point."""
+        assert "MACEFF006" not in codes("def f(limit):\n    return read_events(limit=limit)\n")
+
+    def test_other_calls_with_a_limit_are_not_our_business(self):
+        """Over-matching would flag every paginated API in the tree."""
+        assert "MACEFF006" not in codes("rows = fetch_page(limit=50)\n")
+
+
 class TestSuppressionIsHonoured:
     """A justified exception must be expressible, or the rule gets disabled."""
 

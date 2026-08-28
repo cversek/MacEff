@@ -33,6 +33,9 @@ from typing import Dict, Iterable, List, Optional, Sequence
 #: depth, which is what breaks silently when a file moves.
 PARENT_CHAIN_LIMIT = 1
 
+# Readers of the append-only event log. A row limit on these is MACEFF006.
+_EVENT_SCAN_FUNCS = frozenset({"read_events"})
+
 _NOQA_RE = re.compile(r"#\s*noqa\b(?::\s*(?P<codes>[A-Za-z0-9,\s]+))?")
 
 
@@ -189,6 +192,29 @@ def check_source(source: str, *, path: Optional[Path] = None) -> List[Finding]:
                         "are identified only by where they sit, so a change to the "
                         "callee's order silently rebinds the ones you kept. Have the "
                         "callee return a named record and read the fields you want.")
+
+        # ---- MACEFF006: a hardcoded row limit on an event scan ----------------
+        # The bound is denominated in ROWS while these questions are about time
+        # or most-recent-state, so unrelated writes consume the budget and the
+        # window shrinks exactly when the log is busy. The scans exit on their
+        # first match, so the limit costs nothing when the event exists and only
+        # bites when it does not -- returning a miss the caller reads as a fact.
+        if isinstance(node, ast.Call):
+            func = node.func
+            fname = getattr(func, "id", None) or getattr(func, "attr", None)
+            if fname in _EVENT_SCAN_FUNCS:
+                for kw in node.keywords:
+                    if kw.arg != "limit":
+                        continue
+                    if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, int):
+                        add("MACEFF006", node,
+                            f"scans the event log with a hardcoded limit="
+                            f"{kw.value.value}. The bound is in ROWS while the question "
+                            f"is about time or most-recent-state, so unrelated writes "
+                            f"shrink the window exactly when the log is busy -- and a "
+                            f"miss is then returned as a fact. Pass limit=None when the "
+                            f"scan exits on its first match, or stop at the first event "
+                            f"older than the interval you care about.")
 
     return found
 
