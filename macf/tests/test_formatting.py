@@ -125,10 +125,10 @@ class TestFormatMacfBrand:
 
     def test_session_id_detection(self):
         from macf.utils.formatting import format_macf_brand
-        with patch('macf.utils.cycles.detect_auto_mode', return_value=(True, "event")):
+        with patch('macf.modes.auto.detect_auto_mode', return_value=(True, "event")):
             assert format_macf_brand(session_id="s-123") == "🏗️ MACF 🤖"
 
     def test_detection_failure_falls_back_to_bare(self):
         from macf.utils.formatting import format_macf_brand
-        with patch('macf.utils.cycles.detect_auto_mode', side_effect=OSError("boom")):
+        with patch('macf.modes.auto.detect_auto_mode', side_effect=OSError("boom")):
             assert format_macf_brand(session_id="s-123") == "🏗️ MACF"

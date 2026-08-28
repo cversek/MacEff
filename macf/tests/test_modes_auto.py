@@ -9,7 +9,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from macf.utils.cycles import (
+from macf.modes.auto import (
     detect_auto_mode,
     set_auto_mode,
 )
@@ -40,7 +40,7 @@ class TestDetectAutoMode:
         """Returns MANUAL_MODE (False) with default source when no config found."""
         monkeypatch.delenv('MACF_AUTO_MODE', raising=False)
 
-        with patch('macf.utils.cycles.find_agent_home', side_effect=OSError("No agent home")):
+        with patch('macf.modes.auto.find_agent_home', side_effect=OSError("No agent home")):
             enabled, source = detect_auto_mode("test-session")
 
             assert enabled is False
@@ -111,7 +111,7 @@ class TestSetAutoMode:
     def test_handles_errors_gracefully(self):
         """Returns error message when exceptions occur."""
         # Force an error by patching find_agent_home
-        with patch('macf.utils.cycles.find_agent_home', side_effect=Exception("Error")):
+        with patch('macf.modes.auto.find_agent_home', side_effect=Exception("Error")):
             success, message = set_auto_mode(
                 enabled=True,
                 session_id="test-session",

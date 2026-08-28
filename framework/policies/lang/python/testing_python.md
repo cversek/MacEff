@@ -454,8 +454,7 @@ def test_confidence_scores_in_valid_range(monkeypatch):
         else:
             monkeypatch.delenv("MACF_AUTO_MODE", raising=False)
 
-        enabled, source, confidence = detect_auto_mode("test-session")
-        assert 0.0 <= confidence <= 1.0
+        enabled, source = detect_auto_mode("test-session")
         assert source == expected_source
 ```
 

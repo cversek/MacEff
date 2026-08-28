@@ -237,8 +237,15 @@ def format_macf_brand(session_id=None, auto_mode=None, indicators=None) -> str:
         auto_mode = False
         if session_id:
             try:
-                from .cycles import detect_auto_mode
+                from ..modes.auto import detect_auto_mode
                 auto_mode, _ = detect_auto_mode(session_id)
-            except Exception:
+            except (ImportError, OSError, ValueError) as e:
+                # The brand still renders without the mode indicator, so the
+                # caller is not blocked. Saying why is not optional: this runs in
+                # every hook, and a mode subsystem that has stopped resolving
+                # would otherwise show up only as a robot emoji that quietly
+                # stopped appearing.
+                print(f"⚠️ MACF: could not resolve mode for the banner: {e}",
+                      file=sys.stderr)
                 auto_mode = False
     return "🏗️ MACF 🤖" if auto_mode else "🏗️ MACF"
