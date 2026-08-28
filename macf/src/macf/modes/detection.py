@@ -126,8 +126,11 @@ def detect_active_modes(session_id: str, token_info: dict) -> Set[str]:
             10,
             coerce=int,
         )
-        last_activity = _get_last_user_activity_timestamp(session_id)
-        if last_activity and (time.time() - last_activity) > idle_timeout * 60:
+        # Ask whether anything happened inside the window, rather than when the
+        # last thing happened. See _had_user_activity_since for why the second
+        # question is the one that broke.
+        cutoff = time.time() - idle_timeout * 60
+        if not _had_user_activity_since(cutoff):
             modes.add("USER_IDLE")
     except (OSError, ValueError) as e:
         print(f"⚠️ MACF: USER_IDLE detection failed: {e}", file=sys.stderr)
@@ -582,6 +585,44 @@ def _get_last_user_activity_timestamp(session_id: str, sources: Optional[Set[str
             except (ValueError, TypeError):
                 pass
     return None
+
+
+def _had_user_activity_since(cutoff_epoch: float, sources=None) -> bool:
+    """True when a user_activity_detected event exists at or after ``cutoff_epoch``.
+
+    Asks the question USER_IDLE actually has — *has the user done anything in
+    the last N minutes* — instead of the harder one it used to ask, *when did
+    the user last do something*. The difference matters because the second
+    needs to reach an event of unbounded age, and the first only ever needs to
+    reach ``cutoff_epoch``.
+
+    That closes the defect this replaces. The old lookup scanned a fixed 200
+    rows; every macf_tools invocation appends an event, so a working agent
+    buried the user's last input past the window within minutes. The scan then
+    returned None, and ``if last_activity and ...`` read None as "the user is
+    present" — an emptiness the reader had produced by truncation, reported as
+    a measurement. Perversely, the mode meaning "the agent is working alone"
+    was switched off by the agent working alone.
+
+    The scan is bounded here too, but **in the unit being measured**: it stops
+    at the first event older than the cutoff. Volume cannot shrink that window,
+    only age can.
+
+    A False return is now honest — no matching activity exists in the interval,
+    which is exactly what idleness means.
+    """
+    for event in read_events(limit=None, reverse=True):
+        ts = _parse_epoch(event.get("timestamp"))
+        if ts is not None and ts < cutoff_epoch:
+            # Reverse order, so everything beyond here is older still.
+            return False
+        if event.get("event") != "user_activity_detected":
+            continue
+        if sources is not None and event.get("data", {}).get("source") not in sources:
+            continue
+        if ts is not None and ts >= cutoff_epoch:
+            return True
+    return False
 
 
 def _detect_quiet_mode_event(session_id: str) -> bool:
