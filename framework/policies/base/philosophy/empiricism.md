@@ -40,6 +40,7 @@ Empiricism establishes the epistemological foundation for all investigation, deb
 - How does the observability trap work?
 - What is the false absence fallacy?
 - What happens when a false absence is written into code rather than believed once?
+- What does a generalisation from two cases silently claim?
 - How do inherited conclusions propagate errors?
 
 **5 Integration with Other Policies**
@@ -238,6 +239,23 @@ bury the last sign of company.
 **The tell**: a predicate whose miss is never logged, never surfaced, and never
 distinguished from a negative answer. If nothing anywhere records "I could not
 tell", the system cannot be reporting honestly — it is reporting confidently.
+
+### 4.2.2 The Unvaried Axis
+
+**"It worked in both cases, so it generalises."**
+
+A generalisation from N=2 widens whichever axis *differed* between the cases and
+silently hardens every axis that did not. Both runs shared an operating system, a
+window size, a shell, a clock — and the conclusion quietly claims all of them.
+
+What makes this hard to catch is that the hardened assumptions were **never
+decisions**. Nobody chose them, so nobody remembers to doubt them, and they do
+not appear in the writeup as constraints because they did not feel like
+constraints.
+
+**Counter**: when stating a generalisation, name the axes you did NOT vary. The
+list is usually short, always uncomfortable, and is the difference between a
+finding and a coincidence that has not yet been contradicted.
 
 ### 4.3 The Plausibility Trap
 
