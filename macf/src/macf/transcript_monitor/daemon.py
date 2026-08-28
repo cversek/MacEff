@@ -589,7 +589,10 @@ def start_daemon(foreground: bool = False, poll_interval: float = DEFAULT_POLL_I
     """
     if is_running():
         pid = read_pid_file()
-        print(f"📡 Transcript Monitor already running (PID {pid})")
+        # stderr, not stdout: start_daemon is called from the SessionStart hook,
+        # whose stdout must be parseable JSON. See the note on the started-banner
+        # below — this branch has the same defect and is merely harder to reach.
+        print(f"📡 Transcript Monitor already running (PID {pid})", file=sys.stderr)
         return 0
 
     jsonl_path = find_current_transcript()
@@ -624,9 +627,21 @@ def start_daemon(foreground: bool = False, poll_interval: float = DEFAULT_POLL_I
     if pid > 0:
         # Parent: report and exit
         write_pid_file(pid)
-        print(f"📡 Transcript Monitor started (PID {pid})")
-        print(f"   Watching: {jsonl_path}")
-        print(f"   Poll interval: {poll_interval}s")
+        # stderr, ALL THREE. The SessionStart hook calls this when the monitor is
+        # down, and the hook's stdout must parse as JSON. Three lines here made
+        # json.loads fail at char 0, so Claude Code never extracted
+        # systemMessage and the compaction-recovery banner was silently dropped
+        # — the operator saw nothing at all on a compaction restart, while the
+        # agent still received the content as unparsed context. A one-directional
+        # failure with no error, no warning, and no partial output: it looks
+        # exactly like a session where nothing needed saying.
+        #
+        # Latent because the guard only calls this when the daemon is DOWN, and
+        # the daemon persists across sessions. The bug needed a session start
+        # coinciding with a dead monitor, which is why it read as intermittent.
+        print(f"📡 Transcript Monitor started (PID {pid})", file=sys.stderr)
+        print(f"   Watching: {jsonl_path}", file=sys.stderr)
+        print(f"   Poll interval: {poll_interval}s", file=sys.stderr)
         return 0
 
     # Child: become daemon
