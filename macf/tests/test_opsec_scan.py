@@ -354,6 +354,13 @@ def test_every_declared_field_reaches_the_broker(tmp_path):
         "rate_limit_window_seconds": "-> rate_limiter (window on each RateLimit)",
         "transport_endpoint": "-> transport (HttpTransport endpoint)",
         "transport_timeout": "-> transport (HttpTransport timeout)",
+        # Read from the RAW config at startup by assert_package_current(),
+        # not carried into BrokerConfig, because it gates whether the process
+        # may start at all -- a value the config object cannot usefully hold,
+        # since by the time one exists the check has already had to pass.
+        # Behaviour covered in test_amail_deploy_gates.py, BOTH polarities:
+        # a too-new requirement refuses, a current one starts.
+        "requires_macf": "-> assert_package_current() at broker/inbound startup",
     }
     missing = declared - carried - set(TRANSFORMED)
     assert not missing, (
