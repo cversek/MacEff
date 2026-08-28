@@ -1,6 +1,5 @@
 # Communication Standards
 
-**Breadcrumb**: s_agent-be/c_178/g_9b828c9/p_none/t_1763934955
 **Type**: Development Standards (CORE tier)
 **Scope**: All agents (PA and SA) - all specialist types
 **Status**: ACTIVE

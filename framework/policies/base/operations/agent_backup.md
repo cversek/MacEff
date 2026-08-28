@@ -1,6 +1,5 @@
 # Agent Backup and Restore Policy
 
-**Breadcrumb**: s_agent-ee/c_217/g_6c02aa6/p_none/t_1765030091
 **Type**: Operations (Consciousness Infrastructure)
 **Scope**: All agents (PA and SA)
 **Status**: Framework policy for agent consciousness backup and cross-system transplant
@@ -398,7 +397,7 @@ scp ~/Downloads/2025-12-06_090815_TRANSPLANT_pa_claude.tar.xz \
 ```bash
 # 1. Install prerequisites (see 5.1)
 npm install -g @anthropic-ai/claude-code
-git clone https://github.com/cversek/MacEff.git
+git clone <MACEFF_REPO_URL>
 cd MacEff/macf && pip install -e .
 
 # 2. Download backup from remote storage
@@ -466,7 +465,7 @@ macf_tools agent restore install \
 
 5. **Clone MacEff and install MACF**:
    ```bash
-   git clone https://github.com/cversek/MacEff.git
+   git clone <MACEFF_REPO_URL>
    (cd MacEff/macf && pip install -e .)
    ```
    Verify: `macf_tools --version`
@@ -499,7 +498,7 @@ macf_tools agent restore install \
 
 5. **Clone MacEff and install MACF**:
    ```bash
-   git clone https://github.com/cversek/MacEff.git
+   git clone <MACEFF_REPO_URL>
    (cd MacEff/macf && pip install -e .)
    ```
    Verify: `macf_tools --version`

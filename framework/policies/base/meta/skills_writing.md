@@ -1,6 +1,5 @@
 # Skills Definition Best Practices
 
-**Breadcrumb**: s_agent-eb/c_169/g_e5648c9/p_none/t_1763502673
 **Type**: Meta-Policy (Development Infrastructure)
 **Scope**: Skill definition authors (PA creating skill extensions)
 **Status**: Framework guidelines for skill definition creation

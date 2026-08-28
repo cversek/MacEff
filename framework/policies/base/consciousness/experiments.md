@@ -498,7 +498,6 @@ Before formal protocols, run quick informal tests to:
 # Quick Test NNN: [One-line description]
 
 **Date**: YYYY-MM-DD HH:MM
-**Breadcrumb**: c_XX/s_YYYYYYYY/p_ZZZZZZZ/t_TTTTTTTTTT/g_GGGGGGG
 **Duration**: 5-30 minutes max
 
 ## Hypothesis
@@ -546,7 +545,6 @@ Transform insights into structured plan WITH reflection checkpoints:
 # Experiment: [Descriptive Name]
 
 **Date**: YYYY-MM-DD
-**Breadcrumb**: c_XX/s_YYYYYYYY/p_ZZZZZZZ/t_TTTTTTTTTT/g_GGGGGGG
 **Status**: PLANNING | ACTIVE | COMPLETE
 
 ---
@@ -1100,7 +1098,6 @@ Stopped before completion? → ABANDONED
 # Experiment Analysis
 
 **Date**: YYYY-MM-DD
-**Breadcrumb**: s_XXXXXXXX/c_NN/g_YYYYYYY/p_ZZZZZZZ/t_TTTTTTTTTT
 **Terminal State**: [VALIDATED | REJECTED | INCONCLUSIVE | ABANDONED]
 
 ---
@@ -1408,7 +1405,6 @@ agent/public/roadmaps/YYYY-MM-DD_{Experiment_Name}/
 # ROADMAP: [Capability Name]
 
 **Created**: YYYY-MM-DD
-**Breadcrumb**: s_XXXXXXXX/c_NN/g_YYYYYYY/p_ZZZZZZZ/t_TTTTTTTTTT
 **Status**: PLANNING
 **Converted From**: Experiment [breadcrumb and path]
 
@@ -1591,7 +1587,6 @@ Experiment → MISSION conversion complete.
 ## Evidence Base
 
 **Source Experiment**: `agent/public/experiments/2026-01-15_140000_002_Temporal_Awareness/`
-**Breadcrumb**: s_abc12345/c_73/g_def6789/p_ghi01234/t_1234567890
 **Status**: VALIDATED (4/4 success criteria met)
 
 **Validated Findings**:
@@ -1613,7 +1608,6 @@ Experiment → MISSION conversion complete.
 
 **Converted**: 2026-01-16
 **Roadmap**: `agent/public/roadmaps/2026-01-16_Universal_Temporal_Awareness/roadmap.md`
-**Breadcrumb**: s_xyz98765/c_74/g_uvw54321/p_rst09876/t_9876543210
 
 **Why Converted**:
 - All 4 crystallization indicators met

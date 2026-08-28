@@ -249,7 +249,6 @@ Reports document the **completion of significant projects or development phases*
 # [Descriptive Title]: [Key Outcome or Theme]
 
 **Project Report - [Full Date]**
-**Breadcrumb**: c_XX/s_YYYYYYYY/p_ZZZZZZZ/t_TTTTTTTTTT/g_GGGGGGG
 **Status**: [Complete/Ongoing/Deferred]
 **Timeframe**: [Project duration or completion date]
 ```
@@ -259,7 +258,6 @@ Reports document the **completion of significant projects or development phases*
 # AgentX v0.3.0 Deployment: 73-Minute Bootstrap Success
 
 **Project Report - October 13, 2025**
-**Breadcrumb**: c_33/s_abc12345/p_def6789/t_1760123456/g_abc1234
 **Status**: Complete
 **Timeframe**: October 13, 2025 (73 minutes from zero to operational)
 ```

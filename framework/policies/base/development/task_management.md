@@ -1,6 +1,5 @@
 # Task Management Policy
 
-**Breadcrumb**: s_d4abc33b/c_410/g_6cd0bc4/p_02c3f10e/t_1770625420
 **Type**: Development Infrastructure
 **Scope**: All agents (PA and SA)
 **Status**: ACTIVE (successor to todo_hygiene.md)

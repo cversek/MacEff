@@ -400,7 +400,6 @@ created_by: PA
 - ✅ Platform detection logs show correct arch
 
 **Status**: COMPLETE
-**Breadcrumb**: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
 
 All platform tests passing. ARM64 builds 23% faster than x86_64 emulation.
 ```
@@ -539,7 +538,6 @@ Create experiments.md [/p_154c839/t_1761707112/.]
 
 ## FP#1: Brief Descriptive Title {#fp1-anchor}
 
-**Breadcrumb**: s_XXXXXXXX/c_NN/g_YYYYYYY/p_ZZZZZZZ/t_TTTTTTTTTT (FP discovery moment)
 **Phase**: [Phase where encountered]
 **Severity**: HIGH | MEDIUM | LOW
 

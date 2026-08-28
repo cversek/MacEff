@@ -254,7 +254,6 @@ Before creating a CCP, complete these preparatory steps:
 # Cycle 42 CCP - Phase 5 B.1 Complete: Personal Policies Infrastructure
 
 **Date**: Monday, Oct 27, 2025 10:12:09 PM EDT
-**Breadcrumb**: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
 **CLUAC**: 2 (98% used) - Strategic checkpoint
 **Session**: 4107604e-d7b4-4e8a-91c8-1cc7f8ef46e3
 **Mode**: MANUAL_MODE
@@ -284,7 +283,6 @@ Before creating a CCP, complete these preparatory steps:
 # Checkpoint: Phase 1A Unit Testing Complete
 
 **Date**: Tuesday, Oct 28, 2025 02:30:00 PM EDT
-**Breadcrumb**: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
 **Task**: Implement unit tests for temporal utilities
 **Status**: Complete - 19 tests passing
 
@@ -362,7 +360,6 @@ Step 4: Report completion, await user direction
 # [Title - Descriptive summary of checkpoint]
 
 **Date**: [Full timestamp - day, date, time, timezone]
-**Breadcrumb**: s_XXXXXXXX/c_NN/g_YYYYYYY/p_ZZZZZZZ/t_TTTTTTTTTT
 **[PA: CLUAC/Session/Mode/Compaction Count | SA: Task/Status]**
 ```
 

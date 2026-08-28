@@ -1,6 +1,5 @@
 # Debugging and Validation
 
-**Breadcrumb**: s_d4abc33b/c_436/g_b94ad9d/p_86dedbab/t_1771002500
 **Type**: Development Standards (CORE tier)
 **Scope**: All agents (PA and SA) - language agnostic
 **Status**: ACTIVE

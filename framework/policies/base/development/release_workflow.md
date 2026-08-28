@@ -1,6 +1,5 @@
 # Release Workflow Policy
 
-**Breadcrumb**: s_77270981/c_369/g_41cd5dd/p_4e029f38/t_1769303195
 **Type**: Development Infrastructure
 **Scope**: All agents (PA and SA) performing release operations
 **Status**: DRAFT
@@ -572,7 +571,6 @@ Each task is stored as `{id}.json`. Copy ONLY tasks being archived (not placehol
 **Release Date**: 2026-01-24
 **Version**: v0.3.3
 **Git Tag**: v0.3.3
-**Breadcrumb**: s_77270981/c_369/g_41cd5dd/p_4e029f38/t_1769303195
 
 ---
 
