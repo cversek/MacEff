@@ -136,6 +136,11 @@ Testing standards establish pragmatic test-driven development principles that ba
 - What is the scaling pattern?
 - How do I assess my layer?
 
+**4.9 A Check That Does Not Check Itself**
+- What must a step assert after doing the thing?
+- Why demonstrate a control in both polarities?
+- How does a control die while the suite stays green?
+
 **5 Anti-Patterns**
 - What is test suite bloat?
 - What is overengineering in tests?
@@ -844,6 +849,31 @@ function run_session_start_hook():
 4. **Is this building on validated foundations?** Yes = more pragmatic
 
 ---
+
+## 4.9 A Check That Does Not Check Itself Is a Comment
+
+**After doing the thing, assert the property — and assert the *property*, not the
+call's exit code.** A step that reports success because it ran is a comment with
+a return value: it tells you the code executed, which was never in doubt.
+
+### Demonstrate a control by breaking it, in both polarities
+
+A control never watched fail is a painted bulb. Introduce the violation it exists
+to catch and confirm it fires.
+
+**Both polarities, because a gate that refuses everything is not a gate.** A
+check that rejects the bad input AND accepts the good one has been shown to
+discriminate; a check only ever seen rejecting has been shown to reject.
+
+### A control that passes because a *different* control fired is dead
+
+Two checks guarding overlapping conditions can leave one of them inert forever:
+the suite is green, the dead check is never the reason, and nothing distinguishes
+it from a live one.
+
+Only mutating **the exact line the test names** reveals this. Break something
+nearby and the neighbouring control catches it, the suite goes red, and the dead
+check is credited with a save it did not make.
 
 ## 5 Anti-Patterns
 

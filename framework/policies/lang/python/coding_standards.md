@@ -52,6 +52,11 @@ Applies to all Python code written within MacEff framework projects.
 - When is an unbounded scan the cheaper choice?
 - How do I keep "not found" from becoming a claim about state?
 
+**7 Schemas and Declaredness in Python**
+- What Python mechanism closes a schema at a trust boundary?
+- Where should a non-obvious constraint be enforced, and why there?
+- When does `.get()` answer a different question than `in`?
+
 ---
 
 ## 0 Exception Type Selection
@@ -415,6 +420,50 @@ except FileNotFoundError as e:
 
 
 ---
+
+---
+
+## 7 Schemas and Declaredness in Python
+
+The Python expression of the general rules in `base/development/coding_standards`
+on closed schemas and trust boundaries. The *why* lives there; this is *how*.
+
+### 7.1 Pydantic is the schema mechanism, with `extra="forbid"`
+
+```python
+class AgentSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+```
+
+`extra="forbid"` is the Python expression of **closed schemas at trust
+boundaries**. Without it a mistyped key is silently discarded, and a control the
+author believed they had configured simply does not exist.
+
+### 7.2 Validators carry the rationale for non-obvious constraints
+
+Parse key material, paths and formats **in the validator**, not at first use.
+
+The point is not tidiness: it decides *where* a malformed value is discovered. In
+the validator, bad config fails at load with a message naming the field. At first
+use, it fails inside whatever was about to happen — which for security-relevant
+material means broken config has already reached the inside of a security
+decision.
+
+A validator is also the natural place to write down why a constraint exists,
+where the next reader meets the constraint rather than somewhere else.
+
+### 7.3 Membership test, not truthiness, for "was this declared?"
+
+```python
+if "key" in cfg:        # was it declared?
+if cfg.get("key"):      # is it declared AND non-empty AND non-zero?
+```
+
+The truthiness form collapses **absent** with **present-but-empty**, and those
+can be different facts — an explicitly empty allowlist is a decision, a missing
+one is an omission. Where the answer feeds an authorization, that collapse is the
+general rule in 9.3 being violated by an idiom rather than by a default.
+
 
 ## Cross-References
 
