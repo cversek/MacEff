@@ -222,6 +222,19 @@ class AgentSpec(BaseModel):
         description="Human-readable display name for GECOS field and statusline (e.g., 'Manny MacEff')"
     )
 
+    harness_session: Optional[str] = Field(
+        default=None,
+        description=(
+            "tmux session name for this agent's supervised harness. DECLARED "
+            "rather than derived from the agent key, because remote attach "
+            "helpers bind to this exact string: renaming the session when a "
+            "moniker or key changes strands every client that cannot be reached "
+            "to update. Falls back to the agent key when omitted, which is why "
+            "a deployment whose two values coincide never notices the "
+            "difference. Provisioning exports it as MACEFF_HARNESS_SESSION."
+        )
+    )
+
     flavor: AgentFlavor = Field(
         default=AgentFlavor.MACEFF,
         description=(

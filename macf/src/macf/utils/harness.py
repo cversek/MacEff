@@ -70,6 +70,13 @@ class HarnessParams:
     # identifier to serve both is what produced the untraceable nickname this
     # replaces.
     shell_prefix: Optional[str] = None
+    # Where the supervised session starts. NOT cosmetic: `claude -c` resolves
+    # which conversation to resume from the working directory, so an unset
+    # value means continuity depends on wherever the caller happened to be
+    # standing. A launch from the login home resumes a different conversation
+    # than a launch from the project, and neither reports a substitution.
+    # None keeps the previous behaviour (inherit the caller's cwd).
+    project_dir: Optional[Path] = None
     proxy_port: int = DEFAULT_PROXY_PORT
     context_window: int = DEFAULT_CONTEXT_WINDOW
     term: str = "xterm-256color"
@@ -224,6 +231,7 @@ def load_settings(p: HarnessParams) -> HarnessParams:
         p,
         channels=p.channels or tuple(data.get("channels") or ()),
         shell_prefix=p.shell_prefix or data.get("shell_prefix"),
+        project_dir=p.project_dir or (Path(data["project_dir"]) if data.get("project_dir") else None),
     )
 
 
@@ -232,7 +240,8 @@ def save_settings(p: HarnessParams) -> None:
     import json
     p.settings_path.parent.mkdir(parents=True, exist_ok=True)
     p.settings_path.write_text(json.dumps(
-        {"agent": p.agent, "channels": list(p.channels), "shell_prefix": p.shell_prefix},
+        {"agent": p.agent, "channels": list(p.channels), "shell_prefix": p.shell_prefix,
+         "project_dir": str(p.project_dir) if p.project_dir else None},
         indent=2) + "\n")
 
 
@@ -396,7 +405,23 @@ BASE=""
 # command runs under the tmux SERVER, which may have been created days earlier
 # by an unrelated login (verified 2026-08-07: an exported probe variable did
 # not arrive, and the server in question predated the shell by nine days).
-tmux new-session -d -s "$SESSION" "MACF_CONTEXT_WINDOW={p.context_window} TERM={p.term} $BASE{p.python} -m macf.supervisor _run_loop --name $AGENT --delay 5 --tmux-session $SESSION -- {p.child_path}" \\; set-option -t "=$SESSION" remain-on-exit on
+# The working directory is DECLARED, and it decides which conversation resumes.
+# `claude -c` keys continuity off the cwd, so inheriting the caller's directory
+# makes continuity depend on where a human happened to be standing. An absent or
+# deleted directory is REPORTED rather than silently substituted -- falling back
+# without a word is how a resume quietly lands in a different conversation.
+PROJECT_DIR="{p.project_dir or ''}"
+CD_ARG=()
+if [ -n "$PROJECT_DIR" ]; then
+  if [ -d "$PROJECT_DIR" ]; then
+    CD_ARG=(-c "$PROJECT_DIR")
+  else
+    echo "[harness] WARNING: declared project dir '$PROJECT_DIR' does not exist;" >&2
+    echo "[harness] starting in $PWD instead -- 'claude -c' may resume a DIFFERENT" >&2
+    echo "[harness] conversation than the one this agent was working in." >&2
+  fi
+fi
+tmux new-session -d -s "$SESSION" "${{CD_ARG[@]}}" "MACF_CONTEXT_WINDOW={p.context_window} TERM={p.term} $BASE{p.python} -m macf.supervisor _run_loop --name $AGENT --delay 5 --tmux-session $SESSION -- {p.child_path}" \\; set-option -t "=$SESSION" remain-on-exit on
 # ^ remain-on-exit is chained into the SAME tmux invocation, not run after it.
 # Without this a pane whose command dies immediately can take the session with
 # it before a second `tmux` process gets to set the option -- so the one case

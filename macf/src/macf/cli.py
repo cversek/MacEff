@@ -1464,6 +1464,12 @@ def _harness_params(args: argparse.Namespace):
     prefix = getattr(args, "shell_prefix", None)
     if channels or prefix:
         p = replace(p, channels=channels, shell_prefix=prefix)
+    # The session's working directory decides which conversation `claude -c`
+    # resumes, so it is taken from the declaration when provisioning exports one
+    # and never inferred from the caller's cwd.
+    project_dir = getattr(args, "project_dir", None) or os.environ.get("MACEFF_PROJECT_DIR")
+    if project_dir:
+        p = replace(p, project_dir=Path(project_dir))
     # Fill anything not given from what the last install recorded. Without this
     # a flagless `install --check` renders different artifacts and reports drift
     # that is not there — and acting on that report with --force would strip the
@@ -10082,6 +10088,9 @@ def _build_parser() -> argparse.ArgumentParser:
                                   help="render without proxy attachment")
     harness_generate.add_argument("--channel", action="append", metavar="PLUGIN",
                                  help="channel plugin the client must load; repeatable")
+    harness_generate.add_argument("--project-dir", metavar="DIR",
+                                 help="directory the supervised session starts in; decides which "
+                                      "conversation 'claude -c' resumes (default: MACEFF_PROJECT_DIR)")
     harness_generate.add_argument("--shell-prefix", metavar="NAME",
                                  help="short handle for the generated shell functions (default: the moniker half of the Calling Card)")
     harness_generate.add_argument(
@@ -10096,6 +10105,9 @@ def _build_parser() -> argparse.ArgumentParser:
                                  help="install without proxy attachment")
     harness_install.add_argument("--channel", action="append", metavar="PLUGIN",
                                  help="channel plugin the client must load; repeatable")
+    harness_install.add_argument("--project-dir", metavar="DIR",
+                                 help="directory the supervised session starts in; decides which "
+                                      "conversation 'claude -c' resumes (default: MACEFF_PROJECT_DIR)")
     harness_install.add_argument("--shell-prefix", metavar="NAME",
                                  help="short handle for the generated shell functions (default: the moniker half of the Calling Card)")
     harness_install.add_argument("--watchdog", action="store_true",
