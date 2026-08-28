@@ -124,8 +124,26 @@ class ConsciousnessConfig:
         Detection priority (highest to lowest):
         1. MACF_AGENT_ROOT environment variable override
         2. Container detection (/.dockerenv exists)
-        3. Host with .claude project
-        4. Fallback to home directory
+        3. MACEFF_AGENT_HOME_DIR, resolved through find_agent_home()
+        4. Host with .claude project
+        5. Fallback to home directory
+
+        Step 3 exists because this resolver and ``utils.paths.find_agent_home``
+        are two ways to answer one question, and they disagreed. That one
+        documents MACEFF_AGENT_HOME_DIR as "explicit configuration takes
+        precedence"; this one did not consult it at all, so a caller arriving
+        through ConsciousnessConfig resolved by *where the process was launched*
+        with the declared home set and ignored.
+
+        The visible cost was small and the invisible one was not. `macf_tools
+        time` reported an agent as having no checkpoints depending on the
+        directory it ran from; the test suite's autouse isolation fixture, which
+        works by setting MACEFF_AGENT_HOME_DIR, did not isolate anything
+        resolved through here.
+
+        The cwd walk stays as a FALLBACK, which is the right place for it: it is
+        a good guess when nothing has been declared and a poor override when
+        something has.
 
         Returns:
             Path object pointing to agent root directory.
@@ -140,12 +158,19 @@ class ConsciousnessConfig:
             user = os.getenv("USER", "user")
             return Path(f"/home/{user}/agent")
 
-        # 3. Host with .claude project
+        # 3. Declared agent home. Delegated rather than re-read from the
+        # environment, so the validation and creation semantics stay in one
+        # place; agent_root is the `agent/` directory *inside* the home.
+        if os.getenv("MACEFF_AGENT_HOME_DIR"):
+            from .utils.paths import find_agent_home
+            return find_agent_home() / "agent"
+
+        # 4. Host with .claude project
         if project_root := self._find_project_root():
             # Use project root directly for consciousness-centric workspace
             return project_root / "agent"
 
-        # 4. Fallback to home directory
+        # 5. Fallback to home directory
         return Path.home() / ".macf" / self.agent_name / "agent"
 
     def get_public_path(self) -> Path:
