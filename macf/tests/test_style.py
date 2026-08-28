@@ -219,3 +219,31 @@ class TestFindingIsNamedNotPositional:
     def test_report_cannot_be_built_positionally(self):
         with pytest.raises(TypeError):
             Report([], 0, [])
+
+
+class TestNumericLimitIsDeprecatedAtRuntime:
+    """The ratchet catches new code; the warning catches everything else.
+
+    MACEFF006 only sees the tree it lints. A DeprecationWarning reaches callers
+    the linter never runs against — downstream code, notebooks, an operator at a
+    REPL — and it names the replacement rather than only the offence.
+    """
+
+    def test_a_numeric_limit_warns(self):
+        import warnings
+        from macf.agent_events_log import read_events
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            # noqa: MACEFF006 - deliberate: this call exists to prove the
+            # deprecation fires. The rule flagging it is the rule working.
+            list(read_events(limit=5))  # noqa: MACEFF006
+        assert any(issubclass(c.category, DeprecationWarning) for c in caught)
+
+    def test_the_default_does_not_warn(self):
+        """Unbounded is the house style; it must not nag."""
+        import warnings
+        from macf.agent_events_log import read_events
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            next(read_events(reverse=True), None)
+        assert not [c for c in caught if issubclass(c.category, DeprecationWarning)]
