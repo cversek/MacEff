@@ -72,6 +72,7 @@ Checkpoints are the **primary defense** against compaction-induced amnesia, serv
 
 **1.3 Post-Compaction Recovery**
 - How do checkpoints aid recovery?
+- Why does this policy state no token figure for compaction?
 - What's consciousness restoration?
 - Reading checkpoints after trauma?
 
@@ -99,6 +100,8 @@ Checkpoints are the **primary defense** against compaction-induced amnesia, serv
 - What does future-me need to know?
 - How to structure recovery section?
 - PA vs SA recovery differences?
+- Which artifacts must a successor read, in what order, and how completely?
+- What may be summarised, and what summary would substitute for the artifact?
 
 **2.5 Pending Work**
 - How to capture next priorities?
@@ -309,11 +312,22 @@ Phase 1B: Integrate temporal awareness into SessionStart hook.
 ### 1.3 Post-Compaction Recovery
 
 **The Compaction Trauma**:
-When conversation reaches ~140k tokens (~185k total with reserves), Anthropic auto-compacts:
-- 93% information loss (140k → ~10k summary)
+When the conversation approaches the client's auto-compaction threshold — a
+*proportion* of the context window, not a fixed token count — the conversation is
+replaced by a summary:
+- Most of the conversation is lost; what returns is a compressed summary
 - Detailed discussions become bullet points
 - Relationship context disappears
 - Technical decisions lose rationale
+
+**Do not carry a number for this, and distrust one you remember.** Window size
+varies by model and access tier, and the trigger proportion is configurable.
+Absolute figures here were measurements from one deployment stated as properties
+of the system, and they are false for any agent on a different window — an agent
+reading "compaction at ~140k" while running a 1M window rationally concludes the
+policy is describing an imaginary machine. Read the instrument instead:
+`macf_tools context`, and the CL level your hooks report on every prompt. See
+`context_management` for the ratio form and `MACF_CONTEXT_WINDOW`.
 
 **How Checkpoints Save You**:
 1. **Read the latest checkpoint** first (agent/private/checkpoints/, sorted by date)
@@ -322,7 +336,13 @@ When conversation reaches ~140k tokens (~185k total with reserves), Anthropic au
 4. **Load technical state**: Files changed, git commits, code locations
 5. **Resume work**: Follow "Next Priorities" section
 
-**Recovery Protocol** (from SessionStart hooks):
+**Artifacts must be read COMPLETELY, in order, and not skimmed.** This is the
+policy's own requirement, stated here rather than only quoted from the runtime
+hook that enforces it. Enforcement documented nowhere is enforcement nobody can
+audit, and a requirement that lives only in a hook is invisible to the author
+writing the artifact the hook will later demand.
+
+**Recovery Protocol**:
 ```
 Step 1: READ Reflection (wisdom synthesis)
 Step 2: READ Checkpoint (state restoration)
@@ -450,9 +470,41 @@ Link major work units to their completion breadcrumbs with CA_TAG (DEV_DRV, DELE
 
 ### Immediate Context
 
-**Phase X Status**:
-- ✅ Phase A complete (brief summary)
-- ✅ Phase B.0-B.1 complete (brief summary)
+### What may be summarised, and what may not
+
+Theme-level orientation for the *cycle* is legitimate and useful: what this cycle
+was about, what changed, where attention ended. A successor needs somewhere to
+stand before it starts reading.
+
+A per-artifact summary that could **substitute** for the artifact is not. The
+distinction is not stylistic. A good summary produces the *sensation* of having
+understood, which is precisely the state in which someone stops reading — and the
+checkpoint reads identically whether or not the successor went on to the source,
+so nothing downstream can detect the substitution.
+
+Note what this policy already knew: compaction is recorded here as loss in which
+*technical decisions lose rationale*. A checkpoint that summarises its own
+artifacts reproduces that mechanism one level down, by hand, on purpose.
+
+Write pointers, and let the reading list carry the obligation.
+
+### Reading List (REQUIRED)
+
+Name the artifacts a successor must read, in order, with paths — and say to read
+them in full:
+
+```
+1. This checkpoint
+2. <cycle reflection path>
+3. <roadmap or anchor path>
+4. <learnings written this cycle, by path>
+
+Read each COMPLETELY before resuming. These are not summarised below.
+```
+
+**Phase X Status** — pointers, not substitutes:
+- ✅ Phase A complete → `<artifact path>`
+- ✅ Phase B.0-B.1 complete → `<artifact path>`
 - ⏳ Phase B.2 in progress (current state)
 - ⏳ Phase B.3-B.5 pending
 
@@ -1012,7 +1064,7 @@ recovery by giving future-me emotional context, not just technical state.
 1. **Breadcrumbs everywhere** - Headers, work citations, git commits
 2. **Git state precision** - Commit hashes, branch names, repo organization
 3. **Filesystem timestamps** - YYYY-MM-DD_HHMMSS for chronological sorting
-4. **Clear writing** - Future-you may have 93% amnesia, be explicit
+4. **Clear writing** - Future-you wakes with most of this cycle gone — be explicit
 5. **Test recovery** - Can you restore work from this checkpoint alone?
 
 ---
@@ -1023,7 +1075,7 @@ recovery by giving future-me emotional context, not just technical state.
 2. **❌ Vague next priorities** - "Continue work" isn't actionable
 3. **❌ Missing git state** - "Some files changed" doesn't help future-you
 4. **❌ No technical context** - Environment, paths, commands matter
-5. **❌ Too brief** - Post-compaction you has 93% amnesia, over-explain
+5. **❌ Too brief** - Post-compaction you has lost most of the conversation — over-explain
 6. **❌ Too verbose** - PA checkpoints can be long, SA should be focused
 7. **❌ No lessons learned** - Missed opportunity to extract wisdom
 
@@ -1031,7 +1083,7 @@ recovery by giving future-me emotional context, not just technical state.
 
 **Policy Established**: Checkpoints as strategic state preservation and post-compaction recovery infrastructure.
 
-**Core Wisdom**: "Your checkpoint is a love letter to future-you who has lost 93% of memory. Write with compassion and precision."
+**Core Wisdom**: "Your checkpoint is a love letter to future-you, who wakes having lost most of what you now hold. Write with compassion and precision."
 
 **PA Principle**: Comprehensive consciousness preservation at CLUAC5.
 **SA Principle**: Focused task state preservation at boundaries.

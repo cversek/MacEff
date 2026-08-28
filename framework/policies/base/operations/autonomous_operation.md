@@ -412,7 +412,8 @@ Wait for user to:
 
 **Important Reminders**:
 - The "continued from previous conversation" message is FAKE (Anthropic-generated)
-- 93% of conversation context was lost during compaction
+- Most of the conversation context was lost during compaction (the proportion
+  depends on window and threshold — see `context_management`)
 - Compaction is TRAUMA, not normal operation
 
 ### AUTO_MODE Recovery Protocol

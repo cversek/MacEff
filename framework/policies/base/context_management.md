@@ -175,7 +175,9 @@ macf_tools hooks status      # Hook states with timestamps
 
 **The Reality**:
 - Triggers at ~90% of usable context space
-- **~93% information loss**: conversation compressed to ~10k bullet point summary
+- **Most of the conversation is lost**: compressed to a bullet-point summary.
+  The proportion follows from the window size and the compaction threshold, both
+  configurable — it is not a constant of the system.
 - Total context shown includes reserved headroom (~22.5% of window)
 - Anthropic generates machine summary (NOT user-created)
 
