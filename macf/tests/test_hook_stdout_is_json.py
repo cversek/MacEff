@@ -32,10 +32,23 @@ class TestStartDaemonKeepsStdoutClean:
         return out.getvalue(), err.getvalue()
 
     def test_already_running_says_nothing_on_stdout(self, monkeypatch):
+        """NOTE the absence of raising=False.
+
+        The first version of this test patched `_read_pidfile` and
+        `_process_alive` with raising=False. Neither name exists — the real ones
+        are `is_running` and `read_pid_file` — so the patches silently did
+        nothing, start_daemon took an entirely different early-return path, and
+        the test passed locally only because this machine happened to have a
+        resolvable session transcript. CI, which does not, caught it.
+
+        raising=False turns "you patched something that isn't there" into
+        silence, which is the same shape as every other defect in this file:
+        a call reporting success for a narrower question than the caller asked.
+        """
         from macf.transcript_monitor import daemon as d
-        monkeypatch.setattr(d, "_read_pidfile", lambda *a, **k: 4242, raising=False)
-        monkeypatch.setattr(d, "_process_alive", lambda *a, **k: True, raising=False)
-        out, err = self._capture(lambda: d.start_daemon("/tmp/x.jsonl"))
+        monkeypatch.setattr(d, "is_running", lambda: True)
+        monkeypatch.setattr(d, "read_pid_file", lambda: 4242)
+        out, err = self._capture(d.start_daemon)
         assert out == "", f"stdout must stay parseable, got: {out!r}"
         assert "already running" in err
 
