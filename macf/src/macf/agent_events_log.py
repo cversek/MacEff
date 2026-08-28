@@ -225,21 +225,56 @@ def read_events(
     ``iter_lines_forward`` (line-by-line). Neither materializes the full
     file, so memory is O(chunk_size + max_line_size) regardless of log size.
 
-    Callers that only need the most recent N events SHOULD pass an explicit
-    ``limit`` so the generator stops early. ``limit=None`` still works but
-    will scan the whole file if no early break.
+    **A numeric ``limit`` is DEPRECATED** and emits a DeprecationWarning.
+
+    It is not a bound on the work; it is an unprovable assertion that the answer
+    lies within N rows, denominated in a unit the question does not use. The log
+    is shared, so unrelated writes consume the budget and the window shrinks
+    exactly when the log is busy — and when the scan falls off the end, the miss
+    is returned as a value the caller reads as a fact about state. USER_IDLE
+    cleared while the operator was away for precisely this reason.
+
+    An earlier version of this docstring told callers they SHOULD pass a limit.
+    That advice produced the defect class; it is withdrawn.
+
+    **Bound by MEANING.** Ask what the answer's scope of validity is:
+
+    - *Valid this cycle only* — stop at ``compaction_detected``. Provably
+      correct, and bounded by construction: a cycle holds finitely many events.
+    - *Valid within an interval* — stop at the first event older than the
+      cutoff. An age cannot be shrunk by volume.
+    - *Lifetime state* — scan until found. These exit on their first match, so
+      the cost is "events since it last changed", not log size.
+
+    The third case still degrades when the event has NEVER occurred. A row limit
+    cannot fix that — it answers wrongly rather than slowly. The intended remedy
+    is to remove the case: cycle-scope every query and have cross-cycle state
+    re-assert itself at the boundary, so the worst case is one cycle regardless
+    of log size. See the cycle-scoping issue.
 
     Args:
-        limit: Maximum events to yield (None = all)
+        limit: DEPRECATED — prefer a semantic stop condition. ``None`` (the
+            default) streams until the caller breaks.
         reverse: If True, read from end (most recent first)
 
     Yields:
         Event dictionaries
 
     Example:
-        >>> for event in read_events(limit=10, reverse=True):
-        ...     print(event["event"], event["timestamp"])
+        >>> for event in read_events(reverse=True):   # exits on the first match
+        ...     if event["event"] == "mode_change":
+        ...         break
     """
+    if isinstance(limit, int) and not isinstance(limit, bool):
+        import warnings
+        warnings.warn(
+            "read_events(limit=<int>) is deprecated: a row count is not a bound "
+            "on the question being asked, and a scan that falls off the end "
+            "returns a miss that reads as a fact. Bound by meaning instead — "
+            "the cycle boundary, a timestamp, or the first match.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
     try:
         log_path = get_log_path()
 

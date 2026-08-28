@@ -344,6 +344,15 @@ Reframing the question is often the whole fix. *When did X last happen* must
 reach an event of unbounded age; *did X happen since T* only ever has to reach
 T.
 
+The third category — lifetime state, scanned until found — still degrades when
+the event has **never** occurred, since the scan then reads the whole log. A row
+limit cannot fix that; it answers wrongly rather than slowly. The structural
+remedy is to remove the category: cycle-scope every query and require
+cross-cycle state to re-assert itself at the boundary, so the worst case is one
+cycle regardless of how long the log grows. That also makes a miss mean exactly
+one thing — *not established this cycle* — which is what dissolves the compiled
+false absence rather than merely bounding it.
+
 ### 6.4 Do not let `None`-is-falsy encode a decision
 
 ```python
@@ -366,8 +375,9 @@ or the default passed as a parameter. Where a default must be chosen, choose by
 | `return None` / `return False` on miss | conflates absent with unreachable | sentinel, or explicit parameter |
 | caller relies on falsiness | the default is invisible | state the fallback where it is chosen |
 
-This is enforced: **MACEFF006** flags a hardcoded numeric `limit=` on an event
-scan. A genuinely justified one stays possible — suppress it at the site with
+This is enforced twice: **MACEFF006** flags a hardcoded numeric `limit=` on an
+event scan in this tree, and `read_events` raises a `DeprecationWarning` at
+runtime for callers the linter never runs against. A genuinely justified one stays possible — suppress it at the site with
 `# noqa: MACEFF006 - <reason>`, the way other exceptions are recorded. The point
 is that the choice becomes visible and auditable, not that it is forbidden.
 
