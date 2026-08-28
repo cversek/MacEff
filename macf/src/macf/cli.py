@@ -2237,6 +2237,51 @@ def _ensure_agent_uuid(
         # anything else re-rolls
 
 
+def other_claude_md_in_load_path(reconciled_path):
+    """Other CLAUDE.md files the agent loads, and what preamble each carries.
+
+    The agent's context is assembled from SEVERAL CLAUDE.md files — a user-level
+    one and a project-level one, both loaded. Reconciling only the file named on
+    the command line leaves the others at whatever version they had, and because
+    all of them are loaded the agent then runs two preambles at once.
+
+    That is not a stale copy sitting harmlessly on disk. Observed: a v1.4 block
+    asserting a hardcoded compaction threshold loaded alongside a v1.5 block
+    instructing the agent to distrust exactly such numbers — with no way to tell
+    which was current, and nothing in the output mentioning the other file
+    existed. It was caught by a human noticing.
+
+    Returns a list of (path, versions, has_markers) for every OTHER file found,
+    so the caller can report rather than guess.
+    """
+    import re as _re
+    from pathlib import Path as _Path
+    candidates = [_Path.home() / "CLAUDE.md"]
+    cwd = _Path.cwd()
+    candidates += [cwd / "CLAUDE.md", cwd / ".claude" / "CLAUDE.md"]
+
+    reconciled = _Path(reconciled_path).resolve()
+    seen, out = set(), []
+    for c in candidates:
+        try:
+            rc = c.resolve()
+        except OSError:
+            continue
+        if rc == reconciled or rc in seen or not c.exists():
+            continue
+        seen.add(rc)
+        try:
+            text = c.read_text()
+        except (OSError, UnicodeDecodeError) as e:
+            print(f"⚠️ MACF: could not read {c}: {e}", file=sys.stderr)
+            continue
+        versions = _re.findall(r'<!--\s*MACEFF_PA_PREAMBLE_v([\d.]+)_START\s*-->', text)
+        has_markers = "<!-- ⚠️ DO NOT WRITE BELOW THIS LINE" in text
+        if versions or has_markers:
+            out.append((c, versions, has_markers))
+    return out
+
+
 def cmd_agent_init(args: argparse.Namespace) -> int:
     """Initialize agent with preamble injection (idempotent)."""
     try:
@@ -2314,13 +2359,22 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
             existing_content = claude_md_path.read_text()
 
             # If boundary exists, extract user content above it
+            import re
             if "<!-- ⚠️ DO NOT WRITE BELOW THIS LINE" in existing_content:
                 user_content = existing_content.split("<!-- ⚠️ DO NOT WRITE BELOW THIS LINE")[0].rstrip()
+                # UPGRADE_BOUNDARY opens with its own `---` separator, which sits
+                # ABOVE the marker and therefore survives the split into
+                # user_content. The next write then adds another one, so each run
+                # left two more lines in a file loaded into every session --
+                # idempotent in content, not in effect (the shape of #274).
+                user_content = re.sub(r'\n*-{3,}\s*$', '', user_content).rstrip()
                 action_desc = "Update PA Preamble in existing"
+                _replacing = True
             else:
                 # No boundary = first time, preserve all existing content
                 user_content = existing_content.rstrip()
                 action_desc = "⚠️  Add PA Preamble to existing"
+                _replacing = False
 
             # Strip stale managed preamble blocks stranded in the user region.
             # A preamble installed before the boundary convention (or moved above
@@ -2330,7 +2384,6 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
             # play (issue #153). The MACEFF_PA_PREAMBLE_vX.Y_START/_END sentinels
             # exist precisely to make managed blocks identifiable wherever they
             # sit; honor them, and leave genuine user content untouched.
-            import re
             stale_versions = re.findall(
                 r'<!--\s*MACEFF_PA_PREAMBLE_v([\d.]+)_START\s*-->', user_content)
             if stale_versions:
@@ -2353,7 +2406,31 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
             # Append: user + boundary + preamble
             new_content = user_content + "\n\n" + UPGRADE_BOUNDARY + "\n\n" + preamble_content
             claude_md_path.write_text(new_content)
-            print(f"✅ PA Preamble appended successfully")
+            # Say which of the two things happened. "appended" asserted the
+            # DANGEROUS outcome -- an operator reading it has been told the thing
+            # they should check for has occurred, when in fact the old block was
+            # replaced in place. A message that describes a different operation
+            # than the one performed is worse than no message.
+            if _replacing:
+                print("✅ PA Preamble replaced in place (one managed block, now current)")
+            else:
+                print("✅ PA Preamble added below the upgrade boundary")
+            try:
+                _others = other_claude_md_in_load_path(claude_md_path)
+            except (OSError, ValueError) as e:
+                print(f"⚠️ MACF: could not survey the CLAUDE.md load path: {e}",
+                      file=sys.stderr)
+                _others = []
+            for _path, _vers, _markers in _others:
+                if _vers:
+                    print(f"\n🚨 ANOTHER preamble is loaded from {_path}")
+                    print(f"   It carries {', '.join('v' + v for v in _vers)} and was NOT updated.")
+                    print("   Both files load, so the agent runs both preambles at once and")
+                    print("   cannot tell which is current. Reconcile or remove it:")
+                    print(f"      macf_tools agent init   # with that file as the target")
+                else:
+                    print(f"\n⚠️  {_path} carries upgrade-boundary markers but no preamble.")
+                    print("   Harmless now; it will accept a block on a future run.")
         else:
             # Create new CLAUDE.md with just the preamble (no boundary needed)
             print(f"\nCreate new CLAUDE.md with PA Preamble:")
