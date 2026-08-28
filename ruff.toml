@@ -1,0 +1,90 @@
+# MacEff Python style, enforced by a checker that runs.
+#
+# WHY THIS FILE EXISTS: the framework's principles were tier 4 — written in
+# policy, and requiring a human to recall them at the right moment. That is the
+# tier that fails. Every rule below is a principle moved down a tier, where a
+# machine decides instead of a memory.
+#
+# THE RULES HERE ARE NOT ALL ENFORCED EQUALLY, AND THAT IS DELIBERATE. This file
+# declares what we intend to hold to; the pre-commit hook decides what BLOCKS.
+# Splitting them is what keeps the gate credible: a rule that fires hundreds of
+# times on day one is not enforced, it is suppressed — and the suppression habit
+# generalises to the true positives. So a rule blocks only once its violation
+# count is ZERO, at which point it is a permanent ratchet.
+#
+#   BLOCKING (count 0, enforced repo-wide by .git/hooks/pre-commit)
+#     E722   bare except        — policy calls this FORBIDDEN
+#     F821   undefined name     — a NameError waiting for its branch to run
+#
+#   SELECTED, REPORTED, NOT YET BLOCKING (run `ruff check .` to see the debt)
+#     everything else below, 48 findings at the time of writing
+#
+# Burn a rule's count to zero, then move it into the hook's blocking set. The
+# count is recorded on the task rather than left to be rediscovered.
+#
+# WHAT THIS FILE CANNOT DO. Ruff has no plugin API, so several DOCUMENTED
+# principles have no rule here and are NOT covered by anything yet:
+#   - imports inside an `except` handler (27 instances) — the documented hazard
+#     from base/coding_standards §6. PLC0415 is NOT it: that rule flags every
+#     non-top-level import (684 here), while the policy explicitly permits a
+#     justified deferred import. Enabling it would manufacture 657 false
+#     positives against our own standard.
+#   - `.parent` chain navigation (§5)
+#   - bare positional multi-value returns, and throwaway `_` unpacking
+#   - `except: return None` (silent return)
+# Those need a custom AST checker. Claiming this file covers them would be the
+# specified-but-unbuilt trap, so it says plainly that it does not.
+#
+# AND THE SEMANTIC PRINCIPLES ARE NOT AST-DECIDABLE AT ALL: that a component is
+# pointed at the wrong subject, that a stale record misleads, that a control has
+# no invocation path. No linter reaches those. They stay at tier 4 and should be
+# labelled as such wherever they are written down.
+
+target-version = "py310"
+line-length = 100
+extend-exclude = ["**/__pycache__", "build", "dist", ".maceff*"]
+
+[lint]
+select = [
+  # ---- documented principles, base/development/coding_standards.md ----
+  "E722",    # §0/§3 bare except — FORBIDDEN. Catches KeyboardInterrupt/SystemExit.
+  "BLE001",  # §0 blind `except Exception` — policy says AVOID, so this reports.
+  "S110",    # §3 silent swallowing: try/except/pass
+  "S112",    # §3 silent swallowing: try/except/continue
+
+  # ---- correctness, and the reason this whole task paid for itself ----
+  "F821",    # undefined name. Found 5 real latent NameErrors on first run,
+             # including `sys` used in two error handlers of a module that never
+             # imported it — the stderr warning path itself raised instead of
+             # warning. Exactly the class base §6 records as FP#28.
+  "F811",    # redefinition of an unused name — usually a lost edit
+  "F841",    # assigned and never used — often a dropped result
+
+  # ---- recommended baseline: real defects, low false-positive rate ----
+  "B",       # bugbear. B904 (raise ... from) and B006 (mutable default) are the
+             # ones that bite; B905 strict= makes zip truncation explicit.
+  "C4",      # comprehension clarity
+  "PIE",     # PIE794 duplicate class field is a genuine silent overwrite
+  "ISC",     # implicit string concat — ISC004 in a collection literal is the
+             # classic MISSING COMMA bug wearing valid syntax
+  "RUF100",  # an unused `# noqa` is a suppression that stopped suppressing
+             # anything — a dead control, which is a shape this project keeps
+             # finding elsewhere
+]
+
+ignore = [
+  # NOT style modernisation. UP (1223) and E/W (1238) are overwhelmingly
+  # cosmetic here and carry no correctness value; a 1200-line wall is how a
+  # linter gets switched off in week one.
+  "E501",    # line length — the formatter's job, not a gate's
+]
+
+[lint.per-file-ignores]
+# Tests deliberately construct broken input, assert on refusals, and shadow
+# names across fixtures. Holding them to the production rules produces noise
+# that is not about test quality.
+"**/tests/**" = ["S110", "S112", "BLE001", "F811"]
+
+[lint.flake8-bugbear]
+# The framework passes Path and Namespace objects into defaults routinely.
+extend-immutable-calls = ["pathlib.Path"]
