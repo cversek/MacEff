@@ -4506,6 +4506,20 @@ def get_tasks_mtime(tasks_dir) -> float:
         return 0.0
 
 
+# Statuses that mean "this work is resolved". `archived` is a legacy terminal
+# state (task archive is retired in favour of hide-completed) but four of them
+# still exist in live stores, and a predicate that recognises only "completed"
+# reads them as open work — which pins every ancestor visible forever, with no
+# way for an operator to clear it, because nothing about it is a display
+# window. Terminality is a property of the status, so name it once.
+TERMINAL_TASK_STATUSES = ("completed", "archived")
+
+
+def is_terminal_status(status) -> bool:
+    """True when a status means the work is resolved rather than outstanding."""
+    return status in TERMINAL_TASK_STATUSES
+
+
 def touched_within_watch(task, since) -> bool:
     """True when the task's last recorded touch falls inside an open watch.
 
@@ -4545,8 +4559,18 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
     show_archived_only = getattr(args, 'archived', False)
     show_all = getattr(args, 'show_all', False)
 
-    def display_tree(root_id: str):
-        """Display the task tree for given root_id."""
+    def display_tree(root_id: str, loop_since: float | None = None):
+        """Display the task tree for given root_id.
+
+        `loop_since` is the epoch moment a `--loop` watch began, or None for a
+        one-shot render. It is a PARAMETER rather than a closure read on
+        purpose: it used to be a local of this function initialised to None,
+        while the loop assigned a same-named local in the enclosing command.
+        Two bindings, one name — so the watch predicate always saw None and
+        every completed top-tier task was hidden in loop mode exactly as in a
+        one-shot render. The feature never ran. A parameter cannot be shadowed
+        by accident; a closure over a name assigned later can.
+        """
         reader = TaskReader()
         all_tasks = reader.read_all_tasks()
 
@@ -4597,14 +4621,21 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
             return False
 
         def is_fully_completed(task, _seen=None):
-            """True when this task AND every descendant are completed.
+            """True when this task AND every descendant are RESOLVED.
 
             "Completed" alone is not enough to hide a subtree: a completed
             parent can still own active children, and hiding the parent hides
             them with it — the work disappears from the tree entirely rather
             than merely collapsing.
+
+            Resolved, not completed: an `archived` descendant is finished work,
+            and reading it as outstanding held #129 and its 68-task subtree
+            visible in succinct mode across many cycles on the strength of three
+            archived grandchildren. That looked like a display bug an operator
+            could clear by exiting and re-entering, and no amount of exiting
+            would have cleared it.
             """
-            if task.status != "completed":
+            if not is_terminal_status(task.status):
                 return False
             # Same cycle guard as count_descendants: a self-parenting task is
             # malformed but reachable, and must not take the render down.
@@ -4613,11 +4644,6 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
                 return True
             _seen.add(task.id)
             return all(is_fully_completed(c, _seen) for c in get_children(task.id))
-
-        # Set when --loop starts; None for a one-shot render. A loop is a WATCH
-        # with a beginning, and that beginning is the honest retention window —
-        # no new flag, no new state beyond the loop's own start time.
-        loop_since = None
 
         def should_show_task(task, siblings, depth, parent=None):
             """Determine if task should be shown in succinct mode.
@@ -5005,7 +5031,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
                     # scrollback, so 3J must come after it to wipe that copy.
                     print("\033[H\033[2J\033[3J", end="")
 
-                    if not display_tree(root_id):
+                    if not display_tree(root_id, loop_since):
                         return 1
 
                     print()  # Add blank line
