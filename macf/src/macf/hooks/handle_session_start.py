@@ -13,7 +13,6 @@ from macf.utils import (
     format_macf_brand,
     get_current_session_id,
     get_latest_consciousness_artifacts,
-    detect_auto_mode,
     get_temporal_context,
     get_rich_environment_string,
     format_duration,
@@ -25,6 +24,7 @@ from macf.utils import (
     get_breadcrumb,
     format_manifest_awareness
 )
+from macf.modes import detect_auto_mode
 from macf.hooks.compaction import detect_compaction
 from macf.hooks.recovery import (
     format_consciousness_recovery_message,

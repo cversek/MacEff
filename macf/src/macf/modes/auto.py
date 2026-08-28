@@ -1,5 +1,14 @@
-"""
-Cycles utilities.
+"""AUTO_MODE detection and control.
+
+Moved here from ``utils/cycles.py``, which was named for cycles and held
+nothing about them: two mode functions in a utils package under a name that
+described neither. The call site that broke asked ``macf.modes`` for a mode
+function, which was the correct instinct against the wrong layout.
+
+The move also breaks a real import cycle. The old module carried a note about
+``cycles -> event_queries -> agent_events_log -> utils -> cycles`` and imported
+``event_queries`` lazily to route around it. That loop closed through ``utils``
+hosting these functions; it does not exist from here.
 """
 
 import json
@@ -8,11 +17,12 @@ import sys
 import time
 from pathlib import Path
 from typing import Optional, Tuple
-from .paths import find_agent_home
-from .session import get_current_session_id
-from .json_io import read_json
-# NOTE: event_queries imported lazily inside functions to avoid circular import
-# (cycles.py -> event_queries -> agent_events_log -> utils -> cycles.py)
+from ..utils.paths import find_agent_home
+from ..utils.session import get_current_session_id
+from ..utils.json_io import read_json
+# event_queries is still imported lazily inside the functions: the module is
+# heavy and only one branch needs it. The circular import that originally
+# forced it is gone (see the module docstring).
 
 def detect_auto_mode(session_id: str) -> Tuple[bool, str]:
     """

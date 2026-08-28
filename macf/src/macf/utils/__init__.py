@@ -26,9 +26,6 @@ from .artifacts import (
     get_latest_consciousness_artifacts,
     ConsciousnessArtifacts,
 )
-from .cycles import (
-    detect_auto_mode,
-)
 from .drives import (
     start_dev_drv,
     complete_dev_drv,
@@ -114,7 +111,6 @@ __all__ = [
     "complete_deleg_drv_by_agent",
     "bridge_deleg_drv_to_agent",
     "complete_dev_drv",
-    "detect_auto_mode",
     "detect_execution_environment",
     "detect_session_migration",
     "extract_current_git_hash",

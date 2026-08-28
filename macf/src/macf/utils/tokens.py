@@ -373,7 +373,7 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
                     # On 200K: 33k/200k = 16.5% → CL penalty ~17
                     # On 1M:   33k/1M   = 3.3%  → CL penalty ~3
                     try:
-                        from .cycles import detect_auto_mode
+                        from ..modes.auto import detect_auto_mode
                         auto_mode, _ = detect_auto_mode(session_id)
                         if auto_mode:
                             autocompact_buffer = 33000  # CC's fixed autocompact reserve

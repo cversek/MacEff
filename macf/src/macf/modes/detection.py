@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Dict, Optional, Set, Tuple
 
 from ..agent_events_log import read_events
-from ..utils.cycles import detect_auto_mode
+from .auto import detect_auto_mode
 
 
 # ============================================================================

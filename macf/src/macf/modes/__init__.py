@@ -8,6 +8,10 @@ Three-layer mode system:
 
 Policy spec: framework/policies/base/operations/mode_system.md
 """
+from .auto import (
+    detect_auto_mode,
+    set_auto_mode,
+)
 from .detection import (
     detect_active_modes,
     anticipate_mode_change,

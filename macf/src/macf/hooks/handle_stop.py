@@ -21,13 +21,13 @@ from macf.utils import (
     get_token_info,
     format_token_context_full,
     get_boundary_guidance,
-    detect_auto_mode,
     get_breadcrumb
 )
 from macf.agent_events_log import append_event
 from macf.hooks.hook_logging import log_hook_event
 from macf.observability import Warning, emit_warning
 from macf.modes import (
+    detect_auto_mode,
     detect_active_modes, get_current_work_mode,
     sample_next_work_mode, format_recommendation,
     should_self_manage_closeout, format_mode_indicators,

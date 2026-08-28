@@ -28,7 +28,6 @@ from .utils import (
     extract_current_git_hash,
     get_claude_code_version,
     get_temporal_context,
-    detect_auto_mode,
     find_agent_home,
     get_env_var_report,
     get_agent_identity,
@@ -38,6 +37,7 @@ from .utils import (
     get_hooks_dir,
     get_total_context,
 )
+from .modes import detect_auto_mode
 from .utils.environment import detect_model
 
 # -------- ANSI escape codes --------
@@ -2031,7 +2031,8 @@ def cmd_agent_sleep(args: argparse.Namespace) -> int:
     """Emergency sleep with fibonacci backoff and channel notification."""
     import time
     from .agent_events_log import append_event
-    from .utils.cycles import set_auto_mode, get_current_session_id
+    from .modes import set_auto_mode
+    from .utils.session import get_current_session_id
 
     session_id = get_current_session_id()
     interval = args.start
@@ -3524,7 +3525,7 @@ def cmd_recommender_sample(args: argparse.Namespace) -> int:
 
 def cmd_mode_get(args: argparse.Namespace) -> int:
     """Get current operating mode."""
-    from .utils.cycles import detect_auto_mode
+    from .modes import detect_auto_mode
 
     try:
         session_id = get_current_session_id()
@@ -3553,7 +3554,7 @@ def cmd_mode_get(args: argparse.Namespace) -> int:
 
 def cmd_mode_set(args: argparse.Namespace) -> int:
     """Set operating mode (requires auth token for AUTO_MODE)."""
-    from .utils.cycles import set_auto_mode
+    from .modes import set_auto_mode
 
     try:
         mode = args.mode.upper()

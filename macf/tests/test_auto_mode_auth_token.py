@@ -14,7 +14,7 @@ Coverage for cversek/MacEff#115:
 import argparse
 import json
 
-from macf.utils.cycles import set_auto_mode
+from macf.modes.auto import set_auto_mode
 from macf.cli import cmd_agent_init_auth_token
 
 
