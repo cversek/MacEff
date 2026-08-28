@@ -143,8 +143,13 @@ class TestPathResolution:
         - Find .claude directory in ancestors
         - Use project_root/agent/ structure
         - Return project-relative path
+
+        The cwd walk is a FALLBACK, so this asserts it only with no declared
+        agent home. That precondition used to hold by accident; it is stated
+        now because a declared home outranks the walk (#252).
         """
         monkeypatch.delenv("MACF_AGENT_ROOT", raising=False)
+        monkeypatch.delenv("MACEFF_AGENT_HOME_DIR", raising=False)
 
         with patch.object(ConsciousnessConfig, '_is_container', return_value=False):
             with patch.object(ConsciousnessConfig, '_find_project_root', return_value=temp_claude_project):
@@ -163,8 +168,11 @@ class TestPathResolution:
         - Use ~/.macf/{agent}/agent/ structure
         - Create in user home directory
         - Ensure path is writable
+
+        Last resort: reached only when nothing is declared and nothing is found.
         """
         monkeypatch.delenv("MACF_AGENT_ROOT", raising=False)
+        monkeypatch.delenv("MACEFF_AGENT_HOME_DIR", raising=False)
 
         with patch.object(ConsciousnessConfig, '_is_container', return_value=False):
             with patch.object(ConsciousnessConfig, '_find_project_root', return_value=None):
@@ -191,6 +199,42 @@ class TestPathResolution:
         agent_root = config._find_agent_root()
 
         assert agent_root == Path(override_path)
+
+    def test_declared_agent_home_outranks_the_cwd_walk(self, tmp_path, monkeypatch):
+        """A declared home wins over wherever the process happens to be.
+
+        `utils.paths.find_agent_home` documents MACEFF_AGENT_HOME_DIR as
+        "explicit configuration takes precedence"; this resolver did not consult
+        it, so a caller arriving through ConsciousnessConfig resolved by the
+        launch directory with the declared home set and ignored.
+
+        Two things followed, and the second is why this test exists rather than
+        a docs fix. `macf_tools time` reported an agent as having no checkpoints
+        depending on where it was invoked from. And the suite's autouse
+        isolation fixture works by setting this variable — so anything resolved
+        through here was never isolated, and would have written wherever the
+        walk landed.
+        """
+        declared = tmp_path / "declared_home"
+        declared.mkdir()
+        elsewhere = tmp_path / "somewhere_else"
+        (elsewhere / ".claude").mkdir(parents=True)
+
+        monkeypatch.delenv("MACF_AGENT_ROOT", raising=False)
+        monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(declared))
+        from macf.utils.paths import find_agent_home
+        find_agent_home.cache_clear()
+
+        with patch.object(ConsciousnessConfig, '_is_container', return_value=False):
+            # A cwd walk that WOULD succeed, to prove precedence rather than
+            # absence: the walk must lose while it is still able to answer.
+            with patch.object(ConsciousnessConfig, '_find_project_root', return_value=elsewhere):
+                agent_root = ConsciousnessConfig(agent_name="test-agent").agent_root
+
+        find_agent_home.cache_clear()
+        assert agent_root == declared / "agent", (
+            "the declared agent home lost to the launch directory"
+        )
 
 
 class TestTOMLSettingsLoading:
