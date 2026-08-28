@@ -257,9 +257,22 @@ class TestSprintForceWithJustificationCompletes:
 class TestSprintAutoAggregate:
 
     def test_aggregate_injected_into_report(self, tmp_path, capsys):
+        """The synthesis carries the goal and the counters it can know.
+
+        This used to set `scoped_progress` to {"completed": 3, "total": 3} and
+        assert "3/3" appeared. It passed, and it could not have caught the defect
+        it sat beside: that field is written ONCE at sprint creation as
+        {"completed": 0, "total": N} and nothing ever increments it, so
+        production always reported 0/N. The test asserted a value it had written
+        itself, which measured the formatting and not the count.
+
+        Progress is now derived from the event log at completion time, so with no
+        scope events recorded the honest answer is that there are none — not
+        "0/0", which reads as "nothing was done" for a sprint that may have done
+        plenty.
+        """
         sprint = _make_fake_task(70, task_type="SPRINT", custom={
             "goal": "Build dashboard",
-            "scoped_progress": {"completed": 3, "total": 3},
             "ideas_captured": 2,
             "learnings_curated": 1,
         })
@@ -271,7 +284,11 @@ class TestSprintAutoAggregate:
         assert rc == 0
         # args.report is mutated by cmd_task_complete before MTMD write
         assert "Build dashboard" in args.report
-        assert "3/3" in args.report
+        assert "no scoped tasks recorded" in args.report.lower(), args.report
+        assert "children" not in args.report.lower(), (
+            "a --scoped sprint has no children; the word was a second wrong "
+            f"answer alongside the number: {args.report}"
+        )
         assert "2 ideas" in args.report
         assert "1 learnings" in args.report
 

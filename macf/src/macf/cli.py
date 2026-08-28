@@ -8442,13 +8442,47 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
         # 2. Auto-aggregate completion report from custom fields
         _custom = getattr(task.mtmd, 'custom', {}) if task.mtmd else {}
         _goal = _custom.get("goal", "")
-        _sp = _custom.get("scoped_progress", {})
-        _completed_n = _sp.get("completed", 0) if isinstance(_sp, dict) else 0
-        _total_n = _sp.get("total", 0) if isinstance(_sp, dict) else 0
+        # Derive the counts from the event log at completion time, rather than
+        # reading `custom["scoped_progress"]`.
+        #
+        # That field is written ONCE at creation as {"completed": 0, "total": N}
+        # and nothing ever increments it, so it reports 0/N for the life of the
+        # sprint — including in the closing synthesis, where it appeared directly
+        # beneath a table of the work it said had not happened. A count cached at
+        # creation cannot describe an outcome.
+        #
+        # It also said "children", which is a second wrong answer: a sprint built
+        # with `--scoped` has none, and its scoped tasks keep their own parents.
+        # The word and the number disagreed with each other as well as with the
+        # tree.
+        _scope_state = {}
+        try:
+            from .task.scope import get_scope_state
+            _scope_state = get_scope_state() or {}
+        except (ImportError, OSError, ValueError) as e:
+            print(f"⚠️ MACF: could not read scope state for the synthesis: {e}",
+                  file=sys.stderr)
+
+        # The sprint task is in its own scope; it is not part of the workload.
+        _scoped = {tid: st for tid, st in _scope_state.items()
+                   if str(tid) != str(task_id)}
+        _total_n = len(_scoped)
+        _completed_n = sum(1 for st in _scoped.values() if st == "inactive")
+        _paused_n = sum(1 for st in _scoped.values() if st == "paused")
+
+        if not _scoped:
+            # No scope recorded — say so rather than printing 0/0, which reads
+            # as "nothing was done" for a sprint that may have done plenty.
+            _progress = "no scoped tasks recorded"
+        else:
+            _progress = f"completed {_completed_n}/{_total_n} scoped"
+            if _paused_n:
+                _progress += f" ({_paused_n} paused)"
+
         _ideas = _custom.get("ideas_captured", 0)
         _learnings = _custom.get("learnings_curated", 0)
         _aggregate = (
-            f'Goal: "{_goal}". Completed {_completed_n}/{_total_n} children. '
+            f'Goal: "{_goal}". {_progress.capitalize()}. '
             f'{_ideas} ideas captured. {_learnings} learnings curated.'
         )
         if args.report:
