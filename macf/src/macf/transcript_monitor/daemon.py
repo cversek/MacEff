@@ -33,6 +33,11 @@ from ..agent_events_log import append_event
 DEFAULT_POLL_INTERVAL = 1.0  # 1 second — negligible CPU, responsive detection
 CHUNK_SIZE = 65536  # 64KB read chunks
 PID_FILE_NAME = "macf_transcript_monitor.pid"
+
+#: Consecutive stat-failure counts at which the loop reports. A condition that
+#: persists must not produce one message per poll; these points give the first
+#: occurrence immediately and then back off by an order of magnitude.
+_STAT_FAILURE_REPORT_AT = frozenset({1, 10, 100, 1000, 10000})
 LOG_FILE_NAME = "macf_transcript_monitor.log"
 
 
@@ -255,22 +260,41 @@ def write_pid_file(pid: int) -> None:
 
 
 def read_pid_file() -> Optional[int]:
-    """Read PID from file, return None if not exists or invalid."""
+    """Return the recorded daemon pid, or None when there is no usable one.
+
+    None covers two cases the return type cannot separate: the pid file is
+    absent, or it is present and unreadable. The unreadable case warns to
+    stderr. Callers that treat None as "not running" are correct for the first
+    case and wrong for the second.
+    """
     pid_file = get_pid_file_path()
     if not pid_file.exists():
         return None
     try:
         return int(pid_file.read_text().strip())
-    except (ValueError, OSError):
+    except (ValueError, OSError) as e:
+        print(
+            f"⚠️ MACF: pid file unreadable, daemon state UNKNOWN and will report "
+            f"as NOT RUNNING ({pid_file}): {e}",
+            file=sys.stderr,
+        )
         return None
 
 
 def remove_pid_file() -> None:
-    """Remove PID file on shutdown."""
+    """Remove the pid file. Warns to stderr if it could not be removed.
+
+    A pid file left behind makes the next liveness check report this daemon as
+    running after it has exited.
+    """
     try:
         get_pid_file_path().unlink(missing_ok=True)
-    except OSError:
-        pass
+    except OSError as e:
+        print(
+            f"⚠️ MACF: could not remove pid file, a dead daemon may report as "
+            f"RUNNING on the next check: {e}",
+            file=sys.stderr,
+        )
 
 
 def is_running() -> bool:
@@ -313,6 +337,8 @@ class TranscriptMonitor:
         # Stats
         self.entries_processed = 0
         self.events_emitted = 0
+        self.unparsed_lines = 0
+        self.stat_failures = 0
         self.last_file_size = 0
 
         # Channel forwarding: USER_REMOTE state, re-checked at most every 5s so a
@@ -332,7 +358,13 @@ class TranscriptMonitor:
             return
         try:
             entry = json.loads(line)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            self.unparsed_lines += 1
+            print(
+                f"⚠️ MACF: transcript line {self.entries_processed + self.unparsed_lines} "
+                f"is not valid JSON, skipped and NOT observed by any detector: {e}",
+                file=sys.stderr,
+            )
             return
 
         self.entries_processed += 1
@@ -361,8 +393,12 @@ class TranscriptMonitor:
             print(f"⚠️ TM: channel forward failed (non-blocking): {e}", file=sys.stderr)
 
     def _forward_to_channel_enabled(self) -> bool:
-        """True iff USER_REMOTE is active — the only mode where mirroring the live
-        exchange to the channel is wanted. Cached for 5s to bound event-log reads."""
+        """True iff USER_REMOTE is active. Cached for 5s to bound event-log reads.
+
+        Returns False when the mode cannot be determined, and warns to stderr:
+        forwarding stops, which is indistinguishable from an operator who is not
+        remote unless the failure is announced.
+        """
         now = time.time()
         if now - self._fwd_checked_at < 5.0:
             return self._fwd_cached
@@ -371,7 +407,17 @@ class TranscriptMonitor:
             from ..modes.detection import _detect_user_remote
             from ..utils import get_current_session_id
             self._fwd_cached = bool(_detect_user_remote(get_current_session_id()))
-        except Exception:
+        except Exception as e:
+            # Deliberately broad: this is a GUARD, not a handler. Mode detection
+            # is best-effort and must never take down the monitor, so an
+            # enumerated list would eventually miss a type and crash for exactly
+            # the thing the guard exists to absorb. Nothing here is recovered —
+            # it is announced and forwarding stays off.
+            print(
+                f"⚠️ MACF: cannot determine USER_REMOTE, channel forwarding is OFF "
+                f"until this clears: {e}",
+                file=sys.stderr,
+            )
             self._fwd_cached = False
         return self._fwd_cached
 
@@ -427,12 +473,22 @@ class TranscriptMonitor:
                             if current_size < f.tell():
                                 print("📡 TM: file truncated, reopening", file=sys.stderr)
                                 break  # exit inner loop, outer caller can restart
-                        except OSError:
-                            pass
+                        except OSError as e:
+                            self.stat_failures += 1
+                            if self.stat_failures in _STAT_FAILURE_REPORT_AT:
+                                print(
+                                    f"⚠️ MACF: cannot stat the transcript "
+                                    f"({self.stat_failures} consecutive), so truncation "
+                                    f"and rewind are undetectable; still polling: {e}",
+                                    file=sys.stderr,
+                                )
+                        else:
+                            self.stat_failures = 0
 
                         time.sleep(self.poll_interval)
 
         except KeyboardInterrupt:
+            # Ordinary shutdown path: the finally block reports the totals.
             pass
         finally:
             self.running = False
@@ -453,6 +509,8 @@ class TranscriptMonitor:
             "jsonl_path": str(self.jsonl_path),
             "entries_processed": self.entries_processed,
             "events_emitted": self.events_emitted,
+            "unparsed_lines": self.unparsed_lines,
+            "stat_failures": self.stat_failures,
             "running": self.running,
             "detectors": len(self.detectors),
             "poll_interval": self.poll_interval,

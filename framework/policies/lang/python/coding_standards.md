@@ -24,7 +24,8 @@ Applies to all Python code written within MacEff framework projects.
 **0 Exception Type Selection**
 - What exception types should I catch?
 - Why avoid bare `except:`?
-- Why avoid `except Exception:`?
+- When is `except Exception:` wrong, and when is it the correct choice?
+- How do I write a guard rather than a handler?
 
 **1 Stderr Warning Pattern**
 - How do I warn to stderr in Python?
@@ -57,21 +58,52 @@ except:
     pass
 ```
 
-### Avoid: Generic Exception
+### Avoid in a HANDLER: Generic Exception
 
 ```python
-# AVOID - hides unexpected failures
+# AVOID - a handler this broad has reasoned about nothing
 except Exception:
     pass
 ```
 
-### Required: Specific Types
+Note what is wrong with that example: **both** the breadth and the `pass`. They are separable faults, and the `pass` is the worse one — it is silent swallowing, forbidden everywhere regardless of breadth.
+
+### Required in a HANDLER: Specific Types
 
 ```python
 # CORRECT - declares understanding of failure modes
 except (FileNotFoundError, json.JSONDecodeError, KeyError) as e:
     # handle with visibility
 ```
+
+### Correct in a GUARD: Generic Exception, Announced
+
+A guard exists so a best-effort path cannot take down an essential one. It
+recovers nothing, so nothing depends on which exception occurred — and an
+enumerated guard eventually meets a type its author did not foresee and crashes
+for exactly the thing it was protecting against.
+
+```python
+# CORRECT - a guard, and it says so
+try:
+    send_optional_notification(text)
+except Exception as e:
+    # Deliberately broad: this is a GUARD, not a handler. Notification is
+    # best-effort and must never take down the caller.
+    print(f"⚠️ MACF: notification failed (continuing): {e}", file=sys.stderr)
+```
+
+`except Exception` does not catch `KeyboardInterrupt` or `SystemExit`, which
+derive from `BaseException`. That is precisely why this form is permitted and
+the bare form is not: interrupts and termination still reach the process.
+
+**Wrap the best-effort call, not the block containing it.** A guard whose scope
+creeps to cover neighbouring operations converts their real failures into
+absorbed ones.
+
+The discriminating question is in the base policy — `macf_tools policy navigate
+coding_standards`, "Catch Breadth Follows PURPOSE": *does any behaviour depend on
+WHICH exception this was?*
 
 ---
 
