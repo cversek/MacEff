@@ -77,8 +77,18 @@ def _touch_discipline_nag(session_id: str) -> str:
     from macf.task import TaskReader
     from macf.utils import get_session_dir
 
-    tasks_dir = TaskReader().tasks_dir
-    mtimes = [f.stat().st_mtime for f in tasks_dir.rglob("*.json")]
+    # The RESOLVED store, not the legacy per-session root. `tasks_dir` always
+    # returns ~/.claude/tasks and ignores `task_store.mode: home`, so under the
+    # home backend this stat'd a directory nothing writes to: store_mtime never
+    # moved, the reset branch never fired, and the counter climbed for the whole
+    # session no matter how diligently the tree was touched. The nag then
+    # escalated at an agent that was writing task notes continuously — which is
+    # worse than a nag that does not fire, because it teaches the agent that the
+    # signal carries no information.
+    reader = TaskReader()
+    tasks_dir = reader.session_path
+    mtimes = ([f.stat().st_mtime for f in tasks_dir.rglob("*.json")]
+              if tasks_dir and tasks_dir.exists() else [])
     store_mtime = max(mtimes) if mtimes else 0.0
 
     sdir = get_session_dir(session_id=session_id, subdir="hooks")

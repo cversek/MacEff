@@ -353,6 +353,10 @@ def hide_task_file(session_path: Path, task_id: str) -> bool:
     Idempotent: no-op if already hidden or file doesn't exist. No-op success for
     a non-CC store (the home store keeps plain {id}.json). Handles chmod 555
     directory protection.
+
+    The bool answers "is this file hidden now", not "did I rename something" —
+    those differ for a store CC never scans, and a caller that needs the second
+    question must ask `_is_cc_session_dir` rather than infer it from here.
     """
     if not _is_cc_session_dir(session_path):
         return True  # home store: nothing to hide from

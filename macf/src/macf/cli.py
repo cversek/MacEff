@@ -6962,10 +6962,37 @@ def cmd_task_hide_completed(args: argparse.Namespace) -> int:
         print("❌ No task session found")
         return 1
 
-    # Snapshot visible task files before iterating (glob is lazy, files rename during loop)
+    # The dot prefix exists to hide files from CC's scanner, so the question is
+    # whether anything scans this store — not which backend it happens to be.
+    # `hide_task_file` no-ops for an unscanned store and returns True meaning
+    # "already in the desired state", which the counter below read as "renamed";
+    # the command then reported "Hidden N ... from CC scanner" having renamed
+    # nothing, over a store nothing was scanning. Asking the real condition here
+    # is narrower than changing that return contract, which other callers rely
+    # on.
+    from .task.reader import _is_cc_session_dir
+    if not _is_cc_session_dir(reader.session_path):
+        print("ℹ️  This task store is not scanned by CC — nothing to hide.")
+        print("   The dot prefix exists only to keep completed tasks out of CC's")
+        print("   native scanner. Renaming here would change nothing except how")
+        print("   the files look to you.")
+        return 0
+
+    # Snapshot before iterating: glob is lazy and these files rename in the loop.
+    #
+    # `Path.glob("*.json")` MATCHES DOTFILES. It differs from a shell glob and
+    # from the `glob` module, both of which exclude leading dots, so the pattern
+    # reads as "visible files only" and is not. Unfiltered, a second run picks up
+    # `.{id}.json`, takes `.stem` as `.{id}` — dot included — and asks for a task
+    # named `.{id}` to be hidden, producing `..{id}.json`. A third run makes
+    # `...{id}.json`. `hide_task_file` is idempotent for a given task_id and is
+    # not at fault: the caller handed it a different id each time, derived from a
+    # filename the previous run had changed. The component was idempotent; the
+    # operation was not.
     hidden_count = 0
     skipped_count = 0
-    visible_files = list(reader.session_path.glob("*.json"))
+    visible_files = [f for f in reader.session_path.glob("*.json")
+                     if not f.name.startswith(".")]
     for task_file in visible_files:
         try:
             with open(task_file, "r") as f:
@@ -6979,8 +7006,11 @@ def cmd_task_hide_completed(args: argparse.Namespace) -> int:
         except (json.JSONDecodeError, IOError):
             continue
 
-    # Re-count after all renames complete
-    visible_after = len(list(reader.session_path.glob("*.json")))
+    # Re-count after all renames complete. Same dotfile trap: an unfiltered
+    # "*.json" counts the files just hidden as still visible, so the summary
+    # contradicted the operation it had performed.
+    visible_after = len([f for f in reader.session_path.glob("*.json")
+                         if not f.name.startswith(".")])
     hidden_after = len(list(reader.session_path.glob(".*.json")))
     print(f"✅ Hidden {hidden_count} completed task files from CC scanner")
     if skipped_count:
