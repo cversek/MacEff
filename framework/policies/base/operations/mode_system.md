@@ -48,6 +48,7 @@ Agent behavior is governed by multiple **simultaneously active** conditions — 
 - How is each mode detected?
 - What is event-based vs computed vs agent-declared detection?
 - What env vars configure thresholds?
+- What must a detector do when it cannot determine whether a mode applies?
 
 **5 The Emoji Dashboard**
 - What does the status line look like?
@@ -204,8 +205,25 @@ These five modes participate in the Markov transition matrix and can be suggeste
 
 **SPRINT 🏃** is a special work mode with different semantics from the five rotatable modes:
 
-- **Set automatically**: When a 🏃 SPRINT task starts (or its child tasks start), the mode is set to SPRINT. The agent does not invoke a motivation skill to enter SPRINT mode.
-- **Clears automatically**: When the parent SPRINT task completes, the mode clears.
+- **Derived from SCOPE, not from status**: the mode is in force while a SPRINT task is in **active scope** and `in_progress`. The agent does not invoke a motivation skill to enter SPRINT mode.
+- **Set automatically**: creating a sprint scopes the sprint task alongside its workload, and any later `scope set` re-includes a running sprint that the caller omitted.
+- **Clears automatically**: when no sprint task remains in active scope. Unscoping releases the lock; completing the sprint does too, by way of leaving scope.
+
+**Why scope and not status.** An earlier version of this policy anchored on task
+start and completion, and both failed in practice. A sprint *resumed* rather than
+created never fires `task start` — the task is already `in_progress` — so the
+mode was never set, which is the normal case after a compaction or an
+operator-directed pause. And the mode was observed clearing on unscoping rather
+than on completion. A sprint that is `in_progress` with no scope is stopped; one
+that is scoped is running. **Status says what a record claims; scope says what is
+being worked**, and completion already keys on the same fact.
+
+**Derive, do not store.** The reader prefers the live invariant — a SPRINT task
+in active scope forces the mode — and falls back to the last `work_mode_change`
+event only when none is found. Scope operations therefore *reconcile* that event
+rather than treating it as the source of truth: a second copy of a fact the scope
+already holds is free to drift from it, and a stale copy is how a mode-lock
+outlives its sprint or a running sprint loses its lock.
 - **Markov-locked**: The gate point recommender is **disabled** while SPRINT mode is active. No mode-transition suggestions fire at Stop hook gates.
 - **Activates scope nag**: Instead of mode suggestions, the Stop hook emits a scope-completion nag listing remaining scoped tasks.
 - **Mode-set restriction**: `mode set-work <other>` while SPRINT is active warns or rejects — open question on strictness: hard-fail vs warn vs convert-to-PLAY_TIME (TODO: resolve in implementation, see roadmap §8 open question 3).
@@ -254,6 +272,43 @@ Returns set of all currently active mode names across both layers.
 | `MACF_QUIET_ON_IDLE` | false | Auto-activate QUIET_MODE with USER_IDLE (off by default) |
 
 ---
+
+### When a Detector Cannot Tell
+
+A detector reads a record and decides whether a mode applies. Sometimes it can
+do neither — the record is unreachable, a scan came back empty, a file is
+missing. That is a third answer, and it must not be quietly collapsed into
+"the mode does not apply".
+
+It has happened here. `USER_IDLE` read a bounded scan's empty result as
+*the user is present*, and the mode silently disengaged while the operator was
+away — the more the agent worked, the sooner it cleared, because the agent's own
+records buried the evidence. The general form is the compiled-false-absence trap
+in `empiricism`; the language-level rule is in the Python coding standards. What
+belongs here is the part neither of those can decide: **which way a given mode
+should fail.**
+
+**Choose the default by what the mode grants.**
+
+A mode that grants *care* — closer checkpointing, more conservative choices,
+preferring to ask — is cheap to enter wrongly and expensive to leave wrongly.
+Default toward it when the answer is unknown. `USER_IDLE` is this kind: reading
+an absent operator as present costs the whole feature, while reading a present
+operator as absent costs a little redundant caution they can correct in one
+message.
+
+A mode that grants *authority* — permission to act without confirmation, to skip
+a gate, to decide alone — is the reverse. Never enter it on an unknown. An
+authority-granting mode must be **positively established**, not inferred from a
+failure to find evidence against it.
+
+**State the choice where it is made.** A detector that falls back must say so —
+in a comment at minimum, and in a warning when the fallback changes behaviour an
+operator would notice. A mode that changes because a lookup failed, with nothing
+anywhere recording that it failed, is indistinguishable from a mode that changed
+because the world changed. That is the property being protected: an operator
+watching the dashboard should never have to wonder whether an emoji reflects
+their situation or the reader's reach.
 
 ## 5. The Emoji Dashboard
 

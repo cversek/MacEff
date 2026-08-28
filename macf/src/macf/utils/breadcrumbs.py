@@ -34,7 +34,9 @@ def get_current_dev_drv_prompt_uuid() -> Optional[str]:
         current_session = get_current_session_id()
 
         # Get most recent dev_drv_started event FOR THIS SESSION
-        for event in read_events(limit=50, reverse=True):
+        # limit=None: exits on the first match; bounded, a breadcrumb silently
+        # lost its prompt uuid under load. See the compiled-false-absence trap in `empiricism`.
+        for event in read_events(limit=None, reverse=True):
             if event.get("event") == "dev_drv_started":
                 data = event.get("data", {})
 

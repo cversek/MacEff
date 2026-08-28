@@ -46,6 +46,12 @@ Applies to all Python code written within MacEff framework projects.
 - When is single `.parent` acceptable?
 - What MACF discovery functions exist?
 
+**6 Reading the Event Log**
+- Why is a hardcoded `limit=` on an event scan a smell?
+- What unit should a scan be bounded in?
+- When is an unbounded scan the cheaper choice?
+- How do I keep "not found" from becoming a claim about state?
+
 ---
 
 ## 0 Exception Type Selection
@@ -282,6 +288,88 @@ project_root = Path(__file__).parent.parent.parent  # FRAGILE
 
 ---
 
+## 6 Reading the Event Log
+
+Section 2 covers writing to the event log. This covers reading it back, where the
+recurring defect is not the read but what a *failed* read is taken to mean.
+
+### 6.1 A hardcoded `limit=` on an event scan is a smell
+
+```python
+# Suspect
+for event in read_events(limit=200, reverse=True):
+    if event.get("event") == "user_activity_detected":
+        return event["timestamp"]
+return None          # "no activity" — or "I stopped looking"?
+```
+
+The scan is bounded in **rows** while the question is about **time**. Every
+unrelated write consumes the budget, so the window silently shrinks as the log
+gets busy — and the miss is returned as a value indistinguishable from a real
+negative. See the compiled-false-absence trap in `empiricism` for why this is a
+distinct failure from an ordinary bad search.
+
+### 6.2 Prefer no bound when the scan exits on its first match
+
+Most of these scans `return` or `break` as soon as they find what they came for.
+Such a scan **already costs nothing in the common case** — the limit only ever
+takes effect when the event is absent, which is exactly the case it gets wrong.
+
+```python
+# Better: self-limiting on match, honest when absent
+for event in read_events(limit=None, reverse=True):
+    if event.get("event") == "mode_change":
+        return event["data"].get("enabled", True)
+return False
+```
+
+### 6.3 When a bound is genuinely needed, bound in the unit you are measuring
+
+If the question is *did X happen in the last N minutes*, stop at the first event
+older than N minutes. An age cannot be shrunk by volume, and the loop still
+terminates early on a busy log:
+
+```python
+def had_activity_since(cutoff_epoch):
+    for event in read_events(limit=None, reverse=True):
+        ts = parse_epoch(event.get("timestamp"))
+        if ts is not None and ts < cutoff_epoch:
+            return False        # reverse order: everything beyond is older
+        if event.get("event") == "user_activity_detected":
+            return True
+    return False
+```
+
+Reframing the question is often the whole fix. *When did X last happen* must
+reach an event of unbounded age; *did X happen since T* only ever has to reach
+T.
+
+### 6.4 Do not let `None`-is-falsy encode a decision
+
+```python
+# The default is invisible — it falls out of Python's truthiness
+last = lookup()
+if last and (now - last) > timeout:
+    mark_idle()
+```
+
+Make the fallback explicit at the call site — a sentinel the caller must handle,
+or the default passed as a parameter. Where a default must be chosen, choose by
+**cost of being wrong**: a default that grants *care* is cheap; one that grants
+*authority*, or silently withdraws a safeguard, is not.
+
+### 6.5 Anti-pattern summary
+
+| smell | why | instead |
+|---|---|---|
+| `read_events(limit=<int literal>)` | bounded in rows, question is in time | `limit=None`, or bound by age |
+| `return None` / `return False` on miss | conflates absent with unreachable | sentinel, or explicit parameter |
+| caller relies on falsiness | the default is invisible | state the fallback where it is chosen |
+
+A new hardcoded numeric `limit=` on an event scan should be justified at the
+site with a `# noqa` and a reason, the way other suppressions are — the point is
+that the choice becomes visible, not that it is forbidden.
+
 ## Anti-Pattern Examples
 
 ### Silent Pass
@@ -311,6 +399,9 @@ except FileNotFoundError as e:
     print(f"⚠️ MACF: File not found (using None): {e}", file=sys.stderr)
     return None
 ```
+
+---
+
 
 ---
 
