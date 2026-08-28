@@ -174,6 +174,18 @@ macf_tools task create sprint "Goal description" \
 
 **Mid-sprint additions**: If you realize a task must be added during the sprint, re-invoke `scope set` with the full updated list — the command replaces the scope, so include everything you want tracked.
 
+**The sprint task is itself in scope.** Creation scopes it alongside the
+workload, and `scope set` re-includes a running sprint the caller omitted,
+reporting that it did. This is not bookkeeping tidiness: SPRINT work mode is
+*derived* from "is a sprint task in active scope", so a scope that omits the
+sprint silently ends the mode-lock while the sprint is still running — no `🏃`,
+and the Markov recommender un-suppressed. Observed for 1h40m of a live sprint
+before it was noticed.
+
+Scope is therefore the single signal for whether a sprint is running, which is
+the same fact §3.3.3 already relies on: a sprint whose scope was removed is
+stopped even though its status still reads `in_progress`.
+
 **NEVER use `scope clear`** to exit a sprint. It triggers a permissions prompt (halts sprint when user is away) and destroys tracking without completion reports.
 
 #### 3.1.2 Work the Sprint Generates
