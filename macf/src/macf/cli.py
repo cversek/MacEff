@@ -5750,23 +5750,34 @@ def cmd_task_trace(args: argparse.Namespace) -> int:
         print("   ✅ nothing in progress")
         return 0
 
-    icon = {"active": "▶️ ", "enclosing": "📂", "parked": "⏸️ ", "abandoned": "⚠️ "}
+    icon = {"active": "▶️ ", "enclosing": "📂", "parked": "⏸️ ",
+            "ready": "🟢", "deferred": "⚠️ "}
     for f in frames:
         when = _rel_age_short(f.last_touch) if f.last_touch else "never"
         print(f"   {icon.get(f.state, '  ')} #{f.task_id:<6} {f.state:<10} last touched {when}")
         print(f"        {_strip_ansi(f.subject)[:96]}")
         if f.blockers_open:
             print(f"        ⏸  waiting on {', '.join('#' + b for b in f.blockers_open)}")
+        elif f.state == "ready" and f.blockers_resolved:
+            # The transition, stated. This is the fact an operator scans for
+            # during a lull: not "what did I drop" but "what is ripe to resume".
+            print(f"        🟢 unblocked — {', '.join('#' + b for b in f.blockers_resolved)} "
+                  f"{'have' if len(f.blockers_resolved) > 1 else 'has'} since resolved")
         if f.parent_completed and f.state != "active":
             print(f"        ⚠️  its parent is marked COMPLETE while this is still running")
 
-    # Recommend a frame that was actually dropped. Pointing at a parked frame
+    # Recommend a frame that can actually be worked. Pointing at a parked frame
     # sends the agent at something legitimately waiting on a blocker, and this
     # line is the one an agent *acts* on — during recovery, when it has least
     # context with which to notice the advice is wrong.
-    dropped = [f for f in owed if f.state == "abandoned"]
-    if dropped:
-        print(f"\n   Resume with:  macf_tools task start {dropped[0].task_id}")
+    #
+    # `ready` outranks `deferred`: a frame whose blocker just cleared is ripe by
+    # construction, and recommending it is what turns the new state from a label
+    # into a suggestion. Ties fall to the oldest touch, which frames already are.
+    resumable = ([f for f in owed if f.state == "ready"]
+                 or [f for f in owed if f.state == "deferred"])
+    if resumable:
+        print(f"\n   Resume with:  macf_tools task start {resumable[0].task_id}")
     return 0
 
 

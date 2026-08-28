@@ -73,9 +73,9 @@ class TestOpenFrames:
             _Task("2", "in_progress", [_Update(900)]),
         ]
         states = {f.task_id: f.state for f in open_frames(tasks)}
-        assert states == {"2": "active", "1": "abandoned"}
+        assert states == {"2": "active", "1": "deferred"}
 
-    def test_a_frame_with_an_open_blocker_is_parked_not_abandoned(self):
+    def test_a_frame_with_an_open_blocker_is_parked_not_deferred(self):
         """The distinction that keeps the detector usable.
 
         A blocked frame was set down for a reason. Flagging it would cry wolf
@@ -89,14 +89,20 @@ class TestOpenFrames:
         states = {f.task_id: f.state for f in open_frames(tasks)}
         assert states["1"] == "parked"
 
-    def test_a_completed_blocker_no_longer_parks_a_frame(self):
+    def test_a_completed_blocker_makes_a_frame_ready(self):
+        """This assertion used to read `abandoned`, pinning the bug as intended.
+
+        A resolved blocker does leave a real debt — but it leaves a RIPE one,
+        and collapsing it into the residual destroyed the single most actionable
+        fact the stack knows.
+        """
         tasks = [
             _Task("1", "in_progress", [_Update(100)], blocked_by=["9"]),
             _Task("9", "completed", [_Update(50)]),
             _Task("2", "in_progress", [_Update(900)]),
         ]
         states = {f.task_id: f.state for f in open_frames(tasks)}
-        assert states["1"] == "abandoned", "a resolved blocker leaves a real debt"
+        assert states["1"] == "ready"
 
     def test_oldest_frame_reported_first(self):
         """The most-forgotten frame is the one most worth surfacing."""
@@ -125,7 +131,7 @@ class TestOpenFrames:
 class TestEnclosingFrames:
     """A parent holding the frame attention is working inside is not a debt.
 
-    Before this state existed, ``abandoned`` was the else-branch, and the
+    Before this state existed, the residual was the else-branch, and the
     classifier only ever looked *upward* (blockers, parent) — never down. So a
     MISSION with a running phase fell through to "dropped frame" by
     construction, and the false-alarm rate scaled with how faithfully work was
@@ -141,7 +147,7 @@ class TestEnclosingFrames:
         states = {f.task_id: f.state for f in open_frames(tasks)}
         assert states == {"30": "active", "10": "enclosing"}
 
-    def test_a_genuinely_dropped_frame_is_still_abandoned(self):
+    def test_a_genuinely_dropped_frame_is_still_deferred(self):
         """The control, and the reason the test above proves anything.
 
         A fix that simply stopped emitting ``abandoned`` would satisfy every
@@ -155,7 +161,7 @@ class TestEnclosingFrames:
             _Task("40", "in_progress", [_Update(50)]),
         ]
         states = {f.task_id: f.state for f in open_frames(tasks)}
-        assert states["40"] == "abandoned", "the fix must not silence the state"
+        assert states["40"] == "deferred", "the fix must not silence the state"
         assert states["10"] == "enclosing"
 
     def test_enclosure_reaches_through_grandparents(self):
@@ -181,8 +187,8 @@ class TestEnclosingFrames:
             _Task("40", "in_progress", [_Update(900)]),
         ]
         states = {f.task_id: f.state for f in open_frames(tasks)}
-        assert states["10"] == "abandoned"
-        assert states["30"] == "abandoned"
+        assert states["10"] == "deferred"
+        assert states["30"] == "deferred"
 
     def test_enclosing_outranks_parked(self):
         """Work running inside a frame means it is not waiting, whatever its
@@ -330,3 +336,46 @@ class TestLoopChangeSignal:
         f.write_text("{}")
         os.utime(f, (time.time() + 5, time.time() + 5))
         assert cli.get_display_mtime(store) != before
+
+
+class TestReadyIsEarnedNotInferred:
+    """A frame whose blocker cleared is ripe; a frame nobody blocked is not.
+
+    The guard that keeps ``ready`` meaningful is that it requires a DECLARED
+    blocker to have cleared. Without it every set-down frame drifts into
+    ``ready`` and the signal dies exactly the way the old residual did: a state
+    that eventually describes most of the list stops discriminating, which is
+    the failure this change exists to fix.
+    """
+
+    def _states(self, tasks):
+        return {f.task_id: f.state for f in open_frames(tasks)}
+
+    def test_a_never_blocked_frame_is_deferred_not_ready(self):
+        """The design caution, as an assertion."""
+        tasks = [
+            _Task("1", "in_progress", [_Update(100)]),
+            _Task("2", "in_progress", [_Update(900)]),
+        ]
+        assert self._states(tasks)["1"] == "deferred"
+
+    def test_partially_cleared_blockers_stay_parked(self):
+        """One resolved blocker out of two does not make a frame workable."""
+        tasks = [
+            _Task("1", "in_progress", [_Update(100)], blocked_by=["8", "9"]),
+            _Task("8", "completed", [_Update(50)]),
+            _Task("9", "pending", [_Update(50)]),
+            _Task("2", "in_progress", [_Update(900)]),
+        ]
+        frames = {f.task_id: f for f in open_frames(tasks)}
+        assert frames["1"].state == "parked"
+        assert frames["1"].blockers_resolved == ["8"]
+
+    def test_an_archived_blocker_counts_as_resolved(self):
+        """Archived is terminal; reading it as open would park a ripe frame forever."""
+        tasks = [
+            _Task("1", "in_progress", [_Update(100)], blocked_by=["9"]),
+            _Task("9", "archived", [_Update(50)]),
+            _Task("2", "in_progress", [_Update(900)]),
+        ]
+        assert self._states(tasks)["1"] == "ready"

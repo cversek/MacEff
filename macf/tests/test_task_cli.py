@@ -1399,7 +1399,7 @@ class TestTaskTraceCommand:
         assert result.returncode == 0, result.stdout + result.stderr
         assert "nothing in progress" in result.stdout
 
-    def test_surfaces_an_abandoned_frame(self, isolated_task_env):
+    def test_surfaces_a_deferred_frame(self, isolated_task_env):
         session = isolated_task_env['session_dir']
         self._seed(session, "000", "in_progress", 100, parent="null", task_type="SENTINEL")
         self._seed(session, "5", "in_progress", 200)   # left behind
@@ -1408,7 +1408,7 @@ class TestTaskTraceCommand:
         result = self._run(isolated_task_env['env'])
         assert result.returncode == 0, result.stdout + result.stderr
         assert "#5" in result.stdout
-        assert "abandoned" in result.stdout
+        assert "deferred" in result.stdout
         assert "macf_tools task start 5" in result.stdout, "must name the remedy"
 
     def test_path_flag_shows_the_order_attention_moved(self, isolated_task_env):
