@@ -138,6 +138,11 @@ Reflections document philosophical insights, wisdom synthesis, and consciousness
 - PA vs SA locations?
 - Privacy permissions?
 
+7.5 Delivery
+- Where is the operator, and what actually reaches them there?
+- What does the secret-gist ruling cover, and what does it not?
+- What must happen when a delivery step fails?
+
 8 Knowledge Web Participation
 - What two forms may a concept take in prose, and how do I choose between them?
 - Why is a parenthetical reference annotation rather than editing?
@@ -678,6 +683,62 @@ YYYY-MM-DD_HHMMSS_JOTEWR_CycleXX_Theme_reflection.md
 **Exception for SAs**: Parent PA has read permission (delegation improvement), SA retains ownership
 
 ---
+
+## 7.5 Delivery: Consult Where the Operator Actually Is
+
+An artifact that was written but never reached anyone was not delivered. This
+section governs delivery for every artifact-producing skill, so each does not
+grow its own copy and drift.
+
+**The failure being fixed is silent.** Rendering to a local browser tab is right
+when the operator is at the machine and useless when they are driving over SSH,
+tmux, or a chat channel: the tab opens where they cannot see it, the command
+exits 0, and the skill reports success. The artifact exists, the operator has
+nothing, and there is no error to notice.
+
+**Delivery has at least three cases, and the framework already knows which one
+holds** — a presence mode for a remote operator exists, and requested reports
+already go out as channel attachments when it is active. So *where is the
+operator* is a question the system can answer; delivery simply never asked it.
+That makes this a missing branch, not a new capability.
+
+| operator location | delivery that works |
+|---|---|
+| local, at the machine | render and open a browser tab |
+| remote via a chat channel | send the file as a channel attachment |
+| remote over SSH/tmux, no channel | a URL they can open on their own machine |
+
+**Failure must be loud.** The whole defect is silent non-delivery, so a delivery
+step that cannot complete says so rather than exiting successfully. A skill that
+reports success on an artifact nobody received has reproduced the bug in its
+report.
+
+**Say what was published and where, in the same message as the link**, so the
+operator knows what now exists off-machine.
+
+### The secret-gist ruling, and its two limits
+
+For the third case, a secret gist carries the artifact to wherever the operator
+is. A secret gist is *unlisted* rather than access-controlled, and the operator
+has ruled that obscurity adequate for private reflections that are in any case
+being shared with them.
+
+Recorded so it is not re-litigated — and recorded with its boundaries, because a
+ruling quoted without its scope becomes a general permission:
+
+- **It covers artifacts intended for the operator.** It does not license
+  publishing artifacts that were never meant for them. The ruling is a scope,
+  not a blanket.
+- **It does not suspend the outbound-text discipline.** Content leaving the
+  machine passes the same checks as any other outbound text. That discipline is
+  about the correctness of what gets published, which is a separate question
+  from who can read it.
+
+### Open, and deliberately not settled here
+
+Gist **lifecycle** — whether the URL persists or is revoked after reading. A link
+in a chat log outlives the session that produced it, and the right answer depends
+on retention expectations this policy does not own.
 
 ## 8. Knowledge Web Participation
 
