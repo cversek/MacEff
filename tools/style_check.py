@@ -46,9 +46,38 @@ def _load_checker():
     return check_paths
 
 
+def _tracked_targets():
+    """The files git tracks under TARGETS, or the directories if git cannot say.
+
+    Walking the directories measures the WORKING TREE; the baseline describes
+    the REPOSITORY. Those differ wherever anything untracked sits under a
+    target, and the difference is charged to whoever is committing.
+
+    That is not hypothetical. A gitignored directory of local training data
+    contributed two findings, so a branch that touched no relevant code was
+    refused for `MACEFF002 5 -> 7` — debt that exists in no other clone and that
+    no contributor can remove. The documented escape (suppress at the site)
+    means editing a file that will never be committed, so the realistic outcome
+    is `--no-verify`, which is how a gate stops being one.
+
+    Falling back to the directories when git is unavailable keeps the checker
+    usable outside a checkout; it is the same measurement the baseline was
+    originally taken with.
+    """
+    try:
+        out = subprocess.run(["git", "-C", str(REPO), "ls-files", "--", *TARGETS],
+                             capture_output=True, text=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError) as e:
+        print(f"style: git unavailable ({e}); falling back to a directory walk, "
+              f"which counts untracked files", file=sys.stderr)
+        return [REPO / t for t in TARGETS]
+    files = [REPO / line for line in out.split("\n") if line.endswith(".py")]
+    return files or [REPO / t for t in TARGETS]
+
+
 def main() -> int:
     check_paths = _load_checker()
-    report = check_paths([REPO / t for t in TARGETS])
+    report = check_paths(_tracked_targets())
 
     if report.unreadable:
         # REFUSE rather than continue: a file that could not be read is not a
