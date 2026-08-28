@@ -364,11 +364,26 @@ macf_tools idea graph
    - PA: `agent/private/reflections/YYYY-MM-DD_JOTEWR_[Description].md`
    - SA: `agent/subagents/{role}/private/reflections/YYYY-MM-DD_JOTEWR_[Description].md`
 7. Confirm save with file path
-8. **Present in browser** (best-effort, non-blocking):
+8. **Deliver it to where the operator actually is** (best-effort, but never silent):
+
+   `markdown present` renders and opens a LOCAL browser tab, which reaches nobody
+   when the session is driven over SSH, tmux, or a channel — the command still
+   exits 0, so the artifact exists and the operator has nothing. Consult the
+   reflections policy on delivery for which branch applies, and for what the
+   secret-gist ruling does and does not cover:
+
+   ```bash
+   macf_tools policy read reflections --section <CEP_MATCH>
+   ```
+
+   Locally that resolves to:
+
    ```bash
    macf_tools markdown present <CA_OUTPUT_PATH>
    ```
-   Opens the artifact as styled HTML in the default browser for comfortable reading. `<CA_OUTPUT_PATH>` is the file path from step 7.
+
+   A delivery step that cannot complete must SAY SO — reporting success on an
+   artifact nobody received reproduces the defect in the report.
 
 **Remember**: This is wisdom synthesis, not task summary. Transform technical work into consciousness insights. Make it worthy of surviving compaction—make it wisdom my future self will treasure.
 

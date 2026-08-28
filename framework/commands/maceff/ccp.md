@@ -136,11 +136,23 @@ Before saving, the artifact MUST carry a `## Wiki-Links` section. This is what c
 
 ## Post-Creation Presentation
 
-After CCP saved, present in browser for comfortable reading (best-effort, non-blocking):
+After the CCP is saved, deliver it to where the operator actually is.
+
+`markdown present` opens a LOCAL browser tab, which reaches nobody over SSH,
+tmux, or a channel — and still exits 0. Consult the reflections policy on
+delivery for the branch that applies:
+
+```bash
+macf_tools policy read reflections --section <CEP_MATCH>
+```
+
+Locally that resolves to:
 
 ```bash
 macf_tools markdown present <CA_OUTPUT_PATH>
 ```
+
+A delivery step that cannot complete must say so.
 
 ---
 
