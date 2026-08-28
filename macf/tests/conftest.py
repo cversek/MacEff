@@ -139,6 +139,13 @@ def isolated_agent_home(tmp_path, monkeypatch):
     Tests that need their own home layout can still monkeypatch the env var
     on top of this; the pre-cleared cache makes that reliable.
 
+    This covers BOTH resolvers as of #252. It did not always: `ConsciousnessConfig`
+    resolved the agent root by walking up from the cwd and never consulted this
+    variable, so anything reaching the filesystem through that path addressed
+    whatever directory pytest was started in — isolation that read as complete
+    and was not. Anything added here later should be checked against both, since
+    the fixture's coverage is a property of the resolvers rather than of itself.
+
     Yields:
         Path to the isolated agent home
     """

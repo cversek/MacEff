@@ -4506,6 +4506,29 @@ def get_tasks_mtime(tasks_dir) -> float:
         return 0.0
 
 
+def touched_within_watch(task, since) -> bool:
+    """True when the task's last recorded touch falls inside an open watch.
+
+    `since` is the epoch moment `--loop` began, or None for a one-shot render — so a
+    one-shot render answers False for everything and behaves exactly as before.
+
+    Reads the same breadcrumb timestamps `task trace` reads, so "when did this
+    happen" has one answer in this codebase rather than two.
+    """
+    if since is None:
+        return False
+    try:
+        from .task.trace import last_touch
+        touched = last_touch(task)
+    except (ImportError, ValueError, AttributeError) as e:
+        # Hiding matches the one-shot behaviour, which is the safe direction.
+        # Saying so keeps a broken trace parser from reading as a quiet watch.
+        print(f"⚠️ MACF: could not resolve a touch time for #{getattr(task, 'id', '?')}: {e}",
+              file=sys.stderr)
+        return False
+    return touched is not None and touched >= since
+
+
 def cmd_task_tree(args: argparse.Namespace) -> int:
     """Display task hierarchy tree from a root task."""
     import time
@@ -4591,6 +4614,11 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
             _seen.add(task.id)
             return all(is_fully_completed(c, _seen) for c in get_children(task.id))
 
+        # Set when --loop starts; None for a one-shot render. A loop is a WATCH
+        # with a beginning, and that beginning is the honest retention window —
+        # no new flag, no new state beyond the loop's own start time.
+        loop_since = None
+
         def should_show_task(task, siblings, depth, parent=None):
             """Determine if task should be shown in succinct mode.
 
@@ -4617,7 +4645,15 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
             # down. A completed task with active descendants stays, or those
             # descendants would have no path to the surface.
             if depth == 1:
-                return not is_fully_completed(task)
+                if not is_fully_completed(task):
+                    return True
+                # Finished, and normally hidden. In a loop, keep what finished
+                # since the watch began: an operator running --loop is watching
+                # completions ACCUMULATE, and suppressing each one on the next
+                # refresh makes the display least informative exactly when it
+                # has the most to report. A formal exit and re-entry starts a
+                # new window, which makes hiding an explicit act.
+                return touched_within_watch(task, loop_since)
             # Deeper tiers: while the parent is still open, show its completed
             # children. Their own finished descendants collapse by the same
             # rule one level further in, so a resolved branch costs one line
@@ -4936,6 +4972,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
 
     # Loop mode - monitor for changes
     if args.loop:
+        loop_since = time.time()
         reader = TaskReader()
         # Watch the resolved store (home store or legacy session dir), not the
         # legacy per-session root — the home store lives outside ~/.claude/tasks.
@@ -6925,10 +6962,37 @@ def cmd_task_hide_completed(args: argparse.Namespace) -> int:
         print("❌ No task session found")
         return 1
 
-    # Snapshot visible task files before iterating (glob is lazy, files rename during loop)
+    # The dot prefix exists to hide files from CC's scanner, so the question is
+    # whether anything scans this store — not which backend it happens to be.
+    # `hide_task_file` no-ops for an unscanned store and returns True meaning
+    # "already in the desired state", which the counter below read as "renamed";
+    # the command then reported "Hidden N ... from CC scanner" having renamed
+    # nothing, over a store nothing was scanning. Asking the real condition here
+    # is narrower than changing that return contract, which other callers rely
+    # on.
+    from .task.reader import _is_cc_session_dir
+    if not _is_cc_session_dir(reader.session_path):
+        print("ℹ️  This task store is not scanned by CC — nothing to hide.")
+        print("   The dot prefix exists only to keep completed tasks out of CC's")
+        print("   native scanner. Renaming here would change nothing except how")
+        print("   the files look to you.")
+        return 0
+
+    # Snapshot before iterating: glob is lazy and these files rename in the loop.
+    #
+    # `Path.glob("*.json")` MATCHES DOTFILES. It differs from a shell glob and
+    # from the `glob` module, both of which exclude leading dots, so the pattern
+    # reads as "visible files only" and is not. Unfiltered, a second run picks up
+    # `.{id}.json`, takes `.stem` as `.{id}` — dot included — and asks for a task
+    # named `.{id}` to be hidden, producing `..{id}.json`. A third run makes
+    # `...{id}.json`. `hide_task_file` is idempotent for a given task_id and is
+    # not at fault: the caller handed it a different id each time, derived from a
+    # filename the previous run had changed. The component was idempotent; the
+    # operation was not.
     hidden_count = 0
     skipped_count = 0
-    visible_files = list(reader.session_path.glob("*.json"))
+    visible_files = [f for f in reader.session_path.glob("*.json")
+                     if not f.name.startswith(".")]
     for task_file in visible_files:
         try:
             with open(task_file, "r") as f:
@@ -6942,8 +7006,11 @@ def cmd_task_hide_completed(args: argparse.Namespace) -> int:
         except (json.JSONDecodeError, IOError):
             continue
 
-    # Re-count after all renames complete
-    visible_after = len(list(reader.session_path.glob("*.json")))
+    # Re-count after all renames complete. Same dotfile trap: an unfiltered
+    # "*.json" counts the files just hidden as still visible, so the summary
+    # contradicted the operation it had performed.
+    visible_after = len([f for f in reader.session_path.glob("*.json")
+                         if not f.name.startswith(".")])
     hidden_after = len(list(reader.session_path.glob(".*.json")))
     print(f"✅ Hidden {hidden_count} completed task files from CC scanner")
     if skipped_count:
