@@ -18,9 +18,9 @@ from macf.utils import (
     get_token_info,
     format_token_context_minimal,
     get_breadcrumb,
-    detect_auto_mode
 )
-from macf.modes import detect_active_modes, anticipate_mode_change, format_mode_indicators, get_active_task_type_marker
+from macf.modes import (detect_active_modes, anticipate_mode_change, format_mode_indicators,
+                        get_active_task_type_marker, detect_auto_mode)
 from macf.agent_events_log import append_event, elide_large_values
 from macf.event_queries import get_active_policy_injections_from_events
 from macf.hooks.hook_logging import log_hook_event

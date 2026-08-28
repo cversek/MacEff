@@ -23,10 +23,10 @@ from macf.utils import (
     get_token_info,
     format_token_context_full,
     get_boundary_guidance,
-    detect_auto_mode,
     # Note: mode indicators imported separately below
     get_breadcrumb
 )
+from macf.modes import detect_auto_mode
 from macf.hooks.hook_logging import log_hook_event
 from macf.observability import Warning, emit_warning
 
