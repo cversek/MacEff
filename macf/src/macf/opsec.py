@@ -80,20 +80,64 @@ def main():
         return 1
     checks = [(re.compile(p), label, "hard") for p, label in profile.get("hard", [])]
     checks += [(re.compile(p), label, "soft") for p, label in profile.get("soft", [])]
+    # Labels a profile marks as SECRET-CLASS. A finding of this class is
+    # reported WITHOUT the matched text and WITHOUT the surrounding line.
+    #
+    # THE GATE MUST NOT PRINT WHAT IT REFUSES. For the original private-context
+    # patterns, quoting the match is exactly right -- you need to see which
+    # cycle code or task number leaked, and the string is harmless. For a
+    # credential it inverts completely: the gate that stops the secret reaching
+    # git prints it into a terminal, a CI log and an agent transcript instead,
+    # and those are harder to rotate out of than a rejected commit.
+    #
+    # Measured, not theorised: a service token was disclosed into a transcript
+    # by this hook's own refusal message during the test that added these
+    # patterns, and had to be rotated.
+    #
+    # The reader needs to know THAT a credential is in the diff and WHERE. Never
+    # what it is -- they have the file, and `git diff --cached` is one command.
+    secret_labels = set(profile.get("secret_class", []))
+
+    def is_secret(label):
+        return label in secret_labels or any(
+            k in label.lower() for k in
+            ("credential", "secret", "token", "password", "private key",
+             "api key", "email address"))
+
     hits = []
     for fname, text in staged_added_lines():
         for rx, label, kind in checks:
             m = rx.search(text)
             if m:
-                hits.append((fname, label, m.group(0), text.strip()[:100]))
+                if is_secret(label):
+                    hits.append((fname, label, None, None))
+                else:
+                    hits.append((fname, label, m.group(0), text.strip()[:100]))
     if hits:
-        print("COMMIT REJECTED: private-context leakage in staged changes")
+        print("COMMIT REJECTED: leakage in staged changes")
         print("-" * 60)
+        redacted = 0
         for fname, label, tok, ctx in hits:
-            print("%s: [%s] %r" % (fname, label, tok))
-            print("    %s" % ctx)
+            if tok is None:
+                redacted += 1
+                print("%s: [%s]" % (fname, label))
+                print("    <REDACTED -- this gate does not print the material "
+                      "it refuses; inspect with: git diff --cached -- %s>" % fname)
+            else:
+                print("%s: [%s] %r" % (fname, label, tok))
+                print("    %s" % ctx)
         print("-" * 60)
-        print("%d hit(s). Fix, or bypass after review: git commit --no-verify" % len(hits))
+        print("%d hit(s)%s." % (len(hits),
+              ", %d withheld as secret-class" % redacted if redacted else ""))
+        if redacted:
+            print("A refused credential is still a DISCLOSED credential if it "
+                  "reached a log or a transcript. If this material has been "
+                  "printed anywhere, ROTATE it -- deletion does not reach the "
+                  "copies, rotation does.")
+        print("Fix, or bypass after review: git commit --no-verify")
+        print("Why this gate exists:")
+        print("  macf_tools policy navigate capability_boundaries")
+        print("  Related: credential custody, private context, public surfaces")
         return 1
     return 0
 

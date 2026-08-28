@@ -29,6 +29,8 @@ Applies to all code written within MacEff framework projects.
 - What must happen when catching errors?
 - Why catch specific error types?
 - What makes handling "visible"?
+- Am I HANDLING an error or GUARDING against one? How do I tell?
+- When is a broad catch the more correct choice?
 
 **2 Logging Philosophy**
 - When is event logging required?
@@ -98,6 +100,26 @@ Every error handler must produce output. The minimum acceptable output is a warn
 
 When an error triggers fallback behavior, the output message must describe what fallback was taken. Future debuggers (including future instances of yourself) need to know what alternative path was chosen.
 
+### Catch Breadth Follows PURPOSE, Not Taste
+
+"Specificity declares understanding" is right for a **handler** and wrong for a **guard**, and the two are different jobs wearing the same syntax.
+
+A **handler** does something with the error: recovers, substitutes a value, retries, chooses a different path. The types it names *are* the failure modes it claims to understand, so it MUST be specific — and every type it does not name should propagate to someone who does understand it.
+
+A **guard** absorbs, so that a non-essential path cannot take down an essential one. It recovers nothing and decides nothing. Here **a broad catch is the more correct choice**: an enumerated guard eventually meets a type its author did not foresee and crashes for precisely the thing it existed to absorb. Narrowing a guard does not declare understanding — it declares an assumption about what can go wrong in code whose failures were never the point.
+
+**The discriminating question, and it is the only one you need:**
+
+> **Does any behaviour depend on WHICH exception this was?**
+> Yes → it is a handler → name the types.
+> No → it is a guard → catch broadly, and say so in a comment.
+
+Three riders, because a guard is easy to abuse into the anti-pattern it resembles:
+
+- **A guard is not a licence for silence.** Visibility is non-negotiable for both kinds. A guard that absorbs quietly is silent swallowing with a rationale attached, which is worse than the naive version because it looks considered.
+- **A guard's SCOPE must be as small as the thing it protects.** A broad catch spanning a region that also contains operations whose failures need real handling converts those into absorbed ones. Wrap the best-effort call, not the block it sits in.
+- **A guard still lets the uncatchable through.** Interrupts and termination requests must reach the process. This is why the bare form remains forbidden while the broad-but-bounded form is permitted — see the anti-pattern below.
+
 ---
 
 ## 2 Logging Philosophy
@@ -133,7 +155,15 @@ Catching an error and doing nothing is the fundamental anti-pattern. It creates 
 
 ### Overly Broad Catches
 
-Catching all exceptions indiscriminately hides unexpected failures. It may also catch system signals that should propagate (interrupts, termination requests).
+Catching all exceptions indiscriminately hides unexpected failures — **when the catch is a handler**. A handler that names everything has reasoned about nothing, and it silently takes ownership of failures it cannot address.
+
+**Two distinct faults are easy to merge here, and merging them produces the wrong rule.**
+
+The first is **breadth in a handler**, which is the anti-pattern above.
+
+The second is **catching what must never be caught** — interrupts and termination requests, which must always reach the process. That is an argument against the *unbounded* form specifically, not against breadth as such: a catch bounded to ordinary errors already lets those through, which is exactly why the unbounded form stays forbidden while a deliberate guard does not.
+
+Reading the second as an argument for narrowness in general is what turns a correct rule into pressure to enumerate guards — and an enumerated guard fails at the one moment it is needed. See "Catch Breadth Follows PURPOSE" above.
 
 ### Logging Without Fallback Description
 
