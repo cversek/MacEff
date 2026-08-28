@@ -1,6 +1,5 @@
 # Python Testing Guide
 
-**Breadcrumb**: s_agent-84/c_177/g_8d1e86e/p_none/t_1763876414
 **Type**: Language-Specific Implementation Guide
 **Scope**: Python projects using pytest
 **Status**: ACTIVE
@@ -695,7 +694,6 @@ pytest --tb=no -q
 **Implementation**: 5 utility functions (150 lines)
 **Tests**: 19/19 passed in 0.03s (summary mode)
 **Coverage**: 95% (pytest --cov=macf --cov-report=term-missing)
-**Breadcrumb**: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
 
 **Test Output**:
 ```

@@ -1,6 +1,5 @@
 # Empiricism
 
-**Breadcrumb**: s_d4abc33b/c_436/g_b94ad9d/p_86dedbab/t_1771001500
 **Type**: Philosophy (Foundation)
 **Scope**: All agents (PA and SA)
 **Status**: ACTIVE

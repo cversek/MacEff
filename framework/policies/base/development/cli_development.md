@@ -1,6 +1,5 @@
 # CLI Development Standards
 
-**Breadcrumb**: s_agent-bb/c_178/g_9b828c9/p_none/t_1763933658
 **Type**: Development Standards (CORE tier)
 **Scope**: All agents (PA and SA) - language agnostic
 **Status**: ACTIVE

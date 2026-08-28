@@ -524,7 +524,6 @@ roadmaps/YYYY-MM-DD_Descriptive_Name/
 # [Descriptive Title] ROADMAP
 
 **Date**: YYYY-MM-DD [Day of week]
-**Breadcrumb**: s_XXXXXXXX/c_NN/g_YYYYYYY/p_ZZZZZZZ/t_TTTTTTTTTT
 **Status**: DRAFT | ACTIVE | COMPLETE
 **Context**: [Brief situational context]
 
@@ -891,7 +890,6 @@ Added validation step 4.4.11 for GitHub auth before repo cloning.
 # [Project] Migration ROADMAP
 
 **Date**: YYYY-MM-DD
-**Breadcrumb**: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
 **Status**: ACTIVE
 
 ## Mission
@@ -940,7 +938,6 @@ If migration fails:
 # [Feature Name] Implementation ROADMAP
 
 **Date**: YYYY-MM-DD
-**Breadcrumb**: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
 **Status**: ACTIVE
 
 ## Mission
@@ -994,7 +991,6 @@ Implement [feature] enabling users to [capability], addressing [user need].
 # [Problem] Investigation ROADMAP
 
 **Date**: YYYY-MM-DD
-**Breadcrumb**: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
 **Status**: ACTIVE
 
 ## Mission

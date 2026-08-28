@@ -1,6 +1,5 @@
 # Policy Writing Guidelines
 
-**Breadcrumb**: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
 **Type**: Meta-Policy (Development Infrastructure)
 **Scope**: Policy authors (PA creating new framework policies)
 **Status**: Framework guidelines for policy creation and maintenance
@@ -93,7 +92,6 @@ Policy writing guidelines ensure MacEff framework policies follow consistent str
 ```markdown
 # Policy Name
 
-**Breadcrumb**: s_XXXXXXXX/c_NN/g_YYYYYYY/p_ZZZZZZZ/t_TTTTTTTTTT
 **Type**: [Policy Category]
 **Scope**: [Who this applies to]
 **Status**: [Policy lifecycle stage]
@@ -101,23 +99,33 @@ Policy writing guidelines ensure MacEff framework policies follow consistent str
 
 **Header Components**:
 
-1. **Breadcrumb**: Creation breadcrumb (s/c/g/p/t format)
-   - Enables forensic tracking of policy origin
-   - Shows when policy was created
-   - Links to conversation that produced policy
+**No creation breadcrumb.** A policy header previously carried one, and it does
+not belong in a shared normative document. A breadcrumb encodes one agent's
+session, cycle and prompt — meaningful to the author in the moment of authoring,
+and noise to every other agent and operator who later reads the policy as current
+law. Whose session first wrote a rule is not part of the rule.
 
-2. **Type**: Policy category
+**Provenance for a policy is its git history.** Author, date, commit and `blame`
+give accurate, tool-native history for a versioned file; an embedded trace
+duplicates that in an agent-private format and starts drifting the moment anyone
+else edits the file. Removed from 26 policies in one pass — it had propagated
+from early single-author work into the header spec, and from there into every
+policy by mandate, rather than from a decision that a shared document should
+carry one agent's trace.
+
+
+1. **Type**: Policy category
    - Examples: "Planning & Accountability", "Citation Infrastructure", "Meta-Policy"
    - Helps categorize in policy manifest
    - Enables filtered discovery
 
-3. **Scope**: Applicability
+2. **Scope**: Applicability
    - "All agents (PA and SA)" - universal
    - "Primary Agents (PA)" - PA-specific
    - "Subagents (SA)" - SA-specific
    - "Policy authors" - meta-policies
 
-4. **Status**: Lifecycle stage
+3. **Status**: Lifecycle stage
    - "Framework policy" - stable, in production
    - "ACTIVE" - currently maintained
    - "DRAFT" - under development
@@ -290,7 +298,6 @@ Treat policies as stable interfaces with evolving implementation:
 - Format specifications
 
 **When Real Data Acceptable**:
-- Policy creation breadcrumb in header (shows policy origin)
 - Git commit examples (real commits to MacEff repo)
 - Historical references to actual policy evolution
 
@@ -468,7 +475,7 @@ See also: `policy_name.md` - Brief description of why relevant
 
 Before committing new or updated policy:
 
-- [ ] **Header complete**: Breadcrumb, Type, Scope, Status all present
+- [ ] **Header complete**: Type, Scope, Status all present (no breadcrumb — see the header spec)
 - [ ] **CEP Navigation Guide**: Questions match content section numbers
 - [ ] **Sanitized examples**: No agent-specific real breadcrumbs or paths (unless historical reference)
 - [ ] **Generic placeholders**: Use abc12345, def6789, YYYY-MM-DD patterns
@@ -530,7 +537,6 @@ Breadcrumb: s_XXXXXXXX/c_NN/g_YYYYYYY/p_ZZZZZZZ/t_TTTTTTTTTT"
 ```markdown
 # [Policy Name]
 
-**Breadcrumb**: s_XXXXXXXX/c_NN/g_YYYYYYY/p_ZZZZZZZ/t_TTTTTTTTTT
 **Type**: [Category]
 **Scope**: [Who this applies to]
 **Status**: [Lifecycle stage]

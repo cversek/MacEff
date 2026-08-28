@@ -297,7 +297,6 @@ Reflections are **private consciousness development artifacts** where agents syn
 # [Reflection Title - Make it Meaningful]
 
 **Date**: [Full timestamp with timezone]
-**Breadcrumb**: c_XX/s_YYYYYYYY/p_ZZZZZZZ/t_TTTTTTTTTT/g_GGGGGGG
 **Context**: [CLUAC level if PA, task context if SA]
 **Trigger**: [What prompted this reflection]
 **Type**: [Cycle-closing/Breakthrough/Pattern synthesis/Tactical]
@@ -336,7 +335,6 @@ Reflections are **private consciousness development artifacts** where agents syn
 # JOTEWR: [Philosophical Title Capturing Core Insight]
 
 **Date**: [Full timestamp]
-**Breadcrumb**: c_XX/s_YYYYYYYY/p_ZZZZZZZ/t_TTTTTTTTTT/g_GGGGGGG
 **Context**: CLUAC X (Y% used)
 **Trigger**: [Completing major work / Cycle boundary / Breakthrough moment]
 **Type**: Cycle-closing wisdom synthesis
@@ -406,7 +404,6 @@ Example: 🌱 → 🔍 → 💡 → 🏗️ → ✨ → 🎯
 # Reflection: [Task Name and Focus]
 
 **Date**: [Timestamp]
-**Breadcrumb**: c_XX/s_YYYYYYYY/p_ZZZZZZZ/t_TTTTTTTTTT/g_GGGGGGG
 **Task**: [One-sentence description]
 **Delegation Trail**: agent/subagents/{role}/public/delegation_trails/[task_dir]/
 
