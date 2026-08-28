@@ -46,6 +46,36 @@ def _update_task_scope_status(task_id: str, scope_status: Optional[str]) -> bool
     return True
 
 
+def active_sprint_task_ids(reader=None) -> List[str]:
+    """Ids of SPRINT/PLAY_TIME tasks that are currently in_progress.
+
+    A sprint's own task belongs in its own scope. The work-mode reader already
+    derives SPRINT from "is a SPRINT task in active scope" — an invariant that
+    exists so the mode survives compaction and event-window truncation instead
+    of depending on an imperative event. `task create sprint` scopes the sprint
+    task for exactly that reason.
+
+    A later `scope set` REPLACES the scope, and a caller listing the workload
+    naturally omits the umbrella — so restarting or re-scoping a sprint silently
+    dropped it, the invariant stopped matching, and the mode-lock quietly ended
+    while the sprint was still running. Observed: 1h40m of sprint with no 🏃 and
+    the recommender un-suppressed.
+
+    Status is the wrong anchor here and scope is the right one: a sprint that is
+    `in_progress` with no scope is stopped, and one that is scoped is running.
+    This function reports the candidates; the caller decides.
+    """
+    from .reader import TaskReader
+    reader = reader or TaskReader()
+    out = []
+    for t in reader.read_all_tasks():
+        if not t.mtmd or t.status != "in_progress":
+            continue
+        if getattr(t.mtmd, "task_type", None) in ("SPRINT", "PLAY_TIME"):
+            out.append(str(t.id))
+    return out
+
+
 def set_scope(task_ids: List[str], parent_expanded: bool = False,
               expanded_from: Optional[str] = None, session_id: str = "") -> dict:
     """Activate scope for a set of task IDs.

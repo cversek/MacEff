@@ -7918,11 +7918,28 @@ def cmd_task_scope_set(args: argparse.Namespace) -> int:
         print("❌ No valid tasks to scope")
         return 1
 
+    # A running sprint belongs in its own scope. `scope set` REPLACES the scope,
+    # and a caller listing the workload naturally omits the umbrella — which
+    # silently ended the sprint's mode-lock, because the work-mode reader derives
+    # SPRINT from "is a SPRINT task in active scope". Re-include it here rather
+    # than emitting a mode event: the scope already holds the fact, and a second
+    # copy would be free to drift from it.
+    from .task.scope import active_sprint_task_ids
+    _readded = []
+    for _sid in active_sprint_task_ids(reader):
+        if _sid not in expanded:
+            expanded.append(_sid)
+            _readded.append(_sid)
+
     result = set_scope(expanded, parent_expanded=len(expanded) > len(raw_ids),
                        expanded_from=raw_ids[0] if len(raw_ids) == 1 else None)
 
     if result["success"]:
         print(f"✅ Scoped {len(expanded)} task(s):")
+        for _sid in _readded:
+            # Reported, never silent: the caller did not ask for this task and
+            # should see that the sprint mode-lock is what put it back.
+            print(f"   🏃 re-included in-progress sprint #{_sid} (keeps SPRINT mode-lock in force)")
         for tid in result["tasks_scoped"]:
             task = reader.read_task(tid)
             subject = task.subject if task else f"Task #{tid}"
@@ -8124,6 +8141,39 @@ def cmd_task_scope_add(args: argparse.Namespace) -> int:
     return 0 if result["success"] else 1
 
 
+def _clear_sprint_mode_if_unscoped() -> None:
+    """Unset SPRINT work mode once no sprint task is left in active scope.
+
+    The work-mode reader prefers a live invariant — a SPRINT task in active
+    scope forces the mode — and falls back to the last ``work_mode_change``
+    event. `task create sprint` emits that event, so removing the sprint from
+    scope stops the invariant matching while the stale event keeps asserting
+    SPRINT: the mode-lock would outlive the sprint, suppressing the recommender
+    over work that is no longer a sprint.
+
+    Clearing here keeps the two agreeing. It is the mirror of re-including the
+    sprint on `scope set`, and the pair is what makes SCOPE the single signal
+    for whether a sprint is running — the same fact completion already keys on,
+    since a sprint whose scope was removed is stopped though its status still
+    reads ``in_progress``.
+    """
+    try:
+        from .task.scope import active_sprint_task_ids, get_scope_check
+        from .modes.detection import _get_current_work_mode
+        if _get_current_work_mode() != "SPRINT":
+            return
+        active_ids = {str(e.get("id")) for e in (get_scope_check().get("active") or [])}
+        if any(sid in active_ids for sid in active_sprint_task_ids()):
+            return
+        append_event("work_mode_change", {"mode": None})
+        print("   🏃→   sprint no longer in scope; SPRINT mode-lock released")
+    except (ImportError, OSError, AttributeError, ValueError) as e:
+        # Advisory: never let a mode bookkeeping failure break the removal that
+        # already succeeded on disk.
+        print(f"⚠️ MACF: could not reconcile SPRINT mode after unscoping: {e}",
+              file=sys.stderr)
+
+
 def cmd_task_scope_remove(args: argparse.Namespace) -> int:
     """Incrementally remove tasks from scope (BUG #1067).
 
@@ -8138,6 +8188,7 @@ def cmd_task_scope_remove(args: argparse.Namespace) -> int:
     result = remove_from_scope(raw_ids, session_id=get_current_session_id())
 
     if result["removed_ids"]:
+        _clear_sprint_mode_if_unscoped()
         print(f"➖ Removed {len(result['removed_ids'])} task(s) from scope:")
         for tid in result["removed_ids"]:
             print(f"   ↩️  #{tid}")
@@ -8160,6 +8211,7 @@ def cmd_task_scope_clear(args: argparse.Namespace) -> int:
     result = clear_scope()
 
     if result["success"]:
+        _clear_sprint_mode_if_unscoped()
         print("✅ Scope cleared:")
         for tid in result["active_removed"]:
             print(f"   ↩️  #{tid} (was active)")
