@@ -38,7 +38,25 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
 # Python symlink for hooks compatibility (hooks use #!/usr/bin/env python)
 RUN ln -s /usr/bin/python3 /usr/bin/python
 
-RUN npm install -g @anthropic-ai/claude-code
+# Claude Code, PINNED and ASSERTED.
+#
+# This was `npm install -g @anthropic-ai/claude-code` with no version. Two
+# failures compounded: the version installed was whatever npm served the day the
+# layer was first built, and because the layer then CACHES, a rebuild does not
+# update it. So the image was both undeclared and frozen -- deployments drifted
+# apart silently (one container sat 30 releases behind another, and nothing in
+# either image said which version it carried or why).
+#
+# Pinning fixes both. The version is now a stated fact, bumping it is a one-line
+# change that correctly invalidates the layer, and the assertion means a silent
+# substitution fails the build instead of shipping.
+ARG CLAUDE_CODE_VERSION=2.1.250
+RUN set -eux; \
+    npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"; \
+    got="$(claude --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"; \
+    test "$got" = "${CLAUDE_CODE_VERSION}" \
+        || { echo "BUILD FAILED: claude ${got} != pinned ${CLAUDE_CODE_VERSION}"; exit 1; }; \
+    echo "claude code ${CLAUDE_CODE_VERSION} OK"
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
 
 # NOTE: Framework content (policies, templates, agent_defs) comes from bind mount

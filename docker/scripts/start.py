@@ -565,7 +565,18 @@ export BASH_ENV="$HOME/.bash_init.sh"
 
 {identity_block}
 {channels_block}
-# Source deployment-provided environment scripts (alphanumeric order)
+# Source FRAMEWORK-provided shell scripts first (alphanumeric order).
+# These are base-layer capabilities every agent gets -- the supervised launcher
+# among them. Kept separate from env.d because env.d is deployment TOOLCHAIN
+# setup; a framework capability copied into each deployment's env.d would
+# diverge between deployments with nothing to notice it had.
+if [ -d /opt/maceff/framework/shell ]; then
+    for script in /opt/maceff/framework/shell/*.sh; do
+        [ -r "$script" ] && . "$script"
+    done
+fi
+
+# Then deployment-provided environment scripts (alphanumeric order)
 # Scripts: 00-core, 10-lang-managers, 20-path, 50-custom, 90-final
 if [ -d /opt/maceff/framework/env.d ]; then
     for script in /opt/maceff/framework/env.d/*.sh; do
