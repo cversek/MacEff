@@ -49,6 +49,27 @@ An experiment that fails question 1 or 2 is not converted — say so and stop.
 Conversion produces a plan and a task hierarchy; it is not authorization to
 implement (question 8).
 
+Create that hierarchy by invoking `/maceff:task:create_mission` and
+`/maceff:task:create_phase`, not the raw CLI. This command previously named no
+concrete creation step and left it to judgement, which is how a roadmap produced
+here came to carry no PEP on any phase while the sibling drafting path carried
+one on every phase.
+
+**Policy Engagement Protocol on Phases (MANDATORY)**:
+
+Ask `roadmaps_drafting` these, and carry the answers into every phase you create:
+
+- What does the policy require a phase to declare about the policies its executor must engage?
+- How does the policy say required reading follows from the WORK TYPE, rather than being re-derived per phase?
+- What distinction does the policy draw between policies a phase READS and policies it WRITES?
+- When does the policy say a phase carries no PEP at all?
+
+Extract the work-type mapping from the policy rather than reproducing it here — it
+is expected to grow, and a copy would drift from it. The point of the mapping is
+that an executor picking a phase up cold, with no memory of the drafting
+conversation, does not begin work without reading something they needed.
+
+
 ## Wiki-Links
 
 Consult the roadmaps drafting policy on knowledge web participation. Prefer

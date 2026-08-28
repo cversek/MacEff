@@ -19,7 +19,10 @@ Create a MacEff-compliant roadmap following the complete preliminary workflow wi
 
 **Channel-mode workflow instead**:
 1. Skip EnterPlanMode entirely
-2. Create MISSION task via `macf_tools task create mission`
+2. Create the MISSION task by invoking `/maceff:task:create_mission` — NOT the raw
+   `macf_tools task create mission`. The command is where per-type framework
+   requirements live; calling the CLI directly bypasses them, and a requirement
+   added there would be correct and unreachable.
 3. Read the skeleton roadmap.md
 4. Write plan content directly to the roadmap CA (user approves via Write permission + inline feedback)
 5. Use `mcp__plugin_telegram_telegram__reply` for questions instead of AskUserQuestion

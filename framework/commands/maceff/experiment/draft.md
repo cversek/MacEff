@@ -13,7 +13,9 @@ Create a MacEff-compliant experiment protocol by reading policies for structure 
 
 **Channel-mode workflow instead**:
 1. Skip EnterPlanMode entirely
-2. Create EXPERIMENT task via `macf_tools task create experiment`
+2. Create the EXPERIMENT task by invoking `/maceff:task:create_experiment` — NOT the
+   raw `macf_tools task create experiment`. The command is where per-type framework
+   requirements live; calling the CLI directly bypasses them.
 3. Read the skeleton protocol.md
 4. Write experiment content directly to the CA (user approves via Write permission + inline feedback)
 5. Use `mcp__plugin_telegram_telegram__reply` for questions instead of AskUserQuestion
