@@ -801,6 +801,41 @@ def get_auto_mode_from_events(session_id: str) -> Tuple[bool, str]:
     return (False, "default")
 
 
+def get_policies_surfaced_this_cycle() -> Dict[str, str]:
+    """Policies whose nav guide has already been surfaced this cycle.
+
+    Maps policy_name -> the task id that first surfaced it, so a repeat can name
+    where the content already is instead of reprinting it.
+
+    Scans in reverse and stops at ``compaction_detected``, the cycle boundary.
+    That is the ONLY reset, deliberately: ``policy_injections_cleared_all``
+    clears pending injections, not the agent's exposure to the content. Injected
+    text persists in the conversation's message history for the rest of the
+    cycle, so "has this been surfaced" stays true even after the injection is
+    cleared.
+
+    No new state store. The events log already records what happened this cycle
+    and is already the durable agent-owned record, so this question has an
+    existing home.
+
+    Returns:
+        {policy_name: first_task_id_that_surfaced_it}; empty before any injection.
+    """
+    surfaced: Dict[str, str] = {}
+    for event in read_events(limit=None, reverse=True):
+        event_type = event.get("event")
+        if event_type == "compaction_detected":
+            break
+        if event_type == "policy_injection_activated":
+            data = event.get("data", {})
+            policy_name = data.get("policy_name")
+            if policy_name:
+                # Reverse scan, so later writes lose to earlier ones and the
+                # value ends up being the FIRST surfacing of the cycle.
+                surfaced[policy_name] = str(data.get("task_id") or "?")
+    return surfaced
+
+
 def get_active_policy_injections_from_events() -> List[Dict[str, str]]:
     """
     Get list of currently active policy injections from event log.
