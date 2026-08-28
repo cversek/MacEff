@@ -1,6 +1,5 @@
 # Subagent Definition Best Practices
 
-**Breadcrumb**: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
 **Type**: Meta-Policy (Development Infrastructure)
 **Scope**: Subagent definition authors (PA creating specialist agents)
 **Status**: Framework guidelines for subagent definition creation

@@ -1,6 +1,5 @@
 # Agent Harness — The Supervised Session, and the Name It Answers To
 
-**Breadcrumb**: s_1afd4d78/c_12/p_04343b94/t_1786152911
 **Type**: Infrastructure (opt-in)
 **Scope**: All agents that run supervised, and the deployments that provision them
 **Status**: ACTIVE

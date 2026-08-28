@@ -1,6 +1,5 @@
 # Docker Container Operations
 
-**Breadcrumb**: s_agent-2e/c_178/g_9b828c9/p_none/t_1763935929
 **Type**: Technology Standards (Docker/Containers)
 **Scope**: DevOps engineers, container operations specialists
 **Status**: ACTIVE
