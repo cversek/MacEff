@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..agent_events_log import append_event
-from . import liveness
+from . import liveness, masking
 from .notice import Notice
 from .session import (
     find_credential_path,
@@ -43,7 +43,9 @@ DEDUP_RETAIN = 512
 CONNECT_TIMEOUT_S = 3.0
 
 DELIVERED = "delivered"
+DEFERRED = "deferred"
 SUPPRESSED_DUPLICATE = "suppressed_duplicate"
+SUPPRESSED_MASKED = "suppressed_masked"
 REFUSED_INCARNATION = "refused_incarnation"
 REFUSED_NO_CREDENTIAL = "refused_no_credential"
 REFUSED_NO_SOCKET = "refused_no_socket"
@@ -153,6 +155,49 @@ def _emit(event: str, payload: dict) -> None:
         print(f"⚠️ MACF: notify event logging failed: {e}", file=sys.stderr)
 
 
+def _flush_deferred(pid: int, mask) -> list:
+    """Deliver everything this conversation deferred, ONCE each.
+
+    `force=True` on the way back in, because these notices already passed the
+    mask once and were held rather than refused. Re-deciding them would let the
+    section that held them hold them again, which is how "deferred" quietly
+    becomes "never".
+    """
+    released = mask.release()
+    if not released:
+        return []
+    results = []
+    for held in released:
+        results.append(deliver(pid, held, force=True))
+    _emit("notify_released", {
+        "pid": pid,
+        "count": len(released),
+        "delivered": sum(1 for r in results if r.ok),
+    })
+    return results
+
+
+def release_deferred(pid: int, session_id: Optional[str] = None) -> list:
+    """Flush a conversation's held notices without waiting for a new arrival.
+
+    The opportunistic flush inside `deliver` only runs when something else
+    arrives. If a critical section lapses and nothing arrives afterwards, the
+    held notices would wait indefinitely -- delivered eventually is the promise,
+    and "eventually" cannot mean "when unrelated traffic happens". A caller that
+    polls (the daemon) uses this so the release depends on the EXPIRY rather
+    than on luck.
+
+    Honours the section: called while one is still active, it releases nothing.
+    """
+    if session_id is None:
+        info = read_session_info(pid)
+        session_id = info.session_id if info else None
+    mask = masking.load(session_id)
+    if mask.critical is not None and mask.critical.active():
+        return []
+    return _flush_deferred(pid, mask)
+
+
 def deliver(pid: int, notice: Notice, force: bool = False) -> DeliveryResult:
     """Wake one session with one notice. Idempotent on `notice.arrival_id`."""
     arrival_id = notice.arrival_id
@@ -165,6 +210,48 @@ def deliver(pid: int, notice: Notice, force: bool = False) -> DeliveryResult:
             "session_id": session_id, "reason": "duplicate",
         })
         return DeliveryResult(SUPPRESSED_DUPLICATE, pid, arrival_id, "already delivered to this conversation")
+
+    # THE MASK IS ENFORCED HERE, not merely computed somewhere the agent can
+    # read. It is consulted BEFORE the credential is touched: an agent inside a
+    # declared critical section should not have its credential read, its socket
+    # opened, or anything sent -- and deferring needs none of those, so a notice
+    # can be held for a session that is momentarily unreachable rather than lost
+    # because it was.
+    #
+    # `force` bypasses this. That is the release path re-entering, and a held
+    # notice must not be re-held by the same section that held it.
+    mask = masking.load(session_id)
+    if not force:
+        decision = mask.decide(notice)
+        if decision.defer:
+            held = mask.defer(notice)
+            _emit("notify_deferred", {
+                "pid": pid, "arrival_id": arrival_id, "session_id": session_id,
+                "source": notice.source, "reason": decision.reason,
+                # Whether the HOLD itself succeeded. A deferral that failed to
+                # persist is a DROP, and it must not be reported as a deferral.
+                "held": held,
+            })
+            if not held:
+                print(
+                    f"⚠️ MACF: notice {arrival_id} could not be held and is now LOST "
+                    f"(deferral is not a drop, but a failed write is)",
+                    file=sys.stderr,
+                )
+            return DeliveryResult(DEFERRED, pid, arrival_id, decision.reason)
+        if decision.suppress:
+            _emit("notify_suppressed", {
+                "pid": pid, "arrival_id": arrival_id,
+                "session_id": session_id, "reason": decision.reason,
+            })
+            return DeliveryResult(SUPPRESSED_MASKED, pid, arrival_id, decision.reason)
+
+        # Allowed, so no section is holding anything back: whatever this
+        # conversation deferred earlier is owed to it NOW, before the notice
+        # that happened to arrive next. `release` clears the queue before
+        # returning, so the nested deliver() below finds nothing to flush and
+        # this cannot recurse.
+        _flush_deferred(pid, mask)
 
     cred_path = find_credential_path(pid)
     if cred_path is None:

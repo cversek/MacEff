@@ -37,6 +37,30 @@ SELF_SOURCES = frozenset({"macf-daemon", "supervision", "authority", "operator"}
 
 DEFERRED_NAME = "macf_notify_deferred.json"
 DEFERRED_RETAIN = 256
+DECLARATION_NAME = "macf_notify_mask.json"
+
+
+def _runtime_dir() -> Path:
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    return Path(runtime)
+
+
+def _scoped(stem: str, session_id: Optional[str]) -> Path:
+    """A per-CONVERSATION path, not merely a per-uid one.
+
+    The runtime directory is already per-uid, which is per-agent in every
+    deployment we run. It is NOT per-conversation, and one agent can serve more
+    than one. An unscoped queue lets a notice deferred by conversation A be
+    released into conversation B -- delivering, to a session that never deferred
+    it, a notice addressed to one that did. The adapter already scopes its dedup
+    ledger by conversation for the same reason; this follows it rather than
+    inventing a second rule.
+    """
+    if not session_id:
+        return _runtime_dir() / stem
+    safe = "".join(c for c in session_id if c.isalnum() or c in "-_")[:64]
+    base = Path(stem)
+    return _runtime_dir() / f"{base.stem}.{safe}{base.suffix}"
 
 
 @dataclass(frozen=True)
@@ -90,6 +114,13 @@ class Mask:
     `predicate` is supplied by the agent and answers relevance -- the one thing
     only the agent knows. It is never consulted for a notice about the agent
     itself.
+
+    A PREDICATE CANNOT CROSS A PROCESS BOUNDARY, and the notifier is a different
+    process from the agent. So an in-process Mask can carry one and a Mask loaded
+    from an agent's declaration cannot: `load` builds the critical section, which
+    is data, and leaves the predicate None. This is stated rather than worked
+    around, because a mask that silently lost its predicate on the way to the
+    notifier would look like a filter and behave like an open gate.
     """
 
     def __init__(
@@ -97,16 +128,17 @@ class Mask:
         predicate: Optional[Callable[[Notice], bool]] = None,
         critical: Optional[CriticalSection] = None,
         deferred_path: Optional[Path] = None,
+        session_id: Optional[str] = None,
     ):
         self.predicate = predicate
         self.critical = critical
         self._deferred_path = deferred_path
+        self.session_id = session_id
 
     def deferred_path(self) -> Path:
         if self._deferred_path is not None:
             return self._deferred_path
-        runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
-        return Path(runtime) / DEFERRED_NAME
+        return _scoped(DEFERRED_NAME, self.session_id)
 
     def decide(self, notice: Notice, now: Optional[float] = None) -> MaskDecision:
         """Allow, defer, or suppress -- with the floor checked FIRST.
@@ -208,3 +240,126 @@ class Mask:
         except (FileNotFoundError, PermissionError, OSError) as e:
             print(f"⚠️ MACF: deferred queue write failed (a held notice is now lost): {e}", file=sys.stderr)
             return False
+
+
+# ---------------------------------------------------------------------------
+# Declaration: how an agent tells a DIFFERENT PROCESS what it does not want now
+# ---------------------------------------------------------------------------
+# The mask primitive above is in-process. The notifier is not in that process,
+# so without this the mask is computable and unenforceable -- a control with no
+# caller, which this corpus already names three times and shipped once.
+#
+# Only DATA crosses. A critical section is a label and an expiry; a predicate is
+# a callable and stays behind. That asymmetry is the honest boundary, not a
+# limitation to be engineered around: an agent declaring "not now, I am mid-
+# proof" is stating a fact about itself that survives serialization, while
+# "notices I find relevant" is a judgement that does not.
+
+
+def declaration_path(session_id: Optional[str] = None) -> Path:
+    return _scoped(DECLARATION_NAME, session_id)
+
+
+def declare_critical(
+    label: str,
+    seconds: float,
+    session_id: Optional[str] = None,
+    now: Optional[float] = None,
+) -> Optional[CriticalSection]:
+    """Declare a critical section that a separate notifier process will honour.
+
+    The expiry is absolute and written down. A section that outlives its work is
+    a permanent mute nobody remembers switching on, so it lapses on its own --
+    and because the notifier reads the expiry rather than a flag, the lapse
+    needs no cooperation from an agent that may be wedged.
+
+    Returns the section, or None when it could not be recorded. None matters: an
+    agent that believes it is masked while the notifier cannot see the
+    declaration would be surprised by delivery, so the failure is returned and
+    announced rather than swallowed.
+    """
+    now = now if now is not None else time.time()
+    if seconds <= 0:
+        print(
+            f"⚠️ MACF: refusing a critical section of {seconds}s -- "
+            f"a section that is already expired masks nothing and reads as one that does",
+            file=sys.stderr,
+        )
+        return None
+
+    section = CriticalSection(label=str(label), until=now + float(seconds), declared_at=now)
+    path = declaration_path(session_id)
+    tmp = path.with_suffix(".tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(tmp, "w") as fh:
+            json.dump(
+                {"label": section.label, "until": section.until, "declared_at": section.declared_at},
+                fh,
+            )
+        os.replace(tmp, path)
+    except (FileNotFoundError, PermissionError, OSError) as e:
+        print(
+            f"⚠️ MACF: critical section '{label}' could NOT be declared, so notices "
+            f"will still arrive: {e}",
+            file=sys.stderr,
+        )
+        return None
+    return section
+
+
+def clear_declaration(session_id: Optional[str] = None) -> bool:
+    """End a critical section early. Absent is already the cleared state."""
+    path = declaration_path(session_id)
+    try:
+        path.unlink()
+        return True
+    except FileNotFoundError:
+        return True
+    except (PermissionError, OSError) as e:
+        print(f"⚠️ MACF: could not clear the mask declaration (it will lapse on its own): {e}", file=sys.stderr)
+        return False
+
+
+def read_declaration(session_id: Optional[str] = None) -> Optional[CriticalSection]:
+    """The declared section, or None when there is none to honour.
+
+    A malformed declaration reads as NO section rather than as a section. The
+    choice is deliberate and it is the fail-OPEN direction: an unparseable file
+    should let notices through, because the alternative is an unreadable byte
+    sequence silencing an agent indefinitely with nobody able to say why.
+    """
+    path = declaration_path(session_id)
+    if not path.exists():
+        return None
+    try:
+        with open(path) as fh:
+            data = json.load(fh)
+    except (FileNotFoundError, PermissionError, OSError) as e:
+        print(f"⚠️ MACF: mask declaration unreadable, delivering as if unmasked: {e}", file=sys.stderr)
+        return None
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        print(f"⚠️ MACF: mask declaration malformed, delivering as if unmasked: {e}", file=sys.stderr)
+        return None
+
+    if not isinstance(data, dict):
+        return None
+    try:
+        return CriticalSection(
+            label=str(data.get("label", "")),
+            until=float(data["until"]),
+            declared_at=float(data.get("declared_at", 0.0)),
+        )
+    except (KeyError, TypeError, ValueError) as e:
+        print(f"⚠️ MACF: mask declaration missing its expiry, delivering as if unmasked: {e}", file=sys.stderr)
+        return None
+
+
+def load(session_id: Optional[str] = None) -> Mask:
+    """The mask a NOTIFIER should enforce for this conversation.
+
+    Always returns a Mask, never None: the floor applies whether or not the agent
+    declared anything, and a caller that had to handle None would be a caller
+    that could forget to.
+    """
+    return Mask(predicate=None, critical=read_declaration(session_id), session_id=session_id)
