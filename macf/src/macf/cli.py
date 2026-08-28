@@ -4426,6 +4426,9 @@ def cmd_task_get(args: argparse.Namespace) -> int:
         print(f"Blocked by: {', '.join(f'#{b}' for b in task.blocked_by)}")
     if task.blocks:
         print(f"Blocks: {', '.join(f'#{b}' for b in task.blocks)}")
+    _dependents = dependents_of(task.id, reader.read_all_tasks())
+    if _dependents:
+        print(f"Blocks (derived): {', '.join(f'#{d}' for d in _dependents)}")
 
     # MTMD section - iterate dataclass fields in definition order
     if task.mtmd:
@@ -4504,6 +4507,44 @@ def get_tasks_mtime(tasks_dir) -> float:
     except (OSError, IOError) as e:
         print(f"⚠️ MACF: task mtime scan failed: {e}", file=sys.stderr)
         return 0.0
+
+
+def unsatisfied_blockers(task, reader):
+    """Blockers of `task` that have not been resolved, as (id, status) pairs.
+
+    A blocker counts as satisfied only when it reached a terminal status. An
+    `in_progress` blocker does NOT satisfy: it has started, not delivered, and
+    the point of the edge is that this work waits on that work's result.
+
+    A blocker that cannot be read at all is reported with status "not found"
+    rather than skipped. Skipping would make a dangling edge silently
+    permissive, which is the exact failure this guard exists to end -- and a
+    missing blocker is precisely when a human should look, not when the tool
+    should quietly decide on their behalf.
+    """
+    out = []
+    for bid in (task.blocked_by or []):
+        clean = str(bid).lstrip("#")
+        blocker = reader.read_task(clean)
+        if blocker is None:
+            out.append((clean, "not found"))
+        elif not is_terminal_status(blocker.status):
+            out.append((clean, blocker.status))
+    return out
+
+
+def dependents_of(task_id, all_tasks):
+    """Task ids declaring `task_id` in blocked_by — the inverse edge, derived.
+
+    `task blocked-by` writes only the blocked side, so from a gating task you
+    cannot see what waits on it. Derived on read rather than stored: a stored
+    inverse is a second copy of the same fact, maintained by a different code
+    path and free to drift from it. The forward edges ARE the graph; reading
+    them backwards costs one pass and cannot disagree with itself.
+    """
+    target = str(task_id).lstrip("#")
+    return [t.id for t in all_tasks
+            if any(str(b).lstrip("#") == target for b in (t.blocked_by or []))]
 
 
 # Statuses that mean "this work is resolved". `archived` is a legacy terminal
@@ -7174,13 +7215,57 @@ def cmd_task_start(args: argparse.Namespace) -> int:
 
     # Unhide task file if it was completed (dot-prefixed) — must happen before update
     from .task.reader import unhide_task_file
+    # Ask the filesystem, not the return value: unhide_task_file answers True
+    # for "already visible" as well as for "I unhid it", so it cannot tell us
+    # what a refusal below would need to restore.
+    _was_hidden = False
     if reader.session_path:
+        # str(...) because session_path is not guaranteed to be a Path — the
+        # unhide/hide helpers normalise it themselves, and assuming Path here
+        # raised TypeError on every start.
+        _was_hidden = os.path.exists(
+            os.path.join(str(reader.session_path), f".{task_id}.json"))
         unhide_task_file(reader.session_path, str(task_id))
 
     task = reader.read_task(task_id)
     if not task:
         print(f"❌ Task #{task_id} not found")
         return 1
+
+    # A declared dependency has to actually hold. `blocked_by` was an honest
+    # record of intent and nothing more: a phase gated on a pending task started
+    # cleanly and cascade-started its parent on the way, warning nobody. That is
+    # worse than never expressing the dependency, because people design against
+    # it -- they read a tree, see the edge, conclude the ordering is guaranteed,
+    # and are wrong.
+    #
+    # Placed here deliberately: after the read, before the stale computation,
+    # before every mutation, and before the ancestor cascade. A refusal must not
+    # leave a half-started tree behind it, and returning from this point is what
+    # guarantees that -- rather than an unwind someone has to keep correct.
+    #
+    # Only a real start is gated. Resuming something already in_progress is not
+    # this failure mode: the work is underway, and refusing would strand any
+    # task that acquired a blocker after it started.
+    if task.status != "in_progress":
+        _unsatisfied = unsatisfied_blockers(task, reader)
+        if _unsatisfied and not getattr(args, "force", False):
+            _listing = ", ".join(f"#{b}({st})" for b, st in _unsatisfied)
+            print(f"⚠️  Task #{task_id} is blocked by {_listing}")
+            print("   Starting a blocked task means the dependency was declared and not honoured.")
+            print("   Complete or pause the blocker first — or re-run with --force.")
+            if _was_hidden and reader.session_path:
+                from .task.reader import hide_task_file
+                hide_task_file(reader.session_path, str(task_id))
+            return 1
+        if _unsatisfied:
+            _listing = ", ".join(f"#{b}({st})" for b, st in _unsatisfied)
+            print(f"⚠️  Starting anyway (--force) over unsatisfied blocker(s): {_listing}")
+            append_event("task_start_forced_over_blockers", {
+                "task_id": str(task_id),
+                "blockers": [{"id": b, "status": st} for b, st in _unsatisfied],
+                "justification": getattr(args, "justification", None),
+            })
 
     # Detect resuming work put down in an earlier cycle BEFORE mutating the task,
     # so "last activity" reflects the prior work rather than this resume.
@@ -10471,6 +10556,10 @@ def _build_parser() -> argparse.ArgumentParser:
     # task start
     task_start_parser = task_sub.add_parser("start", help="start work on task (→ in_progress)")
     task_start_parser.add_argument("task_id", help="task ID to start (e.g., #67 or 67)")
+    task_start_parser.add_argument("--force", action="store_true",
+                                   help="start despite unsatisfied blocked_by (recorded)")
+    task_start_parser.add_argument("--justification", default=None,
+                                   help="why the declared dependency is being overridden")
     task_start_parser.set_defaults(func=cmd_task_start)
 
     # task pause
