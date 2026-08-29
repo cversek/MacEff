@@ -6,11 +6,30 @@ docs/arch_v0.3_named_agents/05_implementation_guide.md (lines 127+)
 """
 
 from typing import Dict, List, Optional
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class RepoMount(BaseModel):
     """Git repository mount configuration."""
+
+    # AN UNKNOWN KEY IS AN ERROR, NOT SOMETHING TO IGNORE.
+    #
+    # pydantic's default is extra="ignore", so a key this model does not define
+    # was dropped at load with no warning, no log line and no non-zero exit.
+    # That produced the worst shape a bug can take: a deployment missing ONE
+    # capability and correct about everything else, with a config file stating
+    # the capability is present. Two live instances were found this way, both
+    # added deliberately, both carrying explanatory comments -- and one of them
+    # sent an investigation after an entirely wrong cause, because the file
+    # said the right thing.
+    #
+    # The forward-compatibility argument for tolerant parsing does not reach
+    # here: these files are the sanctioned, hand-edited interface to a
+    # deployment, provisioning runs unattended at container start, and its log
+    # is read only when something already looks wrong -- which it does not,
+    # because the ignored key was never needed to come up.
+    model_config = ConfigDict(extra="forbid")
+
 
     url: str = Field(
         ...,
@@ -61,6 +80,25 @@ class RepoMount(BaseModel):
 class DataMount(BaseModel):
     """Data directory mount configuration."""
 
+    # AN UNKNOWN KEY IS AN ERROR, NOT SOMETHING TO IGNORE.
+    #
+    # pydantic's default is extra="ignore", so a key this model does not define
+    # was dropped at load with no warning, no log line and no non-zero exit.
+    # That produced the worst shape a bug can take: a deployment missing ONE
+    # capability and correct about everything else, with a config file stating
+    # the capability is present. Two live instances were found this way, both
+    # added deliberately, both carrying explanatory comments -- and one of them
+    # sent an investigation after an entirely wrong cause, because the file
+    # said the right thing.
+    #
+    # The forward-compatibility argument for tolerant parsing does not reach
+    # here: these files are the sanctioned, hand-edited interface to a
+    # deployment, provisioning runs unattended at container start, and its log
+    # is read only when something already looks wrong -- which it does not,
+    # because the ignored key was never needed to come up.
+    model_config = ConfigDict(extra="forbid")
+
+
     type: str = Field(
         ...,
         description="Mount type (e.g., 'bind')"
@@ -84,6 +122,25 @@ class DataMount(BaseModel):
 
 class ProjectSpec(BaseModel):
     """Specification for a project workspace."""
+
+    # AN UNKNOWN KEY IS AN ERROR, NOT SOMETHING TO IGNORE.
+    #
+    # pydantic's default is extra="ignore", so a key this model does not define
+    # was dropped at load with no warning, no log line and no non-zero exit.
+    # That produced the worst shape a bug can take: a deployment missing ONE
+    # capability and correct about everything else, with a config file stating
+    # the capability is present. Two live instances were found this way, both
+    # added deliberately, both carrying explanatory comments -- and one of them
+    # sent an investigation after an entirely wrong cause, because the file
+    # said the right thing.
+    #
+    # The forward-compatibility argument for tolerant parsing does not reach
+    # here: these files are the sanctioned, hand-edited interface to a
+    # deployment, provisioning runs unattended at container start, and its log
+    # is read only when something already looks wrong -- which it does not,
+    # because the ignored key was never needed to come up.
+    model_config = ConfigDict(extra="forbid")
+
 
     context: str = Field(
         ...,
@@ -126,6 +183,25 @@ class ProjectsConfig(BaseModel):
             commands:
               analyze_vep: ../custom/projects/commands/analyze_vep.md
     """
+
+    # AN UNKNOWN KEY IS AN ERROR, NOT SOMETHING TO IGNORE.
+    #
+    # pydantic's default is extra="ignore", so a key this model does not define
+    # was dropped at load with no warning, no log line and no non-zero exit.
+    # That produced the worst shape a bug can take: a deployment missing ONE
+    # capability and correct about everything else, with a config file stating
+    # the capability is present. Two live instances were found this way, both
+    # added deliberately, both carrying explanatory comments -- and one of them
+    # sent an investigation after an entirely wrong cause, because the file
+    # said the right thing.
+    #
+    # The forward-compatibility argument for tolerant parsing does not reach
+    # here: these files are the sanctioned, hand-edited interface to a
+    # deployment, provisioning runs unattended at container start, and its log
+    # is read only when something already looks wrong -- which it does not,
+    # because the ignored key was never needed to come up.
+    model_config = ConfigDict(extra="forbid")
+
 
     projects: Dict[str, ProjectSpec] = Field(
         ...,
