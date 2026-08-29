@@ -30,9 +30,9 @@ jobs:
       - name: Create CI environment directories
         run: mkdir -p ~/.claude/projects
 
-      - name: Run tests
+      - name: Run tests (hermetic)
         run: >
-          pytest macf/tests/ -v --tb=short
+          pytest macf/tests/ -v --tb=short -m "not live"
           --ignore=macf/tests/test_recommend.py
           --ignore=macf/tests/test_hybrid_search.py
           --ignore=macf/tests/test_lancedb_search.py
@@ -41,6 +41,26 @@ jobs:
           --ignore=macf/tests/test_get_token_info.py
           --ignore=macf/tests/test_handle_session_start.py
         timeout-minutes: 3
+
+      - name: Run tests (live external state)
+        # MEASURED on this runner, not predicted: 26 passed, 7 skipped. The
+        # image does ship tmux, so most of this set genuinely executes here;
+        # what stays skipped is systemd-analyze, the real claude client, and
+        # the Telegram-credential tests pending GH #330.
+        #
+        # The step must be INVOKED regardless of how much of it skips: a step
+        # that is never run cannot fail, which is a different thing from a
+        # suite that passed.
+        run: >
+          pytest macf/tests/ -v --tb=short -m "live"
+          --ignore=macf/tests/test_recommend.py
+          --ignore=macf/tests/test_hybrid_search.py
+          --ignore=macf/tests/test_lancedb_search.py
+          --ignore=macf/tests/test_search_service.py
+          --ignore=macf/tests/test_env_cli.py
+          --ignore=macf/tests/test_get_token_info.py
+          --ignore=macf/tests/test_handle_session_start.py
+        timeout-minutes: 2
 
   style:
     # The gate `ruff.toml` describes as blocking. It was configured, scripted,

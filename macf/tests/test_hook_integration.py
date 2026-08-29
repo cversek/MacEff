@@ -23,10 +23,13 @@ either way.
 
 import pytest
 
-pytestmark = pytest.mark.skip(
-    reason="GH #330: executing these tests sends real Telegram messages "
-           "(hook resolves live credentials; TELEGRAM_STATE_DIR is not consulted)"
-)
+pytestmark = [
+    pytest.mark.live,
+    pytest.mark.skip(
+        reason="GH #330: executing these tests sends real Telegram messages "
+               "(hook resolves live credentials; TELEGRAM_STATE_DIR is not consulted)"
+    ),
+]
 
 import json
 import subprocess
