@@ -93,8 +93,17 @@ def update_sidecar(
 
         sidecar_path = hooks_dir / f"sidecar_{hook_name}.json"
 
-        # Load previous state for logging
-        previous_state = read_json(sidecar_path)
+        # A MISSING SIDECAR IS THE FIRST WRITE, NOT AN ERROR.
+        #
+        # read_json raises FileNotFoundError on a missing file, and this call
+        # sits inside the catch-all below. So the first write for a hook_name
+        # raised here, was swallowed, and never reached write_json_safely --
+        # which means the file could only ever be UPDATED, never created, and
+        # therefore never created at all. `macf_tools hooks status` reported
+        # "No hook states recorded yet" indefinitely, which reads as a fact
+        # about the hooks rather than about a writer that had never once
+        # succeeded.
+        previous_state = read_json(sidecar_path) if sidecar_path.exists() else {}
 
         # Log state change
         if previous_state:
@@ -105,10 +114,16 @@ def update_sidecar(
             })
 
         # Build new state
+        # The RESOLVED session_id wins, so it goes last.
+        #
+        # It was previously first, with **state after it, so a caller passing
+        # session_id="unknown" had that written back over the value resolved
+        # above -- the file landed in the correct session directory while
+        # recording the wrong identity, which is the harder version to notice.
         new_state = {
             "hook_name": hook_name,
+            **state,
             "session_id": session_id,
-            **state
         }
 
         # Add captured output if provided

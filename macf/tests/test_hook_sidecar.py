@@ -9,19 +9,16 @@ these tests (0% coverage) even though it is the writer/reader pair behind
 that CLI surface. Every test monkeypatches get_hooks_dir/get_current_session_id
 at the module level so nothing touches the real /tmp/macf tree.
 
-Note (discovered while writing these tests): `update_sidecar`'s own
-"load previous state for logging" step calls `read_json()` unguarded, and
-`read_json()` raises `FileNotFoundError` when the sidecar doesn't exist yet
-(see macf/src/macf/utils/json_io.py). Because that call sits inside
-`update_sidecar`'s try/except, the FIRST call for a given hook_name in a
-fresh session directory raises, is swallowed by the catch-all at the bottom,
-and the sidecar is never written — silently. Every subsequent call hits the
-same missing-file path, so the file never gets created at all through this
-function. This looks like a real bug (flagged in the delegation checkpoint
-for the PA), not intended behavior, but it is the current behavior, so the
-happy-path tests below seed an existing sidecar file first to exercise the
-intended "update on top of prior state" path — the shape every call after
-the first is supposed to take, and the only shape currently reachable.
+Note: `update_sidecar` used to call `read_json()` unguarded when loading
+prior state, and `read_json()` raises `FileNotFoundError` on a missing file.
+Because that call sits inside the function's try/except, the FIRST write for
+a hook_name was swallowed and the sidecar was never created -- so it could
+only be updated, and therefore never created at all. `macf_tools hooks
+status` reported "No hook states recorded yet" indefinitely.
+
+That is fixed. `_seed()` below is retained deliberately: seeding prior state
+is still the honest way to exercise the "update on top of what was there"
+path, which is a different path from the first write. Both are now tested.
 """
 
 import json
@@ -141,3 +138,38 @@ def test_update_sidecar_emits_warning_when_write_fails(hooks_dir, monkeypatch):
     assert len(warnings_seen) == 1
     assert warnings_seen[0].kind == "sidecar_write_failed"
     assert "disk full" in warnings_seen[0].detail
+
+
+def test_first_write_creates_the_sidecar(hooks_dir):
+    """The first write for a hook_name creates the file, with nothing seeded.
+
+    Regression: this is the case that used to be swallowed. read_json raised
+    FileNotFoundError on the missing file, the catch-all caught it, and
+    write_json_safely was never reached -- so the file could only be updated
+    and hence never created. Deliberately does NOT call _seed().
+    """
+    path = hooks_dir / "sidecar_session_start.json"
+    assert not path.exists(), "precondition: nothing seeded"
+
+    sidecar.update_sidecar("session_start", {"session_id": "sess-first", "cl": 42})
+
+    assert path.exists(), "first write did not create the sidecar"
+    written = json.loads(path.read_text())
+    assert written["hook_name"] == "session_start"
+    assert written["cl"] == 42
+
+
+def test_resolved_session_id_is_not_clobbered_by_an_unknown_from_the_caller(hooks_dir, monkeypatch):
+    """A caller passing "unknown" gets the RESOLVED id recorded, not "unknown".
+
+    Regression: **state used to be unpacked after session_id, so the resolved
+    value chose the directory and was then overwritten in the payload. The
+    file landed in the right place recording the wrong identity.
+    """
+    monkeypatch.setattr(sidecar, "get_current_session_id", lambda: "resolved-session")
+
+    sidecar.update_sidecar("stop", {"session_id": "unknown", "mode": "AUTO_MODE"})
+
+    written = json.loads((hooks_dir / "sidecar_stop.json").read_text())
+    assert written["session_id"] == "resolved-session"
+    assert written["mode"] == "AUTO_MODE", "the caller's other fields still survive"
