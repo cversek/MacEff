@@ -50,6 +50,9 @@ Applies to all Python code written within MacEff framework projects.
 - Why is a hardcoded `limit=` on an event scan a smell?
 - What unit should a scan be bounded in?
 - When is an unbounded scan the cheaper choice?
+- What scope does a read default to, and when may a lifetime read be asked for?
+- Why does removing a failure case beat bounding it?
+- What must state do to survive a scope boundary?
 - How do I keep "not found" from becoming a claim about state?
 
 **7 Schemas and Declaredness in Python**
@@ -352,13 +355,68 @@ T.
 The third category — lifetime state, scanned until found — still degrades when
 the event has **never** occurred, since the scan then reads the whole log. A row
 limit cannot fix that; it answers wrongly rather than slowly. The structural
-remedy is to remove the category: cycle-scope every query and require
-cross-cycle state to re-assert itself at the boundary, so the worst case is one
-cycle regardless of how long the log grows. That also makes a miss mean exactly
-one thing — *not established this cycle* — which is what dissolves the compiled
-false absence rather than merely bounding it.
+remedy is to remove the category rather than bound it, which is what the
+cycle-scoping section below describes: scoping every read to the cycle by
+default and requiring cross-cycle
+state to re-assert itself at the boundary. The worst case becomes one cycle
+regardless of how long the log grows, and a miss comes to mean exactly one thing
+— *not established this cycle* — which is what dissolves the compiled false
+absence rather than merely bounding it.
 
-### 6.4 Do not let `None`-is-falsy encode a decision
+### 6.4 Scope the read to the cycle by default; make persistence explicit
+
+Bounding by meaning leaves one case unfixed, and it is the one that actually
+hurts: a scan for
+something that has **never** happened reads the whole log, every time, forever. A
+limit cannot repair that — it answers wrongly instead of slowly.
+
+The remedy is to **remove the case rather than bound it**. Default every read to
+the current cycle, so the worst case is one cycle's events regardless of how long
+the log has grown:
+
+```python
+for event in read_events(reverse=True):        # cycle-scoped by default
+    if event.get("event") == "mode_change":
+        return event["data"].get("enabled", False)
+return False        # "not established this cycle" — a complete answer
+```
+
+Two consequences are the point of the change, not side effects:
+
+**A miss becomes unambiguous.** Under a row limit, `None` meant *never happened*
+OR *I could not see*. Under cycle-scoping it means exactly *not established in
+this cycle*, which is a fact about the world rather than about the reader.
+
+**Persistence becomes an act.** State that must outlive a cycle can no longer
+survive because nothing overwrote it and a backward search happened to reach it.
+It has to re-assert itself at the boundary — an event, at a known moment, that
+can be audited and can fail loudly.
+
+**A carried assertion MUST record where it came from.** Re-emitting an operator's
+authorisation each boundary without provenance makes a grant given once and
+carried a hundred times read as freshly given. The system then presents its own
+inheritance as consent — the same fabrication as inventing user approval, arriving
+through infrastructure instead of through narrative. Record the origin, and
+preserve it through a chain of carries rather than stamping the current scope at
+each hop.
+
+**A lifetime read is still legitimate — it just has to ask.** Some questions are
+about all of time: how many boundaries have there been, what was the previous
+session, what is the accumulated baseline. Request the wider scope explicitly and
+say why *at the call site*, because the next reader's alternative is to guess
+whether the wider scope was reasoned about or inherited.
+
+Two failure modes worth naming, because each is worse than the defect:
+
+- **Scoping without carrying** silently drops authority at the first boundary.
+- **An unrecognised scope value that falls back to reading everything** restores
+  the unbounded case through a caller who believed they were bounded. Refuse it.
+
+When a fallback to the wider scope is kept during a migration, give it a
+**removal condition in the comment**. Scaffolding without one is indistinguishable
+from design, and the next reader will either enshrine it or delete it blindly.
+
+### 6.5 Do not let `None`-is-falsy encode a decision
 
 ```python
 # The default is invisible — it falls out of Python's truthiness
@@ -372,7 +430,7 @@ or the default passed as a parameter. Where a default must be chosen, choose by
 **cost of being wrong**: a default that grants *care* is cheap; one that grants
 *authority*, or silently withdraws a safeguard, is not.
 
-### 6.5 Anti-pattern summary
+### 6.6 Anti-pattern summary
 
 | smell | why | instead |
 |---|---|---|

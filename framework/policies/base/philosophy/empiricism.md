@@ -228,6 +228,16 @@ bury the last sign of company.
 - **Prefer no bound when the search exits on its first match.** Such a scan
   already costs nothing in the common case; the limit only ever bites when the
   thing is absent, which is precisely when truncation lies.
+- **Better still, remove the case instead of bounding it.** The counters above
+  all make a bounded lookup less dishonest. Sometimes the scope itself can be
+  chosen so that the ambiguity cannot arise: bound the search to a period the
+  answer is *valid within*, and require anything that outlives that period to
+  re-assert itself at the boundary. A miss then has exactly one meaning — *not
+  established in this period* — which is a fact about the world rather than
+  about the reader, and the worst case is one period however large the store
+  grows. The cost is that persistence becomes an act someone has to perform,
+  which is the point: an act can be audited and can fail loudly, whereas
+  surviving-because-nothing-overwrote-it cannot.
 - **Make the two meanings distinguishable.** Return a sentinel the caller must
   handle, or take the fallback as a parameter so the choice is visible where it
   is made rather than falling out of `None` being falsy.

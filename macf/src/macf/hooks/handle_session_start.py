@@ -387,19 +387,29 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 hook_input=data
             )
 
-            # Tunnel AUTO_MODE through compaction boundary:
-            # Re-emit mode_change event AFTER compact_boundary so
-            # post-compaction detect_auto_mode() finds it via event query.
-            if auto_mode:
+            # Carry persistent state across the boundary, with provenance.
+            #
+            # This replaces an AUTO_MODE-only tunnel that stamped the NEW cycle
+            # on every re-emission, so an authorisation granted once and tunneled
+            # a hundred times read in the log as granted afresh each cycle. It
+            # also only ever carried AUTO_MODE: USER_REMOTE was dropped at every
+            # boundary, which is how delivery could silently revert to assuming a
+            # local operator.
+            #
+            # Cycle-scoped queries are what make this REQUIRED rather than
+            # merely tidier: a cycle-scoped read cannot see across the boundary,
+            # so state that is not re-asserted is genuinely absent. Absent is the
+            # honest answer, and for authority-granting modes it is also the safe
+            # one — authority cannot be inherited by accident.
+            from macf.cycle_carry import carry_state_forward
+            carried_keys = carry_state_forward(current_cycle=cycle_number)
+            if carried_keys:
                 append_event(
-                    event="mode_change",
+                    event="state_carried",
                     data={
-                        "mode": "AUTO_MODE",
-                        "enabled": True,
                         "session_id": session_id,
-                        "auth_validated": True,
-                        "tunneled_through_compaction": True,
-                        "cycle": cycle_number
+                        "cycle": cycle_number,
+                        "keys": sorted(carried_keys),
                     },
                     hook_input=data
                 )
