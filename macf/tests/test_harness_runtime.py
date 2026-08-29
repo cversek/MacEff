@@ -38,7 +38,9 @@ and end -- a probe that outlives its probing is a tmux session nobody owns.
 
 import json
 import os
+import signal
 import subprocess
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -177,6 +179,43 @@ class Probe:
 
     def kill(self):
         _tmux("kill-session", "-t", f"={self.session}")
+        self._reap_descendants()
+
+    def _reap_descendants(self):
+        """Kill anything still running out of this probe's directory.
+
+        Killing the tmux session reaps the PANE's child -- the supervisor --
+        but not the supervisor's own children. The fake client is a grandchild,
+        so it survived, reparented to init, and kept running after the test that
+        made it had passed. Three were found alive on a developer machine at 56,
+        28 and 16 minutes: one per full-suite run.
+
+        Matching on the probe's tmp_path is what makes this safe to do with a
+        signal. The path is unique per test, so nothing outside this probe can
+        match it -- a name-based kill (`pkill -f claude`) would be a loaded gun
+        pointed at the developer's real session.
+        """
+        marker = str(self.dir)
+        try:
+            out = subprocess.run(["pgrep", "-f", marker], capture_output=True, text=True)
+        except (OSError, ValueError) as e:
+            # Say it. A teardown that silently declines to reap is exactly the
+            # failure this method exists to fix -- the leak would come back
+            # looking like it had never been addressed.
+            print(f"⚠️ probe: could not enumerate descendants to reap: {e}",
+                  file=sys.stderr)
+            return
+        for line in out.stdout.split():
+            try:
+                pid = int(line)
+            except ValueError:
+                continue
+            if pid == os.getpid():
+                continue
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
 
 
 @pytest.fixture
@@ -191,6 +230,41 @@ def probe(tmp_path):
 class TestTheFixtureIsolatesAndCleansUp:
     """The fixture is itself a subject. A probe that leaks sessions is worse
     than no probe: it makes the host's tmux state a function of test history."""
+
+    def test_no_process_survives_teardown(self, tmp_path):
+        """The sibling test covers tmux SESSIONS. Processes are a separate
+        escape route and were leaking through it unwatched: tmux reaps the
+        pane's child, not its grandchild, so the fake client outlived every run
+        that started one."""
+        p = Probe(tmp_path)
+        p.install_client(mode="stay")
+        # The SUPERVISOR form on purpose, not the wrapper. tmux reaps the pane's
+        # child; the leak is the pane-child's OWN child. Running the client
+        # directly in the pane creates no grandchild, so a test written that way
+        # passes whether or not the reap works -- which is exactly what the first
+        # version of this test did, in 0.77s, with the reap disabled.
+        p.start_pane(
+            f"/usr/bin/env python3 -m macf.supervisor _run_loop "
+            f"--name {p.session} --delay 1 --tmux-session {p.session} "
+            f"-- {p.bin}/claude"
+        )
+        p.wait_for_records(1)
+        assert subprocess.run(["pgrep", "-f", f"{tmp_path}/bin/claude"],
+                              capture_output=True).returncode == 0, (
+            "the grandchild never started, so this test would prove nothing"
+        )
+
+        p.kill()
+
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            if subprocess.run(["pgrep", "-f", f"{tmp_path}/bin/claude"],
+                              capture_output=True).returncode != 0:
+                return
+            time.sleep(0.25)
+        leaked = subprocess.run(["pgrep", "-af", f"{tmp_path}/bin/claude"],
+                                capture_output=True, text=True).stdout
+        pytest.fail(f"processes survived teardown:\n{leaked}")
 
     def test_the_probe_runs_in_its_own_session(self, probe):
         probe.install_client(mode="stay")
