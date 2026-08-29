@@ -16,7 +16,7 @@ import json
 
 import pytest
 
-from macf.agent_events_log import CYCLE_BOUNDARY_EVENT, append_event, read_events
+from macf.agent_events_log import CYCLE_BOUNDARY_EVENT, read_events
 from macf.cycle_carry import carry_state_forward
 
 
@@ -161,6 +161,20 @@ class TestCarryForward:
 
         latest = next(e for e in read_events(reverse=True) if e["event"] == "mode_change")
         assert latest["data"]["enabled"] is False, "reached back past one cycle"
+
+    def test_a_failed_carry_is_not_silence(self, isolated_events_log, capsys, monkeypatch):
+        """An empty return has two opposite causes — nothing to carry, and every
+        append failing. The return value cannot tell them apart, so the failure
+        has to say so somewhere. Unreported, it drops the operator's
+        authorisation at a boundary and looks exactly like a quiet cycle."""
+        _write(isolated_events_log, [
+            _ev("mode_change", 100, mode="AUTO_MODE", enabled=True, cycle=1),
+            _ev(CYCLE_BOUNDARY_EVENT, 200, cycle=2),
+        ])
+        monkeypatch.setattr("macf.cycle_carry.append_event", lambda *a, **k: False)
+
+        assert carry_state_forward(current_cycle=2) == []
+        assert "carry-forward FAILED" in capsys.readouterr().err
 
     def test_nothing_to_carry_is_a_real_answer(self, isolated_events_log):
         """An empty carry is 'nothing persistent was set', not a failure. Saying

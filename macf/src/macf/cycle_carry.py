@@ -19,6 +19,7 @@ framework documents in narrative form, arriving instead through infrastructure.
 carried, so the chain reports the ORIGINAL grant rather than the last hop.
 """
 
+import sys
 from typing import Dict, List, Optional
 
 from .agent_events_log import CYCLE_BOUNDARY_EVENT, append_event, read_events
@@ -80,14 +81,20 @@ def carry_state_forward(current_cycle: Optional[int] = None) -> List[str]:
     Call immediately AFTER ``compaction_detected`` is written — not from
     PreCompact, where no boundary exists yet to write on the far side of.
 
-    Returns the keys carried, so the caller can report them. An empty list is a
-    real answer (nothing persistent was set last cycle), not a failure.
+    Returns the keys carried. An empty list is a real answer — nothing
+    persistent was set last cycle — but it is NOT the only way to get one: every
+    append could have failed instead. Those two are opposite facts and the return
+    value cannot tell them apart, so a failed carry says so on stderr rather than
+    leaving the caller to read silence as success. The distinction matters more
+    here than almost anywhere: an unreported carry failure drops the operator's
+    authorisation at a boundary and looks exactly like a quiet cycle.
     """
     if current_cycle is None:
         from .event_queries import get_cycle_number_from_events
         current_cycle = get_cycle_number_from_events()
 
     carried: List[str] = []
+    failed: List[str] = []
     for key, source in _fold_previous_cycle().items():
         data = dict(source.get("data") or {})
 
@@ -106,5 +113,19 @@ def carry_state_forward(current_cycle: Optional[int] = None) -> List[str]:
 
         if append_event(source.get("event", "mode_change"), data):
             carried.append(key)
+        else:
+            failed.append(key)
+
+    if failed:
+        # Deliberately stderr and not another append_event: the thing that just
+        # failed was appending an event, so a second one is the least likely
+        # channel to survive. This is the one place a print beats the log.
+        print(
+            "⚠️ MACF: carry-forward FAILED for "
+            f"{', '.join(sorted(failed))} into cycle {current_cycle}. That state "
+            "is now absent rather than stale — authority-granting modes will "
+            "read as unset until re-established.",
+            file=sys.stderr,
+        )
 
     return carried
