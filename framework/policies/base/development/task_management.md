@@ -1304,11 +1304,11 @@ macf_tools task complete #67 --report "Implemented feature X. No difficulties. C
 #         Report recorded in MTMD
 ```
 
-### 9.4 Archive & Delete
+### 9.4 Hide & Delete
 
 ```bash
-macf_tools task archive #67                   # Archive with cascade (default)
-macf_tools task archive #67 --no-cascade      # Archive single task
+macf_tools task hide-completed                # RETIRED task archive's replacement; see §7
+macf_tools task unhide-all                    # reverse hide-completed
 macf_tools task delete #67                    # Delete (HIGH grant required)
 ```
 
