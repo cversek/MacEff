@@ -21,7 +21,6 @@ macf/
 │   ├── handle_subagent_stop.py     # SubagentStop hook
 │   ├── logging.py             # Hook logging utilities
 │   ├── recovery.py            # Recovery message formatting
-│   └── sidecar.py             # Sidecar state management
 ├── models/                     # Pydantic models
 │   ├── __init__.py
 │   ├── agent_spec.py          # Agent configuration models
