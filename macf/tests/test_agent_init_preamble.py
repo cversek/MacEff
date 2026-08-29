@@ -16,6 +16,7 @@ asserting a hardcoded compaction threshold loaded beside a v1.5 block telling th
 agent to distrust exactly such numbers, with nothing naming the other file.
 """
 import re
+from pathlib import Path
 
 
 class TestBoundarySeparatorDoesNotAccumulate:
@@ -104,3 +105,31 @@ class TestLoadPathSurvey:
         (proj / "CLAUDE.md").write_text("project\n")
         monkeypatch.chdir(proj)
         assert other_claude_md_in_load_path(proj / "CLAUDE.md") == []
+
+
+class TestShippedTemplatesDeclareOneVersion:
+    """A version bump touches two markers, and the upgrade regex needs both.
+
+    Bumping only the START leaves the block unterminated, so the replacement
+    pattern -- which spans START to END -- stops matching. The upgrade then does
+    nothing, quietly, on every agent, and the symptom is an old preamble that
+    never changes rather than an error anyone sees.
+    """
+
+    ROOT = Path(__file__).resolve().parents[2] / "framework" / "templates"
+
+    def _versions(self, name, kind):
+        text = (self.ROOT / name).read_text()
+        start = re.findall(rf'<!--\s*MACEFF_{kind}_PREAMBLE_v([\d.]+)_START\s*-->', text)
+        end = re.findall(rf'<!--\s*MACEFF_{kind}_PREAMBLE_v([\d.]+)_END\s*-->', text)
+        return start, end
+
+    def test_pa_start_and_end_agree(self):
+        start, end = self._versions("PA_PREAMBLE.md", "PA")
+        assert len(start) == 1 and len(end) == 1, "exactly one marker pair expected"
+        assert start == end, f"START says v{start[0]}, END says v{end[0]}"
+
+    def test_sa_start_and_end_agree(self):
+        start, end = self._versions("SA_PREAMBLE.md", "SA")
+        assert len(start) == 1 and len(end) == 1, "exactly one marker pair expected"
+        assert start == end, f"START says v{start[0]}, END says v{end[0]}"
