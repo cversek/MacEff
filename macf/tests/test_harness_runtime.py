@@ -51,10 +51,13 @@ from macf.utils.harness import HarnessParams, render_child
 
 PROBE_PREFIX = "maceff-probe-"
 
-pytestmark = pytest.mark.skipif(
-    subprocess.run(["which", "tmux"], capture_output=True).returncode != 0,
-    reason="runtime tier needs tmux: the property under test is the presence of a terminal",
-)
+pytestmark = [
+    pytest.mark.live,
+    pytest.mark.skipif(
+        subprocess.run(["which", "tmux"], capture_output=True).returncode != 0,
+        reason="runtime tier needs tmux: the property under test is the presence of a terminal",
+    ),
+]
 
 
 def _tmux(*args, **kw):
