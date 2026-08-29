@@ -68,6 +68,22 @@ error() {
     echo -e "${RED}[maceff-init ERROR]${NC} $*" >&2
 }
 
+# policies/base -> policies/sets/base, which is the layout the `current`
+# symlink expects. A FUNCTION because it must run after the submodule copy AND
+# after the parent overlay: once the overlay stopped being a fixed list, a
+# deployment shipping its own framework/policies/ could land a `base/` that the
+# one-shot version had already run past -- generalising the overlay would have
+# introduced a new silent mishandling while fixing the old one.
+normalize_policies_layout() {
+    if [[ -d "$MACEFF_DIR/framework/policies/base" ]]; then
+        mkdir -p "$MACEFF_DIR/framework/policies/sets"
+        cp -r "$MACEFF_DIR/framework/policies/base/." \
+              "$MACEFF_DIR/framework/policies/sets/base/" 2>/dev/null || true
+        rm -rf "$MACEFF_DIR/framework/policies/base"
+        log "  ✓ Moved policies/base → policies/sets/base (for symlink pattern)"
+    fi
+}
+
 # Check if .maceff/ already exists
 if [[ -d "$MACEFF_DIR" ]]; then
     if [[ "$FORCE_OVERWRITE" == "true" ]]; then
@@ -117,12 +133,7 @@ if [[ -d "$MACEFF_SOURCE/framework" ]]; then
     cp -r "$MACEFF_SOURCE/framework/"* "$MACEFF_DIR/framework/" 2>/dev/null || true
     log "  ✓ Copied all framework/ contents (policies, templates, commands, skills, etc.)"
 
-    # Special handling: policies/base goes to policies/sets/base for symlink pattern
-    if [[ -d "$MACEFF_DIR/framework/policies/base" ]]; then
-        mkdir -p "$MACEFF_DIR/framework/policies/sets"
-        mv "$MACEFF_DIR/framework/policies/base" "$MACEFF_DIR/framework/policies/sets/"
-        log "  ✓ Moved policies/base → policies/sets/base (for symlink pattern)"
-    fi
+    normalize_policies_layout
 else
     error "framework/ directory not found in $MACEFF_SOURCE"
     exit 1
@@ -132,44 +143,66 @@ fi
 if [[ "$MACEFF_SOURCE" != "$REPO_ROOT" ]] && [[ -d "$REPO_ROOT/framework" ]]; then
     log "Applying parent repo framework/ overlay..."
 
-    # Copy parent framework resources, explicitly noting overwrites
-    if [[ -f "$REPO_ROOT/framework/agents.yaml" ]]; then
-        cp "$REPO_ROOT/framework/agents.yaml" "$MACEFF_DIR/framework/"
-        warn "  ⚠ OVERLAY: agents.yaml (parent overrides submodule default)"
-    fi
+    # EVERY top-level entry, not an enumerated six.
+    #
+    # This used to be a hand-written list -- agents.yaml, projects.yaml,
+    # agents/, projects/, env.d/, subagents/ -- and anything else a deployment
+    # put in its own framework/ was dropped with nothing said. That is the worst
+    # shape a bug can take: the file works when placed by hand, gets committed
+    # to the parent repo in what looks like the right place, and then vanishes
+    # on the one command whose purpose is reproducibility. The reader concludes
+    # their file was never applied and looks in the wrong place.
+    #
+    # Note the asymmetry this removes. The submodule's framework/ is copied
+    # recursively one pass above, under a comment reading "generic -
+    # future-proof for new components". The parent's was not, for no stated
+    # reason -- so the deployment's OWN customizations got worse treatment than
+    # the upstream defaults they exist to override.
+    #
+    # Each entry is still announced by name, which is what the enumerated
+    # version got right and the reason a bare recursive copy would have been a
+    # downgrade: "some files were not copied" leaves a reader exactly where
+    # they started.
+    for entry in "$REPO_ROOT/framework/"*; do
+        [[ -e "$entry" ]] || continue          # no matches: glob stayed literal
+        entry_name=$(basename "$entry")
+        # `config/` has its OWN overlay pass further down, and a different
+        # destination: .maceff/config/, not .maceff/framework/config/. Copying
+        # it here too would put a second, divergent copy where nothing reads it
+        # -- generalising the overlay would have created the very "which copy
+        # is live?" confusion it exists to remove. Announced rather than
+        # dropped quietly, because an unexplained absence is the defect.
+        if [[ "$entry_name" == "config" ]]; then
+            log "  ℹ framework/config/ is overlaid separately → .maceff/config/"
+            continue
+        fi
+        if [[ -d "$entry" ]]; then
+            mkdir -p "$MACEFF_DIR/framework/$entry_name"
+            # `$entry/.` rather than `$entry/*` -- the glob form silently skips
+            # dotfiles and fails on an empty directory, so an env.d holding only
+            # a .keep would have copied nothing while reporting an overlay.
+            cp -r "$entry/." "$MACEFF_DIR/framework/$entry_name/" 2>/dev/null || true
+            warn "  ⚠ OVERLAY: $entry_name/* (parent customizations added/override)"
+        else
+            cp "$entry" "$MACEFF_DIR/framework/"
+            warn "  ⚠ OVERLAY: $entry_name (parent overrides submodule default)"
+        fi
+    done
 
-    if [[ -f "$REPO_ROOT/framework/projects.yaml" ]]; then
-        cp "$REPO_ROOT/framework/projects.yaml" "$MACEFF_DIR/framework/"
-        warn "  ⚠ OVERLAY: projects.yaml (parent overrides submodule default)"
-    fi
+    # HIDDEN ENTRIES ARE NAMED, NEVER COPIED, AND NEVER IGNORED. Copying them
+    # blind is unsafe -- a stray .git in framework/ would be catastrophic to
+    # recurse -- but skipping them silently is the very defect above. So they
+    # are reported, and the operator decides.
+    for hidden in "$REPO_ROOT/framework/".*; do
+        [[ -e "$hidden" ]] || continue
+        hidden_name=$(basename "$hidden")
+        [[ "$hidden_name" == "." || "$hidden_name" == ".." ]] && continue
+        warn "  ⚠ SKIPPED (hidden): framework/$hidden_name -- not overlaid."
+        warn "    If this must reach the runtime tree, move it to a visible path."
+    done
 
-    # Copy parent agent personalities
-    if [[ -d "$REPO_ROOT/framework/agents" ]]; then
-        mkdir -p "$MACEFF_DIR/framework/agents"
-        cp -r "$REPO_ROOT/framework/agents/"* "$MACEFF_DIR/framework/agents/" 2>/dev/null || true
-        warn "  ⚠ OVERLAY: agents/* (parent customizations added/override)"
-    fi
-
-    # Copy parent project contexts
-    if [[ -d "$REPO_ROOT/framework/projects" ]]; then
-        mkdir -p "$MACEFF_DIR/framework/projects"
-        cp -r "$REPO_ROOT/framework/projects/"* "$MACEFF_DIR/framework/projects/" 2>/dev/null || true
-        warn "  ⚠ OVERLAY: projects/* (parent customizations added/override)"
-    fi
-
-    # Copy parent env.d scripts (environment extensibility)
-    if [[ -d "$REPO_ROOT/framework/env.d" ]]; then
-        mkdir -p "$MACEFF_DIR/framework/env.d"
-        cp -r "$REPO_ROOT/framework/env.d/"* "$MACEFF_DIR/framework/env.d/" 2>/dev/null || true
-        warn "  ⚠ OVERLAY: env.d/* (parent environment scripts)"
-    fi
-
-    # Copy parent subagent definitions (deployment-specific specialists)
-    if [[ -d "$REPO_ROOT/framework/subagents" ]]; then
-        mkdir -p "$MACEFF_DIR/framework/subagents"
-        cp -r "$REPO_ROOT/framework/subagents/"* "$MACEFF_DIR/framework/subagents/" 2>/dev/null || true
-        warn "  ⚠ OVERLAY: subagents/* (parent subagent definitions added/override)"
-    fi
+    # The overlay may have introduced framework/policies/base.
+    normalize_policies_layout
 
     log "  ✓ Parent overlay complete"
 fi
