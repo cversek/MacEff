@@ -7,7 +7,7 @@ docs/arch_v0.3_named_agents/05_implementation_guide.md (lines 48-125)
 
 from enum import Enum
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class AgentFlavor(str, Enum):
@@ -34,6 +34,25 @@ class ClaudeCodePreferencesConfig(BaseModel):
     Controls how the agent experiences their environment.
     """
 
+    # AN UNKNOWN KEY IS AN ERROR, NOT SOMETHING TO IGNORE.
+    #
+    # pydantic's default is extra="ignore", so a key this model does not define
+    # was dropped at load with no warning, no log line and no non-zero exit.
+    # That produced the worst shape a bug can take: a deployment missing ONE
+    # capability and correct about everything else, with a config file stating
+    # the capability is present. Two live instances were found this way, both
+    # added deliberately, both carrying explanatory comments -- and one of them
+    # sent an investigation after an entirely wrong cause, because the file
+    # said the right thing.
+    #
+    # The forward-compatibility argument for tolerant parsing does not reach
+    # here: these files are the sanctioned, hand-edited interface to a
+    # deployment, provisioning runs unattended at container start, and its log
+    # is read only when something already looks wrong -- which it does not,
+    # because the ignored key was never needed to come up.
+    model_config = ConfigDict(extra="forbid")
+
+
     verbose: bool = Field(
         default=True,
         description="Enable verbose output for debugging"
@@ -50,6 +69,25 @@ class ClaudeCodePermissionsConfig(BaseModel):
     These settings control tool authorization in ~/.claude/settings.json.
     Allows declarative configuration of allow/ask/deny rules via agents.yaml.
     """
+
+    # AN UNKNOWN KEY IS AN ERROR, NOT SOMETHING TO IGNORE.
+    #
+    # pydantic's default is extra="ignore", so a key this model does not define
+    # was dropped at load with no warning, no log line and no non-zero exit.
+    # That produced the worst shape a bug can take: a deployment missing ONE
+    # capability and correct about everything else, with a config file stating
+    # the capability is present. Two live instances were found this way, both
+    # added deliberately, both carrying explanatory comments -- and one of them
+    # sent an investigation after an entirely wrong cause, because the file
+    # said the right thing.
+    #
+    # The forward-compatibility argument for tolerant parsing does not reach
+    # here: these files are the sanctioned, hand-edited interface to a
+    # deployment, provisioning runs unattended at container start, and its log
+    # is read only when something already looks wrong -- which it does not,
+    # because the ignored key was never needed to come up.
+    model_config = ConfigDict(extra="forbid")
+
 
     allow: Optional[List[str]] = Field(
         default=None,
@@ -75,6 +113,25 @@ class ClaudeCodeSettingsConfig(BaseModel):
     These settings go in ~/.claude/settings.json (project layer).
     Controls what capabilities are authorized.
     """
+
+    # AN UNKNOWN KEY IS AN ERROR, NOT SOMETHING TO IGNORE.
+    #
+    # pydantic's default is extra="ignore", so a key this model does not define
+    # was dropped at load with no warning, no log line and no non-zero exit.
+    # That produced the worst shape a bug can take: a deployment missing ONE
+    # capability and correct about everything else, with a config file stating
+    # the capability is present. Two live instances were found this way, both
+    # added deliberately, both carrying explanatory comments -- and one of them
+    # sent an investigation after an entirely wrong cause, because the file
+    # said the right thing.
+    #
+    # The forward-compatibility argument for tolerant parsing does not reach
+    # here: these files are the sanctioned, hand-edited interface to a
+    # deployment, provisioning runs unattended at container start, and its log
+    # is read only when something already looks wrong -- which it does not,
+    # because the ignored key was never needed to come up.
+    model_config = ConfigDict(extra="forbid")
+
 
     cleanupPeriodDays: int = Field(
         default=99999,
@@ -111,6 +168,25 @@ class ClaudeCodeConfig(BaseModel):
     Per-agent values override deployment-level defaults.
     """
 
+    # AN UNKNOWN KEY IS AN ERROR, NOT SOMETHING TO IGNORE.
+    #
+    # pydantic's default is extra="ignore", so a key this model does not define
+    # was dropped at load with no warning, no log line and no non-zero exit.
+    # That produced the worst shape a bug can take: a deployment missing ONE
+    # capability and correct about everything else, with a config file stating
+    # the capability is present. Two live instances were found this way, both
+    # added deliberately, both carrying explanatory comments -- and one of them
+    # sent an investigation after an entirely wrong cause, because the file
+    # said the right thing.
+    #
+    # The forward-compatibility argument for tolerant parsing does not reach
+    # here: these files are the sanctioned, hand-edited interface to a
+    # deployment, provisioning runs unattended at container start, and its log
+    # is read only when something already looks wrong -- which it does not,
+    # because the ignored key was never needed to come up.
+    model_config = ConfigDict(extra="forbid")
+
+
     settings: Optional[ClaudeCodeSettingsConfig] = Field(
         default=None,
         description="Project/capability settings for ~/.claude/settings.json"
@@ -127,6 +203,25 @@ class ClaudeCodeConfig(BaseModel):
 
 class ConsciousnessArtifactsConfig(BaseModel):
     """Configuration for consciousness artifacts directories."""
+
+    # AN UNKNOWN KEY IS AN ERROR, NOT SOMETHING TO IGNORE.
+    #
+    # pydantic's default is extra="ignore", so a key this model does not define
+    # was dropped at load with no warning, no log line and no non-zero exit.
+    # That produced the worst shape a bug can take: a deployment missing ONE
+    # capability and correct about everything else, with a config file stating
+    # the capability is present. Two live instances were found this way, both
+    # added deliberately, both carrying explanatory comments -- and one of them
+    # sent an investigation after an entirely wrong cause, because the file
+    # said the right thing.
+    #
+    # The forward-compatibility argument for tolerant parsing does not reach
+    # here: these files are the sanctioned, hand-edited interface to a
+    # deployment, provisioning runs unattended at container start, and its log
+    # is read only when something already looks wrong -- which it does not,
+    # because the ignored key was never needed to come up.
+    model_config = ConfigDict(extra="forbid")
+
 
     private: Optional[List[str]] = Field(
         default=None,
@@ -166,6 +261,25 @@ class EgressPolicy(BaseModel):
     it overrides, so an account added later is covered rather than silently exempt.
     Exemption must be written explicitly, which makes it visible in config review.
     """
+
+    # AN UNKNOWN KEY IS AN ERROR, NOT SOMETHING TO IGNORE.
+    #
+    # pydantic's default is extra="ignore", so a key this model does not define
+    # was dropped at load with no warning, no log line and no non-zero exit.
+    # That produced the worst shape a bug can take: a deployment missing ONE
+    # capability and correct about everything else, with a config file stating
+    # the capability is present. Two live instances were found this way, both
+    # added deliberately, both carrying explanatory comments -- and one of them
+    # sent an investigation after an entirely wrong cause, because the file
+    # said the right thing.
+    #
+    # The forward-compatibility argument for tolerant parsing does not reach
+    # here: these files are the sanctioned, hand-edited interface to a
+    # deployment, provisioning runs unattended at container start, and its log
+    # is read only when something already looks wrong -- which it does not,
+    # because the ignored key was never needed to come up.
+    model_config = ConfigDict(extra="forbid")
+
 
     deny_tcp_ports: List[int] = Field(
         default_factory=list,
@@ -212,6 +326,25 @@ class EgressPolicy(BaseModel):
 class AgentSpec(BaseModel):
     """Specification for a Primary Agent (PA)."""
 
+    # AN UNKNOWN KEY IS AN ERROR, NOT SOMETHING TO IGNORE.
+    #
+    # pydantic's default is extra="ignore", so a key this model does not define
+    # was dropped at load with no warning, no log line and no non-zero exit.
+    # That produced the worst shape a bug can take: a deployment missing ONE
+    # capability and correct about everything else, with a config file stating
+    # the capability is present. Two live instances were found this way, both
+    # added deliberately, both carrying explanatory comments -- and one of them
+    # sent an investigation after an entirely wrong cause, because the file
+    # said the right thing.
+    #
+    # The forward-compatibility argument for tolerant parsing does not reach
+    # here: these files are the sanctioned, hand-edited interface to a
+    # deployment, provisioning runs unattended at container start, and its log
+    # is read only when something already looks wrong -- which it does not,
+    # because the ignored key was never needed to come up.
+    model_config = ConfigDict(extra="forbid")
+
+
     username: str = Field(
         ...,
         description="Linux username for the agent (e.g., pa_manny)"
@@ -232,6 +365,21 @@ class AgentSpec(BaseModel):
             "to update. Falls back to the agent key when omitted, which is why "
             "a deployment whose two values coincide never notices the "
             "difference. Provisioning exports it as MACEFF_HARNESS_SESSION."
+        )
+    )
+
+    conda_env: Optional[str] = Field(
+        default=None,
+        description=(
+            "Conda environment activated for this agent's shells. Declared here "
+            "because deployments were already declaring it and the model was "
+            "discarding it: with no schema field the key vanished at load, so a "
+            "deployment that wanted a specific interpreter had to hardcode the "
+            "name in a shell script instead. That duplicate then became a file "
+            "that could go missing with nothing to notice -- which is what "
+            "happened. Declaring the field does not itself activate anything; "
+            "it makes the value visible to the framework so a consumer can read "
+            "it rather than each deployment restating it."
         )
     )
 
@@ -356,6 +504,25 @@ class AgentSpec(BaseModel):
 class SubagentSpec(BaseModel):
     """Specification for a Subagent (SA)."""
 
+    # AN UNKNOWN KEY IS AN ERROR, NOT SOMETHING TO IGNORE.
+    #
+    # pydantic's default is extra="ignore", so a key this model does not define
+    # was dropped at load with no warning, no log line and no non-zero exit.
+    # That produced the worst shape a bug can take: a deployment missing ONE
+    # capability and correct about everything else, with a config file stating
+    # the capability is present. Two live instances were found this way, both
+    # added deliberately, both carrying explanatory comments -- and one of them
+    # sent an investigation after an entirely wrong cause, because the file
+    # said the right thing.
+    #
+    # The forward-compatibility argument for tolerant parsing does not reach
+    # here: these files are the sanctioned, hand-edited interface to a
+    # deployment, provisioning runs unattended at container start, and its log
+    # is read only when something already looks wrong -- which it does not,
+    # because the ignored key was never needed to come up.
+    model_config = ConfigDict(extra="forbid")
+
+
     role: str = Field(
         ...,
         description="Description of subagent's role and specialization"
@@ -387,6 +554,25 @@ class SubagentSpec(BaseModel):
 
 class DefaultsConfig(BaseModel):
     """Global defaults for agents."""
+
+    # AN UNKNOWN KEY IS AN ERROR, NOT SOMETHING TO IGNORE.
+    #
+    # pydantic's default is extra="ignore", so a key this model does not define
+    # was dropped at load with no warning, no log line and no non-zero exit.
+    # That produced the worst shape a bug can take: a deployment missing ONE
+    # capability and correct about everything else, with a config file stating
+    # the capability is present. Two live instances were found this way, both
+    # added deliberately, both carrying explanatory comments -- and one of them
+    # sent an investigation after an entirely wrong cause, because the file
+    # said the right thing.
+    #
+    # The forward-compatibility argument for tolerant parsing does not reach
+    # here: these files are the sanctioned, hand-edited interface to a
+    # deployment, provisioning runs unattended at container start, and its log
+    # is read only when something already looks wrong -- which it does not,
+    # because the ignored key was never needed to come up.
+    model_config = ConfigDict(extra="forbid")
+
 
     consciousness_artifacts: Optional[ConsciousnessArtifactsConfig] = Field(
         default=None,
@@ -462,6 +648,25 @@ class SecretSpec(BaseModel):
     else's network problem rather than as ours.
     """
 
+    # AN UNKNOWN KEY IS AN ERROR, NOT SOMETHING TO IGNORE.
+    #
+    # pydantic's default is extra="ignore", so a key this model does not define
+    # was dropped at load with no warning, no log line and no non-zero exit.
+    # That produced the worst shape a bug can take: a deployment missing ONE
+    # capability and correct about everything else, with a config file stating
+    # the capability is present. Two live instances were found this way, both
+    # added deliberately, both carrying explanatory comments -- and one of them
+    # sent an investigation after an entirely wrong cause, because the file
+    # said the right thing.
+    #
+    # The forward-compatibility argument for tolerant parsing does not reach
+    # here: these files are the sanctioned, hand-edited interface to a
+    # deployment, provisioning runs unattended at container start, and its log
+    # is read only when something already looks wrong -- which it does not,
+    # because the ignored key was never needed to come up.
+    model_config = ConfigDict(extra="forbid")
+
+
     name: str = Field(..., description="File name under the secrets mount")
     dest: str = Field(..., description="Absolute path to place it at")
     owner: str = Field(..., description="Owning user after placement")
@@ -478,6 +683,25 @@ class ServiceSpec(BaseModel):
     guarantee statable at all: "only the broker may read this credential" is not
     a weaker rule without a separate uid, it is an INEXPRESSIBLE one.
     """
+
+    # AN UNKNOWN KEY IS AN ERROR, NOT SOMETHING TO IGNORE.
+    #
+    # pydantic's default is extra="ignore", so a key this model does not define
+    # was dropped at load with no warning, no log line and no non-zero exit.
+    # That produced the worst shape a bug can take: a deployment missing ONE
+    # capability and correct about everything else, with a config file stating
+    # the capability is present. Two live instances were found this way, both
+    # added deliberately, both carrying explanatory comments -- and one of them
+    # sent an investigation after an entirely wrong cause, because the file
+    # said the right thing.
+    #
+    # The forward-compatibility argument for tolerant parsing does not reach
+    # here: these files are the sanctioned, hand-edited interface to a
+    # deployment, provisioning runs unattended at container start, and its log
+    # is read only when something already looks wrong -- which it does not,
+    # because the ignored key was never needed to come up.
+    model_config = ConfigDict(extra="forbid")
+
 
     secrets: List[SecretSpec] = Field(
         default_factory=list,
@@ -507,6 +731,25 @@ class AgentsConfig(BaseModel):
             private: [checkpoints, reflections, learnings]
             public: [roadmaps, reports, observations]
     """
+
+    # AN UNKNOWN KEY IS AN ERROR, NOT SOMETHING TO IGNORE.
+    #
+    # pydantic's default is extra="ignore", so a key this model does not define
+    # was dropped at load with no warning, no log line and no non-zero exit.
+    # That produced the worst shape a bug can take: a deployment missing ONE
+    # capability and correct about everything else, with a config file stating
+    # the capability is present. Two live instances were found this way, both
+    # added deliberately, both carrying explanatory comments -- and one of them
+    # sent an investigation after an entirely wrong cause, because the file
+    # said the right thing.
+    #
+    # The forward-compatibility argument for tolerant parsing does not reach
+    # here: these files are the sanctioned, hand-edited interface to a
+    # deployment, provisioning runs unattended at container start, and its log
+    # is read only when something already looks wrong -- which it does not,
+    # because the ignored key was never needed to come up.
+    model_config = ConfigDict(extra="forbid")
+
 
     agents: Dict[str, AgentSpec] = Field(
         ...,
