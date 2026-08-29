@@ -27,7 +27,7 @@ from macf.utils.paths import find_agent_home
 # Battery test cases: (query, expected_policy) - 53 total
 BATTERY_TESTS = [
     # === Original 18 from FTS5 experiment ===
-    ("How should I backup my TODOs?", "TODO_HYGIENE"),
+    ("How should I backup my TODOs?", "TASK_MANAGEMENT"),
     ("What is the checkpoint format?", "CHECKPOINTS"),
     ("How do I write a policy?", "POLICY_WRITING"),
     ("What testing approach should I use?", "TESTING"),
