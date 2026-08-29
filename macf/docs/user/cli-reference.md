@@ -38,6 +38,14 @@ Complete command reference for `macf_tools` CLI.
 - [Auto-Restart Supervisor](#auto-restart-supervisor-v050)
 - [Transcript Monitor](#transcript-monitor-v050)
 - [Shell Integration](#shell-integration-v050)
+- [Claude Code Configuration](#claude-code-configuration)
+- [Framework Artifacts](#framework-artifacts)
+- [Git Hooks Dispatcher](#git-hooks-dispatcher)
+- [Harness (Supervised Sessions)](#harness-supervised-sessions)
+- [Inject](#inject)
+- [OPSEC](#opsec)
+- [API Proxy](#api-proxy)
+- [Statusline](#statusline)
 
 ## Global Options
 
@@ -159,7 +167,7 @@ macf_tools budget
 }
 ```
 
-**Description:** Returns CLUAC (Context Left Until Auto-Compaction) threshold configuration.
+**Description:** Returns the token-usage thresholds (as a fraction of context used) that trigger warn and hard budget states, read from `MACEFF_TOKEN_WARN` / `MACEFF_TOKEN_HARD` (defaults 0.85 / 0.95).
 
 **Related:** `context`
 
@@ -240,7 +248,7 @@ macf_tools session info
 
 ### context
 
-Show token usage and CLUAC level for current or specific session.
+Show token usage and CL (Context Left) level for current or specific session.
 
 **Syntax:**
 ```bash
@@ -253,20 +261,21 @@ macf_tools context [--json] [--session SESSION]
 
 **Output (default):**
 ```
-Token Usage: 43,913 / 200,000 (22.0%)
-Remaining: 156,087 tokens
-CLUAC Level: 78 (Context Left Until Auto-Compaction)
+Token Usage: 741,662 / 1,000,000 (74.2%)
+Remaining: 258,338 tokens
+CL Level: 23 (Context Left)
 Source: jsonl
 ```
 
 **Output (JSON):**
 ```json
 {
-  "tokens_used": 43913,
-  "tokens_total": 200000,
-  "tokens_remaining": 156087,
-  "percentage": 22.0,
-  "cluac": 78,
+  "tokens_used": 741662,
+  "tokens_remaining": 258338,
+  "percentage_used": 74.1662,
+  "percentage_remaining": 25.8338,
+  "cl_level": 23,
+  "last_updated": "2026-08-29T19:24:19.516Z",
   "source": "jsonl"
 }
 ```
@@ -1644,77 +1653,40 @@ macf_tools task metadata validate <task_id>
 
 ### Task Archive Commands
 
-#### task archive
+`task archive`, `task restore`, and `task archived` are **deprecated stubs**
+(retired 2026-08-06). `task archive` used to print a success line while
+writing nothing — a report of a state change that never happened — so rather
+than repair a feature nobody wanted, all three now fail closed (exit code 2,
+a warning to stderr/stdout) and point at the supported alternative below.
+They remain as subcommands only so old muscle memory gets an explanation
+instead of an "invalid choice" error.
 
-Archive a task (and optionally its children) to disk. Archived tasks are moved out of the active session.
+#### task hide-completed
 
-**Syntax:**
-```bash
-macf_tools task archive <task_id> [--no-cascade] [--json]
-```
-
-**Arguments:**
-- `task_id` - Task ID to archive (e.g., #67 or 67)
-
-**Options:**
-- `--no-cascade` - Archive only this task, not children (default: cascade enabled)
-- `--json` - Output as JSON
-
-**Behavior:**
-- Default cascades to archive all child tasks
-- Writes archive files to `agent/public/task_archives/`
-- Archive filename: `{date}_task_{id}_{sanitized_subject}.json`
-
-**Example:**
-```bash
-# Archive mission and all phases
-macf_tools task archive #26
-
-# Archive single task only
-macf_tools task archive #67 --no-cascade
-```
-
-#### task restore
-
-Restore a previously archived task.
+Bulk dot-prefix all completed task files so Claude Code's task scanner stops
+surfacing them, without deleting anything.
 
 **Syntax:**
 ```bash
-macf_tools task restore <archive_path_or_id> [--json]
+macf_tools task hide-completed
 ```
 
-**Arguments:**
-- `archive_path_or_id` - Archive file path OR original task ID
+**Description:** Renames completed task files to a dot-prefixed form. This is the supported replacement for the old archive workflow — it declutters the visible tree without producing a separate archive artifact. No-ops (with an explanatory message) when the current task store isn't one Claude Code scans.
 
-**Options:**
-- `--json` - Output as JSON
+**Related:** `task unhide-all`
 
-**Examples:**
-```bash
-# Restore by archive file path
-macf_tools task restore agent/public/task_archives/2026-01-29_task_67_Mission.json
+#### task unhide-all
 
-# Restore by original task ID (searches archive directory)
-macf_tools task restore 67
-```
-
-#### task archived list
-
-List all archived tasks.
+Restore all dot-prefixed (hidden) task files to their normal, visible names.
 
 **Syntax:**
 ```bash
-macf_tools task archived list
+macf_tools task unhide-all
 ```
 
-**Output:**
-```
-📦 Archived Tasks
-============================================================
-  2026-01-29_task_5_Extend_grant-delete.json (#5)
-  2026-01-29_task_6_BUG_Hook_messages.json (#6)
-  ...
-```
+**Description:** Reverses `task hide-completed`. Use this if a task was hidden before you realized you needed to look at it again.
+
+**Related:** `task hide-completed`
 
 ---
 
@@ -2211,6 +2183,313 @@ macf_tools shell setup
 ```
 
 **Supported shells:** bash, zsh, fish (via argcomplete)
+
+---
+
+## Claude Code Configuration
+
+Manage `.claude.json` — Claude Code's own settings file (distinct from `macf_tools config`, which manages agent configuration).
+
+### claude-config init
+
+Set recommended `.claude.json` defaults.
+
+**Syntax:**
+```bash
+macf_tools claude-config init
+```
+
+**Description:** Sets `verbose=true` and `autoCompact=false`.
+
+**Related:** `claude-config show`
+
+### claude-config show
+
+Show the current `.claude.json` configuration.
+
+**Syntax:**
+```bash
+macf_tools claude-config show
+```
+
+**Related:** `claude-config init`
+
+---
+
+## Framework Artifacts
+
+### framework install
+
+Install framework artifacts (hooks, commands, skills) in one step.
+
+**Syntax:**
+```bash
+macf_tools framework install [--hooks-only] [--skip-hooks]
+```
+
+**Options:**
+- `--hooks-only` - Install only hooks (backward compatibility)
+- `--skip-hooks` - Skip hook installation; install commands and skills only
+
+**Related:** `hooks install`
+
+---
+
+## Git Hooks Dispatcher
+
+A composable dispatcher for git hooks: multiple independent "hooklets" can share a single git hook (e.g. `pre-commit`) without overwriting each other.
+
+### githooks install
+
+Install the dispatcher into a repository, adopting any pre-existing hook rather than replacing it.
+
+**Syntax:**
+```bash
+macf_tools githooks install [repo]
+```
+
+**Arguments:**
+- `repo` - Path to the git repository (default: CWD)
+
+**Related:** `githooks list`, `opsec install-hook`
+
+### githooks list
+
+Show every hooklet that would run for a repository, in dispatch order.
+
+**Syntax:**
+```bash
+macf_tools githooks list [repo]
+```
+
+**Arguments:**
+- `repo` - Path to the git repository (default: CWD)
+
+**Related:** `githooks install`
+
+---
+
+## Harness (Supervised Sessions)
+
+Runs an agent's Claude Code session under a persistent supervisor (systemd + tmux) so it survives terminal disconnects and can auto-restart.
+
+### harness generate
+
+Render harness artifacts (systemd unit, start script, tmux config, etc.) to stdout without writing anything.
+
+**Syntax:**
+```bash
+macf_tools harness generate [--agent AGENT] [--home HOME] [--no-proxy] [--channel PLUGIN] [--project-dir DIR] [--shell-prefix NAME] [--what {unit,start,child,functions,tmux,watchdog,all}]
+```
+
+**Options:**
+- `--agent AGENT` - Agent slug naming the unit and tmux session
+- `--home HOME` - Agent home directory
+- `--no-proxy` - Render without proxy attachment
+- `--channel PLUGIN` - Channel plugin the client must load; repeatable
+- `--project-dir DIR` - Directory the supervised session starts in; decides which conversation `claude -c` resumes (default: `MACEFF_PROJECT_DIR`)
+- `--shell-prefix NAME` - Short handle for the generated shell functions
+- `--what` - Which artifact to render (default: `unit`)
+
+**Related:** `harness install`
+
+### harness install
+
+Write harness artifacts into place (same options as `generate`, plus:).
+
+**Syntax:**
+```bash
+macf_tools harness install [--agent AGENT] [--home HOME] [--no-proxy] [--channel PLUGIN] [--project-dir DIR] [--shell-prefix NAME] [--watchdog] [--check] [--force]
+```
+
+**Additional Options:**
+- `--watchdog` - Also install a timer that restarts the session if the tmux server dies
+- `--check` - Report drift against what would be rendered; write nothing
+- `--force` - Overwrite an existing unit that differs
+
+**Related:** `harness generate`, `harness status`
+
+### harness attach
+
+Attach this terminal to the agent's supervised tmux session.
+
+**Syntax:**
+```bash
+macf_tools harness attach [--agent AGENT] [--control] [--read-only]
+```
+
+**Options:**
+- `--agent AGENT` - Agent slug (default: resolved from identity)
+- `--control` - Attach in tmux control mode (`-CC`), for iTerm2 on macOS
+- `--read-only` - Observe without evicting other clients or taking the keyboard
+
+**Related:** `harness status`
+
+### harness status
+
+Show harness unit and session state.
+
+**Syntax:**
+```bash
+macf_tools harness status [--agent AGENT]
+```
+
+**Related:** `harness attach`, `harness install`
+
+---
+
+## Inject
+
+### inject
+
+Queue a slash command into this agent's own Claude Code pane (e.g. to trigger `/compact` from a script or hook).
+
+**Syntax:**
+```bash
+macf_tools inject <command> [--target TARGET]
+```
+
+**Arguments:**
+- `command` - Slash command without the leading slash, e.g. `compact`
+
+**Options:**
+- `--target TARGET` - Supervisor name/pid to target directly (default: self-resolve from this session id)
+
+---
+
+## OPSEC
+
+Gates against private-context leakage (agent identity, internal jargon, personal paths) into a public repository.
+
+### opsec install-hook
+
+Install a pre-commit gate that rejects staged private-context leaks.
+
+**Syntax:**
+```bash
+macf_tools opsec install-hook [--profile PROFILE] <repo>
+```
+
+**Arguments:**
+- `repo` - Path to the target git repository
+
+**Options:**
+- `--profile PROFILE` - Pattern profile JSON (default: agent-home default profile, created if absent)
+
+**Related:** `githooks install`
+
+---
+
+## API Proxy
+
+Runs a local proxy that intercepts Claude Code's API calls, for token/cost accounting and call-level forensics.
+
+### proxy start
+
+Start the proxy daemon.
+
+**Syntax:**
+```bash
+macf_tools proxy start [--daemon] [--port PORT] [--force]
+```
+
+**Options:**
+- `--daemon`, `-d` - Run in background (daemonize)
+- `--port PORT` - Port to listen on (default: 8019)
+- `--force` - Start even if the port is already held (skips the occupied-port refusal; the bind still fails if the holder keeps it)
+
+**Related:** `proxy stop`, `proxy status`
+
+### proxy stop
+
+Stop a running proxy.
+
+**Syntax:**
+```bash
+macf_tools proxy stop [--port PORT]
+```
+
+**Options:**
+- `--port PORT` - Port of the proxy to stop (default: 8019)
+
+**Related:** `proxy start`
+
+### proxy status
+
+Show proxy status.
+
+**Syntax:**
+```bash
+macf_tools proxy status [--port PORT] [--json]
+```
+
+**Options:**
+- `--port PORT` - Port to report on (default: 8019)
+- `--json` - Output as JSON
+
+**Related:** `proxy start`, `proxy stats`
+
+### proxy stats
+
+Show aggregate token/cost statistics.
+
+**Syntax:**
+```bash
+macf_tools proxy stats
+```
+
+**Related:** `proxy log`
+
+### proxy log
+
+Show recent API call events.
+
+**Syntax:**
+```bash
+macf_tools proxy log [--limit LIMIT]
+```
+
+**Options:**
+- `--limit LIMIT`, `-n LIMIT` - Number of recent events (default: 10)
+
+**Related:** `proxy stats`
+
+---
+
+## Statusline
+
+Consciousness-aware status line for Claude Code's UI (agent identity, project, environment, token usage, CL level).
+
+### statusline generate
+
+Generate formatted statusline output.
+
+**Syntax:**
+```bash
+macf_tools statusline generate
+```
+
+**Description:** This is also the default action — running `macf_tools statusline` with no subcommand generates output the same way.
+
+**Output:**
+```
+agent@a3f7c2 | agent | Host System | 741k/1000k CL 23
+```
+
+**Related:** `statusline install`, `context`
+
+### statusline install
+
+Install the statusline script and configure Claude Code to use it.
+
+**Syntax:**
+```bash
+macf_tools statusline install
+```
+
+**Description:** Creates `.claude/statusline.sh` and configures `.claude/settings.local.json`. Restart Claude Code afterward to see the statusline.
+
+**Related:** `statusline generate`
 
 ---
 

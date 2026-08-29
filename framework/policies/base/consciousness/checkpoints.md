@@ -291,7 +291,7 @@ Created comprehensive unit test coverage for macf/utils.py temporal functions.
 All 19 tests passing in 0.03s.
 
 ## Files Modified
-- MacEff/tools/tests/test_temporal_utils.py (new, 450 lines)
+- macf/tests/test_temporal_utils.py (new)
 
 ## Technical Context
 - Python 3.11, pytest 8.0

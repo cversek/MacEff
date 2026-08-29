@@ -105,19 +105,18 @@ Roadmaps preserve strategic intent across context loss. This policy ensures agen
 - GitHub anchors?
 
 **6 Archive Protocol**
-- When do I archive task hierarchies?
-- What is cascade behavior?
-- How does multi-repo archiving work?
+- When do I hide completed task hierarchies?
+- What happened to the old `task archive` command?
+- Where do the underlying task files live?
 
-**6.1 Archive Command**
-- What CLI command archives tasks?
-- What is default cascade behavior?
-- Archive directory structure?
+**6.1 Hide Command**
+- What CLI command declutters completed tasks?
+- How do I reverse hiding a task?
+- What triggers hiding completed work?
 
-**6.2 Archive Contents**
-- What files are archived?
-- Task metadata preservation?
-- Completion summary?
+**6.2 What Persists**
+- What happens to task metadata and hierarchy when a task is hidden?
+- Does hiding move or delete anything?
 
 **6.3 Legacy Archive-Then-Collapse**
 - What was the old TodoWrite pattern?
@@ -598,59 +597,31 @@ Encountered docker-compose working directory dependency [Roadmap 2025-11-11 "Doc
 
 ## 6 Archive Protocol
 
-Task hierarchies are archived using `macf_tools task archive` when MISSION phases complete. This replaces the legacy TodoWrite Archive-Then-Collapse pattern.
+**`macf_tools task archive` (and `task restore` / `task archived`) is retired** (2026-08-06) — it printed a success line while writing nothing. Tasks are persistent JSON files on disk already, so completed work doesn't need a separate archive artifact; it needs to stop cluttering the visible tree.
 
-**Cross-Reference**: See `task_management.md` §7 for complete archive protocol details.
+**Cross-Reference**: See `task_management.md` §7 for complete details on the retirement and its replacement.
 
-### 6.1 Archive Command
+### 6.1 Hide Command
 
 **Primary Command**:
 ```bash
-macf_tools task archive #67              # Archive task #67 and all descendants
-macf_tools task archive #67 --no-cascade # Archive single task only
+macf_tools task hide-completed   # dot-prefix all completed task files (hidden from CC scanner)
+macf_tools task unhide-all       # reverse it
 ```
 
-**Cascade Behavior** (default):
-- Archiving a parent archives ALL child tasks automatically
-- Hierarchy preserved in archive structure
-- No `--cascade` flag needed (it's the default)
+**Behavior**:
+- Renames completed task files in place; nothing is moved to a separate archive location
+- No-ops (with an explanatory message) on a task store Claude Code doesn't scan
+- Reversible via `task unhide-all`
 
-**Archive Location**: `agent/public/task_archives/{repo}/{version}/`
-
-**When to Archive**:
+**When to Hide**:
 - MISSION complete (all phases done)
-- Version release (archive version-associated tasks)
-- Major milestone (preserve state before pivot)
+- Version release (declutter version-associated tasks)
+- Major milestone (tidy the tree before pivot)
 
-### 6.2 Archive Contents
+### 6.2 What Persists
 
-**What Gets Archived**:
-- Complete task JSON with MTMD metadata
-- Hierarchy relationships (parent_id, [^#N] notation)
-- All breadcrumbs (creation, completion, updates)
-- Task descriptions and CA references
-
-**Archive Structure**:
-```
-agent/public/task_archives/
-├── MacEff/
-│   └── v0.4.0/
-│       ├── archive.md          # Summary with breadcrumbs
-│       └── task_files/         # Individual task JSONs
-│           ├── 67.json
-│           ├── 68.json
-│           └── ...
-```
-
-**Commit Message Format**:
-```bash
-git commit -m "archive: MISSION #67 v0.4.0 tasks [s_77270981/c_379/g_.../t_...]
-
-Archived 23 tasks to agent/public/task_archives/MacEff/v0.4.0/
-- MISSION #67: MACF Task CLI & Policy Migration
-- Phases 1-8 complete
-"
-```
+Completed tasks are never deleted by hiding them — the underlying JSON files, MTMD metadata, hierarchy relationships (parent_id, `[^#N]` notation), and breadcrumbs all remain on disk exactly where they were. Hiding only changes whether Claude Code's task scanner surfaces the file; it does not move, summarize, or repackage the task.
 
 ### 6.3 Legacy Archive-Then-Collapse (DEPRECATED)
 
@@ -663,11 +634,10 @@ The legacy pattern used TodoWrite with manual archiving:
 
 **Why Deprecated**:
 - Tasks are now persistent JSON files on disk (no collapse needed)
-- `macf_tools task archive` handles everything automatically
 - No manual file creation or 📦 emoji marking required
-- Cascade archiving preserves hierarchy atomically
+- `macf_tools task hide-completed` declutters the visible tree without touching the underlying files
 
-**Migration**: Use `macf_tools task archive #N` instead of manual Archive-Then-Collapse
+**Migration**: Use `macf_tools task hide-completed` instead of manual Archive-Then-Collapse
 
 ---
 

@@ -75,8 +75,8 @@ State is reconstructed by scanning events backwards from the most recent:
 
 ```python
 # Example: Get current cycle number
-from macf.event_queries import get_current_cycle_from_events
-cycle = get_current_cycle_from_events()
+from macf.event_queries import get_cycle_number_from_events
+cycle = get_cycle_number_from_events()
 
 # Example: Get development drive stats
 from macf.event_queries import get_dev_drv_stats_from_events
@@ -96,8 +96,8 @@ with open('.maceff/agent_state.json') as f:
 **After (v0.3.0+)**:
 ```python
 # Query events for state
-from macf.event_queries import get_current_cycle_from_events
-cycle = get_current_cycle_from_events()
+from macf.event_queries import get_cycle_number_from_events
+cycle = get_cycle_number_from_events()
 ```
 
 ## Benefits
