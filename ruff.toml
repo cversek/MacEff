@@ -12,7 +12,15 @@
 # generalises to the true positives. So a rule blocks only once its violation
 # count is ZERO, at which point it is a permanent ratchet.
 #
-#   BLOCKING (count 0, enforced repo-wide by .git/hooks/pre-commit)
+#   BLOCKING (count 0; enforced in CI unconditionally, and per checkout by
+#             the pre-commit dispatcher once `macf_tools githooks install`
+#             has been run)
+#
+# The wording matters. `.git/hooks` is PER-CLONE and not versioned, so the
+# earlier claim that this was "enforced repo-wide by .git/hooks/pre-commit"
+# could not have been true of any clone but the author's -- and in fact was
+# true of none, because nothing invoked the gate at all. CI is where the
+# guarantee lives; the hook is for fast feedback. They are not substitutes.
 #     E722   bare except        — policy calls this FORBIDDEN
 #     F821   undefined name     — a NameError waiting for its branch to run
 #

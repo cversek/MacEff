@@ -5,6 +5,7 @@ installed hook; a clean commit must pass; --no-verify must bypass.
 """
 import json
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -38,7 +39,7 @@ def profile(tmp_path):
 def test_install_reports_facts(repo, profile):
     facts = install_hook(repo, profile)
     assert facts["repo"] == str(repo)
-    assert (repo / ".git" / "hooks" / "pre-commit").exists()
+    assert Path(facts["hooklet"]).exists()
     assert (repo / ".git" / "hooks" / "check_context_leakage.py").exists()
 
 
@@ -82,12 +83,21 @@ def test_profile_inside_repo_refused(repo):
         install_hook(repo, inside)
 
 
-def test_foreign_precommit_not_overwritten(repo, profile):
+def test_foreign_precommit_is_adopted_not_destroyed(repo, profile):
+    """This used to RAISE, which was the right posture for a lone installer and
+    the wrong shape for a second one: git offers a single pre-commit file, so
+    refusing meant one of the two gates the framework wants simply did not
+    exist. It now takes a numbered slot and adopts whatever was there."""
     hook = repo / ".git" / "hooks" / "pre-commit"
     hook.parent.mkdir(parents=True, exist_ok=True)
-    hook.write_text("#!/bin/sh\nexit 0\n")
-    with pytest.raises(ValueError, match="different pre-commit hook"):
-        install_hook(repo, profile)
+    hook.write_text("#!/bin/sh\n# a hook the developer wrote\nexit 0\n")
+
+    facts = install_hook(repo, profile)
+
+    adopted = repo / ".git" / "hooks.local.d" / "pre-commit.d" / "00-local-preexisting"
+    assert adopted.is_file(), "the developer's hook was destroyed"
+    assert "a hook the developer wrote" in adopted.read_text()
+    assert facts["adopted"], "adoption happened but was not reported"
 
 
 def test_missing_profile_fails_closed(repo, profile):

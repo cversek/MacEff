@@ -17,18 +17,32 @@ mechanism, the gate is advice.
 tools/lint_staged.sh                   # what the hook should run — try it directly first
 ```
 
-`tools/lint_staged.sh` is versioned on purpose and is designed to be called from a two-line
-shim in `.git/hooks/pre-commit`, so the rule travels between clones and only the trigger is
-local.
+`tools/lint_staged.sh` is versioned on purpose so the rule travels between clones and only the
+trigger is local.
 
-⚠️ **This repository already has a `pre-commit` hook — the OPSEC scanner.** Do not overwrite it;
-it is a security control that keeps private research out of a public repo. Until the framework
-ships a composable installer (#286), add the lint call to the existing hook rather than
-replacing it, and check what is there first:
+**One command installs the trigger:**
 
 ```bash
-cat .git/hooks/pre-commit               # look before you write
+macf_tools githooks install             # then: macf_tools githooks list
 ```
+
+It installs a dispatcher that runs a DIRECTORY rather than owning the single `pre-commit` file,
+because the framework wants two things in that slot — the OPSEC scanner and the style gate — and
+git offers one file. **A hook you already had is ADOPTED, not replaced**: it moves to
+`00-local-preexisting` and keeps running first.
+
+Hooklets come from two places, and the split is deliberate:
+
+| directory | committed? | for |
+|---|---|---|
+| `.githooks/pre-commit.d/` | yes | hooklets that embed nothing private, so they can travel |
+| `.git/hooks.local.d/pre-commit.d/` | never | anything naming a private path, plus adopted hooks |
+
+The OPSEC scanner lives in the second one: it hardcodes the location of a private pattern file,
+and committing that would publish one developer's private vocabulary to everyone who clones.
+
+To skip the whole chain deliberately — a scripted flow, or mid-rebase — use `MACF_SKIP_HOOKS=1`
+rather than reaching for `--no-verify` on everything.
 
 Run the gates manually until your hook is in place:
 

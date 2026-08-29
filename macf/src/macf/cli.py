@@ -11468,6 +11468,21 @@ def _build_parser() -> argparse.ArgumentParser:
                                help="pattern profile JSON (default: agent-home default profile, created if absent)")
     opsec_install.set_defaults(func=cmd_opsec_install_hook)
 
+    # ── githooks ─────────────────────────────────────────────────────────
+    gh_parser = sub.add_parser("githooks", help="composable git hook dispatcher")
+    gh_sub = gh_parser.add_subparsers(dest="githooks_cmd")
+    gh_install = gh_sub.add_parser(
+        "install",
+        help="install the dispatcher, ADOPTING any pre-existing hook rather than replacing it")
+    gh_install.add_argument("repo", nargs="?", default=".",
+                            help="path to the git repository (default: cwd)")
+    gh_install.set_defaults(func=cmd_githooks_install)
+    gh_list = gh_sub.add_parser(
+        "list", help="show every hooklet that would run, in dispatch order")
+    gh_list.add_argument("repo", nargs="?", default=".",
+                         help="path to the git repository (default: cwd)")
+    gh_list.set_defaults(func=cmd_githooks_list)
+
     # ── shell ────────────────────────────────────────────────────────────
     shell_parser = sub.add_parser("shell", help="shell integration (tab completion)")
     shell_sub = shell_parser.add_subparsers(dest="shell_cmd")
@@ -11487,11 +11502,87 @@ def cmd_opsec_install_hook(args: argparse.Namespace) -> int:
     except ValueError as e:
         print(f"❌ {e}")
         return 1
-    print("✅ OPSEC pre-commit gate installed")
-    print(f"   Repo:    {facts['repo']}")
-    print(f"   Hooks:   {facts['hooks_dir']}")
-    print(f"   Profile: {facts['profile']} (edit patterns there; NEVER commit it)")
+    # Report the EFFECT, not the attempt. A message describing the call rather
+    # than the result is how a provisioning command came to say "appended" for
+    # something that replaced -- telling the operator the one outcome they
+    # needed to check for had happened.
+    for line in facts.get("dispatcher_actions", []):
+        print(f"   • {line}")
+    for line in facts.get("adopted", []):
+        print(f"   ⚑ ADOPTED an existing hook, still running: {line}")
+    if not facts.get("dispatcher_actions"):
+        print("   • dispatcher already current — nothing changed")
+
+    print("✅ OPSEC scan installed as pre-commit hooklet 10-opsec")
+    print(f"   Repo:     {facts['repo']}")
+    print(f"   Hooklet:  {facts['hooklet']}")
+    print(f"   Profile:  {facts['profile']} (edit patterns there; NEVER commit it)")
+    print("   The hooklet is per-clone, never committed: it names a private file.")
+    print("   Inspect the chain:  macf_tools opsec hooks")
     print("   Bypass for reviewed disclosures: git commit --no-verify")
+    return 0
+
+
+def cmd_githooks_list(args: argparse.Namespace) -> int:
+    """Show every pre-commit hooklet that would run, in dispatch order."""
+    from pathlib import Path
+    from .githooks import list_hooklets
+
+    try:
+        hooklets = list_hooklets(Path(args.repo))
+    except ValueError as e:
+        print(f"❌ {e}")
+        return 1
+
+    if not hooklets:
+        # Not "nothing to report" — an empty chain means every gate this repo
+        # believes it has is absent, which is worth saying out loud.
+        print("⚠️  No pre-commit hooklets found. NOTHING is gating commits here.")
+        print("   Install:  macf_tools opsec install-hook <repo>")
+        return 0
+
+    print(f"pre-commit chain for {Path(args.repo).resolve()} (runs in this order):")
+    problems = 0
+    for h in hooklets:
+        mark = "✅" if h["executable"] else "❌"
+        if not h["executable"]:
+            problems += 1
+        print(f"  {mark} {h['name']:<24} [{h['source']}]  {h['path']}")
+    if problems:
+        print(f"\n❌ {problems} hooklet(s) are present but NOT EXECUTABLE.")
+        print("   The dispatcher refuses rather than skipping: a gate that is")
+        print("   skipped quietly reports success for a check that never ran.")
+        return 1
+    return 0
+
+
+
+def cmd_githooks_install(args: argparse.Namespace) -> int:
+    """Install the dispatcher, adopting whatever hook was already there."""
+    from pathlib import Path
+    from .githooks import install_dispatcher
+
+    try:
+        facts = install_dispatcher(Path(args.repo))
+    except ValueError as e:
+        print(f"❌ {e}")
+        return 1
+
+    # Effect, not attempt. An empty action list is the honest report for a
+    # re-run, and it is the observable difference between a command that is
+    # idempotent and one that merely does no visible harm.
+    if facts["already_current"]:
+        print("✅ dispatcher already current — nothing changed")
+    else:
+        for line in facts["actions"]:
+            print(f"   • {line}")
+        for line in facts["adopted"]:
+            print(f"   ⚑ ADOPTED an existing hook, still running: {line}")
+        print("✅ dispatcher installed")
+
+    print(f"   Versioned hooklets: {facts['versioned_dir']}/pre-commit.d/  (travels to every clone)")
+    print(f"   Per-clone hooklets: {facts['local_dir']}/pre-commit.d/  (never committed)")
+    print("   Inspect the chain:  macf_tools githooks list")
     return 0
 
 

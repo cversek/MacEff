@@ -203,18 +203,35 @@ def install_hook(repo: Path, profile: Optional[Path] = None) -> Dict[str, Any]:
 
     checker = hooks_dir / "check_context_leakage.py"
     checker.write_text(HOOK_TEMPLATE.format(profile_path=str(profile_path)))
-    shim = hooks_dir / "pre-commit"
-    if shim.exists() and "check_context_leakage" not in shim.read_text():
-        raise ValueError(
-            f"a different pre-commit hook already exists at {shim}; "
-            "chain it manually rather than overwriting"
-        )
-    shim.write_text(SHIM_TEMPLATE)
-    for p in (checker, shim):
-        os.chmod(p, p.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    os.chmod(checker, checker.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    # Install the dispatcher and take a NUMBERED SLOT rather than owning the
+    # single pre-commit file.
+    #
+    # This used to refuse when another hook held the slot, which is the correct
+    # posture for a lone installer and the wrong shape for a second one. The
+    # framework wants two things in pre-commit -- this scan and the style gate --
+    # and git offers one file, so whichever installed second lost and was silent
+    # about it afterwards. Refusing was better than clobbering and still meant
+    # one of the two gates did not exist.
+    #
+    # The hooklet goes in the PER-CLONE directory, never the versioned one: it
+    # hardcodes the path to a private pattern file, and committing that would
+    # publish one developer's private vocabulary to everyone who clones.
+    from .githooks import install_dispatcher
+
+    dispatch = install_dispatcher(repo)
+    local_d = Path(dispatch["local_dir"]) / "pre-commit.d"
+    local_d.mkdir(parents=True, exist_ok=True)
+    hooklet = local_d / "10-opsec"
+    hooklet.write_text(SHIM_TEMPLATE)
+    os.chmod(hooklet, hooklet.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
     return {
         "repo": str(repo),
         "hooks_dir": str(hooks_dir),
         "profile": str(profile_path),
+        "hooklet": str(hooklet),
+        "dispatcher_actions": dispatch["actions"],
+        "adopted": dispatch["adopted"],
     }

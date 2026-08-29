@@ -32,7 +32,21 @@ cd "$REPO_ROOT" || exit 0
 
 # Staged, still-present Python files. ACMR excludes deletions -- linting a file
 # that is being removed would block a commit over code that will not exist.
-mapfile -t FILES < <(git diff --cached --name-only --diff-filter=ACMR -- '*.py')
+# A read loop rather than `mapfile`, which DOES NOT EXIST in bash 3.2 -- the
+# version macOS ships and will keep shipping, and the one this file's shebang
+# names. Under `set -u` the failure was not even a clean error: mapfile printed
+# "command not found", FILES stayed unset, and the very next line aborted on an
+# unbound variable. So on a Mac this gate exited non-zero for a reason having
+# nothing to do with the code being committed, which is the fastest possible
+# route to habitual --no-verify.
+#
+# `${#FILES[@]}` on an empty array is safe on 3.2; only a VALUE expansion
+# `"${FILES[@]}"` aborts there, and the early exit below means the expansions
+# further down are never reached empty.
+FILES=()
+while IFS= read -r f; do
+  [ -n "$f" ] && FILES+=("$f")
+done < <(git diff --cached --name-only --diff-filter=ACMR -- '*.py')
 [ ${#FILES[@]} -eq 0 ] && exit 0
 
 if ! command -v ruff >/dev/null 2>&1; then

@@ -1,0 +1,25 @@
+#!/bin/bash
+# Style gate hooklet — the two-line shim `tools/lint_staged.sh` was written for
+# and never got.
+#
+# Versioned deliberately: it embeds nothing private and nothing machine-specific,
+# so it can travel to every clone. That matters more than convenience here — the
+# ratchet's own configuration claimed for months that it was "enforced repo-wide
+# by .git/hooks/pre-commit" while nothing invoked it, and .git/hooks is per-clone
+# so no such claim could ever have been true. This file makes the claim true for
+# anyone who has run the installer, and CI makes it true unconditionally.
+set -uo pipefail
+
+REPO=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+GATE="$REPO/tools/lint_staged.sh"
+
+if [ ! -f "$GATE" ]; then
+  # Say it rather than skip it. A gate that vanishes silently is the same defect
+  # as a gate that was never wired up: the commit succeeds and the absence is
+  # invisible.
+  echo "[style] $GATE is missing — the style gate did NOT run." >&2
+  echo "[style] Refusing to report success for a check that did not happen." >&2
+  exit 1
+fi
+
+exec "$GATE"
