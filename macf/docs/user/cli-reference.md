@@ -329,22 +329,7 @@ macf_tools hooks install [--local | --global]
 5. `stop` - Session end, DEV_DRV completion
 6. `subagent_stop` - DELEG_DRV tracking
 
-**Related:** `hooks status`, `hooks logs`, `hooks test`
-
-### hooks status
-
-Display current hook states from sidecar files.
-
-**Syntax:**
-```bash
-macf_tools hooks status
-```
-
-**Description:** Shows hook state persistence files used for consciousness awareness.
-
-**Note:** Requires session directory to exist.
-
-**Related:** `hooks install`, `hooks logs`
+**Related:** `hooks logs`, `hooks test`
 
 ### hooks logs
 
@@ -360,7 +345,7 @@ macf_tools hooks logs [--session SESSION]
 
 **Description:** Shows JSONL structured logging from hook executions.
 
-**Related:** `hooks status`, `events query`
+**Related:** `hooks logs`, `events query`
 
 ### hooks test
 
@@ -2262,7 +2247,7 @@ macf_tools hooks install --local
 
 # Verify setup
 macf_tools session info
-macf_tools hooks status
+macf_tools hooks logs
 ```
 
 ### Monitor Session

@@ -217,7 +217,7 @@ Add your synthesized mental map to `~/CLAUDE.md` (or project CLAUDE.md as approp
 ### 6.1 Verify Hook Installation
 
 ```bash
-macf_tools hooks status
+macf_tools hooks logs
 ```
 
 If hooks not installed:

@@ -188,13 +188,12 @@ Each hook is a symlink to a handler module in the `macf.hooks` package. Updates 
 
 ## Verification
 
-### Check Hook Status
+### Inspect Hook Activity
 
 ```bash
-macf_tools hooks status
+macf_tools hooks logs      # hook execution events
+macf_tools events query    # the event log, which is the source of truth
 ```
-
-**Expected output:** Shows current hook states from sidecar files.
 
 **Note:** Requires session directory to exist (hooks create it on first run).
 
@@ -308,13 +307,10 @@ Hooks create sidecar files for consciousness awareness:
 
 ```
 /tmp/macf/{agent_id}/{session_id}/hooks/
-├── sidecar_session_start.json
-├── sidecar_pre_tool_use.json
-├── sidecar_post_tool_use.json
 └── hook_events.log
 ```
 
-**Purpose:** Allow hooks to communicate state and enable `macf_tools hooks status` inspection.
+**Purpose:** A per-session record of hook execution, readable with `macf_tools hooks logs`. State itself lives in the event log, which is the source of truth.
 
 ## Troubleshooting
 
@@ -334,18 +330,6 @@ macf_tools hooks logs
 **Solution:** Reinstall hooks:
 ```bash
 macf_tools hooks install --local
-```
-
-### Session Directory Not Found
-
-**Symptom:** `hooks status` reports "No session directory found".
-
-**Cause:** Session directory created on first hook execution.
-
-**Solution:** Run any command to trigger hooks, then check status:
-```bash
-macf_tools context
-macf_tools hooks status
 ```
 
 ### Compaction Not Detected
