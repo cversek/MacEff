@@ -103,6 +103,14 @@ Agent behavior is governed by multiple **simultaneously active** conditions — 
 - Why is habituation the budget a nag spends?
 - What should be done about a host's reminders for a capability the framework supersedes?
 
+**14 Modes and Subagents**
+- Which modes apply to a subagent, and which belong to the primary alone?
+- Why is reading the primary's modes from inside a delegation misleading rather than merely useless?
+- Does a subagent declare a work mode, and does the recommender run for it?
+- What does a subagent consult in place of the mode set?
+
+=== CEP_NAV_BOUNDARY ===
+
 ---
 
 ## 1. What Are Modes?
@@ -701,6 +709,53 @@ Document the mechanism when you find it. A suppression lever discovered and not 
 - **Notification spam in QUIET_MODE**: Sending messages when QUIET_MODE is active. Silence is respectful.
 - **Ignoring LOW_CONTEXT**: Continuing normal work at CL5 without closeout. LOW_CONTEXT is urgency.
 - **Fighting the recommender**: Always picking the highest-probability skill. The Monte Carlo "spice" exists to encourage exploration.
+
+---
+
+## 14. Modes and Subagents
+
+A subagent is not a small primary. Most of the operational modes describe a
+relationship between the primary and its operator, and a subagent stands outside
+that relationship entirely.
+
+**The mechanical fact that makes this more than a definitional point:** a
+subagent runs inside the primary's session and resolves the same session id, so
+`mode get` inside a delegation returns the **primary's** modes. Reading them is
+therefore not merely uninformative — it is *misleading*, because the values are
+real and belong to someone else.
+
+| Mode | Applies to a subagent? |
+|------|----------------------|
+| **AUTO_MODE** 🤖 | **No — the primary's.** It records that the operator authorised *the primary* to act autonomously. A subagent that reads it sees a true value about a different agent and can mistake it for a licence it was never given. |
+| **USER_IDLE** 😴 | **No.** It describes an operator the subagent has no channel to; user communication is not a subagent's to do. Nothing about its behaviour would change if it knew. |
+| **USER_REMOTE** 📡 | **The hazard applies; the meaning does not.** "Talk to them on Telegram" is not available to a subagent. "Do not invoke a tool that blocks on CLI input" applies with *more* force: a subagent that hangs on a permission prompt hangs the primary's session too, and the primary cannot see the prompt to answer it. |
+| **QUIET_MODE** 🔕 | **No,** with the same caveat: it suppresses notifications a subagent does not send, and defers questions a subagent should not be asking. |
+| **LOW_CONTEXT** 🪫 | **Yes, directly.** A subagent has its own context window and its own edge. This is the one operational mode it computes about *itself*, and the one it must act on without consulting anyone. |
+
+### Work modes inside a delegation
+
+A delegation arrives with its purpose already fixed by the delegating agent. The
+subagent does not declare a work mode, and **the recommender does not run for
+it** — gate points fire in the Stop hook, and a subagent terminates through
+SubagentStop, which has no recommender.
+
+This is worth stating rather than leaving to inference, because the absence looks
+like an oversight from inside a subagent that knows the recommender exists. It is
+deliberate. Recommending a mode transition to an agent whose purpose is fixed and
+which is about to terminate would be advice it cannot take.
+
+### What a subagent should do instead
+
+Read the delegation brief. It carries the authorisation, the scope, and the
+purpose that the mode set carries for a primary. Where a brief is silent, the
+answer is in policy or in the parent's instruction — not in a dashboard reading
+that belongs to another agent.
+
+**The reason this section exists in a policy rather than in a preamble's
+phrasing:** an agent-facing block that listed five modes a subagent can neither
+read nor act on would be worse than no block at all. An instrument that cannot be
+acted on teaches its reader to discount instruments, and the dashboard is the one
+thing the framework most needs an agent to keep trusting.
 
 ---
 
