@@ -6,7 +6,7 @@ PORT     ?= 2222
 KEYS_DIR ?= keys
 PROJ     ?= demo
 
-.PHONY: help init build build-deploy up logs down mirror mirror-watch ssh-pa ssh-admin sa-test claude claude-doctor test
+.PHONY: help init build build-deploy up logs down mirror mirror-watch ssh-pa ssh-admin sa-test claude claude-doctor test test-live
 
 # Forward everything after the first goal as ARGS (and ignore a literal --)
 RAW_ARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
@@ -29,7 +29,8 @@ help:
 	@echo "  make sa-test       - run a small SA job from the PA"
 	@echo "  make claude        - launch Claude in /shared_workspace/\$(PROJ) (args forwarded)"
 	@echo "  make claude-doctor - run 'claude doctor' inside the container"
-	@echo "  make test            - run pytest suite (macf/tests/)"
+	@echo "  make test            - run the hermetic pytest suite (macf/tests/, excludes -m live)"
+	@echo "  make test-live       - run the live-external-state tests (macf/tests/, -m live: needs tmux/systemd/claude)"
 	@echo "  make policy-sync     - sync framework/policies/<set> (default: base) into container & link current"
 	@echo "  make policy-sync-SET - sync framework/policies/SET (e.g., policy-sync-base)"
 	@echo "  make template-sync   - sync framework/templates/ into container"
@@ -90,7 +91,10 @@ init:
 	maceff_tools/maceff-init
 
 test:
-	pytest macf/tests/ -x -q
+	pytest macf/tests/ -x -q -m "not live"
+
+test-live:
+	pytest macf/tests/ -x -q -m "live"
 
 build-deploy:
 	@echo "Building deployment image (framework baked in)..."
