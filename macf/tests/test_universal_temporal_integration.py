@@ -230,7 +230,8 @@ class TestDELEGDRVLifecycle:
         start_deleg_drv(session_id, agent_id)
         time.sleep(0.1)  # 100ms duration
 
-        success, duration = complete_deleg_drv(session_id, agent_id)
+        result = complete_deleg_drv(session_id, agent_id)
+        success, duration = result.success, result.duration
 
         assert success is True
         assert duration >= 0.1  # At least 100ms
@@ -240,7 +241,8 @@ class TestDELEGDRVLifecycle:
         session_id = "test_session_deleg3"
         agent_id = "test_agent"
 
-        success, duration = complete_deleg_drv(session_id, agent_id)
+        result = complete_deleg_drv(session_id, agent_id)
+        success, duration = result.success, result.duration
 
         assert success is False
         assert duration == 0.0
@@ -400,7 +402,8 @@ class TestCrossComponentIntegration:
         time.sleep(0.1)
 
         # Complete DELEG_DRV
-        success, duration = complete_deleg_drv(session_id, agent_id)
+        result = complete_deleg_drv(session_id, agent_id)
+        success, duration = result.success, result.duration
         assert success is True
         assert duration >= 0.1
 

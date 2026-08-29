@@ -193,7 +193,13 @@ def test_events_history_shows_recent_events(cli_env):
 
     # Verify chronological ordering (most recent first)
     # Latest event should appear before earlier events
-    assert output.index("172") < output.index("170")  # Cycle 172 before 170
+    # Match the rendered breadcrumb form, not bare digits. "170" and "172" are
+    # three-character needles searched in a blob that also carries timestamps,
+    # session ids and git hashes, so a bare index() can match a digit run that
+    # has nothing to do with a cycle -- and then reports a REVERSED ORDERING
+    # that never happened. c_NNN appears only where a cycle is named.
+    assert output.index("c_172") < output.index("c_170"), \
+        "events should render most-recent-first"
 
 
 # ============================================================================

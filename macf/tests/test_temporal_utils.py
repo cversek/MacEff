@@ -7,12 +7,7 @@ skip exhaustive edge cases.
 
 import pytest
 import time
-from pathlib import Path
-import sys
 import os
-
-# Add macf to path
-sys.path.insert(0, str(Path(__file__).parent.parent / "tools" / "src"))
 
 from macf.utils import (
     get_temporal_context,
