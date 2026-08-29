@@ -95,7 +95,7 @@ Complete work-tracking replacement for Claude Code's native Task tools with MTMD
 - **7 task types**: `mission` (🗺️), `experiment` (🧪), `detour` (↩️), `phase` (📋), `bug` (🐛), `deleg` (📜), `task` (🔧)
 - **Lifecycle commands**: `task start`, `task pause`, `task complete --report`
 - **Hierarchy visualization**: `task tree` with visual parent-child relationships
-- **Archive/Restore**: Disk persistence with `task archive` and `task restore`
+- **Declutter**: `task hide-completed` / `task unhide-all` dot-prefix completed tasks out of Claude Code's scanner without touching the underlying files (the earlier `task archive`/`task restore` pair is retired)
 - **Grant-based protection**: Exact set-matching authorization for destructive operations
 
 **MTMD (MacfTaskMetaData)**:
@@ -123,10 +123,10 @@ Immutable append-only event log as sole source of truth.
 - DEV_DRV (Development Drive) and DELEG_DRV (Delegation Drive) tracking
 - `events gaps` - Crash detection via timing analysis
 
-**Hook Ecosystem** (10 Hooks):
-- `SessionStart`, `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`, `SubagentStop`
+**Hook Ecosystem** (11 Hooks):
+- `SessionStart`, `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`, `SubagentStart`, `SubagentStop`
 - `PreCompact`, `SessionEnd`, `Notification`, `PermissionRequest`
-- Universal temporal awareness with CLUAC percentage display
+- Universal temporal awareness with CL (Context Left) percentage display
 - Breadcrumb injection for forensic tracking
 
 **Consciousness Infrastructure**:
@@ -385,7 +385,7 @@ Alpha testers should consult the **production documentation** for guidance on:
 **Known issues**:
 - **SessionStart hook output not pretty-printing**: Displays as raw text/escaped format in UI (functional but not visually polished—fix in progress)
 - SessionStart hook can take 25-50ms on cold start (acceptable, but noticeable)
-- Project state initialization on first run defaults to cycle 1 (manually editable if needed)
+- Cycle number is reconstructed from the event log (not a mutable state file); on first run with no compaction events yet, it starts at 1
 - JOTEWR/CCP/DEV_DRV terminology requires learning curve (production docs explain conventions)
 
 **Not yet implemented**:
@@ -394,7 +394,7 @@ Alpha testers should consult the **production documentation** for guidance on:
 - Multi-agent consciousness networks (future phase)
 - Enhanced temporal reasoning (work week inference, time-of-day state detection)
 
-Alpha testers should expect evolving APIs, incomplete documentation, and the need to manually manage state files in some scenarios. **Bug reports and experience reports are highly valued**—please file issues at the GitHub repository.
+Alpha testers should expect evolving APIs and incomplete documentation. **Bug reports and experience reports are highly valued**—please file issues at the GitHub repository.
 
 ---
 
