@@ -24,7 +24,10 @@ infinite loop with a supervisor that gives up on the first hiccup.
 
 import json
 import os
+import queue
 import subprocess
+import threading
+import time
 import sys
 import textwrap
 
@@ -64,18 +67,75 @@ class TestUnlaunchableReason:
         assert _unlaunchable_reason([]) is not None
 
 
-def _run_supervisor(tmp_path, name, target, delay=1, timeout=20):
-    """Run a real supervisor against an isolated registry; return (rc, output)."""
+def _run_supervisor(tmp_path, name, target, delay=1, timeout=20, until=None):
+    """Run a real supervisor against an isolated registry; return (rc, output).
+
+    ``until`` is a predicate over the output so far. When it is satisfied the
+    supervisor is stopped immediately, and the wall clock stops deciding the
+    result.
+
+    Why that matters: a supervisor under test never exits on its own, so the
+    old version always waited out the full timeout and a test asserting "at
+    least N restarts" was really asserting "the machine managed N iterations in
+    T seconds". That is a race, not a property, and it duly failed 3 times in 12
+    observations while being unreproducible on demand. Waiting for the CONDITION
+    removes the race rather than making it less likely; the timeout survives as
+    the failure path, not the success path.
+    """
     env = {**os.environ, "XDG_RUNTIME_DIR": str(tmp_path)}
-    try:
-        r = subprocess.run(
-            [sys.executable, "-m", "macf.supervisor", "_run_loop",
-             "--name", name, "--delay", str(delay), "--", target],
-            env=env, capture_output=True, text=True, timeout=timeout)
-        return r.returncode, r.stdout + r.stderr
-    except subprocess.TimeoutExpired as e:
-        out = (e.stdout or b"") + (e.stderr or b"")
-        return None, out.decode(errors="replace")
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "macf.supervisor", "_run_loop",
+         "--name", name, "--delay", str(delay), "--", target],
+        env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+    lines, q = [], queue.Queue()
+
+    def _pump():
+        for line in proc.stdout:
+            q.put(line)
+        q.put(None)
+
+    threading.Thread(target=_pump, daemon=True).start()
+
+    deadline = time.monotonic() + timeout
+    satisfied = False
+    while time.monotonic() < deadline:
+        try:
+            line = q.get(timeout=0.1)
+        except queue.Empty:
+            if proc.poll() is not None and q.empty():
+                break
+            continue
+        if line is None:
+            break
+        lines.append(line)
+        if until is not None and until("".join(lines)):
+            satisfied = True
+            break
+
+    if proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+
+    while True:
+        try:
+            line = q.get_nowait()
+        except queue.Empty:
+            break
+        if line is None:
+            break
+        lines.append(line)
+
+    output = "".join(lines)
+    # A supervisor stopped because the condition was met has no meaningful
+    # return code -- it was killed mid-supervision. None says that, rather than
+    # handing back a signal number a caller might read as a verdict.
+    rc = None if (satisfied or proc.returncode is not None and proc.returncode < 0) else proc.returncode
+    return rc, output
 
 
 def _registry(tmp_path, name):
@@ -131,8 +191,20 @@ class TestSupervisionStillWorks:
             #!/bin/bash
             exit 1
             """)
-        rc, out = _run_supervisor(tmp_path, "t", crasher, delay=1, timeout=10)
-        assert out.count("Restart #") >= 2, "supervision must survive a crashing child"
+        rc, out = _run_supervisor(
+            tmp_path, "t", crasher, delay=1, timeout=30,
+            until=lambda text: text.count("Restart #") >= 2,
+        )
+        assert out.count("Restart #") >= 2, (
+            "supervision must survive a crashing child.\n"
+            "--- captured at the moment of failure, so this is diagnosable ---\n"
+            f"  restarts seen : {out.count('Restart #')}\n"
+            f"  returncode    : {rc}\n"
+            f"  full output   : {out!r}\n"
+            "The runner now stops as soon as the condition is met, so reaching\n"
+            "here means the restarts genuinely did not happen within 30s rather\n"
+            "than that the machine was slow."
+        )
         assert "FATAL" not in out
 
     def test_exit_127_from_a_long_lived_child_is_not_treated_as_never_launched(self, tmp_path):
