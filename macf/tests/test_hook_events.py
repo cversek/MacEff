@@ -246,14 +246,25 @@ def test_breadcrumbs_valid(temp_log_file, temp_agent_state, monkeypatch):
         assert "git_hash" in parsed
         assert "timestamp" in parsed
 
-        # Session ID should be shortened (8 chars)
-        assert len(parsed["session_id"]) == 8
+        # Session ID is an 8-char prefix, OR the documented sentinel when no
+        # session can be resolved -- breadcrumbs.py: `session_id[:8] if
+        # session_id else "unknown"`. Asserting 8 encoded only the first half of
+        # that contract, so this passed on any machine with a live session and
+        # failed in CI, where there is none. "unknown" is seven characters, so
+        # the failure read as `assert 7 == 8` and said nothing about sessions.
+        assert (
+            parsed["session_id"] == "unknown" or len(parsed["session_id"]) == 8
+        ), f"unexpected session_id in breadcrumb: {parsed['session_id']!r}"
 
         # Cycle should be a number
         assert isinstance(parsed["cycle"], int)
 
-        # Git hash should be shortened (7 chars)
-        assert len(parsed["git_hash"]) == 7
+        # Same shape, latent rather than observed: parse_breadcrumb documents
+        # git_hash as Optional and yields None for a missing or 'none' value, so
+        # len() here would raise TypeError outside a git checkout. CI happens to
+        # have one, which is why this has never fired.
+        assert parsed["git_hash"] is None or len(parsed["git_hash"]) == 7, \
+            f"unexpected git_hash in breadcrumb: {parsed['git_hash']!r}"
 
 
 def test_hook_input_preserved(temp_log_file, temp_agent_state, monkeypatch):
