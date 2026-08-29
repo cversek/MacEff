@@ -307,8 +307,6 @@ macf_tools hooks test
 # View hook execution logs
 macf_tools hooks logs
 
-# Check hook states
-macf_tools hooks status
 ```
 
 ### Architecture Principles
@@ -332,7 +330,6 @@ macf_tools hooks status
 ├── hooks/
 │   ├── hook_events.log            # JSONL structured logging
 │   ├── session_start.log          # Python logger output
-│   └── sidecar_*.json             # Hook states
 ├── dev_scripts/                    # Session-scoped temporary scripts
 └── logs/                           # General session logging
 ```

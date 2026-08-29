@@ -1194,43 +1194,6 @@ def cmd_hook_logs(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_hook_status(args: argparse.Namespace) -> int:
-    """Display current hook sidecar states."""
-    from .hooks.sidecar import read_sidecar
-
-    # Get session_id
-    session_id = get_current_session_id()
-
-    # Get agent_id
-    config = ConsciousnessConfig()
-    agent_id = config.agent_id
-
-    # Get hooks directory using unified utils
-    hooks_dir = get_hooks_dir(session_id, create=False)
-    if not hooks_dir:
-        print(f"No session directory found for: {session_id}")
-        return 1
-
-    print(f"Hook states for session {session_id} (agent: {agent_id}):\n")
-
-    # Find all sidecar files
-    sidecar_files = list(hooks_dir.glob("sidecar_*.json"))
-
-    if not sidecar_files:
-        print("No hook states recorded yet")
-        return 0
-
-    for sidecar_file in sidecar_files:
-        hook_name = sidecar_file.stem.replace("sidecar_", "")
-        state = read_sidecar(hook_name, session_id)
-
-        print(f"Hook: {hook_name}")
-        print(json.dumps(state, indent=2))
-        print()
-
-    return 0
-
-
 def cmd_config_init(args: argparse.Namespace) -> int:
     """Initialize .macf/config.json with interactive prompts."""
     config_dir = Path.cwd() / '.macf'
@@ -1262,10 +1225,6 @@ def cmd_config_init(args: argparse.Namespace) -> int:
             "enabled": True,
             "level": "INFO",
             "console_output": False
-        },
-        "hooks": {
-            "capture_output": True,
-            "sidecar_enabled": True
         }
     }
 
@@ -10181,7 +10140,6 @@ def _build_parser() -> argparse.ArgumentParser:
     logs_parser.add_argument("--session", help="specific session ID (default: current)")
     logs_parser.set_defaults(func=cmd_hook_logs)
 
-    hook_sub.add_parser("status", help="display current hook states").set_defaults(func=cmd_hook_status)
 
     # Framework commands (unified installation of hooks, commands, skills)
     framework_parser = sub.add_parser("framework", help="framework artifact management")
