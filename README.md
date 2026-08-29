@@ -5,11 +5,29 @@ things that normally break it: a context window that fills up, a summarisation
 pass that discards most of the conversation, a session that restarts, a
 delegation that returns and remembers nothing.
 
-It is a Python package, `macf_tools`, plus a set of lifecycle hooks and a body of
-policies the agent reads on demand. It runs on a host with no container, and
-works with Claude Code today.
-
 **Alpha.** APIs move. Expect rough edges and file issues.
+
+## Two names, one system
+
+The repository is **MacEff** — *Multi-agent Containerized Environment for
+frameworks* — and it contains two layers whose names differ by one letter and
+are routinely confused.
+
+**MACF**, *Multi-Agent Coordination Framework*, is the portable Python package:
+`macf_tools`, the lifecycle hooks, and the policy corpus. It depends on no
+container and runs anywhere an agent runs — on a host, in someone else's Docker
+image, inside any project.
+
+**MacEff** proper is one deployment built on MACF: Docker containers with an
+isolated home per Primary Agent, SSH access for agent sessions, a shared
+workspace, and volume management for the artifacts agents write.
+
+MACF is the library; MacEff is an implementation that uses it.
+
+That distinction decides which half of this repository you want. Everything below
+is MACF on a host, which needs no container and is where most people should
+start. The container environment is in
+[docs/container-setup.md](docs/container-setup.md).
 
 ## What problem it actually solves
 
