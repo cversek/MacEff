@@ -91,14 +91,17 @@ needs_systemd = pytest.mark.skipif(
 
 
 class TestUnitIsWellFormed:
+    @pytest.mark.live
     @needs_systemd
     def test_rendered_unit_passes_systemds_own_parser(self, tmp_path):
         assert _verify(render_unit(_real_start(tmp_path)), tmp_path) == ""
 
+    @pytest.mark.live
     @needs_systemd
     def test_rendered_unit_without_proxy_also_passes(self, tmp_path):
         assert _verify(render_unit(_real_start(tmp_path), attach_proxy=False), tmp_path) == ""
 
+    @pytest.mark.live
     @needs_systemd
     def test_the_oracle_can_actually_fail(self, tmp_path):
         """Negative control on the oracle itself.
@@ -111,6 +114,7 @@ class TestUnitIsWellFormed:
         broken = render_unit(_real_start(tmp_path)).replace("ExecStart=", "ExecStartt=")
         assert "Unknown key" in _verify(broken, tmp_path)
 
+    @pytest.mark.live
     @needs_systemd
     def test_the_oracle_notices_an_exec_start_that_cannot_run(self, tmp_path):
         """Second negative control, and the one that made this file honest.
@@ -343,6 +347,7 @@ class TestChildEntrypoint:
 needs_tmux = pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux not available")
 
 
+@pytest.mark.live
 @needs_tmux
 class TestStartScriptBehaviour:
     """Run the rendered script rather than only reading it.
@@ -672,6 +677,7 @@ class TestWatchdogIsOptInAndSafe:
         assert f"Unit=cc-harness-{SYNTH.agent}-watch.service" in timer
         assert "OnUnitActiveSec" in timer
 
+    @pytest.mark.live
     @needs_systemd
     def test_both_units_pass_systemds_own_parser(self, tmp_path):
         from dataclasses import replace

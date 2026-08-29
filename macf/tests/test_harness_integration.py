@@ -142,6 +142,7 @@ class TestTheChildBuildsTheArgvItMeansTo:
         assert "starting:" in p.log_path.read_text()
 
 
+@pytest.mark.live
 @pytest.mark.skipif(shutil.which("claude") is None, reason="claude client not installed")
 class TestTheRealClientAcceptsWhatWeGenerate:
     """The stub proves what argv we BUILD; only the real binary proves it PARSES.

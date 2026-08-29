@@ -62,6 +62,7 @@ class TestSubstitution:
         assert session_identifier(CARD) == session_identifier(CARD)
 
 
+@pytest.mark.live
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux not available")
 class TestTheSubstitutionIsActuallyNecessary:
     """Negative controls. Without these the rules above are just assertions —
