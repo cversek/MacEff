@@ -61,7 +61,9 @@ def temp_agent_state(tmp_path):
 def test_session_start_appends_event(temp_log_file, temp_agent_state, monkeypatch):
     """SessionStart hook returns valid output structure.
 
-    Note: testing=True prevents side effects (event appending) per safe-by-default.
+    Note: isolation comes from the autouse conftest fixtures, not from any
+    argument at the call site. The testing= parameter this note used to
+    describe was removed in v0.3.0.
     This test verifies return value structure, not event log content.
     Event appending is verified in agent_events_log tests.
     """
@@ -84,9 +86,9 @@ def test_session_start_appends_event(temp_log_file, temp_agent_state, monkeypatc
     agent_state["last_session_id"] = test_session_id
     agent_state_file.write_text(json.dumps(agent_state, indent=2))
 
-    # Run SessionStart hook with testing=True (safe-by-default, no side effects)
+    # Run SessionStart hook. Events land in the isolated log from conftest.
     stdin_data = {"source": "normal"}
-    result = session_start_run(json.dumps(stdin_data), testing=True)
+    result = session_start_run(json.dumps(stdin_data))
 
     # Verify hook returned successfully with valid structure
     assert result["continue"] is True
@@ -117,11 +119,11 @@ def test_dev_drv_lifecycle(temp_log_file, temp_agent_state, monkeypatch):
 
     # Start DEV_DRV
     stdin_data = {"session_id": "test-session"}
-    result = user_prompt_submit_run(json.dumps(stdin_data), testing=True)
+    result = user_prompt_submit_run(json.dumps(stdin_data))
     assert result["continue"] is True
 
     # End DEV_DRV
-    result = stop_run("", testing=True)
+    result = stop_run("")
     assert result["continue"] is True
 
     # Read events
@@ -156,11 +158,11 @@ def test_tool_calls_logged(temp_log_file, temp_agent_state, monkeypatch):
     }
 
     # Pre-tool
-    result = pre_tool_use_run(json.dumps(stdin_data), testing=True)
+    result = pre_tool_use_run(json.dumps(stdin_data))
     assert result["continue"] is True
 
     # Post-tool
-    result = post_tool_use_run(json.dumps(stdin_data), testing=True)
+    result = post_tool_use_run(json.dumps(stdin_data))
     assert result["continue"] is True
 
     # Read events
@@ -225,9 +227,9 @@ def test_breadcrumbs_valid(temp_log_file, temp_agent_state, monkeypatch):
     )
 
     # Generate some events
-    session_start_run("{}", testing=True)
-    pre_tool_use_run(json.dumps({"tool_name": "Read", "tool_input": {}}), testing=True)
-    post_tool_use_run(json.dumps({"tool_name": "Read", "tool_input": {}}), testing=True)
+    session_start_run("{}")
+    pre_tool_use_run(json.dumps({"tool_name": "Read", "tool_input": {}}))
+    post_tool_use_run(json.dumps({"tool_name": "Read", "tool_input": {}}))
 
     # Read all events
     events = list(read_events(limit=None))
@@ -287,7 +289,7 @@ def test_hook_input_preserved(temp_log_file, temp_agent_state, monkeypatch):
     }
 
     # Run hook
-    pre_tool_use_run(json.dumps(stdin_data), testing=True)
+    pre_tool_use_run(json.dumps(stdin_data))
 
     # Read events
     events = list(read_events(limit=None))
