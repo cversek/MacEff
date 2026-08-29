@@ -263,6 +263,53 @@ def _sanitize_tmux_name(name: str) -> str:
     return cleaned or "session"
 
 
+# `launch` DECLINED to act — it did not start anything, and it is not reporting
+# a process that ran and failed. Distinct from 1 on purpose: the old code
+# returned 1 while PRINTING the command a human could run, so a wrapper could
+# not tell "the supervisor died" from "here is what you could type". A script
+# that cannot make that distinction reports a started agent and starts none,
+# which is exactly how this was found. 3 is the code the generated
+# maceff_harness_start already uses for "a decision for a human, not a retry".
+EXIT_DECLINED = 3
+
+
+def _launch_detached_tmux(tmux_session: str, cmd: list) -> bool:
+    """Start the supervisor in a DETACHED tmux session. No emulator required.
+
+    Idempotent by asking `has-session` before creating, then `new-session -d`.
+    **tmux is the terminal here.** The desktop emulator was only ever there to
+    give a human a window, and on a headless host there is no human at the
+    moment of launch — only one later, who attaches.
+
+    Returns True only if tmux reports success. The caller must not treat a
+    failure here as "started", which is the bug this whole change is about.
+    """
+    if not shutil.which("tmux"):
+        return False
+    # ASK FIRST, THEN CREATE -- rather than `new-session -A -d`, which looks
+    # like "create-or-attach, detached" and is not. MEASURED: with `-A` and an
+    # existing session tmux performs the ATTACH, and `-d` does not suppress it,
+    # so on a headless host the second call dies with "open terminal failed:
+    # not a terminal". The first version of this function used that form and
+    # its own idempotency test caught it on the first run.
+    #
+    # `=name` is exact-match: without it tmux prefix-matches, so "manny" would
+    # silently satisfy a check for a session named "manny1".
+    if subprocess.run(["tmux", "has-session", "-t", f"={tmux_session}"],
+                      capture_output=True).returncode == 0:
+        return True
+    proc = subprocess.run(
+        ["tmux", "new-session", "-d", "-s", tmux_session,
+         _shell_command_string(cmd)],
+        capture_output=True, text=True)
+    if proc.returncode != 0:
+        err = (proc.stderr or "").strip()
+        print(f"[auto-restart] detached tmux launch failed: {err or proc.returncode}",
+              file=sys.stderr)
+        return False
+    return True
+
+
 def _tmux_wrap(tmux_session: str, cmd: list) -> list:
     """Wrap *cmd* (an argv list) so it runs inside a named tmux session.
 
@@ -533,6 +580,46 @@ def send_keys(target: str, keys: list, enter: bool = True) -> int:
     return rc
 
 
+def _report_launch(name, cmd_args, session_id, short_id, tmux_session, where):
+    """Report a launch that ALREADY HAPPENED, naming how it is hosted.
+
+    Shared by the terminal and detached paths so the two cannot drift into
+    describing themselves differently — and so `where` stays honest: a detached
+    session reported as "in new terminal" would send the reader looking for a
+    window that does not exist.
+    """
+    if REGISTRY_DIR.exists():
+        entries = sorted(REGISTRY_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if entries:
+            data = json.loads(entries[0].read_text())
+            pid = data.get("supervisor_pid", "?")
+            print(f"[auto-restart] Launched '{name}' in {where} (supervisor PID: {pid})")
+            print(f"[auto-restart] Command: {' '.join(cmd_args)}")
+            if session_id:
+                print(f"[auto-restart] Session id: {session_id} (breadcrumb s_{short_id})")
+            if tmux_session:
+                print(f"[auto-restart] tmux session: {tmux_session}")
+                print(f"[auto-restart] Attach:     tmux attach -t ={tmux_session}")
+                print(f"[auto-restart] Send input: macf_tools auto-restart send-keys {name} -- <text>")
+            print(f"[auto-restart] Manage: macf_tools auto-restart list")
+            # 0, NOT the pid. This return becomes the process exit status, and
+            # a successful launch was reporting the supervisor's pid as its
+            # exit code -- observed in a headless container as `EXIT: 56` after
+            # a launch that demonstrably worked. Every caller testing `if
+            # macf_tools auto-restart launch ...` read that as failure, which
+            # defeats the whole point of a distinguishable decline: a wrapper
+            # could not tell started from declined because SUCCESS was already
+            # non-zero. Worse silently: exit statuses are masked to 8 bits, so
+            # a pid of 256 or 512 would have reported success.
+            #
+            # The pid is still reported, on the line above, where it is
+            # information rather than a status.
+            return 0
+
+    print(f"[auto-restart] Launched '{name}' in {where}")
+    return 0
+
+
 def launch_in_terminal(cmd_args: list, name: str = "",
                        restart_delay: int = 5,
                        terminal: str = "auto",
@@ -540,7 +627,8 @@ def launch_in_terminal(cmd_args: list, name: str = "",
                        session_spec: str = None,
                        post_start_keys: str = None,
                        post_start_delay: int = 18,
-                       force: bool = False) -> int:
+                       force: bool = False,
+                       detach: bool = False) -> int:
     """Launch a supervised process in a new terminal window.
 
     Args:
@@ -638,6 +726,23 @@ def launch_in_terminal(cmd_args: list, name: str = "",
     # shell-safe string and then escape it for the AppleScript literal.
     escaped_cmd = _applescript_quote(_shell_command_string(launch_cmd))
 
+    # A DETACHED launch is decided BEFORE the platform dispatch, because the
+    # emulator search below is precisely what fails on a headless host. Nothing
+    # here is platform-specific: tmux is POSIX and hosts the pane itself.
+    if detach:
+        if not tmux_session:
+            print("[auto-restart] --detach needs a tmux session to host the "
+                  "supervisor, and tmux is unavailable or --no-tmux was given.",
+                  file=sys.stderr)
+            print("[auto-restart] Nothing was started.", file=sys.stderr)
+            return EXIT_DECLINED
+        if not _launch_detached_tmux(tmux_session, supervisor_cmd):
+            print("[auto-restart] Nothing was started.", file=sys.stderr)
+            return EXIT_DECLINED
+        time.sleep(1.5)
+        return _report_launch(name, cmd_args, session_id, short_id, tmux_session,
+                              where="detached tmux session")
+
     system = platform.system()
     if system == "Darwin":
         # Resolve terminal choice
@@ -683,31 +788,32 @@ def launch_in_terminal(cmd_args: list, name: str = "",
                 time.sleep(1.5)
                 break
         else:
-            print("No terminal emulator found. Run directly:", file=sys.stderr)
+            # NO EMULATOR. This branch previously printed the command it could
+            # not run and returned 1 -- output that reads exactly like success
+            # once piped through a wrapper, which is how a Makefile came to
+            # report two agents started while starting none.
+            #
+            # Falling back to detached is safe to do automatically BECAUSE this
+            # path already failed: no caller that works today can reach it, so
+            # nothing can regress. The behaviour changes only where it was
+            # broken.
+            if tmux_session and _launch_detached_tmux(tmux_session, supervisor_cmd):
+                print("[auto-restart] No terminal emulator (headless host); "
+                      "started DETACHED instead.", file=sys.stderr)
+                time.sleep(1.5)
+                return _report_launch(name, cmd_args, session_id, short_id,
+                                      tmux_session, where="detached tmux session")
+            print("No terminal emulator found, and no tmux to host a detached "
+                  "session. NOTHING WAS STARTED. Run directly:", file=sys.stderr)
             print(f"  {_shell_command_string(launch_cmd)}", file=sys.stderr)
-            return 1
+            return EXIT_DECLINED
     else:
-        print(f"Unsupported platform: {system}", file=sys.stderr)
-        return 1
+        print(f"Unsupported platform: {system}. NOTHING WAS STARTED "
+              f"(--detach works anywhere tmux does).", file=sys.stderr)
+        return EXIT_DECLINED
 
-    # Find the newly created registry entry
-    if REGISTRY_DIR.exists():
-        entries = sorted(REGISTRY_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-        if entries:
-            data = json.loads(entries[0].read_text())
-            pid = data.get("supervisor_pid", "?")
-            print(f"[auto-restart] Launched '{name}' in new terminal (supervisor PID: {pid})")
-            print(f"[auto-restart] Command: {' '.join(cmd_args)}")
-            if session_id:
-                print(f"[auto-restart] Session id: {session_id} (breadcrumb s_{short_id})")
-            if tmux_session:
-                print(f"[auto-restart] tmux session: {tmux_session}")
-                print(f"[auto-restart] Send input: macf_tools auto-restart send-keys {name} -- <text>")
-            print(f"[auto-restart] Manage: macf_tools auto-restart list")
-            return pid
-
-    print(f"[auto-restart] Launched '{name}' in new terminal")
-    return 0
+    return _report_launch(name, cmd_args, session_id, short_id, tmux_session,
+                          where="new terminal")
 
 
 # Shell exit codes that mean the command was never launched. POSIX shells use

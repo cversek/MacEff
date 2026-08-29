@@ -1,6 +1,6 @@
 # PYTHON_ARGCOMPLETE_OK
 # tools/src/maceff/cli.py
-import argparse, json, os, subprocess, sys, glob, platform, socket, time
+import argparse, json, os, shutil, subprocess, sys, glob, platform, socket, time
 from pathlib import Path
 from datetime import datetime, timezone
 try:
@@ -1699,8 +1699,17 @@ def cmd_harness_status(args: argparse.Namespace) -> int:
         print(f"unit:    {unit_path} "
               f"{'(present)' if unit_path.exists() else f'(ABSENT for agent {p.agent})'}")
 
-        active = subprocess.run(["systemctl", "--user", "is-active", p.unit_name],
-                                capture_output=True, text=True).stdout.strip()
+        # A HOST WITH NO INIT SYSTEM IS A SUPPORTED HOST, not an error. This
+        # call used to raise FileNotFoundError straight into the broad handler
+        # below, aborting the whole command -- so on a container the reader
+        # lost the session, owner and proxy lines as well and got an exception
+        # where a status belonged. Whether the unit is manageable says nothing
+        # about whether the session is UP, which is what the command is asked.
+        if shutil.which("systemctl") is None:
+            active = "no init system (systemctl absent) -- unit not managed here"
+        else:
+            active = subprocess.run(["systemctl", "--user", "is-active", p.unit_name],
+                                    capture_output=True, text=True).stdout.strip()
         print(f"active:  {active or 'unknown'}")
 
         # "=" forces an EXACT session match. Without it tmux resolves a target
@@ -9772,7 +9781,8 @@ def _cmd_ar_launch(args):
                               session_spec=getattr(args, 'session_id', None),
                               post_start_keys=getattr(args, 'post_start_keys', None),
                               post_start_delay=getattr(args, 'post_start_delay', 18),
-                              force=getattr(args, 'force', False))
+                              force=getattr(args, 'force', False),
+                              detach=getattr(args, 'detach', False))
 
 def _cmd_ar_list(args=None):
     from .supervisor import list_processes
@@ -11226,7 +11236,7 @@ def _build_parser() -> argparse.ArgumentParser:
     ar_sub = ar_parser.add_subparsers(dest="ar_cmd")
 
     # auto-restart launch
-    ar_launch = ar_sub.add_parser("launch", help="launch supervised process in new terminal")
+    ar_launch = ar_sub.add_parser("launch", help="launch supervised process (terminal window, or --detach for headless)")
     ar_launch.add_argument("--name", "-n", default="", help="display name (default: command basename)")
     ar_launch.add_argument("--delay", "-d", type=int, default=5, help="restart delay in seconds (default: 5)")
     ar_launch.add_argument("--terminal", "-t", default="auto",
@@ -11234,6 +11244,10 @@ def _build_parser() -> argparse.ArgumentParser:
                                     "ptyxis", "kgx", "tilix", "lxterminal", "foot",
                                     "xterm", "konsole", "x-terminal-emulator"],
                            help="terminal app (default: auto-detect)")
+    ar_launch.add_argument("--detach", action="store_true",
+                           help="start in a DETACHED tmux session instead of a terminal window "
+                                "-- the only path that works on a headless host (container, "
+                                "ssh, CI). Attach later with tmux attach.")
     ar_launch.add_argument("--no-tmux", action="store_true",
                            help="do not back the session with tmux (disables send-keys)")
     ar_launch.add_argument("--force", action="store_true",
