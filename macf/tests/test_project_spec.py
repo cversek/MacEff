@@ -3,6 +3,13 @@ Pragmatic tests for project_spec.py Pydantic models.
 
 Tests focus on core validation: valid YAML parsing, required field enforcement,
 type validation, and default values. Does NOT test every permutation.
+
+
+NOTE (#299): a `path=` kwarg was removed from the RepoMount fixtures here.
+It was never a field on the model and nothing in provisioning ever read it --
+repo locations are DERIVED from `name`. It survived because the model ignored
+unknown keys, so these tests documented a field that did not exist and passed
+anyway. Surfaced when the provisioning models moved to extra="forbid".
 """
 
 import pytest
@@ -89,12 +96,10 @@ def test_project_spec_full():
         context="../custom/projects/Orchard_context.md",
         repos=[
             RepoMount(
-                url="git@github.com:user/orchard_analysis.git",
-                path="repos/orchard_analysis"
+                url="git@github.com:user/orchard_analysis.git"
             ),
             RepoMount(
-                url="git@github.com:user/orchard_pipeline.git",
-                path="repos/orchard_pipeline"
+                url="git@github.com:user/orchard_pipeline.git"
             )
         ],
         data_mounts=[
@@ -125,8 +130,7 @@ def test_projects_config_valid():
                 context="../custom/projects/Orchard_context.md",
                 repos=[
                     RepoMount(
-                        url="git@github.com:user/orchard_analysis.git",
-                        path="repos/orchard_analysis"
+                        url="git@github.com:user/orchard_analysis.git"
                     )
                 ]
             ),
@@ -157,8 +161,7 @@ def test_project_spec_missing_context():
         ProjectSpec(
             repos=[
                 RepoMount(
-                    url="git@github.com:user/repo.git",
-                    path="repos/backend"
+                    url="git@github.com:user/repo.git"
                 )
             ]
         )
