@@ -213,9 +213,16 @@ def append_event(
         return False
 
 
+# The event that opens a cycle. A cycle-scoped read stops here, so this is
+# the single place the boundary is named -- a second spelling elsewhere would
+# make some queries stop at a different place than others.
+CYCLE_BOUNDARY_EVENT = "compaction_detected"
+
+
 def read_events(
     limit: Optional[int] = None,
-    reverse: bool = True
+    reverse: bool = True,
+    scope: str = "cycle",
 ) -> Generator[dict, None, None]:
     """
     Read events from log (generator for memory efficiency).
@@ -250,12 +257,21 @@ def read_events(
     cannot fix that — it answers wrongly rather than slowly. The intended remedy
     is to remove the case: cycle-scope every query and have cross-cycle state
     re-assert itself at the boundary, so the worst case is one cycle regardless
-    of log size. See the cycle-scoping issue.
+    of log size.
+
+    That remedy is what ``scope`` implements, and it is the DEFAULT. The other
+    half of it lives in ``cycle_carry`` — without an explicit carry at the
+    boundary, cycle-scoping does not bound the question, it just stops answering
+    it.
 
     Args:
         limit: DEPRECATED — prefer a semantic stop condition. ``None`` (the
             default) streams until the caller breaks.
         reverse: If True, read from end (most recent first)
+        scope: ``"cycle"`` (default) stops at the most recent
+            ``compaction_detected``, inclusive — the boundary event belongs to
+            the cycle it opens. ``"all"`` reads the whole log and must be asked
+            for explicitly, at a site that says why.
 
     Yields:
         Event dictionaries
@@ -275,6 +291,24 @@ def read_events(
             DeprecationWarning,
             stacklevel=2,
         )
+    if scope not in ("cycle", "all"):
+        raise ValueError(
+            f"read_events(scope={scope!r}) — scope must be 'cycle' or 'all'. "
+            "An unrecognised scope silently reading everything is how the "
+            "unbounded case comes back."
+        )
+
+    # A forward CYCLE read is served by materialising the reverse window and
+    # flipping it. That is affordable for exactly the reason the whole design
+    # rests on — a cycle holds finitely many events — and it is why forward
+    # readers get the same bound as reverse ones instead of an exemption. A
+    # forward ALL read still streams; nothing is materialised there.
+    if scope == "cycle" and not reverse:
+        window = list(read_events(limit=limit, reverse=True, scope="cycle"))
+        for event in reversed(window):
+            yield event
+        return
+
     try:
         log_path = get_log_path()
 
@@ -294,15 +328,20 @@ def read_events(
 
             try:
                 event = json.loads(line)
-                yield event
-
-                count += 1
-                if limit is not None and count >= limit:
-                    break
-
             except json.JSONDecodeError:
                 # Skip malformed lines
                 continue
+
+            yield event
+
+            # Yielded BEFORE the break: the boundary opens the cycle it marks,
+            # and callers that read the cycle number read it off this event.
+            if scope == "cycle" and event.get("event") == CYCLE_BOUNDARY_EVENT:
+                break
+
+            count += 1
+            if limit is not None and count >= limit:
+                break
 
     except (OSError, IOError) as e:
         print(f"⚠️ MACF: event log read failed: {e}", file=sys.stderr)
