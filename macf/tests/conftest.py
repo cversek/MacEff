@@ -117,6 +117,34 @@ def isolated_events_log(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def isolated_channel_state(tmp_path, monkeypatch):
+    """Isolate the Telegram channel's state directory for EVERY test.
+
+    Not a hypothetical. `test_harness_integration` launches the REAL client with
+    `--channels plugin:telegram@claude-plugins-official` to prove the argument
+    order parses. That client loads the plugin, which spawns a channel server,
+    which reads `bot.pid` from the state dir it inherits -- the developer's live
+    one -- SIGTERMs the running poller, takes the bot token, and then exits when
+    the 20-second subprocess ends. Net effect: running the test suite silently
+    kills the developer's Telegram for the rest of the session.
+
+    Measured, not theorised: instrumenting the channel server produced
+    `stale_poller_evicted{stale_pid}` followed by `shutdown{reason: SIGTERM}` at
+    the exact second that test began, and `shutdown{reason: stdin-end}` when it
+    ended. A second agent's poller, which sets its own state dir, survived all
+    110 samples -- the control that rules out anything systemic.
+
+    The isolation belongs HERE rather than in that one test because the hazard
+    is not specific to it: any test that spawns a real client inherits this
+    environment. A guard at the boundary catches the next one too.
+    """
+    d = tmp_path / "channel_state" / "telegram"
+    d.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("TELEGRAM_STATE_DIR", str(d))
+    yield d
+
+
+@pytest.fixture(autouse=True)
 def isolated_agent_home(tmp_path, monkeypatch):
     """
     Isolate the agent home so tests can never write into the live agent's
