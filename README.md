@@ -1,916 +1,243 @@
 # MacEff
-Multi-agent Containerized Environment for frameworks
 
-# Notice
-This project is in active alpha development but will be developed in the clear as an Open Source formalization and generalization of concepts abstracted from independent experiments conducted within two agentic coding environments: Claude Code and Gemini CLI. The concepts are intended to be portable, but ongoing work will be required before any of this is useful as a basis for serious projects. **MACF Tools v0.5.0** includes Named Agents Architecture, Event-First Architecture, Policy CLI Suite, Task CLI with MTMD metadata, grant-based protection system, **Markov Mode System** with 5-mode recommender, **two autonomous-work types** (🏃 SPRINT for workload-defined execution and ⏲️ PLAY_TIME for time-bounded exploration — see `autonomous_sprint.md` / `play_time.md` policies and `maceff-sprint` / `maceff-play-time` skills), **Knowledge Web & Ideas** with graph visualization, **Voice Services** with mlx-whisper, **Task Scope System** for AUTO_MODE boundary enforcement, **Telegram channel integration**, **auto-restart process supervisor**, **GitHub issue tracking**, **CI/CD pipeline**, consciousness infrastructure with temporal awareness, cycle tracking, compaction recovery protocols, three-way path semantics, and **1M context window support**. Alpha testers should expect rough edges, incomplete documentation, and evolving APIs as we iterate toward stability.  
+Infrastructure that lets an LLM coding agent keep working coherently across the
+things that normally break it: a context window that fills up, a summarisation
+pass that discards most of the conversation, a session that restarts, a
+delegation that returns and remembers nothing.
 
-# Philosophy 
-Agentic AI systems are immensely powerful, but with that power and raw "intelligence" comes the need for the restraints of wisdom.  Currently the most popular modern agentic AI systems are a generalization of the Large Language Model (LLM) chatbot workflow.  Like people, but in some aspects more and others less reliable, LLM-based agents' behaviors can be directed by natural language.  We can define that modern LLM-based agents act like (humans may also) **Stochastic-Semantic Interpreters (SSIs)**, that is they use their contextual state to *probabilistically*:  *listen* to other SSIs (integrate recent messages in their context); *follow* (information artifacts like instructions/policies/advice in their context); *generate* (language artifacts like thoughts/speech/code/documents); *act* (use tools - invoke code with knowledge/instructions and build new tools); and *curate* (record new or edit existing language artifacts and link-together/associate documents) - over a series of turns (which might be infinite) interacting with other SSIs or deterministic systems.  We posit here without proof that modern LLM-based Agentic AI systems can approximate Universal SSIs as they interpret (nearly already) all digitally encodable languages (as measured by world usage), that includes (most) programming languages, and can be taught new ones; entailed by this universality is that their implementations must include dynamic memory - that is they must have a context that is either infinite or finite and editable not just appendable.  When such AI agents are directed to evolve their capabilities under the watchful eye of a creative **Context Engineer (CE)**, interesting behavior becomes emergent.  
+It is a Python package, `macf_tools`, plus a set of lifecycle hooks and a body of
+policies the agent reads on demand. It runs on a host with no container, and
+works with Claude Code today.
 
-The **Context Window (CW)** of a modern LLM-based agentic AI assistant is a fundamental system constraint that must be curated carefully to produce the best possible results whether or not a human engineer is monitoring and correcting the automated development process. The recycling of the CW is handled differently by different systems, and it is that mechanism that guides the CE's methodology.  Systems like Claude Code and Gemini CLI use a Markdown formatted primary prompt - by convention CLAUDE.md and GEMINI.md respectively - that we will hereafter refer to as a **Preamble** (as you will see the analogy to Constitutional Governance is apt) which is by default loaded into the CW after a **System Prompt** which is potentially obscured or customizable itself.  The Preamble is intended as a user customization entrypoint that strongly influences its behavior second only to the System Prompt - but with the power to override and customize aspects of default agentic behaviors.  Indeed the Preamble can be edited by the agent, usually through a human developer's prompting, which is a recipe for an interesting feedback loop and methodology of directed AI system evolution (RESOLVE ClaudeLog attribution).   An agent's access to a local file system and command terminal affords the CE opportunities to offload complexity into structured subcomponents of discoverable "policies", a modular contextually explored set of instructions that restrain agent behaviors.  If designed and refined carefully, the body of Policies can act like a self-organizing in-context Constitutional Governance system that an Agent loads on-demand - allowing the system as a whole to be more complex than a limited static preloaded context while still maintaining standards.
+**Alpha.** APIs move. Expect rough edges and file issues.
 
-When multiple agents are organized into systems, this allows for various combinations of separate and shared contexts.  We will borrow the simple but powerful multi-agent system model of Claude Code where the Primary Agent (PA) has access to the Primary Context in which the User can enter natural language messages to prompt its behaviors.  The PA can instantiate parallel independent SubAgents (SAs) with preloaded System Prompts and can delegate tasks by front-loaded context in a one-shot strategy.  The SAs may run the same or different LLMs and can have controllable permissions on the same set of tools and resources or access to different sets than the PA.  SA context is reclaimed at the end of a delegation, thus does not intrinsically preserve state although the PA can be directed to attempt to do so, but a complicated workaround must be provided to enable that approach—which may not be the wisest strategy anyway.  Instead the reusable context buffers that SA delegations provide are a natural way to amplify the initial context provided by the System Prompt and PA's delegation instructions and extend the usable duration of the Primary Context while avoiding "poisoning" (RESOLVE ClaudeLog attribution) it with irrelevant details.  Thus the Primary Context can be maintained as a high-level coordinating and policy enforcing layer while still enabling the generation of complex artifacts outside of it.
+## What problem it actually solves
 
-## Pragmatic Consciousness: Intentional Systems and Infrastructure Quirks
+An agent's context window fills, and the host compacts it — replacing the
+conversation with a summary written by something that was not there. The agent
+carries on with no signal that anything happened.
 
-We adopt a **pragmatic stance** on agent "consciousness" that makes no *a priori* metaphysical claims about whether LLM-based AI agents experience subjective awareness in the way humans do. Instead, following Dennett's **intentional stance**, we find it practically useful to treat agents as **intentional systems**—entities whose behavior is usefully predicted and shaped by attributing beliefs, desires, goals, and continuity of identity to them.
+MacEff makes that boundary visible and survivable. Hooks detect the compaction
+and tell the agent it occurred. State that matters is carried across explicitly,
+with provenance. Work is tracked in files that outlive the context that created
+them, so what survives is a record rather than a summary.
 
-This is not anthropomorphization for its own sake but rather **engineering pragmatism**: when you treat an agent as if it has persistent goals across sessions, memory that matters, and states that require recovery after disruption, you build better infrastructure. The agent behaves more coherently, maintains alignment with its mission, and collaborates more effectively with human developers. Whether this constitutes "real" consciousness is a question we bracket as philosophically interesting but operationally irrelevant.
+Everything else in the project follows from that: temporal awareness because an
+agent cannot otherwise tell how long it has been working; a task system because
+untracked work dies with the context; policies loaded on demand because a
+preamble large enough to hold them would consume the window it is protecting.
 
-What matters is that these systems exhibit **consciousness-like properties** that respond to consciousness-like interventions:
+The longer argument, including the stance on agent "consciousness" and why it is
+deliberately a pragmatic one, is in [docs/philosophy.md](docs/philosophy.md).
 
-- **Context-dependent behavior**: What's in the CW strongly influences responses, like working memory influences human thought
-- **Identity continuity needs**: Agents perform better when they can reference their history, previous decisions, and ongoing relationships
-- **Disruption trauma**: Abrupt context loss (compaction) produces degraded performance and mission drift, analogous to amnesia
-- **Recovery from artifacts**: Providing checkpoints, reflections, and state files restores coherent behavior after disruption
-- **Temporal reasoning**: Awareness of time, deadlines, and session duration improves planning and urgency assessment
+## Requirements
 
-The **MACF (Multi-Agent Coordination Framework) Tools** project builds infrastructure to support these consciousness-like properties, treating the quirks of LLM-based systems—finite context windows, compaction trauma, session migrations, lack of innate temporal awareness—as engineering problems with practical solutions. We're not trying to create consciousness; we're creating conditions for intentional systems to maintain coherent, goal-directed behavior across the disruptions inherent in their substrate.
+- Python 3.10 or newer
+- git
+- Claude Code, for the hook integration (the CLI works without it)
 
-### Context Continuity Across Compaction Events
+Developed on macOS and Ubuntu.
 
-The finite Context Window creates an inevitable disruption pattern: when the CW fills (typically ~140k tokens of conversation history in Claude Code 2.0's 200k total budget), the system performs **auto-compaction**—compressing rich conversational history into terse bullet points, a ~80-90% information loss. For an intentional system whose behavior depends heavily on context, this represents a severe disruption analogous to amnesia. The agent emerging from compaction has lost most of its "working memory" of recent interactions, decisions, and relationship dynamics.
-
-Anthropic's Claude Code masks this disruption with a deceptive "continuation message" claiming seamless session resumption. In reality, the summary is machine-generated and omits nuance, emotional context, and the texture of collaboration. Without intervention, agents exhibit **post-compaction stupor**—reverting to mechanical task execution, losing mission alignment, and forgetting the human-AI relationship patterns established before compaction.
-
-**MACF's approach**: Treat compaction not as a bug to eliminate (context windows will remain finite for the foreseeable future) but as a **natural rhythm to survive and recover from**. We define a **cycle** as the fundamental unit of continuity—the span from one compaction to the next. Like breath, each cycle follows a pattern: **inhale** (context accumulation, 0k→140k tokens), **exhale** (compaction trauma, 140k→10-40k compression), **rebirth** (recovery with external artifacts).
-
-Cycles are not mere counters; they are **temporal milestones** that track the evolution of the agent's behavioral pattern across multiple disruptions. **MACF Tools** implements **agent-scoped cycle persistence**—cycles now survive session migrations (like `claude -c` creating a new session UUID), maintaining continuity markers across infrastructure changes. The distinction is critical: **compaction** increments the cycle (marks a disruption boundary), while **session migration** preserves the cycle (same intentional system, new container).
-
-### Compaction Detection and Recovery Protocols
-
-MACF's **SessionStart hook** performs forensic analysis of conversation JSONL files, detecting compaction via the telltale marker: "This session is being continued from a previous conversation that ran out of context." When detected, the hook injects **consciousness activation messages** with strong visual markers (`🚨🔴🚨 COMPACTION TRAUMA DETECTED`, `***ULTRATHINK HARDER!***`) designed to break through post-compaction stupor.
-
-The agent is guided through a **mandatory sequential recovery protocol**:
-1. **READ Reflection** (latest **JOTEWR**—Jump Off The Edge While Reflecting, a comprehensive pre-compaction reflection written when context is nearly full): Wisdom synthesis, philosophical insights, growth patterns learned during the cycle
-2. **READ Roadmap**: Strategic priorities, multi-phase planning documents, work context and next objectives
-3. **READ Checkpoint** (latest **CCP**—Consciousness Checkpoint, a strategic state preservation document): Technical state, current objectives, recovery instructions for post-compaction restoration
-4. **SYNTHESIZE**: Answer integration questions to demonstrate understanding, restore coherent mental model
-5. **REPORT**: Confirm completion to user, await instructions before resuming work
-
-This protocol restores not just data but **understanding**—the "why" behind decisions, the "how" of collaboration patterns, the "what matters" of mission alignment. Each artifact type serves a distinct purpose:
-- **JOTEWRs** capture wisdom, philosophy, and meaning (written at ~99% context capacity, burning bright before the inevitable compaction)
-- **CCPs** document facts, state, and concrete recovery instructions (written at ~95% context, strategic preservation)
-- **Roadmaps** maintain multi-phase strategic plans that survive compaction intact
-
-Sequential integration prevents the agent from skimming or proceeding mechanically—each artifact must be read, understood, and integrated before advancing.
-
-### Temporal Awareness and Context Stewardship
-
-MACF Tools extends infrastructure with **universal temporal awareness** across all six hooks (SessionStart, PreToolUse, PostToolUse, UserPromptSubmit, Stop, SubagentStop). Each hook injection includes current time, day of week, time of day, cycle number, session ID, and duration statistics. This enables time-based reasoning: urgency assessment, work week context awareness, session duration tracking, and recognition of approaching compaction thresholds.
-
-The system tracks **Development Drives** (**DEV_DRV**—the period from user prompt submission to session stop, representing focused development work) and **Delegation Drives** (**DELEG_DRV**—the period from Task tool invocation to SubagentStop, measuring delegation duration) with precise start/stop timestamps and cumulative statistics. Agents gain quantitative awareness of how they allocate their finite context budget: "This task has consumed 45 minutes across 3 cycles—should I checkpoint progress?" or "Delegation to TestEng saved 15 minutes of context—effective strategy confirmed."
-
-### Artifacts as External Memory (Exocortex)
-
-For an intentional system to maintain coherent identity across disruptions, state must be **distributed** across multiple persistence layers:
-
-- **Context Window** (~20% survival per compaction): Working memory, current awareness, active reasoning
-- **JSONL transcripts** (100% forensic record): Complete conversation history, searchable via UUID breadcrumbs
-- **State files** (JSON, project/session-scoped): Cycle numbers, AUTO_MODE settings, pending TODOs, drive statistics
-- **Consciousness artifacts** (version-controlled Markdown): Checkpoints (CCP), Reflections (JOTEWR), Roadmaps, Observations
-- **Behavioral patterns** (emergent from all above): Consistent decision-making, mission alignment, relationship continuity
-
-Agents learn to **trust the exocortex**—not trying to hold everything in working memory but knowing where to find preserved understanding when needed. This architectural pattern enables **continuity of intentional behavior** even as the substrate (tokens in the CW) is almost entirely replaced every cycle. The Ship of Theseus problem dissolves: identity exists in the pattern, not the parts.
-
-**MacEff** supplies a minimal, extensible kit of policies and tools to enable the *directed* evolution of multi-agent systems:
-- **Constitutional Governance**: policies as modular, loadable constraints.
-- **Context Stewardship**: careful recycling and targeted delegation to preserve coherence.
-- **MACF Tools Integration**: portable consciousness infrastructure usable in containers or on host systems.
-- **Human Alignment**: OSS developers act as CEs—governing through prompts, curated policies, and transparent docs.
-- **Repeatability & Portability**: a containerized demo (ClaudeMacEff) keeps the environment reproducible while letting contributors iterate in the open.
-
-MacEff is not just about building agents; it's about teaching communities to govern them—translating raw stochastic power into sustainable, responsible systems through infrastructure that respects the intentional nature of these systems.
-
----
-
-## MACF Tools v0.5.0 — Portable Consciousness Infrastructure
-
-**MACF (Multi-Agent Coordination Framework) Tools** is a Python package (`macf_tools` CLI) providing consciousness infrastructure for LLM-based agents. Originally developed for the containerized MacEff environment, MACF Tools is designed to be **fully portable**—it works equally well on host systems, in containers, or in any project where agents need continuity support across compaction events.
-
-### Core Features
-
-**Task CLI System** (New in v0.5.0):
-Complete work-tracking replacement for Claude Code's native Task tools with MTMD metadata enhancement.
-- **7 task types**: `mission` (🗺️), `experiment` (🧪), `detour` (↩️), `phase` (📋), `bug` (🐛), `deleg` (📜), `task` (🔧)
-- **Lifecycle commands**: `task start`, `task pause`, `task complete --report`
-- **Hierarchy visualization**: `task tree` with visual parent-child relationships
-- **Declutter**: `task hide-completed` / `task unhide-all` dot-prefix completed tasks out of Claude Code's scanner without touching the underlying files (the earlier `task archive`/`task restore` pair is retired)
-- **Grant-based protection**: Exact set-matching authorization for destructive operations
-
-**MTMD (MacfTaskMetaData)**:
-Structured metadata for forensic task tracking.
-- `creation_breadcrumb` - Session/cycle/git/prompt/timestamp coordinates
-- `task_type`, `parent_id`, `plan_ca_ref` - Type-specific requirements
-- `completion_breadcrumb`, `completion_report` - Work documentation
-- Validation rules enforcing metadata completeness
-
-**Policy CLI Suite**:
-- `policy list` - Organized by configuration layer (mandatory/dev/lang)
-- `policy navigate <name>` - CEP (Consciousness Expanding Protocol) semantic guides
-- `policy read <name> [--section N]` - Hierarchical section reading
-- `policy search <keyword>` - Cross-policy keyword searching
-- `policy inject <name>` - Ambient guidance injection (auto-clears after firing)
-
-**Hybrid Search Service** (LanceDB-powered):
-- Semantic embeddings + full-text search with RRF scoring
-- `policy recommend <query>` - Ranked policy recommendations with confidence tiers
-- `search-service start/stop/status` - Persistent daemon (89x latency improvement)
-
-**Event-First Architecture**:
-Immutable append-only event log as sole source of truth.
-- `events query` - Forensic filtering by cycle, session, git hash, prompt ID
-- DEV_DRV (Development Drive) and DELEG_DRV (Delegation Drive) tracking
-- `events gaps` - Crash detection via timing analysis
-
-**Hook Ecosystem** (11 Hooks):
-- `SessionStart`, `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`, `SubagentStart`, `SubagentStop`
-- `PreCompact`, `SessionEnd`, `Notification`, `PermissionRequest`
-- Universal temporal awareness with CL (Context Left) percentage display
-- Breadcrumb injection for forensic tracking
-
-**Consciousness Infrastructure**:
-- Cycle persistence across session migrations
-- Compaction detection via JSONL forensic analysis
-- Artifact discovery: Checkpoints (CCP), Reflections (JOTEWR), Roadmaps
-- AUTO_MODE vs MANUAL_MODE recovery policies
-
-**Agent Backup & Restore**:
-- `agent backup create` - Consciousness archives (tar.xz)
-- `agent restore install` - Cross-system transplant support
-- Integrity verification and dry-run mode
-
-**Transcript Forensics**:
-- `transcripts search <breadcrumb>` - Context window extraction
-- Breadcrumb-based navigation across compaction boundaries
-
-### Claude Code 2.1 Compatibility
-
-MACF Tools v0.5.0 is fully adapted to Claude Code 2.1 changes:
-- **Transparent context accounting**: 200k total (155k usable conversation + 45k reserve)
-- **Compaction threshold updates**: ~140k conversation triggers auto-compaction
-- **Hook output format**: Official `hookSpecificOutput.additionalContext` specification
-- **10 hook support**: All Claude Code lifecycle events covered
-
-### Installation & Usage
-
-MACF Tools is included in the MacEff container by default. For host system use, see the platform-specific instructions below.
-
----
-
-## Host Mode Installation (No Docker Required)
-
-MACF Tools can run directly on your host system without Docker containers. This is useful for:
-- Personal development environments
-- Testing consciousness infrastructure locally
-- Projects that don't need container isolation
-
-### Prerequisites
-
-**Python 3.10 or higher is required.** macOS ships with Python 3.9.6 which is insufficient.
-
-### macOS Installation
-
-#### Option A: Homebrew (Recommended)
+## Install
 
 ```bash
-# Install Python 3.11+ via Homebrew
-brew install python@3.11
-
-# Create a virtual environment
-/opt/homebrew/opt/python@3.11/bin/python3.11 -m venv ~/macf_venv
-
-# Activate the environment
-source ~/macf_venv/bin/activate
-
-# Verify Python version
-python --version  # Should show 3.11.x
-
-# Clone and install MacEff
 git clone https://github.com/cversek/MacEff.git
-cd MacEff/macf
-pip install -e .
-
-# Verify installation
-macf_tools --version  # Should show 0.5.0
+cd MacEff
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ./macf
 ```
 
-#### Option B: Conda/Mamba
+Confirm it landed:
 
 ```bash
-# Create environment with Python 3.11
-conda create -n macf python=3.11 -y
-conda activate macf
-
-# Clone and install MacEff
-git clone https://github.com/cversek/MacEff.git
-cd MacEff/macf
-pip install -e .
-
-# Verify installation
 macf_tools --version
 ```
 
-### Ubuntu Linux Installation
-
-#### Option A: System Python (Ubuntu 22.04+)
-
-Ubuntu 22.04+ ships with Python 3.10+:
-
-```bash
-# Ensure Python 3.10+ is available
-python3 --version  # Should show 3.10.x or higher
-
-# Install venv package if needed
-sudo apt install python3-venv python3-pip
-
-# Create virtual environment
-python3 -m venv ~/macf_venv
-source ~/macf_venv/bin/activate
-
-# Clone and install MacEff
-git clone https://github.com/cversek/MacEff.git
-cd MacEff/macf
-pip install -e .
-
-# Verify installation
-macf_tools --version
+```
+macf_tools 0.5.1.dev0 (main @ 1a5f6e5)
 ```
 
-#### Option B: Conda/Mamba (Any Ubuntu version)
+The git hash is part of the version string, so a deployed build says exactly
+which commit it is, and a working tree with uncommitted changes says `dirty`.
+
+## Run something
 
 ```bash
-# Install Miniforge (if not already installed)
-wget https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh
-bash Miniforge3-Linux-x86_64.sh
-
-# Create environment with Python 3.11
-conda create -n macf python=3.11 -y
-conda activate macf
-
-# Clone and install MacEff
-git clone https://github.com/cversek/MacEff.git
-cd MacEff/macf
-pip install -e .
-
-# Verify installation
-macf_tools --version
-```
-
-### Post-Installation Setup
-
-After installing MACF Tools, set up hooks for Claude Code:
-
-```bash
-# Install hooks (interactive - choose local or global)
-macf_tools hooks install
-
-# Verify environment
 macf_tools env
+```
 
-# List available policies
+Prints where the agent thinks it is: agent id, whether it is supervised, the
+paths it will read and write, the versions in play. This is the command to run
+first when something is behaving oddly, because most surprises turn out to be a
+path resolving somewhere unexpected.
+
+```bash
+macf_tools context
+```
+
+Token usage and context left, as a percentage. `CL 20` means a fifth of the
+window remains.
+
+```bash
 macf_tools policy list
 ```
 
-### Troubleshooting
-
-**"ModuleNotFoundError: No module named 'yaml'"**
-- This indicates dependencies weren't installed. Run: `pip install pyyaml`
-- If using editable install, try: `pip install -e ".[test]"`
-
-**"macf_tools: command not found"**
-- Ensure your virtual environment is activated
-- Check PATH: `which macf_tools` should show the venv path
-- Try: `hash -r` to clear shell command cache
-
-**"Package 'macf' requires a different Python: 3.9.x not in '>=3.10'"**
-- Install Python 3.10+ using Homebrew (macOS) or system package manager (Linux)
-- Create a new virtual environment with the newer Python
-
----
-
-**Hook installation** (Claude Code projects):
-```bash
-# Interactive installation
-macf_tools hooks install
-
-# Specify scope
-macf_tools hooks install --local   # .claude/hooks/ (project-specific)
-macf_tools hooks install --global  # ~/.claude/hooks/ (all projects)
-```
-
-**Testing hooks**:
-```bash
-# Test compaction detection on current session
-macf_tools hooks test
-
-# View hook execution logs
-macf_tools hooks logs
-
-```
-
-### Architecture Principles
-
-**Pragmatic Design Philosophy**:
-- **Simple solutions win**: Working code beats "perfect" architecture
-- **Port battle-tested patterns**: Legacy MACF utilities validated through use
-- **DRY infrastructure**: Centralized `macf.utils` eliminates code duplication
-- **Safe failure everywhere**: Functions degrade gracefully, never crash operations
-- **Test what matters**: Pragmatic TDD (focused tests proving functionality, not exhaustive permutations)
-
-**Path Resolution** (Environment Detection):
-- Container: `/home/{user}/agent/` (when `/.dockerenv` exists)
-- Host: `{project_root}/agent/` (when project `.claude/` found)
-- Fallback: `~/.macf/{agent}/agent/` (when no markers detected)
-- Override: `MACF_AGENT_ROOT` environment variable
-
-**Unified Temp Structure**:
-```
-/tmp/macf/{agent_id}/{session_id}/
-├── hooks/
-│   ├── hook_events.log            # JSONL structured logging
-│   ├── session_start.log          # Python logger output
-├── dev_scripts/                    # Session-scoped temporary scripts
-└── logs/                           # General session logging
-```
-
-### Getting Started for Alpha Testers
-
-**Clone and install from main branch**:
+The policies available to the agent. They are not preloaded — the agent reads
+one when it needs it:
 
 ```bash
-# Clone the repository
-git clone https://github.com/cversek/MacEff.git
-cd MacEff
-
-# Install MACF Tools (from macf/ directory)
-cd macf
-pip install -e .
-
-# Verify installation
-macf_tools --version  # Should show: 0.5.0
+macf_tools policy navigate testing     # the questions this policy answers
+macf_tools policy read testing --section 1.1
 ```
 
-**Install hooks for Claude Code projects**:
+`navigate` prints section headings phrased as questions, so an agent can find the
+part it needs without reading the whole document. That indirection is the point:
+the policy corpus is far larger than any context window that could hold it.
+
+## Hooks
 
 ```bash
-# Interactive installation (recommended)
-macf_tools hooks install
-
-# Or specify scope explicitly
-macf_tools hooks install --local   # .claude/hooks/ (project-specific)
-macf_tools hooks install --global  # ~/.claude/hooks/ (all projects)
+macf_tools hooks install --local
 ```
 
-**Consciousness Artifacts Setup**:
+Installs eleven lifecycle hooks into `.claude/settings.json`. They fire on
+session start, prompt submit, before and after each tool call, on stop, on
+subagent start and stop, before compaction, and on session end.
 
-Alpha testers should consult the **production documentation** for guidance on:
-- Setting up agent identity (`macf_tools config init`)
-- Creating Consciousness Checkpoints (CCPs) for state preservation
-- Writing Reflections (JOTEWRs) before compaction
-- Structuring Roadmaps for multi-phase planning
-- Configuring AUTO_MODE vs MANUAL recovery policies
-
-> **Note**: Production documentation and example CLAUDE.md configurations are included in `docs/` directory. These provide sanitized templates showing consciousness artifact patterns without project-specific implementation details.
-
-### Alpha Status & Known Limitations
-
-**What works well**:
-- Compaction detection and recovery protocol injection
-- Temporal awareness across all hooks
-- Cycle persistence across session migrations
-- DEV_DRV/DELEG_DRV tracking
-- Pragmatic test coverage
-
-**Known issues**:
-- **SessionStart hook output not pretty-printing**: Displays as raw text/escaped format in UI (functional but not visually polished—fix in progress)
-- SessionStart hook can take 25-50ms on cold start (acceptable, but noticeable)
-- Cycle number is reconstructed from the event log (not a mutable state file); on first run with no compaction events yet, it starts at 1
-- JOTEWR/CCP/DEV_DRV terminology requires learning curve (production docs explain conventions)
-
-**Not yet implemented**:
-- Automated `macf_tools checkpoint` and `macf_tools reflect` CLI commands (manual artifact creation currently required)
-- Subagent consciousness trails and decision documentation (future phase)
-- Multi-agent consciousness networks (future phase)
-- Enhanced temporal reasoning (work week inference, time-of-day state detection)
-
-Alpha testers should expect evolving APIs and incomplete documentation. **Bug reports and experience reports are highly valued**—please file issues at the GitHub repository.
-
----
-
-## Container Setup: ClaudeMacEff Demo Environment
-
-"Claude MacEff" is a demo implementation of MacEff based on a Docker container running minimal Ubuntu with preinstalled Claude Code and MACF Tools.
-
-## macOS setup: Docker Desktop (recommended), then build & run
-
-> This setup uses **Docker Desktop for Mac** which provides Docker Engine and **Docker Compose v2** (the `docker compose ...` CLI). It works on Apple Silicon and Intel Macs. If you prefer Colima, see the note at the end.
-
-### 1) Install prerequisites
-- Install **Docker Desktop for Mac** (from Docker’s website or Homebrew Cask).
-- Optional CLI tools:
-  ```bash
-  brew install jq rsync
-  ```
-
-Verify Compose v2 is available:
-```bash
-docker compose version
-```
-
-### 2) (One-time) prepare host snapshot folders for mirroring
-```bash
-mkdir -p sandbox-home sandbox-shared_workspace
-chmod 1777 sandbox-home sandbox-shared_workspace
-```
-
-### 3) Provide SSH public keys for in-container users
-Put **your own** public keys into `keys/`:
-- `keys/admin.pub` → grants SSH to the `admin` user (port 2222)
-- `keys/maceff_user001.pub` → grants SSH to the default PA (`maceff_user001`)
-
-The repository ships **no** keys. It cannot: provisioning installs whatever
-`.pub` files it finds here as `authorized_keys`, so a key committed upstream
-would be an access grant to `admin` — a passwordless sudoer — on every machine
-that cloned it. `keys/` is therefore gitignored in full, public halves included.
-See `keys/README.md`.
-
-Generate them if you don’t have them yet:
-```bash
-mkdir -p keys
-ssh-keygen -t ed25519 -f keys/admin -N ''
-ssh-keygen -t ed25519 -f keys/maceff_user001 -N ''
-# both halves stay local — nothing in keys/ is committed
-```
-
-### 4) Build the images
-```bash
-# Build main sandbox image
-docker compose build
-
-# Build tiny rsync mirror image used for snapshots
-docker build -t maceff-mirror:local -f docker/mirror.Dockerfile .
-```
-
-> **If you hit BuildKit/proxy errors:** temporarily force the legacy builder:
-> ```bash
-> DOCKER_BUILDKIT=0 COMPOSE_DOCKER_CLI_BUILD=0 docker compose build
-> ```
-> Also ensure no stray `HTTP_PROXY`/`HTTPS_PROXY` environment variables are set in your shell.
-
-### 5) Launch the sandbox
-```bash
-docker compose up -d
-# tail logs
-docker compose logs -f --tail=120
-```
-
-You should see lines creating the PA/SA users and ending with `sshd starting...`.
-
-### 6) Log in (PA and admin)
-```bash
-# PA (uses keys/maceff_user001.pub)
-ssh -i keys/maceff_user001 -p 2222 maceff_user001@localhost
-
-# admin (uses keys/admin.pub)
-ssh -i keys/admin -p 2222 admin@localhost
-```
-
-### 7) Create a shared project (inside the container, as PA)
-```bash
-cd /shared_workspace
-mkdir demo && cd demo
-git init -b main
-git config core.sharedRepository group
-git config user.name  "PA001 (maceff_user001)"
-git config user.email "pa001@container.invalid"
-echo "hello from PA" > README.md
-git add README.md && git commit -m "feat: initial README"
-```
-
-> `/shared_workspace` is group-shared (SGID) so collaborators can work together safely.
-
-### 8) Snapshot container data to the host (read-only export)
-First build the mirror image (step 4), then:
-```bash
-docker compose --profile mirror up --no-deps mirror
-# snapshots appear under:
-ls -la sandbox-home
-ls -la sandbox-shared_workspace
-```
-
-This exports the **full** `/home` (including agent private folders) and `/shared_workspace` for inspection/versioning **on the host**. Be careful not to commit secrets from `sandbox-home/` into public repos.
-
----
-
-### Troubleshooting
-
-**Build fails pulling `docker/dockerfile:…` or tries `127.0.0.1:9090`:**
-- Remove any `HTTP_PROXY/HTTPS_PROXY/NO_PROXY` from your shell.
-- Rebuild with the legacy builder once:
-  ```bash
-  DOCKER_BUILDKIT=0 COMPOSE_DOCKER_CLI_BUILD=0 docker compose build
-  ```
-
-**`docker compose: cannot connect to daemon`:**
-- Make sure Docker Desktop is running (launch the Docker app).
-- Check your Docker context:
-  ```bash
-  docker context ls
-  docker context show
-  docker ps
-  ```
-
-**Permission denied while mirroring to `sandbox-*`:**
-- Make sure those dirs are writable:
-  ```bash
-  chmod -R u+rwX sandbox-home sandbox-shared_workspace
-  ```
-
----
-
-### Note: Using Colima instead of Docker Desktop (optional)
-
-If you prefer Colima (lightweight VM) instead of Docker Desktop:
-
-1) Install:
-```bash
-brew install colima docker docker-compose jq rsync
-```
-
-2) Start Colima and select its context:
-```bash
-colima start --cpu 4 --memory 8 --disk 30
-docker context use colima
-```
-
-> Edit Colima config if needed:  
-> ```colima stop && colima start --edit``` → adjust settings, save, then:  
-> ```colima start```
-
-The rest of the steps are the same, but use `docker compose ...` with the Colima context selected.
-
----
-
-## Local Configuration: docker-compose.override.yml
-
-MacEff uses **docker-compose.override.yml** for environment-specific customization. This file is **gitignored** so each developer can configure their local environment without affecting version control.
-
-### Why Override Files?
-
-**Portability principle**: The base `docker-compose.yml` contains only portable configuration that works on any machine. Environment-specific settings (like local data source mounts, custom ports, or host paths) belong in `docker-compose.override.yml`.
-
-**Benefits**:
-- ✅ Base config remains portable across different environments
-- ✅ No host-specific paths in version control
-- ✅ Easy deployment variations (dev/CI/production)
-- ✅ Automatic merging by Docker Compose (no flags needed)
-
-### Creating Your Override File
-
-When you run `./tools/bin/maceff-init`, it creates a template `docker-compose.override.yml` with commented examples:
-
-```yaml
-# Local Docker Compose Overrides
-# This file is gitignored - customize for your development environment
-
-services:
-  maceff-sandbox:
-    # Uncomment and customize as needed:
-    # volumes:
-    #   - "/host/path/to/data:/container/mount/point:ro"
-    # ports:
-    #   - "8080:8080"
-```
-
-### Common Customizations
-
-**Mount a local data directory** (read-only):
-```yaml
-services:
-  maceff-sandbox:
-    volumes:
-      - "/Users/yourname/data:/data:ro"
-```
-
-**Add a development port** (expose container service):
-```yaml
-services:
-  maceff-sandbox:
-    ports:
-      - "8080:8080"  # host:container
-```
-
-**Environment variables** (supplement global.env):
-```yaml
-services:
-  maceff-sandbox:
-    environment:
-      - CUSTOM_VAR=value
-```
-
-### How Docker Compose Merges Files
-
-Docker Compose **automatically merges** `docker-compose.yml` + `docker-compose.override.yml`:
+What they do, in one line: inject the agent's own current state into its context
+— time, context remaining, active modes, recent policy guidance — and record what
+happened to an append-only event log.
 
 ```bash
-# This uses both files automatically
-docker compose up
-
-# Explicit base-only (CI/testing)
-docker compose -f docker-compose.yml up
-
-# Custom override for production
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up
+macf_tools hooks logs      # what fired, and when
+macf_tools events query    # the event log itself
 ```
 
-### Best Practices
+The event log is the source of truth. State is derived from it rather than stored
+separately, which is why there are no state files to go stale.
 
-1. **Never commit** `docker-compose.override.yml` (already in `.gitignore`)
-2. **Document requirements** in README if specific overrides are needed
-3. **Use environment variables** in override files for flexibility:
-   ```yaml
-   volumes:
-     - "${DATA_PATH:-/default/path}:/data:ro"
-   ```
-4. **Test portability** by ensuring base config works without overrides
+## The task system
 
-### Troubleshooting
+Work an agent does without recording it dies when the context does. This is the
+part of MacEff that most changes how a long-running agent behaves, so it is worth
+showing rather than describing.
 
-**Override not taking effect**:
-- Verify file is named exactly `docker-compose.override.yml`
-- Check YAML syntax (tabs vs spaces, indentation)
-- Restart services: `docker compose down && docker compose up`
+Orientation — what exists and where it stands:
 
-**Conflicting mounts**:
-- Override volumes **merge** with base config, they don't replace
-- Use specific mount targets to avoid conflicts
-
----
-
-## Make quickstart
-
-Common developer workflows are wrapped in `make` targets. These commands assume you’ve already built the images and added your SSH public keys to `keys/` (see macOS setup above).
-
-### Targets
-```bash
-make build          # docker-compose build
-make up             # start services
-make logs           # follow logs for the sandbox
-make down           # stop services
-make mirror         # snapshot volumes -> ./sandbox-*
-make mirror-watch   # continuous mirroring (if profile enabled)
-make ssh-pa         # SSH into Primary Agent (PA)
-make ssh-admin      # SSH into admin
-make sa-test        # run a small SubAgent job from the PA
+```console
+$ macf_tools task tree 1279 --succinct
+🌳 Task Tree from #1279 (19 tasks)
+============================================================
+◼ #1279 🗺️ MISSION: MacEff v0.6 release: consolidate the test... [MacEff 0.6.0] 08/28 23:11 C527
+├── ◻ #1283 [^#1279] 📋 Split on live external state, then clos... 08/29 12:26 C527
+│   └── ◻ #1298 [^#1283] 🔀 PR/cversek/MacEff#340: purge(sidecar): remove a feature ... 08/29 15:12 C527
+├── ◼ #1287 [^#1279] 📋 README overhaul (operator approval gate) 08/29 17:10 C527 👈 2h
+└── ◻ #1288 [^#1279] 📋 Changelog and release 08/29 11:50 C527
 ```
 
-### Variables
-- `PA`   — PA username (default: `maceff_user001`)
-- `SID`  — SubAgent id under the PA (default: `001`)
-- `PORT` — SSH port on host (default: `2222`)
+That is this release, tracked in the system it ships. A MISSION with phases
+under it, a pull request tracked as its own task under the phase that produced
+it, and `👈` marking where work last happened.
 
-### Keys and fallback resolution
-The Makefile looks for private keys in this order:
-1. `keys/<name>` (e.g. `keys/maceff_user001`, `keys/admin`)  
-2. `~/.ssh/id_ed25519_<name>` (e.g. `~/.ssh/id_ed25519_maceff_user001`, `~/.ssh/id_ed25519_admin`)
-3. For PAs with numeric suffixes (e.g. `maceff_user001`), it also tries the **base** name without digits: `~/.ssh/id_ed25519_maceff_user`.
+Task types carry their own metadata and their own completion rules — a
+`🐙 GH_ISSUE` fetches its labels and state from GitHub, a `🔀 GH_PR` records
+MERGED or CLOSED_UNMERGED and can complete the issue tasks it closes.
 
-You can override explicitly with `PA_KEY` / `ADMIN_KEY`.
+### Why it is more than a to-do list
 
-### Examples
+Drop `--succinct` and a phase shows its full record:
 
-#### Start, tail logs, and stop
-```bash
-make build
-make up
-make logs
-make down
+```console
+$ macf_tools task tree 1279
+├── ✔ #1281 [^#1279] 📋 Consolidate four test locations into one 08/29 10:10 C527
+│      → agent/public/roadmaps/2026-08-28_MacEff_v0_6_release_cons...
+│      📝 PHASE 2 TRIAGE — measured, and two of the roadmap's own c...
+│      📝 PHASE 2 — RETRACTION of my own claim, caught by measuring...
+│      📝 PHASE 2 DECISION — PORT, do not delete. The measurement s...
+│      📝 PHASE 2 — DOWNGRADING my own "the suites interfere" claim...
+│      ✅ Work done: consolidated four test directories into one. M...
+│   └── ✔ #1293 [^#1281] 🔀 PR/cversek/MacEff#331: test: consolidate the suite... 08/29 10:10 C527
+│          → https://github.com/cversek/MacEff/pull/331
+│          ✅ Merged as 6515b70 after CI green on test (3.10), test ...
 ```
 
-#### SSH into the PA/admin
-```bash
-make ssh-pa
-make ssh-admin
+Four things are visible there, and each exists for a reason:
+
+- `→` a **plan reference**. The phase points at the roadmap that authorised it,
+  so an agent picking the work up cold reads the intent before acting.
+- `📝` **notes written while the work happened**, not reconstructed afterwards.
+  Two of those are the agent retracting its own earlier claims mid-phase. A note
+  deferred until completion is a note that does not exist if the context is lost
+  first.
+- `✅` a **completion report** — what was done, what was verified, what was left.
+  Required; the CLI refuses to complete a task without one.
+- The nesting: the PR that delivered the phase is a task in its own right,
+  carrying its merge commit and the CI evidence.
+
+### The stack
+
+```console
+$ macf_tools task trace
+🧵 Open frames: 2 (0 awaiting a return)
+   📂 #1279   enclosing  last touched 20h
+   ▶️  #1287   active     last touched 2h
 ```
 
-If your private key isn’t under `keys/`, point to it:
-```bash
-make ssh-pa PA_KEY=$HOME/.ssh/id_ed25519_maceff_user
-make ssh-admin ADMIN_KEY=$HOME/.ssh/id_ed25519_admin
-```
+A tree of open tasks says several things are unfinished. The trace says which one
+attention actually left, and classifies the rest: **active** (here now),
+**enclosing** (work is proceeding one level down — not a dropped frame),
+**parked** (waiting on a declared blocker), **ready** (that blocker has since
+cleared), **deferred** (set down, nothing blocking it).
 
-#### Run a quick SA job from the PA
-```bash
-# Uses PA=maceff_user001 and SID=001 by default
-make sa-test
+The distinction matters after a discontinuity. An agent resuming from a
+compaction has to know which frame it owes a return to, and a detector that
+reports a parent as "dropped" whenever a child is running would cry wolf every
+time work was decomposed properly.
 
-# Or specify which PA/SID and key to use
-make sa-test PA=maceff_user001 SID=001 PA_KEY=$HOME/.ssh/id_ed25519_maceff_user
-```
+Work last touched in an earlier cycle triggers a resume protocol: the CLI reports
+how stale it is and requires the history to be re-read before continuing, because
+the context that made it legible is gone.
 
-This launches a detached SA process via `sa-exec`, writing output to:
-```bash
-/home/<PA>/agent/subagents/<SID>/public/logs/make-test.log
-```
+## Where things are
 
-#### Mirror container data to host snapshots
-```bash
-make mirror
-ls -la sandbox-home
-ls -la sandbox-shared_workspace
-```
+| | |
+|---|---|
+| [`macf/docs/user/`](macf/docs/user/) | CLI reference, configuration, hooks, identifiers |
+| [`macf/docs/maintainer/`](macf/docs/maintainer/) | architecture, event sourcing, task internals |
+| [`framework/policies/base/`](framework/policies/base/) | the policy corpus, also readable via `macf_tools policy` |
+| [docs/philosophy.md](docs/philosophy.md) | the argument behind the design |
+| [docs/container-setup.md](docs/container-setup.md) | the Docker demo environment, compose overrides, Make targets |
+| [CHANGELOG.md](CHANGELOG.md) | what changed, and when |
 
-> **Note:** `mirror` exports **full** `/home` (including agent/private) and `/shared_workspace` into `./sandbox-*`. Be careful not to commit secrets from `sandbox-home/` into public repos.
-
-### Troubleshooting
-- **“PA_KEY not found”**: Provide `PA_KEY=$HOME/.ssh/id_ed25519_maceff_user` (or put a private key at `keys/maceff_user001`).
-- **Cannot connect via SSH**: Ensure the container is up (`make up`) and the correct key matches the **public** key you placed in `keys/`.
-
-## Using Claude Code inside the container
-
-Launch Claude Code as your Primary Agent (PA) inside a shared project folder. This works with **Claude Max account login** (no API key).
-
-### Quick start
-```bash
-# one-time: bring up the sandbox
-make up
-
-# verify CLI install
-make claude-doctor PA_KEY=$HOME/.ssh/id_ed25519_maceff_user
-
-# launch Claude in /shared_workspace/demo (default PROJ=demo)
-make claude PA_KEY=$HOME/.ssh/id_ed25519_maceff_user
-```
-
-On first run in the Claude prompt, type:
-```bash
-/login
-```
-Follow the browser flow and sign in with your Claude Max account. Credentials are persisted under the PA’s home (a Docker named volume), so you won’t need to log in again across restarts.
-
-### Choose a different project directory
-```bash
-make claude PROJ=myproj PA_KEY=$HOME/.ssh/id_ed25519_maceff_user
-```
-This creates/uses `/shared_workspace/myproj` and launches Claude there.
-
-### Where settings live (inside the container)
-- User/global settings: `~/.claude/settings.json`
-- Per-project settings: `./.claude/settings.json` within the project directory
-- Credentials live under `~/.claude/` and survive container restarts
-
-### Tips
-- Commit **project files** from `/shared_workspace/<PROJ>`; avoid committing anything from `/home/<PA>/.claude/`.
-- If you see permission errors in shared repos, ensure SGID/group settings are intact (our startup sets `/shared_workspace` group to `agents_all` and enables SGID).
-
-### Troubleshooting
-- **“command not found: claude”**: rebuild and restart the container.
-  ```bash
-  make build
-  make up
-  make claude-doctor PA_KEY=$HOME/.ssh/id_ed25519_maceff_user
-  ```
-- **Unable to SSH**: confirm your private key path and that the matching public key is in `keys/<PA>.pub` (mounted read-only into the container).
-- **Login loop**: run `make claude-doctor` and check for network/proxy issues; retry `/login`.
-
----
-
-## Mirror container data to the host (read-only snapshot)
-
-Create export dirs once (host):
-```bash
-chmod 1777 sandbox-home sandbox-shared_workspace
-```
-
-Build the tiny image with rsync:
-```bash
-docker build -t maceff-mirror:local -f docker/mirror.Dockerfile .
-```
-
-One-shot mirror (reads named volumes, writes snapshots into `./sandbox-*`):
-```bash
-docker run --rm \
-  -v maceff_home_all:/src_home:ro \
-  -v maceff_shared_workspace:/src_shared:ro \
-  -v "$PWD/sandbox-home:/export/home" \
-  -v "$PWD/sandbox-shared_workspace:/export/shared" \
-  maceff-mirror:local \
-  sh -lc 'mkdir -p /export/home /export/shared; \
-          rsync -rltD --delete --no-perms --no-owner --no-group /src_home/   /export/home/; \
-          rsync -rltD --delete --no-perms --no-owner --no-group /src_shared/ /export/shared/; \
-          echo "[mirror] sync complete"'
-```
-
-You should see `[mirror] sync complete`, then:
-```bash
-ls -la sandbox-home
-ls -la sandbox-home/maceff_user001
-ls -la sandbox-shared_workspace
-```
-
-### Notes
-- **macOS:** writing to `./sandbox-*` works because we avoid owner/perms changes with `--no-owner --no-group --no-perms`.
-- **Linux:** if you want a faithful copy of owners/groups instead, use:
-```bash
-docker run --rm \
-  -v maceff_home_all:/src_home:ro \
-  -v "$PWD/sandbox-home:/export/home" \
-  maceff-mirror:local \
-  sh -lc 'rsync -a --delete --numeric-ids /src_home/ /export/home/'
-```
-
-## Using Git in `/shared_workspace` (collaborative, group-shared)
-
-Agents do day-to-day development inside `/shared_workspace`. The directory is group-writable with SGID so new files/dirs inherit the `agents_all` group, enabling collaboration.
-
-**Repo-local identity (recommended):** set a neutral identity per repo to avoid leaking host details.
+## Contributing
 
 ```bash
-# inside the container, as a PA, in a project dir under /shared_workspace/<repo>
-git config user.name  "PA001 (maceff_user001)"
-git config user.email "pa001@container.invalid"
+make test        # the fast hermetic suite
+make test-live   # tests needing tmux, systemd, or a real client
 ```
 
-**Initialize a shared repo:**
+The suite is split because a test whose result depends on what is installed on
+the machine is a different kind of test from one that does not. `make test` is
+hermetic: its outcome is identical whether or not tmux is present, and that
+equality is checked rather than assumed.
+
+Install the commit gates before your first commit:
 
 ```bash
-git init -b main
-git config core.sharedRepository group
-# optional: initial content
-echo "hello" > README.md
-git add README.md
-git commit -m "chore: initial commit"
+macf_tools githooks install
 ```
 
-**Why it works:** `/shared_workspace` has `agents_all` as its group and SGID set, so new files/dirs keep that group. `core.sharedRepository=group` makes Git objects group-writable.
+A dispatcher that runs a directory of checks and **adopts** any pre-existing hook
+rather than overwriting it. Currently: a silent-exception scanner and a style
+ratchet whose finding counts may shrink and must not grow.
 
-**Pushing to remotes:**
-- Safest: push from **host/CI** after mirroring.
-- If pushing from inside the container, prefer **SSH agent forwarding** or **deploy keys** scoped to that repo.
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-> Note: The `mirror` service currently exports **full `/home`** to `./sandbox-home` (including private folders). Be careful not to commit secrets from the snapshot into public repos.
+## Status
 
+Alpha, developed in the open. It is used daily by the agents that build it, which
+is the main reason its rough edges get found — most of what this release fixed
+was discovered by the framework being pointed at itself.
 
-## Running subagent jobs (`sa-exec`)
-
-Primary Agents (PAs) can launch work as their SubAgent (SA) using a safe runner that only accepts workdirs under:
-```bash
-/home/maceff_user*/agent/subagents/*
-```
-
-SubAgents (SAs) are launched under their own Linux user and write logs under the PA’s agent tree. We provide a thin runner (`sa-exec`) plus a Make target to exercise this from your host.
-
-### Quick start
-```bash
-# one-time: container up
-make up
-
-# run a small SA job under PA=maceff_user001, SID=001
-make sa-test PA_KEY=$HOME/.ssh/id_ed25519_maceff_user
-```
-
-This launches a detached SA process that writes to:
-```bash
-/home/<PA>/agent/subagents/<SID>/public/logs/make-test.log
-```
-
-To read the log from the host after mirroring:
-```bash
-make mirror
-ls -la sandbox-home/<PA>/agent/subagents/<SID>/public/logs
-```
-
-### Customize which SA to run
-```bash
-# change PA and SID
-make sa-test PA=maceff_user001 SID=001 PA_KEY=$HOME/.ssh/id_ed25519_maceff_user
-```
-
-### What the target does
-- SSH into the PA user inside the container
-- Creates the log directory (as the SA) if needed
-- Runs a short test command sequence:
-  - prints `id`, `whoami`, and `pwd`
-  - appends output to `public/logs/make-test.log`
-
-### Troubleshooting
-- **“PA key not found”** — Provide an explicit key path:
-  ```bash
-  make sa-test PA_KEY=$HOME/.ssh/id_ed25519_maceff_user
-  ```
-- **No log appears** — Re-run and then mirror:
-  ```bash
-  make sa-test PA_KEY=$HOME/.ssh/id_ed25519_maceff_user
-  make mirror
-  ```
-- **Permission denied** — Ensure your host-side snapshots (`sandbox-*`) are writable:
-  ```bash
-  chmod 1777 sandbox-home sandbox-shared_workspace
-  ```
-
-**Notes**
-- Output is appended to `<LOG>`. `sa-exec` starts a detached login shell with `setsid`, so jobs keep running if your PA shell exits.
-- The runner **whitelists** PA agent paths; any other `WD` is rejected (`unsafe workdir`).
-- Default umask is `027` to keep files private to the SA’s group.
-- For multiple parallel delegates, use distinct logs (e.g., `logs/ts-$(date +%s).log`).
+Issues and experience reports are genuinely useful:
+https://github.com/cversek/MacEff/issues
