@@ -1016,3 +1016,53 @@ def tmux_sandbox_env():
         # so a future edit that reintroduces $TMUX cannot turn this line into
         # kill-server against the host.
         subprocess.run(["tmux", "kill-server"], env=env, capture_output=True)
+
+@pytest.fixture
+def temp_log_file(isolated_events_log):
+    """The isolated event log path, for tests that read the file directly.
+
+    A bridge, not a second isolation mechanism. ``isolated_events_log`` above is
+    autouse and already redirects both the in-process path and the subprocess
+    environment variable; this returns THAT path so a test asserting on file
+    contents reads the same file ``append_event`` just wrote to.
+
+    It exists because the suites consolidated here were written against a
+    separate conftest that named the same object ``temp_log_file``. Aliasing was
+    chosen over renaming call sites: the rename would have touched three modules
+    to no behavioural end, and a wrong rename in a test that reads a log path is
+    invisible -- it would read an empty file and pass.
+    """
+    return isolated_events_log
+
+
+@pytest.fixture(autouse=True)
+def _no_live_telegram_credentials(request, monkeypatch):
+    """Refuse live Telegram credentials to every test by default.
+
+    GH #330. ``isolated_channel_state`` above isolates TELEGRAM_STATE_DIR, which
+    covers poller state -- the failure that evicted a live poller. It does not
+    cover CONFIG RESOLUTION: ``resolve_telegram_config`` reads
+    ``{project}/.claude/channels/telegram/`` then ``~/.claude/channels/telegram/``
+    and consults no environment variable, so any test that reaches a hook's
+    notify path sends a REAL message to a REAL person. Measured on this machine:
+    the operator confirms receiving them routinely.
+
+    Two paths, one covered, and from the outside the fixture looked complete.
+
+    Scope of THIS fix, stated so it is not overread: it neutralises the
+    IN-PROCESS path only. A test that spawns a subprocess gets a fresh
+    interpreter where this patch does not exist, and no environment variable
+    exists to carry the refusal across that boundary -- creating one is a product
+    change and belongs to #330. ``test_hook_integration.py`` is skipped until
+    then for exactly that reason.
+
+    Opt out with ``@pytest.mark.live_telegram_config`` when a test's subject IS
+    the resolution path.
+    """
+    if request.node.get_closest_marker("live_telegram_config"):
+        return
+    monkeypatch.setattr(
+        "macf.channels.telegram.resolve_telegram_config",
+        lambda: None,
+        raising=True,
+    )

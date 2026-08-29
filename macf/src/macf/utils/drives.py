@@ -8,7 +8,7 @@ JSONL log. Event queries reconstruct state from these events.
 import sys
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, NamedTuple
 from .session import get_last_user_prompt_uuid
 
 
@@ -296,11 +296,31 @@ def complete_deleg_drv_by_agent(
 
     return (True, duration, tool_use_id, tool_use_id_short, resolved_subagent_type)
 
+class DelegDrvResult(NamedTuple):
+    """What completing a Delegation Drive produced.
+
+    A NamedTuple rather than a plain tuple, and the choice is not cosmetic. This
+    function's arity has already grown once -- from two members to four -- and
+    every caller that had unpacked it positionally broke at the same time, in
+    tests that then read as "the delegation system is broken" rather than "the
+    signature moved". A named record makes the next addition additive: readers
+    that ask for .success keep working when a fifth member arrives.
+
+    It remains a tuple, so positional unpacking at existing call sites is
+    unaffected. This is a widening, not a break.
+    """
+
+    success: bool
+    duration: float
+    tool_use_id_short: str
+    subagent_type: str
+
+
 def complete_deleg_drv(
     session_id: str,
     agent_id: Optional[str] = None,
     subagent_type: Optional[str] = None,
-) -> tuple[bool, float, str, str]:
+) -> DelegDrvResult:
     """
     Mark Delegation Drive completion and update stats (legacy path).
 
@@ -326,7 +346,7 @@ def complete_deleg_drv(
     started_at, tool_use_id_short, started_subagent_type = get_active_deleg_drv_start(session_id)
 
     if started_at == 0.0:
-        return (False, 0.0, "", "")  # No active drive
+        return DelegDrvResult(False, 0.0, "", "")  # No active drive
 
     duration = time.time() - started_at
 
@@ -344,7 +364,7 @@ def complete_deleg_drv(
         "tool_use_id_short": tool_use_id_short,
     })
 
-    return (True, duration, tool_use_id_short, resolved_subagent_type)
+    return DelegDrvResult(True, duration, tool_use_id_short, resolved_subagent_type)
 
 def get_deleg_drv_stats(session_id: str, agent_id: Optional[str] = None) -> dict:
     """

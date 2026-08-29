@@ -87,3 +87,4 @@ docker-compose.override.yml
 macf/src/macf/voice/training_data/
 macf/src/macf/voice/fusion_patterns.json
 
+.coverage

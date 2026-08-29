@@ -41,16 +41,6 @@ from macf.agent_events_log import (
 # ============================================================================
 
 @pytest.fixture
-def temp_log_file(isolate_event_log):
-    """
-    Return the isolated log path from conftest's autouse fixture.
-
-    This ensures append_event() writes to the same file we read from.
-    """
-    return isolate_event_log
-
-
-@pytest.fixture
 def populated_log(temp_log_file):
     """Create log file with sample events for query tests."""
     events = [
@@ -516,14 +506,14 @@ def test_concurrent_appends_maintain_atomicity(temp_log_file):
 def test_recent_query_under_10ms(populated_log):
     """
     GIVEN: Log with events
-    WHEN: read_events(limit=10, reverse=True) called
+    WHEN: read_events(limit=None, reverse=True) called
     THEN: Returns recent events in < 10ms
     """
     durations = []
 
     for _ in range(10):
         start = time.perf_counter()
-        events = list(read_events(limit=10, reverse=True))
+        events = list(read_events(limit=None, reverse=True))
         end = time.perf_counter()
         durations.append((end - start) * 1000)
 

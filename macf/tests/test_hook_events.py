@@ -125,7 +125,7 @@ def test_dev_drv_lifecycle(temp_log_file, temp_agent_state, monkeypatch):
     assert result["continue"] is True
 
     # Read events
-    events = list(read_events(limit=10))
+    events = list(read_events(limit=None))
 
     # Should have both events
     started_events = [e for e in events if e["event"] == "dev_drv_started"]
@@ -164,7 +164,7 @@ def test_tool_calls_logged(temp_log_file, temp_agent_state, monkeypatch):
     assert result["continue"] is True
 
     # Read events
-    events = list(read_events(limit=10))
+    events = list(read_events(limit=None))
 
     # Should have both events
     started_events = [e for e in events if e["event"] == "tool_call_started"]
@@ -182,7 +182,7 @@ def test_tool_calls_logged(temp_log_file, temp_agent_state, monkeypatch):
 
 
 def test_delegation_logged(temp_log_file, temp_agent_state, monkeypatch):
-    """SubagentStop creates delegation_completed event."""
+    """SubagentStop emits delegation_completed even with no matching start."""
     # Mock find_project_root
     monkeypatch.setattr(
         'macf.utils.find_project_root',
@@ -191,14 +191,14 @@ def test_delegation_logged(temp_log_file, temp_agent_state, monkeypatch):
 
     # Simulate delegation completion
     stdin_data = {
-        "subagent_type": "DevOpsEng"
+        "agent_type": "DevOpsEng"
     }
 
-    result = subagent_stop_run(json.dumps(stdin_data), testing=True)
+    result = subagent_stop_run(json.dumps(stdin_data))
     assert result["continue"] is True
 
     # Read events
-    events = list(read_events(limit=10))
+    events = list(read_events(limit=None))
 
     # Should have delegation_completed event
     delegation_events = [e for e in events if e["event"] == "delegation_completed"]
@@ -206,7 +206,13 @@ def test_delegation_logged(temp_log_file, temp_agent_state, monkeypatch):
 
     event = delegation_events[0]
     assert event["data"]["agent_type"] == "DevOpsEng"
-    assert event["data"]["success"] is True
+    # success is False by design here: no SubagentStart preceded this stop, so
+    # complete_deleg_drv finds no active drive to close. Asserting True was the
+    # pre-v0.3 expectation and would now require inventing a start this test
+    # never performs. What is worth pinning is that the event is emitted AT ALL
+    # on the unmatched path -- a stop that silently dropped its event would
+    # leave a delegation invisible to every downstream query.
+    assert event["data"]["success"] is False
     assert "duration_seconds" in event["data"]
 
 
@@ -224,7 +230,7 @@ def test_breadcrumbs_valid(temp_log_file, temp_agent_state, monkeypatch):
     post_tool_use_run(json.dumps({"tool_name": "Read", "tool_input": {}}), testing=True)
 
     # Read all events
-    events = list(read_events(limit=10))
+    events = list(read_events(limit=None))
 
     # All events should have valid breadcrumbs
     for event in events:
@@ -273,7 +279,7 @@ def test_hook_input_preserved(temp_log_file, temp_agent_state, monkeypatch):
     pre_tool_use_run(json.dumps(stdin_data), testing=True)
 
     # Read events
-    events = list(read_events(limit=1))
+    events = list(read_events(limit=None))
     assert len(events) == 1
 
     event = events[0]
