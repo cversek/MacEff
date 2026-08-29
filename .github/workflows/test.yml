@@ -43,11 +43,14 @@ jobs:
         timeout-minutes: 3
 
       - name: Run tests (live external state)
-        # This runner has none of tmux, systemd-analyze, or the claude client,
-        # and the Telegram-credential tests stay skipped pending GH #330 -- so
-        # this step is expected to report mostly (or entirely) skipped rather
-        # than passed. It still must be INVOKED: a step that is never run
-        # cannot fail, which is a different thing from a suite that passed.
+        # MEASURED on this runner, not predicted: 26 passed, 7 skipped. The
+        # image does ship tmux, so most of this set genuinely executes here;
+        # what stays skipped is systemd-analyze, the real claude client, and
+        # the Telegram-credential tests pending GH #330.
+        #
+        # The step must be INVOKED regardless of how much of it skips: a step
+        # that is never run cannot fail, which is a different thing from a
+        # suite that passed.
         run: >
           pytest macf/tests/ -v --tb=short -m "live"
           --ignore=macf/tests/test_recommend.py
