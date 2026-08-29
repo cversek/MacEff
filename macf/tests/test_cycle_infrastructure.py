@@ -27,6 +27,7 @@ class TestCycleTracking:
         cycle = get_cycle_number_from_events()
         assert cycle == 1
 
-    # NOTE: Persistence/metadata tests removed - they require testing=False
+    # NOTE: persistence/metadata tests were removed when the state files they
+    # covered were purged in favour of the event log.
     # which violates safe-by-default pattern. Integration tests for persistence
     # belong in hook integration tests where production paths are tested.

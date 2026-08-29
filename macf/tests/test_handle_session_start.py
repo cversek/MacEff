@@ -94,7 +94,7 @@ def test_no_compaction_detected(mock_dependencies):
         # Mock compaction count from events
         mock_compact_count.return_value = {'count': 0, 'from_snapshot': True}
 
-        result = run("", testing=True)
+        result = run("")
 
         # Verify structure
         assert result["continue"] is True
@@ -154,7 +154,7 @@ def test_first_session_no_project_state(mock_dependencies):
         # Mock compaction count from events
         mock_compact_count.return_value = {'count': 0, 'from_snapshot': True}
 
-        result = run("", testing=True)
+        result = run("")
 
         # Verify message content shows "First session"
         context = result["hookSpecificOutput"]["additionalContext"]
@@ -169,7 +169,7 @@ def test_compaction_detected_manual_mode(mock_dependencies):
     mock_dependencies['auto_mode'].return_value = (False, "default")
     mock_dependencies['format_message'].return_value = "MANUAL mode recovery instructions"
 
-    result = run("", testing=True)
+    result = run("")
 
     assert "continue" in result
     assert result["continue"] is True
@@ -204,7 +204,7 @@ def test_compaction_detected_auto_mode(mock_dependencies):
         mock_env.return_value = 'Host'
         mock_token.return_value = {}
 
-        result = run(stdin_json, testing=True)
+        result = run(stdin_json)
 
     assert result["continue"] is True
     assert "hookSpecificOutput" in result
@@ -220,7 +220,7 @@ def test_exception_handling(mock_dependencies):
     # Simulate exception in session ID retrieval
     mock_dependencies['session_id'].side_effect = Exception("Session ID error")
 
-    result = run("", testing=True)
+    result = run("")
 
     # Hook should never crash - always returns continue with systemMessage
     assert result["continue"] is True
@@ -232,7 +232,7 @@ def test_empty_stdin_handling(mock_dependencies):
     """Test hook handles empty stdin gracefully."""
     from macf.hooks.handle_session_start import run
 
-    result = run("", testing=True)
+    result = run("")
 
     assert isinstance(result, dict)
     assert "continue" in result
@@ -245,7 +245,7 @@ def test_output_format_includes_hook_event_name(mock_dependencies):
 
     mock_dependencies['detect_compaction'].return_value = True
 
-    result = run("", testing=True)
+    result = run("")
 
     assert "hookSpecificOutput" in result
     assert "hookEventName" in result["hookSpecificOutput"]
@@ -264,7 +264,7 @@ def test_source_field_compact_detection(mock_dependencies):
 
     # Mock log_hook_event to capture events
     with patch('macf.hooks.handle_session_start.log_hook_event') as mock_log:
-        result = run(stdin_json, testing=True)
+        result = run(stdin_json)
 
         # Verify compaction was detected
         assert result["continue"] is True
@@ -324,7 +324,7 @@ def test_source_field_startup_no_detection(mock_dependencies):
         # Mock detect_compaction to ensure it's NOT called (source field takes precedence)
         mock_dependencies['detect_compaction'].return_value = False
 
-        result = run(stdin_json, testing=True)
+        result = run(stdin_json)
 
         # Verify no compaction detected (normal session start message)
         assert result["continue"] is True
@@ -350,7 +350,7 @@ def test_source_field_missing_fallback_to_transcript(mock_dependencies):
     mock_dependencies['detect_compaction'].return_value = True
 
     with patch('macf.hooks.handle_session_start.log_hook_event') as mock_log:
-        result = run(stdin_json, testing=True)
+        result = run(stdin_json)
 
         # Verify compaction was detected via fallback
         assert result["continue"] is True
@@ -379,7 +379,7 @@ def test_source_compact_logs_method(mock_dependencies):
     stdin_json = json.dumps(input_data)
 
     with patch('macf.hooks.handle_session_start.log_hook_event') as mock_log:
-        run(stdin_json, testing=True)
+        run(stdin_json)
 
         # Find COMPACTION_CHECK event
         compaction_check_calls = [
@@ -513,7 +513,7 @@ def _run_shared_path(mock_dependencies, stdin_json, auto_mode):
         mock_footer.return_value = 'Footer'
         mock_compact_count.return_value = {'count': 0}
 
-        return run(stdin_json, testing=True)
+        return run(stdin_json)
 
 
 def test_banner_shows_auto_mode_indicator(mock_dependencies):
