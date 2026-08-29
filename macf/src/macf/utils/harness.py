@@ -205,8 +205,18 @@ def resolve_agent(explicit: Optional[str] = None,
         # whose identity is precisely what could not be established.
         if card and not card.endswith("@unknown"):
             return session_identifier(card), "calling card"
-    except Exception:
-        pass
+    except ImportError as e:
+        # A sibling module of this package, so a failure here means the install
+        # is broken rather than that identity is unavailable.
+        print(f"⚠️ MACF: harness cannot import identity resolution: {e}", file=sys.stderr)
+    except (OSError, ValueError, KeyError, AttributeError) as e:
+        # Falling through to unit-based inference is a legitimate answer. Doing
+        # it SILENTLY is not: it makes "identity could not be resolved" look
+        # identical to "identity resolved to nothing interesting", and the caller
+        # then reports a source of "the only installed unit" for a name it never
+        # actually chose. The whole point of returning a source alongside the
+        # name is to say where the name came from.
+        print(f"⚠️ MACF: harness could not resolve the calling card: {e}", file=sys.stderr)
     units = installed_agents(unit_dir)
     if len(units) == 1:
         return units[0], "the only installed unit"
@@ -421,7 +431,15 @@ if [ -n "$PROJECT_DIR" ]; then
     echo "[harness] conversation than the one this agent was working in." >&2
   fi
 fi
-tmux new-session -d -s "$SESSION" "${{CD_ARG[@]}}" "MACF_CONTEXT_WINDOW={p.context_window} TERM={p.term} $BASE{p.python} -m macf.supervisor _run_loop --name $AGENT --delay 5 --tmux-session $SESSION -- {p.child_path}" \\; set-option -t "=$SESSION" remain-on-exit on
+# CD_ARG is expanded through the ${{name[@]+...}} guard, not as a bare
+# "${{CD_ARG[@]}}". Under `set -u`, bash 3.2 treats an EMPTY array's [@]
+# expansion as an unbound variable and aborts; bash 4.4+ does not. macOS ships
+# 3.2 and will not ship a newer one, and the shebang above names /bin/bash
+# rather than whatever bash is first on PATH -- so the unguarded form aborts
+# every launch on macOS that declares no project dir, which is the default.
+# Linux CI runs bash 5, where the bug cannot reproduce: the failing direction
+# is the one no automation watches. Guard every optional array expansion here.
+tmux new-session -d -s "$SESSION" ${{CD_ARG[@]+"${{CD_ARG[@]}}"}} "MACF_CONTEXT_WINDOW={p.context_window} TERM={p.term} $BASE{p.python} -m macf.supervisor _run_loop --name $AGENT --delay 5 --tmux-session $SESSION -- {p.child_path}" \\; set-option -t "=$SESSION" remain-on-exit on
 # ^ remain-on-exit is chained into the SAME tmux invocation, not run after it.
 # Without this a pane whose command dies immediately can take the session with
 # it before a second `tmux` process gets to set the option -- so the one case
