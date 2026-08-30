@@ -395,8 +395,17 @@ def create_pa_user(agent_name: str, agent_spec: AgentSpec, defaults_dict: Option
     channels = None
     if agent_spec.claude_config and agent_spec.claude_config.channels:
         channels = agent_spec.claude_config.channels
+    # The project directory is the active_project symlink create_workspace_structure
+    # lays down for the first assigned project. Passing the SYMLINK rather than its
+    # target is deliberate: it keeps the path stable when project assignment
+    # changes, and it is the same path the login shell already uses.
+    project_dir = None
+    if agent_spec.assigned_projects:
+        project_dir = f'/home/{username}/active_project'
     create_bash_init(username, agent_name, channels=channels,
-                     vanilla=getattr(agent_spec, 'is_vanilla', False))
+                     vanilla=getattr(agent_spec, 'is_vanilla', False),
+                     harness_session=agent_spec.harness_session,
+                     project_dir=project_dir)
 
     # Configure .bashrc to source bash_init.sh
     configure_bashrc(username)
@@ -513,7 +522,8 @@ def create_maildir(username: str) -> Path:
 
 
 def create_bash_init(username: str, agent_name: str, channels: list = None,
-                     vanilla: bool = False) -> None:
+                     vanilla: bool = False, harness_session: str = None,
+                     project_dir: str = None) -> None:
     """Create ~/.bash_init.sh for shell initialization (interactive + non-interactive).
 
     This file is the single source of truth for PA-specific environment setup.
@@ -531,6 +541,16 @@ def create_bash_init(username: str, agent_name: str, channels: list = None,
         username: Linux username (e.g., 'pa_manny')
         agent_name: Agent identity name (e.g., 'manny')
         channels: Optional list of channel plugin strings for --channels flag
+        harness_session: Declared tmux session name (agents.yaml harness_session).
+            Separate from agent_name on purpose: remote attach helpers bind to
+            this exact string, so it must not shift when a moniker or key
+            changes. Defaults to agent_name when the declaration omits it.
+        project_dir: Directory the supervised session must start in. This is
+            load-bearing rather than cosmetic -- `claude -c` resolves WHICH
+            conversation to resume from the working directory, so a session
+            started in the login home resumes a different conversation than one
+            started in the project, with nothing to indicate a substitution
+            happened.
     """
     home_dir = Path(f'/home/{username}')
     bash_init = home_dir / '.bash_init.sh'
@@ -551,9 +571,19 @@ export MACEFF_CHANNELS="{channels_str}"
     if vanilla:
         identity_block = '# Vanilla account: no MacEff environment by design'
     else:
+        # DECLARED, not derived. Both of these existed in agents.yaml with
+        # explanatory comments and no consumer, which is indistinguishable from
+        # a working feature until something depends on them -- and something
+        # did: an attach helper bound to the declared session name found nothing,
+        # and a resume started in the wrong directory.
+        session_block = f'export MACEFF_HARNESS_SESSION="{harness_session or agent_name}"'
+        project_block = (
+            f'\nexport MACEFF_PROJECT_DIR="{project_dir}"' if project_dir else ''
+        )
         identity_block = f'''# PA-specific environment (container-wide vars in /etc/environment)
 export MACEFF_AGENT_HOME_DIR="$HOME"
-export MACEFF_AGENT_NAME="{agent_name}"'''
+export MACEFF_AGENT_NAME="{agent_name}"
+{session_block}{project_block}'''
 
     bash_init_content = f'''#!/bin/bash
 # Shell initialization for both interactive and non-interactive shells

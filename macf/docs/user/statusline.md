@@ -5,10 +5,10 @@ MacEff statusline displays consciousness-aware status in Claude Code's UI.
 ## Output Format
 
 ```
-{agent}@{uuid} | {project} | {environment} | {tokens} CLUAC {level}
+{agent}@{uuid} | {project} | {environment} | {tokens} CL {level}
 ```
 
-Example: `MannyMacEff@a3f7c2 | NeuroVEP | Container Linux | 60k/200k CLUAC 70`
+Example: `agent@a3f7c2 | project | Container Linux | 60k/200k CL 70`
 
 The agent identity includes:
 - **Display name**: Human-readable name from GECOS field (spaces removed)
@@ -36,9 +36,9 @@ After installation, restart Claude Code to see the statusline.
 | Project | MACF_PROJECT env or .claude/ detection | omitted |
 | Environment | Auto-detected | "Unknown" |
 | Tokens | Session JSONL | 0 |
-| CLUAC | Calculated | 100 |
+| CL | Calculated | 100 |
 
 ## Commands
 
-- `macf_tools statusline` - Generate statusline output
+- `macf_tools statusline` or `macf_tools statusline generate` - Generate statusline output
 - `macf_tools statusline install` - Install to Claude Code

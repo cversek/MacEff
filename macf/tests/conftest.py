@@ -155,6 +155,34 @@ def isolated_events_log(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def isolated_channel_state(tmp_path, monkeypatch):
+    """Isolate the Telegram channel's state directory for EVERY test.
+
+    Not a hypothetical. `test_harness_integration` launches the REAL client with
+    `--channels plugin:telegram@claude-plugins-official` to prove the argument
+    order parses. That client loads the plugin, which spawns a channel server,
+    which reads `bot.pid` from the state dir it inherits -- the developer's live
+    one -- SIGTERMs the running poller, takes the bot token, and then exits when
+    the 20-second subprocess ends. Net effect: running the test suite silently
+    kills the developer's Telegram for the rest of the session.
+
+    Measured, not theorised: instrumenting the channel server produced
+    `stale_poller_evicted{stale_pid}` followed by `shutdown{reason: SIGTERM}` at
+    the exact second that test began, and `shutdown{reason: stdin-end}` when it
+    ended. A second agent's poller, which sets its own state dir, survived all
+    110 samples -- the control that rules out anything systemic.
+
+    The isolation belongs HERE rather than in that one test because the hazard
+    is not specific to it: any test that spawns a real client inherits this
+    environment. A guard at the boundary catches the next one too.
+    """
+    d = tmp_path / "channel_state" / "telegram"
+    d.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("TELEGRAM_STATE_DIR", str(d))
+    yield d
+
+
+@pytest.fixture(autouse=True)
 def isolated_agent_home(tmp_path, monkeypatch):
     """
     Isolate the agent home so tests can never write into the live agent's
@@ -176,6 +204,13 @@ def isolated_agent_home(tmp_path, monkeypatch):
 
     Tests that need their own home layout can still monkeypatch the env var
     on top of this; the pre-cleared cache makes that reliable.
+
+    This covers BOTH resolvers as of #252. It did not always: `ConsciousnessConfig`
+    resolved the agent root by walking up from the cwd and never consulted this
+    variable, so anything reaching the filesystem through that path addressed
+    whatever directory pytest was started in — isolation that read as complete
+    and was not. Anything added here later should be checked against both, since
+    the fixture's coverage is a property of the resolvers rather than of itself.
 
     Yields:
         Path to the isolated agent home
@@ -1019,3 +1054,53 @@ def tmux_sandbox_env():
         # so a future edit that reintroduces $TMUX cannot turn this line into
         # kill-server against the host.
         subprocess.run(["tmux", "kill-server"], env=env, capture_output=True)
+
+@pytest.fixture
+def temp_log_file(isolated_events_log):
+    """The isolated event log path, for tests that read the file directly.
+
+    A bridge, not a second isolation mechanism. ``isolated_events_log`` above is
+    autouse and already redirects both the in-process path and the subprocess
+    environment variable; this returns THAT path so a test asserting on file
+    contents reads the same file ``append_event`` just wrote to.
+
+    It exists because the suites consolidated here were written against a
+    separate conftest that named the same object ``temp_log_file``. Aliasing was
+    chosen over renaming call sites: the rename would have touched three modules
+    to no behavioural end, and a wrong rename in a test that reads a log path is
+    invisible -- it would read an empty file and pass.
+    """
+    return isolated_events_log
+
+
+@pytest.fixture(autouse=True)
+def _no_live_telegram_credentials(request, monkeypatch):
+    """Refuse live Telegram credentials to every test by default.
+
+    GH #330. ``isolated_channel_state`` above isolates TELEGRAM_STATE_DIR, which
+    covers poller state -- the failure that evicted a live poller. It does not
+    cover CONFIG RESOLUTION: ``resolve_telegram_config`` reads
+    ``{project}/.claude/channels/telegram/`` then ``~/.claude/channels/telegram/``
+    and consults no environment variable, so any test that reaches a hook's
+    notify path sends a REAL message to a REAL person. Measured on this machine:
+    the operator confirms receiving them routinely.
+
+    Two paths, one covered, and from the outside the fixture looked complete.
+
+    Scope of THIS fix, stated so it is not overread: it neutralises the
+    IN-PROCESS path only. A test that spawns a subprocess gets a fresh
+    interpreter where this patch does not exist, and no environment variable
+    exists to carry the refusal across that boundary -- creating one is a product
+    change and belongs to #330. ``test_hook_integration.py`` is skipped until
+    then for exactly that reason.
+
+    Opt out with ``@pytest.mark.live_telegram_config`` when a test's subject IS
+    the resolution path.
+    """
+    if request.node.get_closest_marker("live_telegram_config"):
+        return
+    monkeypatch.setattr(
+        "macf.channels.telegram.resolve_telegram_config",
+        lambda: None,
+        raising=True,
+    )

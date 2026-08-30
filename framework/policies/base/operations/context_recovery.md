@@ -91,7 +91,9 @@ The difference is origin (new system vs cleared session), not recovery approach.
 
 ### What Is Compaction
 
-Compaction occurs when conversation context reaches ~93% capacity. Claude Code triggers automatic context reduction, preserving a summary while discarding detailed conversation history.
+Compaction occurs when the conversation reaches the client's auto-compaction threshold — a proportion of the context window, configurable per deployment (Claude Code exposes an override). The client then replaces the detailed history with a summary.
+
+**A caution about the figure that used to sit here.** This said compaction triggers at *~93% capacity*, while `checkpoints` said compaction causes *93% information loss*. Those are different quantities — a trigger threshold and a compression ratio — and they shared a number. Either a coincidence that invites conflation, or one was derived from the other in error; the record does not say which. Both are now expressed as what they are, so the two can no longer be mistaken for one fact.
 
 **What Survives**:
 - Conversation summary (Anthropic-generated, injected at session start)

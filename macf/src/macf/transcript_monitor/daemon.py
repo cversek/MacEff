@@ -89,6 +89,42 @@ def detect_user_activity(entry: dict) -> Optional[Detection]:
     })
 
 
+def detect_permission_denial(entry: dict) -> Optional[Detection]:
+    """Detect a permission dialog the user answered by rejecting the call.
+
+    `detect_user_activity` deliberately drops entries carrying `toolUseResult`,
+    because those are tool results rather than typed messages. A permission
+    REJECTION arrives as exactly that shape, so it was dropped too — and the
+    framework could mark the user idle while they were gating every tool call
+    from the permission surface.
+
+    A rejection is arguably STRONGER presence evidence than a prompt: it proves
+    the user is watching the tool stream in real time.
+
+    Shape verified against a live transcript rather than assumed: nine denials,
+    every one `type: "user"` with `toolDenialKind: "user-rejected"` and
+    `toolUseResult: "User rejected tool use"`. `toolDenialKind` appears on
+    denials and nowhere else, which is what makes it a clean discriminator.
+
+    Approvals are NOT covered. An approved ask-gated call is indistinguishable
+    from an auto-allowed one at this layer, and inventing presence from an
+    ambiguous signal is the failure this whole area already suffers from. The
+    rejection path alone fixes the worst case: typed feedback into a dialog,
+    followed seconds later by being called idle.
+    """
+    if entry.get("type") != "user":
+        return None
+    if not entry.get("toolDenialKind"):
+        return None
+
+    return Detection("user_activity_detected", {
+        "source": "direct",
+        "timestamp": entry.get("timestamp", ""),
+        "denial_kind": str(entry.get("toolDenialKind", "")),
+        "detector": "transcript_monitor_permission_denial",
+    })
+
+
 def detect_mid_turn_enqueue(entry: dict) -> Optional[Detection]:
     """Detect mid-turn user message (queue-operation enqueue)."""
     if entry.get("type") != "queue-operation":
@@ -151,6 +187,7 @@ def detect_context_collapse(entry: dict) -> Optional[Detection]:
 # Default detector set
 DEFAULT_DETECTORS: List[Detector] = [
     detect_user_activity,
+    detect_permission_denial,
     detect_mid_turn_enqueue,
     detect_compact_boundary,
     detect_api_error,
@@ -611,7 +648,10 @@ def start_daemon(foreground: bool = False, poll_interval: float = DEFAULT_POLL_I
     """
     if is_running():
         pid = read_pid_file()
-        print(f"📡 Transcript Monitor already running (PID {pid})")
+        # stderr, not stdout: start_daemon is called from the SessionStart hook,
+        # whose stdout must be parseable JSON. See the note on the started-banner
+        # below — this branch has the same defect and is merely harder to reach.
+        print(f"📡 Transcript Monitor already running (PID {pid})", file=sys.stderr)
         return 0
 
     jsonl_path = find_current_transcript()
@@ -646,9 +686,21 @@ def start_daemon(foreground: bool = False, poll_interval: float = DEFAULT_POLL_I
     if pid > 0:
         # Parent: report and exit
         write_pid_file(pid)
-        print(f"📡 Transcript Monitor started (PID {pid})")
-        print(f"   Watching: {jsonl_path}")
-        print(f"   Poll interval: {poll_interval}s")
+        # stderr, ALL THREE. The SessionStart hook calls this when the monitor is
+        # down, and the hook's stdout must parse as JSON. Three lines here made
+        # json.loads fail at char 0, so Claude Code never extracted
+        # systemMessage and the compaction-recovery banner was silently dropped
+        # — the operator saw nothing at all on a compaction restart, while the
+        # agent still received the content as unparsed context. A one-directional
+        # failure with no error, no warning, and no partial output: it looks
+        # exactly like a session where nothing needed saying.
+        #
+        # Latent because the guard only calls this when the daemon is DOWN, and
+        # the daemon persists across sessions. The bug needed a session start
+        # coinciding with a dead monitor, which is why it read as intermittent.
+        print(f"📡 Transcript Monitor started (PID {pid})", file=sys.stderr)
+        print(f"   Watching: {jsonl_path}", file=sys.stderr)
+        print(f"   Poll interval: {poll_interval}s", file=sys.stderr)
         return 0
 
     # Child: become daemon

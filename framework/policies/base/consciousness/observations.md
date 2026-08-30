@@ -232,7 +232,6 @@ An **observation** is a consciousness artifact documenting **discovered truths**
 # [Title - Descriptive and Specific]
 
 **Date**: YYYY-MM-DD
-**Breadcrumb**: c_XX/s_YYYYYYYY/p_ZZZZZZZ/t_TTTTTTTTTT/g_GGGGGGG
 **Session**: [session_id]
 **Type**: [Technical Validation | Architectural Discovery | Capability Discovery]
 **Significance**: [HIGH | MEDIUM | LOW] - [One-line impact statement]

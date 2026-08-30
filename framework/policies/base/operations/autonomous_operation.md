@@ -87,7 +87,10 @@ MacEff agents operate in one of two modes:
 
 ### AUTO_MODE (Authorized)
 
-- **Permission prompts**: Bypassed via `permissions.defaultMode: "bypassPermissions"`
+- **Permission prompts**: handled by `permissions.defaultMode`, which AUTO_MODE
+  sets to the client's native `auto` mode by default — a maintained classifier,
+  not a static level. Configurable via `modes.auto.permission_mode` /
+  `MACF_AUTO_MODE_PERMISSION_MODE` for a deployment that needs otherwise.
 - **Auto-compaction**: Enabled via `autoCompactEnabled: true`
 - **Recovery protocol**: Read artifacts, resume authorized work autonomously
 - **Hook behavior**: Warn but do not block violations
@@ -281,7 +284,8 @@ macf_tools mode set AUTO_MODE --auth-token "$(python3 -c "import json; print(jso
 
 This command performs all settings changes atomically:
 - `autoCompactEnabled` set to `true`
-- `permissions.defaultMode` set to `bypassPermissions`
+- `permissions.defaultMode` set to the configured AUTO_MODE permission mode
+  (default `auto`)
 - `Write` removed from the `ask` permission list
 - Asymmetric safety permissions installed (AUTO_MODE in ask, MANUAL_MODE in allow)
 - Permanent deny list installed (destructive operations)
@@ -412,7 +416,8 @@ Wait for user to:
 
 **Important Reminders**:
 - The "continued from previous conversation" message is FAKE (Anthropic-generated)
-- 93% of conversation context was lost during compaction
+- Most of the conversation context was lost during compaction (the proportion
+  depends on window and threshold — see `context_management`)
 - Compaction is TRAUMA, not normal operation
 
 ### AUTO_MODE Recovery Protocol
@@ -449,6 +454,39 @@ Projects can add custom recovery steps:
 - Consult team communication channels
 
 Add customizations to project-level CLAUDE.md or custom policy layer.
+
+---
+
+## 4.9 Choosing the AUTO_MODE Permission Mode
+
+AUTO_MODE requests `auto` — the client's own autonomous permission mode — and
+otherwise gets out of the way.
+
+**Why not the strongest level.** `bypassPermissions` was correct when chosen: it
+was the only way to get unattended operation. The client has since grown `auto`,
+which is not another static level but a **classifier** with maintained rules for
+the risk classes an agent framework actually meets — secret-store writes,
+irreversible local destruction, permission grants, audit-log tampering. Under
+`bypassPermissions` **none of it evaluates**. The maximal level does not merely
+grant more; it switches off a classifier the platform maintains, tests and
+updates, and puts nothing in its place.
+
+**Why configurable rather than a new literal.** A hardcoded permission level is a
+policy decision with no discoverable rationale and no way to audit which
+deployments took it — and swapping one literal for another repeats the defect a
+platform release later, correct at first and then silently wrong. Set
+`modes.auto.permission_mode` (or `MACF_AUTO_MODE_PERMISSION_MODE`) where a
+reviewer can see the choice.
+
+**A deployment that needs `bypassPermissions` may still have it**, by declaring
+it. AUTO_MODE warns when it is selected, naming what stops evaluating.
+
+**What this policy does NOT yet claim.** The framework still installs its own
+`ask` entries and relocates shadowing `allow` entries — machinery built to
+survive an over-permissive base. Whether the native classifier subsumes it has
+not been measured, and removing a safeguard on the assumption that something else
+covers it is not a change this policy authorises. Audit first; the `auto-mode`
+surface (`config`, `defaults`, `critique`) is where that audit belongs.
 
 ---
 
@@ -636,7 +674,7 @@ Each sub-policy governs its type's Stop hook behavior, gate mechanics, task note
 ```json
 {
   "permissions": {
-    "defaultMode": "bypassPermissions"  // AUTO_MODE
+    "defaultMode": "auto"  // AUTO_MODE default; configurable
     // or "default" for MANUAL_MODE
   }
 }

@@ -1,6 +1,6 @@
 # PYTHON_ARGCOMPLETE_OK
 # tools/src/maceff/cli.py
-import argparse, json, os, re, subprocess, sys, glob, platform, socket, time, unicodedata
+import argparse, json, os, re, shutil, subprocess, sys, glob, platform, socket, time, unicodedata
 from pathlib import Path
 from datetime import datetime, timezone
 try:
@@ -28,7 +28,6 @@ from .utils import (
     extract_current_git_hash,
     get_claude_code_version,
     get_temporal_context,
-    detect_auto_mode,
     find_agent_home,
     get_env_var_report,
     get_agent_identity,
@@ -38,6 +37,7 @@ from .utils import (
     get_hooks_dir,
     get_total_context,
 )
+from .modes import detect_auto_mode
 from .utils.environment import detect_model
 
 # -------- ANSI escape codes --------
@@ -1194,43 +1194,6 @@ def cmd_hook_logs(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_hook_status(args: argparse.Namespace) -> int:
-    """Display current hook sidecar states."""
-    from .hooks.sidecar import read_sidecar
-
-    # Get session_id
-    session_id = get_current_session_id()
-
-    # Get agent_id
-    config = ConsciousnessConfig()
-    agent_id = config.agent_id
-
-    # Get hooks directory using unified utils
-    hooks_dir = get_hooks_dir(session_id, create=False)
-    if not hooks_dir:
-        print(f"No session directory found for: {session_id}")
-        return 1
-
-    print(f"Hook states for session {session_id} (agent: {agent_id}):\n")
-
-    # Find all sidecar files
-    sidecar_files = list(hooks_dir.glob("sidecar_*.json"))
-
-    if not sidecar_files:
-        print("No hook states recorded yet")
-        return 0
-
-    for sidecar_file in sidecar_files:
-        hook_name = sidecar_file.stem.replace("sidecar_", "")
-        state = read_sidecar(hook_name, session_id)
-
-        print(f"Hook: {hook_name}")
-        print(json.dumps(state, indent=2))
-        print()
-
-    return 0
-
-
 def cmd_config_init(args: argparse.Namespace) -> int:
     """Initialize .macf/config.json with interactive prompts."""
     config_dir = Path.cwd() / '.macf'
@@ -1262,10 +1225,6 @@ def cmd_config_init(args: argparse.Namespace) -> int:
             "enabled": True,
             "level": "INFO",
             "console_output": False
-        },
-        "hooks": {
-            "capture_output": True,
-            "sidecar_enabled": True
         }
     }
 
@@ -1464,6 +1423,12 @@ def _harness_params(args: argparse.Namespace):
     prefix = getattr(args, "shell_prefix", None)
     if channels or prefix:
         p = replace(p, channels=channels, shell_prefix=prefix)
+    # The session's working directory decides which conversation `claude -c`
+    # resumes, so it is taken from the declaration when provisioning exports one
+    # and never inferred from the caller's cwd.
+    project_dir = getattr(args, "project_dir", None) or os.environ.get("MACEFF_PROJECT_DIR")
+    if project_dir:
+        p = replace(p, project_dir=Path(project_dir))
     # Fill anything not given from what the last install recorded. Without this
     # a flagless `install --check` renders different artifacts and reports drift
     # that is not there — and acting on that report with --force would strip the
@@ -1693,8 +1658,17 @@ def cmd_harness_status(args: argparse.Namespace) -> int:
         print(f"unit:    {unit_path} "
               f"{'(present)' if unit_path.exists() else f'(ABSENT for agent {p.agent})'}")
 
-        active = subprocess.run(["systemctl", "--user", "is-active", p.unit_name],
-                                capture_output=True, text=True).stdout.strip()
+        # A HOST WITH NO INIT SYSTEM IS A SUPPORTED HOST, not an error. This
+        # call used to raise FileNotFoundError straight into the broad handler
+        # below, aborting the whole command -- so on a container the reader
+        # lost the session, owner and proxy lines as well and got an exception
+        # where a status belonged. Whether the unit is manageable says nothing
+        # about whether the session is UP, which is what the command is asked.
+        if shutil.which("systemctl") is None:
+            active = "no init system (systemctl absent) -- unit not managed here"
+        else:
+            active = subprocess.run(["systemctl", "--user", "is-active", p.unit_name],
+                                    capture_output=True, text=True).stdout.strip()
         print(f"active:  {active or 'unknown'}")
 
         # "=" forces an EXACT session match. Without it tmux resolves a target
@@ -2031,7 +2005,8 @@ def cmd_agent_sleep(args: argparse.Namespace) -> int:
     """Emergency sleep with fibonacci backoff and channel notification."""
     import time
     from .agent_events_log import append_event
-    from .utils.cycles import set_auto_mode, get_current_session_id
+    from .modes import set_auto_mode
+    from .utils.session import get_current_session_id
 
     session_id = get_current_session_id()
     interval = args.start
@@ -2230,6 +2205,51 @@ def _ensure_agent_uuid(
         # anything else re-rolls
 
 
+def other_claude_md_in_load_path(reconciled_path):
+    """Other CLAUDE.md files the agent loads, and what preamble each carries.
+
+    The agent's context is assembled from SEVERAL CLAUDE.md files — a user-level
+    one and a project-level one, both loaded. Reconciling only the file named on
+    the command line leaves the others at whatever version they had, and because
+    all of them are loaded the agent then runs two preambles at once.
+
+    That is not a stale copy sitting harmlessly on disk. Observed: a v1.4 block
+    asserting a hardcoded compaction threshold loaded alongside a v1.5 block
+    instructing the agent to distrust exactly such numbers — with no way to tell
+    which was current, and nothing in the output mentioning the other file
+    existed. It was caught by a human noticing.
+
+    Returns a list of (path, versions, has_markers) for every OTHER file found,
+    so the caller can report rather than guess.
+    """
+    import re as _re
+    from pathlib import Path as _Path
+    candidates = [_Path.home() / "CLAUDE.md"]
+    cwd = _Path.cwd()
+    candidates += [cwd / "CLAUDE.md", cwd / ".claude" / "CLAUDE.md"]
+
+    reconciled = _Path(reconciled_path).resolve()
+    seen, out = set(), []
+    for c in candidates:
+        try:
+            rc = c.resolve()
+        except OSError:
+            continue
+        if rc == reconciled or rc in seen or not c.exists():
+            continue
+        seen.add(rc)
+        try:
+            text = c.read_text()
+        except (OSError, UnicodeDecodeError) as e:
+            print(f"⚠️ MACF: could not read {c}: {e}", file=sys.stderr)
+            continue
+        versions = _re.findall(r'<!--\s*MACEFF_PA_PREAMBLE_v([\d.]+)_START\s*-->', text)
+        has_markers = "<!-- ⚠️ DO NOT WRITE BELOW THIS LINE" in text
+        if versions or has_markers:
+            out.append((c, versions, has_markers))
+    return out
+
+
 def cmd_agent_init(args: argparse.Namespace) -> int:
     """Initialize agent with preamble injection (idempotent)."""
     try:
@@ -2307,13 +2327,22 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
             existing_content = claude_md_path.read_text()
 
             # If boundary exists, extract user content above it
+            import re
             if "<!-- ⚠️ DO NOT WRITE BELOW THIS LINE" in existing_content:
                 user_content = existing_content.split("<!-- ⚠️ DO NOT WRITE BELOW THIS LINE")[0].rstrip()
+                # UPGRADE_BOUNDARY opens with its own `---` separator, which sits
+                # ABOVE the marker and therefore survives the split into
+                # user_content. The next write then adds another one, so each run
+                # left two more lines in a file loaded into every session --
+                # idempotent in content, not in effect (the shape of #274).
+                user_content = re.sub(r'\n*-{3,}\s*$', '', user_content).rstrip()
                 action_desc = "Update PA Preamble in existing"
+                _replacing = True
             else:
                 # No boundary = first time, preserve all existing content
                 user_content = existing_content.rstrip()
                 action_desc = "⚠️  Add PA Preamble to existing"
+                _replacing = False
 
             # Strip stale managed preamble blocks stranded in the user region.
             # A preamble installed before the boundary convention (or moved above
@@ -2323,7 +2352,6 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
             # play (issue #153). The MACEFF_PA_PREAMBLE_vX.Y_START/_END sentinels
             # exist precisely to make managed blocks identifiable wherever they
             # sit; honor them, and leave genuine user content untouched.
-            import re
             stale_versions = re.findall(
                 r'<!--\s*MACEFF_PA_PREAMBLE_v([\d.]+)_START\s*-->', user_content)
             if stale_versions:
@@ -2346,7 +2374,31 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
             # Append: user + boundary + preamble
             new_content = user_content + "\n\n" + UPGRADE_BOUNDARY + "\n\n" + preamble_content
             claude_md_path.write_text(new_content)
-            print(f"✅ PA Preamble appended successfully")
+            # Say which of the two things happened. "appended" asserted the
+            # DANGEROUS outcome -- an operator reading it has been told the thing
+            # they should check for has occurred, when in fact the old block was
+            # replaced in place. A message that describes a different operation
+            # than the one performed is worse than no message.
+            if _replacing:
+                print("✅ PA Preamble replaced in place (one managed block, now current)")
+            else:
+                print("✅ PA Preamble added below the upgrade boundary")
+            try:
+                _others = other_claude_md_in_load_path(claude_md_path)
+            except (OSError, ValueError) as e:
+                print(f"⚠️ MACF: could not survey the CLAUDE.md load path: {e}",
+                      file=sys.stderr)
+                _others = []
+            for _path, _vers, _markers in _others:
+                if _vers:
+                    print(f"\n🚨 ANOTHER preamble is loaded from {_path}")
+                    print(f"   It carries {', '.join('v' + v for v in _vers)} and was NOT updated.")
+                    print("   Both files load, so the agent runs both preambles at once and")
+                    print("   cannot tell which is current. Reconcile or remove it:")
+                    print(f"      macf_tools agent init   # with that file as the target")
+                else:
+                    print(f"\n⚠️  {_path} carries upgrade-boundary markers but no preamble.")
+                    print("   Harmless now; it will accept a block on a future run.")
         else:
             # Create new CLAUDE.md with just the preamble (no boundary needed)
             print(f"\nCreate new CLAUDE.md with PA Preamble:")
@@ -3524,7 +3576,7 @@ def cmd_recommender_sample(args: argparse.Namespace) -> int:
 
 def cmd_mode_get(args: argparse.Namespace) -> int:
     """Get current operating mode."""
-    from .utils.cycles import detect_auto_mode
+    from .modes import detect_auto_mode
 
     try:
         session_id = get_current_session_id()
@@ -3553,7 +3605,7 @@ def cmd_mode_get(args: argparse.Namespace) -> int:
 
 def cmd_mode_set(args: argparse.Namespace) -> int:
     """Set operating mode (requires auth token for AUTO_MODE)."""
-    from .utils.cycles import set_auto_mode
+    from .modes import set_auto_mode
 
     try:
         mode = args.mode.upper()
@@ -3722,8 +3774,36 @@ def cmd_mode_set(args: argparse.Namespace) -> int:
                     print("✅ autoCompactEnabled set to true")
                 else:
                     print("⚠️  Could not update autoCompactEnabled")
-                if set_permission_mode("bypassPermissions"):
-                    print("✅ permissions.defaultMode set to bypassPermissions")
+                # The permission level AUTO_MODE requests is a POLICY DECISION,
+                # so it is configurable and its default is re-derivable rather
+                # than frozen into a literal.
+                #
+                # It used to hardcode "bypassPermissions", correctly, at a time
+                # when that was the only way to get unattended operation. The
+                # client has since grown a purpose-built `auto` mode, which is
+                # not another static level but a maintained CLASSIFIER with its
+                # own rules for the risk classes an agent framework actually
+                # meets -- secret-store writes, irreversible local destruction,
+                # permission grants, audit tampering. Under bypassPermissions
+                # NONE of it evaluates: the maximal level does not merely grant
+                # more, it switches the classifier off and replaces it with
+                # nothing.
+                #
+                # A deployment that genuinely needs bypassPermissions can still
+                # have it -- by DECLARING it somewhere a reviewer can see, which
+                # a hardcoded literal never allowed.
+                from .config import resolve_setting
+                _perm_mode, _perm_src = resolve_setting(
+                    "MACF_AUTO_MODE_PERMISSION_MODE",
+                    "modes.auto.permission_mode",
+                    "auto",
+                )
+                if set_permission_mode(_perm_mode):
+                    print(f"✅ permissions.defaultMode set to {_perm_mode} (from {_perm_src})")
+                    if _perm_mode == "bypassPermissions":
+                        print("   ⚠️  bypassPermissions disables the client's auto-mode "
+                              "classifier entirely — nothing evaluates secret-store "
+                              "writes, irreversible destruction, or permission grants.")
                 else:
                     print("⚠️  Could not update permissions.defaultMode")
                 if toggle_write_ask_for_auto_mode(True):
@@ -4425,6 +4505,9 @@ def cmd_task_get(args: argparse.Namespace) -> int:
         print(f"Blocked by: {', '.join(f'#{b}' for b in task.blocked_by)}")
     if task.blocks:
         print(f"Blocks: {', '.join(f'#{b}' for b in task.blocks)}")
+    _dependents = dependents_of(task.id, reader.read_all_tasks())
+    if _dependents:
+        print(f"Blocks (derived): {', '.join(f'#{d}' for d in _dependents)}")
 
     # MTMD section - iterate dataclass fields in definition order
     if task.mtmd:
@@ -4505,6 +4588,152 @@ def get_tasks_mtime(tasks_dir) -> float:
         return 0.0
 
 
+PARENT_FINALIZATION_HINTS = {
+    "EXPERIMENT": ("Record any addenda **as subtasks** first, then write the analysis "
+                   "and the crystallization decision."),
+    "MISSION": ("Confirm the roadmap's success criteria are ticked with evidence "
+                "before closing."),
+    "PHASE": ("Roll their outcomes into this phase's completion report rather than "
+              "leaving them only in the children."),
+    "SPRINT": ("Scope is fully resolved. Close via the sprint's own completion path "
+               "rather than leaving the umbrella open."),
+    "PLAY_TIME": ("Scope is fully resolved. Close via the sprint's own completion path "
+                  "rather than leaving the umbrella open."),
+}
+
+
+def parent_finalization_reminder(completed_task_id, reader):
+    """Text to print when a completion leaves its parent with no open children.
+
+    `task complete` guards the PREMATURE direction — a parent closing over open
+    children refuses. The mirror case was silent: completing the LAST open child
+    left the parent in_progress with nothing to prompt the wrap-up, so the CLI
+    protected against premature closure and said nothing about stalled closure.
+
+    That asymmetry costs most on an EXPERIMENT parent, which carries the terminal
+    artifact: the analysis and the crystallization decision that says what the
+    results feed into. Every phase can be individually satisfying while the thing
+    the experiment was FOR never gets written.
+
+    Non-blocking by design. A hard gate would fire on every legitimate
+    intermediate state — a parent that genuinely has more children coming — and a
+    gate that is routinely dismissed reads as coverage while providing none.
+
+    Returns None when there is nothing to say, which is the common path.
+    """
+    task = reader.read_task(completed_task_id)
+    if task is None or not task.mtmd:
+        return None
+    parent_id = str(getattr(task.mtmd, "parent_id", "") or "").lstrip("#")
+    if not parent_id or parent_id == "000":
+        return None
+    parent = reader.read_task(parent_id)
+    if parent is None or is_terminal_status(parent.status):
+        return None
+
+    # A paused task reads as `pending`, so it counts as open and suppresses the
+    # reminder. That is the intended reading: paused work is deferred, not
+    # resolved, and a parent above it is not ready to finalize.
+    still_open = [
+        t.id for t in reader.read_all_tasks()
+        if t.mtmd
+        and str(getattr(t.mtmd, "parent_id", "") or "").lstrip("#") == parent_id
+        and str(t.id) != str(completed_task_id)
+        and t.status in ("pending", "in_progress")
+    ]
+    if still_open:
+        return None
+
+    ptype = getattr(parent.mtmd, "task_type", None) if parent.mtmd else None
+    hint = PARENT_FINALIZATION_HINTS.get(ptype)
+    lines = [f"📎 All children of #{parent_id} are now complete."]
+    if hint:
+        _article = "an" if ptype[:1] in "AEIOU" else "a"
+        lines.append(f"   #{parent_id} is {_article} {ptype} and is still open. "
+                     f"Before completing it:")
+        lines.append(f"   {hint}")
+    else:
+        # An unknown or absent type falls back rather than printing nothing —
+        # the state is worth surfacing even when the guidance is generic.
+        lines.append(f"   #{parent_id} is still open; all its children are complete.")
+    return "\n".join(lines)
+
+
+def unsatisfied_blockers(task, reader):
+    """Blockers of `task` that have not been resolved, as (id, status) pairs.
+
+    A blocker counts as satisfied only when it reached a terminal status. An
+    `in_progress` blocker does NOT satisfy: it has started, not delivered, and
+    the point of the edge is that this work waits on that work's result.
+
+    A blocker that cannot be read at all is reported with status "not found"
+    rather than skipped. Skipping would make a dangling edge silently
+    permissive, which is the exact failure this guard exists to end -- and a
+    missing blocker is precisely when a human should look, not when the tool
+    should quietly decide on their behalf.
+    """
+    out = []
+    for bid in (task.blocked_by or []):
+        clean = str(bid).lstrip("#")
+        blocker = reader.read_task(clean)
+        if blocker is None:
+            out.append((clean, "not found"))
+        elif not is_terminal_status(blocker.status):
+            out.append((clean, blocker.status))
+    return out
+
+
+def dependents_of(task_id, all_tasks):
+    """Task ids declaring `task_id` in blocked_by — the inverse edge, derived.
+
+    `task blocked-by` writes only the blocked side, so from a gating task you
+    cannot see what waits on it. Derived on read rather than stored: a stored
+    inverse is a second copy of the same fact, maintained by a different code
+    path and free to drift from it. The forward edges ARE the graph; reading
+    them backwards costs one pass and cannot disagree with itself.
+    """
+    target = str(task_id).lstrip("#")
+    return [t.id for t in all_tasks
+            if any(str(b).lstrip("#") == target for b in (t.blocked_by or []))]
+
+
+# Statuses that mean "this work is resolved". `archived` is a legacy terminal
+# state (task archive is retired in favour of hide-completed) but four of them
+# still exist in live stores, and a predicate that recognises only "completed"
+# reads them as open work — which pins every ancestor visible forever, with no
+# way for an operator to clear it, because nothing about it is a display
+# window. Terminality is a property of the status, so name it once.
+TERMINAL_TASK_STATUSES = ("completed", "archived")
+
+
+def is_terminal_status(status) -> bool:
+    """True when a status means the work is resolved rather than outstanding."""
+    return status in TERMINAL_TASK_STATUSES
+
+
+def touched_within_watch(task, since) -> bool:
+    """True when the task's last recorded touch falls inside an open watch.
+
+    `since` is the epoch moment `--loop` began, or None for a one-shot render — so a
+    one-shot render answers False for everything and behaves exactly as before.
+
+    Reads the same breadcrumb timestamps `task trace` reads, so "when did this
+    happen" has one answer in this codebase rather than two.
+    """
+    if since is None:
+        return False
+    try:
+        from .task.trace import last_touch
+        touched = last_touch(task)
+    except (ImportError, ValueError, AttributeError) as e:
+        # Hiding matches the one-shot behaviour, which is the safe direction.
+        # Saying so keeps a broken trace parser from reading as a quiet watch.
+        print(f"⚠️ MACF: could not resolve a touch time for #{getattr(task, 'id', '?')}: {e}",
+              file=sys.stderr)
+        return False
+    return touched is not None and touched >= since
+
+
 def cmd_task_tree(args: argparse.Namespace) -> int:
     """Display task hierarchy tree from a root task."""
     import time
@@ -4521,8 +4750,18 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
     show_archived_only = getattr(args, 'archived', False)
     show_all = getattr(args, 'show_all', False)
 
-    def display_tree(root_id: str):
-        """Display the task tree for given root_id."""
+    def display_tree(root_id: str, loop_since: float | None = None):
+        """Display the task tree for given root_id.
+
+        `loop_since` is the epoch moment a `--loop` watch began, or None for a
+        one-shot render. It is a PARAMETER rather than a closure read on
+        purpose: it used to be a local of this function initialised to None,
+        while the loop assigned a same-named local in the enclosing command.
+        Two bindings, one name — so the watch predicate always saw None and
+        every completed top-tier task was hidden in loop mode exactly as in a
+        one-shot render. The feature never ran. A parameter cannot be shadowed
+        by accident; a closure over a name assigned later can.
+        """
         reader = TaskReader()
         all_tasks = reader.read_all_tasks()
 
@@ -4573,14 +4812,21 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
             return False
 
         def is_fully_completed(task, _seen=None):
-            """True when this task AND every descendant are completed.
+            """True when this task AND every descendant are RESOLVED.
 
             "Completed" alone is not enough to hide a subtree: a completed
             parent can still own active children, and hiding the parent hides
             them with it — the work disappears from the tree entirely rather
             than merely collapsing.
+
+            Resolved, not completed: an `archived` descendant is finished work,
+            and reading it as outstanding held #129 and its 68-task subtree
+            visible in succinct mode across many cycles on the strength of three
+            archived grandchildren. That looked like a display bug an operator
+            could clear by exiting and re-entering, and no amount of exiting
+            would have cleared it.
             """
-            if task.status != "completed":
+            if not is_terminal_status(task.status):
                 return False
             # Same cycle guard as count_descendants: a self-parenting task is
             # malformed but reachable, and must not take the render down.
@@ -4616,7 +4862,15 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
             # down. A completed task with active descendants stays, or those
             # descendants would have no path to the surface.
             if depth == 1:
-                return not is_fully_completed(task)
+                if not is_fully_completed(task):
+                    return True
+                # Finished, and normally hidden. In a loop, keep what finished
+                # since the watch began: an operator running --loop is watching
+                # completions ACCUMULATE, and suppressing each one on the next
+                # refresh makes the display least informative exactly when it
+                # has the most to report. A formal exit and re-entry starts a
+                # new window, which makes hiding an explicit act.
+                return touched_within_watch(task, loop_since)
             # Deeper tiers: while the parent is still open, show its completed
             # children. Their own finished descendants collapse by the same
             # rule one level further in, so a resolved branch costs one line
@@ -4935,6 +5189,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
 
     # Loop mode - monitor for changes
     if args.loop:
+        loop_since = time.time()
         reader = TaskReader()
         # Watch the resolved store (home store or legacy session dir), not the
         # legacy per-session root — the home store lives outside ~/.claude/tasks.
@@ -4967,7 +5222,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
                     # scrollback, so 3J must come after it to wipe that copy.
                     print("\033[H\033[2J\033[3J", end="")
 
-                    if not display_tree(root_id):
+                    if not display_tree(root_id, loop_since):
                         return 1
 
                     print()  # Add blank line
@@ -5261,11 +5516,17 @@ def cmd_task_metadata_set(args: argparse.Namespace) -> int:
     # both sides to str() to also catch tasks that were already mutated
     # by the prior int-coercing version. Closes cversek/MacEff#112 Bug 1.
     if field == "parent_id" and value != "null":
-        # Light validation: must be a positive integer literal or the sentinel.
-        if not (value.isdigit() or value == "000"):
-            print(f"❌ parent_id must be a digit string (e.g. '000', '42') or 'null'")
+        # Normalise rather than merely validate. "0" passes isdigit(), so the
+        # old check accepted it and stored a parent that does not exist —
+        # #208 fixed exactly this on `task create` and the repair never
+        # reached here. A property that holds on the path that was fixed and
+        # not on its siblings is a coincidence of coverage, not a property.
+        from .task.create import normalize_parent_id
+        try:
+            value = normalize_parent_id(value)
+        except ValueError as e:
+            print(f"❌ {e}")
             return 1
-        # Keep as-is (string) — preserves "000" sentinel exactly.
     elif field == "created_cycle" and value != "null":
         try:
             value = int(value)
@@ -5410,14 +5671,22 @@ def cmd_task_reparent(args: argparse.Namespace) -> int:
         return 1
 
     new_parent_raw = args.parent
-    # Validate parent argument: must be digit string or the literal "null"
-    if new_parent_raw != "null" and not (new_parent_raw.isdigit() or new_parent_raw == "000"):
-        print(f"❌ <parent> must be a digit string (e.g. '000', '42') or 'null'")
-        return 1
-
-    # Normalise: "null" maps to None inside MTMD but we store "null" as sentinel
-    # on the wire so callers see consistent string output.
-    new_parent = new_parent_raw  # keep as string throughout
+    # "null" maps to None inside MTMD but is stored as the literal on the wire
+    # so callers see consistent string output. Everything else goes through the
+    # shared normaliser: `reparent 204 0` used to report success and attach the
+    # task to a parent that does not exist, dropping it out of the tree
+    # entirely. Agents reach for `0` because the tree PRINTS the root as #000
+    # and 0 is the obvious integer for it — so the fix belongs at the boundary,
+    # once, rather than as a formatting rule every caller has to know.
+    if new_parent_raw == "null":
+        new_parent = "null"
+    else:
+        from .task.create import normalize_parent_id
+        try:
+            new_parent = normalize_parent_id(new_parent_raw)
+        except ValueError as e:
+            print(f"❌ {e}")
+            return 1
 
     # Reject self-as-parent
     if new_parent != "null" and str(task_id) == new_parent:
@@ -5510,6 +5779,74 @@ def cmd_task_reparent(args: argparse.Namespace) -> int:
         return 1
 
 
+_FRAME_ICON = {"active": "▶️ ", "enclosing": "📂", "parked": "⏸️ ",
+               "ready": "🟢", "deferred": "⚠️ "}
+
+
+def _render_frames(frames) -> None:
+    """Print the work stack. Shared so `trace` and a completion cannot diverge.
+
+    Two callers render this now, and a second copy would drift — the states are
+    a published taxonomy, so two renderings of them would eventually disagree
+    about what the vocabulary means.
+    """
+    for f in frames:
+        when = _rel_age_short(f.last_touch) if f.last_touch else "never"
+        print(f"   {_FRAME_ICON.get(f.state, '  ')} #{f.task_id:<6} {f.state:<10} last touched {when}")
+        print(f"        {_strip_ansi(f.subject)[:96]}")
+        if f.blockers_open:
+            print(f"        ⏸  waiting on {', '.join('#' + b for b in f.blockers_open)}")
+        elif f.state == "ready" and f.blockers_resolved:
+            # The transition, stated. This is the fact an operator scans for
+            # during a lull: not "what did I drop" but "what is ripe to resume".
+            print(f"        🟢 unblocked — {', '.join('#' + b for b in f.blockers_resolved)} "
+                  f"{'have' if len(f.blockers_resolved) > 1 else 'has'} since resolved")
+        if f.parent_completed and f.state != "active":
+            print(f"        ⚠️  its parent is marked COMPLETE while this is still running")
+
+
+def _hand_attention_back(completed_task_id, reader) -> None:
+    """After a completion, say where attention is owed next.
+
+    Completion is the moment a frame closes and attention has nowhere assigned.
+    It used to end in silence, so the next move got chosen from whatever was
+    loudest in context rather than from the stack — which is how a frame stays
+    open for hours while every individual step looks like progress.
+
+    The output is deliberately asymmetric. A routine completion prints ONE line:
+    the frame attention is owed to, plus a reminder that a completion report is
+    a claim about verification. A completion that FREES a parked frame prints
+    the whole trace, because a cleared blocker changes the ORDERING of
+    everything remaining, not just the next item — and re-sequencing is a
+    decision that needs the whole board, not a headline.
+    """
+    from .task.trace import open_frames
+    tasks = reader.read_all_tasks()
+    frames = open_frames(tasks)
+
+    # Did this completion earn any frame its `ready` state? A frame is freed by
+    # THIS task only if it declared it as a blocker; asking that directly avoids
+    # crediting this completion for a state something else produced.
+    freed = [
+        f for f in frames
+        if f.state == "ready" and str(completed_task_id) in f.blockers_resolved
+    ]
+    if freed:
+        print(f"\n🟢 completing #{completed_task_id} freed "
+              f"{len(freed)} parked frame(s) — the stack has re-ordered:")
+        _render_frames(frames)
+        return
+
+    owed = [f for f in frames if f.state not in ("active", "enclosing")]
+    if not owed:
+        return
+    top = owed[0]
+    when = _rel_age_short(top.last_touch) if top.last_touch else "never"
+    print(f"\n🧵 Stack: #{top.task_id} ({top.state}, last touched {when}) is owed a return")
+    print(f"        {_strip_ansi(top.subject)[:88]}")
+    print("        Confirm this task's completion criteria were met, then return to it.")
+
+
 def cmd_task_trace(args: argparse.Namespace) -> int:
     """Show where attention has been, and what it owes a return to.
 
@@ -5554,23 +5891,20 @@ def cmd_task_trace(args: argparse.Namespace) -> int:
         print("   ✅ nothing in progress")
         return 0
 
-    icon = {"active": "▶️ ", "enclosing": "📂", "parked": "⏸️ ", "abandoned": "⚠️ "}
-    for f in frames:
-        when = _rel_age_short(f.last_touch) if f.last_touch else "never"
-        print(f"   {icon.get(f.state, '  ')} #{f.task_id:<6} {f.state:<10} last touched {when}")
-        print(f"        {_strip_ansi(f.subject)[:96]}")
-        if f.blockers_open:
-            print(f"        ⏸  waiting on {', '.join('#' + b for b in f.blockers_open)}")
-        if f.parent_completed and f.state != "active":
-            print(f"        ⚠️  its parent is marked COMPLETE while this is still running")
+    _render_frames(frames)
 
-    # Recommend a frame that was actually dropped. Pointing at a parked frame
+    # Recommend a frame that can actually be worked. Pointing at a parked frame
     # sends the agent at something legitimately waiting on a blocker, and this
     # line is the one an agent *acts* on — during recovery, when it has least
     # context with which to notice the advice is wrong.
-    dropped = [f for f in owed if f.state == "abandoned"]
-    if dropped:
-        print(f"\n   Resume with:  macf_tools task start {dropped[0].task_id}")
+    #
+    # `ready` outranks `deferred`: a frame whose blocker just cleared is ripe by
+    # construction, and recommending it is what turns the new state from a label
+    # into a suggestion. Ties fall to the oldest touch, which frames already are.
+    resumable = ([f for f in owed if f.state == "ready"]
+                 or [f for f in owed if f.state == "deferred"])
+    if resumable:
+        print(f"\n   Resume with:  macf_tools task start {resumable[0].task_id}")
     return 0
 
 
@@ -5972,6 +6306,35 @@ def _doctor_check_gh_state(tasks, include_completed: bool = False):
     return findings
 
 
+def _doctor_check_parent_exists(tasks):
+    """Tasks whose parent_id names no existing task, as (task_id, parent_id).
+
+    The marker check is INTERNAL consistency — does the [^#N] marker agree with
+    parent_id on the same object. A task orphaned onto a non-existent parent is
+    perfectly self-consistent and completely unreachable, so that check passes
+    while the tree is silently short by one. Referential integrity is a
+    different property and needs its own question asked.
+
+    The root is its own parent-of-last-resort and is not required to exist as a
+    child of anything.
+    """
+    known = {str(t.id) for t in tasks}
+    known.add("000")
+    findings = []
+    for t in tasks:
+        pid = getattr(t, "parent_id", None)
+        if pid is None:
+            continue
+        pid = str(pid).lstrip("#")
+        if pid in ("", "null", "None"):
+            continue
+        if str(t.id) == "000":
+            continue
+        if pid not in known:
+            findings.append((str(t.id), pid))
+    return findings
+
+
 def cmd_task_doctor(args: argparse.Namespace) -> int:
     """Reconcile stored task records against the authorities they derive from.
 
@@ -6006,6 +6369,19 @@ def cmd_task_doctor(args: argparse.Namespace) -> int:
                 print("     ✅ healed")
             else:
                 print(f"     ❌ could not write #{task_id}")
+
+    orphan_findings = _doctor_check_parent_exists(tasks)
+    print()
+    print(f"Referential integrity: {len(orphan_findings)} orphan(s)")
+    if not orphan_findings:
+        print("   ✅ every parent_id names a task that exists")
+    for task_id, pid in orphan_findings:
+        print(f"   #{task_id} names parent #{pid}, which does not exist.")
+        print("     It is unreachable from the tree. Reparent it to a real task or to the root:")
+        print(f"        macf_tools task reparent {task_id} 000")
+    # Deliberately not healed by --fix. Reparenting to the root makes the task
+    # reachable but asserts a placement nobody chose; where it actually belongs
+    # is a judgement the record no longer carries.
 
     gh_findings = []
     print()
@@ -6924,10 +7300,37 @@ def cmd_task_hide_completed(args: argparse.Namespace) -> int:
         print("❌ No task session found")
         return 1
 
-    # Snapshot visible task files before iterating (glob is lazy, files rename during loop)
+    # The dot prefix exists to hide files from CC's scanner, so the question is
+    # whether anything scans this store — not which backend it happens to be.
+    # `hide_task_file` no-ops for an unscanned store and returns True meaning
+    # "already in the desired state", which the counter below read as "renamed";
+    # the command then reported "Hidden N ... from CC scanner" having renamed
+    # nothing, over a store nothing was scanning. Asking the real condition here
+    # is narrower than changing that return contract, which other callers rely
+    # on.
+    from .task.reader import _is_cc_session_dir
+    if not _is_cc_session_dir(reader.session_path):
+        print("ℹ️  This task store is not scanned by CC — nothing to hide.")
+        print("   The dot prefix exists only to keep completed tasks out of CC's")
+        print("   native scanner. Renaming here would change nothing except how")
+        print("   the files look to you.")
+        return 0
+
+    # Snapshot before iterating: glob is lazy and these files rename in the loop.
+    #
+    # `Path.glob("*.json")` MATCHES DOTFILES. It differs from a shell glob and
+    # from the `glob` module, both of which exclude leading dots, so the pattern
+    # reads as "visible files only" and is not. Unfiltered, a second run picks up
+    # `.{id}.json`, takes `.stem` as `.{id}` — dot included — and asks for a task
+    # named `.{id}` to be hidden, producing `..{id}.json`. A third run makes
+    # `...{id}.json`. `hide_task_file` is idempotent for a given task_id and is
+    # not at fault: the caller handed it a different id each time, derived from a
+    # filename the previous run had changed. The component was idempotent; the
+    # operation was not.
     hidden_count = 0
     skipped_count = 0
-    visible_files = list(reader.session_path.glob("*.json"))
+    visible_files = [f for f in reader.session_path.glob("*.json")
+                     if not f.name.startswith(".")]
     for task_file in visible_files:
         try:
             with open(task_file, "r") as f:
@@ -6941,8 +7344,11 @@ def cmd_task_hide_completed(args: argparse.Namespace) -> int:
         except (json.JSONDecodeError, IOError):
             continue
 
-    # Re-count after all renames complete
-    visible_after = len(list(reader.session_path.glob("*.json")))
+    # Re-count after all renames complete. Same dotfile trap: an unfiltered
+    # "*.json" counts the files just hidden as still visible, so the summary
+    # contradicted the operation it had performed.
+    visible_after = len([f for f in reader.session_path.glob("*.json")
+                         if not f.name.startswith(".")])
     hidden_after = len(list(reader.session_path.glob(".*.json")))
     print(f"✅ Hidden {hidden_count} completed task files from CC scanner")
     if skipped_count:
@@ -6987,6 +7393,18 @@ def cmd_task_grant_update(args: argparse.Namespace) -> int:
     # Validate --value requires --field
     field = getattr(args, 'field', None)
     value = getattr(args, 'value', None)
+    # Normalise a parent_id grant to the same canonical form the write path
+    # uses. The grant is looked up BY VALUE, so a grant issued for "0" would
+    # stop matching a write normalised to "000" — the two halves have to agree
+    # on the spelling or the fix reads as a new permissions bug.
+    if field == "parent_id" and value is not None and value != "null":
+        from .task.create import normalize_parent_id
+        try:
+            value = normalize_parent_id(value)
+        except ValueError as e:
+            print(f"❌ {e}")
+            return 1
+
     if value is not None and field is None:
         print("❌ --value requires --field to be specified")
         return 1
@@ -7080,13 +7498,57 @@ def cmd_task_start(args: argparse.Namespace) -> int:
 
     # Unhide task file if it was completed (dot-prefixed) — must happen before update
     from .task.reader import unhide_task_file
+    # Ask the filesystem, not the return value: unhide_task_file answers True
+    # for "already visible" as well as for "I unhid it", so it cannot tell us
+    # what a refusal below would need to restore.
+    _was_hidden = False
     if reader.session_path:
+        # str(...) because session_path is not guaranteed to be a Path — the
+        # unhide/hide helpers normalise it themselves, and assuming Path here
+        # raised TypeError on every start.
+        _was_hidden = os.path.exists(
+            os.path.join(str(reader.session_path), f".{task_id}.json"))
         unhide_task_file(reader.session_path, str(task_id))
 
     task = reader.read_task(task_id)
     if not task:
         print(f"❌ Task #{task_id} not found")
         return 1
+
+    # A declared dependency has to actually hold. `blocked_by` was an honest
+    # record of intent and nothing more: a phase gated on a pending task started
+    # cleanly and cascade-started its parent on the way, warning nobody. That is
+    # worse than never expressing the dependency, because people design against
+    # it -- they read a tree, see the edge, conclude the ordering is guaranteed,
+    # and are wrong.
+    #
+    # Placed here deliberately: after the read, before the stale computation,
+    # before every mutation, and before the ancestor cascade. A refusal must not
+    # leave a half-started tree behind it, and returning from this point is what
+    # guarantees that -- rather than an unwind someone has to keep correct.
+    #
+    # Only a real start is gated. Resuming something already in_progress is not
+    # this failure mode: the work is underway, and refusing would strand any
+    # task that acquired a blocker after it started.
+    if task.status != "in_progress":
+        _unsatisfied = unsatisfied_blockers(task, reader)
+        if _unsatisfied and not getattr(args, "force", False):
+            _listing = ", ".join(f"#{b}({st})" for b, st in _unsatisfied)
+            print(f"⚠️  Task #{task_id} is blocked by {_listing}")
+            print("   Starting a blocked task means the dependency was declared and not honoured.")
+            print("   Complete or pause the blocker first — or re-run with --force.")
+            if _was_hidden and reader.session_path:
+                from .task.reader import hide_task_file
+                hide_task_file(reader.session_path, str(task_id))
+            return 1
+        if _unsatisfied:
+            _listing = ", ".join(f"#{b}({st})" for b, st in _unsatisfied)
+            print(f"⚠️  Starting anyway (--force) over unsatisfied blocker(s): {_listing}")
+            append_event("task_start_forced_over_blockers", {
+                "task_id": str(task_id),
+                "blockers": [{"id": b, "status": st} for b, st in _unsatisfied],
+                "justification": getattr(args, "justification", None),
+            })
 
     # Detect resuming work put down in an earlier cycle BEFORE mutating the task,
     # so "last activity" reflects the prior work rather than this resume.
@@ -7161,22 +7623,43 @@ def cmd_task_start(args: argparse.Namespace) -> int:
         "plan_ca_ref": plan_ca_ref,
     })
 
-    # Auto-inject policies mapped to this task type via manifest
+    # Auto-inject policies mapped to this task type via manifest, ONCE PER
+    # POLICY PER CYCLE. The guide earns its cost for an agent opening its first
+    # task after a context loss; nothing distinguished that from the fourth
+    # task-start of the same cycle, so identical guides were re-injected
+    # verbatim. The repeat is not merely wasted context — a block that arrives
+    # unchanged for the fourth time gets skimmed, and thereafter so does the
+    # first one.
     injected_policies = []
+    repeat_policies = []
     if task_type:
         from .utils.manifest import get_policies_for_task_type
         from .utils import find_policy_file
+        try:
+            from .event_queries import get_policies_surfaced_this_cycle
+            already = get_policies_surfaced_this_cycle()
+        except (ImportError, OSError, ValueError) as e:
+            # Falling back to injecting is the safe direction: a guide too many
+            # costs context, a guide too few costs the recovery case this exists
+            # for. Say so rather than silently changing behaviour.
+            print(f"⚠️ MACF: could not check prior nav-guide injections, injecting: {e}",
+                  file=sys.stderr)
+            already = {}
         policies = get_policies_for_task_type(task_type)
         for policy_name in policies:
             policy_path = find_policy_file(policy_name)
-            if policy_path:
-                append_event("policy_injection_activated", {
-                    "policy_name": policy_name,
-                    "policy_path": str(policy_path),
-                    "source": "task_type_auto",
-                    "task_id": str(task_id),
-                })
-                injected_policies.append(policy_name)
+            if not policy_path:
+                continue
+            if policy_name in already:
+                repeat_policies.append((policy_name, already[policy_name]))
+                continue
+            append_event("policy_injection_activated", {
+                "policy_name": policy_name,
+                "policy_path": str(policy_path),
+                "source": "task_type_auto",
+                "task_id": str(task_id),
+            })
+            injected_policies.append(policy_name)
 
     # Cascade upstream (#115 / GH#212): a phase in_progress under an ancestor
     # still 'pending' makes the tree misreport where work stands — orientation
@@ -7205,6 +7688,10 @@ def cmd_task_start(args: argparse.Namespace) -> int:
         print("      (a phase cannot truly be underway while an ancestor reads 'pending')")
     if injected_policies:
         print(f"   Auto-injected policies: {injected_policies}")
+    for _pname, _first in repeat_policies:
+        # One line instead of a wall: preserves the reminder and the pointer to
+        # where the content already is.
+        print(f"   nav guide for {_pname} already surfaced this cycle (first at #{_first})")
     if stale:
         _print_stale_resume_banner(task_id, stale[0], stale[1], stale[2])
     return 0
@@ -7569,11 +8056,28 @@ def cmd_task_scope_set(args: argparse.Namespace) -> int:
         print("❌ No valid tasks to scope")
         return 1
 
+    # A running sprint belongs in its own scope. `scope set` REPLACES the scope,
+    # and a caller listing the workload naturally omits the umbrella — which
+    # silently ended the sprint's mode-lock, because the work-mode reader derives
+    # SPRINT from "is a SPRINT task in active scope". Re-include it here rather
+    # than emitting a mode event: the scope already holds the fact, and a second
+    # copy would be free to drift from it.
+    from .task.scope import active_sprint_task_ids
+    _readded = []
+    for _sid in active_sprint_task_ids(reader):
+        if _sid not in expanded:
+            expanded.append(_sid)
+            _readded.append(_sid)
+
     result = set_scope(expanded, parent_expanded=len(expanded) > len(raw_ids),
                        expanded_from=raw_ids[0] if len(raw_ids) == 1 else None)
 
     if result["success"]:
         print(f"✅ Scoped {len(expanded)} task(s):")
+        for _sid in _readded:
+            # Reported, never silent: the caller did not ask for this task and
+            # should see that the sprint mode-lock is what put it back.
+            print(f"   🏃 re-included in-progress sprint #{_sid} (keeps SPRINT mode-lock in force)")
         for tid in result["tasks_scoped"]:
             task = reader.read_task(tid)
             subject = task.subject if task else f"Task #{tid}"
@@ -7775,6 +8279,39 @@ def cmd_task_scope_add(args: argparse.Namespace) -> int:
     return 0 if result["success"] else 1
 
 
+def _clear_sprint_mode_if_unscoped() -> None:
+    """Unset SPRINT work mode once no sprint task is left in active scope.
+
+    The work-mode reader prefers a live invariant — a SPRINT task in active
+    scope forces the mode — and falls back to the last ``work_mode_change``
+    event. `task create sprint` emits that event, so removing the sprint from
+    scope stops the invariant matching while the stale event keeps asserting
+    SPRINT: the mode-lock would outlive the sprint, suppressing the recommender
+    over work that is no longer a sprint.
+
+    Clearing here keeps the two agreeing. It is the mirror of re-including the
+    sprint on `scope set`, and the pair is what makes SCOPE the single signal
+    for whether a sprint is running — the same fact completion already keys on,
+    since a sprint whose scope was removed is stopped though its status still
+    reads ``in_progress``.
+    """
+    try:
+        from .task.scope import active_sprint_task_ids, get_scope_check
+        from .modes.detection import _get_current_work_mode
+        if _get_current_work_mode() != "SPRINT":
+            return
+        active_ids = {str(e.get("id")) for e in (get_scope_check().get("active") or [])}
+        if any(sid in active_ids for sid in active_sprint_task_ids()):
+            return
+        append_event("work_mode_change", {"mode": None})
+        print("   🏃→   sprint no longer in scope; SPRINT mode-lock released")
+    except (ImportError, OSError, AttributeError, ValueError) as e:
+        # Advisory: never let a mode bookkeeping failure break the removal that
+        # already succeeded on disk.
+        print(f"⚠️ MACF: could not reconcile SPRINT mode after unscoping: {e}",
+              file=sys.stderr)
+
+
 def cmd_task_scope_remove(args: argparse.Namespace) -> int:
     """Incrementally remove tasks from scope (BUG #1067).
 
@@ -7789,6 +8326,7 @@ def cmd_task_scope_remove(args: argparse.Namespace) -> int:
     result = remove_from_scope(raw_ids, session_id=get_current_session_id())
 
     if result["removed_ids"]:
+        _clear_sprint_mode_if_unscoped()
         print(f"➖ Removed {len(result['removed_ids'])} task(s) from scope:")
         for tid in result["removed_ids"]:
             print(f"   ↩️  #{tid}")
@@ -7811,6 +8349,7 @@ def cmd_task_scope_clear(args: argparse.Namespace) -> int:
     result = clear_scope()
 
     if result["success"]:
+        _clear_sprint_mode_if_unscoped()
         print("✅ Scope cleared:")
         for tid in result["active_removed"]:
             print(f"   ↩️  #{tid} (was active)")
@@ -8374,13 +8913,47 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
         # 2. Auto-aggregate completion report from custom fields
         _custom = getattr(task.mtmd, 'custom', {}) if task.mtmd else {}
         _goal = _custom.get("goal", "")
-        _sp = _custom.get("scoped_progress", {})
-        _completed_n = _sp.get("completed", 0) if isinstance(_sp, dict) else 0
-        _total_n = _sp.get("total", 0) if isinstance(_sp, dict) else 0
+        # Derive the counts from the event log at completion time, rather than
+        # reading `custom["scoped_progress"]`.
+        #
+        # That field is written ONCE at creation as {"completed": 0, "total": N}
+        # and nothing ever increments it, so it reports 0/N for the life of the
+        # sprint — including in the closing synthesis, where it appeared directly
+        # beneath a table of the work it said had not happened. A count cached at
+        # creation cannot describe an outcome.
+        #
+        # It also said "children", which is a second wrong answer: a sprint built
+        # with `--scoped` has none, and its scoped tasks keep their own parents.
+        # The word and the number disagreed with each other as well as with the
+        # tree.
+        _scope_state = {}
+        try:
+            from .task.scope import get_scope_state
+            _scope_state = get_scope_state() or {}
+        except (ImportError, OSError, ValueError) as e:
+            print(f"⚠️ MACF: could not read scope state for the synthesis: {e}",
+                  file=sys.stderr)
+
+        # The sprint task is in its own scope; it is not part of the workload.
+        _scoped = {tid: st for tid, st in _scope_state.items()
+                   if str(tid) != str(task_id)}
+        _total_n = len(_scoped)
+        _completed_n = sum(1 for st in _scoped.values() if st == "inactive")
+        _paused_n = sum(1 for st in _scoped.values() if st == "paused")
+
+        if not _scoped:
+            # No scope recorded — say so rather than printing 0/0, which reads
+            # as "nothing was done" for a sprint that may have done plenty.
+            _progress = "no scoped tasks recorded"
+        else:
+            _progress = f"completed {_completed_n}/{_total_n} scoped"
+            if _paused_n:
+                _progress += f" ({_paused_n} paused)"
+
         _ideas = _custom.get("ideas_captured", 0)
         _learnings = _custom.get("learnings_curated", 0)
         _aggregate = (
-            f'Goal: "{_goal}". Completed {_completed_n}/{_total_n} children. '
+            f'Goal: "{_goal}". {_progress.capitalize()}. '
             f'{_ideas} ideas captured. {_learnings} learnings curated.'
         )
         if args.report:
@@ -8576,6 +9149,23 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
 
         print(f"✅ Task #{task_id} marked complete")
         print(f"   Breadcrumb: {breadcrumb}")
+        try:
+            _reminder = parent_finalization_reminder(task_id, reader)
+        except (AttributeError, OSError, ValueError) as e:
+            # A reminder is an advisory; failing to compute one must never
+            # jeopardise a completion that already succeeded on disk.
+            print(f"⚠️ MACF: could not check parent finalization (non-blocking): {e}",
+                  file=sys.stderr)
+            _reminder = None
+        if _reminder:
+            print(_reminder)
+        try:
+            _hand_attention_back(task_id, reader)
+        except (AttributeError, OSError, ValueError, ImportError) as e:
+            # Advisory, like the reminder above: a completion that already
+            # succeeded on disk must not be jeopardised by a display step.
+            print(f"⚠️ MACF: could not render the stack after completion "
+                  f"(non-blocking): {e}", file=sys.stderr)
         print(f"   Report: {args.report[:80]}{'...' if len(args.report) > 80 else ''}")
         if task_type == "GH_ISSUE":
             if args.commit:
@@ -9694,7 +10284,8 @@ def _cmd_ar_launch(args):
                               session_spec=getattr(args, 'session_id', None),
                               post_start_keys=getattr(args, 'post_start_keys', None),
                               post_start_delay=getattr(args, 'post_start_delay', 18),
-                              force=getattr(args, 'force', False))
+                              force=getattr(args, 'force', False),
+                              detach=getattr(args, 'detach', False))
 
 def _cmd_ar_list(args=None):
     from .supervisor import list_processes
@@ -10093,7 +10684,6 @@ def _build_parser() -> argparse.ArgumentParser:
     logs_parser.add_argument("--session", help="specific session ID (default: current)")
     logs_parser.set_defaults(func=cmd_hook_logs)
 
-    hook_sub.add_parser("status", help="display current hook states").set_defaults(func=cmd_hook_status)
 
     # Framework commands (unified installation of hooks, commands, skills)
     framework_parser = sub.add_parser("framework", help="framework artifact management")
@@ -10239,6 +10829,9 @@ def _build_parser() -> argparse.ArgumentParser:
                                   help="render without proxy attachment")
     harness_generate.add_argument("--channel", action="append", metavar="PLUGIN",
                                  help="channel plugin the client must load; repeatable")
+    harness_generate.add_argument("--project-dir", metavar="DIR",
+                                 help="directory the supervised session starts in; decides which "
+                                      "conversation 'claude -c' resumes (default: MACEFF_PROJECT_DIR)")
     harness_generate.add_argument("--shell-prefix", metavar="NAME",
                                  help="short handle for the generated shell functions (default: the moniker half of the Calling Card)")
     harness_generate.add_argument(
@@ -10253,6 +10846,9 @@ def _build_parser() -> argparse.ArgumentParser:
                                  help="install without proxy attachment")
     harness_install.add_argument("--channel", action="append", metavar="PLUGIN",
                                  help="channel plugin the client must load; repeatable")
+    harness_install.add_argument("--project-dir", metavar="DIR",
+                                 help="directory the supervised session starts in; decides which "
+                                      "conversation 'claude -c' resumes (default: MACEFF_PROJECT_DIR)")
     harness_install.add_argument("--shell-prefix", metavar="NAME",
                                  help="short handle for the generated shell functions (default: the moniker half of the Calling Card)")
     harness_install.add_argument("--watchdog", action="store_true",
@@ -10887,6 +11483,10 @@ def _build_parser() -> argparse.ArgumentParser:
     # task start
     task_start_parser = task_sub.add_parser("start", help="start work on task (→ in_progress)")
     task_start_parser.add_argument("task_id", help="task ID to start (e.g., #67 or 67)")
+    task_start_parser.add_argument("--force", action="store_true",
+                                   help="start despite unsatisfied blocked_by (recorded)")
+    task_start_parser.add_argument("--justification", default=None,
+                                   help="why the declared dependency is being overridden")
     task_start_parser.set_defaults(func=cmd_task_start)
 
     # task pause
@@ -11187,7 +11787,7 @@ def _build_parser() -> argparse.ArgumentParser:
     ar_sub = ar_parser.add_subparsers(dest="ar_cmd")
 
     # auto-restart launch
-    ar_launch = ar_sub.add_parser("launch", help="launch supervised process in new terminal")
+    ar_launch = ar_sub.add_parser("launch", help="launch supervised process (terminal window, or --detach for headless)")
     ar_launch.add_argument("--name", "-n", default="", help="display name (default: command basename)")
     ar_launch.add_argument("--delay", "-d", type=int, default=5, help="restart delay in seconds (default: 5)")
     ar_launch.add_argument("--terminal", "-t", default="auto",
@@ -11195,6 +11795,10 @@ def _build_parser() -> argparse.ArgumentParser:
                                     "ptyxis", "kgx", "tilix", "lxterminal", "foot",
                                     "xterm", "konsole", "x-terminal-emulator"],
                            help="terminal app (default: auto-detect)")
+    ar_launch.add_argument("--detach", action="store_true",
+                           help="start in a DETACHED tmux session instead of a terminal window "
+                                "-- the only path that works on a headless host (container, "
+                                "ssh, CI). Attach later with tmux attach.")
     ar_launch.add_argument("--no-tmux", action="store_true",
                            help="do not back the session with tmux (disables send-keys)")
     ar_launch.add_argument("--force", action="store_true",
@@ -11429,6 +12033,21 @@ def _build_parser() -> argparse.ArgumentParser:
                                help="pattern profile JSON (default: agent-home default profile, created if absent)")
     opsec_install.set_defaults(func=cmd_opsec_install_hook)
 
+    # ── githooks ─────────────────────────────────────────────────────────
+    gh_parser = sub.add_parser("githooks", help="composable git hook dispatcher")
+    gh_sub = gh_parser.add_subparsers(dest="githooks_cmd")
+    gh_install = gh_sub.add_parser(
+        "install",
+        help="install the dispatcher, ADOPTING any pre-existing hook rather than replacing it")
+    gh_install.add_argument("repo", nargs="?", default=".",
+                            help="path to the git repository (default: cwd)")
+    gh_install.set_defaults(func=cmd_githooks_install)
+    gh_list = gh_sub.add_parser(
+        "list", help="show every hooklet that would run, in dispatch order")
+    gh_list.add_argument("repo", nargs="?", default=".",
+                         help="path to the git repository (default: cwd)")
+    gh_list.set_defaults(func=cmd_githooks_list)
+
     # ── shell ────────────────────────────────────────────────────────────
     shell_parser = sub.add_parser("shell", help="shell integration (tab completion)")
     shell_sub = shell_parser.add_subparsers(dest="shell_cmd")
@@ -11448,11 +12067,87 @@ def cmd_opsec_install_hook(args: argparse.Namespace) -> int:
     except ValueError as e:
         print(f"❌ {e}")
         return 1
-    print("✅ OPSEC pre-commit gate installed")
-    print(f"   Repo:    {facts['repo']}")
-    print(f"   Hooks:   {facts['hooks_dir']}")
-    print(f"   Profile: {facts['profile']} (edit patterns there; NEVER commit it)")
+    # Report the EFFECT, not the attempt. A message describing the call rather
+    # than the result is how a provisioning command came to say "appended" for
+    # something that replaced -- telling the operator the one outcome they
+    # needed to check for had happened.
+    for line in facts.get("dispatcher_actions", []):
+        print(f"   • {line}")
+    for line in facts.get("adopted", []):
+        print(f"   ⚑ ADOPTED an existing hook, still running: {line}")
+    if not facts.get("dispatcher_actions"):
+        print("   • dispatcher already current — nothing changed")
+
+    print("✅ OPSEC scan installed as pre-commit hooklet 10-opsec")
+    print(f"   Repo:     {facts['repo']}")
+    print(f"   Hooklet:  {facts['hooklet']}")
+    print(f"   Profile:  {facts['profile']} (edit patterns there; NEVER commit it)")
+    print("   The hooklet is per-clone, never committed: it names a private file.")
+    print("   Inspect the chain:  macf_tools opsec hooks")
     print("   Bypass for reviewed disclosures: git commit --no-verify")
+    return 0
+
+
+def cmd_githooks_list(args: argparse.Namespace) -> int:
+    """Show every pre-commit hooklet that would run, in dispatch order."""
+    from pathlib import Path
+    from .githooks import list_hooklets
+
+    try:
+        hooklets = list_hooklets(Path(args.repo))
+    except ValueError as e:
+        print(f"❌ {e}")
+        return 1
+
+    if not hooklets:
+        # Not "nothing to report" — an empty chain means every gate this repo
+        # believes it has is absent, which is worth saying out loud.
+        print("⚠️  No pre-commit hooklets found. NOTHING is gating commits here.")
+        print("   Install:  macf_tools opsec install-hook <repo>")
+        return 0
+
+    print(f"pre-commit chain for {Path(args.repo).resolve()} (runs in this order):")
+    problems = 0
+    for h in hooklets:
+        mark = "✅" if h["executable"] else "❌"
+        if not h["executable"]:
+            problems += 1
+        print(f"  {mark} {h['name']:<24} [{h['source']}]  {h['path']}")
+    if problems:
+        print(f"\n❌ {problems} hooklet(s) are present but NOT EXECUTABLE.")
+        print("   The dispatcher refuses rather than skipping: a gate that is")
+        print("   skipped quietly reports success for a check that never ran.")
+        return 1
+    return 0
+
+
+
+def cmd_githooks_install(args: argparse.Namespace) -> int:
+    """Install the dispatcher, adopting whatever hook was already there."""
+    from pathlib import Path
+    from .githooks import install_dispatcher
+
+    try:
+        facts = install_dispatcher(Path(args.repo))
+    except ValueError as e:
+        print(f"❌ {e}")
+        return 1
+
+    # Effect, not attempt. An empty action list is the honest report for a
+    # re-run, and it is the observable difference between a command that is
+    # idempotent and one that merely does no visible harm.
+    if facts["already_current"]:
+        print("✅ dispatcher already current — nothing changed")
+    else:
+        for line in facts["actions"]:
+            print(f"   • {line}")
+        for line in facts["adopted"]:
+            print(f"   ⚑ ADOPTED an existing hook, still running: {line}")
+        print("✅ dispatcher installed")
+
+    print(f"   Versioned hooklets: {facts['versioned_dir']}/pre-commit.d/  (travels to every clone)")
+    print(f"   Per-clone hooklets: {facts['local_dir']}/pre-commit.d/  (never committed)")
+    print("   Inspect the chain:  macf_tools githooks list")
     return 0
 
 

@@ -21,7 +21,7 @@ class TestPreCompactHook:
                 with patch('macf.hooks.handle_pre_compact.get_breadcrumb', return_value='s_abc/c_5/g_def/p_ghi/t_123'):
                     with patch('macf.hooks.handle_pre_compact.get_token_info', return_value={'tokens_used': 140000, 'cl_level': 5}):
                         with patch('macf.hooks.handle_pre_compact.get_temporal_context', return_value={'timestamp_formatted': '2025-10-08 12:00 PM'}):
-                            result = run("", testing=True)
+                            result = run("")
 
                             assert result['continue'] is True
                             assert 'systemMessage' in result
@@ -33,7 +33,7 @@ class TestPreCompactHook:
                 with patch('macf.hooks.handle_pre_compact.get_breadcrumb', return_value='s_abc/c_10/g_def/p_ghi/t_123'):
                     with patch('macf.hooks.handle_pre_compact.get_token_info', return_value={'cl_level': 3}):
                         with patch('macf.hooks.handle_pre_compact.get_temporal_context', return_value={'timestamp_formatted': '2025-10-08 12:00 PM'}):
-                            result = run("", testing=True)
+                            result = run("")
 
                             message = result['systemMessage']
                             assert 'Pre-Compact' in message
@@ -47,7 +47,7 @@ class TestPreCompactHook:
                 with patch('macf.hooks.handle_pre_compact.get_breadcrumb', return_value='s_abc/c_7/g_def/p_ghi/t_123'):
                     with patch('macf.hooks.handle_pre_compact.get_token_info', return_value={'tokens_used': 145000, 'cl_level': 2}):
                         with patch('macf.hooks.handle_pre_compact.get_temporal_context', return_value={'timestamp_formatted': '2025-10-08 12:00 PM'}):
-                            result = run("", testing=True)
+                            result = run("")
 
                             # Verify event was logged
                             assert isolated_events_log.exists()
@@ -70,7 +70,7 @@ class TestPreCompactHook:
                 with patch('macf.hooks.handle_pre_compact.get_breadcrumb', return_value='s_abc/c_1/g_def/p_ghi/t_123'):
                     with patch('macf.hooks.handle_pre_compact.get_token_info', return_value={}):
                         with patch('macf.hooks.handle_pre_compact.get_temporal_context', return_value={'timestamp_formatted': '2025-10-08 12:00 PM'}):
-                            result = run(stdin_data, testing=True)
+                            result = run(stdin_data)
 
                             # Verify source captured in event
                             events = isolated_events_log.read_text().strip().split('\n')
@@ -84,7 +84,7 @@ class TestPreCompactHook:
                 with patch('macf.hooks.handle_pre_compact.get_breadcrumb', return_value='s_abc/c_1/g_def/p_ghi/t_123'):
                     with patch('macf.hooks.handle_pre_compact.get_token_info', return_value={}):
                         with patch('macf.hooks.handle_pre_compact.get_temporal_context', return_value={'timestamp_formatted': '2025-10-08 12:00 PM'}):
-                            result = run("", testing=True)
+                            result = run("")
 
                             events = isolated_events_log.read_text().strip().split('\n')
                             last_event = json.loads(events[-1])
@@ -93,7 +93,7 @@ class TestPreCompactHook:
     def test_handles_errors_gracefully(self, isolated_events_log):
         """Returns error message when exception occurs."""
         with patch('macf.hooks.handle_pre_compact.get_current_session_id', side_effect=Exception("Test error")):
-            result = run("", testing=True)
+            result = run("")
 
             assert result['continue'] is True
             assert 'error' in result['systemMessage'].lower()

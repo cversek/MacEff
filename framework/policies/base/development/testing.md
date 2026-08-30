@@ -81,6 +81,12 @@ Testing standards establish pragmatic test-driven development principles that ba
 - After specialist delegation handoffs?
 - When integrating multiple components?
 
+**3.1.1 Test-Run Granularity — What to Run Instead**
+- If not the full suite, then what?
+- How do I choose the subset for a change?
+- What granularity applies during a sprint?
+- Why does an expensive check protect less than a cheap one?
+
 **3.2 Progressive Verbosity Protocol**
 - What are the three verbosity levels?
 - What is Level 0 (Summary)?
@@ -129,6 +135,11 @@ Testing standards establish pragmatic test-driven development principles that ba
 - How does architectural position determine rigor?
 - What is the scaling pattern?
 - How do I assess my layer?
+
+**4.9 A Check That Does Not Check Itself**
+- What must a step assert after doing the thing?
+- Why demonstrate a control in both polarities?
+- How does a control die while the suite stays green?
 
 **5 Anti-Patterns**
 - What is test suite bloat?
@@ -494,6 +505,44 @@ Testing anti-patterns cause wasted effort and false confidence. Agents must reco
 - ❌ While debugging single function
 - ❌ When iterating on implementation
 
+#### 3.1.1 Test-Run Granularity — What to Run Instead
+
+§3.1 says when NOT to run everything. This says what to run in its place, because
+"not the full suite" is not an instruction and the gap gets filled with either
+running it anyway or running nothing.
+
+**Run the tests for the subsystems the change touched.** Name the modules you
+edited, run their test files plus the files that exercise them, and run that set
+after every edit rather than once per batch.
+
+| situation | run |
+|---|---|
+| an edit during implementation | the touched subsystems' test files |
+| a sprint, per scoped item | the touched subsystems' test files |
+| before opening a PR | the full suite, once |
+| CI | the full suite, always |
+
+**The cost argument, which is the whole point.** A check that is expensive gets
+run rarely, and a check run rarely is not protecting the edit in front of you.
+Measured on one framework sprint: the full suite took ~190 seconds and was run
+four times in a session — roughly thirteen minutes of wall clock, plus the tokens
+to read the output — to re-verify sixteen hundred tests against changes touching
+a handful of modules. The targeted set for the same changes was 156 tests in 23
+seconds. Same signal for the code actually changed, an eighth of the cost, and
+cheap enough to run after every edit.
+
+**Frequency is where the protection comes from.** This is the same argument as
+preferring an automated pre-commit gate over remembering to run one, arriving
+from the other direction: make verification cheap and it happens continuously;
+leave it expensive and it happens at the end, when a regression has already been
+built on top of.
+
+**What the targeted run does not do**, stated so it is not overread: it cannot
+catch a change whose blast radius you misjudged. That is precisely what the
+pre-PR full run and CI are for. The targeted run is the fast inner loop, not a
+replacement for the outer one — and a disagreement between them is a finding
+about the blast radius, not a nuisance.
+
 ### 3.2 Progressive Verbosity Protocol
 
 **The Token Problem**: Full verbose test output for passing tests wastes 10,000+ tokens. Summary mode provides same validation with 100-500 tokens.
@@ -655,7 +704,6 @@ Roadmaps specify phase completion criteria. Test passage is a **completion gate*
 - [ ] Changes committed
 
 **Test Results**: 19/19 tests passed in 0.03s
-**Breadcrumb**: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
 ```
 
 **What to Document**:
@@ -800,6 +848,31 @@ function run_session_start_hook():
 4. **Is this building on validated foundations?** Yes = more pragmatic
 
 ---
+
+## 4.9 A Check That Does Not Check Itself Is a Comment
+
+**After doing the thing, assert the property — and assert the *property*, not the
+call's exit code.** A step that reports success because it ran is a comment with
+a return value: it tells you the code executed, which was never in doubt.
+
+### Demonstrate a control by breaking it, in both polarities
+
+A control never watched fail is a painted bulb. Introduce the violation it exists
+to catch and confirm it fires.
+
+**Both polarities, because a gate that refuses everything is not a gate.** A
+check that rejects the bad input AND accepts the good one has been shown to
+discriminate; a check only ever seen rejecting has been shown to reject.
+
+### A control that passes because a *different* control fired is dead
+
+Two checks guarding overlapping conditions can leave one of them inert forever:
+the suite is green, the dead check is never the reason, and nothing distinguishes
+it from a live one.
+
+Only mutating **the exact line the test names** reveals this. Break something
+nearby and the neighbouring control catches it, the suite goes red, and the dead
+check is credited with a save it did not make.
 
 ## 5 Anti-Patterns
 

@@ -225,7 +225,7 @@ def test_recoverable_error_gate_skipped_when_stop_hook_active(mock_dependencies,
          patch('macf.hooks.handle_stop.get_rich_environment_string', return_value=''), \
          patch('macf.hooks.handle_stop.get_breadcrumb', return_value='s/c/g/p/t'), \
          patch('macf.hooks.handle_stop.get_token_info', return_value={'cl_level': 50, 'tokens_used': 1000, 'tokens_remaining': 100000}), \
-         patch('macf.hooks.handle_stop.detect_auto_mode', return_value=(False, 'default', 0.0)), \
+         patch('macf.hooks.handle_stop.detect_auto_mode', return_value=(False, 'default')), \
          patch('macf.hooks.handle_stop.format_token_context_full', return_value=''), \
          patch('macf.hooks.handle_stop.get_boundary_guidance', return_value=''), \
          patch('macf.hooks.handle_stop.format_macf_footer', return_value=''):

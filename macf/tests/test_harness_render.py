@@ -91,14 +91,17 @@ needs_systemd = pytest.mark.skipif(
 
 
 class TestUnitIsWellFormed:
+    @pytest.mark.live
     @needs_systemd
     def test_rendered_unit_passes_systemds_own_parser(self, tmp_path):
         assert _verify(render_unit(_real_start(tmp_path)), tmp_path) == ""
 
+    @pytest.mark.live
     @needs_systemd
     def test_rendered_unit_without_proxy_also_passes(self, tmp_path):
         assert _verify(render_unit(_real_start(tmp_path), attach_proxy=False), tmp_path) == ""
 
+    @pytest.mark.live
     @needs_systemd
     def test_the_oracle_can_actually_fail(self, tmp_path):
         """Negative control on the oracle itself.
@@ -111,6 +114,7 @@ class TestUnitIsWellFormed:
         broken = render_unit(_real_start(tmp_path)).replace("ExecStart=", "ExecStartt=")
         assert "Unknown key" in _verify(broken, tmp_path)
 
+    @pytest.mark.live
     @needs_systemd
     def test_the_oracle_notices_an_exec_start_that_cannot_run(self, tmp_path):
         """Second negative control, and the one that made this file honest.
@@ -185,6 +189,39 @@ class TestOneImplementationOfStarting:
 
     def test_start_script_is_executable_shell(self):
         assert render_start(SYNTH).startswith("#!/bin/bash")
+
+    def test_no_unguarded_array_expansion_under_set_u(self):
+        """Under `set -u`, bash 3.2 aborts on an EMPTY array's `[@]` expansion;
+        bash 4.4+ does not. macOS ships 3.2 and the shebang names /bin/bash, so
+        the unguarded form kills every launch on macOS that declares no project
+        dir — the default. Linux CI runs bash 5 and cannot reproduce it.
+
+        That asymmetry is why this is a STATIC check rather than an execution
+        test: the runtime failure is invisible in the only environment that runs
+        automatically, so the control has to be one that CI can still fail on.
+
+        The guarded form is `${name[@]+"${name[@]}"}`.
+        """
+        pattern = re.compile(r'"\$\{([A-Za-z_][A-Za-z0-9_]*)\[@\]\}"')
+        guarded = re.compile(r'\$\{([A-Za-z_][A-Za-z0-9_]*)\[@\]\+')
+
+        inspected = 0
+        for render in (render_unit, render_start, render_launch_functions, render_child):
+            text = render(SYNTH)
+            if "set -u" not in text:
+                continue
+            inspected += 1
+            for line in _code_only(text).splitlines():
+                for m in pattern.finditer(line):
+                    assert guarded.search(line), (
+                        f"unguarded ${{{m.group(1)}[@]}} under `set -u` — aborts on "
+                        f"bash 3.2 when empty. Write ${{{m.group(1)}[@]+\"${{{m.group(1)}[@]}}\"}}. "
+                        f"Line: {line.strip()}"
+                    )
+
+        # Without this the test passes by examining nothing the day someone drops
+        # `set -u`, and a green result would mean only that the loop never ran.
+        assert inspected, "no rendered script carried `set -u`; this check inspected nothing"
 
 
 class TestIdentityIsNotTakenFromTheName:
@@ -310,6 +347,7 @@ class TestChildEntrypoint:
 needs_tmux = pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux not available")
 
 
+@pytest.mark.live
 @needs_tmux
 class TestStartScriptBehaviour:
     """Run the rendered script rather than only reading it.
@@ -639,6 +677,7 @@ class TestWatchdogIsOptInAndSafe:
         assert f"Unit=cc-harness-{SYNTH.agent}-watch.service" in timer
         assert "OnUnitActiveSec" in timer
 
+    @pytest.mark.live
     @needs_systemd
     def test_both_units_pass_systemds_own_parser(self, tmp_path):
         from dataclasses import replace

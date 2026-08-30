@@ -26,6 +26,11 @@
 # the session is named by the DECLARATION rather than by whatever the generator
 # infers from a calling card. Override only if a deployment's existing tooling
 # attaches to a different name.
+# start.py exports MACEFF_HARNESS_SESSION from agents.yaml `harness_session`,
+# falling back to the agent key. The fallback is why this defect hid: when a
+# deployment's declared session name and agent key happen to be the same string,
+# deriving from the wrong one looks correct. Override only if a deployment's
+# existing tooling attaches to yet another name.
 MACEFF_HARNESS_SESSION="${MACEFF_HARNESS_SESSION:-${MACEFF_AGENT_NAME:-}}"
 
 launch_cc_supervised() {
@@ -66,12 +71,20 @@ launch_cc_supervised() {
     local chan_args=() c
     for c in ${MACEFF_CHANNELS:-}; do chan_args+=(--channel "$c"); done
 
+    # The project directory is passed EXPLICITLY rather than left to the
+    # generator's environment fallback. `claude -c` resolves which conversation
+    # to resume from the working directory, so this is the difference between
+    # resuming the agent's live conversation and silently resuming whichever one
+    # was last used in the caller's cwd -- a substitution nothing reports.
+    local dir_args=()
+    [ -n "${MACEFF_PROJECT_DIR:-}" ] && dir_args=(--project-dir "$MACEFF_PROJECT_DIR")
+
     if [ "$mode" != "stop" ] && { [ "$regen" = 1 ] || [ ! -x "$start" ] || [ ! -x "$child" ]; }; then
         local tmp_s tmp_c
         tmp_s="$(mktemp "${TMPDIR:-/tmp}/maceff_start.XXXXXX")" || return 1
         tmp_c="$(mktemp "${TMPDIR:-/tmp}/maceff_child.XXXXXX")" || { rm -f "$tmp_s"; return 1; }
-        if macf_tools harness generate --agent "$agent" --what start "${chan_args[@]}" > "$tmp_s" 2>/dev/null &&
-           macf_tools harness generate --agent "$agent" --what child "${chan_args[@]}" > "$tmp_c" 2>/dev/null &&
+        if macf_tools harness generate --agent "$agent" --what start "${dir_args[@]}" "${chan_args[@]}" > "$tmp_s" 2>/dev/null &&
+           macf_tools harness generate --agent "$agent" --what child "${dir_args[@]}" "${chan_args[@]}" > "$tmp_c" 2>/dev/null &&
            [ -s "$tmp_s" ] && [ -s "$tmp_c" ]; then
             # Placed atomically and mode 700: a truncated-then-failed write
             # leaves an executable that runs and does nothing recognisable, and

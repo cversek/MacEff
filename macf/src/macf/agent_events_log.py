@@ -213,9 +213,16 @@ def append_event(
         return False
 
 
+# The event that opens a cycle. A cycle-scoped read stops here, so this is
+# the single place the boundary is named -- a second spelling elsewhere would
+# make some queries stop at a different place than others.
+CYCLE_BOUNDARY_EVENT = "compaction_detected"
+
+
 def read_events(
     limit: Optional[int] = None,
-    reverse: bool = True
+    reverse: bool = True,
+    scope: str = "cycle",
 ) -> Generator[dict, None, None]:
     """
     Read events from log (generator for memory efficiency).
@@ -225,21 +232,83 @@ def read_events(
     ``iter_lines_forward`` (line-by-line). Neither materializes the full
     file, so memory is O(chunk_size + max_line_size) regardless of log size.
 
-    Callers that only need the most recent N events SHOULD pass an explicit
-    ``limit`` so the generator stops early. ``limit=None`` still works but
-    will scan the whole file if no early break.
+    **A numeric ``limit`` is DEPRECATED** and emits a DeprecationWarning.
+
+    It is not a bound on the work; it is an unprovable assertion that the answer
+    lies within N rows, denominated in a unit the question does not use. The log
+    is shared, so unrelated writes consume the budget and the window shrinks
+    exactly when the log is busy — and when the scan falls off the end, the miss
+    is returned as a value the caller reads as a fact about state. USER_IDLE
+    cleared while the operator was away for precisely this reason.
+
+    An earlier version of this docstring told callers they SHOULD pass a limit.
+    That advice produced the defect class; it is withdrawn.
+
+    **Bound by MEANING.** Ask what the answer's scope of validity is:
+
+    - *Valid this cycle only* — stop at ``compaction_detected``. Provably
+      correct, and bounded by construction: a cycle holds finitely many events.
+    - *Valid within an interval* — stop at the first event older than the
+      cutoff. An age cannot be shrunk by volume.
+    - *Lifetime state* — scan until found. These exit on their first match, so
+      the cost is "events since it last changed", not log size.
+
+    The third case still degrades when the event has NEVER occurred. A row limit
+    cannot fix that — it answers wrongly rather than slowly. The intended remedy
+    is to remove the case: cycle-scope every query and have cross-cycle state
+    re-assert itself at the boundary, so the worst case is one cycle regardless
+    of log size.
+
+    That remedy is what ``scope`` implements, and it is the DEFAULT. The other
+    half of it lives in ``cycle_carry`` — without an explicit carry at the
+    boundary, cycle-scoping does not bound the question, it just stops answering
+    it.
 
     Args:
-        limit: Maximum events to yield (None = all)
+        limit: DEPRECATED — prefer a semantic stop condition. ``None`` (the
+            default) streams until the caller breaks.
         reverse: If True, read from end (most recent first)
+        scope: ``"cycle"`` (default) stops at the most recent
+            ``compaction_detected``, inclusive — the boundary event belongs to
+            the cycle it opens. ``"all"`` reads the whole log and must be asked
+            for explicitly, at a site that says why.
 
     Yields:
         Event dictionaries
 
     Example:
-        >>> for event in read_events(limit=10, reverse=True):
-        ...     print(event["event"], event["timestamp"])
+        >>> for event in read_events(reverse=True):   # exits on the first match
+        ...     if event["event"] == "mode_change":
+        ...         break
     """
+    if isinstance(limit, int) and not isinstance(limit, bool):
+        import warnings
+        warnings.warn(
+            "read_events(limit=<int>) is deprecated: a row count is not a bound "
+            "on the question being asked, and a scan that falls off the end "
+            "returns a miss that reads as a fact. Bound by meaning instead — "
+            "the cycle boundary, a timestamp, or the first match.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+    if scope not in ("cycle", "all"):
+        raise ValueError(
+            f"read_events(scope={scope!r}) — scope must be 'cycle' or 'all'. "
+            "An unrecognised scope silently reading everything is how the "
+            "unbounded case comes back."
+        )
+
+    # A forward CYCLE read is served by materialising the reverse window and
+    # flipping it. That is affordable for exactly the reason the whole design
+    # rests on — a cycle holds finitely many events — and it is why forward
+    # readers get the same bound as reverse ones instead of an exemption. A
+    # forward ALL read still streams; nothing is materialised there.
+    if scope == "cycle" and not reverse:
+        window = list(read_events(limit=limit, reverse=True, scope="cycle"))
+        for event in reversed(window):
+            yield event
+        return
+
     try:
         log_path = get_log_path()
 
@@ -259,15 +328,20 @@ def read_events(
 
             try:
                 event = json.loads(line)
-                yield event
-
-                count += 1
-                if limit is not None and count >= limit:
-                    break
-
             except json.JSONDecodeError:
                 # Skip malformed lines
                 continue
+
+            yield event
+
+            # Yielded BEFORE the break: the boundary opens the cycle it marks,
+            # and callers that read the cycle number read it off this event.
+            if scope == "cycle" and event.get("event") == CYCLE_BOUNDARY_EVENT:
+                break
+
+            count += 1
+            if limit is not None and count >= limit:
+                break
 
     except (OSError, IOError) as e:
         print(f"⚠️ MACF: event log read failed: {e}", file=sys.stderr)

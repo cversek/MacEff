@@ -131,7 +131,7 @@ Agents must maintain awareness of time and token constraints, prepare for compac
 ```bash
 macf_tools time              # Current time with temporal context
 macf_tools session info      # Session details and duration
-macf_tools hooks status      # Hook states with timestamps
+macf_tools hooks logs        # Hook execution events with timestamps
 ```
 
 **What You Get**:
@@ -175,7 +175,9 @@ macf_tools hooks status      # Hook states with timestamps
 
 **The Reality**:
 - Triggers at ~90% of usable context space
-- **~93% information loss**: conversation compressed to ~10k bullet point summary
+- **Most of the conversation is lost**: compressed to a bullet-point summary.
+  The proportion follows from the window size and the compaction threshold, both
+  configurable — it is not a constant of the system.
 - Total context shown includes reserved headroom (~22.5% of window)
 - Anthropic generates machine summary (NOT user-created)
 
@@ -368,7 +370,7 @@ YYYY-MM-DD_HHMMSS_Description_ccp.md
 **Observability**:
 ```bash
 macf_tools hooks logs          # View hook execution events
-macf_tools hooks status        # Check sidecar files
+macf_tools hooks logs          # Check hook execution events
 macf_tools hooks test          # Test detection on current session
 ```
 
@@ -430,7 +432,7 @@ macf_tools hooks test          # Test detection on current session
 **MACF Tools**:
 ```bash
 macf_tools time              # Temporal awareness
-macf_tools hooks status      # Hook states
+macf_tools hooks logs        # Hook execution events
 macf_tools hooks logs        # Compaction detection events
 ```
 

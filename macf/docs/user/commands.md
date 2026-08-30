@@ -82,6 +82,6 @@ Or use Claude Code's `/` autocomplete to explore available namespaces.
 | `/maceff_roadmap_draft` | `/maceff:roadmap:draft` |
 | `/maceff_ccp` | `/maceff:ccp` |
 
-**Note**: The `:todos:` namespace from v0.3.2 was renamed to `:task:` when the underlying TodoWrite-based workflow was supplanted by the persistent task system (see `framework/policies/sets/base/development/task_management.md`). If you used `/maceff:todos:start` in older sessions, switch to `/maceff:task:start <task_id>`.
+**Note**: The `:todos:` namespace from v0.3.2 was renamed to `:task:` when the underlying TodoWrite-based workflow was supplanted by the persistent task system (see `framework/policies/base/development/task_management.md`). If you used `/maceff:todos:start` in older sessions, switch to `/maceff:task:start <task_id>`.
 
 The colon separator provides clearer hierarchy and enables namespace-based organization.

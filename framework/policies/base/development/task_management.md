@@ -1,6 +1,5 @@
 # Task Management Policy
 
-**Breadcrumb**: s_d4abc33b/c_410/g_6cd0bc4/p_02c3f10e/t_1770625420
 **Type**: Development Infrastructure
 **Scope**: All agents (PA and SA)
 **Status**: ACTIVE (successor to todo_hygiene.md)
@@ -1305,11 +1304,11 @@ macf_tools task complete #67 --report "Implemented feature X. No difficulties. C
 #         Report recorded in MTMD
 ```
 
-### 9.4 Archive & Delete
+### 9.4 Hide & Delete
 
 ```bash
-macf_tools task archive #67                   # Archive with cascade (default)
-macf_tools task archive #67 --no-cascade      # Archive single task
+macf_tools task hide-completed                # RETIRED task archive's replacement; see §7
+macf_tools task unhide-all                    # reverse hide-completed
 macf_tools task delete #67                    # Delete (HIGH grant required)
 ```
 
@@ -1597,11 +1596,18 @@ The distinction:
 - **active** — where attention is now. Not a debt.
 - **enclosing** — attention is *inside* this frame, in a descendant of it. Not a debt: the work is proceeding one level down.
 - **parked** — waiting on an unresolved blocker. Legitimately set down.
-- **abandoned** — unblocked, and attention went elsewhere without completing it. This is the dropped frame.
+- **ready** — was blocked, and every declared blocker has since resolved. Ripe to pick back up.
+- **deferred** — nothing blocking it, and attention went elsewhere without completing it.
 
-These four are **exhaustive**: attention is here, or below here, or the frame is waiting on something, or it was dropped. That matters more than it sounds. A classifier that decides the first three and lets everything else fall through to `abandoned` has made the most alarming label its *residual* — the bucket that silently absorbs every case its author did not enumerate. `enclosing` exists because hierarchy was exactly such a case, and it was absorbed for as long as the taxonomy had three states.
+These five are **exhaustive**: attention is here, or below here, or the frame waits on something, or that something has cleared, or it was set down. That matters more than it sounds. A classifier that decides the first states and lets everything else fall through to the last has made its most alarming label a *residual* — the bucket that silently absorbs every case its author did not enumerate. `enclosing` exists because hierarchy was exactly such a case, and `ready` because a cleared blocker was another: both were absorbed for as long as the taxonomy lacked them.
 
-**Why the fourth state is load-bearing, and not bookkeeping.** A MISSION with a running phase is the ordinary shape of decomposed work. Classified as a dropped frame, it makes the false-alarm rate scale with *how faithfully work is decomposed* — so following §2.5 degrades the very detector this section exists to keep usable. A policy that punishes compliance with another policy is a defect in the pair, not a rough edge in one of them.
+**`ready` must be EARNED, never inferred.** It requires that a blocker was *declared* and has since cleared. A frame nobody ever blocked, simply set down, is `deferred`. Without that rule every set-down frame drifts into `ready` as its neighbours complete, and the signal dies the same way the old residual did: a state that eventually describes most of the list stops discriminating, which is the failure the state was added to fix.
+
+**`deferred` names the observable, not the motive.** The earlier name, `abandoned`, asserted something the data cannot support — a frame set down when priorities shifted and one genuinely forgotten are identical in the record: in_progress, no open blocker, attention elsewhere. Choosing the uncharitable reading tells an operator they dropped work they fully intend to return to, and a label that is wrong most of the time gets discounted in the cases where it is right.
+
+**Why `ready` is the state worth surfacing.** *This was waiting on something, and that something is now done* is the most actionable fact the stack holds, and it is what an operator is looking for during a lull or while blocked elsewhere — not "what did I drop" but "what is ripe to resume". `task trace` therefore recommends a `ready` frame ahead of a `deferred` one.
+
+**Why `enclosing` is load-bearing, and not bookkeeping.** A MISSION with a running phase is the ordinary shape of decomposed work. Classified as a dropped frame, it makes the false-alarm rate scale with *how faithfully work is decomposed* — so following §2.5 degrades the very detector this section exists to keep usable. A policy that punishes compliance with another policy is a defect in the pair, not a rough edge in one of them.
 
 **Enclosure is about where attention *is*, not about what is open underneath.** The tempting shortcut — treat any frame with an in-progress descendant as enclosing — absolves a parent that was dropped *together with* its child. If attention is on an unrelated frame, an ancestor and its descendant are both dropped, and both should say so. The correct test walks up from the active frame.
 

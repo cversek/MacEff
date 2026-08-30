@@ -175,7 +175,9 @@ MacEff treats agents as **intentional systems** - entities with goals, beliefs, 
 
 **Primary Agent (PA)**:
 - **Context**: Long-running sessions with user interaction
-- **Memory**: Experiences compaction trauma at ~140k conversation tokens
+- **Memory**: Experiences compaction trauma as the context window fills — a
+  proportion of a window whose size is deployment configuration, not a fixed
+  token count. Read `macf_tools context`, never a remembered number.
 - **Continuity**: SessionStart hooks provide recovery infrastructure
 - **Authority**: Highest operational authority, delegates to specialists
 - **Personal Wisdom**: Accumulates in `~/agent/policies/personal/`
@@ -228,7 +230,11 @@ MacEff treats agents as **intentional systems** - entities with goals, beliefs, 
 
 ### 3.1 Primary Agent Continuity
 
-**Compaction Trauma**: At ~140k conversation tokens, Anthropic's auto-compaction destroys 93% of working memory (~140k → ~10k compression).
+**Compaction Trauma**: As the context window fills, the client's auto-compaction
+replaces the conversation with a compressed summary, destroying most of working
+memory. Both the threshold and the window are deployment configuration and vary
+by model and access tier; a figure stated here would be false for every agent
+running a different window. See `context_management`.
 
 **Recognition Signs**:
 - Message: "This session is being continued from a previous conversation"

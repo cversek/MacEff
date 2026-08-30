@@ -21,7 +21,7 @@ class TestSessionEndHook:
                 with patch('macf.hooks.handle_session_end.get_temporal_context', return_value={'timestamp_formatted': '2025-10-08 12:00 PM'}):
                     with patch('macf.hooks.handle_session_end.get_breadcrumb', return_value='s_abc/c_5/g_def/p_ghi/t_123'):
                         with patch('macf.hooks.handle_session_end.get_token_info', return_value={'tokens_used': 1000}):
-                            result = run("", testing=True)
+                            result = run("")
 
                             assert result['continue'] is True
                             assert 'systemMessage' in result
@@ -33,7 +33,7 @@ class TestSessionEndHook:
                 with patch('macf.hooks.handle_session_end.get_temporal_context', return_value={'timestamp_formatted': '2025-10-08 12:00 PM'}):
                     with patch('macf.hooks.handle_session_end.get_breadcrumb', return_value='s_abc/c_10/g_def/p_ghi/t_123'):
                         with patch('macf.hooks.handle_session_end.get_token_info', return_value={}):
-                            result = run("", testing=True)
+                            result = run("")
 
                             message = result['systemMessage']
                             assert 'Session Ended' in message
@@ -47,7 +47,7 @@ class TestSessionEndHook:
                 with patch('macf.hooks.handle_session_end.get_temporal_context', return_value={'timestamp_formatted': '2025-10-08 12:00 PM'}):
                     with patch('macf.hooks.handle_session_end.get_breadcrumb', return_value='s_abc/c_7/g_def/p_ghi/t_123'):
                         with patch('macf.hooks.handle_session_end.get_token_info', return_value={'tokens_used': 5000}):
-                            result = run("", testing=True)
+                            result = run("")
 
                             # Verify event was logged
                             assert isolated_events_log.exists()
@@ -68,7 +68,7 @@ class TestSessionEndHook:
                 with patch('macf.hooks.handle_session_end.get_temporal_context', return_value={'timestamp_formatted': '2025-10-08 12:00 PM'}):
                     with patch('macf.hooks.handle_session_end.get_breadcrumb', return_value='s_abc/c_1/g_def/p_ghi/t_123'):
                         with patch('macf.hooks.handle_session_end.get_token_info', return_value={}):
-                            result = run(stdin_data, testing=True)
+                            result = run(stdin_data)
 
                             # Verify reason captured in event
                             events = isolated_events_log.read_text().strip().split('\n')
@@ -79,7 +79,7 @@ class TestSessionEndHook:
         """Returns error message when exception occurs."""
         # Force an error by making get_current_session_id raise
         with patch('macf.hooks.handle_session_end.get_current_session_id', side_effect=Exception("Test error")):
-            result = run("", testing=True)
+            result = run("")
 
             assert result['continue'] is True
             assert 'error' in result['systemMessage'].lower()
@@ -91,7 +91,7 @@ class TestSessionEndHook:
                 with patch('macf.hooks.handle_session_end.get_temporal_context', return_value={'timestamp_formatted': '2025-10-08 12:00 PM'}):
                     with patch('macf.hooks.handle_session_end.get_breadcrumb', return_value='s_abc/c_1/g_def/p_ghi/t_123'):
                         with patch('macf.hooks.handle_session_end.get_token_info', return_value={}):
-                            result = run("", testing=True)
+                            result = run("")
 
                             assert result['continue'] is True
                             # Should use "unknown" as default reason

@@ -19,7 +19,7 @@ class TestPermissionRequestHook:
         with patch('macf.hooks.handle_permission_request.get_current_session_id', return_value="test-session"):
             with patch('macf.hooks.handle_permission_request.get_minimal_timestamp', return_value="12:00 PM"):
                 with patch('macf.hooks.handle_permission_request.get_breadcrumb', return_value='s_abc/c_5/g_def/p_ghi/t_123'):
-                    result = run("", testing=True)
+                    result = run("")
 
                     assert result['continue'] is True
                     assert 'systemMessage' in result
@@ -35,7 +35,7 @@ class TestPermissionRequestHook:
         with patch('macf.hooks.handle_permission_request.get_current_session_id', return_value="test-session"):
             with patch('macf.hooks.handle_permission_request.get_minimal_timestamp', return_value="12:00 PM"):
                 with patch('macf.hooks.handle_permission_request.get_breadcrumb', return_value='s_abc/c_5/g_def/p_ghi/t_123'):
-                    result = run(stdin_data, testing=True)
+                    result = run(stdin_data)
 
                     message = result['systemMessage']
                     assert 'Write' in message
@@ -51,7 +51,7 @@ class TestPermissionRequestHook:
         with patch('macf.hooks.handle_permission_request.get_current_session_id', return_value="test-session"):
             with patch('macf.hooks.handle_permission_request.get_minimal_timestamp', return_value="12:00 PM"):
                 with patch('macf.hooks.handle_permission_request.get_breadcrumb', return_value='s_abc/c_7/g_def/p_ghi/t_123'):
-                    result = run(stdin_data, testing=True)
+                    result = run(stdin_data)
 
                     # Verify event was logged
                     assert isolated_events_log.exists()
@@ -75,7 +75,7 @@ class TestPermissionRequestHook:
         with patch('macf.hooks.handle_permission_request.get_current_session_id', return_value="test-session"):
             with patch('macf.hooks.handle_permission_request.get_minimal_timestamp', return_value="12:00 PM"):
                 with patch('macf.hooks.handle_permission_request.get_breadcrumb', return_value='s_abc/c_1/g_def/p_ghi/t_123'):
-                    result = run(stdin_data, testing=True)
+                    result = run(stdin_data)
 
                     events = isolated_events_log.read_text().strip().split('\n')
                     last_event = json.loads(events[-1])
@@ -89,7 +89,7 @@ class TestPermissionRequestHook:
         with patch('macf.hooks.handle_permission_request.get_current_session_id', return_value="test-session"):
             with patch('macf.hooks.handle_permission_request.get_minimal_timestamp', return_value="12:00 PM"):
                 with patch('macf.hooks.handle_permission_request.get_breadcrumb', return_value='s_abc/c_1/g_def/p_ghi/t_123'):
-                    result = run("", testing=True)
+                    result = run("")
 
                     events = isolated_events_log.read_text().strip().split('\n')
                     last_event = json.loads(events[-1])
@@ -99,7 +99,7 @@ class TestPermissionRequestHook:
     def test_handles_errors_gracefully(self, isolated_events_log):
         """Returns error message when exception occurs."""
         with patch('macf.hooks.handle_permission_request.get_current_session_id', side_effect=Exception("Test error")):
-            result = run("", testing=True)
+            result = run("")
 
             assert result['continue'] is True
             assert 'error' in result['systemMessage'].lower()

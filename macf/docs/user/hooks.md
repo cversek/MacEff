@@ -5,7 +5,7 @@ Complete guide to installing and using MACF hooks for consciousness preservation
 ## Table of Contents
 
 - [What Are Hooks?](#what-are-hooks)
-- [The Ten Hooks](#the-ten-hooks)
+- [The Eleven Hooks](#the-eleven-hooks)
 - [Installation](#installation)
 - [Verification](#verification)
 - [Hook Behavior](#hook-behavior)
@@ -23,7 +23,7 @@ MACF hooks are Python scripts that integrate with Claude Code's lifecycle events
 
 Hooks run automatically at specific points in the Claude Code lifecycle without requiring manual invocation.
 
-## The Ten Hooks
+## The Eleven Hooks
 
 ### 1. session_start
 
@@ -84,14 +84,14 @@ These are wrapped in visual boundary boxes:
 **When it runs:** Before any tool is invoked.
 
 **What it does:**
-- Injects temporal awareness (time, breadcrumb, CLUAC level)
+- Injects temporal awareness (time, breadcrumb, CL level)
 - Provides tool-specific context
 
 **Key output:** System-reminder with timestamp and context status.
 
 **Example:**
 ```
-🏗️ MACF | 09:17:56 PM | s_agent-1c/c_188/g_6597f65/p_none/t_1764296276 | ⚙️ macf_tools --help | CLUAC 80 (20% used)
+🏗️ MACF | 09:17:56 PM | s_agent-1c/c_188/g_6597f65/p_none/t_1764296276 ⚙️ CL80
 ```
 
 ### 4. post_tool_use
@@ -138,6 +138,54 @@ When a task scope is active, the Stop hook inspects the active task type before 
 
 **Key output:** Delegation timing and statistics.
 
+### 7. subagent_start
+
+**When it runs:** When a delegated subagent's session begins (after the Agent tool has spawned it).
+
+**What it does:**
+- Bridges the parent session's `tool_use_id` to the subagent's `agent_id`, so DELEG_DRV events from both sides join correctly
+- Observational only — never blocks subagent execution
+
+**Key output:** None visible to the agent; internal event-log bridging for delegation tracking.
+
+### 8. session_end
+
+**When it runs:** When a Claude Code session terminates (clear, logout, etc.).
+
+**What it does:**
+- Records session termination in the event log
+- Persists final session state
+
+**Key output:** None visible to the agent; forensic event only.
+
+### 9. pre_compact
+
+**When it runs:** Immediately before compaction occurs.
+
+**What it does:**
+- Records the imminent compaction in the event log ahead of the context loss
+
+**Key output:** None visible to the agent; forensic event only.
+
+### 10. permission_request
+
+**When it runs:** When Claude Code shows a permission dialog to the user.
+
+**What it does:**
+- Records the permission request in the event log
+- On configured channels, previews the pending tool call to the user
+
+**Key output:** None visible to the agent; forensic event and optional channel preview.
+
+### 11. notification
+
+**When it runs:** On Claude Code notifications (permission prompts, idle prompts, auth success, etc.).
+
+**What it does:**
+- Records the notification in the event log
+
+**Key output:** None visible to the agent; forensic event only.
+
 ## Installation
 
 ### Local Installation (Recommended)
@@ -168,7 +216,7 @@ macf_tools hooks install --global
 
 ### What Gets Installed
 
-Ten hook symlinks are created:
+Eleven hook symlinks are created:
 
 ```
 .claude/hooks/
@@ -177,6 +225,7 @@ Ten hook symlinks are created:
 ├── pre_tool_use.py -> macf/hooks/handle_pre_tool_use.py
 ├── post_tool_use.py -> macf/hooks/handle_post_tool_use.py
 ├── stop.py -> macf/hooks/handle_stop.py
+├── subagent_start.py -> macf/hooks/handle_subagent_start.py
 ├── subagent_stop.py -> macf/hooks/handle_subagent_stop.py
 ├── session_end.py -> macf/hooks/handle_session_end.py
 ├── pre_compact.py -> macf/hooks/handle_pre_compact.py
@@ -188,13 +237,12 @@ Each hook is a symlink to a handler module in the `macf.hooks` package. Updates 
 
 ## Verification
 
-### Check Hook Status
+### Inspect Hook Activity
 
 ```bash
-macf_tools hooks status
+macf_tools hooks logs      # hook execution events
+macf_tools events query    # the event log, which is the source of truth
 ```
-
-**Expected output:** Shows current hook states from sidecar files.
 
 **Note:** Requires session directory to exist (hooks create it on first run).
 
@@ -243,7 +291,12 @@ user_prompt_submit.py
 pre_tool_use.py
 post_tool_use.py
 stop.py
+subagent_start.py
 subagent_stop.py
+session_end.py
+pre_compact.py
+permission_request.py
+notification.py
 ```
 
 ## Hook Behavior
@@ -254,15 +307,14 @@ Most hooks inject temporal context as system-reminders:
 
 **Format:**
 ```
-🏗️ MACF | HH:MM:SS AM/PM | s_SESSION/c_CYCLE/g_HASH/p_PROMPT/t_TIMESTAMP | ⚙️ TOOL | CLUAC NN (NN% used)
+🏗️ MACF | HH:MM:SS AM/PM | s_SESSION/c_CYCLE/g_HASH/p_PROMPT/t_TIMESTAMP ⚙️ CLNN
 ```
 
 **Components:**
 - `🏗️ MACF` - Framework attribution tag
 - `HH:MM:SS AM/PM` - Current time (12-hour format)
 - `s_SESSION/c_CYCLE/g_HASH/p_PROMPT/t_TIMESTAMP` - Forensic breadcrumb
-- `⚙️ TOOL` - Tool being invoked (for pre/post hooks)
-- `CLUAC NN` - Context remaining percentage
+- `CLNN` - CL (Context Left) level, the percentage of usable context remaining
 
 ### Compaction Detection (session_start)
 
@@ -285,22 +337,20 @@ Most hooks inject temporal context as system-reminders:
 
 ### State Persistence
 
-Hooks maintain state in multiple locations:
+MacEff is event-first: there are no mutable state files. Every hook appends
+immutable events to the agent's event log, and anything that used to live in
+a state file (cycle number, session history, mode) is reconstructed on demand
+by querying that log.
 
-**Session-scoped:**
-- `.maceff/sessions/{session_id}/session_state.json`
-- Lifetime: Single session only
-- Contains: auto_mode, pending_todos, compaction_count
-
-**Project-scoped:**
-- `.maceff/agent_state.json`
-- Lifetime: Persists across all sessions
-- Contains: last_session_id, current_cycle_number, cycles_completed
+**Event log:**
+- Queried via `macf_tools events query` and related `events` subcommands
+- Contains: session boundaries, compaction markers, cycle transitions, DEV_DRV/DELEG_DRV timing, and all other hook-observed facts
+- This is the sole source of truth — there is nothing else to keep in sync
 
 **Hook logs:**
 - `/tmp/macf/{agent_id}/{session_id}/hooks/hook_events.log`
 - Lifetime: Session temporary
-- Contains: JSONL structured execution logs
+- Contains: JSONL structured execution logs (forensic/debugging record, not state)
 
 ### Sidecar Files
 
@@ -308,13 +358,10 @@ Hooks create sidecar files for consciousness awareness:
 
 ```
 /tmp/macf/{agent_id}/{session_id}/hooks/
-├── sidecar_session_start.json
-├── sidecar_pre_tool_use.json
-├── sidecar_post_tool_use.json
 └── hook_events.log
 ```
 
-**Purpose:** Allow hooks to communicate state and enable `macf_tools hooks status` inspection.
+**Purpose:** A per-session record of hook execution, readable with `macf_tools hooks logs`. State itself lives in the event log, which is the source of truth.
 
 ## Troubleshooting
 
@@ -334,18 +381,6 @@ macf_tools hooks logs
 **Solution:** Reinstall hooks:
 ```bash
 macf_tools hooks install --local
-```
-
-### Session Directory Not Found
-
-**Symptom:** `hooks status` reports "No session directory found".
-
-**Cause:** Session directory created on first hook execution.
-
-**Solution:** Run any command to trigger hooks, then check status:
-```bash
-macf_tools context
-macf_tools hooks status
 ```
 
 ### Compaction Not Detected
@@ -375,13 +410,12 @@ macf_tools hooks install --local
 
 **Common causes:**
 - Missing dependencies (should not happen - pure Python)
-- Corrupted state files (`.maceff/agent_state.json`)
-- Permission issues (hook log directory)
+- Permission issues (hook log directory or event log directory)
 
 **Solution:**
 ```bash
-# Check state file integrity
-cat .maceff/agent_state.json
+# Inspect the event log directly
+macf_tools events query
 
 # Fix permissions on temp directory
 chmod -R u+w /tmp/macf/
@@ -389,18 +423,18 @@ chmod -R u+w /tmp/macf/
 
 ### Cycle Counter Incorrect
 
-**Symptom:** Cycle number jumps unexpectedly.
+**Symptom:** Cycle number looks wrong.
 
-**Cause:** Tests or manual runs without `testing=True` parameter.
+**Cause:** The cycle number is reconstructed from compaction events in the
+event log, not stored anywhere mutable — there is no file to hand-edit.
 
-**Solution:** Manually edit `.maceff/agent_state.json`:
-```json
-{
-  "current_cycle_number": 188,
-  "cycles_completed": 187,
-  "last_session_id": "agent-1c0dd0d8"
-}
+**Solution:** Inspect the event log to see what compaction events were
+actually recorded:
+```bash
+macf_tools events query --event compaction_detected
 ```
+If a compaction event is missing or duplicated, that is the discrepancy to
+chase; there is no local state to patch around it.
 
 ### Temporal Awareness Missing
 
@@ -433,7 +467,12 @@ Hooks use modular package-based design:
 - `macf/hooks/handle_pre_tool_use.py`
 - `macf/hooks/handle_post_tool_use.py`
 - `macf/hooks/handle_stop.py`
+- `macf/hooks/handle_subagent_start.py`
 - `macf/hooks/handle_subagent_stop.py`
+- `macf/hooks/handle_session_end.py`
+- `macf/hooks/handle_pre_compact.py`
+- `macf/hooks/handle_permission_request.py`
+- `macf/hooks/handle_notification.py`
 
 **Installed hooks** (thin delegators):
 - `.claude/hooks/session_start.py` - Imports and calls `handle_session_start.run()`
@@ -442,26 +481,30 @@ Hooks use modular package-based design:
 
 **Development workflow:**
 1. Edit package module in `macf/hooks/handle_*.py`
-2. Test with `testing=True` parameter to avoid side effects
+2. Run the test suite, which exercises the same code path against an isolated event log
 3. Commit to version control
 4. Run `macf_tools hooks install` to deploy
 
 ### Testing Hooks Safely
 
-**CRITICAL:** Always use `testing=True` parameter when testing hooks manually.
+Hooks run the same code in tests and in production — there is no `testing`
+parameter to skip side effects. Isolation happens at the pytest fixture
+boundary instead: autouse fixtures in `macf/tests/conftest.py` (for example
+`isolated_events_log`) redirect the event log, task store, and agent home to
+a temp directory for the duration of the test, so hook logic never touches
+your real event log.
 
-**Why:** SessionStart hook increments cycle counter on every run. Forgotten `testing=True` causes state corruption.
-
-**Safe pattern:**
+**Pattern:**
 ```python
 from macf.hooks.handle_session_start import run
 
-# Safe - skips state mutations
-output = run(test_input_json, testing=True)
-
-# Dangerous - mutates production state
-output = run(test_input_json)  # Only in production delegators!
+# Inside a test, the isolated_events_log fixture is already active —
+# this call is safe because it writes to the fixture's temp log, not yours.
+output = run(test_input_json)
 ```
+
+Running a hook's `run()` function directly outside of pytest (with no
+isolation fixture active) writes to your real event log, same as production.
 
 ### Custom Hook Modifications
 
@@ -469,18 +512,17 @@ Hooks are designed to be extended:
 
 1. Fork the hook module
 2. Add custom logic
-3. Maintain `testing` parameter pattern
+3. Append new facts as events rather than introducing new state files
 4. Document side effects clearly
 
 **Example modification:**
 ```python
-def run(stdin_json: str = "", testing: bool = False) -> Dict[str, Any]:
+def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
     """
     Custom session_start hook.
 
-    Side effects (skipped when testing=True):
-    - Increments cycle counter
-    - Updates timestamps
+    Side effects:
+    - Appends a compaction/session event to the event log
     - YOUR CUSTOM SIDE EFFECT HERE
     """
     # Your custom logic here
@@ -490,8 +532,7 @@ def run(stdin_json: str = "", testing: bool = False) -> Dict[str, Any]:
 ## Files Modified by Hooks
 
 **Created:**
-- `.maceff/agent_state.json` - Project state
-- `.maceff/sessions/{session_id}/session_state.json` - Session state
+- The agent's event log (append-only; queried via `macf_tools events`) - all hook-observed facts
 - `/tmp/macf/{agent_id}/{session_id}/hooks/` - Hook logs and sidecars
 
 **Read:**
@@ -508,11 +549,11 @@ def run(stdin_json: str = "", testing: bool = False) -> Dict[str, Any]:
 1. **Use local installation** - Version control hooks with your project
 2. **Monitor hook logs** - Regular `macf_tools hooks logs` checks
 3. **Test after updates** - Run `macf_tools hooks test` after framework updates
-4. **Preserve state files** - Don't manually delete `.maceff/agent_state.json`
+4. **Don't hand-edit the event log** - It's append-only and the sole source of truth; use `macf_tools events` to query it
 5. **Review consciousness artifacts** - Post-compaction, read listed CCPs and JOTEWRs
 
 ## See Also
 
 - [CLI Reference](cli-reference.md) - Complete command documentation
 - `macf_tools hooks --help` - Command-line help
-- `macf_tools context` - Check token usage and CLUAC level
+- `macf_tools context` - Check token usage and CL level

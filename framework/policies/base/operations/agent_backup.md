@@ -1,6 +1,5 @@
 # Agent Backup and Restore Policy
 
-**Breadcrumb**: s_agent-ee/c_217/g_6c02aa6/p_none/t_1765030091
 **Type**: Operations (Consciousness Infrastructure)
 **Scope**: All agents (PA and SA)
 **Status**: Framework policy for agent consciousness backup and cross-system transplant
@@ -147,19 +146,17 @@ Agent backup and restore provides **complete consciousness preservation** for st
 | **Task Archive** | Task hierarchy snapshot | Completed work, releases | `task_management.md` Archive Protocol |
 | **Agent Backup** | Complete consciousness | Strategic: transplant, fork, migration | THIS POLICY |
 
-**Task Archive**:
+**Task Archive** (note: `macf_tools task archive` itself is retired — see `task_management.md` §7; tasks persist as JSON on disk regardless, and `task hide-completed` is the current declutter mechanism):
 - **Scope**: Task hierarchy with MTMD metadata
 - **Storage**: Persistent JSON files in `~/.claude/tasks/{session_uuid}/*.json`
-- **Recovery**: `macf_tools todos list --previous N` queries event history
-- **Legacy Location**: `agent/public/todo_backups/` (fallback when events unavailable)
-- **Trigger**: Every TodoWrite emits event; manual backup for cross-system transfer
+- **Recovery**: `macf_tools task tree` / `macf_tools events query` reconstruct state from the live task store and event log
 - **Purpose**: Protect active work state across transitions
-- **Restore**: TodoWrite tool with JSON from CLI output or backup file
+- **Restore**: Task files are never removed by hiding — nothing to "restore" in the old sense; `macf_tools task unhide-all` reverses a hide
 
 **Agent Backup**:
 - **Scope**: Entire agent consciousness (all artifacts, config, state, history)
 - **Location**: User-specified (local, remote storage)
-- **Filename**: `agent_backup_YYYY-MM-DD_HHMMSS_{agent_id}.tar.xz`
+- **Filename**: `YYYY-MM-DD_HHMMSS_{project_name}_consciousness.tar.xz` (auto-generated)
 - **Trigger**: Transplant, fork, migration, major milestones
 - **Purpose**: Complete consciousness preservation for catastrophic events
 - **Restore**: Full system installation on virgin or existing system
@@ -378,12 +375,12 @@ Agent backup and restore provides **complete consciousness preservation** for st
 
 **Source System (macOS)**:
 ```bash
-# 1. Create full backup with transcripts
-macf_tools agent backup create --include-transcripts \
-  --output ~/Downloads/2025-12-06_090815_TRANSPLANT_pa_claude.tar.xz
+# 1. Create full backup (transcripts included by default)
+macf_tools agent backup create --output ~/Downloads/
+# Writes ~/Downloads/2025-12-06_090815_{project_name}_consciousness.tar.xz
 
 # 2. Verify backup integrity
-macf_tools agent backup verify ~/Downloads/2025-12-06_090815_TRANSPLANT_pa_claude.tar.xz
+macf_tools agent restore verify ~/Downloads/2025-12-06_090815_TRANSPLANT_pa_claude.tar.xz
 
 # 3. Transfer to remote storage
 # Option A: Cloud storage (Dropbox, S3)
@@ -398,7 +395,7 @@ scp ~/Downloads/2025-12-06_090815_TRANSPLANT_pa_claude.tar.xz \
 ```bash
 # 1. Install prerequisites (see 5.1)
 npm install -g @anthropic-ai/claude-code
-git clone https://github.com/cversek/MacEff.git
+git clone <MACEFF_REPO_URL>
 cd MacEff/macf && pip install -e .
 
 # 2. Download backup from remote storage
@@ -466,7 +463,7 @@ macf_tools agent restore install \
 
 5. **Clone MacEff and install MACF**:
    ```bash
-   git clone https://github.com/cversek/MacEff.git
+   git clone <MACEFF_REPO_URL>
    (cd MacEff/macf && pip install -e .)
    ```
    Verify: `macf_tools --version`
@@ -499,7 +496,7 @@ macf_tools agent restore install \
 
 5. **Clone MacEff and install MACF**:
    ```bash
-   git clone https://github.com/cversek/MacEff.git
+   git clone <MACEFF_REPO_URL>
    (cd MacEff/macf && pip install -e .)
    ```
    Verify: `macf_tools --version`
@@ -705,7 +702,7 @@ ls -la /path/to/target/agent/private/checkpoints/
 2. **Backup-Before-Overwrite** (MANDATORY if using --force):
    ```bash
    # 1. Backup existing consciousness
-   macf_tools agent backup create --output /tmp/existing_backup.tar.xz
+   macf_tools agent backup create --output /tmp/
 
    # 2. THEN force restore
    macf_tools agent restore install backup.tar.xz \
@@ -723,8 +720,9 @@ ls -la /path/to/target/agent/private/checkpoints/
 **If restore fails mid-process**:
 
 ```bash
-# 1. Check restore log for error details
-macf_tools agent restore logs
+# 1. Re-run with --dry-run and -v/--verbose for diagnostic detail
+macf_tools agent restore verify -v <archive>
+macf_tools agent restore install <archive> --target <dir> --dry-run
 
 # 2. Common issues:
 #    - Corrupted archive (re-download/re-transfer)
@@ -755,37 +753,28 @@ macf_tools agent restore install backup.tar.xz --target /path/to/target
 
 **Storage Location**: User responsibility (local, cloud, network)
 
-### 8.2 Retention Override
+### 8.2 Retention (library-only, no CLI command yet)
 
-**Environment Variable**:
-```bash
-export MACF_BACKUP_KEEP=10  # Keep 10 backups instead of 5
-```
-
-**Per-Backup Override**:
-```bash
-macf_tools agent backup create --keep 3  # Keep only 3 backups
-```
+Retention logic (`cleanup_old_backups()`, `get_backup_retention_count()`, honoring a `MACF_BACKUP_KEEP` environment variable) exists in `macf.backup.integrity` and is unit-tested, but **no `macf_tools` subcommand calls it**. There is currently no `agent backup cleanup` command and no `--keep` flag on `agent backup create`. Setting `MACF_BACKUP_KEEP` has no effect until a CLI command is wired to read it.
 
 ### 8.3 Manual Cleanup
 
+Until that CLI command exists, cleanup is manual:
+
 **List Backups**:
 ```bash
-ls -lth ~/backups/agent_backup_*.tar.xz
+macf_tools agent backup list --dir ~/backups/
 ```
 
 **Delete Old Backups**:
 ```bash
-# Manual deletion (explicit, safe)
-rm ~/backups/agent_backup_2025-01-15_*.tar.xz
-
-# Automated cleanup (keep newest N)
-macf_tools agent backup cleanup --keep 5 --location ~/backups/
+# Manual deletion (explicit, safe) — verify with `agent backup list` first
+rm ~/backups/2025-01-15_*_consciousness.tar.xz
 ```
 
-**No Automatic Deletion**: Cleanup NEVER runs automatically without explicit user action.
+**No Automatic Deletion**: Nothing deletes a backup without explicit user action.
 
-**Why Manual**: Backups are precious—automatic deletion risks losing critical snapshots. User must explicitly authorize cleanup.
+**Why Manual**: Backups are precious—automatic deletion risks losing critical snapshots. Until a cleanup command ships, that caution is enforced by having no automated path at all.
 
 ---
 
@@ -801,25 +790,25 @@ macf_tools agent backup create [OPTIONS]
 ```
 
 **Options**:
-- `--output <path>`: Backup archive destination (default: `./agent_backup_YYYY-MM-DD_HHMMSS_{agent_id}.tar.xz`)
-- `--include-transcripts`: Include conversation transcripts (large, optional)
-- `--exclude-subagents`: Exclude subagent delegation trails
-- `--keep <N>`: Retention count override (default: 5)
+- `--output <dir>` / `-o <dir>`: Output directory for the archive (default: CWD). The filename itself is always auto-generated as `YYYY-MM-DD_HHMMSS_{project_name}_consciousness.tar.xz`.
+- `--no-transcripts`: Exclude conversation transcripts (transcripts are **included by default**)
+- `--quick`: Only include recent transcripts (last 7 days) instead of full history
+
+There is no flag to exclude subagent delegation trails and no retention/`--keep` flag — see §8.2.
 
 **Examples**:
 ```bash
-# Basic backup (local directory)
+# Basic backup (local directory, transcripts included by default)
 macf_tools agent backup create
 
-# Backup with transcripts to specific location
-macf_tools agent backup create \
-  --include-transcripts \
-  --output ~/Dropbox/backups/full_backup.tar.xz
+# Backup to a specific directory
+macf_tools agent backup create --output ~/Dropbox/backups/
 
-# Minimal backup (exclude transcripts and subagents)
-macf_tools agent backup create \
-  --exclude-subagents \
-  --output /tmp/minimal_backup.tar.xz
+# Minimal backup, no transcripts at all
+macf_tools agent backup create --no-transcripts --output /tmp/
+
+# Backup with only the last 7 days of transcripts
+macf_tools agent backup create --quick --output /tmp/
 ```
 
 ### 9.2 Restore Installation
@@ -845,7 +834,7 @@ macf_tools agent restore install backup.tar.xz \
   --transplant
 
 # Force restore over existing consciousness (backup first!)
-macf_tools agent backup create --output /tmp/safety_backup.tar.xz
+macf_tools agent backup create --output /tmp/
 macf_tools agent restore install backup.tar.xz \
   --target ~/projects/ExistingProject \
   --force
@@ -862,22 +851,29 @@ macf_tools agent restore verify <archive>
 
 **Example**:
 ```bash
-macf_tools agent restore verify ~/Downloads/agent_backup_2025-12-06_090815_pa_claude.tar.xz
+macf_tools agent restore verify ~/Downloads/2025-12-06_090815_pa_claude_consciousness.tar.xz
 ```
 
-**Output**:
+**Output (valid archive)**:
 ```
-✓ Archive integrity: OK
-✓ Manifest found: MANIFEST.sha256
-✓ Checksums verified: 1247/1247 files
-✓ Critical components: All present
-  - agent_state.json: OK
-  - agent_events_log.jsonl: OK
-  - agent/private/: 45 files
-  - agent/public/: 127 files
-  - .claude/: 8 files
-✓ Backup valid and restorable
+Archive valid: 1247 files verified
 ```
+
+**Output (broken symlinks — not fatal, common after a cross-system copy)**:
+```
+Archive valid: 1247 files verified
+
+⚠️  3 broken symlinks (targets don't exist on this system)
+   These are hooks/commands pointing to source system paths.
+   Use --transplant with 'restore install' to rewrite paths for this system:
+   macf_tools agent restore install <archive> --target <dir> --transplant
+```
+
+**Output (corrupted/missing files)**:
+```
+Archive INVALID: 2 corrupted, 1 missing
+```
+Add `-v`/`--verbose` to list the missing and corrupted files, and any broken symlinks, individually.
 
 ### 9.4 List Backups
 
@@ -885,23 +881,23 @@ macf_tools agent restore verify ~/Downloads/agent_backup_2025-12-06_090815_pa_cl
 
 **Syntax**:
 ```bash
-macf_tools agent backup list [--location <dir>]
+macf_tools agent backup list [--dir <dir>] [--json]
 ```
 
 **Example**:
 ```bash
-macf_tools agent backup list --location ~/Dropbox/backups/
+macf_tools agent backup list --dir ~/Dropbox/backups/
 ```
 
-**Output**:
+**Output** (plain filenames, newest not guaranteed first unless sorted by name):
 ```
-Agent Backups (5 found):
-1. agent_backup_2025-12-06_090815_pa_claude.tar.xz (245 MB) - 2 hours ago
-2. agent_backup_2025-12-05_183022_pa_claude.tar.xz (243 MB) - 1 day ago
-3. agent_backup_2025-12-01_120000_pa_claude.tar.xz (198 MB) - 5 days ago
-4. agent_backup_2025-11-25_093015_pa_claude.tar.xz (187 MB) - 11 days ago
-5. agent_backup_2025-11-20_154530_pa_claude.tar.xz (176 MB) - 16 days ago
+2025-11-20_154530_pa_claude_consciousness.tar.xz
+2025-11-25_093015_pa_claude_consciousness.tar.xz
+2025-12-01_120000_pa_claude_consciousness.tar.xz
+2025-12-05_183022_pa_claude_consciousness.tar.xz
+2025-12-06_090815_pa_claude_consciousness.tar.xz
 ```
+No size or age annotation is printed; use `agent backup info <archive>` for details on a specific file.
 
 ---
 
@@ -957,8 +953,7 @@ git add agent/private/checkpoints/ agent/public/todo_backups/
 git commit -m "consciousness(cycle217): Strategic milestone CCP"
 
 # 5. Create agent backup (THIS POLICY)
-macf_tools agent backup create \
-  --output ~/Dropbox/backups/agent_backup_2025-12-06_milestone.tar.xz
+macf_tools agent backup create --output ~/Dropbox/backups/
 ```
 
 **Pre-Transplant Workflow**:
@@ -966,16 +961,14 @@ macf_tools agent backup create \
 # 1. Verify clean state
 git status  # Should be clean
 
-# 2. Create comprehensive backup
-macf_tools agent backup create \
-  --include-transcripts \
-  --output ~/Downloads/pre_transplant_backup.tar.xz
+# 2. Create comprehensive backup (transcripts included by default)
+macf_tools agent backup create --output ~/Downloads/
 
 # 3. Verify backup integrity
-macf_tools agent restore verify ~/Downloads/pre_transplant_backup.tar.xz
+macf_tools agent restore verify ~/Downloads/2025-12-06_090815_pa_claude_consciousness.tar.xz
 
 # 4. Transfer to remote storage (safe off-site)
-cp ~/Downloads/pre_transplant_backup.tar.xz ~/Dropbox/
+cp ~/Downloads/2025-12-06_090815_pa_claude_consciousness.tar.xz ~/Dropbox/
 
 # 5. Proceed with transplant
 # ... virgin system restore protocol ...
@@ -1006,14 +999,13 @@ macf_tools agent backup create  # Captures inconsistent state
 - **Problem**: Backup includes uncommitted experiments, broken code
 - **Fix**: Commit or stash changes before backup (clean git state)
 
-**❌ Forgetting Transcripts on Transplant**:
+**❌ Excluding Transcripts on Transplant**:
 ```bash
-# WRONG: Transplant backup without conversation history
-macf_tools agent backup create --output transplant.tar.xz
-# (missing --include-transcripts flag)
+# WRONG: --no-transcripts drops conversation history the transplant needs
+macf_tools agent backup create --no-transcripts --output ~/Downloads/
 ```
 - **Problem**: Transplanted agent lacks conversation memory
-- **Fix**: Use `--include-transcripts` for transplant backups
+- **Fix**: Omit `--no-transcripts` — transcripts are included by default; only add it when you deliberately want a lighter backup
 
 **❌ No Verification After Transfer**:
 ```bash

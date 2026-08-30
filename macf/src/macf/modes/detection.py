@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Dict, Optional, Set, Tuple
 
 from ..agent_events_log import read_events
-from ..utils.cycles import detect_auto_mode
+from .auto import detect_auto_mode
 
 
 # ============================================================================
@@ -126,8 +126,11 @@ def detect_active_modes(session_id: str, token_info: dict) -> Set[str]:
             10,
             coerce=int,
         )
-        last_activity = _get_last_user_activity_timestamp(session_id)
-        if last_activity and (time.time() - last_activity) > idle_timeout * 60:
+        # Ask whether anything happened inside the window, rather than when the
+        # last thing happened. See _had_user_activity_since for why the second
+        # question is the one that broke.
+        cutoff = time.time() - idle_timeout * 60
+        if not _had_user_activity_since(cutoff):
             modes.add("USER_IDLE")
     except (OSError, ValueError) as e:
         print(f"⚠️ MACF: USER_IDLE detection failed: {e}", file=sys.stderr)
@@ -561,7 +564,11 @@ def _get_last_user_activity_timestamp(session_id: str, sources: Optional[Set[str
     Returns None when neither producer has recorded anything for this agent
     (no false signals > wrong signals).
     """
-    for event in read_events(limit=200, reverse=True):
+    # limit=None: bounded at 200 rows this returned None once the agent's own
+    # events buried the user's input, and the caller read None as "present".
+    # The scan exits on the first match, so unbounded costs nothing when one
+    # exists. See the compiled-false-absence trap in `empiricism`.
+    for event in read_events(limit=None, reverse=True):
         event_type = event.get("event", "")
         if event_type != "user_activity_detected":
             continue
@@ -584,9 +591,49 @@ def _get_last_user_activity_timestamp(session_id: str, sources: Optional[Set[str
     return None
 
 
+def _had_user_activity_since(cutoff_epoch: float, sources=None) -> bool:
+    """True when a user_activity_detected event exists at or after ``cutoff_epoch``.
+
+    Asks the question USER_IDLE actually has — *has the user done anything in
+    the last N minutes* — instead of the harder one it used to ask, *when did
+    the user last do something*. The difference matters because the second
+    needs to reach an event of unbounded age, and the first only ever needs to
+    reach ``cutoff_epoch``.
+
+    That closes the defect this replaces. The old lookup scanned a fixed 200
+    rows; every macf_tools invocation appends an event, so a working agent
+    buried the user's last input past the window within minutes. The scan then
+    returned None, and ``if last_activity and ...`` read None as "the user is
+    present" — an emptiness the reader had produced by truncation, reported as
+    a measurement. Perversely, the mode meaning "the agent is working alone"
+    was switched off by the agent working alone.
+
+    The scan is bounded here too, but **in the unit being measured**: it stops
+    at the first event older than the cutoff. Volume cannot shrink that window,
+    only age can.
+
+    A False return is now honest — no matching activity exists in the interval,
+    which is exactly what idleness means.
+    """
+    for event in read_events(limit=None, reverse=True):
+        ts = _parse_epoch(event.get("timestamp"))
+        if ts is not None and ts < cutoff_epoch:
+            # Reverse order, so everything beyond here is older still.
+            return False
+        if event.get("event") != "user_activity_detected":
+            continue
+        if sources is not None and event.get("data", {}).get("source") not in sources:
+            continue
+        if ts is not None and ts >= cutoff_epoch:
+            return True
+    return False
+
+
 def _detect_quiet_mode_event(session_id: str) -> bool:
     """Check if QUIET_MODE was explicitly set via mode_change event."""
-    for event in read_events(limit=50, reverse=True):
+    # limit=None: exits on the first mode_change. Bounded, a QUIET_MODE set
+    # more than 50 events ago read as "QUIET_MODE is off". See the compiled-false-absence trap in `empiricism`.
+    for event in read_events(limit=None, reverse=True):
         if event.get("event") == "mode_change":
             data = event.get("data", {})
             mode = data.get("mode", "")
@@ -630,7 +677,11 @@ def _detect_user_remote(session_id: str) -> bool:
     axis, not part of the operational-mode toggle.
     """
     set_ts = None
-    for event in read_events(limit=100, reverse=True):
+    # limit=None: breaks on the first USER_REMOTE mode_change. Bounded, going
+    # remote and then generating 100 events silently cleared the mode — and
+    # note this one defaulted the OTHER way from the quiet-mode scan, which is
+    # good evidence nobody chose these directions. See the compiled-false-absence trap in `empiricism`.
+    for event in read_events(limit=None, reverse=True):
         if event.get("event") != "mode_change":
             continue
         data = event.get("data", {})
@@ -705,7 +756,8 @@ def _get_current_work_mode() -> Optional[str]:
         print(f"⚠️ MACF: SPRINT/PLAY_TIME scope check in _get_current_work_mode failed (non-blocking): {e}", file=sys.stderr)
 
     # Fall back: most recent work_mode_change event (existing behavior)
-    for event in read_events(limit=50, reverse=True):
+    # limit=None: exits on the first work_mode_change. See the compiled-false-absence trap in `empiricism`.
+    for event in read_events(limit=None, reverse=True):
         if event.get("event") == "work_mode_change":
             return event.get("data", {}).get("mode")
     return None

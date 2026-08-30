@@ -21,7 +21,6 @@ macf/
 │   ├── handle_subagent_stop.py     # SubagentStop hook
 │   ├── logging.py             # Hook logging utilities
 │   ├── recovery.py            # Recovery message formatting
-│   └── sidecar.py             # Sidecar state management
 ├── models/                     # Pydantic models
 │   ├── __init__.py
 │   ├── agent_spec.py          # Agent configuration models
@@ -222,18 +221,23 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
 
 **Purpose**: Forensic coordinates for finding exact session/cycle/prompt context.
 
-#### `utils/cycles.py` - Cycle and AUTO_MODE Management
+#### `modes/auto.py` - AUTO_MODE Detection and Control
 
 **Key Functions**:
-- `detect_auto_mode()` - Hierarchical AUTO_MODE detection
+- `detect_auto_mode()` - Hierarchical AUTO_MODE detection, returns `(enabled, source)`
 - `set_auto_mode()` - Set AUTO_MODE state
 
-**AUTO_MODE Priority**:
-1. CLI flag (future) - confidence 1.0
-2. Environment `MACF_AUTO_MODE` - confidence 0.9
-3. Config `.maceff/config.json` - confidence 0.7
-4. Session state (previous) - confidence 0.5
-5. Default (False) - confidence 0.0
+**AUTO_MODE Priority** (highest to lowest):
+1. CLI flag `--auto-mode` (not implemented)
+2. Environment `MACF_AUTO_MODE` -> source `"env"`
+3. Event log, most recent `mode_change` -> source `"event"`
+4. Default `(False, "default")`
+
+Lived at `utils/cycles.py` until it was dissolved into `macf.modes`: the module
+was named for cycles and held nothing about them, and the misplacement broke the
+task completion gate. The confidence scores this section used to list, and the
+config-file tier it described, were both from an earlier design -- the function
+returns a two-tuple and consults no config file.
 
 #### `utils/temporal.py` - Temporal Awareness
 

@@ -9,6 +9,7 @@ These functions replace reads from mutable session_state.json with
 event-sourced queries from agent_events_log.jsonl.
 """
 
+import sys
 from typing import Tuple, Dict, List, Optional
 from .agent_events_log import read_events
 
@@ -28,7 +29,11 @@ def get_latest_state_snapshot() -> Optional[dict]:
         >>> if snapshot:
         ...     baseline = snapshot["data"]["event_tallies"].get("dev_drv_ended", 0)
     """
-    for event in read_events(reverse=True):
+    # scope="all": a snapshot is a BASELINE, which is older than the current
+    # cycle by definition. Cycle-scoping this would find nothing on the first
+    # query after every compaction and silently reset every accumulated total
+    # that builds on it.
+    for event in read_events(reverse=True, scope="all"):
         if event.get("event") == "state_snapshot":
             return event
     return None
@@ -275,7 +280,13 @@ def get_cycle_number_from_events() -> int:
     """
     # Reverse scan - find most recent cycle source
     # Self-limiting: exits on first match
-    for event in read_events(limit=None, reverse=True):
+    #
+    # scope="all": this is the query that IDENTIFIES the cycle, so it cannot be
+    # bounded by one. The compaction_detected source would survive cycle-scoping
+    # (the boundary event is included), but the cycle_correction and
+    # state_snapshot fallbacks both live before it -- and those are exactly the
+    # paths that run when the boundary is missing or wrong.
+    for event in read_events(limit=None, reverse=True, scope="all"):
         event_type = event.get("event")
 
         # Highest priority: cycle_correction (manual fix for test pollution)
@@ -337,7 +348,10 @@ def get_compaction_count_from_events(session_id: str) -> dict:
     count = baseline_count
     session_prefix = session_id[:8] if session_id else ""
 
-    for event in read_events(limit=None, reverse=True):
+    # scope="all": a count of compactions over all time is the one question a
+    # cycle boundary must not truncate -- cycle-scoping returns at most 1, and
+    # the count is already bounded semantically by the snapshot timestamp below.
+    for event in read_events(limit=None, reverse=True, scope="all"):
         event_timestamp = event.get("timestamp", 0)
         if snapshot_timestamp > 0 and event_timestamp <= snapshot_timestamp:
             break
@@ -722,8 +736,9 @@ def get_last_session_id_from_events() -> str:
     Returns:
         Previous session ID string, or empty string if no migration detected
     """
-    # Read most recent events first
-    for event in read_events(reverse=True):
+    # scope="all": the PREVIOUS session is by definition on the far side of the
+    # event that ended this one. Self-limiting -- exits on the first match.
+    for event in read_events(reverse=True, scope="all"):
         if event.get("event") == "migration_detected":
             data = event.get("data", {})
             previous_session = data.get("previous_session", "")
@@ -745,8 +760,9 @@ def get_last_session_end_time_from_events() -> Optional[float]:
     Returns:
         Unix timestamp of last session end, or None if no session_ended events
     """
-    # Read most recent events first
-    for event in read_events(reverse=True):
+    # scope="all": the previous session ENDED before the boundary that opened
+    # this cycle. Self-limiting -- exits on the first match.
+    for event in read_events(reverse=True, scope="all"):
         if event.get("event") == "session_ended":
             data = event.get("data", {})
             timestamp = data.get("timestamp")
@@ -754,6 +770,35 @@ def get_last_session_end_time_from_events() -> Optional[float]:
                 return float(timestamp)
 
     return None
+
+
+#: Carry gaps already reported by this process. Reporting is once-per-key rather
+#: than once-per-call: the query runs on nearly every hook firing, and an
+#: unbounded report would bury the signal in its own noise — and append_event
+#: builds a breadcrumb, which itself reads the log.
+_carry_gaps_reported = set()
+
+
+def _report_carry_gap(event_type: str, key: str) -> None:
+    """Record that persistent state was found only by scanning past the boundary."""
+    if (event_type, key) in _carry_gaps_reported:
+        return
+    _carry_gaps_reported.add((event_type, key))
+
+    print(
+        f"⚠️ MACF: {key} was not carried into this cycle; found it by scanning "
+        f"past the cycle boundary. Carry-forward did not run, or ran before this "
+        f"state existed.",
+        file=sys.stderr,
+    )
+    try:
+        from .agent_events_log import append_event
+        append_event("carry_forward_missing", {
+            "event_type": event_type,
+            "key": key,
+        })
+    except (OSError, IOError, ValueError) as e:
+        print(f"⚠️ MACF: could not log the carry gap: {e}", file=sys.stderr)
 
 
 def get_auto_mode_from_events(session_id: str) -> Tuple[bool, str]:
@@ -784,10 +829,10 @@ def get_auto_mode_from_events(session_id: str) -> Tuple[bool, str]:
     # SessionStart handles the reset logic — this function just finds the
     # most recent mode_change regardless of which session wrote it.
 
-    # Read most recent events first — find the latest mode_change
-    # NOTE: limit=None because mode_change events are rare (1 per session)
-    # and can be buried under thousands of tool_call/cli_command events.
-    # With limit=200, a busy session would push mode_change out of range.
+    # Cycle-scoped (the default): a miss here means "not established in this
+    # cycle", which is a complete answer rather than a truncated one. Persistence
+    # across the boundary is supplied by carry_state_forward, not by searching
+    # backwards without limit.
     for event in read_events(limit=None, reverse=True):
         if event.get("event") == "mode_change":
             data = event.get("data", {})
@@ -798,7 +843,69 @@ def get_auto_mode_from_events(session_id: str) -> Tuple[bool, str]:
 
             return (auto_mode, "event")
 
+    # ------------------------------------------------------------------
+    # REPORTING FALLBACK — scaffolding, with its removal condition attached.
+    #
+    # Reaching here means no mode_change exists in this cycle, which should be
+    # impossible once carry_state_forward has run at every boundary. It IS
+    # reachable on the first boundary after this change ships, because earlier
+    # cycles were never carried.
+    #
+    # So: fall back to a lifetime scan rather than silently dropping the
+    # operator's mode, and SAY SO — both to stderr and to the log — so the gap
+    # is a queryable fact instead of an agent that mysteriously stopped working.
+    # The scan is self-limiting (exits on the first match), so this does not
+    # reintroduce the pathological unbounded case in practice.
+    #
+    # REMOVE THIS BLOCK once carry_forward_missing has not been emitted for
+    # several cycles. Left unexplained, a later reader would find a lifetime scan
+    # in a cycle-scoped codebase and either enshrine it or delete it blindly.
+    # ------------------------------------------------------------------
+    for event in read_events(limit=None, reverse=True, scope="all"):
+        if event.get("event") == "mode_change":
+            data = event.get("data", {})
+            mode = data.get("mode", "MANUAL_MODE")
+            enabled = data.get("enabled", False)
+            auto_mode = (mode == "AUTO_MODE" and enabled)
+            _report_carry_gap("mode_change", mode)
+            return (auto_mode, "pre_carry_fallback")
+
     return (False, "default")
+
+
+def get_policies_surfaced_this_cycle() -> Dict[str, str]:
+    """Policies whose nav guide has already been surfaced this cycle.
+
+    Maps policy_name -> the task id that first surfaced it, so a repeat can name
+    where the content already is instead of reprinting it.
+
+    Scans in reverse and stops at ``compaction_detected``, the cycle boundary.
+    That is the ONLY reset, deliberately: ``policy_injections_cleared_all``
+    clears pending injections, not the agent's exposure to the content. Injected
+    text persists in the conversation's message history for the rest of the
+    cycle, so "has this been surfaced" stays true even after the injection is
+    cleared.
+
+    No new state store. The events log already records what happened this cycle
+    and is already the durable agent-owned record, so this question has an
+    existing home.
+
+    Returns:
+        {policy_name: first_task_id_that_surfaced_it}; empty before any injection.
+    """
+    surfaced: Dict[str, str] = {}
+    for event in read_events(limit=None, reverse=True):
+        event_type = event.get("event")
+        if event_type == "compaction_detected":
+            break
+        if event_type == "policy_injection_activated":
+            data = event.get("data", {})
+            policy_name = data.get("policy_name")
+            if policy_name:
+                # Reverse scan, so later writes lose to earlier ones and the
+                # value ends up being the FIRST surfacing of the cycle.
+                surfaced[policy_name] = str(data.get("task_id") or "?")
+    return surfaced
 
 
 def get_active_policy_injections_from_events() -> List[Dict[str, str]]:

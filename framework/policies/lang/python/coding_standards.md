@@ -46,6 +46,20 @@ Applies to all Python code written within MacEff framework projects.
 - When is single `.parent` acceptable?
 - What MACF discovery functions exist?
 
+**6 Reading the Event Log**
+- Why is a hardcoded `limit=` on an event scan a smell?
+- What unit should a scan be bounded in?
+- When is an unbounded scan the cheaper choice?
+- What scope does a read default to, and when may a lifetime read be asked for?
+- Why does removing a failure case beat bounding it?
+- What must state do to survive a scope boundary?
+- How do I keep "not found" from becoming a claim about state?
+
+**7 Schemas and Declaredness in Python**
+- What Python mechanism closes a schema at a trust boundary?
+- Where should a non-obvious constraint be enforced, and why there?
+- When does `.get()` answer a different question than `in`?
+
 ---
 
 ## 0 Exception Type Selection
@@ -282,6 +296,154 @@ project_root = Path(__file__).parent.parent.parent  # FRAGILE
 
 ---
 
+## 6 Reading the Event Log
+
+Section 2 covers writing to the event log. This covers reading it back, where the
+recurring defect is not the read but what a *failed* read is taken to mean.
+
+### 6.1 A hardcoded `limit=` on an event scan is a smell
+
+```python
+# Suspect
+for event in read_events(limit=200, reverse=True):
+    if event.get("event") == "user_activity_detected":
+        return event["timestamp"]
+return None          # "no activity" — or "I stopped looking"?
+```
+
+The scan is bounded in **rows** while the question is about **time**. Every
+unrelated write consumes the budget, so the window silently shrinks as the log
+gets busy — and the miss is returned as a value indistinguishable from a real
+negative. See the compiled-false-absence trap in `empiricism` for why this is a
+distinct failure from an ordinary bad search.
+
+### 6.2 Prefer no bound when the scan exits on its first match
+
+Most of these scans `return` or `break` as soon as they find what they came for.
+Such a scan **already costs nothing in the common case** — the limit only ever
+takes effect when the event is absent, which is exactly the case it gets wrong.
+
+```python
+# Better: self-limiting on match, honest when absent
+for event in read_events(limit=None, reverse=True):
+    if event.get("event") == "mode_change":
+        return event["data"].get("enabled", True)
+return False
+```
+
+### 6.3 When a bound is genuinely needed, bound in the unit you are measuring
+
+If the question is *did X happen in the last N minutes*, stop at the first event
+older than N minutes. An age cannot be shrunk by volume, and the loop still
+terminates early on a busy log:
+
+```python
+def had_activity_since(cutoff_epoch):
+    for event in read_events(limit=None, reverse=True):
+        ts = parse_epoch(event.get("timestamp"))
+        if ts is not None and ts < cutoff_epoch:
+            return False        # reverse order: everything beyond is older
+        if event.get("event") == "user_activity_detected":
+            return True
+    return False
+```
+
+Reframing the question is often the whole fix. *When did X last happen* must
+reach an event of unbounded age; *did X happen since T* only ever has to reach
+T.
+
+The third category — lifetime state, scanned until found — still degrades when
+the event has **never** occurred, since the scan then reads the whole log. A row
+limit cannot fix that; it answers wrongly rather than slowly. The structural
+remedy is to remove the category rather than bound it, which is what the
+cycle-scoping section below describes: scoping every read to the cycle by
+default and requiring cross-cycle
+state to re-assert itself at the boundary. The worst case becomes one cycle
+regardless of how long the log grows, and a miss comes to mean exactly one thing
+— *not established this cycle* — which is what dissolves the compiled false
+absence rather than merely bounding it.
+
+### 6.4 Scope the read to the cycle by default; make persistence explicit
+
+Bounding by meaning leaves one case unfixed, and it is the one that actually
+hurts: a scan for
+something that has **never** happened reads the whole log, every time, forever. A
+limit cannot repair that — it answers wrongly instead of slowly.
+
+The remedy is to **remove the case rather than bound it**. Default every read to
+the current cycle, so the worst case is one cycle's events regardless of how long
+the log has grown:
+
+```python
+for event in read_events(reverse=True):        # cycle-scoped by default
+    if event.get("event") == "mode_change":
+        return event["data"].get("enabled", False)
+return False        # "not established this cycle" — a complete answer
+```
+
+Two consequences are the point of the change, not side effects:
+
+**A miss becomes unambiguous.** Under a row limit, `None` meant *never happened*
+OR *I could not see*. Under cycle-scoping it means exactly *not established in
+this cycle*, which is a fact about the world rather than about the reader.
+
+**Persistence becomes an act.** State that must outlive a cycle can no longer
+survive because nothing overwrote it and a backward search happened to reach it.
+It has to re-assert itself at the boundary — an event, at a known moment, that
+can be audited and can fail loudly.
+
+**A carried assertion MUST record where it came from.** Re-emitting an operator's
+authorisation each boundary without provenance makes a grant given once and
+carried a hundred times read as freshly given. The system then presents its own
+inheritance as consent — the same fabrication as inventing user approval, arriving
+through infrastructure instead of through narrative. Record the origin, and
+preserve it through a chain of carries rather than stamping the current scope at
+each hop.
+
+**A lifetime read is still legitimate — it just has to ask.** Some questions are
+about all of time: how many boundaries have there been, what was the previous
+session, what is the accumulated baseline. Request the wider scope explicitly and
+say why *at the call site*, because the next reader's alternative is to guess
+whether the wider scope was reasoned about or inherited.
+
+Two failure modes worth naming, because each is worse than the defect:
+
+- **Scoping without carrying** silently drops authority at the first boundary.
+- **An unrecognised scope value that falls back to reading everything** restores
+  the unbounded case through a caller who believed they were bounded. Refuse it.
+
+When a fallback to the wider scope is kept during a migration, give it a
+**removal condition in the comment**. Scaffolding without one is indistinguishable
+from design, and the next reader will either enshrine it or delete it blindly.
+
+### 6.5 Do not let `None`-is-falsy encode a decision
+
+```python
+# The default is invisible — it falls out of Python's truthiness
+last = lookup()
+if last and (now - last) > timeout:
+    mark_idle()
+```
+
+Make the fallback explicit at the call site — a sentinel the caller must handle,
+or the default passed as a parameter. Where a default must be chosen, choose by
+**cost of being wrong**: a default that grants *care* is cheap; one that grants
+*authority*, or silently withdraws a safeguard, is not.
+
+### 6.6 Anti-pattern summary
+
+| smell | why | instead |
+|---|---|---|
+| `read_events(limit=<int literal>)` | bounded in rows, question is in time | `limit=None`, or bound by age |
+| `return None` / `return False` on miss | conflates absent with unreachable | sentinel, or explicit parameter |
+| caller relies on falsiness | the default is invisible | state the fallback where it is chosen |
+
+This is enforced twice: **MACEFF006** flags a hardcoded numeric `limit=` on an
+event scan in this tree, and `read_events` raises a `DeprecationWarning` at
+runtime for callers the linter never runs against. A genuinely justified one stays possible — suppress it at the site with
+`# noqa: MACEFF006 - <reason>`, the way other exceptions are recorded. The point
+is that the choice becomes visible and auditable, not that it is forbidden.
+
 ## Anti-Pattern Examples
 
 ### Silent Pass
@@ -313,6 +475,53 @@ except FileNotFoundError as e:
 ```
 
 ---
+
+
+---
+
+---
+
+## 7 Schemas and Declaredness in Python
+
+The Python expression of the general rules in `base/development/coding_standards`
+on closed schemas and trust boundaries. The *why* lives there; this is *how*.
+
+### 7.1 Pydantic is the schema mechanism, with `extra="forbid"`
+
+```python
+class AgentSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+```
+
+`extra="forbid"` is the Python expression of **closed schemas at trust
+boundaries**. Without it a mistyped key is silently discarded, and a control the
+author believed they had configured simply does not exist.
+
+### 7.2 Validators carry the rationale for non-obvious constraints
+
+Parse key material, paths and formats **in the validator**, not at first use.
+
+The point is not tidiness: it decides *where* a malformed value is discovered. In
+the validator, bad config fails at load with a message naming the field. At first
+use, it fails inside whatever was about to happen — which for security-relevant
+material means broken config has already reached the inside of a security
+decision.
+
+A validator is also the natural place to write down why a constraint exists,
+where the next reader meets the constraint rather than somewhere else.
+
+### 7.3 Membership test, not truthiness, for "was this declared?"
+
+```python
+if "key" in cfg:        # was it declared?
+if cfg.get("key"):      # is it declared AND non-empty AND non-zero?
+```
+
+The truthiness form collapses **absent** with **present-but-empty**, and those
+can be different facts — an explicitly empty allowlist is a decision, a missing
+one is an omission. Where the answer feeds an authorization, that collapse is the
+general rule in 9.3 being violated by an idiom rather than by a default.
+
 
 ## Cross-References
 

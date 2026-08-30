@@ -63,6 +63,19 @@ Applies to all code written within MacEff framework projects.
 - Why does automation raise the stakes on unreconciled state?
 
 **8 Search Before You Write**
+
+**9 Files, Schemas and Trust Boundaries**
+- What distinguishes a file you edit from one a program emits?
+- What must a parser do with a field it does not recognise?
+- When is a default the wrong mechanism entirely?
+- Which file deserves the strictest schema?
+- Why must the safe outcome be the one you get by doing nothing?
+- Which trust context may perform privileged setup?
+
+**10 What a Reader Is Owed**
+- Which register does a given piece of writing belong in?
+- Why must a comment carry the mechanism and not only the conclusion?
+- What may a renderer claim relative to the record behind it?
 - What must I do before adding a function to a module?
 - How do I search for an existing helper whose NAME I do not know?
 - What do I do when I find a near-duplicate rather than an exact one?
@@ -398,3 +411,86 @@ This policy defines the philosophy. Implementation patterns are language-specifi
      visibility, derived-state discipline, and search-before-you-write. -->
 
 [[silent_failure]] [[drift]] [[methodology]] [[observability]]
+
+---
+
+## 9 Files, Schemas and Trust Boundaries
+
+### 9.1 Config and state are different kinds of file
+
+A file **maintained by editing** and a file **emitted by running** have opposite
+requirements. Config must carry its rationale — the next editor needs to know why
+a value is what it is. Generated state must never be hand-edited, because editing
+it is precisely the tampering it exists to detect.
+
+Treating them alike produces both failures at once: config nobody can safely
+change, and state nobody can trust.
+
+### 9.2 Closed schemas at trust boundaries
+
+Anything parsed from disk or from another process **rejects unknown fields**. An
+ignored key is not inert — it silently changes what the reader believes is being
+enforced, and a typo in a security-relevant key becomes an absent control that
+looks present.
+
+### 9.3 Defaults are for plumbing, never for authorization
+
+A security-relevant value that can be inherited silently is one **a reviewer
+never sees**. Require it to be stated.
+
+There is a second reason: `null` may itself carry meaning — *explicitly nothing*
+— which a default erases without trace, so the mechanism destroys the very
+distinction the caller was making.
+
+### 9.4 The strictest schema belongs on the most security-relevant file
+
+Audit where a misparse becomes a security decision, not where conversion is
+easiest. Convenience picks the wrong file reliably, because the easy file is
+usually the one with the least at stake.
+
+### 9.5 Deny all, then allow by name
+
+The safe outcome must be the one you get **by doing nothing**. Exemptions must be
+written down — which is what puts them in front of a reviewer. A permissive
+default is an exemption nobody had to justify and nobody can find.
+
+### 9.6 Provisioning and runtime are different trust contexts
+
+Privileged setup belongs to the trusted pre-runtime context. **A runtime
+principal performing its own privileged setup collapses the boundary** it is
+supposed to sit inside — after which no later check can restore it, because the
+principal that would be checked is the one that granted itself the capability.
+
+---
+
+## 10 What a Reader Is Owed
+
+### 10.1 Three registers: docstring, inline comment, commit message
+
+The reader's next action decides which:
+
+| the reader wants to… | register | carries |
+|---|---|---|
+| **use** it | docstring | the contract |
+| **change** it | inline comment | the local trap |
+| **understand** it | commit message | the history |
+
+Archaeology in a docstring is a claim that cannot be maintained inside a document
+that must be — the docstring is read on every use and the history is true only of
+one moment, so the two decay against each other.
+
+### 10.2 A comment carries the mechanism, not only the conclusion
+
+A conclusion without its mechanism is easy to regress by restating it wrongly:
+the next reader agrees with the sentence and reimplements the bug. Put
+present-tense rationale in the code and the measurement itself in the commit.
+
+### 10.3 A renderer may never be more confident than its record
+
+In **either** direction. Over-claiming is the obvious failure. Under-claiming is
+the subtler one and often worse: a report that hedges what the record states
+plainly does not merely lose information — **it creates action**, because someone
+goes to re-establish a fact the system already had.
+
+The rendering is the only layer most readers ever see, so its confidence is the
+system's confidence as far as anyone can tell.

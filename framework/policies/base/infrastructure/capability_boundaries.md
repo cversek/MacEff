@@ -1,6 +1,5 @@
 # Capability Boundaries — What an Agent May Reach, and Why
 
-**Breadcrumb**: s_cd1f76a9/c_10/p_18e7c354/t_1786108544
 **Type**: Infrastructure (opt-in)
 **Scope**: All agents (PA and SA), and the deployments that provision them
 **Status**: ACTIVE

@@ -27,6 +27,24 @@ def isolated_cli_env(tmp_path, monkeypatch):
     yield test_log
 
 
+RECOGNISED_STDERR_PREFIXES = ('⚠️ MACF:', 'Last CCP:')
+
+
+def unrecognised_stderr_lines(stderr):
+    """stderr lines matching no known prefix.
+
+    Extracted so it can be tested against synthetic input. Asserting on the real
+    subprocess proves nothing when that subprocess emits no stderr at all -- an
+    empty list then means "nothing to check", which is indistinguishable from
+    "everything checked out". Found by mutating the prefix list and watching the
+    test still pass.
+    """
+    return [
+        line for line in (stderr or "").strip().split("\n")
+        if line and not line.startswith(RECOGNISED_STDERR_PREFIXES)
+    ]
+
+
 class TestTimeCommand:
     """Test macf_tools time command."""
 
@@ -94,6 +112,8 @@ class TestTimeCommand:
         carries a machine-readable timestamp, so human-facing annotation goes
         to stderr by design rather than as a warning.
         """
+        import os
+
         result = subprocess.run(
             ['macf_tools', 'time'],
             capture_output=True, text=True
@@ -101,11 +121,35 @@ class TestTimeCommand:
 
         assert result.returncode == 0
         # Allow MACF informational warnings (fallback notices) and the
-        # checkpoint annotation, but fail on actual Python errors/tracebacks
-        if result.stderr:
-            for line in result.stderr.strip().split('\n'):
-                assert line.startswith(('⚠️ MACF:', 'Last CCP:')) or not line, \
-                    f"Unexpected stderr: {line}"
+        # checkpoint annotation, but fail on actual Python errors/tracebacks.
+        #
+        # The assertion is NOT relaxed on purpose. It exists to catch a Python
+        # traceback reaching stderr, and loosening it to make an unexplained
+        # failure go away would remove the only thing that noticed.
+        #
+        # What is fixed here is the EVIDENCE. This failed once in a full-suite
+        # run and has never reproduced; the run was captured with -q and the
+        # offending line was lost, so every subsequent investigation had to work
+        # from the fact that something unrecognised happened. A flake with no
+        # artifact is a flake nobody can fix, and the moment of failure is the
+        # only moment the artifact exists.
+        unexpected = unrecognised_stderr_lines(result.stderr)
+        assert not unexpected, (
+            "unrecognised stderr from `macf_tools time`.\n"
+            f"  offending lines : {unexpected}\n"
+            "--- captured so the next person does not have to reproduce it ---\n"
+            f"  returncode      : {result.returncode}\n"
+            f"  full stderr     : {result.stderr!r}\n"
+            f"  full stdout     : {result.stdout!r}\n"
+            f"  cwd             : {os.getcwd()}\n"
+            f"  MACEFF_AGENT_HOME_DIR : {os.environ.get('MACEFF_AGENT_HOME_DIR')!r}\n"
+            f"  MACF_EVENTS_LOG_PATH  : {os.environ.get('MACF_EVENTS_LOG_PATH')!r}\n"
+            f"  PYTHONWARNINGS        : {os.environ.get('PYTHONWARNINGS')!r}\n"
+            "A leading candidate is an interpreter warning reaching stderr -- a\n"
+            "DeprecationWarning from a deprecated call path would match neither\n"
+            "prefix. If that is what the capture shows, name that warning\n"
+            "specifically rather than widening the prefix list."
+        )
 
 
 class TestTimeKeepsStdoutMachineReadable:
@@ -152,3 +196,36 @@ class TestTimeKeepsStdoutMachineReadable:
         assert result.returncode == 0
         assert 'Last CCP:' not in result.stdout
         datetime.fromisoformat(result.stdout.strip())
+
+
+class TestStderrRecognition:
+    """The recognition rule, tested against synthetic input.
+
+    The subprocess assertion above cannot demonstrate this: on a machine where
+    `macf_tools time` writes nothing to stderr, it passes without examining
+    anything, and a broken rule would look identical to a clean run.
+    """
+
+    def test_a_traceback_line_is_unrecognised(self):
+        stderr = 'Traceback (most recent call last):\n  File "x.py", line 1'
+        assert unrecognised_stderr_lines(stderr) == [
+            "Traceback (most recent call last):", '  File "x.py", line 1'
+        ]
+
+    def test_a_deprecation_warning_is_unrecognised(self):
+        """The leading candidate for the one observed failure. A warning reaching
+        stderr matches neither prefix, which is the correct answer -- the remedy
+        would be to name that warning, not to widen the list."""
+        stderr = "/path/mod.py:12: DeprecationWarning: read_events(limit=) is deprecated"
+        assert len(unrecognised_stderr_lines(stderr)) == 1
+
+    def test_the_expected_lines_are_recognised(self):
+        """Both polarities. A rule that rejects everything is not a rule."""
+        stderr = "⚠️ MACF: fallback in use\nLast CCP: 2 hours ago\n"
+        assert unrecognised_stderr_lines(stderr) == []
+
+    def test_empty_stderr_is_not_evidence_of_anything(self):
+        """Documents the trap this class exists for: an empty result is the
+        absence of input, not a passing check."""
+        assert unrecognised_stderr_lines("") == []
+        assert unrecognised_stderr_lines(None) == []

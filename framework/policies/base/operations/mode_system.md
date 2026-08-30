@@ -48,6 +48,7 @@ Agent behavior is governed by multiple **simultaneously active** conditions — 
 - How is each mode detected?
 - What is event-based vs computed vs agent-declared detection?
 - What env vars configure thresholds?
+- What must a detector do when it cannot determine whether a mode applies?
 
 **5 The Emoji Dashboard**
 - What does the status line look like?
@@ -101,6 +102,14 @@ Agent behavior is governed by multiple **simultaneously active** conditions — 
 - What three properties must a nag have?
 - Why is habituation the budget a nag spends?
 - What should be done about a host's reminders for a capability the framework supersedes?
+
+**14 Modes and Subagents**
+- Which modes apply to a subagent, and which belong to the primary alone?
+- Why is reading the primary's modes from inside a delegation misleading rather than merely useless?
+- Does a subagent declare a work mode, and does the recommender run for it?
+- What does a subagent consult in place of the mode set?
+
+=== CEP_NAV_BOUNDARY ===
 
 ---
 
@@ -204,8 +213,25 @@ These five modes participate in the Markov transition matrix and can be suggeste
 
 **SPRINT 🏃** is a special work mode with different semantics from the five rotatable modes:
 
-- **Set automatically**: When a 🏃 SPRINT task starts (or its child tasks start), the mode is set to SPRINT. The agent does not invoke a motivation skill to enter SPRINT mode.
-- **Clears automatically**: When the parent SPRINT task completes, the mode clears.
+- **Derived from SCOPE, not from status**: the mode is in force while a SPRINT task is in **active scope** and `in_progress`. The agent does not invoke a motivation skill to enter SPRINT mode.
+- **Set automatically**: creating a sprint scopes the sprint task alongside its workload, and any later `scope set` re-includes a running sprint that the caller omitted.
+- **Clears automatically**: when no sprint task remains in active scope. Unscoping releases the lock; completing the sprint does too, by way of leaving scope.
+
+**Why scope and not status.** An earlier version of this policy anchored on task
+start and completion, and both failed in practice. A sprint *resumed* rather than
+created never fires `task start` — the task is already `in_progress` — so the
+mode was never set, which is the normal case after a compaction or an
+operator-directed pause. And the mode was observed clearing on unscoping rather
+than on completion. A sprint that is `in_progress` with no scope is stopped; one
+that is scoped is running. **Status says what a record claims; scope says what is
+being worked**, and completion already keys on the same fact.
+
+**Derive, do not store.** The reader prefers the live invariant — a SPRINT task
+in active scope forces the mode — and falls back to the last `work_mode_change`
+event only when none is found. Scope operations therefore *reconcile* that event
+rather than treating it as the source of truth: a second copy of a fact the scope
+already holds is free to drift from it, and a stale copy is how a mode-lock
+outlives its sprint or a running sprint loses its lock.
 - **Markov-locked**: The gate point recommender is **disabled** while SPRINT mode is active. No mode-transition suggestions fire at Stop hook gates.
 - **Activates scope nag**: Instead of mode suggestions, the Stop hook emits a scope-completion nag listing remaining scoped tasks.
 - **Mode-set restriction**: `mode set-work <other>` while SPRINT is active warns or rejects — open question on strictness: hard-fail vs warn vs convert-to-PLAY_TIME (TODO: resolve in implementation, see roadmap §8 open question 3).
@@ -254,6 +280,43 @@ Returns set of all currently active mode names across both layers.
 | `MACF_QUIET_ON_IDLE` | false | Auto-activate QUIET_MODE with USER_IDLE (off by default) |
 
 ---
+
+### When a Detector Cannot Tell
+
+A detector reads a record and decides whether a mode applies. Sometimes it can
+do neither — the record is unreachable, a scan came back empty, a file is
+missing. That is a third answer, and it must not be quietly collapsed into
+"the mode does not apply".
+
+It has happened here. `USER_IDLE` read a bounded scan's empty result as
+*the user is present*, and the mode silently disengaged while the operator was
+away — the more the agent worked, the sooner it cleared, because the agent's own
+records buried the evidence. The general form is the compiled-false-absence trap
+in `empiricism`; the language-level rule is in the Python coding standards. What
+belongs here is the part neither of those can decide: **which way a given mode
+should fail.**
+
+**Choose the default by what the mode grants.**
+
+A mode that grants *care* — closer checkpointing, more conservative choices,
+preferring to ask — is cheap to enter wrongly and expensive to leave wrongly.
+Default toward it when the answer is unknown. `USER_IDLE` is this kind: reading
+an absent operator as present costs the whole feature, while reading a present
+operator as absent costs a little redundant caution they can correct in one
+message.
+
+A mode that grants *authority* — permission to act without confirmation, to skip
+a gate, to decide alone — is the reverse. Never enter it on an unknown. An
+authority-granting mode must be **positively established**, not inferred from a
+failure to find evidence against it.
+
+**State the choice where it is made.** A detector that falls back must say so —
+in a comment at minimum, and in a warning when the fallback changes behaviour an
+operator would notice. A mode that changes because a lookup failed, with nothing
+anywhere recording that it failed, is indistinguishable from a mode that changed
+because the world changed. That is the property being protected: an operator
+watching the dashboard should never have to wonder whether an emoji reflects
+their situation or the reader's reach.
 
 ## 5. The Emoji Dashboard
 
@@ -646,6 +709,53 @@ Document the mechanism when you find it. A suppression lever discovered and not 
 - **Notification spam in QUIET_MODE**: Sending messages when QUIET_MODE is active. Silence is respectful.
 - **Ignoring LOW_CONTEXT**: Continuing normal work at CL5 without closeout. LOW_CONTEXT is urgency.
 - **Fighting the recommender**: Always picking the highest-probability skill. The Monte Carlo "spice" exists to encourage exploration.
+
+---
+
+## 14. Modes and Subagents
+
+A subagent is not a small primary. Most of the operational modes describe a
+relationship between the primary and its operator, and a subagent stands outside
+that relationship entirely.
+
+**The mechanical fact that makes this more than a definitional point:** a
+subagent runs inside the primary's session and resolves the same session id, so
+`mode get` inside a delegation returns the **primary's** modes. Reading them is
+therefore not merely uninformative — it is *misleading*, because the values are
+real and belong to someone else.
+
+| Mode | Applies to a subagent? |
+|------|----------------------|
+| **AUTO_MODE** 🤖 | **No — the primary's.** It records that the operator authorised *the primary* to act autonomously. A subagent that reads it sees a true value about a different agent and can mistake it for a licence it was never given. |
+| **USER_IDLE** 😴 | **No.** It describes an operator the subagent has no channel to; user communication is not a subagent's to do. Nothing about its behaviour would change if it knew. |
+| **USER_REMOTE** 📡 | **The hazard applies; the meaning does not.** "Talk to them on Telegram" is not available to a subagent. "Do not invoke a tool that blocks on CLI input" applies with *more* force: a subagent that hangs on a permission prompt hangs the primary's session too, and the primary cannot see the prompt to answer it. |
+| **QUIET_MODE** 🔕 | **No,** with the same caveat: it suppresses notifications a subagent does not send, and defers questions a subagent should not be asking. |
+| **LOW_CONTEXT** 🪫 | **Yes, directly.** A subagent has its own context window and its own edge. This is the one operational mode it computes about *itself*, and the one it must act on without consulting anyone. |
+
+### Work modes inside a delegation
+
+A delegation arrives with its purpose already fixed by the delegating agent. The
+subagent does not declare a work mode, and **the recommender does not run for
+it** — gate points fire in the Stop hook, and a subagent terminates through
+SubagentStop, which has no recommender.
+
+This is worth stating rather than leaving to inference, because the absence looks
+like an oversight from inside a subagent that knows the recommender exists. It is
+deliberate. Recommending a mode transition to an agent whose purpose is fixed and
+which is about to terminate would be advice it cannot take.
+
+### What a subagent should do instead
+
+Read the delegation brief. It carries the authorisation, the scope, and the
+purpose that the mode set carries for a primary. Where a brief is silent, the
+answer is in policy or in the parent's instruction — not in a dashboard reading
+that belongs to another agent.
+
+**The reason this section exists in a policy rather than in a preamble's
+phrasing:** an agent-facing block that listed five modes a subagent can neither
+read nor act on would be worse than no block at all. An instrument that cannot be
+acted on teaches its reader to discount instruments, and the dashboard is the one
+thing the framework most needs an agent to keep trusting.
 
 ---
 

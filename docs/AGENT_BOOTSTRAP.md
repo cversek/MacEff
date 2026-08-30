@@ -241,7 +241,7 @@ macf_tools config init  # Interactive setup
 macf_tools hooks install # Install compaction detection hooks
 macf_tools hooks test    # Test hooks on current session
 macf_tools hooks logs    # View hook execution events
-macf_tools hooks status  # Show hook states
+macf_tools hooks logs  # Show hook execution events
 
 # Agent initialization
 macf_tools agent init    # Attach framework preamble

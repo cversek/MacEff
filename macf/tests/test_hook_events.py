@@ -61,7 +61,9 @@ def temp_agent_state(tmp_path):
 def test_session_start_appends_event(temp_log_file, temp_agent_state, monkeypatch):
     """SessionStart hook returns valid output structure.
 
-    Note: testing=True prevents side effects (event appending) per safe-by-default.
+    Note: isolation comes from the autouse conftest fixtures, not from any
+    argument at the call site. The testing= parameter this note used to
+    describe was removed in v0.3.0.
     This test verifies return value structure, not event log content.
     Event appending is verified in agent_events_log tests.
     """
@@ -84,9 +86,9 @@ def test_session_start_appends_event(temp_log_file, temp_agent_state, monkeypatc
     agent_state["last_session_id"] = test_session_id
     agent_state_file.write_text(json.dumps(agent_state, indent=2))
 
-    # Run SessionStart hook with testing=True (safe-by-default, no side effects)
+    # Run SessionStart hook. Events land in the isolated log from conftest.
     stdin_data = {"source": "normal"}
-    result = session_start_run(json.dumps(stdin_data), testing=True)
+    result = session_start_run(json.dumps(stdin_data))
 
     # Verify hook returned successfully with valid structure
     assert result["continue"] is True
@@ -117,15 +119,15 @@ def test_dev_drv_lifecycle(temp_log_file, temp_agent_state, monkeypatch):
 
     # Start DEV_DRV
     stdin_data = {"session_id": "test-session"}
-    result = user_prompt_submit_run(json.dumps(stdin_data), testing=True)
+    result = user_prompt_submit_run(json.dumps(stdin_data))
     assert result["continue"] is True
 
     # End DEV_DRV
-    result = stop_run("", testing=True)
+    result = stop_run("")
     assert result["continue"] is True
 
     # Read events
-    events = list(read_events(limit=10))
+    events = list(read_events(limit=None))
 
     # Should have both events
     started_events = [e for e in events if e["event"] == "dev_drv_started"]
@@ -156,15 +158,15 @@ def test_tool_calls_logged(temp_log_file, temp_agent_state, monkeypatch):
     }
 
     # Pre-tool
-    result = pre_tool_use_run(json.dumps(stdin_data), testing=True)
+    result = pre_tool_use_run(json.dumps(stdin_data))
     assert result["continue"] is True
 
     # Post-tool
-    result = post_tool_use_run(json.dumps(stdin_data), testing=True)
+    result = post_tool_use_run(json.dumps(stdin_data))
     assert result["continue"] is True
 
     # Read events
-    events = list(read_events(limit=10))
+    events = list(read_events(limit=None))
 
     # Should have both events
     started_events = [e for e in events if e["event"] == "tool_call_started"]
@@ -182,7 +184,7 @@ def test_tool_calls_logged(temp_log_file, temp_agent_state, monkeypatch):
 
 
 def test_delegation_logged(temp_log_file, temp_agent_state, monkeypatch):
-    """SubagentStop creates delegation_completed event."""
+    """SubagentStop emits delegation_completed even with no matching start."""
     # Mock find_project_root
     monkeypatch.setattr(
         'macf.utils.find_project_root',
@@ -191,14 +193,14 @@ def test_delegation_logged(temp_log_file, temp_agent_state, monkeypatch):
 
     # Simulate delegation completion
     stdin_data = {
-        "subagent_type": "DevOpsEng"
+        "agent_type": "DevOpsEng"
     }
 
-    result = subagent_stop_run(json.dumps(stdin_data), testing=True)
+    result = subagent_stop_run(json.dumps(stdin_data))
     assert result["continue"] is True
 
     # Read events
-    events = list(read_events(limit=10))
+    events = list(read_events(limit=None))
 
     # Should have delegation_completed event
     delegation_events = [e for e in events if e["event"] == "delegation_completed"]
@@ -206,7 +208,13 @@ def test_delegation_logged(temp_log_file, temp_agent_state, monkeypatch):
 
     event = delegation_events[0]
     assert event["data"]["agent_type"] == "DevOpsEng"
-    assert event["data"]["success"] is True
+    # success is False by design here: no SubagentStart preceded this stop, so
+    # complete_deleg_drv finds no active drive to close. Asserting True was the
+    # pre-v0.3 expectation and would now require inventing a start this test
+    # never performs. What is worth pinning is that the event is emitted AT ALL
+    # on the unmatched path -- a stop that silently dropped its event would
+    # leave a delegation invisible to every downstream query.
+    assert event["data"]["success"] is False
     assert "duration_seconds" in event["data"]
 
 
@@ -219,12 +227,12 @@ def test_breadcrumbs_valid(temp_log_file, temp_agent_state, monkeypatch):
     )
 
     # Generate some events
-    session_start_run("{}", testing=True)
-    pre_tool_use_run(json.dumps({"tool_name": "Read", "tool_input": {}}), testing=True)
-    post_tool_use_run(json.dumps({"tool_name": "Read", "tool_input": {}}), testing=True)
+    session_start_run("{}")
+    pre_tool_use_run(json.dumps({"tool_name": "Read", "tool_input": {}}))
+    post_tool_use_run(json.dumps({"tool_name": "Read", "tool_input": {}}))
 
     # Read all events
-    events = list(read_events(limit=10))
+    events = list(read_events(limit=None))
 
     # All events should have valid breadcrumbs
     for event in events:
@@ -240,14 +248,25 @@ def test_breadcrumbs_valid(temp_log_file, temp_agent_state, monkeypatch):
         assert "git_hash" in parsed
         assert "timestamp" in parsed
 
-        # Session ID should be shortened (8 chars)
-        assert len(parsed["session_id"]) == 8
+        # Session ID is an 8-char prefix, OR the documented sentinel when no
+        # session can be resolved -- breadcrumbs.py: `session_id[:8] if
+        # session_id else "unknown"`. Asserting 8 encoded only the first half of
+        # that contract, so this passed on any machine with a live session and
+        # failed in CI, where there is none. "unknown" is seven characters, so
+        # the failure read as `assert 7 == 8` and said nothing about sessions.
+        assert (
+            parsed["session_id"] == "unknown" or len(parsed["session_id"]) == 8
+        ), f"unexpected session_id in breadcrumb: {parsed['session_id']!r}"
 
         # Cycle should be a number
         assert isinstance(parsed["cycle"], int)
 
-        # Git hash should be shortened (7 chars)
-        assert len(parsed["git_hash"]) == 7
+        # Same shape, latent rather than observed: parse_breadcrumb documents
+        # git_hash as Optional and yields None for a missing or 'none' value, so
+        # len() here would raise TypeError outside a git checkout. CI happens to
+        # have one, which is why this has never fired.
+        assert parsed["git_hash"] is None or len(parsed["git_hash"]) == 7, \
+            f"unexpected git_hash in breadcrumb: {parsed['git_hash']!r}"
 
 
 def test_hook_input_preserved(temp_log_file, temp_agent_state, monkeypatch):
@@ -270,10 +289,10 @@ def test_hook_input_preserved(temp_log_file, temp_agent_state, monkeypatch):
     }
 
     # Run hook
-    pre_tool_use_run(json.dumps(stdin_data), testing=True)
+    pre_tool_use_run(json.dumps(stdin_data))
 
     # Read events
-    events = list(read_events(limit=1))
+    events = list(read_events(limit=None))
     assert len(events) == 1
 
     event = events[0]

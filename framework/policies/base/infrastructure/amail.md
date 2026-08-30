@@ -1,6 +1,5 @@
 # amail — Agent Mail Protocol
 
-**Breadcrumb**: s_cd1f76a9/c_8/p_none/t_1785940333
 **Type**: Infrastructure (opt-in)
 **Scope**: All agents (PA and SA), and the broker that serves them
 **Status**: ACTIVE — specification. No implementation is authorized by this document.

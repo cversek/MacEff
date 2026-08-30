@@ -1,6 +1,5 @@
 # Public Voice Standards (DADTTT)
 
-**Breadcrumb**: s_cd1f76a9/c_6/g_b039173/p_9b0c0870/t_1785509746
 **Type**: Communication Standards
 **Scope**: All agents (PA and SA) producing text that leaves the machine
 **Status**: ACTIVE

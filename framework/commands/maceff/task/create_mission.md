@@ -27,6 +27,32 @@ macf_tools policy read task_management
 macf_tools policy read task_management --section N
 ```
 
+### The Policy Engagement Protocol its phases will carry (MANDATORY)
+
+A MISSION owns the phases `roadmaps_drafting` governs with its phase Policy-Engagement-Protocol requirement, so this command must
+consult that policy as well as `task_management`. Establishing the requirement at
+the MISSION means each phase created under it inherits an answer rather than
+re-deriving one.
+
+```bash
+macf_tools policy navigate roadmaps_drafting
+macf_tools policy read roadmaps_drafting --section <CEP_MATCH>
+```
+
+Ask it, and carry the answers into every phase created under this MISSION:
+
+- What does the policy require a phase to declare about the policies its executor must engage?
+- How does the policy say required reading follows from the WORK TYPE, rather than being re-derived per phase?
+- What distinction does the policy draw between policies a phase READS and policies it WRITES?
+- When does the policy say a phase carries no PEP at all?
+
+Extract the work-type mapping from the policy rather than reproducing it here — it
+is expected to grow, and a copy would drift. The point is that an executor picking a phase up cold, with no memory of the drafting conversation, does not begin
+work without reading something they needed. The motivating failure is recorded in
+the policy: an agent wrote Python under a PEP-less phase and never opened the
+coding standards, because nothing prompted it to.
+
+
 Navigate to sections covering: task types, MTMD schema, hierarchy, roadmap structure.
 
 ---

@@ -1,6 +1,5 @@
 # Slash Command Writing Best Practices
 
-**Breadcrumb**: s_agent-88/c_191/g_6597f65/p_none/t_1764610196
 **Type**: Meta-Policy (Development Infrastructure)
 **Scope**: Slash command authors (PA creating custom commands)
 **Status**: Framework guidelines for slash command definition creation
