@@ -59,11 +59,19 @@ from .contacts import ContactBook, ContactListError
 from . import models, audit, trust, crypto, ratelimit, transport
 from .broker import Broker, BrokerConfig, DeliveryError, serve
 from .client import submit, BrokerUnavailable
+from .inbound import (
+    InboundConfig, PushEligibilityError, SpoolError,
+    process_spool, process_entry, reconcile,
+)
 from . import store, contacts, broker, client, deploy_config
+from . import inbound, fetch, alerting, notices
 
 __all__ = ["Message", "new_id", "AuditLog", "TrustClass",
            "ContactBook", "ContactListError",
            "models", "audit", "trust", "crypto", "ratelimit", "transport",
            "Broker", "BrokerConfig", "DeliveryError", "serve",
            "submit", "BrokerUnavailable",
-           "store", "contacts", "broker", "client", "deploy_config"]
+           "InboundConfig", "PushEligibilityError", "SpoolError",
+           "process_spool", "process_entry", "reconcile",
+           "store", "contacts", "broker", "client", "deploy_config",
+           "inbound", "fetch", "alerting", "notices"]

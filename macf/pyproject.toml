@@ -25,6 +25,7 @@ test = [
     "pydantic>=2.0.0",  # For agent/project spec validation tests
     "lancedb>=0.26.0",  # For hybrid search / recommend tests
     "tomli>=2.0.0; python_version < '3.11'",  # pyproject introspection in test_ci_extras_coverage (tomllib is 3.11+)
+    "PyJWT>=2.0.0",  # the ingest receiver imports it at module scope; its drain-coupling logic is under test
 ]
 viz = [
     "markdown>=3.0",  # Markdown-to-HTML for CA presentation
@@ -48,7 +49,6 @@ recommend = [
     "lancedb>=0.26.0",               # For vector similarity and hybrid search
     # "sqlite-vec>=0.1.0",           # DEPRECATED: ARM64 broken, 12-month stale
 ]
-
 # RECOMMENDED, not merely optional. Without it `macf.amail` refuses to import:
 # since amail v1.1, inbound handling is built on verifying signatures and
 # classifying what that verification proved, and running without a backend would
@@ -60,3 +60,12 @@ amail = [
 
 [project.scripts]
 macf_tools = "macf.cli:main"     # fastest startup (direct Python)
+
+# amail's long-running processes. They are package modules, so a deployment
+# that installs macf editable from a bind mount gets code changes on restart
+# rather than on rebuild. Provisioning invokes them as `python -m` so the
+# interpreter is named explicitly and no execute bit is load-bearing; these
+# names exist for an operator running them by hand.
+amail-broker = "macf.amail.daemons.broker:main"
+amail-inbound = "macf.amail.daemons.inbound:main"
+amail-receiver = "macf.amail.daemons.receiver:main"
