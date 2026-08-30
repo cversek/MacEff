@@ -72,11 +72,13 @@ macf_tools --version
 ```
 
 ```
-macf_tools 0.5.1.dev0 (main @ 1a5f6e5)
+macf_tools 0.6.0 (main @ e9a2801)
 ```
 
 The git hash is part of the version string, so a deployed build says exactly
-which commit it is, and a working tree with uncommitted changes says `dirty`.
+which commit it is — yours will differ from the one above — and a working tree
+with uncommitted changes says `dirty`. Installed from a wheel rather than a
+checkout, there is no suffix at all.
 
 ## Run something
 
