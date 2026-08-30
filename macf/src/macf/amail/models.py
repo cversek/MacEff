@@ -228,10 +228,10 @@ class Message:
 
     @classmethod
     def deserialize(cls, raw: str) -> "Message":
-        head, _, body = raw.partition("\n\n")
+        head, _, body = raw.partition("\n\n")  # noqa: MACEFF005 - str.partition's (before, sep, after) contract is fixed by the stdlib; there is no callee whose order can change
         h: Dict[str, str] = {}
         for line in head.splitlines():
-            k, _, v = line.partition(":")
+            k, _, v = line.partition(":")  # noqa: MACEFF005 - str.partition's (before, sep, after) contract is fixed by the stdlib; there is no callee whose order can change
             h[k.strip().lower()] = v.strip()
         return cls(
             sender=h.get("from", ""),

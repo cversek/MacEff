@@ -174,7 +174,19 @@ def _moniker_from(home) -> Optional[str]:
     from pathlib import Path as _P
     try:
         text = (_P(home) / ".maceff_primary_agent.id").read_text().strip()
-    except OSError:
+    except FileNotFoundError:
+        # A LEGITIMATE None: no calling card means no moniker to redact, which
+        # is a fact about this home rather than a failure to read it. This is
+        # the case the rule asks to be distinguished, and it IS distinguished
+        # -- from the unreadable case immediately below, which warns.
+        return None  # noqa: MACEFF003 - absence is the answer here, not a failure to get one
+    except OSError as e:
+        # NOT legitimate. The file exists and could not be read, so the scan is
+        # about to run WITHOUT the agent's own moniker in its pattern set --
+        # a quieter gate than the caller asked for. Say so.
+        print(f"⚠️ MACF: could not read the calling card at {home} ({e}); the "
+              f"OPSEC scan will not redact this agent's moniker",
+              file=sys.stderr, flush=True)
         return None
     return text.split("@", 1)[0].strip() or None
 

@@ -43,6 +43,8 @@ try:
 except ImportError:  # pragma: no cover - non-POSIX
     fcntl = None  # type: ignore[assignment]
 from dataclasses import dataclass, field
+
+from macf.agent_events_log import append_event
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -273,10 +275,30 @@ class BrokerConfig:
     def agent_for(self, address: str) -> Optional[str]:
         """Local agent owning this address, or None if it is not ours."""
         addr = address.strip().lower()
-        local, _, dom = addr.partition("@")
+        local, _, dom = addr.partition("@")  # noqa: MACEFF005 - str.partition's (before, sep, after) contract is fixed by the stdlib; there is no callee whose order can change
         if dom != self.domain.lower():
             return None
         return local if local in self.agent_homes else None
+
+
+@dataclass(frozen=True)
+class DeliveryOutcome:
+    """What happened to ONE recipient, named rather than ordered.
+
+    Was a positional 4-tuple. `rung` and `trust` are both strings, as are
+    `state` and `detail`, so REORDERING either pair would have type-checked,
+    run, and silently swapped their meanings at the single unpacking site --
+    the failure the rule names, and the one that leaves no evidence.
+
+    The suppression this replaces said the refactor was owed for all three
+    return sites at once, because introducing a record for one arm would leave
+    two shapes in one function. All three are converted here.
+    """
+
+    rung: str      #: "local" or "internet" -- which delivery path was taken
+    trust: str     #: what verification actually proved, "" when not applicable
+    state: str     #: "delivered", "refused", or the transport's own state
+    detail: str    #: human-readable reason; "" on success
 
 
 class Broker:
@@ -469,7 +491,6 @@ class Broker:
                       f"history is the evidence this store exists to keep",
                       file=sys.stderr)
                 try:
-                    from macf.agent_events_log import append_event
                     append_event("error", {
                         "source": "amail.broker.record_disposition",
                         "error": str(e), "error_type": type(e).__name__,
@@ -743,12 +764,8 @@ class Broker:
                 # answered is_revoked=True and permits(inbound)=False while the
                 # message was delivered and read.
                 self.quarantine_refused(agent, message, refusal)
-                # noqa: MACEFF004 - conforms to this function's existing
-                # 4-tuple contract, which every other return here already
-                # uses. Introducing a dataclass for one arm would leave two
-                # shapes in one function, which is worse than the coupling
-                # the rule names. The refactor is owed for ALL of them.
-                return "local", "unverified", "refused", refusal  # noqa: MACEFF004
+                return DeliveryOutcome(rung="local", trust="unverified",
+                                       state="refused", detail=refusal)
             # Classified against THIS recipient's contact book, immediately
             # before the handoff. Two recipients may declare different keys for
             # the same sender, so the answer is per mailbox, not per message.
@@ -757,7 +774,8 @@ class Broker:
             self.hand_off(agent, message, trust)
             # Local handoff IS delivery: the message is in the recipient's
             # pickup box and only the recipient can move it from there.
-            return "local", trust, "delivered", ""
+            return DeliveryOutcome(rung="local", trust=trust,
+                                   state="delivered", detail="")
         # RUNG 3: the internet, via a transport that performs NO authorization.
         # Everything that decides whether this message may exist has already
         # run -- destination, rate limit, pre-send gate -- because a transport
@@ -784,7 +802,8 @@ class Broker:
                                 recipient=recipient)
         # No signature classification exists on an outbound internet send, so
         # the trust slot is EMPTY rather than borrowed for something else.
-        return "internet", "", result.state, result.detail
+        return DeliveryOutcome(rung="internet", trust="",
+                               state=result.state, detail=result.detail)
 
     # -------------------------------------------------------------------- submit
 
@@ -1012,7 +1031,9 @@ class Broker:
         delivered, failures = [], []
         for r in message.to:
             try:
-                rung, trust, state, detail = self._deliver_one(r, message)
+                outcome = self._deliver_one(r, message)
+                rung, trust, state, detail = (outcome.rung, outcome.trust,
+                                              outcome.state, outcome.detail)
                 delivered.append({"recipient": r, "rung": rung, "trust": trust,
                                   "state": state, "detail": detail})
             except Exception as e:  # noqa: BLE001

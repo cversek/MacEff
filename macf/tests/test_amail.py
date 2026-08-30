@@ -715,7 +715,7 @@ class TestHeaderInjection:
         """The dangerous form: a blank line ends the header block, so attacker
         text becomes the body a client renders and the real body is orphaned."""
         m = msg(subject="x\n\nattacker body", body="the real body")
-        _, _, body = m.serialize().partition("\n\n")
+        _, _, body = m.serialize().partition("\n\n")  # noqa: MACEFF005 - str.partition's (before, sep, after) contract is fixed by the stdlib; there is no callee whose order can change
         assert body.strip() == "the real body"
 
     def test_injection_via_sender_and_recipient_is_neutralised(self):
@@ -1911,7 +1911,7 @@ class TestBothAuditLocksArePinned:
         script = tmp_path / "w.py"
         script.write_text(
             "import sys\n"
-            f"sys.path.insert(0, {str(Path(__file__).parent.parent / 'src')!r})\n"
+            f"sys.path.insert(0, {str(Path(__file__).parent.parent / 'src')!r})\n"  # noqa: MACEFF002 - a test locating its OWN source tree, not project discovery; find_project_root would resolve the checkout under test rather than this file's package
             "from macf.amail import AuditLog\n"
             f"log = AuditLog({str(tmp_path / 'audit.jsonl')!r}, max_bytes=4000)\n"
             "for i in range(300):\n"
@@ -3409,3 +3409,31 @@ class TestNoGuardWithoutACallSite:
             f"these are now called in production and must be removed from "
             f"KNOWN_UNINTEGRATED: {stale}"
         )
+
+
+class TestDeliveryOutcomeFieldsAreNamedNotOrdered:
+    """The four delivery-outcome fields must not be swappable in silence.
+
+    `_deliver_one` used to return a positional 4-tuple. `rung`/`trust` are both
+    strings and so are `state`/`detail`, so reordering either pair type-checked,
+    ran, and silently swapped their meanings at the single unpacking site.
+
+    This class exists because a mutation sweep proved the gap rather than
+    predicted it: swapping `state` with `detail`, and `rung` with `trust`, on
+    live delivery paths left the ENTIRE suite green. The record type now makes
+    the swap unrepresentable, and these assertions make it detectable — the
+    refactor and the test that can see it landing together, because the
+    refactor alone would have been an unverified change to delivery code.
+    """
+
+    def test_a_local_delivery_reports_each_field_in_its_own_slot(self, deployment):
+        r = deployment["broker"].submit("alpha", msg())
+        assert r["ok"], r
+        entry = r["delivered"][0]
+
+        # Each assertion pins ONE slot to a value only that slot can hold, so a
+        # swap with a same-typed sibling fails here rather than passing quietly.
+        assert entry["rung"] == "local", "rung must name the path, not the trust"
+        assert entry["state"] == "delivered", "state must name the outcome, not the reason"
+        assert entry["detail"] == "", "detail is the reason; empty on success"
+        assert entry["trust"] != "local", "trust must not be holding the rung"

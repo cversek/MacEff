@@ -250,7 +250,7 @@ def deploy_with_notices(tmp_path):
                                                  "envelope_to": f"{AGENT}@{DOMAIN}"}}))
         return eml, side
 
-    return cfg, spool_fn, make
+    return cfg, spool_fn, make  # noqa: MACEFF004 - a test fixture's local 3-tuple, unpacked once in this file; a record here would add indirection without adding a caller that could reorder it
 
 
 # ------------------------------------------- transmission (found by a battery)
@@ -401,7 +401,7 @@ def test_the_inbound_path_actually_transmits_the_notice(tmp_path, monkeypatch):
     from macf.amail import inbound as I
     t = _Recording()
     monkeypatch.setattr(I, "authentication_status",
-                        lambda cfg, raw: (True, "them@them.example", "aligned"))
+                        lambda cfg, raw: I.AuthStatus(True, "them@them.example", "aligned"))
     out = I._notify_refusal(_inbound_cfg(tmp_path, t), _AUTHED, "them@them.example")
     assert out["emitted"] is True
     assert out["sent"] is True, "the notice was decided and never transmitted"
@@ -413,7 +413,7 @@ def test_the_report_distinguishes_decided_from_sent(tmp_path, monkeypatch):
     claim delivery — the exact pair of facts one field could not carry."""
     from macf.amail import inbound as I
     monkeypatch.setattr(I, "authentication_status",
-                        lambda cfg, raw: (True, "them@them.example", "aligned"))
+                        lambda cfg, raw: I.AuthStatus(True, "them@them.example", "aligned"))
     out = I._notify_refusal(_inbound_cfg(tmp_path, None), _AUTHED, "them@them.example")
     assert out["emitted"] is True and out["sent"] is False
 
@@ -425,7 +425,7 @@ def test_an_unauthenticated_sender_still_gets_silence_through_the_wire(tmp_path,
     from macf.amail import inbound as I
     t = _Recording()
     monkeypatch.setattr(I, "authentication_status",
-                        lambda cfg, raw: (False, "", "unauthenticated"))
+                        lambda cfg, raw: I.AuthStatus(False, "", "unauthenticated"))
     out = I._notify_refusal(_inbound_cfg(tmp_path, t), b"From: forged@x\n\nx", "forged@x")
     assert out["emitted"] is False and out["sent"] is False
     assert t.sent == [], "a notice reached the transport for an unauthenticated sender"

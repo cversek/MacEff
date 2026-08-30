@@ -257,7 +257,25 @@ def push_denied_by_history(audit: Optional[AuditLog], address: str) -> Optional[
 
 # ------------------------------------------------------------ authorization
 
-def authentication_status(cfg: InboundConfig, raw: bytes) -> Tuple[bool, str, str]:
+@dataclass(frozen=True)
+class AuthStatus:
+    """Whether an inbound sender was authenticated, and on what basis.
+
+    Named rather than ordered because `sender` and `why` are both strings: a
+    positional 3-tuple lets them be swapped with no type error and no visible
+    breakage, which would put a human-readable explanation where an address
+    belongs -- in a value that gates quarantine and addresses bounces.
+
+    Converted for the same reason as the broker's delivery outcome, where a
+    mutation sweep showed two same-typed field swaps surviving the whole suite.
+    """
+
+    authenticated: bool   #: verdict authenticated AND aligned to this sender
+    sender: str           #: the address the verdict actually covers
+    why: str              #: basis when True; the refusal reason when False
+
+
+def authentication_status(cfg: InboundConfig, raw: bytes) -> AuthStatus:
     """Was the sending identity AUTHENTICATED and ALIGNED? (ok, sender, why).
 
     EXTRACTED SO TWO DECISIONS CANNOT DRIFT. `authorize()` needs it to refuse;
@@ -276,12 +294,14 @@ def authentication_status(cfg: InboundConfig, raw: bytes) -> Tuple[bool, str, st
     sender, from_domain = sender_identity(raw)
     verdict = first_verdict(raw, cfg.verdict_authority)
     if verdict is None:
-        return False, sender, ("no trustworthy authentication verdict (absent, "
-                               "or stamped by an authserv-id this deployment "
-                               "does not trust)")
+        return AuthStatus(False, sender,
+                          "no trustworthy authentication verdict (absent, "
+                          "or stamped by an authserv-id this deployment "
+                          "does not trust)")
     if verdict.get("dmarc") != "pass":
-        return False, sender, (f"sender '{sender}' not authenticated: dmarc="
-                               f"{verdict.get('dmarc', 'absent')}")
+        return AuthStatus(False, sender,
+                          f"sender '{sender}' not authenticated: dmarc="
+                          f"{verdict.get('dmarc', 'absent')}")
 
     # BIND the verdict to the sender. A dmarc=pass says SOME domain aligned;
     # without this it was never checked to be the domain we then look up in
@@ -294,14 +314,16 @@ def authentication_status(cfg: InboundConfig, raw: bytes) -> Tuple[bool, str, st
     # encoded-words), so the agreement is now checked, not presumed.
     aligned = verdict.get("dmarc_from")
     if aligned is None:
-        return False, sender, ("verdict carries dmarc=pass but names no "
-                               "aligned domain (header.from absent); cannot "
-                               "bind the pass to a sender")
+        return AuthStatus(False, sender,
+                          "verdict carries dmarc=pass but names no "
+                          "aligned domain (header.from absent); cannot "
+                          "bind the pass to a sender")
     if aligned != from_domain:
-        return False, sender, (f"authentication does not cover this sender: "
-                               f"the authority aligned '{aligned}' but the "
-                               f"message's From resolves to '{from_domain}'")
-    return True, sender, f"authenticated and aligned as '{sender}'"
+        return AuthStatus(False, sender,
+                          f"authentication does not cover this sender: "
+                          f"the authority aligned '{aligned}' but the "
+                          f"message's From resolves to '{from_domain}'")
+    return AuthStatus(True, sender, f"authenticated and aligned as '{sender}'")
 
 
 def authorize(cfg: InboundConfig, recipient_agent: str, raw: bytes) -> Tuple[str, str]:
@@ -320,7 +342,8 @@ def authorize(cfg: InboundConfig, recipient_agent: str, raw: bytes) -> Tuple[str
     contacts = ContactBook(cfg.broker_config.contacts_path)
     assert_push_grants_eligible(contacts, cfg.broker_config)
 
-    authenticated, sender, why = authentication_status(cfg, raw)
+    st = authentication_status(cfg, raw)
+    authenticated, sender, why = st.authenticated, st.sender, st.why
     if not authenticated:
         return DENY, why
 
@@ -381,7 +404,8 @@ def _notify_refusal(cfg: InboundConfig, raw: bytes, sender: str) -> Dict[str, An
     from . import notices
 
     bc = cfg.broker_config
-    authenticated, auth_sender, _why = authentication_status(cfg, raw)
+    st = authentication_status(cfg, raw)
+    authenticated, auth_sender = st.authenticated, st.sender
     decision = notices.decide(
         authenticated=authenticated,
         sender=auth_sender or sender,

@@ -17,6 +17,7 @@ import errno
 import json
 import os
 import stat
+import sys
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -86,6 +87,46 @@ class AuditLog:
             self._spare_fd = os.open(os.devnull, os.O_RDONLY)
         except OSError:
             self._spare_fd = None
+
+    def close(self) -> None:
+        """Release the reserved descriptor. Idempotent.
+
+        WITHOUT THIS THE RESERVATION IS A LEAK, and the leak is the failure the
+        reservation exists to survive. `_reserve_spare` opens a descriptor so a
+        critical write can still complete when the process is out of them; with
+        no release, every instance keeps one for the life of the process.
+
+        Measured on a live deployment: the broker builds one AuditLog on
+        `self` and held 5 descriptors after three days. The inbound path builds
+        one per call and held 1024 of 1024 -- at which point it could no longer
+        open its own heartbeat file, so it stayed ALIVE, reported
+        failures_total 0, and stopped publishing liveness. Every local signal
+        said healthy.
+        """
+        fd, self._spare_fd = self._spare_fd, None
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+    def __enter__(self) -> "AuditLog":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        # A BACKSTOP, not the intended path -- callers should use `with` or
+        # hold one instance. It is here because the observed leak was exactly
+        # a dropped reference: the object was collected and the descriptor
+        # survived it, so the collection point is where the repair has to
+        # reach. Guarded because __del__ runs during interpreter teardown,
+        # when module globals may already be gone.
+        try:
+            self.close()
+        except Exception:
+            pass
 
     @contextmanager
     def _spare_released(self) -> Iterator[bool]:
@@ -182,16 +223,28 @@ class AuditLog:
             return
         try:
             size = self.path.stat().st_size
-        except OSError:
+        except OSError as e:
+            # SAY SO. Returning here means the ceiling stops being enforced,
+            # and a log that silently grows without bound is the failure this
+            # rotation exists to prevent -- so the one condition that disables
+            # it must not be the quietest path in the function.
+            print(f"⚠️ MACF: audit log at {self.path} could not be sized ({e}); "
+                  f"rotation is NOT being enforced this write",
+                  file=sys.stderr, flush=True)
             return
         if size < self.max_bytes:
             return
         previous = self.path.with_name(self.path.name + ".1")
         try:
             os.replace(self.path, previous)
-        except OSError:
-            # Rotation failing must not stop the log from recording. Growing
-            # past the ceiling is worse than the alternative of dropping records.
+        except OSError as e:
+            # Rotation failing must not stop the log from recording: growing
+            # past the ceiling is better than dropping records. But it is
+            # REPORTED, because from here on the file grows unbounded and the
+            # only symptom would be a disk filling for no stated reason.
+            print(f"⚠️ MACF: audit log rotation FAILED ({e}); {self.path} is "
+                  f"past its {self.max_bytes}-byte ceiling and will keep growing",
+                  file=sys.stderr, flush=True)
             return
         self._write({
             "decision": "rotated", "context": "audit",

@@ -43,29 +43,35 @@ except ImportError as _e:  # pragma: no cover - exercised by the extra's absence
         "every message as unverified while appearing to work."
     ) from _e
 
+# THIS LAYER ONLY. The package is landing in dependency order -- primitives
+# first, then storage and policy, then the broker and client -- so that each
+# change is small enough to review. Re-exports grow as each layer arrives;
+# naming a module here before it exists would make the package unimportable,
+# which is a worse failure than an incomplete surface.
 from .models import Message, new_id
-from .contacts import ContactBook, ContactListError
 from .audit import AuditLog
 from .trust import TrustClass
 from .crypto import (
+
     SigningError, generate_keypair, load_private_key, public_key_line, sign, verify,
 )
+from .contacts import ContactBook, ContactListError
+from . import models, audit, trust, crypto, ratelimit, transport
 from .broker import Broker, BrokerConfig, DeliveryError, serve
 from .client import submit, BrokerUnavailable
 from .inbound import (
     InboundConfig, PushEligibilityError, SpoolError,
     process_spool, process_entry, reconcile,
 )
-from . import store
+from . import store, contacts, broker, client, deploy_config
+from . import inbound, fetch, alerting, notices
 
-__all__ = [
-    "Message", "new_id",
-    "ContactBook", "ContactListError",
-    "AuditLog",
-    "TrustClass",
-    "SigningError", "generate_keypair", "load_private_key", "public_key_line",
-    "sign", "verify",
-    "Broker", "BrokerConfig", "DeliveryError", "serve",
-    "submit", "BrokerUnavailable",
-    "store",
-]
+__all__ = ["Message", "new_id", "AuditLog", "TrustClass",
+           "ContactBook", "ContactListError",
+           "models", "audit", "trust", "crypto", "ratelimit", "transport",
+           "Broker", "BrokerConfig", "DeliveryError", "serve",
+           "submit", "BrokerUnavailable",
+           "InboundConfig", "PushEligibilityError", "SpoolError",
+           "process_spool", "process_entry", "reconcile",
+           "store", "contacts", "broker", "client", "deploy_config",
+           "inbound", "fetch", "alerting", "notices"]

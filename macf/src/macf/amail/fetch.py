@@ -85,7 +85,7 @@ def read_imap_credential(path: Optional[Path]) -> ImapCredential:
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
-        k, _, v = line.partition("=")
+        k, _, v = line.partition("=")  # noqa: MACEFF005 - str.partition's (before, sep, after) contract is fixed by the stdlib; there is no callee whose order can change
         fields[k.strip().upper()] = v.strip().strip("\"'")
     cred = ImapCredential(fields.get("IMAP_HOST", ""), fields.get("IMAP_USER", ""),
                           fields.get("IMAP_PASSWORD", ""))
