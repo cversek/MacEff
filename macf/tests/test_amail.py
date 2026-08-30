@@ -3348,15 +3348,6 @@ class TestNoGuardWithoutACallSite:
         # REMOVE THIS ENTRY when an inbound receiver hands messages to the
         # broker; the test then demands the call site.
         "accept_inbound",
-        # deploy_config's package-currency guard. Its only production callers
-        # are the amail daemons, which land in the next carve -- so in THIS
-        # change it is ahead of its integration point, not orphaned inside a
-        # finished system. The distinction matters: the module arrives here
-        # because the broker's own scrub tests need it, and shipping it with a
-        # silent unused guard is what this test exists to prevent.
-        # REMOVE THIS ENTRY when the daemons land; the test then demands the
-        # call site, which they supply.
-        "assert_package_current",
     }
 
     GUARD_PREFIXES = ("assert_", "check_", "verify_", "validate_", "ensure_",
