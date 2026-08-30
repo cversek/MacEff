@@ -1,0 +1,257 @@
+"""amail message model.
+
+Implements the message format the amail policy specifies. Read that policy
+before changing anything here — several choices below look arbitrary and are not.
+
+The one worth restating: there are NO SEQUENCE NUMBERS. Ordering a thread by a
+counter requires every sender to know the current maximum, which requires seeing
+every participant's messages at send time. The delivery model cannot supply that,
+and the previous convention's two participants diverged on it inside a
+four-message exchange. Identity is locally generated; order is derived.
+"""
+from __future__ import annotations
+
+import json
+import secrets
+import time
+from dataclasses import dataclass, field, asdict
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+#: Longest a single header value may be. Not a correctness limit — a blast
+#: radius one. An unbounded subject becomes an unbounded line in every reader.
+_MAX_HEADER = 998  # RFC 5322 line-length ceiling
+
+
+def _hdr(value: Any) -> str:
+    """Make a value safe to interpolate into a header line.
+
+    Strips CR and LF, which are the header/body delimiters — a value containing
+    either can forge headers and terminate the header block early. Tabs and other
+    control characters are folded to spaces so a value cannot smuggle structure
+    past a naive parser. Truncated to the RFC line ceiling.
+
+    Applied at SERIALIZATION rather than on assignment, deliberately: the in-memory
+    object may legitimately hold whatever a sender typed, and it is only when that
+    value is written into a line-delimited format that the delimiter matters.
+    """
+    s = "" if value is None else str(value)
+    # Use splitlines() — the SAME function the deserialiser uses to find header
+    # boundaries. Stripping only CR and LF was not enough: str.splitlines() also
+    # breaks on U+0085, U+2028, U+2029 and friends, so a subject containing one
+    # serialised as a single physical line yet parsed back as two. The serialiser
+    # and the parser disagreed about what a line IS, and the gap between them was
+    # the vulnerability. Defining the sanitiser in terms of the parser's own rule
+    # closes it by construction rather than by enumerating separators.
+    s = " ".join(s.splitlines())
+    s = "".join(" " if (ord(c) < 32 or ord(c) == 127) else c for c in s)
+    return s[:_MAX_HEADER]
+
+
+#: Sentinel passed by deserialize() to say "this value came off disk; do not
+#: invent one if it is absent". A distinct object rather than a bool flag so
+#: the rule lives in one place and every other constructor keeps minting.
+MINTED_ON_READ = "\x00minted-on-read\x00"
+
+
+def new_id(prefix: str) -> str:
+    """A locally-generated identifier that needs no coordination to be unique.
+
+    Time prefix so identifiers sort roughly chronologically for a human reading
+    a directory listing; random suffix so two agents generating in the same
+    second cannot collide. Neither participant has to ask the other anything.
+    """
+    return f"{prefix}-{int(time.time())}-{secrets.token_hex(6)}"
+
+
+@dataclass
+class Message:
+    """One amail message.
+
+    `to` is a list because a message may be addressed to several correspondents;
+    the broker checks each against the sender's contact list independently, so a
+    partially-permitted message is refused rather than partially delivered.
+    """
+
+    sender: str
+    to: list
+    subject: str
+    body: str
+    message_id: str = field(default_factory=lambda: new_id("msg"))
+    thread_id: str = ""
+    parent: Optional[str] = None
+    date: str = field(default_factory=_now_iso)
+    #: Detached authorship signature over the canonical payload (v1.1). Supplied
+    #: by the sender, so it is a CLAIM — it proves nothing until verified against
+    #: the correspondent's declared public key, and `trust` records the result.
+    signature: Optional[str] = None
+    #: What the broker established about this message's origin (v1.1). MINTED:
+    #: the broker sets it and a sender can never influence it. Absent means the
+    #: message has not passed through a broker, which is itself information.
+    trust: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if isinstance(self.to, str):
+            self.to = [self.to]
+        # A message that opens a thread mints its identifier. A reply carries the
+        # one it was given, unchanged — the thread is named by whoever opened it
+        # and is never renamed.
+        #
+        # COMPOSITION ONLY. Minting is right when a message is being created and
+        # wrong when one is being READ: deserialize() passes thread_id=MINTED_ON_READ
+        # so a stored message missing the header keeps an explicit marker instead
+        # of silently acquiring a fresh identifier on every listing. That silent
+        # path produced a thread id which changed between two back-to-back reads
+        # — an identifier that cannot thread anything, and one no test caught
+        # because every test constructed messages rather than re-reading them.
+        if self.thread_id == MINTED_ON_READ:
+            self.thread_id = ""
+        elif not self.thread_id:
+            self.thread_id = new_id("thr")
+
+    def reply(self, sender: str, body: str, subject: Optional[str] = None) -> "Message":
+        """Build a reply that joins this thread rather than opening a parallel one."""
+        return Message(
+            sender=sender,
+            to=[self.sender],
+            subject=subject if subject is not None else self.subject,
+            body=body,
+            thread_id=self.thread_id,
+            parent=self.message_id,
+        )
+
+    def canonical_for_signing(self) -> Dict[str, Any]:
+        """The message AS IT WILL BE STORED, for anything that must survive a round trip.
+
+        THIS EXISTS BECAUSE SIGNING THE IN-MEMORY OBJECT WAS A LIE. The signature
+        covered `sender`, `to`, `subject` and a hash of `body`, and the storage
+        round trip rewrites three of those four:
+
+          - serialize() appends a newline to the body and deserialize() rstrips
+            them, so EVERY trailing newline is destroyed — and a body read from a
+            file, which is what `--body-file` does, ends in one essentially always.
+          - deserialize() strips each header value, so leading and trailing
+            whitespace in the subject or sender is destroyed.
+          - _hdr() folds line separators and control characters to spaces and
+            truncates at 998, so a tab, a U+2028, or a long subject is rewritten.
+
+        Seven of ten realistic inputs verified in memory, delivered, and then
+        FAILED to verify from storage — while their stored label still read
+        "attested". The spec promised that a stored message stays verifiable by
+        anyone holding the correspondent's key; for most real mail it did not.
+
+        The fix is the same inversion _hdr() already uses for line boundaries:
+        stop describing the transformation and DEFER TO IT. Sign what the parser
+        will produce, not what the caller happened to hold. Every step below
+        mirrors an exact operation in serialize()/deserialize(), and each is
+        idempotent, so canonicalising twice equals canonicalising once and
+        sign(m) == sign(deserialize(serialize(m))) holds by construction.
+
+        If serialize() or deserialize() changes, this MUST change with it. The
+        property test asserts the equality rather than trusting this comment.
+        """
+        return {
+            # `From:` and `Subject:` are written through _hdr() and read back
+            # through .strip().
+            "sender": _hdr(self.sender).strip(),
+            "subject": _hdr(self.subject or "").strip(),
+            # `To:` is canonicalised PER ELEMENT, not by modelling the joined
+            # header.
+            #
+            # Modelling the join was the faithful-looking choice and it created a
+            # collision: `_hdr()` truncates at 998, so any two recipient lists
+            # sharing that prefix produced BYTE-IDENTICAL signing payloads, and
+            # one captured signature covered a message addressed somewhere else.
+            # MAX_RECIPIENTS did not prevent it — 64 ordinary addresses join to
+            # well over 998 characters.
+            #
+            # Element-wise gives the same answer as the round trip for every
+            # list the broker will store, because the broker refuses a joined
+            # list longer than the header can hold (an address containing a
+            # comma is refused for the same reason: it would split into two on
+            # the way back). It differs only for lists that can never reach
+            # storage — and there it differs by NOT colliding, which is the
+            # point.
+            "to": [x for x in (_hdr(a).strip() for a in self.to) if x],
+            # The body gains a trailing newline on write and loses all of them
+            # on read.
+            "body": (self.body or "").rstrip("\n"),
+        }
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "Message":
+        known = {f for f in cls.__dataclass_fields__}
+        return cls(**{k: v for k, v in d.items() if k in known})
+
+    def serialize(self) -> str:
+        """RFC-5322-shaped headers, then a blank line, then the body.
+
+        Readable by an ordinary mail client, which is the point of storing in a
+        Maildir at all. Transport headers are deliberately absent: they belong to
+        the journey, not the message.
+
+        EVERY header value is passed through _hdr(). A newline inside any field
+        ends the header block early, so an attacker-chosen subject could inject
+        arbitrary headers and a blank line — making the rest of their text the
+        body a mail client renders, and orphaning the real one. Interpolating
+        untrusted values into a line-delimited format is the same class of bug as
+        SQL injection, and the fix is the same: neutralise the delimiter.
+        """
+        headers = [
+            f"Message-ID: {_hdr(self.message_id)}",
+            f"Thread-ID: {_hdr(self.thread_id)}",
+            f"Date: {_hdr(self.date)}",
+            f"From: {_hdr(self.sender)}",
+            f"To: {_hdr(', '.join(self.to))}",
+            f"Subject: {_hdr(self.subject)}",
+        ]
+        if self.parent:
+            headers.append(f"In-Reply-To: {_hdr(self.parent)}")
+        if self.signature:
+            headers.append(f"X-Amail-Signature: {_hdr(self.signature)}")
+        if self.trust:
+            # Written by the broker, from broker-held state. A sender cannot put
+            # this here: serialize() emits a fixed header set from dataclass
+            # fields, and `trust` is minted rather than passed through. The
+            # header exists so an ordinary mail client — which has no access to
+            # the stored metadata — can still see what was established.
+            headers.append(f"X-Amail-Trust: {_hdr(self.trust)}")
+        return "\n".join(headers) + "\n\n" + self.body + "\n"
+
+    @classmethod
+    def deserialize(cls, raw: str) -> "Message":
+        head, _, body = raw.partition("\n\n")  # noqa: MACEFF005 - str.partition's (before, sep, after) contract is fixed by the stdlib; there is no callee whose order can change
+        h: Dict[str, str] = {}
+        for line in head.splitlines():
+            k, _, v = line.partition(":")  # noqa: MACEFF005 - str.partition's (before, sep, after) contract is fixed by the stdlib; there is no callee whose order can change
+            h[k.strip().lower()] = v.strip()
+        return cls(
+            sender=h.get("from", ""),
+            to=[a.strip() for a in h.get("to", "").split(",") if a.strip()],
+            subject=h.get("subject", ""),
+            body=body.rstrip("\n"),
+            message_id=h.get("message-id", ""),
+            # See __post_init__: reading is not composing, so an absent
+            # thread-id stays absent rather than being invented per read.
+            thread_id=h.get("thread-id") or MINTED_ON_READ,
+            parent=h.get("in-reply-to") or None,
+            date=h.get("date", ""),
+            signature=h.get("x-amail-signature") or None,
+            trust=h.get("x-amail-trust") or None,
+        )
+
+    def sort_key(self):
+        """Deterministic ordering without coordination.
+
+        (date, message_id) — the message id breaks ties, so two messages written
+        in the same second still order identically for every reader.
+        """
+        return (self.date, self.message_id)

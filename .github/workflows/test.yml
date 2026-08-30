@@ -25,7 +25,10 @@ jobs:
       - name: Install package with test dependencies
         # `proxy` too: the proxy tests import aiohttp, which lives in that extra,
         # so with [test] alone they could never pass in CI.
-        run: pip install -e "./macf[test,proxy]"
+        # `amail` is here because the amail suite imports the crypto backend.
+        # Without it those tests would SKIP rather than fail, and a silently
+        # skipped security suite is the quietest way to stop testing something.
+        run: pip install -e "./macf[test,proxy,amail]"
 
       - name: Create CI environment directories
         run: mkdir -p ~/.claude/projects
