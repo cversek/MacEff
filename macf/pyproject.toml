@@ -49,5 +49,14 @@ recommend = [
     # "sqlite-vec>=0.1.0",           # DEPRECATED: ARM64 broken, 12-month stale
 ]
 
+# RECOMMENDED, not merely optional. Without it `macf.amail` refuses to import:
+# since amail v1.1, inbound handling is built on verifying signatures and
+# classifying what that verification proved, and running without a backend would
+# classify every message as unverified while appearing to work. A capability
+# that is off is honest; one that is present-but-hollow is not.
+amail = [
+    "cryptography>=40.0.0",  # Ed25519 per-correspondent authorship signing
+]
+
 [project.scripts]
 macf_tools = "macf.cli:main"     # fastest startup (direct Python)
