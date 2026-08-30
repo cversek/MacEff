@@ -72,13 +72,15 @@ macf_tools --version
 ```
 
 ```
-macf_tools 0.6.0 (main @ e9a2801)
+macf_tools 0.6.1.dev0 (main @ 54f1899)
 ```
 
-The git hash is part of the version string, so a deployed build says exactly
-which commit it is — yours will differ from the one above — and a working tree
-with uncommitted changes says `dirty`. Installed from a wheel rather than a
-checkout, there is no suffix at all.
+Both halves of that line track your checkout rather than this document, so
+expect different values. `main` between releases carries a development version;
+a release tag carries a plain one like `0.6.0`. The git hash follows, so a
+deployed build says exactly which commit it is, and a working tree with
+uncommitted changes adds `dirty`. Installed from a wheel rather than a checkout,
+there is no suffix at all.
 
 ## Run something
 
