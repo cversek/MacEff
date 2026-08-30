@@ -55,7 +55,11 @@ from .crypto import (
 
     SigningError, generate_keypair, load_private_key, public_key_line, sign, verify,
 )
+from .contacts import ContactBook, ContactListError
 from . import models, audit, trust, crypto, ratelimit, transport
+from . import store, contacts
 
 __all__ = ["Message", "new_id", "AuditLog", "TrustClass",
-           "models", "audit", "trust", "crypto", "ratelimit", "transport"]
+           "ContactBook", "ContactListError",
+           "models", "audit", "trust", "crypto", "ratelimit", "transport",
+           "store", "contacts"]
