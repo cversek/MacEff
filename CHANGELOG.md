@@ -5,6 +5,215 @@ All notable changes to MACF Tools (Multi-Agent Coordination Framework) will be d
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-08-29
+
+### Summary
+
+Consolidation release. The task system becomes a **work stack** — `task trace` reports which frame attention actually left rather than merely listing what is unfinished, completion hands attention back to the enclosing frame, and starting a phase cascades its pending ancestors — and gains a **project-scoped home task store**, so task history survives the session-UUID churn of fork, rewind, and continue instead of being copied and diverging. **GH_PR tasks** close the loop from issue to merged pull request, with a CI-green merge gate and a ground-truth MERGED / CLOSED_UNMERGED outcome that cascades to the issue tasks the PR closes. **USER_REMOTE** makes driving an agent from a chat channel viable by refusing the tools that would otherwise hang waiting for a terminal nobody is watching. The **knowledge web** becomes its own module with a corpus doctor that finds artifacts nothing can reach. A **pre-commit dispatcher** composes independent gates and adopts any hook already installed rather than overwriting it. Autonomous work splits into **SPRINT** (workload-defined) and **PLAY_TIME** (timer-bounded), which had been one overloaded concept. And the test suite was consolidated from four locations into one, split into a hermetic set and a live set by marker, and stripped of `xfail` tombstones that had outlived their reason by two minor versions. 280 commits since v0.5.0.
+
+### Added
+
+**Work stack and task lifecycle** (`macf_tools task`):
+- `task trace` — the open-frame stack, classifying each frame as active, enclosing, parked, ready, or deferred, so a parent whose phase is running is not reported as a dropped frame
+- Attention handed back to the enclosing frame when a task completes, and a message when the last child closes
+- `task start` cascades pending ancestors on every start path, and reports what it started
+- Stale-resume banner: work last touched in an earlier cycle names how stale it is and requires its history to be re-read before continuing
+- Guard against completing a task over open children
+- `task reparent` / `advance` / `set-custom` verbs
+- `task doctor` — reconciles GitHub-backed tasks against live GitHub, and names structural faults such as a task parented to a non-root
+- Last-touched recency marker in the tree, with a touch-discipline nag
+
+**Home task store**:
+- Optional project-scoped task store under the agent home, divorced from the session-keyed `~/.claude/tasks/`
+- `task migrate-store` — one command from the legacy store to the home store
+- Provisioning creates the store, rather than leaving an agent to opt in
+- `task tree --loop` watches the resolved store, not the legacy session root
+
+**GH_PR task type**:
+- Inbound pull-request review and merge tracked as a first-class task type (🔀), with kind-aware URL parsing and metadata fetched from the host
+- Completion records the ground-truth outcome (MERGED or CLOSED_UNMERGED) and cascades to the GH_ISSUE tasks the PR closes
+- CI-green policy gate on merge, with the resolution path stated when the check is red
+- GH_ISSUE close-out calling card is opt-in, and respects public-attribution settings
+
+**Presence and modes**:
+- `USER_REMOTE` presence mode — denies CLI-blocking tools so a remotely driven session cannot hang on a prompt nobody can see, with automatic permission restore and non-hanging housekeeping
+- The transcript monitor mirrors the live exchange to the channel while USER_REMOTE is active
+- SPRINT (workload-defined) and PLAY_TIME (timer-bounded) as separate autonomous-work types, with their own task types, models, CLI verbs, skills, and stop-hook dispatch
+- Behavioral-reinforcement message on every mode transition
+- AUTO_MODE requests the client's own auto mode and records the request where it can be audited
+
+**Knowledge web** (`macf_tools knowledge`):
+- Extracted into its own module; participation is emergent from wiki-links, with no registry to keep in sync
+- `knowledge doctor` — a corpus doctor that finds orphans, drift, and undeclared artifact directories, answering the question `gaps` structurally cannot
+- Node semantics and orphan prevention specified in policy, and all 39 substantive policies retrospectively annotated into the web
+- Wiki-link flags on `idea create` and `idea update`; archived ideas excluded from gap suggestions
+
+**Observability** (`macf_tools events`):
+- Structured warnings framework with dual-channel emission, replacing scattered stderr writes
+- `HookMessage` / `emit_message` for CLI-to-channel parity, and concise tool-invocation summaries
+- `events analyze` — a generic structured-event JSONL analyzer
+- Per-request byte accounting and a per-block census in the proxy
+- SubagentStart hook as a parallel-safe bridge between tool-use id and agent id for delegation timing
+
+**Commit gates** (`macf_tools githooks`, `macf_tools opsec`):
+- A pre-commit dispatcher that runs a directory of independent checks and adopts any pre-existing hook instead of overwriting it
+- A style ratchet whose finding counts may shrink and must not grow
+- `opsec install-hook` — a gate against private-context leakage in a public tree
+
+**Configuration and provisioning**:
+- Unified config layer with a config-layer slot in identity resolution
+- Declarative deployment environment via `agents.yaml` `defaults.container_env`
+- Declarative account flavor, multi-key SSH, and vanilla-purity options for provisioned agents
+- Declarative per-uid egress capability boundaries, with the policy that explains them
+- Declared channel plugins installed and kept current at container start
+- Idempotent tool install behind a fingerprint sentinel, so a warm restart skips reinstallation
+- An `amail` mailbox created for every agent at init, with the protocol specified before the client was built
+
+**Harness**:
+- The persistent agent harness is generated from declarations rather than hand-edited
+- One launch implementation, identity-derived session names, and failures that report what actually went wrong
+
+**CLI and shell**:
+- `macf_tools inject` — self-directed session control
+- `macf_tools env set-term-title`, and `task tree --loop` auto-titling with the agent calling card
+- `--title-width` for trimming long titles in the tree
+- Seek-from-end line iterators for large transcripts, fixing a Stop-hook out-of-memory failure
+- Configurable keys sent after every supervised child spawn; per-user auto-restart registries; singleton pre-flight that refuses to fork a live calling card
+
+**Policies**:
+- `public_voice` — writing standards for text leaving the agent's own tree
+- `instruction_language` — foundational principles, grammar shape, and service model, with an interpreter skill
+- `coding_standards` §7 — Derived State Discipline
+- `mode_system` §13 Nag Design, and §14 stating which modes a subagent actually has a stance about
+- `amail` — the agent mail protocol
+- Maintainer principles, sorted by layer, with the framework layer seeded
+- Cycle-scoped event queries with persistent state carried forward explicitly, rather than inferred
+
+### Changed
+
+- Scope is event-sourced only; the MTMD `scope_status` field was retired, and tree and list markers now read from the event log
+- The test suite runs from one location, split by marker into a hermetic set (`make test`) and a live set requiring tmux, systemd, or a real client (`make test-live`)
+- The README was rewritten from 916 lines to 265, with philosophy and container setup extracted into their own documents
+- Proxy message rewriting is gated behind `MACF_PROXY_REWRITE` and defaults to off
+- Mode detection reports what it actually knows, rather than presenting a default as a determination
+- A nav guide surfaces once per cycle rather than once per task start
+- `aiohttp`'s 1 MiB default body limit was raised in the proxy, which had been rejecting real conversations
+- User activity is derived from the prompt-submit payload rather than a poller
+- The full operator prompt is captured, not its first 200 characters
+
+### Removed
+
+- The hook sidecar: a writer that shipped in 2025 with zero call sites, never gained one, and whose reader had been reporting its absence as a fact about hooks — along with the documentation that supplied a plausible wrong cause for the symptom
+- The `archive` / `restore` / `archived` CLI trio, which failed closed rather than reporting false success
+- The per-prompt policy-recommendation injection
+- `utils/cycles.py`, dissolved into its callers
+- The superseded `maceff-autonomous-sprint` skill, deleted rather than deprecated
+- The deprecated `todo_hygiene` policy
+- Every `xfail` marker citing the v0.4.0 removal of the TODO system, including two whose tests were passing
+
+### Fixed
+
+105 issues fixed since v0.5.0, plus one closed as a duplicate. Grouped by what they affected:
+
+**Task system**:
+- **#68**, **#70**: inconsistent task-id argument parsing across verbs; a misleading scope count with a spurious expansion line
+- **#69**: `task create sprint --children` silently dropped the first child
+- **#79**: completing a GH_ISSUE task closed the upstream issue before its PR merged
+- **#148**, **#273**: `task reparent` left a stale parent marker in the subject, and orphaned on parent 0
+- **#150**, **#289**, **#295**: the recency marker vanished in succinct mode; `--loop` hid tasks completed since it started; an archived descendant pinned its whole ancestor chain visible
+- **#208**: `task create --parent 0` was accepted and orphaned the task outside the tree
+- **#212**: starting a child of an unstarted parent now cascades upstream and says so
+- **#255**: sprint completion synthesis counted children, reporting 0/3 for a scoped sprint
+- **#261**: "abandoned" misnamed deliberate deferral, and hid which frames were still owed a return
+- **#267**: the touch-discipline nag watched the legacy store and never reset under the home store
+- **#268**: nothing was said when the last child closed and the parent still needed attention
+- **#269**: a task with an unsatisfied `blocked_by` started anyway, so a declared dependency did not hold
+- **#274**: `task hide-completed` was not idempotent and reported phantom counts
+- **#306**: a running sprint was not in its own scope, so SPRINT mode was not in force for it
+- **#125**, **#48**: a `NameError` crashed the protected-field guidance in `task edit`, and another crashed `task list` outright
+- **#112**: no correct path existed for reparenting, advancing a lifecycle, or nesting — now `reparent` / `advance` / `set-custom`
+- **#272**: the task-creation commands had no callers, leaving the phase policy-engagement requirement unreachable from every path
+
+**Modes and presence**:
+- **#53**: a client-side name collision blocked AUTO_MODE activation
+- **#56**: the recommender hardcoded one agent's skill prefix
+- **#67**: AUTO_MODE installed ask-list entries without auditing existing allow-list shadows
+- **#72**: a gendered runner emoji replaced with a gender-neutral one
+- **#50**: the PreToolUse mode dashboard lagged a tool call behind `mode set-work`
+- **#181**, **#266**, **#301**: idle detection reported the user idle on the very prompt they had just sent, did not reset on permission-dialog activity, and disengaged once 200 agent events buried the user's last input
+- **#275**: AUTO_MODE now hands the permission decision to the client's native auto mode
+- **#279**: `utils/cycles.py` dissolved into the module that owned its functions
+- **#294**, **#325**: the PA preamble taught modes as a two-value post-compaction checkbox; the SA preamble had no mode awareness at all, and the PA block could not simply be copied into it
+- **#302**, **#309**: a bounded event scan's miss was being read as a fact at five sites; event queries are now cycle-scoped by default with cross-cycle state carried explicitly
+
+**Hooks and session**:
+- **#54**: the transcript-monitor daemon inherited the caller's pipe and hung `mode set` for ~90s
+- **#65**: the Stop hook's scope-gate logic was indented inside a failsafe early-return, making it dead code
+- **#66**: autocompact settings were written to a path the client had stopped reading
+- **#82**: bare-`cd` detection missed every command fragment after the first
+- **#89**: hook lookup used relative paths, so a bare `cd` in agent Bash could kill all hooks for the session
+- **#92**, **#93**: hook warnings had no delivery framework; now structured and dual-channel
+- **#94**: the Stop hook was OOM-killed at high context use by unbounded transcript and event-log reads
+- **#110**, **#111**, **#118**: the context meter reported stale pre-compaction usage, scanned a tail that missed preserved-segment replays, and raced its own first post-compaction write
+- **#116**: a `claude` substring match executed an unrelated binary during version detection on Linux, and forked in a loop
+- **#154**: a PreToolUse deny also set `continue: false`, halting the agent instead of the tool call
+- **#158**: session-id resolution let a concurrent session hijack the identity
+- **#163**, **#165**, **#264**: notifications did not name the invoked skill; the SessionStart banner lacked an AUTO_MODE indicator and was silently dropped when the monitor cold-started
+- **#271**: policy nav-guide injection fired per task start rather than once per cycle
+
+**Configuration, identity, and provisioning**:
+- **#96**: a unified config layer with environment-variable overrides
+- **#115**: the AUTO_MODE auth token had no install path off Docker and its validation was bypassable
+- **#120**, **#121**: a duplicate `config` subparser crashed the CLI on newer Pythons, and pydantic was a runtime dependency declared only under test extras
+- **#131**, **#180**, **#283**: `agent init` never minted the agent id so identity resolved to a placeholder, later minted one that shadowed an existing global identity, and its preamble upgrade appended without removing the old version
+- **#153**: preamble upgrades grew the file on every run
+- **#252**: two agent-home resolvers disagreed, and the isolation fixture only patched one
+- **#64**: subagent directories were created root-owned and 0700 in containers, blocking delegation
+- **#258**: container deployments had no working path to start a supervised agent session
+- **#280**: the init overlay was a fixed list, so anything a deployment declared outside it was dropped
+- **#299**: provisioning models silently discarded unknown keys, so a declared capability could vanish without error
+
+**Proxy, supervisor, and harness**:
+- **#159**: the supervisor registry was not per-user, so a second agent on a host collided with the first
+- **#161**, **#167**: the ad-hoc daemon and the systemd unit were not mutually exclusive; aiohttp's 1 MiB default body limit was silently rejecting real conversations
+- **#162**: request-size telemetry with opt-in rolling capture
+- **#164**: no post-restart hook, so a trust prompt on relaunch hung unattended
+- **#209**, **#210**: harness status guessed the agent name, and an agent had no supported way to restart its own session
+- **#27**: the auto-restart supervisor entered a crash loop under some terminals, from job-control signalling
+- **#25**, **#46**: the channel plugin fork had drifted from its upstream, and its server log grew unbounded — 191 GB in three weeks, nearly filling a disk
+
+**Knowledge web**:
+- **#73**: the cross-CA graph indexed only ideas, ignoring learnings, checkpoints, and reflections
+- **#87**: the graph builder ignored `wiki_links` in idea JSONs
+- **#109**, **#124**: wiki-link flags on `idea create` and `idea update`
+
+**Tests and CI**:
+- **#123**: a flaky session test that relied on `sleep()` for ordering
+- **#241**: the tmux helper stripped PATH from its subprocess environment, breaking seven tests on macOS
+- **#247**: the sprint suite wrote into the live task store
+- **#254**: one flake's race removed, and the other made diagnosable
+- **#282**, **#284**: the style gate was declared blocking and wired into nothing; the ratchet charged gitignored local work as new findings
+- **#318**: four harness-render tests read live machine state, so they failed locally and passed in CI
+- **#328**: the test suite spawned a real client that inherited live credentials and killed the developer's channel
+
+**Documentation and policy**:
+- **#52**: `framework install` reported hooks installed while writing an empty config
+- **#55**: an ambiguity about how many scoped sprint tasks may exist
+- **#63**: stale command-namespace references across framework commands and docs
+- **#71**: three small UX nits in install output and skill text
+- **#113**: `markdown present` failed silently when the HTML handler was hijacked
+- **#242**: `macf_tools time` appended a checkpoint line to stdout, breaking its documented single-timestamp contract
+- **#156**: the GH_ISSUE close-out comment leaked agent attribution to public issues
+- **#211**: the per-prompt policy-recommendation injection removed in favour of on-demand search
+- **#244**: per-agent breadcrumbs removed from shared policy headers
+- **#259**: EXPERIMENT and ROADMAP disambiguated up front rather than at the comparison
+- **#262**: artifact delivery assumed a local browser, which reaches nobody over SSH or a channel
+- **#270**: the checkpoint policy had no recovery reading list and a template prescribing summaries
+- **#276**: maintainer principles categorised by layer, with the framework layer seeded
+- **#286**: git hooks provisioned composably, by a dispatcher that adopts pre-existing hooks
+- **#287**: work a sprint generates needs a task at the moment of filing
+- **#339**: `hooks status` reported an empty result because nothing called the writer, not because nothing had happened
+
 ## [0.5.0] - 2026-04-20
 
 ### Summary
