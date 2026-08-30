@@ -57,9 +57,13 @@ from .crypto import (
 )
 from .contacts import ContactBook, ContactListError
 from . import models, audit, trust, crypto, ratelimit, transport
-from . import store, contacts
+from .broker import Broker, BrokerConfig, DeliveryError, serve
+from .client import submit, BrokerUnavailable
+from . import store, contacts, broker, client, deploy_config
 
 __all__ = ["Message", "new_id", "AuditLog", "TrustClass",
            "ContactBook", "ContactListError",
            "models", "audit", "trust", "crypto", "ratelimit", "transport",
-           "store", "contacts"]
+           "Broker", "BrokerConfig", "DeliveryError", "serve",
+           "submit", "BrokerUnavailable",
+           "store", "contacts", "broker", "client", "deploy_config"]
