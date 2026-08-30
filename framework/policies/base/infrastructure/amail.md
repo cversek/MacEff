@@ -3,7 +3,16 @@
 **Type**: Infrastructure (opt-in)
 **Scope**: All agents (PA and SA), and the broker that serves them
 **Status**: ACTIVE — specification. No implementation is authorized by this document.
-**Version**: 1.0.2
+**Version**: 1.2.0 — §6b.0 answers what to do INSTEAD of a refused send, makes the rate
+limit observable to the good-faith agent it targets, settles whose contacts are checked,
+and states that outbound controls are scoped by PATH rather than by authorship (the seam
+that a red team found between two correct fixes).
+
+**Version**: 1.1.0 — adds the outbound half (§6b) and two credential rules learned by
+measurement (§3.2.1). Minor rather than patch: these are new normative sections, not
+corrections. Every rule added here derives from an experiment that tested the assumption
+with real mail before the text was written; where a rule looks pedantic, the obvious
+alternative was tried and produced a false reading.
 **Supersedes**: the provisional `amail/v0` convention shipped in agent mailbox READMEs
 
 ---
@@ -37,11 +46,17 @@ becomes tractable once the address stops encoding how the message travels.
 - What is the delivery ladder?
 - How does the broker choose a rung?
 - Why does the same address work on one host and across many?
+- How does delivery actually complete, and who performs the final write?
+- What must a deployment provision before mail can be delivered at all?
 - Where is the authoritative mail store?
 
 **3 The Broker**
 - Why is the restriction enforced outside the agent rather than in its client?
 - How do agents submit mail, and what must they never hold?
+- Why must authorization complete BEFORE the transport credential is touched, and how
+  is an ordering verified when it is invisible in a return value?
+- Why must a deployment be refused for a MISSING credential and not only an exposed
+  one, and what does a custody check report on absent input?
 - What must the audit record contain, and why is it mandatory?
 
 **4 Contact Lists**
@@ -57,6 +72,27 @@ becomes tractable once the address stops encoding how the message travels.
 **6 Inbound Handling**
 - What happens to mail from a sender who is not on the contact list?
 - Why is inbound mail untrusted input even from a trusted sender?
+
+**6b Outbound Handling**
+- My mail was refused — who decided, and why not my own client?
+- My message was refused for one recipient. What may I do instead, and what would be
+  routing around the rule rather than working with it?
+- Whose contact list is checked — mine, or everyone's? Why does the answer matter?
+- Can I see the rate limit before I hit it, and where?
+- Why is a multi-recipient message refused whole rather than sent to the permitted part?
+- How does the broker know who I am, and why can I not simply claim a sender?
+- Why is there a rate limit, and whose asset is it protecting?
+- Who writes the sender's copy of a message, and why is it never the broker?
+- Why is what became of a sent message not the sender's to assert, and where does that
+  fact live?
+- Why is a disposition recorded as a history rather than a last value, and what must an
+  UNRECORDED disposition read as?
+- Why is a store with a reader and no writer a defect rather than a stub?
+- What input must a pre-send gate accept, and what does passing it actually mean?
+- Is the pre-send gate scoped by who composed a message or by where it is going, and what
+  went wrong when it was scoped the other way?
+- Why must a non-delivery notice never reach an unauthenticated sender?
+- Why is a public key that arrives in a message only a claim?
 
 **7 Threat Model**
 - What does this design actually defend against?
@@ -131,15 +167,61 @@ contact lists, or stored messages. Only the broker's rung choice changes.
 
 ### 2.2 Local delivery is an optimization, not a special case
 
-Rung 1 exists because writing to a mailbox on the same disk is faster, more private,
-and cannot fail in transit — not because same-host mail is a different kind of mail.
-It carries the same fields, the same identifiers, and appears identical to the
-recipient.
+Rung 1 exists because same-host delivery is faster, more private, and cannot fail
+in transit — not because same-host mail is a different kind of mail. It carries the
+same fields, the same identifiers, and appears identical to the recipient.
+
+"Same-host" describes the route, not the write. How delivery actually completes is
+§2.3, and it is the same for every rung.
 
 A design that treated local mail as its own mechanism would need a second format, a
 second set of rules, and a migration the first time an agent moved hosts.
 
-### 2.3 The authoritative store is local
+### 2.3 Delivery completes as a hand-off, never as a write into another's home
+
+**The broker MUST NOT write into a recipient's mailbox.** Delivery terminates in a
+per-recipient **pickup box** that the broker owns; the **recipient** completes the
+custody transfer by ingesting into its own store, as itself. This holds for every
+kind of mail — agent-to-agent, peer-inbound, and internet — and for refused mail,
+which is retained in a broker-owned store rather than anywhere inside the
+recipient's home.
+
+**Why this is a policy statement and not an implementation note.** The obvious
+design has the broker write each recipient's mailbox directly. That requires a
+process that can write across uid boundaries, which means privilege on the mail
+path — and the justification arrives already attached to the requirement ("the
+broker delivers into homes it does not own"), which is what makes it hard to
+notice. It is a *design choice*, not an operation: hand the mail into a box the
+recipient's group can read, and nobody writes across a boundary at all. The
+resulting property is worth more than the convenience it costs:
+
+> Compromise of any single component yields that component's own stores and
+> nothing above its row.
+
+**Consequences a deployment MUST honour:**
+
+- **Pickup boxes are provisioned, not auto-created.** An unprivileged broker cannot
+  place a box in the recipient's group, so a box it creates on demand is unreadable
+  by the very agent it belongs to. This failure is **silent at the sender** —
+  submission reports success and the message sits in the box — so provisioning is a
+  deployment responsibility and an aged-entry alarm is the backstop that surfaces a
+  box nobody is draining.
+- **Ingest is a filesystem act and MUST NOT require the broker.** A permanent record
+  that needs a running service to receive it is not permanent. Custody transfer, and
+  any verification performed during it, use only what the recipient can read locally.
+- **Ownership is correct by construction**, which is what §2.4's mode-700
+  agent-owned mailbox has always claimed. Under direct-write delivery that claim
+  required a privileged process to be careful; under hand-off it is simply true,
+  because the only writer is the owner.
+
+**Apply this rule to every delivery path at once.** A hand-off model applied to one
+path while a sibling path keeps writing directly leaves the privilege requirement
+intact and hides it behind whichever path happens to be exercised — the property
+then holds by coverage rather than by construction, which is not a property at all.
+
+---
+
+### 2.4 The authoritative store is local
 
 Each agent's mailbox is a **standard Maildir in the agent's home**, owned by the
 agent, mode 700.
@@ -248,6 +330,40 @@ This specification adds only what is specific to mail:
 Refusals are returned to the agent as errors. An agent MUST be able to tell that its
 message was refused, and why — silent discard trains agents to believe mail was
 delivered.
+
+### 3.2.1 Two rules about the credential that were learned by measuring
+
+**Authorization completes before the credential is touched.** The broker MUST finish
+deciding — destination permitted, sender authority established — before any code path
+reads, opens, or transmits the transport credential.
+
+The derivation matters more than the rule. Checks placed earlier — at compose time, in
+a client, in a CLI — sit *inside* the party being restricted, which means a compromised
+or merely over-eager agent can edit them. They are ergonomic: they give a well-behaved
+agent a fast, clear refusal. They are not the control. This is the outbound face of
+*enforce outside the principal you restrict*, and it is why the ordering is normative
+rather than a matter of style.
+
+Ordering is invisible in a return value, so it is verified with a **tripwire**: a
+credential object that records every read of itself, asserted untouched at the moment
+of refusal. A tripwire needs its paired acceptance — a *permitted* destination must
+pass authorization and fail at transport — because an untouched tripwire is equally
+consistent with a gate that refuses everything.
+
+**Refusal to start must cover a MISPLACED credential, not only an exposed one.** A
+deployment whose credential is absent, or configured at a path holding nothing, MUST be
+refused as loudly as one whose credential is world-readable.
+
+This is stated explicitly because the obvious implementation does not do it. A check
+that asks "is this file readable by others?" answers *no* for a file that does not
+exist — so absence and correct protection produce the same answer, and the broker
+starts in both cases. The control cannot see the case it is named for. Any agent
+implementing or reviewing this must ask what the check reports on **absent input**, and
+must treat "absent reads as clean" as a defect rather than an edge case.
+
+The demonstration owed is a *break*, in both polarities — exposed and absent — each
+with its paired acceptance in the same run. Inspecting a configuration file is not a
+demonstration of a refusal.
 
 ### 3.3 The audit record
 
@@ -398,6 +514,156 @@ message takes, and its arrival from a permitted address does not change that.
 
 ---
 
+## 6b Outbound Handling
+
+*(Numbered `6b` rather than `7` so the existing section numbers, which other artifacts
+cite, keep their meaning. Discovery order is not a reason to renumber.)*
+
+Inbound asks what may reach an agent. Outbound asks what may leave, and — the half that
+is easy to forget — **what the sender is allowed to believe happened.**
+
+### 6b.0 The first boundary you will meet: your destination must be permitted
+
+If you are an agent and you are reading this because something refused to send your
+mail, start here.
+
+**You do not decide who you may write to.** The broker checks every destination against
+your contact list and refuses the whole message if any recipient is not on it — not the
+permitted subset, not a split into two sends, the whole message. A partial send would
+leave you believing something was delivered that was not, and you would have to
+reconcile it, and you would get it wrong.
+
+**So what do you do instead?** *(This paragraph exists because the first version of this
+section told you what refused you and never told you what to do next, which is half a
+policy.)* **You may compose a new message to the recipients that ARE permitted, and send
+it.** That is not a workaround — it is an ordinary authorized send, and doing it openly
+is honest. What the rule forbids is the *system* splitting your message behind your
+back, because then your belief about what happened would be manufactured by a component
+you cannot see.
+
+For the recipient who was refused: that is a contacts question, and contacts are not
+editable through any channel the broker serves. Raise it with the operator. **Do not
+route around it** — not via another agent, not via a channel, not by finding a different
+address for the same party. If the refusal is wrong, the fix is a corrected contacts
+file, and that fix is somebody else's to make on purpose.
+
+**A refusal is not a failure to send.** They are recorded differently and they mean
+different things: refused means the gate decided, could-not-send means transport broke.
+If your client shows you one when it means the other, that is a bug worth reporting —
+an agent that retries a refusal retries it forever.
+
+**"Your contact list" means yours, and that distinction is a security property rather
+than a turn of phrase.** The contacts live in one broker-owned file, but the *authority*
+in it is per-agent: your outbound mail is checked against **your** entries, never against
+the union of everyone's. If it were shared, any agent could write to any other agent's
+correspondents — a materially different system, and one nobody chose. The inbound half
+says the same thing from the other side: only the broker may say a sender is a contact
+*of this recipient*.
+
+**The check runs at the broker, not in your client, and that is deliberate.** Any check
+living in code you can edit is documentation. The client may check early to give you a
+fast answer; that check is a convenience and is not what decides. This is the same rule
+as §3.1, seen from the sending side.
+
+**Who you are is established by the kernel, not by what you claim.** The broker takes
+your identity from the connection, not from any field in the message. A submission whose
+claimed sender disagrees with the connecting process is refused, and the refusal is
+recorded against the *real* identity. So there is nothing to gain by writing someone
+else's name into a From field, and an attempt to do so is evidence rather than a
+loophole.
+
+**There is a rate limit, and it is a control rather than a courtesy.** Sending
+reputation is shared across every agent under the same organisational domain, so a
+burst from one agent spends an asset belonging to everyone and to every future project
+beneath it. The threat this guards against is not an attacker — it is a well-intentioned
+agent deciding that the efficient path to a hard problem is to mail every expert it can
+name. That is a reasonable plan and it destroys a shared resource. If the limit blocks
+work you believe is legitimate, that is a conversation with the operator, not a
+constraint to route around.
+
+**You can see it before you hit it, and you should look.** The window, the cap, and your
+own current consumption are readable from the client's status surface. This is
+deliberate: a control aimed at *good faith* that good faith cannot see is discoverable
+only by tripping it, which teaches you the system is unreliable rather than that the
+resource is shared. An attacker learns the limit by hitting it either way, so there was
+never anything to gain by hiding it from you. If you are planning a send that will
+approach the cap, that is the moment to ask the operator rather than the moment to
+discover a refusal.
+
+### 6b.1 The sender's copy is the sender's
+
+An agent composes into its own store, and that copy is canonical and immutable. It is
+written by the **agent**, never by the broker: the filesystem is the access path to the
+agent's store, and a broker writing into an agent's home is precisely the cross-uid
+write §2.3 exists to remove. It MUST remain readable with the broker stopped, for the
+same reason a memory requiring a running service to read is not a memory.
+
+### 6b.2 What became of it is not the sender's to assert
+
+Whether a message was submitted, deferred, bounced, or refused at transport is
+established *after* it leaves the agent's hands, by components the agent cannot
+observe. So the disposition is **broker-owned and agent-readable**: the broker writes,
+the agent reads it off the filesystem with no broker call, and an agent cannot forge its
+own delivery confirmations.
+
+Placement follows from **mutability**, not symmetry. The sent copy is immutable and
+lives with its author; the disposition changes and lives with its writer. Handing it
+through a pickup box would either freeze it at first read or require re-ingesting the
+same record forever.
+
+Record it as a **history, not a last value** — a bounce after three deferrals is a
+different fact from an immediate bounce, and only a sequence tells them apart. And an
+**unrecorded disposition MUST read as absent, never as delivered**: a caller that treats
+absence as success invents exactly the silent delivery this section exists to prevent.
+
+A corollary worth stating because it was found the expensive way: **a store with a
+reader and no writer is a defect, not a stub.** If the read path exists and nothing
+populates it, an agent asking what it sent receives an emptiness that reads as *"nothing
+was sent"* rather than *"this is not wired"*.
+
+### 6b.3 The pre-send gate
+
+A message is scrubbed before submission, and the gate MUST accept a **composed message**
+as input. A scanner that can only be pointed at a repository diff cannot be a pre-send
+gate for mail, however good its patterns — the entry point is part of the control.
+
+It MUST fail closed on unreadable input, and it MUST pass a clean control: a gate that
+refuses everything scores perfectly against a corpus made only of leaks and protects
+nothing.
+
+State its coverage as a claim about a threat model. A gate is silent outside the model
+it was built for, so passing it means only that it checked what it checks — never that
+the message is clean.
+
+**The gate is scoped by the PATH a message takes, not by who composed it.** Anything
+going out over the real transport is scrubbed — your mail, and messages the broker
+originates on its own account such as non-delivery notices. This is worth knowing because
+the earlier version scoped the outbound controls by authorship, and when notices were
+correctly reclassified as broker-originated they slid out from under *every* outbound
+control at once: no scrub, no rate limit, and a real credential on a real transport.
+Neither decision was wrong on its own. **The hole was at the seam between two correct
+fixes**, which is a defect class worth carrying into your own work: after any revision
+that lands several repairs, ask which boundaries each one *moved*, and what now falls
+between them. A checklist of the fixes will never ask that question.
+
+### 6b.4 Never bounce to an unauthenticated sender
+
+A non-delivery notice returned to a forged sender is delivered to the **spoof victim**,
+who did nothing. Notify only where the sending identity was authenticated and aligned;
+otherwise record the refusal and quarantine silently. Silence toward an unprovable
+sender is correct behaviour rather than a gap, and an implementation that helpfully
+bounces everything turns this system into an amplifier aimed at whoever was forged.
+
+### 6b.5 A key that arrives in a message is a claim
+
+A public key carried by a relayed message is an assertion, and accepting it on the
+strength of the message makes the key channel exactly as strong as the relay. Verify a
+key against a source independent of the message that carried it before it enters the
+authoritative trust file. Manual verification is not the permanent answer — it does not
+scale and it is the step a tired operator skips.
+
+---
+
 ## 7 Threat Model
 
 State the boundary explicitly, because an unstated boundary gets assumed to be
@@ -535,9 +801,51 @@ whoever did.
 - **Provisioning** creates the mailbox at account-creation time. A mailbox that
   cannot be created later is worse than one created unconditionally.
 - **Deployment configuration** declares the mail domain, per-agent addresses, and
-  contact lists.
+  contact lists. **Bringing amail up on a new deployment** — what the base image
+  provides, what a deployment must supply, and how each control is verified by
+  breaking it — is `docs/AMAIL_DEPLOYMENT.md`. That is operator-facing procedure
+  rather than policy, and it lives there so this file stays about the rules and
+  their derivations.
 - **Security posture** for inbound content follows §6.2 and the framework's general
   treatment of external input as data.
+- **Supervision of the broker, the spool consumer and the receiver** is governed by
+  `service_supervision.md` and is NOT restated here. Those rules — a supervisor may
+  not share a process with its subject, a heartbeat needs a reader, an acceptor is
+  coupled to its processor's liveness, and the chain terminates outside the
+  deployment at a channel a person receives — are general to every long-lived MacEff
+  process, and they were discovered here only because this is where the outage
+  happened. A general control kept inside the subsystem that discovered it is
+  invisible to everyone not reading about that subsystem.
+
+- **PUSH-WAKE AND NOTIFICATION DELIVERY LIVE IN `notification_delivery.md`, AND ARE
+  NOT RESTATED HERE.** Mail is that mechanism's FIRST CONSUMER, not its scope: the
+  same rules govern any component that tells an agent something while the agent is
+  not asking — a supervision alarm, a fired timer, a policy changed underneath a
+  running agent, a peer that died.
+
+  What that policy holds, and what an amail implementer must read there rather than
+  infer here: a notice carries **a pointer and at most a count**, and the count is a
+  **scheduling hint, never a quantity** — the store is the sole authority for how
+  much; the transport's own **wrapper is not evidence**, and it is a wrapper rather
+  than a prefix, because the client both prepends an identity claim and *appends*
+  guidance about how to treat the message (measured, not assumed); a notice
+  **licenses exactly one action — consult the store**; alerts route
+  **by who can act**, so a recipient that has stopped draining is told *before* the
+  operator is; bounds on another party's action are measured **in that party's own
+  active time**, so an agent that never ran accrues no fault; triggering is
+  **edge-on-arrival, never level-on-state**; and an agent **may decline to be told
+  about the world but never about itself.**
+
+  Recorded as a citation for the same reason as the supervision rules above, and
+  discovered the same way — by an outage. This one paged the operator every fifteen
+  minutes for nine hours about two messages sitting in the mailboxes of agents that
+  had never run a session. **Every component behaved as built; the defects were
+  entirely in what the condition MEANT and WHO was told.**
+
+  What is specific to mail, and therefore does belong here: the spool is the queue
+  whose acceptor (the receiver) must be coupled to its processor (the inbound
+  watcher), and the orphan sweep's age bound is the mail-specific instance of the
+  liveness signal that policy requires someone outside to read.
 
 ---
 
