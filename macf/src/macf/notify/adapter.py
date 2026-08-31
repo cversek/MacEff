@@ -158,7 +158,7 @@ def _emit(event: str, payload: dict) -> None:
 def _flush_deferred(pid: int, mask) -> list:
     """Deliver everything this conversation deferred, ONCE each.
 
-    `force=True` on the way back in, because these notices already passed the
+    `bypass_mask=True` on the way back in, because these notices already passed the
     mask once and were held rather than refused. Re-deciding them would let the
     section that held them hold them again, which is how "deferred" quietly
     becomes "never".
@@ -166,17 +166,22 @@ def _flush_deferred(pid: int, mask) -> list:
     ONCE EACH IS INHERITED FROM `Mask.release`, which reads and clears under the
     queue lock. It is not established here, and it was not true before that lock
     existed: two concurrent releases could each deliver the same entry. Naming
-    the source of the guarantee because `force=True` also switches OFF the dedup
-    ledger in `deliver`, so this path has no second line of defence -- a reader
-    who takes "ONCE" as unconditional will not find that out from the call site
-    (peer review ira-75, F2).
+    ONCE EACH now rests on two things rather than one: `peek` reads under the
+    queue lock, and the dedup ledger is consulted on this path too. `bypass_mask`
+    deliberately does NOT switch the ledger off -- it once did, which is what made
+    a retry unsafe and forced clear-on-read (ira-75 F2, ira-76 blocker).
     """
-    released = mask.release()
+    released = mask.peek()
     if not released:
         return []
     results = []
     for held in released:
-        results.append(deliver(pid, held, force=True))
+        results.append(deliver(pid, held, bypass_mask=True))
+    # RETIRE ONLY WHAT WAS CONFIRMED. Anything that refused -- no credential, a
+    # session that ended -- stays held and is retried on the next poll. Clearing
+    # on read instead made a released notice unrecoverable the instant it was
+    # released, on an ORDINARY path rather than in a crash window (ira-76).
+    mask.retire([r.arrival_id for r in results if r.ok])
     _emit("notify_released", {
         "pid": pid,
         "count": len(released),
@@ -206,13 +211,20 @@ def release_deferred(pid: int, session_id: Optional[str] = None) -> list:
     return _flush_deferred(pid, mask)
 
 
-def deliver(pid: int, notice: Notice, force: bool = False) -> DeliveryResult:
+def deliver(pid: int, notice: Notice, bypass_mask: bool = False) -> DeliveryResult:
     """Wake one session with one notice. Idempotent on `notice.arrival_id`."""
     arrival_id = notice.arrival_id
     info = read_session_info(pid)
     session_id = info.session_id if info else None
 
-    if not force and already_delivered(arrival_id, session_id):
+    # THE LEDGER IS CONSULTED ON EVERY PATH, INCLUDING RELEASE. `force` used to
+    # switch this off along with the mask, bundling two concerns into one flag:
+    # "do not re-apply the mask", which is right, and "do not consult the dedup
+    # ledger", which is not needed and is exactly what makes a retry unsafe. With
+    # peek/retire the release path is at-least-once, so the ledger is what makes
+    # it effectively exactly-once (ira-76). Same shape as F1 one layer up: two
+    # correct concerns in a single control, doing something neither intended.
+    if already_delivered(arrival_id, session_id):
         _emit("notify_suppressed", {
             "pid": pid, "arrival_id": arrival_id,
             "session_id": session_id, "reason": "duplicate",
@@ -226,10 +238,10 @@ def deliver(pid: int, notice: Notice, force: bool = False) -> DeliveryResult:
     # can be held for a session that is momentarily unreachable rather than lost
     # because it was.
     #
-    # `force` bypasses this. That is the release path re-entering, and a held
+    # `bypass_mask` skips this. That is the release path re-entering, and a held
     # notice must not be re-held by the same section that held it.
     mask = masking.load(session_id)
-    if not force:
+    if not bypass_mask:
         decision = mask.decide(notice)
         if decision.defer:
             held = mask.defer(notice)
@@ -258,14 +270,14 @@ def deliver(pid: int, notice: Notice, force: bool = False) -> DeliveryResult:
         # conversation deferred earlier is owed to it NOW, before the notice
         # that happened to arrive next.
         #
-        # NON-RECURSION RESTS ON THE force GUARD, NOT ON THE QUEUE BEING EMPTY.
+        # NON-RECURSION RESTS ON THE bypass_mask GUARD, NOT ON THE QUEUE BEING EMPTY.
         # An earlier comment here reasoned that `release` clears the queue, so
         # the nested deliver() finds nothing to flush. True today, and the wrong
         # guarantee to cite: it describes the STATE that happens to hold rather
         # than the MECHANISM that makes it hold. The nested call passes
-        # force=True and this flush sits inside `if not force`, so it cannot
-        # recurse whatever the queue contains. The stated reason would survive
-        # someone moving the flush out of the force guard; the real protection
+        # bypass_mask=True and this flush sits inside `if not bypass_mask`, so it
+        # cannot recurse whatever the queue contains. The stated reason would survive
+        # someone moving the flush out of the bypass_mask guard; the real protection
         # would not, and that is exactly when a reader needs the comment to be
         # about the right thing (peer review ira-75, F2).
         _flush_deferred(pid, mask)

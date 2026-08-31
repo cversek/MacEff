@@ -186,7 +186,8 @@ class Mask:
           defer vs release -- release delivers A and writes []; defer appends to
                               its stale read and writes [A,B], resurrecting a
                               notice already delivered. The release path re-enters
-                              with force=True, which skips the dedup ledger, so
+                              with bypass_mask=True. That once skipped the dedup
+                              ledger too, so
                               the one mechanism that would have made the
                               resurrection harmless is switched off.
           release vs release -- both deliver both entries. Same bypass.
@@ -322,8 +323,67 @@ class Mask:
             return []
         return data if isinstance(data, list) else []
 
+    def peek(self) -> List[Notice]:
+        """Every held notice, WITHOUT clearing the queue.
+
+        Split out from `release` because clearing on read makes a released notice
+        unrecoverable the instant it is released: delivery happens afterwards and
+        can refuse for ordinary reasons -- no credential, a session that ended --
+        at which point the notices are gone from disk and nothing re-queues them.
+
+        That is not a crash window. `REFUSED_NO_CREDENTIAL` is a normal outcome,
+        and the moment it is most likely is exactly the moment a release is most
+        likely: a section lapses after a session ended, the poller fires, and
+        every notice the agent declared a section to protect is destroyed by the
+        mechanism built to preserve it. Peer review ira-76 named it as the one
+        blocker on Phase 4.
+
+        Pair with `retire()` after delivery is CONFIRMED. That makes the path
+        at-least-once rather than at-most-once, which is the right direction for
+        this subsystem: a repeated notice costs an interruption, a lost one costs
+        a silence nobody can attribute.
+        """
+        with self._queue_lock():
+            return self._to_notices(self.deferred())
+
+    def retire(self, arrival_ids) -> int:
+        """Drop only the entries whose delivery was CONFIRMED. Returns the count.
+
+        Taken under the same lock as `peek`, so a concurrent `defer` cannot be
+        clobbered by the retire that follows a release -- which is F1's failure
+        one layer up, and the reason this is not simply a second write.
+
+        Anything not named here STAYS HELD and is retried on the next poll.
+        """
+        ids = set(arrival_ids)
+        if not ids:
+            return 0
+        with self._queue_lock():
+            held = self.deferred()
+            keep = [h for h in held if h.get("arrival_id") not in ids]
+            removed = len(held) - len(keep)
+            if removed:
+                self._write(keep)
+            return removed
+
+    def _to_notices(self, held: List[dict]) -> List[Notice]:
+        """Reconstructed from stored fields, never replayed verbatim, so a
+        deferred notice cannot carry anything a live one could not."""
+        return [Notice(
+            source=str(h.get("source", "amail")),
+            arrival_id=str(h.get("arrival_id", "")),
+            pointer=str(h.get("pointer", "")),
+            count=h.get("count"),
+        ) for h in held]
+
     def release(self) -> List[Notice]:
         """Return every held notice ONCE and clear the queue.
+
+        DEPRECATED IN FAVOUR OF peek()+retire(). Retained because it is the
+        correct primitive when the caller genuinely cannot confirm delivery, and
+        removing it would push that decision to a call site with less context.
+        Callers that CAN confirm must not use it: clearing before confirmation
+        loses the notice on any ordinary refusal.
 
         Reconstructed from stored fields rather than replayed verbatim, so a
         deferred notice cannot carry anything a live one could not.

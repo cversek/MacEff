@@ -155,3 +155,127 @@ def test_concurrent_defers_do_not_lose_entries(tmp_path, monkeypatch):
     assert held == {f"a{i}" for i in range(n)}, (
         f"lost {n - len(held)} of {n} concurrently deferred notices"
     )
+
+
+# --------------------------------------------------------------------------
+# ira-76's blocker: clearing on read destroyed a notice on an ORDINARY refusal
+# --------------------------------------------------------------------------
+
+def test_a_refused_delivery_leaves_the_notice_HELD(tmp_path, monkeypatch):
+    """The blocker. `release` cleared the queue and delivery happened after.
+
+    `REFUSED_NO_CREDENTIAL` is a normal outcome, not a crash -- and the moment it
+    is most likely is exactly the moment a release is most likely: a section
+    lapses after a session ended, the poller fires, the credential is gone. Every
+    notice the agent declared a section to protect was destroyed by the mechanism
+    built to preserve it.
+
+    peek + retire-only-what-was-confirmed makes the path at-least-once instead.
+    """
+    from macf.notify import adapter, masking
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setattr(adapter, "find_credential_path", lambda pid: None)
+
+    mask = masking.load(None)
+    assert mask.defer(_notice(1)) is True
+
+    results = adapter._flush_deferred(os.getpid(), masking.load(None))
+
+    assert results and not results[0].ok, "expected the delivery to refuse"
+    assert len(masking.load(None).deferred()) == 1, (
+        "the notice was cleared on read and is unrecoverable -- this is the "
+        "at-most-once failure ira-76 blocked Phase 4 on"
+    )
+
+
+def test_a_CONFIRMED_delivery_retires_the_notice(tmp_path, monkeypatch):
+    """CONTROL: retention must not become 'never retires'.
+
+    Without this, the fix above is satisfied by a queue that simply never drains,
+    which converts a lost notice into an eternally repeated one.
+    """
+    from macf.notify import adapter, masking
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+
+    mask = masking.load(None)
+    assert mask.defer(_notice(7)) is True
+
+    class _Ok:
+        def __init__(self, aid):
+            self.ok, self.arrival_id = True, aid
+
+    monkeypatch.setattr(adapter, "deliver", lambda pid, n, **kw: _Ok(n.arrival_id))
+    adapter._flush_deferred(os.getpid(), masking.load(None))
+
+    assert masking.load(None).deferred() == [], (
+        "a confirmed delivery must retire its entry, or the queue never drains"
+    )
+
+
+def test_retire_removes_ONLY_what_is_named(tmp_path, monkeypatch):
+    """Partial success is the realistic case: some deliver, some refuse."""
+    from macf.notify import masking
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    mask = masking.load(None)
+    for i in range(4):
+        mask.defer(_notice(i))
+    assert mask.retire(["a1", "a3"]) == 2
+    left = {h["arrival_id"] for h in masking.load(None).deferred()}
+    assert left == {"a0", "a2"}
+
+
+def test_peek_does_not_clear(tmp_path, monkeypatch):
+    from macf.notify import masking
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    mask = masking.load(None)
+    mask.defer(_notice(1))
+    assert len(mask.peek()) == 1
+    assert len(mask.peek()) == 1, "peek cleared the queue; that is release's job"
+
+
+def test_a_RETRIED_notice_suppresses_as_a_duplicate(tmp_path, monkeypatch):
+    """The other half of the fix, and the half a mutation sweep found untested.
+
+    peek+retire makes the release path AT-LEAST-ONCE: a delivery that refuses is
+    retried on the next poll. That is only safe because the dedup ledger is
+    consulted on this path too -- which it was not, because one flag meant both
+    "do not re-apply the mask" (right) and "do not consult the ledger" (not
+    needed, and exactly what made a retry unsafe).
+
+    Without this test, the flag split is unverified: a mutant restoring the old
+    coupling passes the entire notify suite.
+    """
+    from macf.notify import adapter, masking
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+
+    n = _notice(42)
+    adapter._record_seen(adapter.dedup_key(n.arrival_id, None))
+
+    masking.load(None).defer(n)
+    results = adapter._flush_deferred(os.getpid(), masking.load(None))
+
+    assert results and results[0].outcome == adapter.SUPPRESSED_DUPLICATE, (
+        f"a retried notice was re-delivered instead of suppressed "
+        f"(outcome={results[0].outcome if results else 'none'}); the release "
+        f"path is at-least-once, so the ledger is what makes it exactly-once"
+    )
+
+
+def test_the_mask_is_still_bypassed_on_the_release_path(tmp_path, monkeypatch):
+    """CONTROL: consulting the ledger must not re-apply the MASK.
+
+    Restoring the ledger check by removing the whole bypass would satisfy the
+    test above and reintroduce the defect it replaced -- the section that held a
+    notice holding it again, so "deferred" quietly means "never".
+    """
+    from macf.notify import adapter, masking
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setattr(adapter, "find_credential_path", lambda pid: None)
+
+    masking.declare_critical("mid-proof", 60)
+    masking.load(None).defer(_notice(9))
+    results = adapter._flush_deferred(os.getpid(), masking.load(None))
+
+    assert results and results[0].outcome != adapter.DEFERRED, (
+        "the still-active section re-held the notice; bypass_mask was lost"
+    )
