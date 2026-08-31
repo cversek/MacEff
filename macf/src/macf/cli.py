@@ -4237,6 +4237,46 @@ def cmd_events_stats(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_events_rotate(args: argparse.Namespace) -> int:
+    """Move history older than the current cycle into a verified archive."""
+    from .agent_events_log import get_log_path
+    from .eventlog.archive import list_archives, rotate_log
+
+    try:
+        log_path = get_log_path()
+        before = log_path.stat().st_size if log_path.exists() else 0
+
+        if getattr(args, "dry_run", False):
+            print(f"Live log: {before:,} B")
+            print("Archives:")
+            for p in list_archives(log_path) or []:
+                print(f"  {p.name}  {p.stat().st_size:,} B")
+            print("\nDry run — nothing written. Re-run without --dry-run to rotate.")
+            return 0
+
+        result = rotate_log(log_path, preset=getattr(args, "preset", 6))
+
+        if not result.get("rotated"):
+            print(f"Nothing to rotate: {result.get('reason')}")
+            return 0
+
+        after = log_path.stat().st_size
+        arch_bytes = result["archive_bytes"]
+        print("Rotated.")
+        print(f"  archive        {result['archive']}")
+        print(f"  archived       {result['archived_lines']:,} lines -> {arch_bytes:,} B")
+        print(f"  kept live      {result['kept_lines']:,} lines (the open cycle)")
+        print(f"  live log       {before:,} B -> {after:,} B")
+        if arch_bytes:
+            print(f"  ratio          {(before - after) / arch_bytes:.1f}x on the archived portion")
+        print(f"  sha256         {result['sha256'][:16]}…")
+        print("\nVerified by reading the archive back before the log was truncated.")
+        return 0
+    except (OSError, IOError, RuntimeError, ValueError) as e:
+        print(f"⚠️ MACF: events rotate failed: {e}", file=sys.stderr)
+        return 1
+
+
 def cmd_events_gaps(args: argparse.Namespace) -> int:
     """Detect time gaps between events (potential crashes)."""
     from .agent_events_log import read_events
@@ -11057,6 +11097,17 @@ def _build_parser() -> argparse.ArgumentParser:
     gaps_parser.add_argument("--threshold", type=float, default=3600,
                             help="gap threshold in seconds (default: 3600)")
     gaps_parser.set_defaults(func=cmd_events_gaps)
+
+    # events rotate
+    rotate_parser = events_sub.add_parser(
+        "rotate",
+        help="archive history older than the current cycle (lossless, verified)",
+    )
+    rotate_parser.add_argument("--dry-run", action="store_true",
+                               help="report sizes and existing archives; write nothing")
+    rotate_parser.add_argument("--preset", type=int, default=6,
+                               help="lzma preset 0-9 (default: 6)")
+    rotate_parser.set_defaults(func=cmd_events_rotate)
 
     # events analyze (BUG #1069 — generic structured-event JSONL analyzer)
     analyze_parser = events_sub.add_parser(
