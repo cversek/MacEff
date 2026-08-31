@@ -162,6 +162,14 @@ def _flush_deferred(pid: int, mask) -> list:
     mask once and were held rather than refused. Re-deciding them would let the
     section that held them hold them again, which is how "deferred" quietly
     becomes "never".
+
+    ONCE EACH IS INHERITED FROM `Mask.release`, which reads and clears under the
+    queue lock. It is not established here, and it was not true before that lock
+    existed: two concurrent releases could each deliver the same entry. Naming
+    the source of the guarantee because `force=True` also switches OFF the dedup
+    ledger in `deliver`, so this path has no second line of defence -- a reader
+    who takes "ONCE" as unconditional will not find that out from the call site
+    (peer review ira-75, F2).
     """
     released = mask.release()
     if not released:
@@ -248,9 +256,18 @@ def deliver(pid: int, notice: Notice, force: bool = False) -> DeliveryResult:
 
         # Allowed, so no section is holding anything back: whatever this
         # conversation deferred earlier is owed to it NOW, before the notice
-        # that happened to arrive next. `release` clears the queue before
-        # returning, so the nested deliver() below finds nothing to flush and
-        # this cannot recurse.
+        # that happened to arrive next.
+        #
+        # NON-RECURSION RESTS ON THE force GUARD, NOT ON THE QUEUE BEING EMPTY.
+        # An earlier comment here reasoned that `release` clears the queue, so
+        # the nested deliver() finds nothing to flush. True today, and the wrong
+        # guarantee to cite: it describes the STATE that happens to hold rather
+        # than the MECHANISM that makes it hold. The nested call passes
+        # force=True and this flush sits inside `if not force`, so it cannot
+        # recurse whatever the queue contains. The stated reason would survive
+        # someone moving the flush out of the force guard; the real protection
+        # would not, and that is exactly when a reader needs the comment to be
+        # about the right thing (peer review ira-75, F2).
         _flush_deferred(pid, mask)
 
     cred_path = find_credential_path(pid)

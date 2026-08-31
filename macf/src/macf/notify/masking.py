@@ -22,10 +22,13 @@ mask its own supervision could silence the notice that says its instruments are
 down -- which recreates the defect this subsystem exists to cure and makes
 "no notice is distinguishable from no event" unsatisfiable.
 """
+import fcntl
+import hashlib
 import json
 import os
 import sys
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Optional
@@ -59,6 +62,17 @@ def _scoped(stem: str, session_id: Optional[str]) -> Path:
     if not session_id:
         return _runtime_dir() / stem
     safe = "".join(c for c in session_id if c.isalnum() or c in "-_")[:64]
+    # SANITIZING MUST NOT MERGE TWO CONVERSATIONS. Stripping and truncating are
+    # lossy: two distinct ids can sanitize to the same string, and one that is
+    # truthy but contains no permitted character sanitizes to EMPTY -- yielding a
+    # single shared bucket holding every such conversation's notices together.
+    # That is precisely the merge this function exists to prevent, arriving
+    # silently through the defensive code meant to prevent it. When the safe form
+    # is not faithful, fall back to a digest, which is collision-resistant and
+    # always representable. Raised by peer review (ira-75) as a shape rather than
+    # a live failure: real session ids are UUIDs, so it does not fire today.
+    if safe != session_id:
+        safe = hashlib.sha256(session_id.encode("utf-8", "replace")).hexdigest()[:32]
     base = Path(stem)
     return _runtime_dir() / f"{base.stem}.{safe}{base.suffix}"
 
@@ -140,6 +154,75 @@ class Mask:
             return self._deferred_path
         return _scoped(DEFERRED_NAME, self.session_id)
 
+    def lock_path(self) -> Path:
+        """A SEPARATE file, and separate for a reason that bit us elsewhere today.
+
+        The queue is published with `os.replace`, which swaps the INODE. A lock
+        taken on the queue file itself would therefore be held against an inode
+        that the next writer's replace makes unreachable -- two processes would
+        each hold a valid lock on a different inode and both believe they had
+        exclusion. The lock file is never replaced, so its identity is stable for
+        as long as the queue exists.
+        """
+        q = self.deferred_path()
+        return q.with_suffix(q.suffix + ".lock")
+
+    @contextmanager
+    def _queue_lock(self):
+        """Serialize read-modify-write on the deferred queue.
+
+        `os.replace` makes each individual WRITE atomic; it does nothing for the
+        SEQUENCE read -> modify -> write, and both `defer` and `release` are that
+        sequence against one whole-list file. Without this, three interleavings
+        lose data (peer review ira-75, F1):
+
+          defer vs defer   -- both read [A]; one writes [A,B], the other [A,C];
+                              B is gone AND `defer` returned True, so the caller
+                              records a hold. That is A DROP REPORTED AS HELD,
+                              which the adapter's own comment forbids. The failure
+                              is invisible: the guard there covers `_write`
+                              RAISING, and this is `_write` SUCCEEDING while
+                              clobbering.
+          defer vs release -- release delivers A and writes []; defer appends to
+                              its stale read and writes [A,B], resurrecting a
+                              notice already delivered. The release path re-enters
+                              with force=True, which skips the dedup ledger, so
+                              the one mechanism that would have made the
+                              resurrection harmless is switched off.
+          release vs release -- both deliver both entries. Same bypass.
+
+        THE SECOND WRITER EXISTS BY CONSTRUCTION, and that is the part worth
+        recording: `release_deferred` was added so a lapsed section would not hold
+        its notices until unrelated traffic arrived. Before it there was one
+        writer. The fix for that gap is what supplied the concurrency this lock
+        now handles -- neither decision wrong, the composition unsafe.
+
+        Failure to acquire is announced and then proceeds, deliberately: the
+        pre-existing behaviour is a rare lost entry, while refusing to defer is a
+        certain undelivered notice. The announcement is what makes it attributable.
+        """
+        path = self.lock_path()
+        fh = None
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fh = open(path, "a+")
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        except (OSError, PermissionError) as e:
+            print(f"⚠️ MACF: deferred-queue lock unavailable ({e}); proceeding "
+                  f"UNSERIALIZED -- a concurrent write may lose an entry",
+                  file=sys.stderr)
+            if fh is not None:
+                fh.close()
+            fh = None
+        try:
+            yield
+        finally:
+            if fh is not None:
+                try:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+                finally:
+                    fh.close()
+
     def decide(self, notice: Notice, now: Optional[float] = None) -> MaskDecision:
         """Allow, defer, or suppress -- with the floor checked FIRST.
 
@@ -179,19 +262,50 @@ class Mask:
     # ---- deferral: deferred is not dropped ----
 
     def defer(self, notice: Notice, now: Optional[float] = None) -> bool:
-        """Hold a notice for later delivery. Idempotent on arrival id."""
+        """Hold a notice for later delivery. Idempotent on arrival id.
+
+        Idempotent and single-writer-safe: the read-modify-write is serialized by
+        `_queue_lock`, without which a concurrent write clobbers whole entries
+        while this returns True -- a drop reported as a hold.
+
+        REFUSES AN UNMASKABLE NOTICE, and that check lives here rather than only
+        in `decide`. Today the only caller checks the floor first, so this can
+        never fire; that is a property of the current CALL GRAPH, not of the
+        primitive, and "the only caller happens not to do that" is the shape this
+        project has learned to distrust. A second caller is exactly how a notice
+        about the agent's own authority would end up in a maskable queue.
+        """
+        if is_unmaskable(notice):
+            print(f"⚠️ MACF: refusing to defer an unmaskable notice "
+                  f"(source={notice.source!r}); the floor is not the caller's to "
+                  f"waive", file=sys.stderr)
+            return False
         now = now if now is not None else time.time()
-        held = self.deferred()
-        if any(h.get("arrival_id") == notice.arrival_id for h in held):
-            return True
-        held.append({
-            "arrival_id": notice.arrival_id,
-            "source": notice.source,
-            "pointer": notice.pointer,
-            "count": notice.count,
-            "deferred_at": now,
-        })
-        return self._write(held[-DEFERRED_RETAIN:])
+        with self._queue_lock():
+            held = self.deferred()
+            if any(h.get("arrival_id") == notice.arrival_id for h in held):
+                return True
+            held.append({
+                "arrival_id": notice.arrival_id,
+                "source": notice.source,
+                "pointer": notice.pointer,
+                "count": notice.count,
+                "deferred_at": now,
+            })
+            # THE CAP EVICTS, AND SILENCE ABOUT IT WAS THE DEFECT. This module
+            # announces a failed write, an unreadable queue, a malformed queue, a
+            # malformed declaration and a refused zero-second section -- and used
+            # to discard the OLDEST held notices without a word. The evicted ones
+            # are those held LONGEST, which is to say the ones the agent has been
+            # waiting on. Raised by peer review (ira-75, F3), whose sharper point
+            # is that this, not the declared duration, is the binding cap on how
+            # much a critical section can cost.
+            evicted = len(held) - DEFERRED_RETAIN
+            if evicted > 0:
+                print(f"⚠️ MACF: deferred queue is full at {DEFERRED_RETAIN}; "
+                      f"DISCARDING the {evicted} oldest held notice(s). They are "
+                      f"lost, not delayed.", file=sys.stderr)
+            return self._write(held[-DEFERRED_RETAIN:])
 
     def deferred(self) -> List[dict]:
         path = self.deferred_path()
@@ -213,20 +327,27 @@ class Mask:
 
         Reconstructed from stored fields rather than replayed verbatim, so a
         deferred notice cannot carry anything a live one could not.
+
+        ONCE holds because the read and the clear happen under `_queue_lock`. It
+        is not a property of `os.replace`, which makes each write atomic and says
+        nothing about the sequence -- stating the condition because an invariant
+        whose preconditions go unnamed is the documentation hazard this module
+        was reviewed for (ira-75, F2).
         """
-        held = self.deferred()
-        if not held:
-            return []
-        out = []
-        for h in held:
-            out.append(Notice(
-                source=str(h.get("source", "amail")),
-                arrival_id=str(h.get("arrival_id", "")),
-                pointer=str(h.get("pointer", "")),
-                count=h.get("count"),
-            ))
-        self._write([])
-        return out
+        with self._queue_lock():
+            held = self.deferred()
+            if not held:
+                return []
+            out = []
+            for h in held:
+                out.append(Notice(
+                    source=str(h.get("source", "amail")),
+                    arrival_id=str(h.get("arrival_id", "")),
+                    pointer=str(h.get("pointer", "")),
+                    count=h.get("count"),
+                ))
+            self._write([])
+            return out
 
     def _write(self, items: List[dict]) -> bool:
         path = self.deferred_path()
