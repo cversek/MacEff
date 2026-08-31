@@ -85,7 +85,7 @@ def test_deferred_notices_arrive_AFTERWARDS_once_each(runtime, home, monkeypatch
 
 
 def _recording_deliver(sink):
-    def fake(pid, notice, force=False):
+    def fake(pid, notice, bypass_mask=False):
         sink.append(notice)
         return adapter.DeliveryResult(adapter.DELIVERED, pid, notice.arrival_id)
     return fake
@@ -205,16 +205,16 @@ def test_release_deferred_honours_a_section_that_is_STILL_active(runtime, home):
 
 
 def test_a_released_notice_is_not_re_held_by_the_section_that_held_it(runtime, home):
-    """`force` on the way back in. Without it the release path re-decides each
+    """`bypass_mask` on the way back in. Without it the release path re-decides each
     notice, the section holds it again, and "deferred" quietly means "never".
 
-    The REAL deliver runs here. Stubbing it would make this vacuous -- `force`
+    The REAL deliver runs here. Stubbing it would make this vacuous -- `bypass_mask`
     only has an observable effect if the code it gates actually executes, and a
     recording stub skips exactly that code. Measured: the stubbed version of this
-    test passed against a mutant that removed `force`.
+    test passed against a mutant that removed `bypass_mask`.
 
     The section is deliberately still ACTIVE during the flush, which is what
-    makes the two behaviours differ: with force the notice passes the mask and
+    makes the two behaviours differ: with bypass_mask the notice passes the mask and
     reaches the credential check, without it the same section holds it again and
     the queue refills.
     """
@@ -222,7 +222,18 @@ def test_a_released_notice_is_not_re_held_by_the_section_that_held_it(runtime, h
     assert adapter.deliver(os.getpid(), amail_notice("once", count=1)).outcome == adapter.DEFERRED
     assert len(masking.load(None).deferred()) == 1
 
-    adapter._flush_deferred(os.getpid(), masking.load(None))
+    results = adapter._flush_deferred(os.getpid(), masking.load(None))
 
-    assert masking.load(None).deferred() == [], \
+    # The property: the notice PASSED the still-active section rather than being
+    # re-decided by it. It got as far as the credential check, which is beyond
+    # the mask.
+    assert results and results[0].outcome != adapter.DEFERRED, \
         "the released notice was re-held by the section that held it"
+
+    # AND IT IS STILL ON DISK, which is the ira-76 fix rather than a regression.
+    # Delivery refused here (no credential for this pid), so the entry is RETAINED
+    # for the next poll instead of being destroyed. Under the previous design
+    # `release` cleared on read and this queue would be empty -- the notice gone,
+    # undelivered, on an entirely ordinary refusal. Retention is the point.
+    assert len(masking.load(None).deferred()) == 1, \
+        "an unconfirmed delivery must stay held, not be cleared on read"
