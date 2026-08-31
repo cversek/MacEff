@@ -33,7 +33,11 @@ import textwrap
 
 import pytest
 
-from macf.supervisor import _unlaunchable_reason
+from macf.supervisor import (
+    _NEVER_LAUNCHED_WINDOW_SECONDS,
+    _is_never_launched,
+    _unlaunchable_reason,
+)
 
 
 class TestUnlaunchableReason:
@@ -165,11 +169,39 @@ class TestSupervisorRefusesTheUnlaunchable:
 
     def test_an_unresolvable_command_stops_instead_of_spinning(self, tmp_path):
         """The case the pre-flight cannot see: the shell resolves the name, not
-        the filesystem, so the verdict arrives as exit 127."""
+        the filesystem, so the verdict arrives as exit 127.
+
+        WHAT THIS ASSERTS AND WHAT IT DELIBERATELY DOES NOT. The property is
+        that supervision STOPS. It used to also assert exactly zero restarts,
+        and that is machine speed wearing the costume of behaviour: the verdict
+        requires the launch to finish inside ``_NEVER_LAUNCHED_WINDOW_SECONDS``,
+        so on a loaded host the first exit falls outside the window, the
+        supervisor restarts once, and the second, warm launch is caught. It
+        stopped — which is the whole requirement — while the assertion failed.
+
+        Observed exactly that way in CI: green on one interpreter and red on the
+        other, in the SAME commit, and green on rerun of that same commit.
+
+        The zero-restart path is not abandoned; it moved somewhere it can be
+        asserted exactly. ``TestNeverLaunchedVerdict`` below tests the decision
+        at its boundary with the lifetime supplied rather than raced for.
+
+        This is the same defect this file's own helper docstring already
+        describes for the opposite polarity — "a test asserting 'at least N
+        restarts' was really asserting 'the machine managed N iterations in T
+        seconds'". Same race, opposite direction, three functions apart.
+        """
         rc, out = _run_supervisor(tmp_path, "t", "definitely_not_a_command_xyz")
         assert rc == 1
         assert "FATAL" in out
-        assert out.count("Restart #") == 0, "it must not have entered the restart loop"
+        assert "Not restarting" in out, (
+            "it must declare that it is giving up, not merely exit"
+        )
+        # Generous, and still decisive: a supervisor that never reached its
+        # verdict spins until the helper's timeout, which is far more than this.
+        assert out.count("Restart #") <= 2, (
+            f"it kept restarting instead of stopping: {out.count('Restart #')} restarts"
+        )
 
     def test_giving_up_is_recorded_as_failed_not_stopped(self, tmp_path):
         """"stopped" means someone asked it to stop. Overwriting "failed" with
@@ -219,3 +251,30 @@ class TestSupervisionStillWorks:
         rc, out = _run_supervisor(tmp_path, "t", late, delay=1, timeout=16)
         assert "FATAL" not in out
         assert out.count("Restart #") >= 1
+
+
+class TestNeverLaunchedVerdict:
+    """The decision, tested where the lifetime is given rather than raced for.
+
+    Everything here is exact because nothing here starts a process. This is the
+    half of the coverage the integration test above had to give up, and keeping
+    it means loosening that assertion cost no rigour.
+    """
+
+    @pytest.mark.parametrize("exit_code", [126, 127])
+    def test_a_shell_never_launched_verdict_is_fatal_when_immediate(self, exit_code):
+        assert _is_never_launched(exit_code, 0.1) is True
+
+    @pytest.mark.parametrize("exit_code", [0, 1, 2, 130, 255])
+    def test_any_other_exit_code_is_not_a_launch_failure(self, exit_code):
+        """126/127 are the shell's "never ran"; everything else is a result."""
+        assert _is_never_launched(exit_code, 0.1) is False
+
+    def test_a_long_lived_child_may_exit_127_on_its_own_terms(self):
+        """The reason the window exists: this must NOT kill supervision."""
+        assert _is_never_launched(127, _NEVER_LAUNCHED_WINDOW_SECONDS + 0.1) is False
+
+    def test_the_boundary_is_exclusive(self):
+        """Pins the comparison itself, so < cannot silently become <=."""
+        assert _is_never_launched(127, _NEVER_LAUNCHED_WINDOW_SECONDS - 0.001) is True
+        assert _is_never_launched(127, _NEVER_LAUNCHED_WINDOW_SECONDS) is False
