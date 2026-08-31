@@ -312,13 +312,29 @@ def read_events(
     try:
         log_path = get_log_path()
 
-        if not log_path.exists():
-            return
+        # scope="all" is the ONLY path that can reach rotated history. A
+        # cycle-scoped read stops at the boundary, which by construction lives
+        # in the live log, so the common path costs exactly what it did before
+        # rotation existed and never opens an archive.
+        if scope == "all":
+            from .eventlog.archive import iter_log_lines, list_archives
 
-        if reverse:
-            line_iter = iter_lines_reverse(log_path)
+            # Not `log_path.exists()`: after a rotation the live log can be
+            # legitimately absent or empty while the history sits in archives.
+            # Returning early there would answer "no events" from a file that
+            # is simply no longer where the whole answer lives.
+            if not log_path.exists() and not list_archives(log_path):
+                return
+            line_iter = iter_log_lines(
+                log_path, reverse=reverse, include_archives=True
+            )
         else:
-            line_iter = iter_lines_forward(log_path)
+            if not log_path.exists():
+                return
+            if reverse:
+                line_iter = iter_lines_reverse(log_path)
+            else:
+                line_iter = iter_lines_forward(log_path)
 
         count = 0
         for line in line_iter:
@@ -432,18 +448,54 @@ def _matches_filter(event: dict, filters: dict) -> bool:
     return True
 
 
-def query_events(filters: dict) -> List[dict]:
+# A filter that names a cross-cycle IDENTITY or an INTERVAL is itself a bound,
+# supplied by the caller. Asking for cycle 25 is bounded by "cycle 25"; refusing
+# to look past the current cycle does not bound that question, it answers a
+# different one. `event_type` and `without_matching` are deliberately absent:
+# they match in any cycle and constrain nothing about how far back to read.
+BOUNDING_FILTER_KEYS = frozenset({"since", "until", "session_id"})
+BOUNDING_BREADCRUMB_KEYS = frozenset({"s", "c", "g", "p", "t_min", "t_max"})
+
+
+def query_scope_for(filters: dict) -> str:
+    """Scope a forensic query should read at, derived from its own filters.
+
+    Returns ``"all"`` when the caller supplied a bound and ``"cycle"`` otherwise.
+
+    This exists because `read_events` defaults to cycle scope -- correct, and the
+    reason worst-case query cost is O(one cycle) rather than O(log). The default
+    was established by flipping it and letting the existing tests name the sites
+    that legitimately read for a lifetime. `query_events` was not among them, and
+    not because it does not belong there: **a cross-cycle query returning empty
+    produces no test failure**, so the instrument used to enumerate the sites was
+    structurally unable to see this one. Its errors run in the tidy direction.
+
+    The user-visible cost was a categorical claim: a forensic query for a cycle
+    whose events sit on disk printed "No matching events found".
+    """
+    if BOUNDING_FILTER_KEYS & filters.keys():
+        return "all"
+    if BOUNDING_BREADCRUMB_KEYS & (filters.get("breadcrumb") or {}).keys():
+        return "all"
+    return "cycle"
+
+
+def query_events(filters: dict, scope: Optional[str] = None) -> List[dict]:
     """
     Query events with forensic filters.
 
     Args:
         filters: Query specification (see _matches_filter for details)
+        scope: ``None`` (default) derives the scope from the filters via
+            `query_scope_for` -- a caller-supplied bound is honoured, and an
+            unbounded filter stays cycle-scoped. Pass ``"cycle"`` or ``"all"``
+            to override, at a site that says why.
 
     Returns:
         List of event dictionaries matching filters
 
     Examples:
-        >>> # Find all events from cycle 170
+        >>> # Find all events from cycle 170 -- bounded by the cycle, reads 'all'
         >>> events = query_events({'breadcrumb': {'c': 170}})
 
         >>> # Find events in git state g_44545c6
@@ -452,9 +504,12 @@ def query_events(filters: dict) -> List[dict]:
         >>> # Find events between timestamps
         >>> events = query_events({'breadcrumb': {'t_min': 1000, 't_max': 2000}})
     """
+    if scope is None:
+        scope = query_scope_for(filters)
+
     results = []
 
-    for event in read_events(limit=None, reverse=False):
+    for event in read_events(limit=None, reverse=False, scope=scope):
         if _matches_filter(event, filters):
             results.append(event)
 
@@ -739,6 +794,7 @@ __all__ = [
     "append_event",
     "read_events",
     "query_events",
+    "query_scope_for",
     "query_set_operations",
     "reconstruct_state_at",
     "get_current_state",
