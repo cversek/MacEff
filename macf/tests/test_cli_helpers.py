@@ -40,3 +40,38 @@ class TestParseTaskIdArg:
         # "0" is a single-character form (no leading-zero ambiguity); ints
         # are unambiguous here.
         assert _parse_task_id_arg("0") == 0
+
+
+# ------------------------------------------- what the sender is actually told
+#
+# Found on the first successful internet send: every layer beneath the
+# rendering was correct -- the transport mapped 202 to `submitted`, the ledger
+# stored `submitted` -- and the CLI printed "delivered". A silent success does
+# not need a broken ledger, only a renderer more confident than its record.
+
+def test_a_submitted_message_is_not_reported_as_delivered():
+    from macf.cli import _render_send_outcome
+    out = _render_send_outcome(
+        {"recipient": "someone@example.org", "rung": "internet",
+         "state": "submitted"})
+    assert "delivered" not in out.lower().replace("not confirmed delivered", "")
+    assert "submitted" in out.lower()
+
+
+def test_a_real_delivery_is_still_reported_as_one():
+    """The paired green. A renderer that never says delivered would pass the
+    test above and be just as wrong in the other direction."""
+    from macf.cli import _render_send_outcome
+    out = _render_send_outcome(
+        {"recipient": "peer@agents.test", "rung": "local", "state": "delivered"})
+    assert "delivered" in out.lower()
+
+
+def test_an_unknown_state_does_not_fall_through_to_the_happy_case():
+    """A renderer that maps the unrecognised onto its most optimistic branch is
+    the same defect with a smaller blast radius."""
+    from macf.cli import _render_send_outcome
+    for state in (None, "some-future-state"):
+        out = _render_send_outcome(
+            {"recipient": "x@y.test", "rung": "internet", "state": state})
+        assert "✅" not in out

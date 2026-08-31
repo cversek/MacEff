@@ -64,7 +64,7 @@ from .inbound import (
     process_spool, process_entry, reconcile,
 )
 from . import store, contacts, broker, client, deploy_config
-from . import inbound, fetch, alerting, notices
+from . import inbound, fetch, alerting, notices, criterion
 
 __all__ = ["Message", "new_id", "AuditLog", "TrustClass",
            "ContactBook", "ContactListError",
@@ -74,4 +74,4 @@ __all__ = ["Message", "new_id", "AuditLog", "TrustClass",
            "InboundConfig", "PushEligibilityError", "SpoolError",
            "process_spool", "process_entry", "reconcile",
            "store", "contacts", "broker", "client", "deploy_config",
-           "inbound", "fetch", "alerting", "notices"]
+           "inbound", "fetch", "alerting", "notices", "criterion"]

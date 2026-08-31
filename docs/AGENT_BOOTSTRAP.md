@@ -339,6 +339,8 @@ After completing bootstrap checklist:
 - **Core Policies**: `/opt/maceff/framework/policies/current/*.md`
 - **Templates**: `/opt/maceff/framework/templates/`
 - **Operations Guide**: `docs/OPERATIONS.md` (for operators/admins)
+- **amail deployment**: `docs/AMAIL_DEPLOYMENT.md` (bringing agent mail up on a
+  new deployment — the base/deployment contract, and how to verify it by breaking it)
 
 ---
 
