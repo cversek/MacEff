@@ -21,6 +21,7 @@ import subprocess
 import pwd
 import grp
 import secrets
+import time
 from pathlib import Path
 from typing import Dict, List, Optional
 from datetime import datetime
@@ -44,7 +45,28 @@ SHARED_WORKSPACE = Path('/shared_workspace')
 # install_macf_tools() — explicit deps installed alongside the editable macf package.
 # Lifted from inline strings into a module-level constant so it participates in the
 # fingerprint that gates re-installation (see _compute_install_fingerprint).
-INSTALL_EXTRA_DEPS = ["lancedb", "sentence-transformers"]
+#   PyJWT is required by macf.amail.daemons.receiver to verify Cloudflare
+#   Access assertions. Declared here rather than left to a hand-install: it is
+#   the library that decides whether an inbound request is authenticated, and
+#   an undeclared security dependency is one a rebuild silently omits.
+INSTALL_EXTRA_DEPS = ["lancedb", "sentence-transformers", "PyJWT"]
+
+# Extras installed WITH the editable macf package, so their version constraints
+# stay in pyproject.toml rather than being restated here where they would drift.
+#
+#   amail  pulls the crypto backend. amail REFUSES TO IMPORT without it, and it
+#          is right to: signature verification is how inbound authorship is
+#          established, so a missing backend would classify every message as
+#          unverified while appearing to work.
+#
+# THIS WAS THE EIGHTH UNDECLARED THING. The first deployment had the backend
+# installed BY HAND -- `pip show` reports it required by nothing -- and the
+# c_24 recreate that found the other seven could not find this one, because
+# the venv is a NAMED VOLUME and a container recreate does not rebuild it. A
+# hand-installed package survives the exact test designed to catch hand-placed
+# state, and looks provisioned afterwards. A second deployment, with its own
+# empty venv, found it in one start.
+INSTALL_EXTRAS = ["amail"]
 
 
 def log(msg: str) -> None:
@@ -1373,7 +1395,7 @@ def _compute_install_fingerprint(macf_tools_src: Path) -> str:
     """Compute a stable fingerprint for the macf install state.
 
     Hashes Python interpreter version + macf pyproject.toml + the
-    INSTALL_EXTRA_DEPS constant. Drift in any of these invalidates the
+    INSTALL_EXTRA_DEPS and INSTALL_EXTRAS constants. Drift in any of these invalidates the
     sentinel and triggers a reinstall on next container start.
 
     Returns:
@@ -1389,6 +1411,10 @@ def _compute_install_fingerprint(macf_tools_src: Path) -> str:
     if pyproject.exists():
         h.update(pyproject.read_bytes())
     h.update(','.join(INSTALL_EXTRA_DEPS).encode())
+    # Extras participate too, or adding one would leave every existing
+    # deployment on a sentinel that says the install is current when the new
+    # extra is absent -- a fingerprint that ignores an input it depends on.
+    h.update(','.join(INSTALL_EXTRAS).encode())
     return h.hexdigest()
 
 
@@ -1444,7 +1470,10 @@ def install_macf_tools() -> None:
     log("Installing MACF into /opt/maceff-venv (fingerprint changed or first run; expect 2-3 min)...")
 
     # Install with uv (editable — links against the bind-mounted /opt/macf_tools)
-    run_command(['uv', 'pip', 'install', '--python', str(venv_path / 'bin' / 'python'), '-e', str(macf_tools_src)], check=False)
+    editable = str(macf_tools_src)
+    if INSTALL_EXTRAS:
+        editable += f"[{','.join(INSTALL_EXTRAS)}]"
+    run_command(['uv', 'pip', 'install', '--python', str(venv_path / 'bin' / 'python'), '-e', editable], check=False)
 
     # Install search service dependencies (INSTALL_EXTRA_DEPS).
     # These enable the warm-cache search service for 89x faster policy recommendations.
@@ -1465,6 +1494,7 @@ def install_macf_tools() -> None:
         f"python={sys.version.split()[0]}\n"
         f"installed_at={datetime.utcnow().isoformat()}Z\n"
         f"extra_deps={','.join(INSTALL_EXTRA_DEPS)}\n"
+        f"extras={','.join(INSTALL_EXTRAS)}\n"
     )
     sentinel.write_text(sentinel_content)
     log(f"MACF install complete; sentinel written to {sentinel}")
@@ -1988,6 +2018,90 @@ def place_secrets(agents_config: AgentsConfig) -> None:
             f"({actual_owner}:{actual_mode}) placed and VERIFIED")
 
 
+#: How long provisioning waits before asking whether a service it launched is
+#: still there. The failure this guards against -- a daemon refusing on a
+#: missing directory -- resolved in well under a second, so a short grace
+#: catches it; anything that dies later is the watchdog's job, not this one's.
+START_GRACE_S = 1.5
+
+
+def broker_cfg_handoff_root(broker_config: Path) -> str:
+    """Where the broker will put pickup boxes, read from ITS config.
+
+    Derived rather than restated: the broker decides this from
+    `inbound_handoff`, and provisioning a different path would create a
+    directory nobody uses while the one that matters stays missing. The default
+    matches BrokerConfig's own so an unset key provisions what the broker will
+    actually reach for.
+    """
+    try:
+        raw = yaml.safe_load(broker_config.read_text()) or {}
+        return str(raw.get('inbound_handoff') or '/var/lib/amail/handoff')
+    except (OSError, yaml.YAMLError):
+        return '/var/lib/amail/handoff'
+
+
+def provision_pickup_boxes(broker_config: Path, handoff_root: Path) -> None:
+    """Create one pickup box per agent, owned by the broker, GROUPED TO THE
+    RECIPIENT.
+
+    THE MOST INSTRUCTIVE OF THE UNDECLARED THINGS, because it was written down
+    as a provisioning requirement and never built. The deployment README states
+    it plainly -- broker-owned, group = the recipient's group, mode 2770,
+    "required, not optional" -- and records the outage it caused: "submission
+    reported success, the box held the message, and the recipient's pull found
+    nothing."
+
+    That failure reproduces exactly on a deployment with an empty tree, because
+    the broker is UNPRIVILEGED and cannot chgrp into a group it does not belong
+    to. A box it auto-creates therefore carries the BROKER's group, and the
+    recipient cannot read its own mail. The send is not wrong and the delivery
+    is not wrong; the message simply sits in a directory whose owner is the
+    only party who can open it.
+
+    Setgid on the box (2770) makes each delivered file inherit the group, so
+    the property holds for the messages and not merely for the directory.
+
+    Group is resolved from the ACCOUNT DATABASE via the account each agent
+    declares, never transcribed: a gid written into a config drifts from the
+    account it names and the drift is silent until someone cannot read their
+    mail.
+    """
+    try:
+        raw = yaml.safe_load(broker_config.read_text()) or {}
+        addressing_path = raw.get('addressing_path')
+        if not addressing_path:
+            return
+        addressing = yaml.safe_load(Path(addressing_path).read_text()) or {}
+    except (OSError, yaml.YAMLError) as e:
+        log(f"⚠️ MACF: could not read addressing to provision pickup boxes "
+            f"({e}); agent-to-agent delivery will land in boxes the recipients "
+            f"cannot read.")
+        return
+
+    for agent, spec in (addressing.get('agents') or {}).items():
+        account = (spec or {}).get('account')
+        if not account:
+            # uid/home declared directly rather than by account. The group is
+            # the account database's answer and there is no account to ask, so
+            # say which agent was skipped rather than skipping quietly.
+            log(f"⚠️ MACF: agent {agent!r} declares no `account`, so its pickup "
+                f"box group cannot be resolved; skipping. Mail to it will be "
+                f"delivered into a box it cannot read.")
+            continue
+        box = handoff_root / agent
+        try:
+            pw = pwd.getpwnam(account)
+            box.mkdir(parents=True, exist_ok=True)
+            os.chown(box, pwd.getpwnam('amail_broker').pw_uid, pw.pw_gid)
+            box.chmod(0o2770)
+            log(f"amail pickup box {box} -> amail_broker:{account}'s group "
+                f"(2770) provisioned")
+        except (OSError, KeyError) as e:
+            log(f"⚠️ MACF: could not provision pickup box for {agent!r} ({e}); "
+                f"mail delivered to it will be unreadable BY ITS RECIPIENT, "
+                f"while every send reports success.")
+
 def start_amail_services(agents_config: AgentsConfig) -> None:
     """Start the broker and the inbound watcher, and schedule the sweep.
 
@@ -1998,37 +2112,225 @@ def start_amail_services(agents_config: AgentsConfig) -> None:
     when a watcher runs, it is what notices the watcher died" -- and what was
     missing was never the mechanism, only its provisioning.
 
+    So the watchdog is started HERE, as its own process. The sweep the watcher
+    runs internally covers stuck mail only while the watcher is alive, which is
+    the one condition under which nothing needs reporting.
+
+    THE CHAIN DOES NOT TERMINATE IN THIS CONTAINER. The watchdog publishes its
+    own heartbeat and `inbound health` returns non-zero over both, so something
+    outside can age the whole stack out. Until that outside caller is
+    provisioned, this buys detection and not yet notification -- stated plainly
+    because a partial control described as a whole one is the thing this
+    function got wrong before.
     THE INTERPRETER IS NAMED EXPLICITLY rather than relying on the execute bit.
     The bit is provisioned in the image now, but the outage was a `setsid
     <script>` failing on a missing +x and reporting it to a log nobody reads, so
     the invocation is made not to depend on the thing that broke.
     """
-    if not Path('/etc/amail/broker_config.json').exists():
-        log("amail: no broker_config.json -- deployment does not run amail, skipping")
+    broker_config = Path('/etc/amail/broker_config.yaml')
+    if not broker_config.exists():
+        # NAME THE PATH. The previous form checked for a `.json` the framework
+        # no longer emits and reported "deployment does not run amail" -- a
+        # silent skip that would have made a successful-looking start with no
+        # mail path at all. An absent-config message that does not say WHICH
+        # file was looked for cannot be checked against reality by its reader.
+        log(f"amail: no {broker_config} -- deployment does not run amail, skipping")
         return
+
+    # THE SOCKET DIRECTORY IS CREATED HERE AND NOT IN THE IMAGE, because /run is
+    # repopulated on every container start -- a Dockerfile mkdir would be
+    # provisioned once and gone by the time anything needed it.
+    #
+    # It was created by hand in a long-lived container and by nothing else, so
+    # the broker started for weeks on a directory no build produced. The first
+    # recreate refused with "Permission denied: /run/amail" -- correctly, and
+    # only because the recreate finally happened. Everything else about that
+    # container was reproducible; this one directory was not, and it is the one
+    # the mail path cannot open a socket without.
+    run_dir = Path('/run/amail')
+    try:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        shutil.chown(run_dir, user='amail_broker', group='amail_broker')
+        run_dir.chmod(0o755)
+    except (OSError, KeyError, LookupError) as e:
+        log(f"⚠️ MACF: could not provision {run_dir} ({e}); the broker cannot "
+            f"bind its socket and no agent will be able to send mail.")
+
+    # The ingest ledger records what was ACCEPTED -- a fact about what happened,
+    # so it lives apart from the spool, which is a retryable queue and may be
+    # tiered for loss. Separate from the broker's store too: the receiver writes
+    # this and the broker owns that store, and one uid writing into the other's
+    # store is the separation these two accounts exist to maintain.
+    #
+    # Provisioned here rather than in the image because it is a volume
+    # mountpoint -- Docker creates it root-owned, and the receiver's ownership
+    # has to be applied on the running container.
+    records_dir = Path('/var/lib/amail_ingest_records')
+    try:
+        records_dir.mkdir(parents=True, exist_ok=True)
+        shutil.chown(records_dir, user='amail_ingest', group='amail_ingest')
+        records_dir.chmod(0o755)
+    except (OSError, KeyError, LookupError) as e:
+        log(f"⚠️ MACF: could not provision {records_dir} ({e}); the ingest "
+            f"ledger will not be writable and acceptances will go unrecorded.")
+
+    # THE HANDOFF ROOT, and it existed in NEITHER deployment. The broker
+    # delivers agent-to-agent mail into a per-recipient pickup box beneath it
+    # and creates those boxes itself, but it is unprivileged and cannot create
+    # the root under a directory it does not own -- so the first send fails with
+    # a bare PermissionError naming a path nothing ever made.
+    #
+    # The first deployment hid this the way it hid the crypto backend: the
+    # directory was there from an earlier hand-run, on a volume no recreate
+    # rebuilds. A deployment with an empty tree hits it on its first message.
+    handoff_root = Path(broker_cfg_handoff_root(broker_config))
+    try:
+        handoff_root.mkdir(parents=True, exist_ok=True)
+        shutil.chown(handoff_root, user='amail_broker', group='amail_broker')
+        handoff_root.chmod(0o755)
+    except (OSError, KeyError, LookupError) as e:
+        log(f"⚠️ MACF: could not provision {handoff_root} ({e}); the broker "
+            f"cannot create pickup boxes and every agent-to-agent send will "
+            f"fail at delivery.")
+    provision_pickup_boxes(broker_config, handoff_root)
 
     venv_py = '/opt/maceff-venv/bin/python'
     interp = venv_py if Path(venv_py).exists() else '/usr/bin/python3'
 
-    for svc, script, logfile in (
-        ('broker', 'run_broker.py', '/var/lib/amail_broker/broker.out'),
-        ('inbound watcher', 'run_inbound.py', '/var/lib/amail_broker/watch.out'),
-    ):
-        args = [interp, f'/opt/amail_ingest/{script}']
-        if script == 'run_inbound.py':
-            args.append('watch')
+    # THE INBOUND PATH IS OPTIONAL AND WAS TREATED AS UNIVERSAL. A deployment
+    # can run the broker -- agent-to-agent mail inside the container -- without
+    # any inbound transport at all: no tunnel, no courier, no domain. This
+    # function gated on the broker config and then started the spool consumer
+    # and its watchdog regardless, so such a deployment got two daemons
+    # refusing on a config it has no reason to own, reported (correctly, and
+    # unhelpfully) as EXITED IMMEDIATELY on every single start.
+    #
+    # Found by bringing amail up on a SECOND deployment, which is the entire
+    # argument for doing that: the first deployment cannot reveal an assumption
+    # that was true of it.
+    inbound_config = Path('/etc/amail/inbound_config.yaml')
+    runs_inbound = inbound_config.exists()
+    if not runs_inbound:
+        log(f"amail: no {inbound_config} -- this deployment runs the broker "
+            f"but NOT the inbound path; the spool consumer and its watchdog "
+            f"are not started. This is a STATED configuration, not a failure.")
+
+    services = [
+        ('broker', 'macf.amail.daemons.broker', '',
+         '/var/lib/amail_broker/broker.out'),
+    ]
+    if runs_inbound:
+        services += [
+        ('inbound watcher', 'macf.amail.daemons.inbound', 'watch',
+         '/var/lib/amail_broker/watch.out'),
+        # THE SUPERVISOR, AND IT IS A SEPARATE PROCESS ON PURPOSE. The watcher
+        # already sweeps on its own cadence, which covers stuck mail while the
+        # watcher lives and covers nothing at all once it does not -- the sweep
+        # meant to report the watcher's death shared the process that died. A
+        # supervisor has to sit at a higher scope than the thing it watches.
+        ('watchdog', 'macf.amail.daemons.inbound', 'watchdog',
+         '/var/lib/amail_broker/watchdog.out'),
+        ]
+
+    for svc, module, verb, logfile in services:
+        args = [interp, '-m', module] + ([verb] if verb else [])
         try:
-            subprocess.Popen(
+            proc = subprocess.Popen(
                 ['setpriv', '--reuid=amail_broker', '--regid=amail_broker',
                  '--clear-groups', '--'] + args,
                 stdout=open(logfile, 'a'), stderr=subprocess.STDOUT,
                 start_new_session=True)
-            log(f"amail {svc} started ({' '.join(args)})")
         except (OSError, subprocess.SubprocessError) as e:
             # Loud, and to the startup log the operator actually reads -- the
             # previous failure went to a file nobody opened for a day.
             log(f"⚠️ MACF: amail {svc} failed to start ({e}); inbound mail will "
                 f"spool unprocessed until this is repaired.\n{SECRETS_POLICY_POINTER}")
+            continue
+
+        # A LAUNCH IS NOT A LIFE. The Popen succeeding means the fork
+        # succeeded; it says nothing about whether the process is still there.
+        # This log line read "amail broker started" while the broker had
+        # already refused on a missing socket directory and exited -- true
+        # about the act, silent about the outcome, and a success line closes a
+        # question that silence would have left open.
+        time.sleep(START_GRACE_S)
+        rc = proc.poll()
+        if rc is None:
+            log(f"amail {svc} started and STILL RUNNING after "
+                f"{START_GRACE_S}s (pid {proc.pid}: {' '.join(args)})")
+        else:
+            # Reported here, not raised: one service failing to stay up must
+            # not stop the others from being started.
+            log(f"⚠️ MACF: amail {svc} started and EXITED IMMEDIATELY "
+                f"(rc {rc}); it is NOT running. See {logfile} for why.\n"
+                f"{SECRETS_POLICY_POINTER}")
+
+    if runs_inbound:
+        _start_inbound_transport(interp)
+
+
+def _start_inbound_transport(interp: str) -> None:
+    """Start the receiver, and the tunnel if this deployment supplies one.
+
+    THESE TWO CARRY MAIL AND NEITHER WAS PROVISIONED. Both ran for weeks from
+    a container's writable layer, placed by hand, so a recreate would have taken
+    the inbound path with them -- and the tunnel credential is not reissuable
+    from anything this side holds. Provisioning covered the components with a
+    home in the framework and missed the two that exist only in a deployment,
+    which is discovery-order-is-not-ownership running in the other direction.
+
+    THE TUNNEL IS OPTIONAL AND THE BASE IMAGE STAYS AGNOSTIC. It does not ship
+    cloudflared: which transport fronts the receiver is a deployment's choice,
+    and baking one in would make every deployment carry a 40MB binary for a
+    vendor it may not use. A deployment that wants it installs it in its own
+    image and supplies the config; this starts it when BOTH are present and says
+    which half is missing when they are not.
+
+    ANNOUNCE THE UNCONFIGURED CASE. "No tunnel configured" and "the tunnel
+    failed to start" must not look alike from the log, because the first is a
+    deployment choice and the second is an outage.
+    """
+    env_file = Path('/opt/amail_ingest/receiver.env')
+    if env_file.exists():
+        try:
+            env = dict(os.environ)
+            for raw in env_file.read_text().splitlines():
+                line = raw.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    env[key.strip()] = value.strip()
+            subprocess.Popen(
+                ['setpriv', '--reuid=amail_ingest', '--regid=amail_ingest',
+                 '--clear-groups', '--', interp, '-m',
+                 'macf.amail.daemons.receiver'],
+                stdout=open('/var/lib/amail_ingest/receiver.out', 'a'),
+                stderr=subprocess.STDOUT, start_new_session=True, env=env)
+            log("amail ingest receiver started")
+        except (OSError, subprocess.SubprocessError) as e:
+            log(f"⚠️ MACF: amail ingest receiver failed to start ({e}); inbound "
+                f"mail cannot be ACCEPTED at all until this is repaired.")
+    else:
+        log("amail ingest receiver: no receiver.env -- not started. Declare it "
+            "as a secret if this deployment accepts inbound mail.")
+
+    tunnel_config = Path('/etc/cloudflared/config.yml')
+    have_binary = shutil.which('cloudflared')
+    if tunnel_config.exists() and have_binary:
+        try:
+            subprocess.Popen(
+                [have_binary, 'tunnel', '--config', str(tunnel_config), 'run'],
+                stdout=open('/var/lib/amail_ingest/tunnel.out', 'a'),
+                stderr=subprocess.STDOUT, start_new_session=True)
+            log(f"amail inbound tunnel started ({have_binary})")
+        except (OSError, subprocess.SubprocessError) as e:
+            log(f"⚠️ MACF: inbound tunnel failed to start ({e}); mail will not "
+                f"REACH the receiver until this is repaired.")
+    elif tunnel_config.exists():
+        log("⚠️ MACF: /etc/cloudflared/config.yml is present but cloudflared is "
+            "not installed -- this deployment declared a tunnel its image does "
+            "not provide. Inbound mail cannot reach the receiver.")
+    else:
+        log("amail inbound tunnel: none configured (deployment choice)")
 
 
 def main() -> int:
