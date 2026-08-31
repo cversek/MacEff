@@ -1626,6 +1626,45 @@ def start_search_service_daemon(agents_config: AgentsConfig) -> None:
         log(f"Search service start failed (non-fatal): {e}")
 
 
+# The BASH_ENV wrapper, as written to /etc/profile.d/maceff-bash-env.sh.
+#
+# THE GUARD IS LOAD-BEARING AND THE FILENAME IS NOT. This file has two readers
+# and only one of them was designed for: it is the BASH_ENV target, and it also
+# sits in /etc/profile.d, which EVERY POSIX login shell sources. `#!/bin/bash`
+# does not restrict a sourced file -- a shebang is read by the kernel on exec
+# and ignored entirely on `.` -- so before this guard, `/bin/sh` (dash on
+# Debian/Ubuntu) sourced it too and followed it into ~/.bash_init.sh, which
+# sources framework shell scripts that legitimately use bash arrays.
+#
+# The failure that produced this guard: a dash login shell ABORTED during
+# profile processing, before running its command, AND EXITED 0. `sh -lc 'echo
+# hi'` printed a syntax error and no `hi`, while every caller checking $? saw
+# success. A /bin/sh cron entry or script in an agent account would silently do
+# nothing and report that it had worked.
+#
+# Guarding here rather than making the sourced scripts POSIX-clean is the
+# narrower fix and the correct layer: this file is explicitly a *bash* env
+# wrapper, so restricting it to bash restores its stated scope instead of
+# constraining every framework script it may ever reach.
+BASH_ENV_WRAPPER = '''#!/bin/bash
+# MacEff BASH_ENV wrapper - sources deployment env + per-user bash_init.sh
+# This script is pointed to by BASH_ENV in /etc/environment.
+#
+# It also lives in /etc/profile.d, which every POSIX shell sources -- so the
+# body is bash-only BY DECLARATION, not by shebang. Without this guard, dash
+# follows it into ~/.bash_init.sh and dies on bash syntax it cannot parse,
+# aborting the login shell while still exiting 0.
+if [ -n "$BASH_VERSION" ]; then
+    if [ -f "/etc/profile.d/maceff-deployment-env.sh" ]; then
+        . "/etc/profile.d/maceff-deployment-env.sh"
+    fi
+    if [ -f "$HOME/.bash_init.sh" ]; then
+        . "$HOME/.bash_init.sh"
+    fi
+fi
+'''
+
+
 def propagate_container_env(agents_config: Optional[AgentsConfig] = None) -> None:
     """Propagate container environment to all session types.
 
@@ -1708,16 +1747,7 @@ def propagate_container_env(agents_config: Optional[AgentsConfig] = None) -> Non
     # CC's Bash tool subprocesses would only see vars in container Config.Env
     # (which agents.yaml-driven vars aren't in by design).
     bash_env_wrapper = Path('/etc/profile.d/maceff-bash-env.sh')
-    bash_env_wrapper.write_text('''#!/bin/bash
-# MacEff BASH_ENV wrapper - sources deployment env + per-user bash_init.sh
-# This script is pointed to by BASH_ENV in /etc/environment
-if [ -f "/etc/profile.d/maceff-deployment-env.sh" ]; then
-    . "/etc/profile.d/maceff-deployment-env.sh"
-fi
-if [ -f "$HOME/.bash_init.sh" ]; then
-    . "$HOME/.bash_init.sh"
-fi
-''')
+    bash_env_wrapper.write_text(BASH_ENV_WRAPPER)
     bash_env_wrapper.chmod(0o644)
     lines.append('BASH_ENV=/etc/profile.d/maceff-bash-env.sh')
 
