@@ -1,10 +1,10 @@
 # Roadmaps Policy: Drafting & Planning
 
-**Version**: 2.5
+**Version**: 2.6
 **Tier**: MANDATORY
 **Category**: Consciousness - Planning
 **Status**: ACTIVE
-**Updated**: 2026-01-08
+**Updated**: 2026-08-31
 **Dependencies**: git_discipline.md, workspace_discipline.md
 **Related**: roadmaps_following.md (execution), task_management.md (integration)
 
@@ -172,6 +172,12 @@ roadmap — which is the intended route to implementation, not a detour around i
 - When to commit roadmaps?
 - Commit-before-revise protocol?
 - Revision tracking?
+
+**6.3 Delivery Requirement**
+- When must a roadmap's code reach a pull request, and when is a PR merely expected?
+- What exempts main-branch work, and when does that exemption expire?
+- May PRs be staged across phases, and who decides how many a roadmap needs?
+- What stops a MISSION being completed while its deliverable exists only locally?
 
 **7 Templates**
 - Migration project template?
@@ -550,6 +556,10 @@ roadmaps/YYYY-MM-DD_Descriptive_Name/
 - **Paragraph 2**: WHY (motivation, value)
 - **Paragraph 3**: SUCCESS (how we know we're done)
 
+**If the roadmap produces code in a repository, its Success Criteria MUST include
+delivery** — see §6.3. "How we know we're done" is not satisfied by work that
+exists only in a working tree.
+
 **Good Mission Statement**:
 ```markdown
 ## Mission
@@ -882,6 +892,87 @@ Added validation step 4.4.11 for GitHub auth before repo cloning.
 
 ---
 
+### 6.3 Delivery: A MISSION Is Not Complete While Its Code Is Unshipped
+
+**Rule**: A roadmap whose phases produce code in a repository MUST declare how that
+code is delivered, and the MISSION MUST NOT be completed until delivery has happened.
+
+- **Public repositories: MUST.** Delivery means a pull request, opened and merged.
+- **All other repositories: SHOULD.** The default is still a PR; deviating is a
+  choice a drafter makes deliberately and records, not one they drift into.
+- **Dev-speed exemption**: main-branch work in a very early stage repository,
+  before version tagging, is exempt. A repo with no releases has no consumers to
+  protect and no bisect history worth preserving, so review ceremony buys nothing
+  and costs momentum. **The exemption expires at the first version tag** — it is a
+  property of the repo's stage, not a standing preference, and it does not extend
+  to a public repo that has begun tagging.
+
+**§6.1 governs committing the roadmap DOCUMENT. This governs shipping the code the
+roadmap produces.** They are different obligations and satisfying one has never
+implied the other.
+
+#### Why this is a rule and not a habit
+
+Work that exists only in a working tree is invisible to everything that would
+otherwise catch its absence. It is not in the task tree's completion evidence, not
+in CI, not in a reviewer's queue, and not in the history a successor reads. A
+compaction, a branch switch, or a rebuild ends it silently — and **nothing reports
+the loss**, because from every instrument's point of view the MISSION closed
+successfully.
+
+That is the specific failure this rule exists to prevent, and it is not
+hypothetical: a MISSION in this framework was completed with every success
+criterion individually evidenced while its final phase's code sat uncommitted. Each
+criterion was true. The deliverable was still nowhere.
+
+**A completion report is not a delivery mechanism.** It is a claim about work whose
+artifacts must be reachable by someone who never read it.
+
+#### How delivery is declared
+
+Name it in the roadmap. Two forms are acceptable and the choice is the drafter's:
+
+1. **A terminal delivery phase** — one PR at the end, when the phases are only
+   coherent together.
+2. **Staged with the phase work** — a PR per phase, or per group of phases, landing
+   as the roadmap progresses.
+
+**Timing and the number of PRs per roadmap are at the drafter's discretion.** This
+rule fixes *that* delivery happens and *that* the roadmap says so; it does not
+prescribe the shape. A large branch carved into reviewable pieces afterwards and a
+sequence of small PRs landing as work completes both satisfy it. Staged delivery is
+usually the better default — it shortens the window in which work exists only
+locally, which is the window this rule is about.
+
+#### Tracking it
+
+Pin the PR into the task tree as a child of the MISSION:
+
+```bash
+macf_tools task create gh_pr <pr_url> --parent <mission_id>
+```
+
+The MISSION then carries an open child until the PR merges, so the tree cannot show
+the MISSION as finished while its code is unshipped. **This is the mechanism, not a
+suggestion**: a delivery obligation that lives only in prose is one the completion
+protocol cannot see, and the completion protocol is what actually gates the close.
+
+#### Completion criteria
+
+A roadmap's Success Criteria (§3.2) MUST include delivery when this section applies.
+State it in the form the criteria use — something that can be checked, not asserted:
+
+```markdown
+- [ ] Every phase's code merged to `main` via reviewed PR; no phase deliverable
+      remains only in a working tree or an unmerged branch
+```
+
+If a phase's work is deliberately NOT being shipped — a spike, a measurement rig, a
+throwaway harness — say so in the phase and say why. **An unshipped deliverable is
+either tracked or explained; it is never simply left.**
+
+---
+
 ## 7 Templates
 
 ### 7.1 Migration Project Template
@@ -922,6 +1013,8 @@ Migrate [project] from [old state] to [new state], preserving [critical assets] 
 - [ ] All validation checks passing
 - [ ] Performance meets or exceeds baseline
 - [ ] Production cutover successful
+- [ ] Every phase's code delivered per §6.3 — nothing left in a working tree
+      or an unmerged branch
 
 ## Rollback Plan
 
@@ -983,6 +1076,8 @@ Implement [feature] enabling users to [capability], addressing [user need].
 - [ ] Monitoring in place
 - [ ] User validation successful
 - [ ] No regressions detected
+- [ ] Every phase's code delivered per §6.3 — nothing left in a working tree
+      or an unmerged branch
 ```
 
 ### 7.3 Investigation Template

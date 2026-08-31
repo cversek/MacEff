@@ -383,6 +383,21 @@ created_by: PA
    git commit -m "roadmap: Complete Phase 2 Docker Infrastructure [s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890]"
    ```
 
+6. **Deliver the phase's code** — see `roadmaps_drafting.md` §6.3.
+
+   **Step 5 commits the roadmap DOCUMENT, not the code the phase produced.** Doing
+   it is not evidence that anything shipped, and the two are easy to conflate here
+   precisely because this step says "commit". A phase whose deliverable is code is
+   not complete until that code is delivered by whatever route the roadmap declared
+   — for a public repository, a merged PR.
+
+   Pin the PR into the tree so the obligation is visible to the completion protocol
+   rather than only to a reader:
+
+   ```bash
+   macf_tools task create gh_pr <pr_url> --parent <mission_id>
+   ```
+
 **Example Phase Completion Update** (in roadmap.md):
 ```markdown
 ## Phase 2: Docker Infrastructure
