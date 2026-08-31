@@ -827,6 +827,23 @@ _NEVER_LAUNCHED_EXITS = (126, 127)
 _NEVER_LAUNCHED_WINDOW_SECONDS = 3
 
 
+def _is_never_launched(exit_code: int, lifetime: float) -> bool:
+    """True when this exit means the command never ran at all.
+
+    Extracted so the decision can be tested at its boundary directly, without a
+    real subprocess in the loop. Through the supervisor the same question can
+    only be asked by racing a launch against the clock, which makes the ANSWER
+    depend on how loaded the machine is -- and a test written that way asserts
+    machine speed while appearing to assert behaviour.
+
+    The pairing is deliberate and neither half suffices. The exit code alone
+    would kill supervision for a long-running child entitled to exit 127 as its
+    own considered result; the lifetime alone says nothing about why it stopped.
+    """
+    return (exit_code in _NEVER_LAUNCHED_EXITS
+            and lifetime < _NEVER_LAUNCHED_WINDOW_SECONDS)
+
+
 def _unlaunchable_reason(cmd_args: list) -> "str | None":
     """Why this command can never run, or None if it might.
 
@@ -1073,7 +1090,7 @@ def run_loop(cmd_args: list, name: str = "", restart_delay: int = 5,
             # file. Stop, rather than spin: the shell has already decided this
             # command does not resolve, and it will decide the same thing every
             # five seconds forever.
-            if exit_code in _NEVER_LAUNCHED_EXITS and lifetime < _NEVER_LAUNCHED_WINDOW_SECONDS:
+            if _is_never_launched(exit_code, lifetime):
                 reason = ("not found" if exit_code == 127 else "not executable")
                 print(f"\n[auto-restart] FATAL: the shell reports the command is "
                       f"{reason} (exit {exit_code}, after {lifetime:.1f}s).",
