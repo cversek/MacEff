@@ -45,6 +45,10 @@ LOG_FILE_NAME = "macf_transcript_monitor.log"
 # Detector Protocol
 # ============================================================================
 
+from ..notify.coalescing import coalesce
+from ..notify.contracts import validate_detector, validate_sink, validate_source
+
+
 class Detection:
     """Result from a detector: event name + data to emit."""
     __slots__ = ("event_name", "data")
@@ -388,8 +392,13 @@ class TranscriptMonitor:
         self._fwd_cached = False
 
     def add_detector(self, detector: Detector) -> "TranscriptMonitor":
-        """Register an additional detector. Returns self for chaining."""
-        self.detectors.append(detector)
+        """Register an additional detector. Returns self for chaining.
+
+        Validated HERE rather than at first use: a detector is invoked inside a
+        guard that treats failure as non-fatal, so a wrongly shaped one would
+        raise into a log nobody reads and otherwise look installed forever.
+        """
+        self.detectors.append(validate_detector(detector))
         return self
 
     def add_source(self, source) -> "TranscriptMonitor":
@@ -400,7 +409,7 @@ class TranscriptMonitor:
         never delays them beyond one poll interval and a quiet one costs a
         directory listing.
         """
-        self.sources.append(source)
+        self.sources.append(validate_source(source))
         return self
 
     def add_sink(self, sink) -> "TranscriptMonitor":
@@ -410,11 +419,12 @@ class TranscriptMonitor:
         terminus in the event log, and routing them here would silently widen
         what gets delivered to an agent.
         """
-        self.sinks.append(sink)
+        self.sinks.append(validate_sink(sink))
         return self
 
     def _poll_sources(self) -> None:
         """Ask every source what is new, emit it, and offer it to every sink."""
+        cycle = []
         for source in self.sources:
             try:
                 detections = source.poll()
@@ -427,13 +437,24 @@ class TranscriptMonitor:
             for detection in detections or ():
                 append_event(detection.event_name, detection.data)
                 self.events_emitted += 1
-                for sink in self.sinks:
-                    try:
-                        sink(detection)
-                    except Exception as e:  # noqa: BLE001 - GUARD, not handler
-                        self.sink_failures += 1
-                        print(f"⚠️ MACF: sink failed for {detection.event_name} "
-                              f"(event still recorded): {e}", file=sys.stderr)
+                cycle.append(detection)
+
+        # THE FLOOR IS APPLIED HERE, ACROSS SOURCES, AND ONLY TO THE SINK PATH.
+        # Every detection above is already in the event log individually -- the
+        # log is the archaeology and collapsing it would destroy the record of
+        # what actually arrived. What is coalesced is what INTERRUPTS: two
+        # sources reporting in one cycle are one thing to look at, not two.
+        #
+        # It lives in the daemon rather than in each source because a floor each
+        # source implements for itself is a floor the next source forgets.
+        for detection in coalesce(cycle):
+            for sink in self.sinks:
+                try:
+                    sink(detection)
+                except Exception as e:  # noqa: BLE001 - GUARD, not handler
+                    self.sink_failures += 1
+                    print(f"⚠️ MACF: sink failed for {detection.event_name} "
+                          f"(event still recorded): {e}", file=sys.stderr)
 
     def _process_line(self, line: str) -> None:
         """Parse a JSONL line and run all detectors."""
