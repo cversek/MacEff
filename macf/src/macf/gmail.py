@@ -17,8 +17,12 @@ overwrite and remove the cache.
 
 The boundary is soft and this docstring says so: the ``draft`` profile carries
 ``gmail.compose``, which Google lets send. Nothing here sends. The controls are
-the absence of the verb, the audit line per call, and a Bash deny rule; see the
-capability_boundaries policy for the declared capability.
+the absence of the verb, the audit line per call, and a permission deny rule.
+Only the last of those is a boundary in the framework's sense, because it is the
+only one the agent cannot lift; read the capability_boundaries policy on mailbox
+access before assuming the command surface is what constrains this.
+
+    macf_tools policy read capability_boundaries --section 5.2
 """
 import base64
 import hashlib
