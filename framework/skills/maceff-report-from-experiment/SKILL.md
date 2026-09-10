@@ -41,14 +41,16 @@ Read `reports` and `public_voice` completely. From `experiments`, read the secti
 8. **Structure** - What structure does the policy give an experiment-derived report, and how does it relate to the general report structure?
 9. **Pointers** - What must point from the report to the experiment, and from the experiment to the report?
 10. **Publication** - How are published copies recorded and kept at a stable address?
+11. **Versions** - When is the result a new version of an existing report rather than a new report, how is a version labelled and where does the label appear, what happens to the earlier version's files, and what must the sidecar's ledger and the deliverable's opening say about the change?
+12. **Domain** - Which domain specialization does the policy register for this content, what deliverable form and structure does it prescribe, and what does its build depend on?
 
 ---
 
 ## Execution
 
 1. Confirm the precondition from question 1; if it is not met, stop and say what is missing.
-2. Establish audience, format, and scope from the request and the experiment's own scope statements; state them before writing.
-3. Build the folder and files the answers to questions 2 to 4 prescribe.
+2. Establish audience, format, and scope from the request and the experiment's own scope statements; state them before writing. Decide, from question 11, whether this is a new report or a new version of one that exists; from question 12, which domain row applies.
+3. Build the folder and files the answers to questions 2 to 4 prescribe; for a new version, freeze the earlier version's files under their versioned names and extend the ledger before writing.
 4. Write the deliverable under the answers to questions 5 and 8.
 5. Perform the verification from question 6 on every number, correct the analysis where the check finds an error, and record the check in the sidecar.
 6. Produce figures per question 7; place the classification statement where question 7 says.
