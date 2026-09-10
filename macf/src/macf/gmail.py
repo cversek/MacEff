@@ -632,3 +632,143 @@ def create_draft(to: List[str], subject: str, body: str, cc: Optional[List[str]]
            "to": to, "subject": subject, "attachments": len(attach or [])}
     audit("draft", "write", "allowed", out)
     return out
+
+
+# ── query ergonomics: shortcut flags compiled to Gmail query syntax ────────
+
+
+def _date_term(value: str, recent_op: str, absolute_op: str) -> str:
+    """'7d' -> newer_than:7d; '2026-09-01' -> after:2026/09/01. Pure."""
+    v = value.strip()
+    if len(v) >= 2 and v[:-1].isdigit() and v[-1] in "dmy":
+        return f"{recent_op}:{v}"
+    if len(v) == 10 and v[4] == "-" and v[7] == "-":
+        return f"{absolute_op}:{v.replace('-', '/')}"
+    raise GmailError(f"date must be a duration like 7d/2m/1y or a date like 2026-09-01, not {value!r}")
+
+
+def compile_query(text: str = "", *, from_: Optional[str] = None, to: Optional[str] = None,
+                  subject: Optional[str] = None, since: Optional[str] = None,
+                  until: Optional[str] = None, label: Optional[str] = None,
+                  has_attachment: bool = False, unread: bool = False) -> str:
+    """Compile shortcut flags plus free text into one Gmail query. Pure.
+
+    Order is fixed so the same inputs always yield the same string, which is
+    what lets a test assert equality with a hand-written query.
+    """
+    terms: List[str] = []
+    if from_:
+        terms.append(f"from:{from_}")
+    if to:
+        terms.append(f"to:{to}")
+    if subject:
+        terms.append(f"subject:{subject}" if " " not in subject else f'subject:"{subject}"')
+    if since:
+        terms.append(_date_term(since, "newer_than", "after"))
+    if until:
+        terms.append(_date_term(until, "older_than", "before"))
+    if label:
+        terms.append(f"label:{label}")
+    if has_attachment:
+        terms.append("has:attachment")
+    if unread:
+        terms.append("is:unread")
+    if text and text.strip():
+        terms.append(text.strip())
+    return " ".join(terms)
+
+
+# ── saved queries: names only, never results ──────────────────────────────
+
+
+def queries_path() -> Path:
+    return _maceff_dir() / "gmail_queries.json"
+
+
+def saved_queries() -> Dict[str, str]:
+    p = queries_path()
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        raise GmailError(f"cannot read saved queries {p}: {e}") from e
+
+
+def save_query(name: str, query: str) -> None:
+    if not name or any(c in name for c in " /\\"):
+        raise GmailError(f"query name must be a single token, not {name!r}")
+    q = saved_queries()
+    q[name] = query
+    _write_private(queries_path(), q)
+
+
+def delete_query(name: str) -> bool:
+    q = saved_queries()
+    if name not in q:
+        return False
+    del q[name]
+    _write_private(queries_path(), q)
+    return True
+
+
+def resolve_query(text: str, saved: Optional[str], **flags) -> str:
+    """Saved name -> its query; then flags and free text compile on top."""
+    base = ""
+    if saved:
+        q = saved_queries()
+        if saved not in q:
+            raise GmailError(f"no saved query named {saved!r}; see: macf_tools gmail query list")
+        base = q[saved]
+    compiled = compile_query(text or "", **flags)
+    return " ".join(x for x in (base, compiled) if x.strip())
+
+
+# ── attachments: listed from the thread record, fetched only where named ──
+
+
+def list_attachments(thread_id: str) -> List[Dict[str, Any]]:
+    rec, _ = read_thread(thread_id)
+    out = []
+    for m in rec["messages"]:
+        for a in m.get("attachments", []):
+            out.append({**a, "message_id": m["message_id"], "date": m.get("date", ""),
+                        "from": m.get("from", "")})
+    return out
+
+
+def _refuse_destination(out: Path) -> None:
+    """The operator's mail goes where the operator says, never into our trees."""
+    resolved = out.resolve()
+    home = _agent_home().resolve()
+    if home == resolved or home in resolved.parents:
+        raise GmailError(f"refusing to write mail content under the agent home ({home}); name another path")
+    g = load_grant(required=False)
+    if g and g.get("cache_id"):
+        root = cache_root_for(g["cache_id"]).resolve()
+        if root == resolved or root in resolved.parents:
+            raise GmailError("refusing to write plaintext into the encrypted cache; name another path")
+
+
+def get_attachment(thread_id: str, attachment_id: str, out: Path) -> Dict[str, Any]:
+    """Download one attachment to a caller-named path. Receipt carries sha256."""
+    _refuse_destination(out)
+    owner = next((a for a in list_attachments(thread_id) if a["attachment_id"] == attachment_id), None)
+    if owner is None:
+        raise GmailError(f"no attachment {attachment_id[:16]}... in thread {thread_id}")
+    tok = access_token()
+    st, res = api("GET", f"/messages/{owner['message_id']}/attachments/{attachment_id}", tok)
+    if st != 200 or not isinstance(res, dict) or "data" not in res:
+        audit("attachment_get", "read", "refused", {"thread": thread_id, "status": st}, _api_error(st, res))
+        raise GmailError(f"attachment fetch refused ({_api_error(st, res)})")
+    data = base64.urlsafe_b64decode(res["data"] + "==")
+    if out.is_dir():
+        out = out / owner["filename"]
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(out), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
+    receipt = {"path": str(out), "filename": owner["filename"], "bytes": len(data),
+               "sha256": hashlib.sha256(data).hexdigest(), "mime": owner.get("mime")}
+    audit("attachment_get", "read", "allowed", {"thread": thread_id, "bytes": len(data)})
+    return receipt
