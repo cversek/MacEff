@@ -137,6 +137,7 @@ Reports document completed projects and significant work phases through comprehe
 6.3 Deliverable Formats
 - What is the default deliverable format, and what must it be self-contained against?
 - When are docx or pdf produced?
+- What is the LaTeX-to-PDF path, what does it depend on, and what is the canonical build command?
 - How are published copies kept at a stable address?
 
 6.4 The Provenance Sidecar
@@ -148,6 +149,17 @@ Reports document completed projects and significant work phases through comprehe
 6.5 Privacy and Classification
 - What may a report contain?
 - What must a report that includes restricted data state, and where?
+
+6.6 Versions
+- When is a change a new version of the same report rather than a new report?
+- How are versions labelled, and where does the label appear?
+- What happens to an earlier version's files, and what does the sidecar's ledger record?
+- What must a new version say about what changed?
+
+6.7 Domain Specializations
+- Which deliverable form and structure suit an empirical data report, a mathematics note, a physics working note?
+- What practices from each domain does the policy register?
+- What is common to every domain?
 
 7 Knowledge Web Participation
 - Does this type participate in the knowledge graph, and at what unit?
@@ -177,6 +189,7 @@ Reports document completed projects and significant work phases through comprehe
 9 Anti-Patterns
 - What makes a bad report?
 - What are the common mistakes when deriving a report from an experiment?
+- What are the common mistakes with versions and with LaTeX builds?
 
 10 Evolution & Feedback
 - How does this policy change?
@@ -690,11 +703,16 @@ A report is a **dated semantic folder**, not a single file. The folder holds the
 
 ```
 agent/public/reports/YYYY-MM-DD_Descriptive_Title_Report/
-├── report.html        # the deliverable (see 6.3)
-├── report.md          # the source the deliverable was rendered from (recommended)
+├── report_v1.0.html   # the deliverable (see 6.3), version in the filename (see 6.6)
+├── report_v1.0.md     # the source the deliverable was rendered from (recommended)
+├── report_v1.0.tex    # LaTeX source, when the PDF path is used (see 6.3)
+├── report_v1.0.pdf    # the PDF deliverable built from it
+├── figures/           # figure files a LaTeX build reads (copies, so the build depends on nothing outside the folder)
 ├── build_page.py      # the renderer, when the deliverable is generated (optional)
-└── provenance.md      # the sidecar: metadata, derivation, dependencies, wiki-links (required)
+└── provenance.md      # the sidecar: metadata, derivation, dependencies, versions, wiki-links (required)
 ```
+
+A single-version report may drop the `_v1.0` suffix; the moment a second version exists, every deliverable and source carries its version (6.6).
 
 **Naming**:
 - `YYYY-MM-DD`: completion date. Add `_HHMMSS` only when two reports would otherwise share a name.
@@ -714,6 +732,10 @@ agent/public/reports/YYYY-MM-DD_Descriptive_Title_Report/
 **Default: `report.html`**, self-contained. Styles inline; figures embedded as data URIs; any web font loaded from a host the publishing surface admits, with a real fallback stack. The same file must read correctly opened from disk and served as a hosted page. A deliverable that fetches assets from the agent's machine breaks the moment it leaves it.
 
 **On request: `report.docx`, `report.pdf`.** Several formats may coexist in one folder; every deliverable present is listed in the sidecar's `deliverables` key.
+
+**The LaTeX-to-PDF path.** For reports whose content is mathematics or physics, or whose readers expect a typeset document, the source is `report.tex` and the deliverable `report.pdf`, built by `latexmk -pdf -interaction=nonstopmode report.tex` where TeX Live is present. The build must depend on nothing outside the report folder: figures are copied into `figures/` and referenced by relative path, and the sidecar's `builders` key names the engine and its version. The title block carries the version label, the date, the author line and the classification or audience line, so the PDF identifies itself when it travels alone. A `.docx` deliverable is produced from the Markdown or LaTeX source with `pandoc` and a reference document, never by hand.
+
+*Toolchain, measured 2026-09-10 in one agent container*: no TeX engine was installed and the shared Python environment was read-only for the agent, so `latexmk` was unavailable and a per-agent `tectonic` environment (about 200 MB, fetching its bundle from the network on first use) was the stopgap that produced a six-page PDF with embedded figures. A deployment that expects LaTeX reports should bake a TeX Live subset with `latexmk` and `biber`, plus `pandoc` and `poppler-utils` (so an agent can render its own PDF pages to images and look at them), rather than have each agent install its own; the stopgap is named here so the policy does not depend on the bake having happened.
 
 **The source** (`report.md`) is kept when the deliverable was rendered from Markdown, so the next edit starts from text rather than from generated HTML. The source carries **no** `## Wiki-Links` section of its own (section 7 explains why).
 
@@ -739,6 +761,8 @@ agent/public/reports/YYYY-MM-DD_Descriptive_Title_Report/
 | `dependencies` | what the numbers rest on: data tables with content hashes, code, figures, external references (a repository and commit, a paper) |
 | `verified` | how the report's numbers were checked against the source's result files, and when (section 8.2) |
 | `published` | optional: `url`, `label`, `date` per published copy |
+| `current_version` | the version label the top-level keys describe (6.6) |
+| `versions` | the ledger, one entry per version (6.6); required once a second version exists |
 
 **Sections** (after the front matter): a first-level heading with the report's title (the graph takes the node title from it), then `## Derived from`, `## Dependencies`, `## Verification`, `## Wiki-Links`. Prose in these sections may say what the front matter cannot (why a dependency matters, what a verification found and fixed).
 
@@ -801,6 +825,34 @@ Reports are **public artifacts** suitable for:
 
 **Restricted data**: a report that includes rows, figures or numbers under a restriction (consent pending, internal only, embargoed) states the restriction in the deliverable's first screen, as a banner the reader cannot miss, and in the sidecar's `classification` key. A deliverable for readers outside the restriction is built from the unrestricted rows only, and its figures are regenerated for that scope from the result files rather than cropped from figures that include restricted panels.
 
+### 6.6 Versions
+
+A report that is extended, corrected, or re-derived after new work is a **new version of the same report**, not a new report, when its question and audience are unchanged. A follow-up experiment folded into an existing report is the typical case. A different question or a different audience is a new report with its own folder.
+
+**Labels**: `vMAJOR.MINOR`. A new major version adds findings or scope (a follow-up run, a new data set); a new minor version corrects or clarifies the same findings (a rounding fix, a reworded conclusion, a figure regenerated). The label appears in every deliverable's and source's filename (`report_v2.0.html`, `report_v2.0.tex`), in the deliverable's title block, and in the label of any published copy.
+
+**Earlier versions are kept and never edited.** Their files stay in the folder under their versioned names, so a reader who was sent version 1.0 can still find the exact document they read and see what changed since. A correction to an earlier version is a new minor version, not an edit.
+
+**The sidecar's ledger**: the top-level keys describe the current version (`current_version` names it); `versions` lists every version with, at least, `label`, `date`, `deliverables`, `source`, `derived_from`, `published` (address and labels), `verified`, `changes` (what this version adds or corrects, in a sentence or two), and the task or breadcrumb that produced it. The ledger is the one place that answers "which version said what, built from which experiment, checked how".
+
+**The deliverable says what changed.** A version after the first opens with a short section naming what it adds and what it corrects, before the reader reaches content they may have read before. A correction is stated as a correction, with the earlier reading named, never silently replaced.
+
+**One published address.** A hosted copy is republished from the versioned file to the same address with the version as its label, so links in earlier messages keep working and the host's own version history mirrors the ledger.
+
+### 6.7 Domain Specializations
+
+The folder, sidecar, voice and verification rules above hold for every report. What varies by domain is the deliverable form and the structure readers expect. Three specializations are registered here; a new one is added when a report is written for a domain the table does not cover.
+
+| domain | deliverable and source | structure readers expect | practices registered |
+|---|---|---|---|
+| **Empirical data** (an experiment on measurements; classifiers, cohorts, instruments) | `html` from Markdown by default, `pdf` on request | the answer first; background that explains the measurement and the labels; the data sets with scope and exclusions; how it was run (pre-registration, unit of analysis, uncertainty, baselines re-run); results per hypothesis with numbers for every scope; what it means; limitations; next steps; where the material is (section 8.3) | numbers re-read from result files; figures regenerated for the audience's scope; verdicts as registered; classification banner on the first screen; both scopes with the unrestricted one first |
+| **Mathematics** (a proof, a computation, a verification of a claim) | `pdf` from `tex` (`article`, `amsmath`, `amsthm`, `hyperref`); the `tex` is the source of record | abstract stating what is proved and under what hypothesis; theorem, lemma and proposition environments with proofs separated from statements; a remark naming what is unconditional and what rests on an unproven hypothesis or an external computation; a computational-data appendix; a bibliography | every computation names the system that ran it and, where two systems are available, the cross-check; the certification status of every dependency (a class-group computation, a rank) is stated, not assumed; a remark on failed approaches records dead ends so they are not re-explored; scripts and transcripts are attached or named as ancillary files; a version note in the title block (`version note v2.0`) when the document audits or revises another |
+| **Physics and applied modelling** (a model, its scales, its stability, a proposed measurement) | `pdf` from `tex`; figures from scripts, saved with their outputs | setup and conventions with the dimensionless groups named; relation to prior work; the base solution; the analysis with the precise open step identified rather than glossed; a table of numerical values; toward a physical realization (length, force and time scales, materials, known risks); a bibliography | provenance tags on claims distinguishing what comes from the note under review, the literature, and the author's own verification; every numerical claim carries a script and its saved output; the exact place where the calculation is incomplete is stated as the open step; scales are worked through before an experiment is proposed |
+
+**Common to every domain**: the version label and the classification or audience line in the title block; the deliverable self-contained and readable without the agent's tree; no framework vocabulary; the sidecar with derivation, dependencies, verification and versions; the pointers of 8.4 in both directions.
+
+The mathematics and physics rows were registered from two LaTeX notes produced by verification agents in a sibling deployment (September 2026): a machine-checked conditional verification of a number-theoretic theorem, and an audit of a variational-physics working note that found three errors in the note's linear-stability section and reproduced a known threshold with the corrected machinery. What made both usable by a reader who was not there is in the practices column.
+
 ---
 
 ## 7. Knowledge Web Participation
@@ -855,6 +907,7 @@ The narrative arc of section 3 applied to a single experiment; the section list 
 - The sidecar's `derived_from` names the protocol and the analysis.
 - The analysis's cross-references name the report folder and any published address.
 - The experiment's task carries a note with the same pointers.
+- When a later experiment is folded into a new version, its protocol and analysis join `derived_from`, the new version's ledger entry names them, and the later experiment's analysis points at the report folder and version.
 
 A report the experiment does not point to is found only by concept query; a report that does not point to the experiment cannot be checked.
 
@@ -889,6 +942,22 @@ A report the experiment does not point to is found only by concept query; a repo
 **❌ Breadcrumbs in the deliverable**
 - **Problem**: forensic identifiers in a document written for someone who cannot resolve them.
 - **Fix**: breadcrumbs, task ids and cycle numbers go in the sidecar.
+
+**❌ An earlier version edited in place, or overwritten by the new one**
+- **Problem**: the document a reader was sent no longer exists; the ledger points at a file whose content changed.
+- **Fix**: versioned filenames; earlier versions frozen; corrections are new minor versions.
+
+**❌ A version with no ledger entry, or a ledger with no `changes`**
+- **Problem**: two files, no record of which experiment each rests on or what the second corrected.
+- **Fix**: every version gets a ledger entry with `derived_from`, `verified` and `changes`.
+
+**❌ A LaTeX build that reads figures or includes from outside the report folder**
+- **Problem**: the PDF cannot be rebuilt by the next agent, and the folder no longer holds what the deliverable was made from.
+- **Fix**: copy figures into `figures/`; reference by relative path; name the engine in the sidecar.
+
+**❌ A domain's structure borrowed by another**
+- **Problem**: an empirical report in theorem environments, or a proof written as a narrative with the hypotheses in a table.
+- **Fix**: pick the row of 6.7 that matches the content; add a row when none does.
 
 ---
 
@@ -956,7 +1025,7 @@ This policy changes when a report form is needed that it does not describe (a ne
 **Storage**:
 - PA: `agent/public/reports/`
 - SA: `agent/subagents/{role}/public/reports/`
-- Folder: `YYYY-MM-DD_Title_Report/` with `report.html` (or docx, pdf), `report.md`, `provenance.md`
+- Folder: `YYYY-MM-DD_Title_Report/` with `report_vX.Y.html` (or `.pdf` from `.tex`, `.docx`), sources, `figures/`, `provenance.md` with a versions ledger
 - Single file `YYYY-MM-DD_HHMMSS_Title_Report.md` only for internal narratives with no rendered deliverable
 
 ---
