@@ -167,3 +167,69 @@ class TestCliSurface:
         assert cli.cmd_gmail_status(Namespace(check=False, json=True)) == 0
         info = json.loads(capsys.readouterr().out)
         assert info["can_send_at_google"] is True and info["sentinel"] is True
+
+
+class TestQueryCompiler:
+    """A pure function, so the tests are a table. Equality with a hand-written query is the point."""
+
+    @pytest.mark.parametrize("kwargs,expected", [
+        (dict(from_="sridhar", since="7d"), "from:sridhar newer_than:7d"),
+        (dict(text="consent reissue", has_attachment=True), "has:attachment consent reissue"),
+        (dict(since="2026-09-01", until="2026-09-10"), "after:2026/09/01 before:2026/09/10"),
+        (dict(subject="two words", unread=True, label="Work"), 'subject:"two words" label:Work is:unread'),
+        (dict(), ""),
+    ])
+    def test_flags_compile_to_the_query_a_person_would_type(self, kwargs, expected):
+        text = kwargs.pop("text", "")
+        assert gmail.compile_query(text, **kwargs) == expected
+
+    def test_a_malformed_date_is_refused_not_passed_through(self):
+        with pytest.raises(gmail.GmailError, match="date must be"):
+            gmail.compile_query(since="last tuesday")
+
+    def test_saved_query_is_a_name_that_expands_and_flags_layer_on_top(self, home):
+        gmail.save_query("irb", "from:northeastern.edu subject:IRB")
+        assert gmail.resolve_query("", "irb", since="30d") == "from:northeastern.edu subject:IRB newer_than:30d"
+        assert gmail.delete_query("irb") and not gmail.delete_query("irb")
+        with pytest.raises(gmail.GmailError, match="no saved query"):
+            gmail.resolve_query("", "irb")
+
+    def test_saved_queries_file_holds_names_and_never_results(self, home):
+        gmail.save_query("q", "from:x")
+        raw = (home / ".maceff" / "gmail_queries.json").read_text()
+        assert raw.strip() == '{\n  "q": "from:x"\n}'
+
+
+class TestAttachments:
+    def _seed(self, home):
+        _fake_grant(home)
+        gmail.cache_put("T1", {"thread_id": "T1", "fetched_at": "now", "messages": [
+            {"message_id": "M1", "date": "d", "from": "a@x", "to": "", "cc": "", "subject": "s",
+             "body": "", "attachments": [{"filename": "report.txt", "mime": "text/plain",
+                                          "size": 5, "attachment_id": "ATT1"}]}]})
+
+    def test_list_reads_the_cached_record_without_a_network_call(self, home, monkeypatch):
+        self._seed(home)
+        monkeypatch.setattr(gmail, "api", lambda *a, **k: (_ for _ in ()).throw(AssertionError("network")))
+        rows = gmail.list_attachments("T1")
+        assert [(r["filename"], r["message_id"]) for r in rows] == [("report.txt", "M1")]
+
+    def test_get_refuses_the_agent_home_and_the_cache_before_touching_the_network(self, home, monkeypatch):
+        self._seed(home)
+        monkeypatch.setattr(gmail, "api", lambda *a, **k: (_ for _ in ()).throw(AssertionError("network")))
+        with pytest.raises(gmail.GmailError, match="agent home"):
+            gmail.get_attachment("T1", "ATT1", home / "agent" / "private" / "x.txt")
+        with pytest.raises(gmail.GmailError, match="encrypted cache"):
+            gmail.get_attachment("T1", "ATT1", gmail.cache_root() / "x.txt")
+
+    def test_get_writes_where_named_and_the_receipt_hashes_what_was_written(self, home, tmp_path, monkeypatch):
+        import base64, hashlib
+        self._seed(home)
+        payload = b"hello"
+        monkeypatch.setattr(gmail, "api", lambda m, p, t, **k: (200, {"data": base64.urlsafe_b64encode(payload).decode()}))
+        dest = tmp_path / "downloads"
+        dest.mkdir()
+        r = gmail.get_attachment("T1", "ATT1", dest)
+        assert Path(r["path"]) == dest / "report.txt"
+        assert Path(r["path"]).read_bytes() == payload
+        assert r["sha256"] == hashlib.sha256(payload).hexdigest() and r["bytes"] == 5
