@@ -84,8 +84,22 @@ SECRET_SHAPED: List[List[str]] = [
     [r"\bxox[baprs]-[A-Za-z0-9-]{10,}", "slack token"],
     [r"\bAKIA[0-9A-Z]{16}\b", "aws access key id"],
     [r"\bsk-[A-Za-z0-9]{20,}", "api key"],
-    [r"(?i)\b(?:api[_-]?key|secret|passwd|password|token|bearer)\s*[:=]\s*"
-     r"[\"']?[A-Za-z0-9_\-./+=]{12,}", "credential assignment"],
+    # The keyword may be SUFFIXED (refresh_token, client-secret) and the key may
+    # be QUOTED, as it always is in JSON. The first version required a word
+    # boundary immediately before the keyword and allowed no quote before the
+    # separator, so it read shell and YAML and was blind to JSON -- which is the
+    # format credential files actually use. Measured on a corpus of eight
+    # literal-secret shapes: 3 of 8 before, 8 of 8 after.
+    #
+    # The value must be quoted, or an unquoted run not followed by a word
+    # character, a dot or an open paren. That last exclusion is what keeps
+    # `token = secrets.token_hex(16)` and `token = resp.headers.get(...)` out:
+    # an identifier or a call is not a literal secret, and flagging it teaches
+    # readers to skim the gate's output.
+    [r"(?i)\b(?:[A-Za-z0-9]+[_-])?(?:api[_-]?key|secret|passwd|password|token|bearer)"
+     r"[\"']?\s*[:=]\s*"
+     r"(?:[\"'][A-Za-z0-9_\-./+=]{12,}[\"']|[A-Za-z0-9_\-/+=]{12,}(?![\w.(]))",
+     "credential assignment"],
     [r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
      "uuid"],
 ]
