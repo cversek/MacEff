@@ -3,7 +3,6 @@
 **Policy Type**: Consciousness Artifact (Public)
 **Scope**: Primary Agents (PA) and Subagents (SA)
 **Precedence**: Framework Policy (overridden by Project > Personal)
-**Created**: c_73/s_4107604e/p_8c7e6d8/t_1761707487/g_17e7b7d
 
 ---
 
@@ -85,7 +84,12 @@ Reports document completed projects and significant work phases through comprehe
 - Future teams?
 - Mixed audiences?
 
-4.2 Breadcrumb Citations
+4.2 Tone and Style
+- What narrative arc?
+- How accessible for non-technical readers?
+- How honest about challenges?
+
+4.3 Breadcrumb Citations
 - When to cite breadcrumbs?
 - How to reference work units?
 - Linking to other artifacts?
@@ -107,22 +111,75 @@ Reports document completed projects and significant work phases through comprehe
 - Showing hypothesis validation?
 - Experimental methodology in reports?
 
-5.3 Reports → Personal Policies
+5.3 Checkpoints → Reports
+- Consolidating checkpoint timelines?
+
+5.4 Reports → Personal Policies
 - Extracting patterns for future work?
 - Turning insights into policies?
 - Wisdom accumulation?
 
 6 Storage and Naming
 - Where do reports go?
-- Naming convention?
+- Is a report a file or a folder, and what is the folder named?
+- Which files does a report folder hold?
 - Public vs private?
 - PA vs SA locations?
 
+6.1 Location
+- Where do PA reports go? SA reports?
+
+6.2 The Report Folder
+- What is the folder naming convention?
+- What must the folder contain, and what may it contain?
+- When is the single-file form still acceptable?
+
+6.3 Deliverable Formats
+- What is the default deliverable format, and what must it be self-contained against?
+- When are docx or pdf produced?
+- How are published copies kept at a stable address?
+
+6.4 The Provenance Sidecar
+- What is the sidecar for?
+- Which keys are required in its front matter?
+- Which sections does it carry?
+- Where do breadcrumbs, task ids and cycle numbers belong?
+
+6.5 Privacy and Classification
+- What may a report contain?
+- What must a report that includes restricted data state, and where?
+
 7 Knowledge Web Participation
 - Does this type participate in the knowledge graph, and at what unit?
+- Which file in a report folder is the node, and why only one?
 - Which node class does it belong to, and what is the rationale?
 - What provenance does it carry by default, and how is a non-default marked?
 - What must a Wiki-Links section on this artifact contain?
+
+8 Reports Derived from Experiments
+- When may a report be derived from an experiment?
+- Which skill walks this section?
+
+8.1 Audience and Voice
+- What voice and vocabulary rules apply to a report for readers outside the working context?
+- How are verdicts reported?
+
+8.2 Verification Duty
+- What must be verified before a number from the analysis appears in the report, and against what?
+- How are figures produced for the report's audience and scope?
+
+8.3 Structure
+- What structure suits an experiment-derived report?
+
+8.4 Pointers in Both Directions
+- What must point from the report to the experiment, and from the experiment to the report?
+
+9 Anti-Patterns
+- What makes a bad report?
+- What are the common mistakes when deriving a report from an experiment?
+
+10 Evolution & Feedback
+- How does this policy change?
 
 === CEP_NAV_BOUNDARY ===
 
@@ -261,6 +318,8 @@ Reports document the **completion of significant projects or development phases*
 **Status**: Complete
 **Timeframe**: October 13, 2025 (73 minutes from zero to operational)
 ```
+
+**Folder reports** (section 6.2): the deliverable's header carries only what its reader needs - title, date, author line, and the audience or classification line. Status, timeframe, breadcrumbs and task references move to the provenance sidecar (6.4), which is written for the agent's own tree, not for the reader.
 
 ### 3.2 Core Narrative Sections
 
@@ -490,6 +549,11 @@ Interested in [trying/using/contributing]?
 - Link to detailed artifacts for deeper understanding
 - Frame challenges constructively as learning opportunities
 
+**For Readers Outside the Working Context** (a colleague who did not follow the work, a sponsor, an external reviewer):
+- Write under `public_voice.md`: plainly, without announcing, without decoration
+- The report stands alone: nothing in it requires access to the agent's tree, the task system, or this framework's vocabulary
+- Explain domain terms at first use; do not use framework terms at all (see section 8)
+
 ### 4.2 Tone and Style
 
 **Narrative Arc**:
@@ -615,28 +679,111 @@ After writing comprehensive "73-Minute Bootstrap" report documenting proven depl
 
 ## 6. Storage and Naming
 
-### Location
+### 6.1 Location
 
-**Primary Agents**: `~/agent/public/reports/`
-**Subagents**: `~/agent/subagents/{role}/public/reports/`
+**Primary Agents**: `agent/public/reports/`
+**Subagents**: `agent/subagents/{role}/public/reports/`
 
-### Naming Convention
+### 6.2 The Report Folder
+
+A report is a **dated semantic folder**, not a single file. The folder holds the deliverable in the format its reader asked for, the source it was rendered from, and a provenance sidecar that ties it back to the work it came from.
 
 ```
-YYYY-MM-DD_HHMMSS_Descriptive_Title_Report.md
+agent/public/reports/YYYY-MM-DD_Descriptive_Title_Report/
+├── report.html        # the deliverable (see 6.3)
+├── report.md          # the source the deliverable was rendered from (recommended)
+├── build_page.py      # the renderer, when the deliverable is generated (optional)
+└── provenance.md      # the sidecar: metadata, derivation, dependencies, wiki-links (required)
 ```
 
-**Components**:
-- `YYYY-MM-DD_HHMMSS`: Completion timestamp (full date and time)
-- `Descriptive_Title`: Title_Case_With_Underscores (specific and searchable)
-- `_Report.md`: Type suffix for clear identification
+**Naming**:
+- `YYYY-MM-DD`: completion date. Add `_HHMMSS` only when two reports would otherwise share a name.
+- `Descriptive_Title`: Title_Case_With_Underscores, specific enough to be found by eye in a listing of many.
+- `_Report`: type suffix.
 
 **Examples**:
-- `2025-10-13_123631_AgentX_Bootstrap_Report.md`
-- `2025-10-27_180000_Phase5_B0_Git_Policy_Sync_Report.md`
-- `2025-11-01_150000_Q4_Sprint_Completion_Report.md`
+- `2025-10-13_AgentX_Bootstrap_Report/`
+- `2025-11-01_Q4_Sprint_Completion_Report/`
 
-### Privacy Classification
+**The single-file form** `YYYY-MM-DD_HHMMSS_Descriptive_Title_Report.md` remains valid for an internal narrative that has no rendered deliverable and no reader outside the agent's own tree. A report that is rendered, published to a hosted page, or handed to a reader outside the working context uses the folder form: the deliverable needs a home, and the corpus needs to know where the deliverable came from.
+
+**Supporting files** (figures a renderer embeds, tables the report quotes) may live in the folder; they are evidence, not nodes (section 7).
+
+### 6.3 Deliverable Formats
+
+**Default: `report.html`**, self-contained. Styles inline; figures embedded as data URIs; any web font loaded from a host the publishing surface admits, with a real fallback stack. The same file must read correctly opened from disk and served as a hosted page. A deliverable that fetches assets from the agent's machine breaks the moment it leaves it.
+
+**On request: `report.docx`, `report.pdf`.** Several formats may coexist in one folder; every deliverable present is listed in the sidecar's `deliverables` key.
+
+**The source** (`report.md`) is kept when the deliverable was rendered from Markdown, so the next edit starts from text rather than from generated HTML. The source carries **no** `## Wiki-Links` section of its own (section 7 explains why).
+
+**Published copies** (a hosted Artifact page, a gist, a shared drive) are recorded in the sidecar's `published` key with the address, the version label used at publish time, and the date. Republish from the same file path so the address stays stable; a new path makes a new address and strands every pointer to the old one.
+
+### 6.4 The Provenance Sidecar
+
+`provenance.md` answers, for a reader who found the deliverable and nothing else: who wrote this, for whom, from what, with what, and how was it checked. It is written for the agent's tree, so breadcrumbs, task ids and cycle numbers belong here and not in the deliverable.
+
+**Front matter, required keys**:
+
+| key | content |
+|---|---|
+| `type` | `report` |
+| `title` | the deliverable's title |
+| `date` | completion date, `YYYY-MM-DD` |
+| `author` | the agent's identity, plus collaborators (`working with ...`) |
+| `audience` | who the deliverable was written for |
+| `classification` | who may read it; which rows, figures or sections are restricted and why |
+| `deliverables` | list of deliverable files in the folder |
+| `source` | the source file, or `none` |
+| `derived_from` | paths to the artifacts the report is derived from: an experiment's protocol and analysis, an observation, a roadmap, an earlier report |
+| `dependencies` | what the numbers rest on: data tables with content hashes, code, figures, external references (a repository and commit, a paper) |
+| `verified` | how the report's numbers were checked against the source's result files, and when (section 8.2) |
+| `published` | optional: `url`, `label`, `date` per published copy |
+
+**Sections** (after the front matter): a first-level heading with the report's title (the graph takes the node title from it), then `## Derived from`, `## Dependencies`, `## Verification`, `## Wiki-Links`. Prose in these sections may say what the front matter cannot (why a dependency matters, what a verification found and fixed).
+
+**Example** (sanitized):
+
+```markdown
+---
+type: report
+title: Does X swamp Y in Z features?
+date: YYYY-MM-DD
+author: AgentName@abc123 (working with Collaborator Name)
+audience: colleagues outside the project
+classification: organization-internal; rows from cohort C are restricted pending re-consent
+deliverables: [report.html]
+source: report.md
+derived_from:
+  - agent/public/experiments/YYYY-MM-DD_HHMMSS_NNN_experiment_name/protocol.md
+  - agent/public/experiments/YYYY-MM-DD_HHMMSS_NNN_experiment_name/analysis.md
+dependencies:
+  - data: path/to/feature_table.csv (sha256 0123abcd...)
+  - code: path/to/run_confirmatory.py, path/to/baseline_port.py
+  - figures: path/to/artifacts/public/*.png
+verified: every number re-read from data/results/*.csv on YYYY-MM-DD; one claim corrected (see Verification)
+published:
+  - url: https://host/page/0123abcd
+    label: Report v1.0
+    date: YYYY-MM-DD
+---
+
+# Does X swamp Y in Z features?
+
+## Derived from
+[what the report summarizes, and what it deliberately leaves to the technical record]
+
+## Dependencies
+[what each dependency contributes]
+
+## Verification
+[what was checked, against what, what was found]
+
+## Wiki-Links
+[[concept_a]] [[concept_b]]
+```
+
+### 6.5 Privacy and Classification
 
 Reports are **public artifacts** suitable for:
 - Team knowledge sharing
@@ -652,19 +799,104 @@ Reports are **public artifacts** suitable for:
 
 **Public = Shareable**: If you wouldn't want stakeholders to read it, belongs in reflection, not report.
 
+**Restricted data**: a report that includes rows, figures or numbers under a restriction (consent pending, internal only, embargoed) states the restriction in the deliverable's first screen, as a banner the reader cannot miss, and in the sidecar's `classification` key. A deliverable for readers outside the restriction is built from the unrestricted rows only, and its figures are regenerated for that scope from the result files rather than cropped from figures that include restricted panels.
+
 ---
 
 ## 7. Knowledge Web Participation
 
 **Does this type participate?** Yes.
 
-**What is the unit of a node?** The whole report.
+**What is the unit of a node?** One node per report. For a folder report (6.2) the node is the **provenance sidecar**, `provenance.md`; for a single-file report the node is the file. The deliverable, the source and the renderer are evidence and carry no `## Wiki-Links` section. Two linked files in one folder make two nodes for one deliverable, and a concept query then returns the report twice with no way to tell which entry is the report.
 
 **Which class?** **Conceptual authority.** A report is a standalone analytical deliverable; its findings are meant to be drawn on by work that has not been planned yet — most often by a roadmap written later. That downstream reader is exactly the reader who does not know the report exists, and concept query is the only way they find it.
 
 **What provenance?** **Lived** by default. A report analysing another agent's system, or inherited wholesale, is **inherited** and marked, because a reader will otherwise treat its conclusions as this agent's own verified findings.
 
-**Every report carries a `## Wiki-Links` section.** A research report exists to be consumed by later planning. If a roadmap author cannot find it by concept, the research is repeated — which is the specific waste reports are written to prevent.
+**Every report carries a `## Wiki-Links` section** (on the sidecar, for a folder report). Link the concepts the findings are about. The link back to what the report was derived from is a path in the sidecar's `derived_from` key, not a wiki-link: a concept names a subject, a path names a file. A research report exists to be consumed by later planning. If a roadmap author cannot find it by concept, the research is repeated — which is the specific waste reports are written to prevent.
+
+---
+
+## 8. Reports Derived from Experiments
+
+An experiment's `analysis.md` is written for the agent's own tree: it names hypotheses by label, cites result files by path, and assumes the reader can open the protocol. When the experiment has reached a terminal state, a report may be derived from it for readers who cannot. The framework skill `maceff-report-from-experiment` walks this section.
+
+### 8.1 Audience and Voice
+
+- The report is written under `public_voice.md`.
+- It stands alone. A reader with no access to the agent's tree can follow it from the first line to the last.
+- Framework vocabulary does not appear in the deliverable: no task ids, cycle numbers, breadcrumbs, mode names, or artifact type names. Those belong in the sidecar.
+- Domain terms are explained at first use. The measurement, the labels, the unit of analysis, and every statistic used are said in words before they are used in a table.
+- Verdicts are reported as registered. A rejected hypothesis stays rejected in the report; the reasons and what survives are explained, never softened for the audience.
+- The analysis remains the technical record. The report cites it and does not replace it.
+
+### 8.2 Verification Duty
+
+**Every number in the report is re-read from the experiment's result files, not from the analysis prose.** A number restated in prose drifts: a family median becomes "every feature", a rounded interval loses its sign, a scope is dropped. The rewrite from analysis to report is exactly where such errors enter, and the result files are the instrument reading. The check is recorded in the sidecar's `verified` key, with what it found. When it finds an error in the analysis, the analysis is corrected too.
+
+**Figures are regenerated for the report's audience and scope** from the same result files. A figure cropped from the analysis carries the analysis's labels and, often, panels the audience may not see.
+
+### 8.3 Structure
+
+The narrative arc of section 3 applied to a single experiment; the section list of 3.2 is not mandatory here.
+
+1. The answer first: what was asked and what the data said, with the verdicts.
+2. Background: what the measurement is, how the labels arise, why the question matters.
+3. The data: the sets used, their scope and restrictions, what was excluded and why.
+4. How it was run: pre-registration, the unit of analysis, where uncertainty comes from, baselines re-run rather than quoted, reproducibility.
+5. Results, one hypothesis at a time, in plain language, with the numbers for every scope the experiment reported.
+6. What it means for the question that motivated the experiment.
+7. Limitations, and what would be done differently.
+8. Next steps and open questions, including questions only a person can answer.
+9. Where the material is.
+
+### 8.4 Pointers in Both Directions
+
+- The sidecar's `derived_from` names the protocol and the analysis.
+- The analysis's cross-references name the report folder and any published address.
+- The experiment's task carries a note with the same pointers.
+
+A report the experiment does not point to is found only by concept query; a report that does not point to the experiment cannot be checked.
+
+---
+
+## 9. Anti-Patterns
+
+**❌ Framework vocabulary in an outside-facing report**
+- **Problem**: "Task #180 under MISSION #172, Cycle 123" means nothing to the reader and marks the document as internal machinery.
+- **Fix**: say what was done and when; put the identifiers in the sidecar.
+
+**❌ Numbers restated from the analysis prose or from memory**
+- **Problem**: the rewrite is where a median becomes "every", an interval loses a sign, a scope disappears.
+- **Fix**: re-read each number from the result files; record the check in `verified`.
+
+**❌ Wiki-Links on both the source and the sidecar**
+- **Problem**: two nodes for one report; concept queries return the report twice.
+- **Fix**: the sidecar carries the links; the source carries none.
+
+**❌ A deliverable published from a scratch path with no folder and no sidecar**
+- **Problem**: the address exists and the corpus does not know; the next agent cannot find, verify, or republish it.
+- **Fix**: build into the report folder; record the address in the sidecar; republish from the same path.
+
+**❌ Restricted rows without a banner, or panels cropped out of a figure**
+- **Problem**: a reader outside the restriction sees what they may not, or a figure whose scale and legend belong to a scope they were not shown.
+- **Fix**: the banner on the first screen; figures regenerated for the scope.
+
+**❌ A rejected verdict softened for the audience**
+- **Problem**: the report and the analysis disagree, and the report is the one that gets quoted.
+- **Fix**: report the verdict as registered; explain what survives.
+
+**❌ Breadcrumbs in the deliverable**
+- **Problem**: forensic identifiers in a document written for someone who cannot resolve them.
+- **Fix**: breadcrumbs, task ids and cycle numbers go in the sidecar.
+
+---
+
+## 10. Evolution & Feedback
+
+This policy changes when a report form is needed that it does not describe (a new deliverable format, a report derived from something other than an experiment or a project), when the sidecar is found to lack a key a reader needed, or when the graph's treatment of report folders changes. Propose the change with the case that motivated it.
+
+**Principle**: a report is finished when a reader who was not there can follow it, and when an agent who was not there can find it, check it, and rebuild it.
 
 ---
 
@@ -676,6 +908,8 @@ Reports are **public artifacts** suitable for:
 - `checkpoints.md`: Reports consolidate checkpoint timelines
 - `reflections.md`: Private wisdom vs public narrative distinction
 - `learnings.md`: Report insights may become learnings policy entries
+- `public_voice.md`: Voice and vocabulary for reports read outside the working context
+- `scholarship.md`: Node classes, provenance, and wiki-link normalization the sidecar follows
 - Personal policies: Successful patterns become constitutional practices
 
 **When to Reference This Policy**:
@@ -702,8 +936,8 @@ Reports are **public artifacts** suitable for:
 - Reflection: Private wisdom synthesis
 - **Report**: Public project completion narrative
 
-**Essential Sections**:
-1. Header with breadcrumb
+**Essential Sections** (project narratives; experiment-derived reports follow section 8):
+1. Header (breadcrumbs in the sidecar for folder reports)
 2. Vision (why it mattered)
 3. Problem (what challenged us)
 4. Solution (approach taken)
@@ -720,13 +954,13 @@ Reports are **public artifacts** suitable for:
 - Links to detailed artifacts (observations, experiments)
 
 **Storage**:
-- PA: `~/agent/public/reports/`
-- SA: `~/agent/subagents/{role}/public/reports/`
-- Format: `YYYY-MM-DD_HHMMSS_Title_Report.md`
+- PA: `agent/public/reports/`
+- SA: `agent/subagents/{role}/public/reports/`
+- Folder: `YYYY-MM-DD_Title_Report/` with `report.html` (or docx, pdf), `report.md`, `provenance.md`
+- Single file `YYYY-MM-DD_HHMMSS_Title_Report.md` only for internal narratives with no rendered deliverable
 
 ---
 
-*Policy Established: c_73/s_4107604e/p_8c7e6d8/t_1761707487/g_17e7b7d*
 *Public Consciousness Artifact - Project Completion Narratives*
 *Integration: observations, experiments, checkpoints, reflections, learnings, personal policies*
 
