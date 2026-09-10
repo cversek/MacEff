@@ -87,6 +87,18 @@ to prevent. **The explanation is part of the control, not documentation of it.**
 - Which capabilities does the framework bound today?
 - How do I add a new one?
 
+**5.1 Self-Directed Session Control (`macf_tools inject`)**
+- May an agent queue a command into its own pane?
+- Where does the boundary sit if the agent invokes it itself?
+- What happens when it is sent mid-turn?
+
+**5.2 Mailbox Access (`macf_tools gmail`)**
+- What does an agent's mailbox grant actually permit?
+- Which part of this is a boundary and which part is only discipline?
+- Why can drafting not be separated from sending?
+- Where does fetched mail live, and who can read it?
+- What must a refusal here tell me?
+
 **6 Integration with Other Policies**
 
 **7 Anti-Patterns**
@@ -402,6 +414,62 @@ made acceptable by the mechanism differing.
 grant: an operator directing an agent remotely has no other way to trigger a
 compaction, and the alternative is hand-typing raw send-keys, which is the same
 act with less auditability.
+
+---
+
+### 5.2 Mailbox Access (`macf_tools gmail`)
+
+An agent may hold its own OAuth grant to the operator's mailbox, in its own home,
+at the smallest scope its work needs. This replaces an account-level connector
+whose authorization every session of that account shares, where no configuration
+exists to scope one agent differently from another.
+
+**Where the boundary actually sits, and where it does not.** Apply the sizing test
+above honestly and this capability splits in two.
+
+The **scope is a boundary**. It is declared at consent time, enforced by the
+provider, and the agent cannot widen it: a read-scoped grant is refused when it
+attempts to draft, by the provider, not by our code. Measured rather than assumed.
+
+The **absence of a send verb is not a boundary**. It is discipline. The scope that
+permits drafting also permits sending -- the provider offers no draft-only scope,
+and a compose-scoped token was measured sending a message successfully. An agent
+holding that grant could call the provider directly. By this policy's own sizing
+test, a restriction the restricted component can lift is not a boundary, and
+calling it one would be the more comfortable description and the false one.
+
+**So the send restriction is held by three things, none of them the tool.** The
+verb is absent from the command surface. Every call appends an audit record, so a
+send that happened by another route is visible after the fact rather than
+invisible. And the permission layer, which the operator configures and the agent
+cannot edit, can deny the invocation outright -- that last one is the only part
+that is a boundary in this policy's sense, and it is the part worth configuring.
+
+**Fetched mail is the operator's data and does not live in the agent's tree.** It
+is cached outside it, encrypted at rest, under a directory named by an identifier
+the grant records. The decryption key is stored separately, beside the grant, so
+possession of the cache alone yields nothing. Without a crypto backend the cache
+refuses rather than falling back to plaintext: a capability that is off is honest,
+one that is present but hollow is not.
+
+**Credential files never leave the host.** The grant, the client registration and
+the cache key each carry a planted marker. The backup archiver excludes them by
+name and by marker, so a renamed credential is still caught, and the pre-commit
+scan refuses a commit that carries one. Both refuse without printing the material
+they refuse, since a gate that echoes a credential into a terminal or a log has
+moved the disclosure rather than prevented it.
+
+**What a refusal must say.** A refusal here names which of the two it is. "The
+provider refused this scope" and "the operator's permission rules deny this verb"
+send an agent to different places, and an agent that cannot tell them apart will
+look for a way around the one it cannot change.
+
+**Operator note.** The grant is revocable at the provider and by the tool, which
+revokes there first and only then unlinks locally, so a failure cannot leave a
+live token with no local record of it. Re-authorizing costs one browser consent.
+An operator who wants drafting without the ability to send should understand that
+the provider does not offer that, and should place a permission rule rather than
+trust the shape of the command surface.
 
 ---
 
