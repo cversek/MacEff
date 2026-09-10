@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Callable
 
-from .paths import BackupSource, BackupPaths
+from .paths import iter_backup_files, BackupSource, BackupPaths
 from .manifest import create_manifest, save_manifest, load_manifest
 
 
@@ -58,14 +58,13 @@ def create_archive(
                 tar.add(source.source_path, arcname=source.archive_path)
             else:
                 # Directory: add all files
-                for file_path in source.source_path.rglob("*"):
-                    if file_path.is_file():
-                        rel_path = file_path.relative_to(source.source_path)
-                        archive_path = f"{source.archive_path}/{rel_path}"
-                        current_file += 1
-                        if progress_callback:
-                            progress_callback(archive_path, current_file, total_files)
-                        tar.add(file_path, arcname=archive_path)
+                for file_path in iter_backup_files(source.source_path):
+                    rel_path = file_path.relative_to(source.source_path)
+                    archive_path = f"{source.archive_path}/{rel_path}"
+                    current_file += 1
+                    if progress_callback:
+                        progress_callback(archive_path, current_file, total_files)
+                    tar.add(file_path, arcname=archive_path)
 
         # Add manifest as last entry
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
