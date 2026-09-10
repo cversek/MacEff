@@ -8,7 +8,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
-from .paths import BackupSource, BackupPaths
+from .paths import iter_backup_files, BackupSource, BackupPaths
 
 
 def compute_sha256(file_path: Path) -> str:
@@ -73,14 +73,13 @@ def create_manifest(
             )
         else:
             # Directory: walk all files
-            for file_path in source.source_path.rglob("*"):
-                if file_path.is_file():
-                    rel_path = file_path.relative_to(source.source_path)
-                    archive_path = f"{source.archive_path}/{rel_path}"
-                    _add_file_to_manifest(
-                        manifest, source, file_path,
-                        archive_path, include_checksums
-                    )
+            for file_path in iter_backup_files(source.source_path):
+                rel_path = file_path.relative_to(source.source_path)
+                archive_path = f"{source.archive_path}/{rel_path}"
+                _add_file_to_manifest(
+                    manifest, source, file_path,
+                    archive_path, include_checksums
+                )
 
     return manifest
 

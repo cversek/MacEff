@@ -54,6 +54,36 @@ class BackupPaths:
         return self.backup_dir / self.generate_archive_name()
 
 
+### Files that must never leave the host inside a backup archive. Name match
+### first (cheap); then a sentinel scan of small files under .maceff/, so a
+### renamed grant is still caught. The sentinel string is defined by the
+### credential's own writer (macf.gmail.SENTINEL) and only ever appears in
+### files that must not be copied off-host.
+EXCLUDED_NAMES = {"gmail_grant.json", "gmail_client.json", "gmail_cache_key"}
+SECRET_SENTINEL = b"MACEFF-SECRET-SENTINEL"
+SENTINEL_SCAN_MAX_BYTES = 65536
+
+
+def is_excluded_from_backup(path: Path) -> bool:
+    """True for credential files that must not be archived."""
+    if path.name in EXCLUDED_NAMES:
+        return True
+    try:
+        if path.stat().st_size <= SENTINEL_SCAN_MAX_BYTES:
+            with open(path, "rb") as f:
+                return SECRET_SENTINEL in f.read()
+    except OSError:
+        return False
+    return False
+
+
+def iter_backup_files(source_path: Path):
+    """Yield files under source_path that are eligible for backup."""
+    for f in source_path.rglob("*"):
+        if f.is_file() and not is_excluded_from_backup(f):
+            yield f
+
+
 @dataclass
 class BackupSource:
     """A single source to include in backup."""
@@ -72,9 +102,8 @@ class BackupSource:
         if self.source_path.is_file():
             return self.source_path.stat().st_size
         total = 0
-        for f in self.source_path.rglob("*"):
-            if f.is_file():
-                total += f.stat().st_size
+        for f in iter_backup_files(self.source_path):
+            total += f.stat().st_size
         return total
 
 
