@@ -9528,6 +9528,189 @@ def _trust_badge(message) -> str:
     return _TRUST_BADGES.get(value, f"❔ [unrecognised classification: {_term_safe(value)}]")
 
 
+# ── gmail: per-agent Gmail through a local grant (shape mirrors amail) ──────────
+
+
+def _gmail_fail(e: Exception) -> int:
+    print(f"❌ {_term_safe(e)}")
+    return 1
+
+
+def _gmail_row(r: dict) -> str:
+    return (f"{_term_safe(r.get('date', ''))[:31]:<31} {_term_safe(r.get('from', ''))[:40]:<40} "
+            f"{_term_safe(r.get('subject', ''))[:60]}\n    id={r.get('thread_id')} messages={r.get('messages', '?')}")
+
+
+def cmd_gmail_auth(args: argparse.Namespace) -> int:
+    """Authorize once in the browser; write the grant, the cache key, and an empty cache."""
+    from macf import gmail
+    try:
+        r = gmail.authorize(args.profile, open_browser=not args.no_browser,
+                            capture=Path(args.capture) if args.capture else None,
+                            url_sink=lambda u: print("If no browser opened, visit:\n" + u))
+    except gmail.GmailError as e:
+        return _gmail_fail(e)
+    if args.json:
+        print(json.dumps(r, indent=2))
+        return 0
+    print(f"✅ grant written ({r['grant']}, mode 600) profile={r['profile']} elapsed={r['elapsed_s']}s")
+    print(f"   scopes: {' '.join(r['scopes'])}")
+    print(f"   refresh_token_expires_in: {r['refresh_token_expires_in'] if r['refresh_token_expires_in'] is not None else 'absent'}")
+    if r["capture"]:
+        print(f"   raw response (tokens redacted) -> {r['capture']}")
+    return 0
+
+
+def cmd_gmail_revoke(args: argparse.Namespace) -> int:
+    """Revoke at Google first, then remove the grant, then purge the cache."""
+    from macf import gmail
+    try:
+        r = gmail.revoke()
+    except gmail.GmailError as e:
+        return _gmail_fail(e)
+    if args.json:
+        print(json.dumps(r, indent=2))
+        return 0
+    print(f"✅ revoked at Google; removed {r['grant_removed']}; cache objects purged: {r['cache_purged']}")
+    return 0
+
+
+def cmd_gmail_status(args: argparse.Namespace) -> int:
+    """Is gmail usable? Exit 0 when a grant is present and (with --check) refreshes."""
+    from macf import gmail
+    try:
+        info = gmail.status()
+        if args.check and info.get("present"):
+            info["check"] = gmail.check()
+    except gmail.GmailError as e:
+        if args.json:
+            print(json.dumps({"ok": False, "error": str(e)}, indent=2))
+            return 1
+        return _gmail_fail(e)
+    usable = bool(info.get("present")) and (not args.check or info.get("check", {}).get("profile_status") == 200)
+    if args.json:
+        print(json.dumps(info, indent=2))
+        return 0 if usable else 1
+    if not info.get("present"):
+        print(f"❌ no grant at {info['grant']}; run: macf_tools gmail auth --profile read")
+        return 1
+    c = info["cache"]
+    print(f"grant:    {info['grant']} mode={info['mode']} sentinel={'present' if info['sentinel'] else 'MISSING'}")
+    print(f"profile:  {info['profile']}  issued {info['issued_at']}  refresh_token_expires_in={info['refresh_token_expires_in']}")
+    print(f"scopes:   {' '.join(info['scopes'])}")
+    print(f"send:     {'possible at Google (compose scope) — no verb here; audit + deny rule are the controls' if info['can_send_at_google'] else 'impossible (no compose scope)'}")
+    if c.get("present"):
+        print(f"cache:    {c['threads']} thread(s), {c['objects']} object(s), {c['bytes']} B, newest fetch {c.get('newest_fetch') or 'none'}")
+    else:
+        print("cache:    empty")
+    if "check" in info:
+        print(f"check:    refresh ok; profile call {info['check']['profile_status']} {info['check']['email'] or ''}")
+    return 0 if usable else 1
+
+
+def cmd_gmail_list(args: argparse.Namespace) -> int:
+    """One line per thread from headers; bodies are never printed here."""
+    from macf import gmail
+    try:
+        rows = gmail.list_threads(args.query or "", args.limit)
+    except gmail.GmailError as e:
+        return _gmail_fail(e)
+    if args.json:
+        print(json.dumps({"query": args.query, "threads": rows}, indent=2))
+        return 0
+    if not rows:
+        print("(no threads)")
+        return 0
+    for r in rows:
+        print(_gmail_row(r))
+    print(f"{len(rows)} thread(s)")
+    return 0
+
+
+def cmd_gmail_sync(args: argparse.Namespace) -> int:
+    """Fetch matching threads into the encrypted cache; prints counts, never paths."""
+    from macf import gmail
+    try:
+        r = gmail.sync(args.query, args.limit)
+    except gmail.GmailError as e:
+        return _gmail_fail(e)
+    if args.json:
+        print(json.dumps(r, indent=2))
+        return 0
+    print(f"✅ synced: {r['matched']} matched, {r['fetched']} fetched, {r['cached_threads']} thread(s) in cache")
+    return 0
+
+
+def cmd_gmail_read(args: argparse.Namespace) -> int:
+    """Print one thread, from the cache when present, fetching otherwise."""
+    from macf import gmail
+    try:
+        rec, cached = gmail.read_thread(args.thread_id)
+    except gmail.GmailError as e:
+        return _gmail_fail(e)
+    if args.json:
+        print(json.dumps({"from_cache": cached, **rec}, indent=2))
+        return 0
+    print(f"thread {rec['thread_id']}  ({'cache' if cached else 'fetched'} {rec['fetched_at']})")
+    for m in rec["messages"]:
+        print(f"\n── {_term_safe(m['date'])}  {_term_safe(m['from'])}")
+        print(f"   to: {_term_safe(m['to'])}" + (f"  cc: {_term_safe(m['cc'])}" if m.get("cc") else ""))
+        print(f"   subject: {_term_safe(m['subject'])}   message_id={m['message_id']}")
+        for a in m.get("attachments", []):
+            print(f"   📎 {_term_safe(a['filename'])} ({a.get('mime')}, {a.get('size')} B) id={a['attachment_id']}")
+        print()
+        print(_term_safe(m["body"]))
+    print(f"\n{len(rec['messages'])} message(s)")
+    return 0
+
+
+def cmd_gmail_draft(args: argparse.Namespace) -> int:
+    """Create a Gmail draft. There is no send verb; see the module docstring."""
+    from macf import gmail
+    if args.body_file and args.body:
+        print("❌ give --body or --body-file, not both")
+        return 1
+    try:
+        body = Path(args.body_file).read_text() if args.body_file else (args.body or "")
+    except OSError as e:
+        return _gmail_fail(e)
+    try:
+        r = gmail.create_draft(args.to, args.subject or "", body, cc=args.cc or None,
+                               attach=args.attach or None, reply_to=args.reply_to)
+    except gmail.GmailError as e:
+        return _gmail_fail(e)
+    if args.json:
+        print(json.dumps(r, indent=2))
+        return 0
+    print(f"✅ draft created: {r['draft_id']} in thread {r['thread_id']}")
+    print(f"   to={', '.join(r['to'])} subject={_term_safe(r['subject'])!r} attachments={r['attachments']}")
+    return 0
+
+
+def cmd_gmail_cache(args: argparse.Namespace) -> int:
+    """cache status | cache purge."""
+    from macf import gmail
+    try:
+        if args.gmail_cache_cmd == "purge":
+            r = gmail.cache_purge()
+            if args.json:
+                print(json.dumps(r, indent=2))
+            else:
+                print(f"✅ cache purged: {r['purged']} object(s) overwritten and removed")
+            return 0
+        c = gmail.cache_status()
+    except gmail.GmailError as e:
+        return _gmail_fail(e)
+    if args.json:
+        print(json.dumps(c, indent=2))
+        return 0
+    if not c.get("present"):
+        print("cache: empty")
+        return 0
+    print(f"cache: {c['threads']} thread(s), {c['objects']} object(s), {c['bytes']} B, newest fetch {c.get('newest_fetch') or 'none'}, key {'present' if c['key_present'] else 'MISSING'}")
+    return 0
+
+
 def cmd_amail_keygen(args: argparse.Namespace) -> int:
     """Generate this agent's authorship signing key and print its public half."""
     from macf.amail import SigningError, generate_keypair
@@ -11742,6 +11925,84 @@ def _build_parser() -> argparse.ArgumentParser:
     amail_status = amail_sub.add_parser("status", help="is amail usable? what is missing?")
     amail_status.add_argument("--json", action="store_true", help="machine-readable output")
     amail_status.set_defaults(func=cmd_amail_status)
+
+    # ── gmail ────────────────────────────────────────────────────────────
+    gmail_parser = sub.add_parser(
+        "gmail", help="per-agent Gmail through a local OAuth grant (no MCP, no send verb)",
+        description=(
+            "Read and draft mail in the operator's Gmail with a grant held only in this "
+            "agent's home. Mail is cached only under the OS temp root, encrypted at "
+            "rest; nothing is written under the agent tree. There is no send verb."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  macf_tools gmail auth --profile draft\n"
+            "  macf_tools gmail list 'from:someone newer_than:7d'\n"
+            "  macf_tools gmail sync 'newer_than:30d' --limit 100\n"
+            "  macf_tools gmail read 1a06c915e59e75a2\n"
+            "  macf_tools gmail draft --to a@b.org --subject hi --body-file note.md --attach report.pdf\n"
+            "  macf_tools gmail cache purge\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    gmail_sub = gmail_parser.add_subparsers(dest="gmail_cmd")
+
+    gmail_auth = gmail_sub.add_parser("auth", help="authorize once in the browser; writes the grant and cache key")
+    gmail_auth.add_argument("--profile", choices=sorted(("read", "draft", "compose_only")), default="read",
+                            help="scope profile (draft = readonly + compose; compose can send at Google)")
+    gmail_auth.add_argument("--capture", metavar="PATH", help="write the redacted raw token response here")
+    gmail_auth.add_argument("--no-browser", action="store_true", help="print the consent URL instead of opening a browser")
+    gmail_auth.add_argument("--json", action="store_true", help="machine-readable result")
+    gmail_auth.set_defaults(func=cmd_gmail_auth)
+
+    gmail_revoke = gmail_sub.add_parser("revoke", help="revoke at Google, remove the grant, purge the cache")
+    gmail_revoke.add_argument("--json", action="store_true", help="machine-readable result")
+    gmail_revoke.set_defaults(func=cmd_gmail_revoke)
+
+    gmail_status = gmail_sub.add_parser("status", help="is gmail usable? what is missing?")
+    gmail_status.add_argument("--check", action="store_true", help="also refresh the token and call the profile endpoint")
+    gmail_status.add_argument("--json", action="store_true", help="machine-readable output")
+    gmail_status.set_defaults(func=cmd_gmail_status)
+
+    gmail_list = gmail_sub.add_parser("list", help="list threads matching a Gmail query (headers only)")
+    gmail_list.add_argument("query", nargs="?", default="", help="Gmail query, e.g. 'from:x newer_than:7d'")
+    gmail_list.add_argument("--limit", type=int, default=20, metavar="N", help="max threads (default 20)")
+    gmail_list.add_argument("--json", action="store_true", help="machine-readable output")
+    gmail_list.set_defaults(func=cmd_gmail_list)
+
+    gmail_sync = gmail_sub.add_parser("sync", help="fetch matching threads into the encrypted cache")
+    gmail_sync.add_argument("query", help="Gmail query")
+    gmail_sync.add_argument("--limit", type=int, default=50, metavar="N", help="max threads (default 50)")
+    gmail_sync.add_argument("--json", action="store_true", help="machine-readable output")
+    gmail_sync.set_defaults(func=cmd_gmail_sync)
+
+    gmail_read = gmail_sub.add_parser("read", help="print one thread (from cache when present)")
+    gmail_read.add_argument("thread_id", help="thread id (see `gmail list`)")
+    gmail_read.add_argument("--json", action="store_true", help="machine-readable output")
+    gmail_read.set_defaults(func=cmd_gmail_read)
+
+    gmail_draft = gmail_sub.add_parser(
+        "draft", help="create a Gmail draft (never sends)",
+        description="Create a draft. The compose scope CAN send at Google; this tool has no send verb, "
+                    "every call is audited, and a Bash deny rule can gate it further.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    gmail_draft.add_argument("--to", action="append", required=True, metavar="ADDRESS", help="recipient (repeat for several)")
+    gmail_draft.add_argument("--cc", action="append", metavar="ADDRESS", help="cc recipient (repeatable)")
+    gmail_draft.add_argument("--subject", help="subject line")
+    gmail_draft.add_argument("--body", help="message body")
+    gmail_draft.add_argument("--body-file", help="read the body from a file")
+    gmail_draft.add_argument("--reply-to", metavar="MESSAGE_ID", help="reply, joining that message's thread")
+    gmail_draft.add_argument("--attach", action="append", metavar="PATH", help="attach a file (repeatable)")
+    gmail_draft.add_argument("--json", action="store_true", help="machine-readable result")
+    gmail_draft.set_defaults(func=cmd_gmail_draft)
+
+    gmail_cache = gmail_sub.add_parser("cache", help="the encrypted cache: status | purge")
+    gmail_cache_sub = gmail_cache.add_subparsers(dest="gmail_cache_cmd")
+    for _name, _help in (("status", "cache size, thread count, newest fetch"), ("purge", "overwrite and remove every cached object")):
+        _p = gmail_cache_sub.add_parser(_name, help=_help)
+        _p.add_argument("--json", action="store_true", help="machine-readable output")
+        _p.set_defaults(func=cmd_gmail_cache)
 
     proxy_parser = sub.add_parser("proxy", help="API proxy for CC call interception")
     proxy_sub = proxy_parser.add_subparsers(dest="proxy_cmd")

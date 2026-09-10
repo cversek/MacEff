@@ -108,3 +108,29 @@ def test_missing_profile_fails_closed(repo, profile):
     r = _git(repo, "commit", "-m", "clean but no profile", check=False)
     assert r.returncode != 0
     assert "failing closed" in r.stdout + r.stderr
+
+
+class TestCredentialSentinelScoping:
+    """The gate must refuse a credential FILE without refusing the module that defines the marker.
+
+    A bare-string rule for the sentinel matches both, which would make the
+    guard unable to ship alongside its own definition -- and the only way past
+    would be the bypass flag on a file that is no credential at all.
+    """
+
+    def _hits(self, text):
+        import re
+        from macf.opsec import DEFAULT_PROFILE
+        secret = set(DEFAULT_PROFILE.get("secret_class", []))
+        return [label for pat, label in DEFAULT_PROFILE["hard"]
+                if label in secret and re.search(pat, text)]
+
+    def test_grant_file_content_is_flagged(self):
+        grant = '{\n  "_sentinel": "MACEFF-SECRET-SENTINEL:gmail_grant:must-not-leave-host",\n  "refresh_token": "1//0AAAAAAAAAAAAAAAAAAAAAAAAAA"\n}'
+        labels = self._hits(grant)
+        assert any("sentinel" in x for x in labels)
+        assert any("refresh token" in x for x in labels)
+
+    def test_module_defining_the_marker_is_not_flagged(self):
+        source = 'SENTINEL = "MACEFF-SECRET-SENTINEL:gmail_grant:must-not-leave-host"\n'
+        assert self._hits(source) == []
