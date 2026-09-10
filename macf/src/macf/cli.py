@@ -9711,6 +9711,73 @@ def cmd_gmail_cache(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_amail_preflight(args: argparse.Namespace) -> int:
+    """Scan a hand-carried bundle before it leaves the host.
+
+    Exit codes are distinct because the responses are. 3 means key or token
+    material is present and the bundle must not go. 4 means this gate could not
+    read some of it, which is an absence of evidence rather than a pass. Private
+    vocabulary is reported and does not block, because whether it may travel
+    depends on a destination the tool does not know; --strict says it is foreign.
+    """
+    from macf.amail.preflight import scan_bundle
+
+    target = Path(args.target)
+    if not target.exists():
+        print(f"\u274c no such path: {target}")
+        return 1
+    try:
+        r = scan_bundle(target)
+    except ValueError as e:
+        print(f"\u274c {e}")
+        return 1
+
+    if args.json:
+        print(json.dumps(r, indent=2))
+    total = r["files_scanned"] + r["files_unscannable"]
+
+    if r["credentials"]:
+        if not args.json:
+            print(f"\U0001f6ab REFUSED: {len(r['credentials'])} credential finding(s) "
+                  f"in {total} file(s)")
+            for f in r["credentials"]:
+                print(f"   {_term_safe(f['file'])}: [{f['label']}]")
+            print("   <REDACTED -- this gate does not print the material it refuses>")
+        return 3
+
+    if r["context"] and not args.json:
+        print(f"\u2139\ufe0f  {len(r['context'])} private-context finding(s) in {total} file(s). "
+              f"Fine between agents of this framework; a leak if this bundle is "
+              f"bound anywhere else.")
+        for f in r["context"][:12]:
+            print(f"   {_term_safe(f['file'])}: [{f['label']}]")
+        if len(r["context"]) > 12:
+            print(f"   ... and {len(r['context']) - 12} more")
+    if r["context"] and args.strict:
+        if not args.json:
+            print("\U0001f6ab REFUSED under --strict: the destination was declared foreign.")
+        return 3
+
+    if r["unscannable"] and not args.allow_unscannable:
+        if not args.json:
+            print(f"\u26a0\ufe0f  {len(r['unscannable'])} file(s) could not be read by this gate; "
+                  f"{r['files_scanned']} scanned")
+            for name in r["unscannable"][:20]:
+                print(f"   unscanned: {_term_safe(name)}")
+            print("   An unread file is not a clean file. Review them, then re-run "
+                  "with --allow-unscannable.")
+        return 4
+
+    if not args.json:
+        bits = [f"{r['files_scanned']} file(s) scanned"]
+        if r["context"]:
+            bits.append(f"{len(r['context'])} private-context finding(s) accepted")
+        if r["unscannable"]:
+            bits.append(f"{r['files_unscannable']} unscannable and allowed")
+        print("\u2705 no credential material: " + ", ".join(bits))
+    return 0
+
+
 def cmd_amail_keygen(args: argparse.Namespace) -> int:
     """Generate this agent's authorship signing key and print its public half."""
     from macf.amail import SigningError, generate_keypair
@@ -11921,6 +11988,38 @@ def _build_parser() -> argparse.ArgumentParser:
     amail_keygen.add_argument("--path", help="where to write the private key "
                                             "(default: ~/.maceff/amail_signing_key.pem)")
     amail_keygen.set_defaults(func=cmd_amail_keygen)
+
+    amail_preflight = amail_sub.add_parser(
+        "preflight", help="scan a hand-carried bundle before it leaves the host",
+        description=(
+            "The broker scrubs what it sends. A bundle a human zips and carries "
+            "never reaches the broker, so nothing scans it. This runs the same "
+            "patterns over every file in a directory or a zip."
+        ),
+        epilog=(
+            "Exit codes:\n"
+            "  0  clean\n"
+            "  3  credential material found, or private vocabulary under --strict\n"
+            "  4  some files could not be read (an unread file is not a clean one)\n"
+            "\n"
+            "Private vocabulary (framework names, agent monikers, task numbers) is\n"
+            "reported but does not block: between agents of this framework it is the\n"
+            "content. Use --strict when the bundle is bound anywhere else.\n"
+            "\n"
+            "Examples:\n"
+            "  macf_tools amail preflight ./outbound_bundle\n"
+            "  macf_tools amail preflight bundle.zip --json\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    amail_preflight.add_argument("target", help="bundle directory or zip archive")
+    amail_preflight.add_argument("--allow-unscannable", action="store_true",
+                                 help="proceed when files could not be read, after review")
+    amail_preflight.add_argument("--strict", action="store_true",
+                                 help="the destination is outside this framework: "
+                                      "treat private vocabulary as blocking too")
+    amail_preflight.add_argument("--json", action="store_true", help="machine-readable output")
+    amail_preflight.set_defaults(func=cmd_amail_preflight)
 
     amail_status = amail_sub.add_parser("status", help="is amail usable? what is missing?")
     amail_status.add_argument("--json", action="store_true", help="machine-readable output")
