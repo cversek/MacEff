@@ -9612,11 +9612,12 @@ def cmd_gmail_list(args: argparse.Namespace) -> int:
     """One line per thread from headers; bodies are never printed here."""
     from macf import gmail
     try:
-        rows = gmail.list_threads(args.query or "", args.limit)
+        q = _gmail_query(args)
+        rows = gmail.list_threads(q, args.limit)
     except gmail.GmailError as e:
         return _gmail_fail(e)
     if args.json:
-        print(json.dumps({"query": args.query, "threads": rows}, indent=2))
+        print(json.dumps({"query": q, "threads": rows}, indent=2))
         return 0
     if not rows:
         print("(no threads)")
@@ -9631,7 +9632,8 @@ def cmd_gmail_sync(args: argparse.Namespace) -> int:
     """Fetch matching threads into the encrypted cache; prints counts, never paths."""
     from macf import gmail
     try:
-        r = gmail.sync(args.query, args.limit)
+        q = _gmail_query(args)
+        r = gmail.sync(q, args.limit)
     except gmail.GmailError as e:
         return _gmail_fail(e)
     if args.json:
@@ -9686,6 +9688,68 @@ def cmd_gmail_draft(args: argparse.Namespace) -> int:
     print(f"   to={', '.join(r['to'])} subject={_term_safe(r['subject'])!r} attachments={r['attachments']}")
     return 0
 
+
+def _gmail_query(args: argparse.Namespace) -> str:
+    """Saved name, shortcut flags and free text, compiled into one Gmail query."""
+    from macf import gmail
+    g = lambda k, d=None: getattr(args, k, d)  # noqa: E731 - callers built by hand may omit flags
+    return gmail.resolve_query(
+        g("query", "") or "", g("saved"),
+        from_=g("from_"), to=g("to"), subject=g("subject"), since=g("since"),
+        until=g("until"), label=g("label"), has_attachment=g("has_attachment", False),
+        unread=g("unread", False))
+
+
+def cmd_gmail_query(args: argparse.Namespace) -> int:
+    """query save NAME QUERY | query list | query rm NAME. Names only, never results."""
+    from macf import gmail
+    try:
+        if args.gmail_query_cmd == "save":
+            gmail.save_query(args.name, args.query)
+            print(f"\u2705 saved {args.name!r}")
+        elif args.gmail_query_cmd == "rm":
+            ok = gmail.delete_query(args.name)
+            print(f"\u2705 removed {args.name!r}" if ok else f"\u274c no saved query {args.name!r}")
+            return 0 if ok else 1
+        else:
+            q = gmail.saved_queries()
+            if args.json:
+                print(json.dumps(q, indent=2))
+            elif not q:
+                print("(no saved queries)")
+            else:
+                for k, v in sorted(q.items()):
+                    print(f"{k:<20} {_term_safe(v)}")
+    except gmail.GmailError as e:
+        return _gmail_fail(e)
+    return 0
+
+
+def cmd_gmail_attachment(args: argparse.Namespace) -> int:
+    """attachment list THREAD_ID | attachment get THREAD_ID ATTACHMENT_ID --out PATH."""
+    from macf import gmail
+    try:
+        if args.gmail_attachment_cmd == "get":
+            r = gmail.get_attachment(args.thread_id, args.attachment_id, Path(args.out))
+            if args.json:
+                print(json.dumps(r, indent=2))
+            else:
+                print(f"\u2705 wrote {r['path']} ({r['bytes']} B, {r['mime']}) sha256={r['sha256']}")
+            return 0
+        rows = gmail.list_attachments(args.thread_id)
+    except gmail.GmailError as e:
+        return _gmail_fail(e)
+    if args.json:
+        print(json.dumps(rows, indent=2))
+        return 0
+    if not rows:
+        print("(no attachments)")
+        return 0
+    for a in rows:
+        print(f"{_term_safe(a['filename'])}  ({a.get('mime')}, {a.get('size')} B)")
+        print(f"    from {_term_safe(a['from'])}  {_term_safe(a['date'])}\n    id={a['attachment_id']}")
+    print(f"{len(rows)} attachment(s)")
+    return 0
 
 def cmd_gmail_cache(args: argparse.Namespace) -> int:
     """cache status | cache purge."""
@@ -12070,7 +12134,7 @@ def _build_parser() -> argparse.ArgumentParser:
     gmail_list.set_defaults(func=cmd_gmail_list)
 
     gmail_sync = gmail_sub.add_parser("sync", help="fetch matching threads into the encrypted cache")
-    gmail_sync.add_argument("query", help="Gmail query")
+    gmail_sync.add_argument("query", nargs="?", default="", help="Gmail query (may be empty when --saved or flags are given)")
     gmail_sync.add_argument("--limit", type=int, default=50, metavar="N", help="max threads (default 50)")
     gmail_sync.add_argument("--json", action="store_true", help="machine-readable output")
     gmail_sync.set_defaults(func=cmd_gmail_sync)
@@ -12095,6 +12159,30 @@ def _build_parser() -> argparse.ArgumentParser:
     gmail_draft.add_argument("--attach", action="append", metavar="PATH", help="attach a file (repeatable)")
     gmail_draft.add_argument("--json", action="store_true", help="machine-readable result")
     gmail_draft.set_defaults(func=cmd_gmail_draft)
+
+    for _p in (gmail_list, gmail_sync):
+        _p.add_argument("--saved", metavar="NAME", help="start from a saved query (see `gmail query`)")
+        _p.add_argument("--from", dest="from_", metavar="ADDR", help="from:ADDR")
+        _p.add_argument("--to", metavar="ADDR", help="to:ADDR")
+        _p.add_argument("--subject", metavar="TEXT", help="subject:TEXT (quoted if it has spaces)")
+        _p.add_argument("--since", metavar="7d|2026-09-01", help="newer_than:7d or after:2026/09/01")
+        _p.add_argument("--until", metavar="7d|2026-09-01", help="older_than:7d or before:2026/09/01")
+        _p.add_argument("--label", metavar="LABEL", help="label:LABEL")
+        _p.add_argument("--has-attachment", action="store_true", help="has:attachment")
+        _p.add_argument("--unread", action="store_true", help="is:unread")
+
+    gmail_query = gmail_sub.add_parser("query", help="saved queries: save | list | rm (names only, never results)")
+    gq = gmail_query.add_subparsers(dest="gmail_query_cmd")
+    _qs = gq.add_parser("save", help="save a query under a name"); _qs.add_argument("name"); _qs.add_argument("query"); _qs.set_defaults(func=cmd_gmail_query)
+    _ql = gq.add_parser("list", help="list saved queries"); _ql.add_argument("--json", action="store_true"); _ql.set_defaults(func=cmd_gmail_query)
+    _qr = gq.add_parser("rm", help="remove a saved query"); _qr.add_argument("name"); _qr.set_defaults(func=cmd_gmail_query)
+
+    gmail_att = gmail_sub.add_parser("attachment", help="attachments: list THREAD_ID | get THREAD_ID ATTACHMENT_ID --out PATH")
+    ga = gmail_att.add_subparsers(dest="gmail_attachment_cmd")
+    _al = ga.add_parser("list", help="list attachments across a thread"); _al.add_argument("thread_id"); _al.add_argument("--json", action="store_true"); _al.set_defaults(func=cmd_gmail_attachment)
+    _ag = ga.add_parser("get", help="download one attachment to a path you name (never into the agent tree or the cache)")
+    _ag.add_argument("thread_id"); _ag.add_argument("attachment_id"); _ag.add_argument("--out", required=True, metavar="PATH", help="file, or a directory to keep the original name")
+    _ag.add_argument("--json", action="store_true"); _ag.set_defaults(func=cmd_gmail_attachment)
 
     gmail_cache = gmail_sub.add_parser("cache", help="the encrypted cache: status | purge")
     gmail_cache_sub = gmail_cache.add_subparsers(dest="gmail_cache_cmd")
