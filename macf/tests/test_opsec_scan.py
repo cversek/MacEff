@@ -456,3 +456,62 @@ def test_full_surface_remains_available_for_outward_renderings():
     """
     r = opsec.scan_message(_framework_addressed(), include_addressing=True)
     assert any(f.part == "header:from" for f in r.findings)
+
+
+class TestCredentialAssignmentAcrossFormats:
+    """The credential-assignment shape must read the format credentials are written in.
+
+    The first version required a word boundary immediately before the keyword
+    and no quote before the separator. That reads shell and YAML and is blind to
+    JSON, where the key is quoted and the keyword is usually suffixed
+    (`refresh_token`, `client_secret`). JSON is the format credential files
+    actually use, so the gap covered the common case.
+    """
+
+    LITERAL_SECRETS = [
+        ('{"password": "correcthorsebattery123"}', "json, plain keyword"),
+        ('{"refresh_token": "ya29.aVeryLongOpaqueValue"}', "json, suffixed keyword"),
+        ('{"client_secret": "GOCSPX-abcdefghijklmnop"}', "json, suffixed keyword"),
+        ("{'api_key': 'correcthorsebattery123'}", "json, single quotes"),
+        ('{"access-token": "correcthorsebattery123"}', "json, hyphenated"),
+        ("API_KEY=correcthorsebattery123", "shell"),
+        ("password: correcthorsebattery123", "yaml"),
+        ('secret = "correcthorsebattery123"', "toml"),
+    ]
+
+    NOT_SECRETS = [
+        ("The password field is required for this endpoint.", "prose"),
+        ('{"password": "short"}', "value too short to be a secret"),
+        ('if "token" in cfg: raise ValueError("missing")', "membership test"),
+        ("def check(self, token: str, secret: bytes) -> bool:", "signature"),
+        ("token = secrets.token_hex(16)", "value is a call"),
+        ("token = result.stdout.strip()", "value is an attribute chain"),
+        ('tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")', "unrelated identifier"),
+    ]
+
+    def test_literal_secrets_are_caught_in_every_format(self):
+        from macf.opsec import scan_text
+        missed = [why for text, why in self.LITERAL_SECRETS if scan_text(text).clean]
+        assert missed == [], f"credential assignment missed: {missed}"
+
+    def test_code_and_prose_are_not_flagged(self):
+        from macf.opsec import scan_text
+        flagged = [
+            why for text, why in self.NOT_SECRETS
+            if any(f.label == "credential assignment" for f in scan_text(text).findings)
+        ]
+        assert flagged == [], f"false positives: {flagged}"
+
+    def test_the_frameworks_own_source_is_not_flagged(self):
+        """A gate that cries wolf over ordinary code gets skimmed, then ignored."""
+        import pathlib
+        from macf import opsec
+        from macf.opsec import scan_text
+        src = pathlib.Path(opsec.__file__).parent
+        hits = [
+            f"{path.name}:{n}"
+            for path in sorted(src.rglob("*.py"))
+            for n, line in enumerate(path.read_text().splitlines(), 1)
+            if any(f.label == "credential assignment" for f in scan_text(line).findings)
+        ]
+        assert hits == [], f"credential assignment fires on framework source: {hits[:8]}"
