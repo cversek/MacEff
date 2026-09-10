@@ -35,6 +35,20 @@ DEFAULT_PROFILE: Dict[str, Any] = {
         [r"calling.card|ULTRATHINK|\bsubagent\b|\bconsciousness\b", "agent infrastructure term"],
         [r"\bClaude\b|\bAnthropic\b|\bChatGPT\b|\bLLM\b", "AI tool reference"],
         [r"[^\x00-\x7f]", "non-ASCII character"],
+        # Credential-class: reported WITHOUT the matched text (see is_secret).
+        # Matched in its FILE form -- the marker as the value of a "_sentinel"
+        # key -- not as a bare string. A bare-string rule also matches the
+        # module that DEFINES the marker, so the gate would refuse to commit
+        # its own guard, and the only way past would be the bypass flag on a
+        # file that is not a credential at all. The backup walker scans file
+        # CONTENTS for the bare marker, which is the right test there because
+        # it must catch a grant that has been renamed.
+        [r'"_sentinel"\s*:\s*"MACEFF-SECRET-SENTINEL', "planted grant-file sentinel (credential file)"],
+        [r"\b1//0[A-Za-z0-9_-]{20,}", "google oauth refresh token (credential)"],
+    ],
+    "secret_class": [
+        "planted grant-file sentinel (credential file)",
+        "google oauth refresh token (credential)",
     ],
     "soft": [
         [r"\barm [A-HJ-Z]\b", "measurement-arm label from private notes"],
