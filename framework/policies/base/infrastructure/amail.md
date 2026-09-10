@@ -93,6 +93,7 @@ becomes tractable once the address stops encoding how the message travels.
   went wrong when it was scoped the other way?
 - Why must a non-delivery notice never reach an unauthenticated sender?
 - Why is a public key that arrives in a message only a claim?
+- What gates a bundle a human carries, which takes no transport path at all?
 
 **7 Threat Model**
 - What does this design actually defend against?
@@ -653,6 +654,47 @@ who did nothing. Notify only where the sending identity was authenticated and al
 otherwise record the refusal and quarantine silently. Silence toward an unprovable
 sender is correct behaviour rather than a gap, and an implementation that helpfully
 bounces everything turns this system into an amplifier aimed at whoever was forged.
+
+### 6b.6 A bundle carried by hand takes no path the gate can see
+
+6b.3 scopes the gate by the path a message takes. That is the right rule for a
+transport, and it leaves a gap the moment a correspondence has a second route.
+A bundle that a human zips and carries -- over a chat app, on a stick, in a
+shared folder -- reaches a correspondent without passing the broker, so it
+passes no gate at all. Neither decision is wrong on its own; this is the seam
+defect 6b.3 already names, arriving in its own house.
+
+**Such a bundle MUST pass the same patterns before it leaves the host**, with
+the same redaction discipline: name the file and the category, quote nothing.
+Running the SAME patterns rather than a second list is the load-bearing part. A
+gate whose vocabulary drifts from the one beside it is worse than no second
+gate, because the two disagree and neither says so.
+
+**Two classes of finding, and conflating them makes the gate useless.**
+
+*Credential material* -- keys, tokens, planted markers -- blocks unconditionally.
+The destination does not matter; there is no correspondent to whom a refresh
+token may travel.
+
+*Private vocabulary* -- a framework name, an agent moniker, an internal task
+number -- is destination-dependent. Between agents of this framework it is the
+content of the message. In a bundle bound for a public repository or a third
+party it is a leak. The tool cannot know which, so it MUST report and let the
+caller declare the destination rather than choose on the caller's behalf.
+
+This is recorded because the first implementation did not distinguish them. It
+refused every bundle that had really been carried, twenty-odd findings apiece,
+and not one was a credential. A gate that calls an agent moniker
+credential-class is not being careful, it is being wrong, and its readers learn
+to skim it -- which costs more than the check was ever worth. The failure was
+invisible to the tests, which used composed fixtures, and appeared on the first
+real bundle.
+
+**A file the gate could not read is not a file that passed.** Bundles carry
+archives, documents and images, and an unreadable one is an absence of evidence.
+It is reported as its own outcome for the operator to decide on, because a tool
+that silently counts unread bytes as clean has the property this policy spends
+its length arguing against.
 
 ### 6b.5 A key that arrives in a message is a claim
 
