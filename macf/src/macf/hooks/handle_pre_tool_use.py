@@ -89,6 +89,13 @@ def _touch_discipline_nag(session_id: str) -> str:
     tasks_dir = reader.session_path
     mtimes = ([f.stat().st_mtime for f in tasks_dir.rglob("*.json")]
               if tasks_dir and tasks_dir.exists() else [])
+    # A duty service is a tree touch (roles policy: servicing). Working a role
+    # must not read as neglecting the tree.
+    try:
+        from macf.roles.hooks import roles_store_mtime
+        mtimes.append(roles_store_mtime())
+    except (OSError, ImportError, ValueError) as e:
+        print(f"⚠️ MACF: roles store mtime skipped in touch nag: {e}", file=sys.stderr)
     store_mtime = max(mtimes) if mtimes else 0.0
 
     sdir = get_session_dir(session_id=session_id, subdir="hooks")
@@ -228,6 +235,13 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             active_modes = detect_active_modes(session_id, token_info)
             active_modes = anticipate_mode_change(tool_name, tool_input, active_modes)
             task_type_marker = get_active_task_type_marker()
+            # The focused role's icon rides in the same slot, before the
+            # PLAY_TIME marker: a context layer beside the work mode.
+            try:
+                from macf.roles.hooks import focus_marker
+                task_type_marker = focus_marker() + task_type_marker
+            except (OSError, ImportError, ValueError) as e:
+                print(f"⚠️ MACF: focus marker skipped: {e}", file=sys.stderr)
             mode_indicator = format_mode_indicators(active_modes, task_type_marker)
         except (OSError, ValueError) as e:
             emit_warning(Warning(source="pre_tool_use", kind="mode_detection_failed", detail=f"mode detection failed, falling back: {e}"))
@@ -443,6 +457,17 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 message_parts.append(nag)
         except (OSError, ValueError, ImportError, AttributeError) as e:
             print(f"⚠️ MACF: touch nag skipped: {e}", file=sys.stderr)
+
+        # Conscientiousness nag (roles policy: focus as prioritized auto-scoping):
+        # a due-now duty in an UNFOCUSED role, on a tool-call schedule in units
+        # of the touch-nag base, cleared by focusing that role. Never breaks the hook.
+        try:
+            from macf.roles.hooks import conscientiousness_nag
+            duty_nag = conscientiousness_nag()
+            if duty_nag:
+                message_parts.append(duty_nag)
+        except (OSError, ValueError, ImportError, AttributeError) as e:
+            print(f"⚠️ MACF: duty nag skipped: {e}", file=sys.stderr)
 
         # Format message (compact single line)
         message = " ".join(message_parts)
