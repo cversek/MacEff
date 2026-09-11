@@ -9689,6 +9689,28 @@ def cmd_gmail_draft(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_gmail_search(args: argparse.Namespace) -> int:
+    """Rank cached threads for a query. Local only: the index lives in memory for this call."""
+    from macf import gmail
+    if not args.local:
+        print("❌ gmail search is local-only (add --local); server-side queries are `gmail list`")
+        return 1
+    try:
+        out = gmail.search_local(args.query, args.limit, keyword_only=args.keyword_only)
+    except gmail.GmailError as e:
+        return _gmail_fail(e)
+    if args.json:
+        print(json.dumps(out, indent=2))
+        return 0
+    if not out["results"]:
+        print(f"(no hits in {out['cached']} cached thread(s); `gmail sync` fetches more)")
+        return 0
+    for r in out["results"]:
+        print(f"{r['score']:.4f}  {_gmail_row(r)}")
+    print(f"{len(out['results'])} hit(s) in {out['cached']} cached thread(s), {out['mode']} ranking")
+    return 0
+
+
 def _gmail_query(args: argparse.Namespace) -> str:
     """Saved name, shortcut flags and free text, compiled into one Gmail query."""
     from macf import gmail
@@ -12190,6 +12212,17 @@ def _build_parser() -> argparse.ArgumentParser:
         _p = gmail_cache_sub.add_parser(_name, help=_help)
         _p.add_argument("--json", action="store_true", help="machine-readable output")
         _p.set_defaults(func=cmd_gmail_cache)
+
+    gmail_search = gmail_sub.add_parser(
+        "search", help="rank cached threads for a query (in-memory index, never written to disk)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="examples:\n  macf_tools gmail search --local \"consent reissue\"\n  macf_tools gmail search --local irb --limit 5 --json")
+    gmail_search.add_argument("query", help="free text; hybrid keyword + semantic when the search libraries are installed")
+    gmail_search.add_argument("--local", action="store_true", help="search the encrypted cache (required; the only mode)")
+    gmail_search.add_argument("--limit", type=int, default=10, metavar="N")
+    gmail_search.add_argument("--keyword-only", action="store_true", help="skip embeddings; plain term overlap")
+    gmail_search.add_argument("--json", action="store_true", help="machine-readable output")
+    gmail_search.set_defaults(func=cmd_gmail_search)
 
     proxy_parser = sub.add_parser("proxy", help="API proxy for CC call interception")
     proxy_sub = proxy_parser.add_subparsers(dest="proxy_cmd")
