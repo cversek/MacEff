@@ -504,6 +504,13 @@ def _body_text(part: Dict[str, Any]) -> str:
     return "\n".join(x for x in (_body_text(p) for p in part.get("parts", []) or []) if x)
 
 
+def _normalise_newlines(text: str) -> str:
+    """Mail arrives with CRLF line endings; the terminal renderer would otherwise
+    escape every bare CR as \\x0d, one per line. Lone CRs are left for the
+    renderer to escape, because those are the informative kind."""
+    return (text or "").replace("\r\n", "\n")
+
+
 def _attachments(part: Dict[str, Any], out: List[Dict[str, Any]]) -> None:
     if part.get("filename") and part.get("body", {}).get("attachmentId"):
         out.append({"filename": part["filename"], "mime": part.get("mimeType"),
@@ -790,8 +797,14 @@ def _refuse_destination(out: Path) -> None:
     """The operator's mail goes where the operator says, never into our trees."""
     resolved = out.resolve()
     home = _agent_home().resolve()
-    if home == resolved or home in resolved.parents:
-        raise GmailError(f"refusing to write mail content under the agent home ({home}); name another path")
+    # The agent TREE (consciousness artifacts) and the secrets directory are
+    # off limits; a project spoke elsewhere under the home is the operator's
+    # to fill (the roadmap said "agent tree", and the first live use hit the
+    # difference: a resources folder under projects/ was wrongly refused).
+    for sub in ("agent", ".maceff", ".claude"):
+        forbidden = home / sub
+        if forbidden == resolved or forbidden in resolved.parents:
+            raise GmailError(f"refusing to write mail content under {forbidden}; name a path outside the agent tree")
     g = load_grant(required=False)
     if g and g.get("cache_id"):
         root = cache_root_for(g["cache_id"]).resolve()
@@ -821,6 +834,49 @@ def get_attachment(thread_id: str, attachment_id: str, out: Path) -> Dict[str, A
                "sha256": hashlib.sha256(data).hexdigest(), "mime": owner.get("mime")}
     audit("attachment_get", "read", "allowed", {"thread": thread_id, "bytes": len(data)})
     return receipt
+
+
+# --- read ergonomics ----------------------------------------------------------
+
+_QUOTE_STARTS = (
+    re.compile(r"^On [^\n]{0,40}?\d{4}[\s\S]{0,200}? wrote:\s*$", re.M),  # Gmail wraps this over two lines
+    re.compile(r"^-{2,}\s*Original Message\s*-{2,}\s*$", re.M | re.I),
+    re.compile(r"^_{5,}\s*$", re.M),
+    re.compile(r"^From: .+\n(?:Sent|Date): .+", re.M),
+    re.compile(r"^(?:> ?.*\n?){3,}", re.M),
+)
+
+
+def strip_quoted(body: str) -> str:
+    """Drop quoted history from a reply: everything from the first quote marker
+    (an 'On ... wrote:' line, an Outlook 'From:/Sent:' block, an 'Original
+    Message' rule, an underscore rule, or a run of '>' lines) to the end. Pure;
+    the record is untouched, only the rendering."""
+    text = _normalise_newlines(body)
+    cut = len(text)
+    for rx in _QUOTE_STARTS:
+        m = rx.search(text)
+        if m and 0 < m.start() < cut:
+            cut = m.start()
+    return text[:cut].rstrip()
+
+
+def _addr(header: str) -> str:
+    m = re.search(r"<([^>]+)>", header or "")
+    return (m.group(1) if m else (header or "")).strip().lower()
+
+
+def duplicate_of_previous(prev: Optional[Dict[str, Any]], cur: Dict[str, Any]) -> bool:
+    """Gmail keeps a sent copy and a mirrored copy of the same message when an
+    alias is involved; both land in the thread with identical bodies. True when
+    `cur` repeats `prev` from the same address, so the renderer can fold it."""
+    if not prev:
+        return False
+    def _flat(text: str) -> str:  # the mirrored copy is re-wrapped, so compare words
+        return " ".join(strip_quoted(text).split())
+    return (_addr(prev.get("from", "")) == _addr(cur.get("from", ""))
+            and _flat(prev.get("body", "")) == _flat(cur.get("body", ""))
+            and (prev.get("subject") or "").strip().lower() == (cur.get("subject") or "").strip().lower())
 
 
 # --- local search over the cache (Phase 5) ------------------------------------
