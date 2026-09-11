@@ -12621,38 +12621,34 @@ def cmd_opsec_install_hook(args: argparse.Namespace) -> int:
 
 
 def cmd_githooks_list(args: argparse.Namespace) -> int:
-    """Show every pre-commit hooklet that would run, in dispatch order."""
+    """Show every hooklet that would run, per dispatched hook, in dispatch order."""
     from pathlib import Path
-    from .githooks import list_hooklets
+    from .githooks import DISPATCHED_HOOKS, list_hooklets
 
-    try:
-        hooklets = list_hooklets(Path(args.repo))
-    except ValueError as e:
-        print(f"❌ {e}")
-        return 1
-
-    if not hooklets:
-        # Not "nothing to report" — an empty chain means every gate this repo
-        # believes it has is absent, which is worth saying out loud.
-        print("⚠️  No pre-commit hooklets found. NOTHING is gating commits here.")
-        print("   Install:  macf_tools opsec install-hook <repo>")
-        return 0
-
-    print(f"pre-commit chain for {Path(args.repo).resolve()} (runs in this order):")
+    repo = Path(args.repo).resolve()
     problems = 0
-    for h in hooklets:
-        mark = "✅" if h["executable"] else "❌"
-        if not h["executable"]:
-            problems += 1
-        print(f"  {mark} {h['name']:<24} [{h['source']}]  {h['path']}")
+    for hook in DISPATCHED_HOOKS:
+        try:
+            hooklets = list_hooklets(repo, hook)
+        except ValueError as e:
+            print(f"❌ {e}")
+            return 1
+        if not hooklets:
+            # Not "nothing to report" — an empty chain means every gate this repo
+            # believes it has is absent, which is worth saying out loud.
+            print(f"⚠️  No {hook} hooklets found. NOTHING is gating {hook} here.")
+            print("   Install:  macf_tools githooks install <repo>   (and opsec install-hook <repo>)")
+            continue
+        print(f"{hook} chain for {repo} (runs in this order):")
+        for h in hooklets:
+            mark = "✅" if h["executable"] else "❌"
+            if not h["executable"]:
+                problems += 1
+            print(f"  {mark} {h['name']:<24} [{h['source']}]  {h['path']}")
     if problems:
-        print(f"\n❌ {problems} hooklet(s) are present but NOT EXECUTABLE.")
-        print("   The dispatcher refuses rather than skipping: a gate that is")
-        print("   skipped quietly reports success for a check that never ran.")
+        print(f"❌ {problems} hooklet(s) present but NOT executable — the dispatcher refuses them; chmod +x to fix")
         return 1
     return 0
-
-
 
 def cmd_githooks_install(args: argparse.Namespace) -> int:
     """Install the dispatcher, adopting whatever hook was already there."""
@@ -12677,9 +12673,9 @@ def cmd_githooks_install(args: argparse.Namespace) -> int:
             print(f"   ⚑ ADOPTED an existing hook, still running: {line}")
         print("✅ dispatcher installed")
 
-    print(f"   Versioned hooklets: {facts['versioned_dir']}/pre-commit.d/  (travels to every clone)")
-    print(f"   Per-clone hooklets: {facts['local_dir']}/pre-commit.d/  (never committed)")
-    print("   Inspect the chain:  macf_tools githooks list")
+    print(f"   Versioned hooklets: {facts['versioned_dir']}/<hook>.d/  (travels to every clone)")
+    print(f"   Per-clone hooklets: {facts['local_dir']}/<hook>.d/  (never committed; portable ones land here)")
+    print("   Inspect the chains: macf_tools githooks list")
     return 0
 
 
