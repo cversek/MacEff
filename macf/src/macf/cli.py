@@ -9651,18 +9651,38 @@ def cmd_gmail_read(args: argparse.Namespace) -> int:
     except gmail.GmailError as e:
         return _gmail_fail(e)
     if args.json:
-        print(json.dumps({"from_cache": cached, **rec}, indent=2))
+        out = {"from_cache": cached, **rec}
+        if getattr(args, "last", None):
+            out["messages"] = out["messages"][-args.last:]
+        if getattr(args, "no_quotes", False):
+            out["messages"] = [{**m, "body": gmail.strip_quoted(m["body"])} for m in out["messages"]]
+        print(json.dumps(out, indent=2))
         return 0
-    print(f"thread {rec['thread_id']}  ({'cache' if cached else 'fetched'} {rec['fetched_at']})")
-    for m in rec["messages"]:
+    msgs = rec["messages"]
+    shown = msgs[-args.last:] if getattr(args, "last", None) else msgs
+    print(f"thread {rec['thread_id']}  ({'cache' if cached else 'fetched'} {rec['fetched_at']})"
+          + (f"  showing last {len(shown)} of {len(msgs)}" if len(shown) < len(msgs) else ""))
+    prev = None
+    folded = 0
+    for m in shown:
+        if gmail.duplicate_of_previous(prev, m):
+            folded += 1
+            print(f"\n── {_term_safe(m['date'])}  (duplicate copy of the previous message, folded)")
+            prev = m
+            continue
         print(f"\n── {_term_safe(m['date'])}  {_term_safe(m['from'])}")
         print(f"   to: {_term_safe(m['to'])}" + (f"  cc: {_term_safe(m['cc'])}" if m.get("cc") else ""))
         print(f"   subject: {_term_safe(m['subject'])}   message_id={m['message_id']}")
         for a in m.get("attachments", []):
             print(f"   📎 {_term_safe(a['filename'])} ({a.get('mime')}, {a.get('size')} B) id={a['attachment_id']}")
         print()
-        print(_term_safe(m["body"]))
-    print(f"\n{len(rec['messages'])} message(s)")
+        body = gmail.strip_quoted(m["body"]) if getattr(args, "no_quotes", False) else gmail._normalise_newlines(m["body"])
+        print(_term_safe(body))
+        prev = m
+    tail = f"\n{len(msgs)} message(s)"
+    if folded:
+        tail += f", {folded} duplicate cop{'y' if folded == 1 else 'ies'} folded"
+    print(tail)
     return 0
 
 
@@ -12155,7 +12175,13 @@ def _build_parser() -> argparse.ArgumentParser:
     gmail_status.add_argument("--json", action="store_true", help="machine-readable output")
     gmail_status.set_defaults(func=cmd_gmail_status)
 
-    gmail_list = gmail_sub.add_parser("list", help="list threads matching a Gmail query (headers only)")
+    gmail_list = gmail_sub.add_parser(
+        "list", help="list threads matching a Gmail query (headers only)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="examples:\n  macf_tools gmail list \"subject:(Appointment OR Teaching)\" --from northeastern.edu --since 90d\n"
+               "  macf_tools gmail list --saved irb --since 30d --json\n"
+               "notes: Gmail's from:/to: match ANY message in a thread; each row shows the thread's LATEST sender,\n"
+               "       so a row can name someone your --from did not (they replied last).")
     gmail_list.add_argument("query", nargs="?", default="", help="Gmail query, e.g. 'from:x newer_than:7d'")
     gmail_list.add_argument("--limit", type=int, default=20, metavar="N", help="max threads (default 20)")
     gmail_list.add_argument("--json", action="store_true", help="machine-readable output")
@@ -12167,7 +12193,14 @@ def _build_parser() -> argparse.ArgumentParser:
     gmail_sync.add_argument("--json", action="store_true", help="machine-readable output")
     gmail_sync.set_defaults(func=cmd_gmail_sync)
 
-    gmail_read = gmail_sub.add_parser("read", help="print one thread (from cache when present)")
+    gmail_read = gmail_sub.add_parser(
+        "read", help="print one thread (from cache when present)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="examples:\n  macf_tools gmail read 1a06c915e59e75a2 --last 3 --no-quotes\n"
+               "  macf_tools gmail read 1a06c915e59e75a2 --json | jq '.messages[-1].body'\n"
+               "notes: CRLF line endings are normalised; a sent copy that duplicates the previous message is folded.")
+    gmail_read.add_argument("--last", type=int, metavar="N", help="only the last N messages of the thread")
+    gmail_read.add_argument("--no-quotes", action="store_true", help="strip quoted history from each body")
     gmail_read.add_argument("thread_id", help="thread id (see `gmail list`)")
     gmail_read.add_argument("--json", action="store_true", help="machine-readable output")
     gmail_read.set_defaults(func=cmd_gmail_read)
