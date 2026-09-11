@@ -178,7 +178,7 @@ class Duty(BaseModel):
             try:
                 parse_cadence(v)
             except CadenceError as e:
-                raise ValueError(str(e))
+                raise ValueError(str(e)) from e
         return v
 
     @field_validator("depends_on")

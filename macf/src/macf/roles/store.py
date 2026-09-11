@@ -257,7 +257,7 @@ class RoleStore:
         try:
             check_transition(ROLE_MACHINE, role.state, new_state)
         except (IllegalTransition, ValueError) as e:
-            raise RoleError(str(e))
+            raise RoleError(str(e)) from e
         old = role.state
         role.state = new_state
         role.updates.append(_update(f"{old} → {new_state}" + (f": {reason}" if reason else ""), kind=new_state))
@@ -271,7 +271,7 @@ class RoleStore:
         try:
             check_transition(DUTY_MACHINE, duty.state, new_state)
         except (IllegalTransition, ValueError) as e:
-            raise RoleError(str(e))
+            raise RoleError(str(e)) from e
         ev = list(evidence)
         if new_state == "done":
             if not ev:

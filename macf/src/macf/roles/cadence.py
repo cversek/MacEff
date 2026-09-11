@@ -90,7 +90,7 @@ def parse_cadence(text: str) -> Cadence:
                 hh, mm = val.split(":")
                 cad.at = time(int(hh), int(mm))
             except (ValueError, TypeError):
-                raise CadenceError(f"'at' needs HH:MM, not {val!r}")
+                raise CadenceError(f"'at' needs HH:MM, not {val!r}") from None
         elif key == "dur":
             m = _DUR_RE.match((val or "").lower())
             if not m:
@@ -100,7 +100,7 @@ def parse_cadence(text: str) -> Cadence:
             try:
                 cad.until = date.fromisoformat(val or "")
             except ValueError:
-                raise CadenceError(f"'until' needs YYYY-MM-DD, not {val!r}")
+                raise CadenceError(f"'until' needs YYYY-MM-DD, not {val!r}") from None
         else:
             raise CadenceError(f"unexpected token {rest[i]!r} in cadence")
         i += 2

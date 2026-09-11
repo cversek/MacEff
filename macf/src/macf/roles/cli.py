@@ -52,7 +52,7 @@ def _date(text: Optional[str], flag: str) -> Optional[date]:
     try:
         return date.fromisoformat(text)
     except ValueError:
-        raise RoleError(f"{flag} needs YYYY-MM-DD, not {text!r}")
+        raise RoleError(f"{flag} needs YYYY-MM-DD, not {text!r}") from None
 
 
 def _datetime(text: Optional[str], flag: str) -> Optional[datetime]:
