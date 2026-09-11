@@ -21,6 +21,7 @@ graph's possible protocols only the web exists so far, and naming the web
 "graph" is how the unbuilt remainder disappears into the name.
 """
 import re
+import json
 import sys
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
@@ -34,9 +35,13 @@ from .concepts import extract_wiki_concepts
 #                quick_tests/ hold the evidence (experiments policy).
 #   roadmaps:    the plan is the node; archived todos, designs and subartifacts
 #                are execution records (roadmaps policies).
+#   roles:       the charter is the node; data.json holds the appointment's
+#                facts and changes without the charter being wrong; each
+#                DUTY_*.json is its own node of type "duties" (roles policy).
 _UNIT_OF_NODE: Dict[str, set] = {
     "experiments": {"protocol", "analysis"},
     "roadmaps": {"roadmap"},
+    "roles": {"charter"},
 }
 
 # Node class: what kind of claim a type's nodes make. The classes are defined
@@ -51,6 +56,9 @@ _NODE_CLASS: Dict[str, str] = {
     "roadmaps": "temporal_record",     # roadmaps policies
     "sprints": "temporal_record",      # execution records
     "amail": "temporal_record",        # correspondence records
+    "roles": "conceptual_authority",   # a charter outlives its cycle (roles policy)
+    "duties": "conceptual_authority",  # prospective, read with its state (roles policy)
+    "tasks": "temporal_record",        # a duty's evidence or tracks pointer into the task store
 }
 _DEFAULT_CLASS = "conceptual_authority"
 
@@ -102,13 +110,78 @@ def iter_web_files(agent_home: Path) -> Iterator[Tuple[str, Path, Path]]:
     keeping its own copy of the traversal.
     """
     for ca_type, root in _type_roots(agent_home):
-        unit = _UNIT_OF_NODE.get(ca_type)
-        for f in sorted(root.rglob("*.md")):
-            if f.name == "INDEX.md":
-                continue
-            if unit is not None and f.stem not in unit:
-                continue
-            yield ca_type, root, f
+        yield from _walk_type(ca_type, root)
+
+
+def _walk_type(ca_type: str, root: Path) -> Iterator[Tuple[str, Path, Path]]:
+    """The per-type walk: markdown units, plus duty records under a roles root."""
+    unit = _UNIT_OF_NODE.get(ca_type)
+    for f in sorted(root.rglob("*.md")):
+        if f.name == "INDEX.md":
+            continue
+        if unit is not None and f.stem not in unit:
+            continue
+        yield ca_type, root, f
+    if ca_type == "roles":
+        # Duties are JSON records with a wiki_links field, as ideas are; they
+        # participate through the same walk so the doctor sees them too.
+        for f in sorted(root.rglob("DUTY_*.json")):
+            yield "duties", root, f
+
+
+def concepts_of(ca_type: str, path: Path, content: str) -> List[str]:
+    """The concepts a walked file carries: [[links]] in markdown, the
+    wiki_links field in a duty record."""
+    if ca_type == "duties":
+        try:
+            import json as _json
+            from .concepts import normalize_concepts
+            return normalize_concepts(_json.loads(content).get("wiki_links") or [])
+        except (ValueError, TypeError, AttributeError) as e:
+            print(f"⚠️ MACF: duty record {path} unreadable for the web: {e}", file=sys.stderr)
+            return []
+    return extract_wiki_concepts(content)
+
+
+def _pointer_node(pointer: str, path_to_node: Dict[str, str], ca_nodes: Dict[str, Any]) -> Optional[str]:
+    """Resolve a duty's tracks/evidence pointer to a node id.
+
+    A task id becomes a `tasks:#N` node (temporal record, titled from the task
+    store when it can be read) so the edge from a duty to its implementation
+    exists even though tasks are not walked; a CA path resolves to the node
+    that file already is, or to nothing if the file is not a node.
+    """
+    import re as re_mod
+    ref = pointer.strip()
+    if re_mod.fullmatch(r"#?\d+", ref):
+        tid = ref.lstrip("#")
+        node_id = f"tasks:#{tid}"
+        if node_id not in ca_nodes:
+            title = f"task #{tid}"
+            try:
+                from .task import TaskReader
+                t = TaskReader().read_task(tid)
+                if t:
+                    title = re_mod.sub(r"\x1b\[[0-9;]*m", "", t.subject).strip()[:50]
+            except (OSError, ValueError, ImportError, AttributeError):
+                pass  # the store may be absent under a scan_dirs build; the id still names the task
+            ca_nodes[node_id] = {"type": "tasks", "title": title, "path": f"task:{tid}",
+                                 "node_class": node_class_for("tasks")}
+        return node_id
+    candidates = [Path(ref)]
+    try:
+        from .utils.paths import find_agent_home
+        candidates.append(find_agent_home() / ref)
+    except (OSError, ImportError):
+        pass
+    for c in candidates:
+        try:
+            hit = path_to_node.get(str(c.resolve()))
+        except OSError:
+            hit = None
+        if hit:
+            return hit
+    return None
 
 
 def node_class_for(ca_type: str) -> str:
@@ -141,14 +214,7 @@ def build_knowledge_web(scan_dirs: Optional[List[Path]] = None) -> Dict[str, Any
         for scan_dir in scan_dirs:
             if not scan_dir.exists():
                 continue
-            ca_type = scan_dir.name
-            unit = _UNIT_OF_NODE.get(ca_type)
-            for f in sorted(scan_dir.rglob("*.md")):
-                if f.name == "INDEX.md":
-                    continue
-                if unit is not None and f.stem not in unit:
-                    continue
-                walk.append((ca_type, scan_dir, f))
+            walk.extend(_walk_type(scan_dir.name, scan_dir))
     else:
         walk = []
         try:
@@ -159,10 +225,25 @@ def build_knowledge_web(scan_dirs: Optional[List[Path]] = None) -> Dict[str, Any
         except (OSError, ImportError) as e:
             print(f"⚠️ MACF: knowledge web scan failed: {e}", file=sys.stderr)
 
+    duty_records = []          # (node_id, record) for the structural edges below
+    path_to_node: Dict[str, str] = {}
     for ca_type, type_root, md_file in walk:
         try:
             content = md_file.read_text(errors='replace')
         except OSError:
+            continue
+        if ca_type == "duties":
+            try:
+                rec = json.loads(content)
+            except ValueError:
+                continue
+            node_id = f"duties:{rec.get('id', md_file.stem)}"
+            ca_nodes[node_id] = {"type": "duties", "title": str(rec.get("title", md_file.stem))[:50],
+                                 "path": str(md_file), "node_class": node_class_for("duties"),
+                                 "state": rec.get("state"), "role_id": rec.get("role_id")}
+            for concept in concepts_of(ca_type, md_file, content):
+                wiki_index[concept].add(node_id)
+            duty_records.append((node_id, rec, md_file))
             continue
         concepts = extract_wiki_concepts(content)
         if not concepts:
@@ -180,6 +261,7 @@ def build_knowledge_web(scan_dirs: Optional[List[Path]] = None) -> Dict[str, Any
         ca_nodes[node_id] = {"type": ca_type, "title": title,
                              "path": str(md_file),
                              "node_class": node_class_for(ca_type)}
+        path_to_node[str(md_file.resolve())] = node_id
         for concept in concepts:
             wiki_index[concept].add(node_id)
 
@@ -188,6 +270,26 @@ def build_knowledge_web(scan_dirs: Optional[List[Path]] = None) -> Dict[str, Any
     # Preserve idea-to-idea edges from related_ideas
     for k, v in graph["edges"].items():
         edges[k] = set(v)
+    # Duties' structural edges (roles policy, knowledge web participation):
+    # the parent role's charter, the tracked tasks, and the evidence that
+    # satisfied the duty -- a task id, or a CA path resolved to its node.
+    for node_id, rec, duty_path in duty_records:
+        charter = duty_path.parent / "charter.md"
+        charter_node = path_to_node.get(str(charter.resolve()))
+        if charter_node is None and charter.exists():
+            # A charter with no links is not a node yet; the duty still points
+            # at it, so the edge names the folder the way a node would.
+            charter_node = f"roles:{duty_path.parent.name}/charter"
+            ca_nodes.setdefault(charter_node, {"type": "roles", "title": duty_path.parent.name[:50],
+                                               "path": str(charter), "node_class": node_class_for("roles")})
+        if charter_node:
+            edges[node_id].add(charter_node)
+            edges[charter_node].add(node_id)
+        for pointer in list(rec.get("tracks") or []) + list(rec.get("evidence") or []):
+            target = _pointer_node(str(pointer), path_to_node, ca_nodes)
+            if target:
+                edges[node_id].add(target)
+                edges[target].add(node_id)
     # Add wiki-link co-occurrence edges (including cross-CA)
     for concept, node_ids in wiki_index.items():
         ids_list = list(node_ids)

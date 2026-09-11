@@ -33,7 +33,7 @@ _RAW_LINK = re.compile(r"\[\[([^\]]+)\]\]")
 def examine(agent_home: Optional[Path] = None,
             kg: Optional[Dict[str, Any]] = None) -> Diagnosis:
     """Examine the knowledge web and report what it cannot report about itself."""
-    from .knowledge_web import build_knowledge_web, iter_web_files
+    from .knowledge_web import build_knowledge_web, concepts_of, iter_web_files
     from .utils.paths import find_agent_home
 
     agent_home = agent_home or find_agent_home()
@@ -57,7 +57,7 @@ def examine(agent_home: Optional[Path] = None,
             content = path.read_text(errors="replace")
         except OSError:
             continue
-        if extract_wiki_concepts(content):
+        if concepts_of(ca_type, path, content):
             continue
         orphans_by_type.setdefault(ca_type, []).append(path)
         # Distinguish "never linked" from "wrote links that do not count".
