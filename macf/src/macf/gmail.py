@@ -28,6 +28,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import secrets
 import stat
 import sys
@@ -772,3 +773,104 @@ def get_attachment(thread_id: str, attachment_id: str, out: Path) -> Dict[str, A
                "sha256": hashlib.sha256(data).hexdigest(), "mime": owner.get("mime")}
     audit("attachment_get", "read", "allowed", {"thread": thread_id, "bytes": len(data)})
     return receipt
+
+
+# --- local search over the cache (Phase 5) ------------------------------------
+#
+# The index is built in memory for each query and discarded with the process.
+# Measured on lancedb 0.26.1: a ``memory://`` connection with vector + FTS search
+# creates no file under a redirected TMPDIR, HOME or cwd. Nothing here writes to
+# disk, inside or outside the cache root; there are no index shards to encrypt or purge.
+
+_WORD = re.compile(r"[a-z0-9][a-z0-9'@._-]{1,}")
+
+
+def _tokens(text: str) -> List[str]:
+    return _WORD.findall(text.lower())
+
+
+def _cached_records() -> List[Dict[str, Any]]:
+    """Every thread record in the cache, decrypted in memory."""
+    recs = []
+    for tid in _index():
+        rec = cache_get(tid)
+        if rec is not None:
+            recs.append(rec)
+    return recs
+
+
+def _keyword_scores(query: str, docs: List[Dict[str, Any]]) -> List[Tuple[int, float]]:
+    """Plain term-frequency overlap, no dependencies: (doc index, score) for docs with any hit."""
+    q = [t for t in _tokens(query) if len(t) > 2]
+    if not q:
+        return []
+    out = []
+    for i, d in enumerate(docs):
+        toks = _tokens(d["text"] + " " + d["subject"])
+        if not toks:
+            continue
+        hits = sum(toks.count(t) for t in q)
+        if hits:
+            out.append((i, hits / len(toks) ** 0.5))
+    out.sort(key=lambda x: -x[1])
+    return out
+
+
+def _rrf(rankings: List[List[int]], k: int = 60) -> Dict[int, float]:
+    """Reciprocal rank fusion over lists of doc indices (best first)."""
+    fused: Dict[int, float] = {}
+    for ranking in rankings:
+        for rank, i in enumerate(ranking, 1):
+            fused[i] = fused.get(i, 0.0) + 1.0 / (k + rank)
+    return fused
+
+
+def search_local(query: str, limit: int = 10, keyword_only: bool = False) -> Dict[str, Any]:
+    """Rank cached threads for ``query``; hybrid (FTS + vector, RRF) when the optional
+    search libraries are present, keyword overlap otherwise. Returns a receipt with
+    ranked rows; never the cache path, never a body."""
+    query = (query or "").strip()
+    if not query:
+        raise GmailError("search needs a query")
+    from macf.hybrid_search.extractors.mail_extractor import MailExtractor
+    ext = MailExtractor()
+    docs = [ext.extract_record(r) for r in _cached_records()]
+    if not docs:
+        audit("search", "read", "allowed", {"mode": "none", "cached": 0, "hits": 0})
+        return {"query": query, "mode": "none", "cached": 0, "results": []}
+
+    mode = "keyword"
+    fused: Dict[int, float] = {}
+    if not keyword_only:
+        try:
+            # keep the model loaders' progress bars and load reports off the terminal
+            os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
+            os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+            os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+            from macf.hybrid_search import base_indexer
+            if not base_indexer.DEPS_AVAILABLE:
+                raise ImportError("lancedb / sentence-transformers absent")
+            idx = base_indexer.BaseIndexer(ext)
+            rows = [{"i": i, "content": ext.generate_embedding_text(d), "text": d["text"]} for i, d in enumerate(docs)]
+            table = idx.index_documents(rows, "memory://")["table"]
+            vec = [r["i"] for r in table.search(idx.model.encode(query)).limit(limit * 3).to_list()]
+            try:
+                table.create_fts_index("text", replace=True)
+                fts = [r["i"] for r in table.search(query, query_type="fts").limit(limit * 3).to_list()]
+            except (AttributeError, ValueError, RuntimeError) as e:  # FTS unavailable in this build
+                print(f"⚠️ MACF: FTS unavailable, fusing vector + term overlap: {e}", file=sys.stderr)
+                fts = [i for i, _ in _keyword_scores(query, docs)]
+            fused = _rrf([vec, fts])
+            mode = "hybrid"
+        except ImportError:
+            fused = {}
+    if not fused:
+        fused = {i: s for i, s in _keyword_scores(query, docs)}
+        mode = "keyword"
+
+    ranked = sorted(fused.items(), key=lambda x: -x[1])[:limit]
+    results = [{"thread_id": docs[i]["thread_id"], "date": docs[i]["date"], "from": docs[i]["from"],
+                "subject": docs[i]["subject"], "messages": docs[i]["messages"], "score": round(s, 4)}
+               for i, s in ranked]
+    audit("search", "read", "allowed", {"mode": mode, "cached": len(docs), "hits": len(results)})
+    return {"query": query, "mode": mode, "cached": len(docs), "results": results}

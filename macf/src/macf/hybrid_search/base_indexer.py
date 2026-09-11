@@ -9,6 +9,7 @@ Provides infrastructure for:
 Domain-agnostic: knows nothing about policies, questions, or CEP.
 """
 
+import sys
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -47,7 +48,13 @@ class BaseIndexer:
     def model(self) -> "SentenceTransformer":  # String annotation for optional dep
         """Lazy-load embedding model."""
         if self._model is None:
-            print(f"Loading embedding model: {self.embedding_model_name}...")
+            print(f"Loading embedding model: {self.embedding_model_name}...", file=sys.stderr)
+            try:  # the weight-loading report and progress bar are noise on a CLI
+                from transformers.utils import logging as _tl
+                _tl.set_verbosity_error()
+                _tl.disable_progress_bar()
+            except (ImportError, AttributeError) as e:  # older transformers: report stays, model still loads
+                print(f"⚠️ MACF: could not quiet transformers logging: {e}", file=sys.stderr)
             self._model = SentenceTransformer(self.embedding_model_name)
         return self._model
 
@@ -109,31 +116,39 @@ class BaseIndexer:
         if not documents:
             raise ValueError(f"No documents found in {source_dir}")
 
-        # Generate embeddings in batch
-        print(f"Generating embeddings for {len(documents)} documents...")
+        print(f"Creating LanceDB at {db_path}", file=sys.stderr)
+        stats = self.index_documents(documents, str(db_path), progress=True)
+        stats.pop('db'); stats.pop('table')  # keep this method's return JSON-serialisable, as before
+        stats['total_time'] = time.time() - start_time
+        return stats
+
+    def index_documents(self, documents: list[dict[str, Any]], db_uri: str = "memory://",
+                        progress: bool = False) -> dict[str, Any]:
+        """Embed already-extracted documents and write them to a LanceDB ``documents`` table.
+
+        Each document must carry a ``content`` key (the text to embed). With the
+        default ``memory://`` URI nothing is written to disk: the table lives only
+        in the returned connection, which is what callers holding data that must
+        not rest in plaintext (the gmail cache) rely on.
+
+        Returns the stats dict plus ``db`` (the connection) and ``table``.
+        """
         embed_start = time.time()
         texts = [doc['content'] for doc in documents]
-        embeddings = self.model.encode(texts, show_progress_bar=True)
+        embeddings = self.model.encode(texts, show_progress_bar=progress)
         embedding_time = time.time() - embed_start
-
-        # Add embeddings to documents
         for i, doc in enumerate(documents):
             doc['embedding'] = embeddings[i].tolist()
 
-        # Create LanceDB database and table
-        print(f"Creating LanceDB at {db_path}")
-        db = lancedb.connect(str(db_path))
-
-        # Drop existing table if present, then create fresh
+        db = lancedb.connect(db_uri)
         if "documents" in db.table_names():
             db.drop_table("documents")
-
-        db.create_table("documents", documents)
-
-        total_time = time.time() - start_time
+        table = db.create_table("documents", documents)
 
         return {
             'documents_indexed': len(documents),
             'embedding_time': embedding_time,
-            'total_time': total_time,
+            'total_time': embedding_time,
+            'db': db,
+            'table': table,
         }
