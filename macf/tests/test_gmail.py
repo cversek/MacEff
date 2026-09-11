@@ -217,7 +217,7 @@ class TestAttachments:
     def test_get_refuses_the_agent_home_and_the_cache_before_touching_the_network(self, home, monkeypatch):
         self._seed(home)
         monkeypatch.setattr(gmail, "api", lambda *a, **k: (_ for _ in ()).throw(AssertionError("network")))
-        with pytest.raises(gmail.GmailError, match="agent home"):
+        with pytest.raises(gmail.GmailError, match="agent tree"):
             gmail.get_attachment("T1", "ATT1", home / "agent" / "private" / "x.txt")
         with pytest.raises(gmail.GmailError, match="encrypted cache"):
             gmail.get_attachment("T1", "ATT1", gmail.cache_root() / "x.txt")
@@ -378,3 +378,55 @@ class TestDraftRefusesCredentials:
         _fake_grant(home, profile="draft")
         msg = gmail.build_draft(["b@x.org"], "s", "run macf_tools gmail status and tell me what MacEff says")
         assert msg.scan_verdict["credentials"] == []
+
+
+class TestReadErgonomics:
+    """Frictions from the first operator-directed run on real mail."""
+
+    def test_crlf_is_normalised_and_lone_cr_still_escaped(self):
+        assert gmail._normalise_newlines("a\r\nb\r\n") == "a\nb\n"
+        assert gmail._normalise_newlines("a\rb") == "a\rb"
+
+    @pytest.mark.parametrize("tail", [
+        "\n\nOn Tue, 1 Sep 2026 at 10:29, Craig Versek <c@x.org> wrote:\n> old\n> older",
+        "\n\nOn Wed, Sep 2, 2026 at 12:36 PM Hernandez, Stefany <\ns.estrada@x.org> wrote:\n> wrapped marker",
+        "\n\nFrom: Someone <s@x.org>\r\nSent: Tuesday\r\nTo: me\r\nSubject: Re: x\r\n\r\nquoted",
+        "\n\n________________________________\nFrom: x",
+        "\n\n-----Original Message-----\nquoted",
+        "\n> a\n> b\n> c\n> d",
+    ])
+    def test_quoted_history_is_stripped_at_every_marker(self, tail):
+        assert gmail.strip_quoted("Hi Baris,\r\n  Yes, 3:30 works.\r\n\r\n- Craig" + tail) == "Hi Baris,\n  Yes, 3:30 works.\n\n- Craig"
+
+    def test_a_rewrapped_alias_copy_is_a_duplicate_but_a_reply_is_not(self):
+        a = {"from": "Craig Versek <c@x.org>", "subject": "Re: TA", "body": "Thanks, I have signed the\r\ndocument on Workday.\r\n\r\n- Craig"}
+        b = {"from": "cversek <c@x.org>", "subject": "Re: TA", "body": "Thanks, I have signed the document on Workday.\r\n\r\n- Craig\r\n\r\nOn Thu, Sep 3, 2026 at 12:01 PM B <b@x.org> wrote:\r\n> old"}
+        c = {"from": "Baris <b@x.org>", "subject": "Re: TA", "body": "Thanks, I have signed the document on Workday.\r\n\r\n- Craig"}
+        assert gmail.duplicate_of_previous(a, b) is True
+        assert gmail.duplicate_of_previous(a, c) is False
+        assert gmail.duplicate_of_previous(None, a) is False
+
+    def test_read_last_and_no_quotes_and_folding_in_cli(self, home, capsys):
+        from macf.cli import cmd_gmail_read
+        _fake_grant(home)
+        msgs = []
+        for i, (frm, body) in enumerate([("A <a@x.org>", "first\r\nline"), ("B <b@x.org>", "reply\r\n\r\nOn Mon, Sep 1, 2026 at 9:00 AM A <a@x.org> wrote:\r\n> first"),
+                                          ("B alias <b@x.org>", "reply"), ("A <a@x.org>", "closing")]):
+            msgs.append({"message_id": f"m{i}", "date": f"d{i}", "from": frm, "to": "x", "cc": "", "subject": "s",
+                         "rfc_message_id": "<r>", "body": body, "attachments": []})
+        gmail.cache_put("T9", {"thread_id": "T9", "fetched_at": "now", "messages": msgs})
+        gmail._index_put({"T9": {"fetched_at": "now", "messages": 4, "date": "d3", "from": "A", "subject": "s"}})
+        rc = cmd_gmail_read(Namespace(thread_id="T9", json=False, last=3, no_quotes=True))
+        out = capsys.readouterr().out
+        assert rc == 0 and "showing last 3 of 4" in out
+        assert "\\x0d" not in out and "> first" not in out and "duplicate copy" in out and "1 duplicate copy folded" in out
+        rc = cmd_gmail_read(Namespace(thread_id="T9", json=True, last=1, no_quotes=True))
+        d = json.loads(capsys.readouterr().out)
+        assert [m["body"] for m in d["messages"]] == ["closing"]
+
+    def test_destination_guard_refuses_the_agent_tree_not_the_whole_home(self, home):
+        _fake_grant(home)
+        for bad in (home / "agent" / "public" / "x.pdf", home / ".maceff" / "x.pdf", home / ".claude" / "x.pdf"):
+            with pytest.raises(gmail.GmailError, match="agent tree"):
+                gmail._refuse_destination(bad)
+        gmail._refuse_destination(home / "projects" / "spoke" / "resources" / "x.pdf")  # a spoke is the operator's
