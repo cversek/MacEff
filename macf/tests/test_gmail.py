@@ -233,3 +233,105 @@ class TestAttachments:
         assert Path(r["path"]) == dest / "report.txt"
         assert Path(r["path"]).read_bytes() == payload
         assert r["sha256"] == hashlib.sha256(payload).hexdigest() and r["bytes"] == 5
+
+
+def _plant(home, threads):
+    """Put thread records straight into the encrypted cache, as fetch_thread would."""
+    _fake_grant(home)
+    idx = {}
+    for tid, subject, body in threads:
+        msg = {"message_id": tid + "m", "date": "Thu, 10 Sep 2026 09:00:00 -0400", "from": "a@example.org",
+               "to": "b@example.org", "cc": "", "subject": subject, "rfc_message_id": "<x>", "body": body,
+               "attachments": []}
+        gmail.cache_put(tid, {"thread_id": tid, "fetched_at": "2026-09-10T09:00:00-0400", "messages": [msg]})
+        idx[tid] = {"fetched_at": "2026-09-10T09:00:00-0400", "messages": 1, "date": msg["date"],
+                    "from": msg["from"], "subject": subject}
+    gmail._index_put(idx)
+
+
+PLANTED = [
+    ("t_irb", "Request to reissue participant consents",
+     "The ethics office will send corrected consent forms for the study once the agreement is countersigned."),
+    ("t_lunch", "Friday lunch", "Anyone want tacos on Friday? The place on the corner has a new menu."),
+    ("t_scope", "Bench instrument", "The oscilloscope on the bench answers over the network again after a power cycle."),
+]
+
+
+def _deps():
+    from macf.hybrid_search import base_indexer
+    return base_indexer.DEPS_AVAILABLE
+
+
+class TestLocalSearch:
+    def test_refuses_without_local_flag(self, home, capsys):
+        """`gmail search` is local-only; without --local it refuses and points at `gmail list`."""
+        from macf.cli import cmd_gmail_search
+        rc = cmd_gmail_search(Namespace(query="x", local=False, limit=10, keyword_only=False, json=False))
+        assert rc == 1
+        assert "❌" in capsys.readouterr().out
+
+    def test_empty_query_and_empty_cache(self, home):
+        with pytest.raises(gmail.GmailError, match="needs a query"):
+            gmail.search_local("   ")
+        _fake_grant(home)
+        assert gmail.search_local("anything") == {"query": "anything", "mode": "none", "cached": 0, "results": []}
+
+    def test_keyword_mode_ranks_planted_thread_first(self, home, monkeypatch):
+        """With the search libraries simulated absent, term overlap still finds the planted thread."""
+        _plant(home, PLANTED)
+        from macf.hybrid_search import base_indexer
+        monkeypatch.setattr(base_indexer, "DEPS_AVAILABLE", False)
+        out = gmail.search_local("consent forms ethics")
+        assert out["mode"] == "keyword"
+        assert out["results"][0]["thread_id"] == "t_irb"
+        assert all("body" not in r for r in out["results"])
+
+    @pytest.mark.skipif(not _deps(), reason="lancedb / sentence-transformers not installed")
+    def test_hybrid_finds_paraphrase_and_writes_nothing_to_disk(self, home, monkeypatch, tmp_path, capsys):
+        """A paraphrase with no shared keywords ranks the planted thread first, and a walk of every
+        writable root during and after the query finds no new file anywhere, inside or outside the cache."""
+        _plant(home, PLANTED)
+        box = tmp_path / "box"
+        for d in ("tmp", "home", "cwd"):
+            (box / d).mkdir(parents=True)
+        monkeypatch.setenv("TMPDIR", str(box / "tmp"))
+        monkeypatch.setenv("HOME", str(box / "home"))
+        monkeypatch.chdir(box / "cwd")
+        before = {str(p) for p in tmp_path.rglob("*")}
+        seen_during = set()
+        real_rrf = gmail._rrf
+
+        def spy(rankings, k=60):  # the table is live at this moment
+            seen_during.update(str(p) for p in tmp_path.rglob("*"))
+            return real_rrf(rankings, k)
+        monkeypatch.setattr(gmail, "_rrf", spy)
+        out = gmail.search_local("review board paperwork for volunteers")  # no token overlap with t_irb
+        assert out["mode"] == "hybrid"
+        assert out["results"][0]["thread_id"] == "t_irb"
+        after = {str(p) for p in tmp_path.rglob("*")}
+        assert seen_during - before == set(), "index touched disk during the query"
+        # the one permitted new file is the audit receipt (mode + counts, never mail); see the grep below
+        assert {Path(x).name for x in after - before} <= {"gmail_audit.jsonl"}, "index left something on disk"
+        # and the planted phrase rests nowhere in plaintext under the temp root
+        for p in tmp_path.rglob("*"):
+            if p.is_file():
+                assert b"countersigned" not in p.read_bytes()
+        assert "countersigned" not in capsys.readouterr().out
+
+    def test_purge_after_search_leaves_nothing(self, home):
+        _plant(home, PLANTED)
+        gmail.search_local("tacos", keyword_only=True)
+        root = gmail.cache_root()
+        assert root.exists()
+        gmail.cache_purge()
+        assert not root.exists()
+        assert gmail.search_local("tacos", keyword_only=True)["cached"] == 0
+
+    def test_cli_rows_are_headers_only(self, home, capsys):
+        from macf.cli import cmd_gmail_search
+        _plant(home, PLANTED)
+        rc = cmd_gmail_search(Namespace(query="oscilloscope", local=True, limit=10, keyword_only=True, json=True))
+        assert rc == 0
+        d = json.loads(capsys.readouterr().out)
+        assert d["mode"] == "keyword" and d["results"][0]["thread_id"] == "t_scope"
+        assert set(d["results"][0]) == {"thread_id", "date", "from", "subject", "messages", "score"}
