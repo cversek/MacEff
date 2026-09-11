@@ -1,0 +1,32 @@
+#!/bin/bash
+# Refuse a commit message that carries a Claude Code session link.
+#
+# The harness appends an attribution block to every commit and PR body it
+# helps write:
+#
+#   Claude-Session: https://claude.ai/code/session_01XXXXXXXXXXXXXXXXXXXXXX
+#
+# That URL is an account-linked identifier. It is not a public link -- opening
+# it needs the owning claude.ai login -- but it binds the account to every
+# public commit that carries it, and its privacy rests on a sharing model the
+# repository does not control. It reached eight commits on this repository's
+# main before anyone noticed, because nothing looked at the MESSAGE: the
+# pre-commit gates scan staged files, and a message is not a file.
+#
+# This runs at commit-msg, where the message is the input. Bash 3.2 compatible
+# (macOS), like the dispatcher that calls it.
+set -uo pipefail
+
+MSG_FILE="${1:-}"
+[ -n "$MSG_FILE" ] && [ -f "$MSG_FILE" ] || exit 0
+
+# Comment lines (git's own template) are not part of the message.
+HITS=$(grep -nE '^[^#]' "$MSG_FILE" | grep -nE 'claude\.ai/code/session_|^[0-9]+:Claude-Session:' || true)
+[ -z "$HITS" ] && exit 0
+
+echo "[hooks] commit message carries a Claude Code session link:" >&2
+# Print the line numbers and a redacted shape, never the identifier itself.
+echo "$HITS" | sed -E 's/session_[A-Za-z0-9]+/session_<redacted>/g; s/^[0-9]+://' | sed 's/^/[hooks]   /' >&2
+echo "[hooks] drop the 'Claude-Session:' trailer and any claude.ai/code/session_ URL," >&2
+echo "[hooks] and sign with the calling-card footer instead." >&2
+exit 1

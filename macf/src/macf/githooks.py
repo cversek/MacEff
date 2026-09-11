@@ -16,6 +16,16 @@ This installs a **dispatcher** that runs a directory, and it reads from two:
     gate hardcodes the location of a private pattern file — and for whatever hook
     the developer already had, which is **adopted** here rather than destroyed.
 
+``$MACEFF/.githooks/portable/<hook>.d/``
+    Canonical copies of hooklets the installer delivers INTO the per-clone
+    directory of every repository it is run on. A hooklet qualifies only if it
+    depends on nothing outside itself and embeds nothing private, so it is
+    correct in a repository that never asked for anything MacEff-specific. The
+    first is ``commit-msg.d/10-no-session-url``, which refuses a commit message
+    carrying a Claude Code session link. They are not dispatched from this tree
+    — the dispatcher reads ``.githooks/<hook>.d/`` — so MacEff's own checkout
+    receives them the way every other repository does: by installing.
+
 The split is not tidiness. A single shared directory would publish a local's
 private material to everyone who clones, which is a worse failure than the
 collision it was meant to solve.
@@ -35,10 +45,13 @@ from typing import Any, Dict, List, Optional
 #: Hooks this installer knows how to dispatch. Extending it means adding a
 #: ``<hook>`` dispatcher alongside the existing one; the dispatcher itself is
 #: hook-agnostic and derives its directory from its own basename.
-DISPATCHED_HOOKS = ("pre-commit",)
+DISPATCHED_HOOKS = ("pre-commit", "commit-msg")
 
 #: Where an adopted or private hooklet lives, relative to the git common dir.
 LOCAL_HOOKLET_DIR = "hooks.local.d"
+
+#: Where the canonical portable hooklets live, relative to the canonical hooks dir.
+PORTABLE_DIR = "portable"
 
 #: The name an adopted pre-existing hook is given. The ``00`` prefix puts it
 #: first: whatever the developer had was running before the framework arrived,
@@ -170,6 +183,24 @@ def install_dispatcher(
         for existing_hooklet in sorted(dst_d.iterdir()):
             if existing_hooklet.is_file():
                 _make_executable(existing_hooklet)
+
+        # 2b. PORTABLE hooklets go to the per-clone directory of THIS repo. They
+        #     are the exception to "only the dispatcher is copied": each depends
+        #     on nothing but itself and embeds nothing private, so it is correct
+        #     in a repository that never asked for anything MacEff-specific.
+        #     Copied only on a content difference, so a re-run stays a no-op.
+        portable_d = source_dir / PORTABLE_DIR / f"{hook}.d"
+        if portable_d.is_dir():
+            local_d = git_common / LOCAL_HOOKLET_DIR / f"{hook}.d"
+            for src_hooklet in sorted(portable_d.iterdir()):
+                if not src_hooklet.is_file() or src_hooklet.name.startswith("."):
+                    continue
+                local_d.mkdir(parents=True, exist_ok=True)
+                dst_hooklet = local_d / src_hooklet.name
+                if not dst_hooklet.exists() or dst_hooklet.read_bytes() != src_hooklet.read_bytes():
+                    dst_hooklet.write_bytes(src_hooklet.read_bytes())
+                    actions.append(f"installed portable {hook} hooklet {src_hooklet.name}")
+                _make_executable(dst_hooklet)
 
     # 3. Point git at the versioned directory. This is what makes the claim
     #    "enforced for this checkout" true; .git/hooks is per-clone, so no
