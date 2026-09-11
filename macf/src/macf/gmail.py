@@ -580,6 +580,36 @@ def sync(query: str, limit: int = 50) -> Dict[str, Any]:
     return {"matched": len(rows), "fetched": new, "cached_threads": len(_index())}
 
 
+def scan_outbound(parts: Dict[str, Any]) -> Dict[str, Any]:
+    """Credential scan over everything that would leave in a draft: body text and
+    each attachment's bytes. Refuses only on credential-class findings; private
+    vocabulary (framework names, agent monikers) is the message when two agents
+    write to each other, so it is reported, not refused -- the split the amail
+    preflight settled. Findings carry the part and the category, never the
+    matched text. Binary parts that cannot be decoded are reported unscanned and
+    allowed: the shape this guards against is a text credential file (a grant
+    is JSON) handed to a verb whose scope can send it.
+    """
+    from macf.amail.preflight import _is_credential
+    from macf.opsec import DEFAULT_PROFILE, compiled_checks, scan_text
+    checks = compiled_checks(DEFAULT_PROFILE)
+    secret_labels = set(DEFAULT_PROFILE.get("secret_class", []))
+    credentials: List[Dict[str, str]] = []
+    context: List[Dict[str, str]] = []
+    unscanned: List[str] = []
+    for name, blob in parts.items():
+        result = scan_text(blob, part=name, checks=checks)
+        unscanned.extend(result.unscanned)
+        seen = set()
+        for f in result.findings:
+            if (f.part, f.label) in seen:
+                continue
+            seen.add((f.part, f.label))
+            row = {"part": f.part, "label": f.label}
+            (credentials if _is_credential(f.label, secret_labels) else context).append(row)
+    return {"credentials": credentials, "context": context, "unscanned": unscanned}
+
+
 def build_draft(to: List[str], subject: str, body: str, cc: Optional[List[str]] = None,
                 attach: Optional[List[str]] = None, in_reply_to: Optional[str] = None,
                 references: Optional[str] = None) -> EmailMessage:
@@ -594,13 +624,28 @@ def build_draft(to: List[str], subject: str, body: str, cc: Optional[List[str]] 
         msg["In-Reply-To"] = in_reply_to
         msg["References"] = references or in_reply_to
     msg.set_content(body or "")
+    parts: Dict[str, Any] = {"body": body or ""}
+    blobs = []
     for path in attach or []:
         p = Path(path)
         if not p.is_file():
             raise GmailError(f"attachment not found: {p}")
         ctype, _ = mimetypes.guess_type(p.name)
         maintype, subtype = (ctype or "application/octet-stream").split("/", 1)
-        msg.add_attachment(p.read_bytes(), maintype=maintype, subtype=subtype, filename=p.name)
+        data = p.read_bytes()
+        parts[f"attachment:{p.name}"] = data
+        blobs.append((data, maintype, subtype, p.name))
+    # Scan BEFORE anything is attached. A credential in the body or in a named
+    # file must not reach a draft the compose scope can send.
+    verdict = scan_outbound(parts)
+    if verdict["credentials"]:
+        labels = ", ".join(sorted({f"{c['part']} ({c['label']})" for c in verdict["credentials"]}))
+        audit("draft", "write", "refused", {"to": to, "credentials": verdict["credentials"]},
+              "credential-class content in the outbound message")
+        raise GmailError(f"refusing to draft: credential-class content in {labels}")
+    msg.scan_verdict = verdict  # carried to the audit record by create_draft
+    for data, maintype, subtype, name in blobs:
+        msg.add_attachment(data, maintype=maintype, subtype=subtype, filename=name)
     return msg
 
 
@@ -631,6 +676,9 @@ def create_draft(to: List[str], subject: str, body: str, cc: Optional[List[str]]
         raise GmailError(f"draft refused ({_api_error(st, d)})")
     out = {"draft_id": d.get("id"), "thread_id": d.get("message", {}).get("threadId"),
            "to": to, "subject": subject, "attachments": len(attach or [])}
+    verdict = getattr(msg, "scan_verdict", {})
+    if verdict.get("context") or verdict.get("unscanned"):
+        out["scan"] = {"context": verdict.get("context", []), "unscanned": verdict.get("unscanned", [])}
     audit("draft", "write", "allowed", out)
     return out
 

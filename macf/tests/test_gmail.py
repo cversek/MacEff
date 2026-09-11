@@ -335,3 +335,46 @@ class TestLocalSearch:
         d = json.loads(capsys.readouterr().out)
         assert d["mode"] == "keyword" and d["results"][0]["thread_id"] == "t_scope"
         assert set(d["results"][0]) == {"thread_id", "date", "from", "subject", "messages", "score"}
+
+
+class TestDraftRefusesCredentials:
+    """The draft verb is the one whose scope can send. Anything that reaches it
+    must have been scanned first; the positive control is the agent's own grant."""
+
+    def test_attaching_the_grant_file_is_refused_and_the_token_is_not_echoed(self, home):
+        _fake_grant(home, profile="draft")
+        grant = home / ".maceff" / "gmail_grant.json"
+        with pytest.raises(gmail.GmailError, match="credential-class content in attachment:gmail_grant.json") as ei:
+            gmail.build_draft(["b@x.org"], "s", "hi", attach=[str(grant)])
+        assert "1//0FAKE" not in str(ei.value) and gmail.SENTINEL not in str(ei.value)
+        last = json.loads((home / ".maceff" / "gmail_audit.jsonl").read_text().splitlines()[-1])
+        assert last["decision"] == "refused" and "1//0FAKE" not in json.dumps(last)
+
+    def test_a_token_in_the_body_or_body_file_is_refused(self, home, tmp_path):
+        _fake_grant(home, profile="draft")
+        with pytest.raises(gmail.GmailError, match="credential-class content in body"):
+            gmail.build_draft(["b@x.org"], "s", "here is the refresh token 1//0FAKEFAKEFAKEFAKEFAKEFAKEFAKE ok")
+        # --body-file goes through the same body part
+        from macf import cli
+        bf = tmp_path / "body.txt"
+        bf.write_text('api_key: "sk-FAKEFAKEFAKEFAKEFAKEFAKE1234"\n')
+        rc = cli.cmd_gmail_draft(Namespace(to=["b@x.org"], cc=None, subject="s", body=None, body_file=str(bf),
+                                           reply_to=None, attach=None, json=False))
+        assert rc == 1
+
+    def test_ordinary_and_binary_attachments_pass_with_binary_reported(self, home, tmp_path):
+        _fake_grant(home, profile="draft")
+        txt = tmp_path / "notes.txt"
+        txt.write_text("meeting moved to Thursday")
+        pdf = tmp_path / "scan.pdf"
+        pdf.write_bytes(b"%PDF-1.4\n\xff\xfe\x00binary\x80\x81\n")
+        msg = gmail.build_draft(["b@x.org"], "s", "see attached", attach=[str(txt), str(pdf)])
+        assert [p.get_filename() for p in msg.iter_attachments()] == ["notes.txt", "scan.pdf"]
+        assert msg.scan_verdict["credentials"] == []
+        assert msg.scan_verdict["unscanned"] == ["attachment:scan.pdf"]
+
+    def test_framework_vocabulary_is_allowed_not_refused(self, home):
+        """Two agents of this framework writing 'macf_tools' to each other is the message."""
+        _fake_grant(home, profile="draft")
+        msg = gmail.build_draft(["b@x.org"], "s", "run macf_tools gmail status and tell me what MacEff says")
+        assert msg.scan_verdict["credentials"] == []
