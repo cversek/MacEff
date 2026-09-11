@@ -61,19 +61,9 @@ def _entries(target: Path) -> Iterator[Tuple[str, bytes]]:
 
 
 def _is_credential(label: str, secret_labels: set) -> bool:
-    """Is this category key or token material, as opposed to private vocabulary?
-
-    The same test the pre-commit gate applies, so the two agree about what
-    counts as a secret. Kept as one predicate rather than two lists because a
-    category that is credential-class in one gate and not the other is exactly
-    the drift a second gate is supposed to remove.
-    """
-    if label in secret_labels:
-        return True
-    lowered = label.lower()
-    return any(k in lowered for k in (
-        "credential", "secret", "token", "password", "private key", "api key",
-        "ssh public key", "access key"))
+    """Kept for callers; the shared predicate lives in macf.opsec so every gate agrees."""
+    from macf.opsec import is_credential_label
+    return label in secret_labels or is_credential_label(label, {"secret_class": []})
 
 
 def scan_bundle(target: Path, *, profile: Optional[Dict[str, Any]] = None,
