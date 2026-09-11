@@ -523,6 +523,22 @@ def compiled_checks(profile: Optional[Dict[str, Any]] = None,
     return checks
 
 
+def is_credential_label(label: str, profile: Optional[Dict[str, Any]] = None) -> bool:
+    """Is this finding category key or token material, as opposed to private
+    vocabulary? ONE predicate for every gate (preflight, broker scrub, gmail
+    draft) so they cannot disagree about what a secret is -- a category that is
+    credential-class in one gate and not the next is exactly the drift a second
+    gate is supposed to remove. Membership in the profile's secret_class list,
+    or a label that names the material, counts."""
+    prof = profile if profile is not None else DEFAULT_PROFILE
+    if label in set(prof.get("secret_class", [])):
+        return True
+    lowered = label.lower()
+    return any(k in lowered for k in (
+        "credential", "secret", "token", "password", "private key", "api key",
+        "ssh public key", "access key"))
+
+
 def scan_text(text: Any, *, part: str = "body",
               profile: Optional[Dict[str, Any]] = None,
               env: Optional[Dict[str, str]] = None,

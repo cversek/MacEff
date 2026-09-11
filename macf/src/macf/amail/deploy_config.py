@@ -23,6 +23,7 @@ that dataclass is the broker's in-memory shape; this is the on-disk contract a
 deployment writes, validated at the trust boundary where operator-authored
 configuration becomes broker authority.
 """
+import sys
 import pwd
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -57,7 +58,8 @@ def running_macf() -> str:
     try:
         import macf
         return getattr(macf, "__version__", "unknown")
-    except Exception:  # pragma: no cover - macf is importing this module
+    except ImportError as e:  # pragma: no cover - macf is importing this module
+        print(f"⚠️ MACF: running macf version unknown: {e}", file=sys.stderr)
         return "unknown"
 
 
@@ -111,7 +113,8 @@ def _package_dir() -> str:
     try:
         import macf
         return str(Path(macf.__file__).parent)
-    except Exception:  # pragma: no cover
+    except (ImportError, AttributeError) as e:  # pragma: no cover
+        print(f"⚠️ MACF: macf package dir unknown: {e}", file=sys.stderr)
         return "unknown"
 
 
@@ -424,6 +427,13 @@ class BrokerDeployConfig(BaseModel):
         description="refuse a message with a part the scrub could not read as "
                     "text. What is forbidden is the third option, where an "
                     "unscanned part silently counts as scanned.")
+    refuse_context: bool = Field(
+        default=False,
+        description="also refuse PRIVATE-VOCABULARY findings (framework name, "
+                    "agent moniker, task number). Credential material always "
+                    "refuses. Off by default because between agents of this "
+                    "framework such vocabulary is the message; turn on for a "
+                    "deployment that relays to third parties.")
 
     def to_broker_config(self) -> BrokerConfig:
         """The in-memory shape the broker actually runs on.
@@ -449,6 +459,7 @@ class BrokerDeployConfig(BaseModel):
             transport=self._build_transport(),
             opsec_scan=self._build_scan() if self.opsec_scan else None,
             refuse_unscanned=self.refuse_unscanned,
+            refuse_context=self.refuse_context,
             agent_uids={b.uid: name for name, b in addressing.agents.items()},
         )
 

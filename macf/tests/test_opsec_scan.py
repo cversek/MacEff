@@ -230,7 +230,7 @@ def _msg(body="ordinary text", subject="s"):
 def test_planted_material_is_refused_through_the_real_submission_path(tmp_path):
     """The gate is ON the path, demonstrated by driving the path."""
     b = _gated_broker(tmp_path)
-    result = b.submit("alpha", _msg(body="deploy notes from buildbox42.internal"))
+    result = b.submit("alpha", _msg(body='deploy notes: api_key = "FAKEFAKEFAKEFAKEFAKE1234"'))
     assert result["ok"] is False
     assert any("pre-send gate" in r for r in result["refused"])
 
@@ -247,7 +247,7 @@ def test_a_gate_refusal_is_a_terminal_fate_and_is_recorded(tmp_path):
     scrubbed message is accounted for rather than vanishing from the ledger."""
     from macf.amail.client import sent_disposition, derive_message_state
     b = _gated_broker(tmp_path)
-    result = b.submit("alpha", _msg(subject="ping from buildbox42"))
+    result = b.submit("alpha", _msg(subject='ping, token = "FAKEFAKEFAKEFAKEFAKE1234"'))
     rec = sent_disposition(tmp_path / "disp", result["message_id"])
     assert rec is not None
     assert derive_message_state(rec) == "gate-refused"
@@ -314,7 +314,7 @@ def test_the_gate_is_scoped_by_path_not_by_authorship(tmp_path):
     broker_originated = Message(
         sender="postmaster@agents.test", to=["stranger@example.org"],
         subject="Delivery Status Notification",
-        body="your message to buildbox42.internal was not delivered")
+        body='your message with token = "FAKEFAKEFAKEFAKEFAKE1234" was not delivered')
     assert b._scrub(broker_originated) is not None, \
         "a broker-composed message must face the same gate as an agent's"
     clean = Message(sender="postmaster@agents.test", to=["stranger@example.org"],
