@@ -3481,3 +3481,42 @@ class TestDeliveryOutcomeFieldsAreNamedNotOrdered:
         assert entry["state"] == "delivered", "state must name the outcome, not the reason"
         assert entry["detail"] == "", "detail is the reason; empty on success"
         assert entry["trust"] != "local", "trust must not be holding the rung"
+
+
+class TestScrubSplitsCredentialFromContext:
+    """The broker's pre-send gate applies the same two classes the hand-carry
+    preflight settled: credential material always refuses; private vocabulary
+    (a framework name, an agent moniker) is the message between agents of this
+    framework and is reported, not refused, unless the deployment says otherwise."""
+
+    def _broker_with(self, deployment, scan, **cfg):
+        from macf import opsec
+        b = deployment["broker"]
+        for k, v in cfg.items():
+            setattr(b.config, k, v)
+        b.config.opsec_scan = lambda m: opsec.ScanResult(findings=[opsec.Finding("body", lbl, 0, 1) for lbl in scan])
+        return b
+
+    def test_framework_vocabulary_alone_is_delivered_and_reported(self, deployment, capsys):
+        b = self._broker_with(deployment, ["framework name", "agent moniker"])
+        assert b._scrub(msg(body="run macf_tools gmail status")) is None
+        err = capsys.readouterr().err
+        assert "private-context vocabulary" in err and "framework name" in err and "macf_tools" not in err
+
+    def test_credential_material_always_refuses_and_names_only_categories(self, deployment):
+        b = self._broker_with(deployment, ["framework name", "google oauth refresh token (credential)"])
+        reason = b._scrub(msg(body="1//0FAKEFAKEFAKEFAKEFAKEFAKE"))
+        assert reason and reason.startswith("credential-class content") and "refresh token" in reason
+        assert "1//0" not in reason
+
+    def test_refuse_context_makes_vocabulary_refuse_too(self, deployment):
+        b = self._broker_with(deployment, ["agent moniker"], refuse_context=True)
+        reason = b._scrub(msg(body="x"))
+        assert reason and "refuse_context" in reason
+
+    def test_the_live_default_scan_would_have_refused_inter_agent_mail(self):
+        """The finding that prompted this: the deployment's default scan flags the
+        framework's own name, so before the split every mention refused."""
+        from macf.opsec import DEFAULT_PROFILE, compiled_checks, scan_text, is_credential_label
+        r = scan_text("please run macf_tools amail status", part="body", checks=compiled_checks(DEFAULT_PROFILE))
+        assert r.findings and all(not is_credential_label(f.label) for f in r.findings)

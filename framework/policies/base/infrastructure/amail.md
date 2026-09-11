@@ -696,6 +696,16 @@ It is reported as its own outcome for the operator to decide on, because a tool
 that silently counts unread bytes as clean has the property this policy spends
 its length arguing against.
 
+**The broker's own gate applies the same two classes.** The pre-send scrub
+refuses credential material unconditionally and, by default, delivers a message
+whose only findings are private vocabulary, reporting them to the operator's
+terminal and the disposition record. A deployment that relays to third parties
+sets `refuse_context` and refuses that class too. This was found by attempt after
+the hand-carry gate was split: the deployment's default scan flags the
+framework's own name, so before the split any message between two agents that
+mentioned the framework was refused by the very transport built to carry it.
+One predicate decides the class for every gate, so they cannot drift apart.
+
 ### 6b.5 A key that arrives in a message is a claim
 
 A public key carried by a relayed message is an assertion, and accepting it on the

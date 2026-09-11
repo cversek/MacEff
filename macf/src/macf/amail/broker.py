@@ -288,6 +288,14 @@ class BrokerConfig:
     #: silently counts as scanned.
     refuse_unscanned: bool = True
 
+    #: What to do with PRIVATE-VOCABULARY findings (a framework name, an agent
+    #: moniker, a task number) as opposed to credential material, which always
+    #: refuses. Between agents of this framework such vocabulary is the content
+    #: of the message (amail policy, the two classes of finding), so the default
+    #: is to report it and deliver. A deployment that relays to third parties
+    #: turns this on and refuses it too.
+    refuse_context: bool = False
+
     #: uid -> agent name. THE authentication table. The socket is world-writable,
     #: so the only thing distinguishing one submitter from another is the kernel's
     #: view of who is on the other end. A submitted `sender` field is a claim; this
@@ -618,10 +626,24 @@ class Broker:
                   file=sys.stderr)
             return f"scrub failed to run ({type(e).__name__})"
 
-        if getattr(result, "findings", None):
-            # The reason names CATEGORIES and quotes nothing: a refusal message
+        findings = list(getattr(result, "findings", None) or [])
+        if findings:
+            # Two classes, and conflating them made the first gate useless: the
+            # reason names CATEGORIES and quotes nothing, because a refusal
             # travels into logs and notices, which are themselves outward-facing.
-            return result.reason()
+            from macf.opsec import is_credential_label
+            credential = [f for f in findings if is_credential_label(f.label)]
+            context = [f for f in findings if not is_credential_label(f.label)]
+            if credential:
+                labels = sorted({f"{f.part}:{f.label}" for f in credential})
+                return "credential-class content: " + "; ".join(labels)
+            if context and getattr(self.config, "refuse_context", False):
+                return "private-context vocabulary (refuse_context is on): " + result.reason()
+            if context:
+                labels = sorted({f"{f.part}:{f.label}" for f in context})
+                print(f"⚠️ MACF: {message.message_id} carries private-context vocabulary "
+                      f"({', '.join(labels)}); delivering -- between agents it is the message",
+                      file=sys.stderr)
         if getattr(result, "unscanned", None) and self.config.refuse_unscanned:
             return result.reason()
         return None
