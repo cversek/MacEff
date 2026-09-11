@@ -19,9 +19,12 @@ requirement it removes REACTIVATES the moment any field is trusted.
 Consequence, stated plainly: a leaked credential permits CAUSING TURNS, not
 FORGING MAIL. The residual risk is attention hijack, and it is bounded by rate.
 """
+import calendar
 import json
 import os
+import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -35,7 +38,13 @@ def sessions_dir() -> Path:
 
 
 def socket_dir() -> Path:
-    runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    """Where the client puts ``<pid>.sock``. ``$XDG_RUNTIME_DIR/cc-socks`` when the
+    variable is set; otherwise ``/run/user/<uid>`` on Linux and ``/tmp`` on macOS,
+    which has no runtime dir (MEASURED: the macOS client publishes
+    ``messagingSocketPath: /tmp/cc-socks/<pid>.sock`` in its sidecar)."""
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if not runtime:
+        runtime = "/tmp" if sys.platform == "darwin" else f"/run/user/{os.getuid()}"
     return Path(runtime) / SOCKET_DIRNAME
 
 
@@ -94,6 +103,9 @@ def read_credential(path: Path) -> Optional[PeerCredential]:
 def proc_start_ticks(pid: int) -> Optional[int]:
     """Field 22 of /proc/<pid>/stat -- process start, in clock ticks since boot.
 
+    Linux only. On a host without procfs this returns None for every pid, so
+    callers must go through ``proc_start``, which dispatches on the platform.
+
     `comm` may contain spaces and parentheses, so everything is parsed relative to
     the LAST ')' rather than by splitting the whole line.
     """
@@ -114,6 +126,77 @@ def proc_start_ticks(pid: int) -> Optional[int]:
         return None
 
 
+_ASCTIME = "%a %b %d %H:%M:%S %Y"
+
+
+def _proc_start_darwin(pid: int) -> Optional[str]:
+    """Process start as the client records it on macOS: ``asctime`` of the start
+    instant in UTC. MEASURED against the client's own sidecar and credential:
+    ``ps -o lstart=`` gives the same instant in local time to the second, and
+    ``time.asctime(time.gmtime(...))`` of it reproduces the stored string exactly.
+    """
+    try:
+        out = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)],
+                             capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"⚠️ MACF: ps unavailable for pid {pid} (no wake): {e}", file=sys.stderr)
+        return None
+    raw = out.stdout.strip()
+    if out.returncode != 0 or not raw:
+        print(f"⚠️ MACF: pid {pid} is not running (no wake)", file=sys.stderr)
+        return None
+    try:
+        local = time.strptime(raw, _ASCTIME)
+        return time.asctime(time.gmtime(time.mktime(local)))
+    except (ValueError, OverflowError) as e:
+        print(f"⚠️ MACF: ps lstart unparseable for pid {pid} (no wake): {e!r} {raw!r}", file=sys.stderr)
+        return None
+
+
+def proc_start(pid: int) -> Optional[str]:
+    """The process-start fingerprint in the form the client STORES on this platform.
+
+    Linux: clock ticks since boot, as a decimal string (``/proc/<pid>/stat``).
+    macOS: ``asctime`` of the start instant in UTC (see ``_proc_start_darwin``).
+    None when the pid is not running or the platform has no known source --
+    which every caller treats as "not live", so an unknown platform fails closed.
+    """
+    if sys.platform.startswith("linux"):
+        ticks = proc_start_ticks(pid)
+        return None if ticks is None else str(ticks)
+    if sys.platform == "darwin":
+        return _proc_start_darwin(pid)
+    print(f"⚠️ MACF: no process-start source on {sys.platform} (no wake)", file=sys.stderr)
+    return None
+
+
+def proc_start_key(value) -> Optional[int]:
+    """Canonical integer for a stored ``procStart`` in either platform form, for
+    equality and for newest-start ordering. None when it is neither form."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        pass
+    try:
+        return calendar.timegm(time.strptime(text, _ASCTIME))
+    except (ValueError, OverflowError) as e:
+        print(f"⚠️ MACF: procStart is neither ticks nor UTC asctime: {text!r} ({e})", file=sys.stderr)
+        return None
+
+
+def proc_start_from_key(key: int) -> str:
+    """Inverse of ``proc_start_key`` in this platform's stored form; lets a test
+    say "one incarnation later" without knowing which platform it is on."""
+    if sys.platform == "darwin":
+        return time.asctime(time.gmtime(key))
+    return str(key)
+
+
 def verify_incarnation(pid: int, declared_start) -> bool:
     """Bind the credential to a process INCARNATION rather than to a number.
 
@@ -121,10 +204,13 @@ def verify_incarnation(pid: int, declared_start) -> bool:
     addressable with a stale credential.
 
     THE TYPES DIFFER AND THIS IS THE WHOLE REASON THE CHECK GOES UNWRITTEN.
-    The credential stores the value as a STRING; /proc yields an INT. Both are
-    clock ticks since boot -- same unit, measured -- so a naive `==` is False for
-    every well-formed credential, the check refuses every legitimate wake, and
-    the obvious remedy is to delete it. Normalise, then compare.
+    The credential stores the value as a STRING; /proc yields an INT. On Linux
+    both are clock ticks since boot -- same unit, measured -- so a naive `==` is
+    False for every well-formed credential, the check refuses every legitimate
+    wake, and the obvious remedy is to delete it. On macOS the client stores a
+    UTC asctime string instead, and there is no /proc at all. Both sides go
+    through ``proc_start_key`` so the comparison is between canonical integers
+    whatever the platform wrote.
 
     A credential with NO declared start fails CLOSED. It is an authorization
     check, not an advisory one, so absence is not permission.
@@ -136,13 +222,12 @@ def verify_incarnation(pid: int, declared_start) -> bool:
             file=sys.stderr,
         )
         return False
-    actual = proc_start_ticks(pid)
+    actual = proc_start_key(proc_start(pid))
     if actual is None:
         return False
-    try:
-        declared = int(str(declared_start).strip())
-    except (TypeError, ValueError) as e:
-        print(f"⚠️ MACF: procStart not an integer for pid {pid} (refusing): {e}", file=sys.stderr)
+    declared = proc_start_key(declared_start)
+    if declared is None:
+        print(f"⚠️ MACF: procStart unusable for pid {pid} (refusing): {declared_start!r}", file=sys.stderr)
         return False
     if declared != actual:
         print(
@@ -234,7 +319,7 @@ def live_sessions() -> list:
             pid = int(name[: -len(".json")])
         except ValueError:
             continue
-        if proc_start_ticks(pid) is None:
+        if proc_start(pid) is None:
             continue
         info = read_session_info(pid)
         if info is not None:
@@ -292,10 +377,8 @@ def resolve_target(session_id: str):
         return candidates[0], candidates
 
     def start_key(info):
-        try:
-            return int(info.proc_start)
-        except (TypeError, ValueError):
-            return -1
+        key = proc_start_key(info.proc_start)
+        return -1 if key is None else key
 
     ranked = sorted(candidates, key=start_key, reverse=True)
     supervised = supervised_child_pids()
@@ -359,6 +442,6 @@ def addressable_sessions() -> list:
             pid = int(name.split(".")[0])
         except ValueError:
             continue
-        if (socket_dir() / f"{pid}.sock").exists() and proc_start_ticks(pid) is not None:
+        if (socket_dir() / f"{pid}.sock").exists() and proc_start(pid) is not None:
             found.append(pid)
     return sorted(found)

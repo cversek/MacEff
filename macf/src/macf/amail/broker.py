@@ -166,18 +166,44 @@ def strip_inbound_headers(message: Message) -> List[str]:
     return cleared
 
 
+#: macOS / BSD: getsockopt(SOL_LOCAL, LOCAL_PEERCRED) fills a `struct xucred`
+#: {u_int cr_version; uid_t cr_uid; short cr_ngroups; gid_t cr_groups[16]}.
+#: The constants are not in Python's socket module on any platform.
+#: Usable bytes of `sun_path` (the array is 104 on macOS/BSD, 108 on Linux, and
+#: the last byte is the terminator).
+SUN_PATH_MAX = 103 if (sys.platform == "darwin" or sys.platform.endswith("bsd")) else 107
+
+_SOL_LOCAL = 0
+_LOCAL_PEERCRED = 0x0001
+_XUCRED_SIZE = 76
+_XUCRED_VERSION = 0
+
+
 def peer_uid(conn: socket.socket) -> int:
     """The uid the kernel recorded for the connected process.
 
     One implementation, used both to authenticate a submission and to meter
     connections, so the two can never disagree about who is calling.
+
+    Linux supplies it as SO_PEERCRED (pid, uid, gid); macOS and the BSDs as
+    LOCAL_PEERCRED (a `struct xucred`). Both are set by the kernel at connect
+    time and neither can be influenced by the peer, which is the property the
+    caller relies on. Any other platform raises, and the caller fails closed.
     """
-    raw = conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED,
-                          struct.calcsize("3I"))
-    # ucred fields are unsigned; reading them signed turns a high uid negative.
-    # It failed closed, but a lookup should not depend on that.
-    _pid, uid, _gid = struct.unpack("3I", raw)
-    return uid
+    if hasattr(socket, "SO_PEERCRED"):
+        raw = conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED,
+                              struct.calcsize("3I"))
+        # ucred fields are unsigned; reading them signed turns a high uid negative.
+        # It failed closed, but a lookup should not depend on that.
+        _pid, uid, _gid = struct.unpack("3I", raw)
+        return uid
+    if sys.platform == "darwin" or sys.platform.endswith("bsd"):
+        raw = conn.getsockopt(_SOL_LOCAL, _LOCAL_PEERCRED, _XUCRED_SIZE)
+        version, uid = struct.unpack_from("II", raw)
+        if version != _XUCRED_VERSION:
+            raise OSError(f"unexpected xucred version {version} from LOCAL_PEERCRED")
+        return uid
+    raise OSError(f"no kernel peer-credential source on {sys.platform}")
 
 #: The trust classification, as data rather than prose. canonicalize() asserts
 #: its union covers every Message field, so a field added later fails loudly
@@ -348,11 +374,8 @@ class Broker:
             return ""
         if sender_agent:
             # The implication, and only for a sender this deployment defines.
-            try:
-                recipient_address = self.config.address_for(recipient_agent)
-            except Exception:
-                recipient_address = ""
-            if recipient_address and self.contacts.permits(
+            recipient_address = self.config.address_for(recipient_agent)
+            if self.contacts.permits(
                     sender_agent, recipient_address, direction="outbound"):
                 return ""
         return (f"'{recipient_agent}' does not accept mail from "
@@ -1808,6 +1831,12 @@ class _Server(socketserver.ThreadingUnixStreamServer):
 
     allow_reuse_address = True
     daemon_threads = True
+    # Listen backlog. socketserver's default is 5; a burst of connects faster
+    # than the accept thread drains them is then refused by the KERNEL, with no
+    # reply, which is the silent failure the metering below exists to replace
+    # with an explained one. Linux absorbs such bursts anyway; macOS refuses at
+    # the backlog (ECONNREFUSED), so it has to be sized to the metering cap.
+    request_queue_size = MAX_CONCURRENT_CONNECTIONS
 
     def __init__(self, *args, **kwargs):
         self._meter_lock = threading.Lock()
@@ -1921,6 +1950,11 @@ def serve(broker: Broker) -> _Server:
             "would be refused. Refusing to start rather than serve a socket that "
             "cannot identify anyone.")
     path = Path(broker.config.socket_path)
+    if len(str(path).encode()) > SUN_PATH_MAX:
+        raise OSError(
+            f"socket path is {len(str(path).encode())} bytes; this platform allows "
+            f"{SUN_PATH_MAX} for a Unix socket. Configure a shorter socket_path "
+            f"(bind would fail with 'AF_UNIX path too long'): {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         path.unlink()

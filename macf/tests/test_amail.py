@@ -41,7 +41,7 @@ DOMAIN = "example.test"
 
 
 @pytest.fixture
-def deployment(tmp_path):
+def deployment(tmp_path, sock_dir):
     """Two local agents, a contact list permitting each to write to the other."""
     homes = {a: tmp_path / a for a in ("alpha", "beta")}
     for h in homes.values():
@@ -75,7 +75,7 @@ def deployment(tmp_path):
     cred.chmod(0o600)
     cfg = BrokerConfig(
         domain=DOMAIN, agent_homes=homes, contacts_path=contacts,
-        audit_path=tmp_path / "audit.jsonl", socket_path=tmp_path / "b.sock",
+        audit_path=tmp_path / "audit.jsonl", socket_path=sock_dir / "b.sock",
         credentials_path=cred,
         # The test process has one uid, so it can only BE one agent. That is
         # exactly the point: anything it submits is 'alpha', and a claim to be
@@ -97,7 +97,7 @@ def deployment(tmp_path):
         return homes[agent]
 
     return {"cfg": cfg, "broker": Broker(cfg), "homes": homes, "pull": _pull,
-            "contacts": contacts, "tmp": tmp_path}
+            "contacts": contacts, "tmp": tmp_path, "sock": sock_dir}
 
 
 def msg(to=f"beta@{DOMAIN}", sender=f"alpha@{DOMAIN}", subject="s", body="b"):
@@ -356,10 +356,10 @@ class TestEnforcementLocation:
             "if ingest stopped verifying, this guard's narrowing is no longer "
             "justified and should be tightened back")
 
-    def test_client_has_no_fallback_transport(self, tmp_path):
+    def test_client_has_no_fallback_transport(self, tmp_path, sock_dir):
         """With the broker down, sending must fail — not find another way out."""
         with pytest.raises(BrokerUnavailable):
-            submit("alpha", msg(), tmp_path / "nonexistent.sock")
+            submit("alpha", msg(), sock_dir / "nonexistent.sock")
 
 
 # ---------------------------------------------------------------------------
@@ -1189,6 +1189,50 @@ class TestRoundTwoMechanismsHaveCoverage:
             assert mode == 0o666, f"socket mode is {oct(mode)}, not 0o666"
         finally:
             srv.shutdown()
+
+    def test_overlong_socket_path_is_refused_before_bind_with_the_limit_named(self, deployment, tmp_path):
+        """`sun_path` is 104 bytes on macOS and 108 on Linux. A deployment that
+        configures a longer path used to die inside bind() with the bare
+        'AF_UNIX path too long'; the broker now refuses up front and says how
+        long the platform allows. The positive control is the short path every
+        other test here binds."""
+        from macf.amail.broker import SUN_PATH_MAX
+        deployment["cfg"].credentials_path.write_text("s")
+        deployment["cfg"].credentials_path.chmod(0o600)
+        long_dir = tmp_path / ("d" * 120)  # over the limit on every platform, whatever tmp_path is
+        deployment["cfg"].socket_path = long_dir / "b.sock"
+        assert len(str(deployment["cfg"].socket_path).encode()) > SUN_PATH_MAX
+        with pytest.raises(OSError, match=f"{SUN_PATH_MAX}.*shorter socket_path"):
+            serve(deployment["broker"])
+        assert not long_dir.exists(), "refused before touching the filesystem"
+
+    def test_peer_uid_is_the_kernel_recorded_uid_on_this_platform(self, sock_dir):
+        """Positive control for the platform branch (SO_PEERCRED on Linux,
+        LOCAL_PEERCRED on macOS/BSD): a connection from this process reports
+        this process's uid, and nothing the client sends can change it."""
+        import socket as s_
+        import threading
+        from macf.amail.broker import peer_uid
+        path = str(sock_dir / "p.sock")
+        srv = s_.socket(s_.AF_UNIX, s_.SOCK_STREAM)
+        srv.bind(path)
+        srv.listen(1)
+        done = threading.Event()
+
+        def client():
+            c = s_.socket(s_.AF_UNIX, s_.SOCK_STREAM)
+            c.connect(path)
+            c.sendall(b'{"uid": 0}')
+            done.wait(2)
+            c.close()
+        threading.Thread(target=client, daemon=True).start()
+        conn, _ = srv.accept()
+        try:
+            assert peer_uid(conn) == os.getuid()
+        finally:
+            done.set()
+            conn.close()
+            srv.close()
 
 
 class TestOverTheSocket:
@@ -3229,7 +3273,7 @@ class TestAccessFollowsCustody:
         from argparse import Namespace
         import macf.amail.client as client
         home = deployment["homes"]["alpha"]
-        sock = deployment["tmp"] / "live.sock"
+        sock = deployment["sock"] / "live.sock"
         srv = self._listening_socket(sock)
         try:
             monkeypatch.setattr(client, "status", lambda p: {
@@ -3255,7 +3299,7 @@ class TestAccessFollowsCustody:
         from argparse import Namespace
         import macf.amail.client as client
         home = deployment["homes"]["alpha"]
-        sock = deployment["tmp"] / "live2.sock"
+        sock = deployment["sock"] / "live2.sock"
         srv = self._listening_socket(sock)
         try:
             monkeypatch.setattr(client, "status", lambda p: {

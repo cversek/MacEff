@@ -6,6 +6,7 @@ must pass. A check that refuses everything is not a check.
 """
 import json
 import os
+import sys
 
 import pytest
 
@@ -20,16 +21,64 @@ def live_pid():
 
 @pytest.fixture
 def real_start(live_pid):
-    ticks = session.proc_start_ticks(live_pid)
-    assert ticks is not None, "positive control: this process must be readable in /proc"
-    return ticks
+    """The stored form on this platform (ticks string on Linux, UTC asctime on macOS)."""
+    start = session.proc_start(live_pid)
+    assert start is not None, "positive control: this process must have a readable start"
+    return start
+
+
+def _shifted(start, delta):
+    """The same platform form, ``delta`` units later: a different incarnation."""
+    return session.proc_start_from_key(session.proc_start_key(start) + delta)
 
 
 def test_proc_start_is_readable_and_absent_for_a_dead_pid(real_start):
     """Positive control first, then the negative one."""
-    assert isinstance(real_start, int)
-    # pid 0 is never a normal userspace process; /proc/0 does not exist.
+    assert isinstance(real_start, str) and session.proc_start_key(real_start) is not None
+    # pid 0 is never a normal userspace process; neither /proc/0 nor `ps -p 0` reports one.
+    assert session.proc_start(0) is None
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="/proc is Linux-only")
+def test_proc_start_ticks_is_the_linux_reader(live_pid):
+    assert isinstance(session.proc_start_ticks(live_pid), int)
     assert session.proc_start_ticks(0) is None
+
+
+def test_linux_reader_parses_a_stat_line_with_parens_in_comm(monkeypatch, tmp_path):
+    """The Linux branch is what CI exercises for real; here it is fed a synthetic
+    /proc so a macOS run still checks the parse, including a `comm` that contains
+    a space and a parenthesis, which is why the line is split from its LAST ')'."""
+    import builtins
+    stat = tmp_path / "stat"
+    # fields 3.. follow the ')' -- state, ppid, ... -- and starttime is field 22, so index 19 here
+    fields = [str(n) for n in range(3, 30)]
+    fields[19] = "424242"
+    stat.write_text("4242 (my (odd) name) " + " ".join(fields) + "\n")
+    real_open = builtins.open
+
+    def fake_open(path, *a, **k):
+        if str(path) == "/proc/4242/stat":
+            return real_open(stat, *a, **k)
+        if str(path).startswith("/proc/"):
+            raise FileNotFoundError(path)
+        return real_open(path, *a, **k)
+    monkeypatch.setattr(builtins, "open", fake_open)
+    assert session.proc_start_ticks(4242) == 424242
+    assert session.proc_start_ticks(4243) is None
+    monkeypatch.setattr(session.sys, "platform", "linux")
+    assert session.proc_start(4242) == "424242"
+    assert session.verify_incarnation(4242, " 424242 ") is True
+    assert session.verify_incarnation(4242, "424243") is False
+
+
+def test_proc_start_key_canonicalises_both_stored_forms():
+    """A ticks string and a UTC asctime string both reduce to an int; junk does not."""
+    assert session.proc_start_key("9") == 9 and session.proc_start_key("  9 ") == 9
+    assert session.proc_start_key("Thu Sep 10 23:12:40 2026") == 1789081960
+    assert session.proc_start_from_key(session.proc_start_key("9")) in ("9", "Thu Jan  1 00:00:09 1970")
+    for junk in (None, "", "   ", "nine", "2026-09-10"):
+        assert session.proc_start_key(junk) is None
 
 
 def test_incarnation_accepts_the_STRING_form_the_credential_actually_stores(live_pid, real_start):
@@ -40,14 +89,14 @@ def test_incarnation_accepts_the_STRING_form_the_credential_actually_stores(live
     legitimate wake and makes deleting the check look like the fix.
     """
     assert session.verify_incarnation(live_pid, str(real_start)) is True
-    assert session.verify_incarnation(live_pid, real_start) is True
+    assert session.verify_incarnation(live_pid, session.proc_start_key(real_start)) is True
     assert session.verify_incarnation(live_pid, f"  {real_start}  ") is True
 
 
 def test_incarnation_refuses_a_stale_value_against_a_live_pid(live_pid, real_start):
     """The case it exists for: a recycled pid addressed with a stale credential."""
-    assert session.verify_incarnation(live_pid, str(real_start + 1)) is False
-    assert session.verify_incarnation(live_pid, str(real_start - 1)) is False
+    assert session.verify_incarnation(live_pid, _shifted(real_start, +1)) is False
+    assert session.verify_incarnation(live_pid, _shifted(real_start, -1)) is False
 
 
 @pytest.mark.parametrize("declared", [None, "", "not-a-number", "12.5.3", []])

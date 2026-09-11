@@ -39,7 +39,7 @@ def _sidecar(directory, pid, session_id, proc_start, status="idle"):
 
 
 def test_a_single_process_conversation_is_not_ambiguous(home):
-    _sidecar(home, os.getpid(), "conv-solo", session.proc_start_ticks(os.getpid()))
+    _sidecar(home, os.getpid(), "conv-solo", session.proc_start(os.getpid()))
     chosen, candidates = session.resolve_target("conv-solo")
     assert chosen is not None and chosen.pid == os.getpid()
     assert len(candidates) == 1
@@ -48,11 +48,11 @@ def test_a_single_process_conversation_is_not_ambiguous(home):
 def test_twins_are_detected_and_the_newest_is_chosen(home, monkeypatch, capsys):
     """Both processes must be LIVE for this to be the ambiguous case at all."""
     live = os.getpid()
-    ticks = session.proc_start_ticks(live)
-    _sidecar(home, live, "conv-twin", ticks)
-    _sidecar(home, live + 1, "conv-twin", ticks + 500)
+    start = session.proc_start(live)
+    _sidecar(home, live, "conv-twin", start)
+    _sidecar(home, live + 1, "conv-twin", session.proc_start_from_key(session.proc_start_key(start) + 500))
     # Both pids report as live; the fixture cannot fork a real second process.
-    monkeypatch.setattr(session, "proc_start_ticks", lambda pid: ticks)
+    monkeypatch.setattr(session, "proc_start", lambda pid: start)
 
     chosen, candidates = session.resolve_target("conv-twin")
     assert len(candidates) == 2, "both twins must be seen, not one"
@@ -71,7 +71,7 @@ def test_a_dead_twin_does_not_make_a_conversation_ambiguous(home):
     the presence of a file.
     """
     live = os.getpid()
-    _sidecar(home, live, "conv-mixed", session.proc_start_ticks(live))
+    _sidecar(home, live, "conv-mixed", session.proc_start(live))
     _sidecar(home, 999999, "conv-mixed", 1)  # never running
     chosen, candidates = session.resolve_target("conv-mixed")
     assert len(candidates) == 1
@@ -105,7 +105,7 @@ def test_status_is_turn_state_and_is_never_treated_as_liveness(home):
     _sidecar(home, pid, "conv-dead", 1, status="busy")
     info = session.read_session_info(pid)
     assert info.status == "busy"
-    assert session.proc_start_ticks(pid) is None
+    assert session.proc_start(pid) is None
     assert info not in session.live_sessions()
 
 
@@ -144,7 +144,7 @@ def test_a_supervisor_CLAIM_beats_the_newest_start_ordering(home, monkeypatch, c
     live, ticks = os.getpid(), 100
     _sidecar(home, live, "conv-sup", ticks)
     _sidecar(home, live + 1, "conv-sup", ticks + 500)   # newer
-    monkeypatch.setattr(session, "proc_start_ticks", lambda pid: ticks)
+    monkeypatch.setattr(session, "proc_start", lambda pid: str(ticks))
     monkeypatch.setattr(session, "supervised_child_pids", lambda: {live})
 
     chosen, candidates = session.resolve_target("conv-sup")
@@ -162,7 +162,7 @@ def test_it_falls_back_to_newest_start_when_no_supervisor_claims_one(home, monke
     live, ticks = os.getpid(), 100
     _sidecar(home, live, "conv-nosup", ticks)
     _sidecar(home, live + 1, "conv-nosup", ticks + 500)
-    monkeypatch.setattr(session, "proc_start_ticks", lambda pid: ticks)
+    monkeypatch.setattr(session, "proc_start", lambda pid: str(ticks))
     monkeypatch.setattr(session, "supervised_child_pids", lambda: set())
 
     chosen, _ = session.resolve_target("conv-nosup")

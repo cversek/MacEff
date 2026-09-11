@@ -14,9 +14,10 @@ from macf.notify.notice import Notice, amail_notice
 
 
 @pytest.fixture
-def runtime(tmp_path, monkeypatch):
-    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
-    return tmp_path
+def runtime(sock_dir, monkeypatch):
+    """Short on purpose: the session socket binds under it (see conftest.sock_dir)."""
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(sock_dir))
+    return sock_dir
 
 
 @pytest.fixture
@@ -141,7 +142,7 @@ def test_transport_failure_FAILS_OPEN_and_never_raises(runtime, home, monkeypatc
     pid = os.getpid()
     (home / f"{pid}.deadbeef.key").write_text(json.dumps({
         "peerToken": "tok",
-        "procStart": str(__import__("macf.notify.session", fromlist=["x"]).proc_start_ticks(pid)),
+        "procStart": __import__("macf.notify.session", fromlist=["x"]).proc_start(pid),
     }))
     sockdir = runtime / "cc-socks"
     sockdir.mkdir(parents=True, exist_ok=True)
@@ -183,7 +184,7 @@ def test_a_STALLED_peer_times_out_instead_of_hanging_the_caller(runtime, home):
     pid = os.getpid()
     (home / f"{pid}.deadbeef.key").write_text(json.dumps({
         "peerToken": "tok",
-        "procStart": str(_session.proc_start_ticks(pid)),
+        "procStart": _session.proc_start(pid),
     }))
 
     sockdir = runtime / "cc-socks"

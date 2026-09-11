@@ -1104,3 +1104,21 @@ def _no_live_telegram_credentials(request, monkeypatch):
         lambda: None,
         raising=True,
     )
+
+
+@pytest.fixture
+def sock_dir():
+    """A SHORT directory for Unix sockets.
+
+    ``sun_path`` is 104 bytes on macOS (108 on Linux) and pytest's ``tmp_path``
+    on macOS already sits ~50 bytes deep under ``/private/var/folders``; a socket
+    named under it fails to bind with ``AF_UNIX path too long`` for any test whose
+    name is not tiny. So sockets go under ``/tmp`` (``/private/tmp`` resolved,
+    still short), removed on teardown. Everything else stays in ``tmp_path``.
+    """
+    import shutil
+    d = Path(tempfile.mkdtemp(prefix="mt", dir="/tmp"))
+    try:
+        yield d
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
