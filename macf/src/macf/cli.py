@@ -9686,6 +9686,12 @@ def cmd_gmail_draft(args: argparse.Namespace) -> int:
         return 0
     print(f"✅ draft created: {r['draft_id']} in thread {r['thread_id']}")
     print(f"   to={', '.join(r['to'])} subject={_term_safe(r['subject'])!r} attachments={r['attachments']}")
+    scan = r.get("scan") or {}
+    if scan.get("unscanned"):
+        print(f"   ⚠️ not scanned (binary): {', '.join(scan['unscanned'])}")
+    if scan.get("context"):
+        parts = sorted({f"{x['part']} ({x['label']})" for x in scan["context"]})
+        print(f"   ⚠️ private-context vocabulary in {', '.join(parts)} -- allowed, check the recipient")
     return 0
 
 
