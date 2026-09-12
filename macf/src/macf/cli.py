@@ -6516,13 +6516,11 @@ def cmd_task_advance(args: argparse.Namespace) -> int:
             next(iter(state_machine), None)
         )
 
-    if current_state not in state_machine:
-        print(f"❌ Current state {current_state!r} is not a key in lifecycle_state_machine")
-        return 1
-
-    legal_next = state_machine[current_state]
-    if new_state not in legal_next:
-        print(f"❌ Illegal transition: {current_state} → {new_state}. Legal: {set(legal_next)}")
+    from .lifecycle import check_transition
+    try:
+        check_transition(state_machine, current_state, new_state)
+    except ValueError as e:
+        print(f"❌ {e}")
         return 1
 
     # Update custom.lifecycle_state
@@ -12479,6 +12477,9 @@ def _build_parser() -> argparse.ArgumentParser:
     voice_svc_sub.add_parser("status", help="show voice service status").set_defaults(func=cmd_voice_service_status)
 
     # ── idea ─────────────────────────────────────────────────────────────
+    from .roles.cli import add_role_parser
+    add_role_parser(sub)
+
     idea_parser = sub.add_parser("idea", help="ideas — prospective knowledge capture")
     idea_sub = idea_parser.add_subparsers(dest="idea_cmd")
 
