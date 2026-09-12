@@ -36,6 +36,7 @@ A **ROLE** is a formal appointment with a tenure and a review date. Its **DUTIES
 - When does the charter reach the agent's context?
 - Can a duty have sub-duties?
 - Why is nothing ordered by an integer?
+- Is writing the charter, or reviewing the role, itself a duty?
 
 **3 Lifecycle**
 - What states can a role be in, and what moves it between them?
@@ -138,6 +139,12 @@ This is also what retires the umbrella-parent workaround in `autonomous_sprint.m
 
 ---
 
+### 1.5 The role's own upkeep is a duty too
+
+Work *on* a role -- writing or revising its charter and Boundaries, migrating a position into the store, preparing its review, refreshing its resources -- is not exempt from the vocabulary because it is about the role rather than about the world. It is a **meta duty**: declared on the role (`role duty add <role> "Write the charter's Boundaries" --meta`), typically **untimed**, and expected to be **done soon after it is declared**, with the charter or record it produced as its evidence. When the operator says "write the charter", "review this role", or "add the migration", the first act is to declare that duty and engage it, and only then to do the work; jumping straight to the edit leaves the role's own history in the transcript instead of on the role.
+
+A meta duty is marked `meta: true` in its record and ranks like any other duty. It has one privilege: **the charter meta duty is the single duty `engage` will take up while the Boundaries are still the scaffold**, because the scaffold cannot be written any other way (§2.5). Every other duty of that role waits for it.
+
 ## 2 Identity and the Store
 
 ### 2.1 Location and layout
@@ -194,6 +201,7 @@ Roles and duties are identified by **six hex characters** (`uuid4().hex[:6]`), a
 | `state` | `pending`, `active`, `done`, `deferred` (§3.2) |
 | `body` | what must be true -- a declaration, not a procedure |
 | `importance` | `critical`, `high`, `normal`, `low` |
+| `meta` | `true` for the role's own upkeep (charter, review, migration); §1.5 |
 | `due` | optional date, or date-time |
 | `horizon` | required when `due` or `cadence` is set (§4) |
 | `cadence` | optional, grammar in §4.3 |
@@ -207,7 +215,7 @@ Roles and duties are identified by **six hex characters** (`uuid4().hex[:6]`), a
 
 The charter is the role's human face and its knowledge-web node: purpose, boundaries, what the role may and may not do, and pointers to the spokes, corpora or people it depends on. It is scaffolded at assignment with those headings and a `## Wiki-Links` section, and it is written by hand. A role whose charter is still the scaffold is a role nobody has yet described, and the review ritual (§3.4) says so.
 
-**Boundaries are the load-bearing section.** They state what the role may do on its own and what needs the operator's direction for that specific act. The default the policy sets, for every role: **a duty is a declaration of what must be true, never an authorization to act on the operator's behalf toward a third party** -- no message, draft, post, submission or commitment addressed to anyone else is implied by a duty. When a duty seems to need one, ask the operator, wait for the answer with a timeout suited to the duty's horizon, then continue with what can be done alone. `role duty engage` refuses while the Boundaries section is still the scaffold: an undescribed role cannot be worked, because working it is exactly how an agent over-reaches.
+**Boundaries are the load-bearing section.** They state what the role may do on its own and what needs the operator's direction for that specific act. The default the policy sets, for every role: **a duty is a declaration of what must be true, never an authorization to act on the operator's behalf toward a third party** -- no message, draft, post, submission or commitment addressed to anyone else is implied by a duty. When a duty seems to need one, ask the operator, wait for the answer with a timeout suited to the duty's horizon, then continue with what can be done alone. `role duty engage` refuses while the Boundaries section is still the scaffold: an undescribed role cannot be worked, because working it is exactly how an agent over-reaches. The one exception is the meta duty that writes those Boundaries (§1.5).
 
 **The charter must be where the decision is made.** Boundaries on disk bind nothing; the agent acts from its context. So `role focus` prints the charter, `role duty engage` prints it after the views of the duties it engaged, and SessionStart injects the focused role's charter (with its engaged duties) into every new session while a role is focused -- a fresh session starts with none of what the focus command printed.
 
@@ -358,9 +366,9 @@ A **service** is any touch of a task or a duty that writes a breadcrumbed update
 
 ### 7.2 Two pointers, differently scoped
 
-**👈 is descriptive**: where attention last landed. It is scoped **per tree** -- one in the main task tree (its newest task service, as today) and **one in the roles stanza**: the duty line or collapsed role line that was touched last across every role. They coexist; no store steals another's marker; the ages beside them say which was most recent overall. **An expanded role's own line never carries 👈**: a note on the role itself hands the pointer to that role's newest-touched duty. A role that was just unfocused collapses, and the pointer comes back up to its collapsed line (with 🎯 gone) until something else is touched, because unfocusing writes nothing. A disengagement is not a touch.
+**👈 is descriptive**: where attention last landed. It is scoped **per tree** -- one in the main task tree (its newest task service, as today) and **one in the roles stanza**: the duty line or collapsed role line that was touched last across every role. They coexist; no store steals another's marker; the ages beside them say which was most recent overall. **An expanded role's own line never carries 👈 for a note on the role**: the note hands the pointer to that role's newest-touched duty. **Focusing is a touch**: when the focus event is the newest thing in the stanza and the role has no active duty yet, the pointer comes up to the focused line after 🎯 and its age, and moves down (possibly multiplying) once duties are engaged. A role that was just unfocused collapses, and the pointer comes back up to its collapsed line (with 🎯 gone) until something else is touched, because unfocusing writes nothing. A disengagement is not a touch.
 
-**Under a parallel engagement (§3.2) the stanza shows one 👈 per engaged duty**, each with its own age, so the operator sees that attention is split. One active duty, one pointer.
+**Under a parallel engagement (§3.2) the stanza shows one 👈 per engaged duty**, each with its own age, so the operator sees that attention is split; a focus newer than all of them is shown as well. One active duty, one pointer.
 
 **🎯 is intentional**: what the agent has chosen to hold. It marks the focused role's line and nothing else, and it carries its own age: **the time since the focus event**, which is separate from any duty's engagement time.
 
@@ -382,7 +390,7 @@ Focus is **orthogonal to work mode**. The dashboard composes the focused role's 
 
 ### 8.2 Line grammar
 
-**Role line**: status box · icon · title · `[state · review MM-DD]` · approach mark · `🎯 age` if focused (the age of the focus, not of any duty) · `👈 age` if this **collapsed** line holds the stanza's pointer. An expanded role's line never carries 👈; its duty lines do. Status boxes are exactly the task tree's: `◼` active, `◻` pending, `✔` done or retired, `⏸` paused. The approach mark on a role line is the **most urgent** of its duties' marks, so a collapsed role still escalates.
+**Role line**: status box · icon · title · `[state · review MM-DD]` · approach mark · `🎯 age` if focused (the age of the focus, not of any duty) · `👈 age` if this **collapsed** line holds the stanza's pointer, or if the focus itself is the newest touch and no duty is engaged yet. Otherwise an expanded role's duty lines carry it. Status boxes are exactly the task tree's: `◼` active, `◻` pending, `✔` done or retired, `⏸` paused. The approach mark on a role line is the **most urgent** of its duties' marks, so a collapsed role still escalates.
 
 **Duty line**: status box · `📌` · title · due or cadence · approach mark · `👈 age` if it is the last-touched duty in the stanza, or one of the engaged duties under a parallel engagement.
 

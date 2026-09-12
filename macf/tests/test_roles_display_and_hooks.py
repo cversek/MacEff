@@ -125,13 +125,13 @@ def test_focused_role_line_shows_the_focus_age_not_a_duty_age(store, lab):
     set_focus(role.id, None)
     focus_at = time.time()
     lines = disp.stanza(store, "focused", role.id, at=NOW, ansi=False)
-    assert lines[1].endswith("🎯 0m") and "👈" not in lines[1]
-    later = datetime.fromtimestamp(focus_at) + timedelta(hours=3)
+    assert "🎯 0m" in lines[1]                                         # the focus age sits by 🎯
+    later = datetime.fromtimestamp(focus_at) + timedelta(hours=3, minutes=5)
     time.sleep(1.1)
-    store.note_duty(d, folder, "drafted")
+    store.note_duty(d, folder, "drafted")                              # a duty touch after the focus
     lines = disp.stanza(store, "focused", role.id, at=later, ansi=False)
-    assert lines[1].endswith("🎯 3h")                                  # the focus is 3h old
-    assert lines[2].endswith("👈 3h") or "👈" in lines[2]              # the duty line has its own age
+    assert lines[1].endswith("🎯 3h") and "👈" not in lines[1]         # the focus is 3h old; no finger up here
+    assert "👈 3h" in lines[2]                                         # the duty line has its own age
 
 
 def test_parallel_engagement_shows_a_pointer_on_every_engaged_duty(store, lab):
@@ -400,3 +400,40 @@ def test_stanza_trims_titles_to_the_trees_title_width(store, lab):
     assert disp.fit(long, 40).endswith("...") and len(disp.fit(long, 40)) <= 40
     untrimmed = disp.stanza(store, "focused", role.id, at=NOW, ansi=False, title_width=0)
     assert any(long in l for l in untrimmed)
+
+
+def test_a_fresh_focus_brings_the_pointer_up_then_engaging_moves_it_down(store, lab):
+    """Focusing is a touch: when the focus event is the newest thing and the role
+    has no active duty, 👈 sits after 🎯 and its age; engaging a duty moves it down."""
+    role, folder = lab
+    (folder / "charter.md").write_text("# x\n## Boundaries\nMay draft. Must not contact anyone.\n")
+    other, of = store.create_role("Corpus Librarian", icon="📚")
+    (of / "charter.md").write_text("# x\n## Boundaries\nMay route. Must not contact anyone.\n")
+    d, dp = store.add_duty(role, folder, "board plan")                # newest touch: the lab's duty
+    time.sleep(1.1)
+    set_focus(other.id, None)                                          # then the librarian is focused
+    lines = disp.stanza(store, "focused", other.id, at=NOW, ansi=False)
+    with_ptr = [l for l in lines if "👈" in l]
+    assert len(with_ptr) == 1 and with_ptr[0].startswith("◼ 📚 Corpus Librarian") and "🎯 0m  👈 0m" in with_ptr[0]
+    time.sleep(1.1)
+    o, op = store.add_duty(other, of, "intake")
+    store.engage(o, op.parent)                                         # a duty is engaged: the finger moves down
+    lines = disp.stanza(store, "focused", other.id, at=NOW, ansi=False)
+    with_ptr = [l for l in lines if "👈" in l]
+    assert len(with_ptr) == 1 and with_ptr[0].startswith("    ◼ 📌 intake")
+    assert "👈" not in lines[1] and "🎯" in lines[1]
+
+
+def test_the_charter_meta_duty_is_engageable_while_boundaries_are_the_scaffold(store):
+    """Policy: the role's own upkeep is a duty; the charter meta duty is the one
+    duty engage takes up while the Boundaries are still the scaffold."""
+    role, folder = store.create_role("Corpus Librarian", icon="📚")     # scaffold charter
+    plain, pp = store.add_duty(role, folder, "route questions")
+    meta, mp = store.add_duty(role, folder, "Write the charter's Boundaries", meta=True)
+    with pytest.raises(Exception) as e:
+        store.engage(plain, pp.parent)
+    assert "still the scaffold" in str(e.value) and "--meta" in str(e.value)
+    store.engage(meta, mp.parent)                                       # allowed
+    assert store.find_duty(meta.id)[0].state == "active"
+    lines = disp.stanza(store, "focused", role.id, at=NOW, ansi=False)
+    assert any("(meta)" in l and "Boundaries" in l for l in lines)

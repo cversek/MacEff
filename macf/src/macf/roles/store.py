@@ -217,7 +217,7 @@ class RoleStore:
                  importance: str = "normal", due: Optional[datetime] = None,
                  horizon: Optional[str] = None, why: str = "", cadence: Optional[str] = None,
                  depends_on: Iterable[str] = (), tracks: Iterable[str] = (),
-                 wiki_links: Iterable[str] = ()) -> Tuple[Duty, Path]:
+                 wiki_links: Iterable[str] = (), meta: bool = False) -> Tuple[Duty, Path]:
         if role.state in ("expired", "retired"):
             raise RoleError(f"role {role.id} is {role.state}; a duty cannot be added to it")
         # Dependencies may cross roles (BLOCKING counts dependents of any
@@ -232,7 +232,7 @@ class RoleStore:
             raise RoleError("--horizon needs --why: the reasoning is the duty's first note "
                             "(roles policy: reasoning a horizon)")
         duty = Duty(id=self.new_id(), role_id=role.id, title=title, body=body, importance=importance,
-                    due=due, horizon=horizon, cadence=cadence, depends_on=deps, tracks=tr,
+                    meta=meta, due=due, horizon=horizon, cadence=cadence, depends_on=deps, tracks=tr,
                     wiki_links=list(wiki_links), state="active" if tr else "pending")
         first = f"Declared. Horizon {horizon}: {why}" if horizon else (why or "Declared")
         duty.updates.append(_update(first, kind="declare"))
@@ -321,11 +321,13 @@ class RoleStore:
         # A role whose charter still carries the scaffold's Boundaries line has
         # never said what it may do alone and what needs the operator; working
         # its duties is how an agent over-reaches on the operator's behalf.
+        # The one exception is the meta duty that writes those Boundaries: the
+        # scaffold cannot be replaced any other way.
         charter = folder / "charter.md"
-        if charter.exists() and SCAFFOLD_BOUNDARIES in charter.read_text():
+        if not duty.meta and charter.exists() and SCAFFOLD_BOUNDARIES in charter.read_text():
             raise RoleError(f"the charter's Boundaries are still the scaffold ({charter}); write what this role "
                             "may do alone and what needs the operator's direction before engaging a duty "
-                            "(roles policy: the charter)")
+                            "(roles policy: the charter; declare the charter as a --meta duty and engage that)")
 
     def engage(self, duty: Duty, folder: Path, note: str = "", task_ids: Iterable[str] = (),
                exclusive: bool = True) -> Duty:

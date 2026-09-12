@@ -97,6 +97,7 @@ def _duty_line(d: Duty, mark: str = "") -> str:
     elif d.cadence:
         when = f"  {d.cadence}"
     imp = "" if d.importance == "normal" else f"  ({d.importance.upper()})"
+    imp += "  (meta)" if d.meta else ""
     hz = f"  horizon {d.horizon}" if d.horizon else ""
     return f"{STATE_BOX.get(d.state, '?')} 📌 {d.id}  {d.title}{when}{hz}{imp}" + (f"  {mark}" if mark else "")
 
@@ -266,7 +267,7 @@ def cmd_duty_add(args: argparse.Namespace) -> int:
     store = RoleStore()
     try:
         role, folder = store.find_role(args.role)
-        fields = dict(body=args.body or "", importance=args.importance,
+        fields = dict(body=args.body or "", importance=args.importance, meta=bool(args.meta),
                       due=_datetime(args.due, "--due"), horizon=args.horizon, why=args.why or "",
                       cadence=args.cadence, depends_on=_csv(args.depends_on), tracks=_csv(args.tracks),
                       wiki_links=_csv(args.wiki_links))
@@ -689,6 +690,8 @@ def add_role_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--from-task", metavar="N", help="migrate a duty held as a task: title from its subject, notes carried as updates")
     p.add_argument("--body", help="what must be true (a declaration, not a procedure)")
     p.add_argument("--importance", choices=("critical", "high", "normal", "low"), default="normal")
+    p.add_argument("--meta", action="store_true", help="the role's own upkeep (charter, review, migration): "
+                   "untimed, done soon after; the charter meta duty is engageable while the Boundaries are the scaffold")
     p.add_argument("--due", help="YYYY-MM-DD or YYYY-MM-DDTHH:MM")
     p.add_argument("--cadence", help="daily | weekly:tue[,thu] | monthly:15  [at HH:MM] [dur 6h] [until YYYY-MM-DD]")
     p.add_argument("--horizon", help="lead time before due at which the duty is DUE_SOON: 3d, 36h, 90m")
