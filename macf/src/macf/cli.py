@@ -4774,6 +4774,36 @@ def touched_within_watch(task, since) -> bool:
     return touched is not None and touched >= since
 
 
+def _roles_tree_preference() -> str:
+    """roles.tree_display from .maceff/config.json (none|collapsed|focused|all)."""
+    from .roles.display import tree_display_preference
+    return tree_display_preference()
+
+
+def cmd_task_roles(args: argparse.Namespace) -> int:
+    """Every role expanded; --all includes retired roles, done duties and their updates."""
+    from .roles.display import stanza
+    from .roles.focus import current_focus
+    from .roles.store import RoleStore
+    lines = stanza(RoleStore(), "all", current_focus(), session_id=get_current_session_id(),
+                   show_all=getattr(args, "all", False))
+    if not lines:
+        print("no roles (assign one: macf_tools role create, or the maceff-assign-role skill)")
+        return 0
+    for line in lines:
+        print(line)
+    if getattr(args, "all", False):
+        store = RoleStore()
+        for role, folder in store.roles():
+            for duty, _ in store.duties(folder):
+                if duty.updates:
+                    print(f"\n📌 {duty.title} ({role.icon} {role.title})")
+                    for u in duty.updates:
+                        extra = f" (done_on {u.done_on})" if u.done_on else ""
+                        print(f"   {u.at}  {u.kind:<10} {u.description}{extra}")
+    return 0
+
+
 def cmd_task_tree(args: argparse.Namespace) -> int:
     """Display task hierarchy tree from a root task."""
     import time
@@ -5214,6 +5244,25 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
         visible_children = [c for c in children if should_show_task(c, children, 1)]
         for i, child in enumerate(visible_children):
             print_tree(child, "", i == len(visible_children) - 1, depth=1, siblings=children)
+
+        # The 🎭 ROLES stanza, below the tree: the terminal pins the bottom, so
+        # standing positions take the prominent place (roles policy, display).
+        # Its 👈 is scoped to each role; the tree above keeps its own.
+        try:
+            _roles_mode = getattr(args, "roles", None) or _roles_tree_preference()
+            if _roles_mode != "none":
+                from .roles.display import stanza as _roles_stanza
+                from .roles.focus import current_focus as _current_focus
+                from .roles.store import RoleStore as _RoleStore
+                _lines = _roles_stanza(_RoleStore(), _roles_mode, _current_focus(),
+                                       session_id=get_current_session_id(),
+                                       show_all=getattr(args, "all", False))
+                if _lines:
+                    print()
+                    for _l in _lines:
+                        print(_l)
+        except (OSError, ValueError, ImportError, AttributeError) as e:
+            print(f"⚠️ MACF: roles stanza skipped (non-blocking): {e}", file=sys.stderr)
 
         return True
 
@@ -5878,13 +5927,23 @@ def _hand_attention_back(completed_task_id, reader) -> None:
         return
 
     owed = [f for f in frames if f.state not in ("active", "enclosing")]
-    if not owed:
-        return
-    top = owed[0]
-    when = _rel_age_short(top.last_touch) if top.last_touch else "never"
-    print(f"\n🧵 Stack: #{top.task_id} ({top.state}, last touched {when}) is owed a return")
-    print(f"        {_strip_ansi(top.subject)[:88]}")
-    print("        Confirm this task's completion criteria were met, then return to it.")
+    if owed:
+        top = owed[0]
+        when = _rel_age_short(top.last_touch) if top.last_touch else "never"
+        print(f"\n🧵 Stack: #{top.task_id} ({top.state}, last touched {when}) is owed a return")
+        print(f"        {_strip_ansi(top.subject)[:88]}")
+        print("        Confirm this task's completion criteria were met, then return to it.")
+    # The hand-back is dual: the top owed frame, and the focused role's next
+    # due duty. Duties are not frames, so they are named beside the stack, not in it.
+    try:
+        from .roles.display import next_duty_line
+        from .roles.focus import current_focus
+        from .roles.store import RoleStore
+        line = next_duty_line(RoleStore(), current_focus())
+        if line:
+            print(("" if owed else "\n") + line)
+    except (OSError, ValueError, ImportError, AttributeError) as e:
+        print(f"⚠️ MACF: focus hand-back skipped (non-blocking): {e}", file=sys.stderr)
 
 
 def cmd_task_trace(args: argparse.Namespace) -> int:
@@ -5925,6 +5984,17 @@ def cmd_task_trace(args: argparse.Namespace) -> int:
 
     # An enclosing frame owes nothing — the work is running inside it. Counting
     # it as a debt would make the tally grow with every level of decomposition.
+    # Roles are not frames (tasks are owed; duties are due). The focused role
+    # gets a header above the stack instead: focus, last serviced, next due.
+    try:
+        from .roles.display import trace_header
+        from .roles.focus import current_focus
+        from .roles.store import RoleStore
+        for line in trace_header(RoleStore(), current_focus()):
+            print(line)
+    except (OSError, ValueError, ImportError, AttributeError) as e:
+        print(f"⚠️ MACF: focus header skipped (non-blocking): {e}", file=sys.stderr)
+
     owed = [f for f in frames if f.state not in ("active", "enclosing")]
     print(f"🧵 Open frames: {len(frames)} ({len(owed)} awaiting a return)")
     if not frames:
@@ -11548,11 +11618,16 @@ def _build_parser() -> argparse.ArgumentParser:
     task_get_parser.set_defaults(func=cmd_task_get)
 
     # task tree
+    task_roles_parser = task_sub.add_parser("roles", help="the roles stanza on its own, every role expanded")
+    task_roles_parser.add_argument("--all", action="store_true", help="retired roles, done duties and every update")
+    task_roles_parser.set_defaults(func=cmd_task_roles)
     task_tree_parser = task_sub.add_parser("tree", help="show task hierarchy tree")
     task_tree_parser.add_argument("task_id", nargs="?", default="000",
                                   help="root task ID (default: 000 sentinel)")
     task_tree_parser.add_argument("--loop", action="store_true",
                                   help="monitor tasks directory and auto-refresh on changes")
+    task_tree_parser.add_argument("--roles", choices=("none", "collapsed", "focused", "all"),
+                                  help="roles stanza below the tree (default: roles.tree_display in .maceff/config.json, else focused)")
     task_tree_parser.add_argument("--succinct", "-s", action="store_true",
                                   help="hide notes/plans, show only active/pending tasks")
     task_tree_parser.add_argument("--verbose", "-v", action="store_true",

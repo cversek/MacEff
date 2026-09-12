@@ -222,6 +222,27 @@ Development Drive Stats:
             except (ImportError, OSError, ValueError) as _e:
                 emit_warning(Warning(source="stop", kind="recoverable_error_gate_failed", detail=f"recoverable-error gate error: {_e}"))
 
+        # --- Focus gate (roles policy): the focused role's priority list is
+        # injected on every Stop; it BLOCKS only in AUTO_MODE while due-now
+        # duties are unserviced. It composes with the scope gate below by
+        # concatenating reasons, and shares the one idle-stop failsafe.
+        _focus = {"text": "", "block": False, "unserviced": []}
+        try:
+            from macf.roles.hooks import focus_gate
+            _focus = focus_gate(auto_mode)
+        except (OSError, ValueError, ImportError, AttributeError) as _e:
+            emit_warning(Warning(source="stop", kind="focus_gate_failed", detail=f"focus gate error (non-blocking): {_e}"))
+
+        def _with_focus(result):
+            """Append the focus text to a gate result; a block reason concatenates."""
+            if not _focus["text"]:
+                return result
+            if result.get("decision") == "block":
+                result["reason"] = f"{result.get('reason', '')}\n\n{_focus['text']}"
+            else:
+                result["systemMessage"] = f"{result.get('systemMessage', '')}\n\n{_focus['text']}"
+            return result
+
         # --- Scope gate: block stop if active scoped tasks remain ---
         try:
             from macf.task.scope import get_scope_check
@@ -330,11 +351,11 @@ Development Drive Stats:
                             )
                         # Append idle countdown warning (BUG #1067)
                         _nag_text += _countdown_suffix
-                        return {
+                        return _with_focus({
                             "continue": True,
                             "decision": "block",
                             "reason": _nag_text,
-                        }
+                        })
 
                     # PLAY_TIME with chain not yet exhausted: suggest chain advance
                     if autowork["play_time_task"]:
@@ -342,7 +363,7 @@ Development Drive Stats:
                         if pt_custom and not pt_custom.chain_exhausted and (
                             pt_custom.chain_position + 1 < len(pt_custom.predetermined_chain)
                         ):
-                            return {
+                            return _with_focus({
                                 "continue": True,
                                 "decision": "block",
                                 "reason": emit_chain_advance_suggestion(
@@ -350,7 +371,7 @@ Development Drive Stats:
                                     pt_custom.chain_position,
                                     pt_custom.predetermined_chain,
                                 ),
-                            }
+                            })
                         # Chain exhausted (or last step): fall through to Markov path below
                 except (ImportError, OSError, ValueError) as e:
                     emit_warning(Warning(source="stop", kind="sprint_gate_failed", detail=f"sprint_gate dispatch failed: {e}"))
@@ -399,7 +420,7 @@ Development Drive Stats:
                         emit_warning(Warning(source="stop", kind="recommender_failed", detail=f"recommender failed: {e}"))
 
                     _paused_summary = f"\n⏸️  Paused (excluded from gate): {paused_count} task(s)" if paused_count > 0 else ""
-                    return {
+                    return _with_focus({
                         "continue": True,
                         "decision": "block",
                         "reason": (
@@ -414,11 +435,11 @@ Development Drive Stats:
                             f"Emergency escape: macf_tools mode set MANUAL_MODE --justification <reason>"
                             f"{_paused_summary}{_countdown_suffix}"
                         ),
-                    }
+                    })
 
                 # Non-timer scope gate: standard "complete these tasks" message
                 _paused_summary = f"\n⏸️  Paused (excluded from gate): {paused_count} task(s)" if paused_count > 0 else ""
-                return {
+                return _with_focus({
                     "continue": True,
                     "decision": "block",
                     "reason": (
@@ -428,7 +449,7 @@ Development Drive Stats:
                         f"Emergency escape: macf_tools mode set MANUAL_MODE --justification <reason>"
                         f"{_paused_summary}{_countdown_suffix}"
                     ),
-                }
+                })
                 # ── END scope-gate dispatch ──
 
             # --- Error-resilience in ANY mode ---
@@ -456,6 +477,30 @@ Development Drive Stats:
                 )
         except Exception as e:
             emit_warning(Warning(source="stop", kind="scope_gate_failed", detail=f"Scope gate error (non-blocking): {e}"))
+
+        # --- Focus-only gate: no active scope, but the focused role has due-now
+        # duties unserviced. Same failsafe counter as the scope gate (one per
+        # blocked Stop), so two gates never get two failsafes.
+        if _focus["block"]:
+            try:
+                from macf.task.scope_gate_failsafe import decrement_and_check
+                _remaining, _fail_open = decrement_and_check()
+                if _fail_open:
+                    _msg = (f"{format_macf_brand()} | ⚠️ Focus gate fail-open: the idle-stop failsafe reached 0. "
+                            f"Stopping. Service or defer the due-now duties, or run macf_tools role unfocus.")
+                    emit_warning(Warning(source="stop", kind="focus_gate_failed", detail=_msg))
+                    return {"continue": True, "systemMessage": _msg}
+                return {
+                    "continue": True,
+                    "decision": "block",
+                    "reason": (f"{_focus['text']}\n\n"
+                               f"Stop blocked in AUTO_MODE while due-now duties of the focused role are unserviced "
+                               f"(idle-stop counter: {_remaining} remaining)."),
+                }
+            except (OSError, ValueError, ImportError, AttributeError) as _e:
+                emit_warning(Warning(source="stop", kind="focus_gate_failed", detail=f"focus-only gate error (non-blocking): {_e}"))
+        elif _focus["text"]:
+            message += f"\n\n{_focus['text']}"
 
         # --- Timer gate: block stop if autonomous work timer is still active ---
         # This fires when scope is EMPTY (all tasks done) but timer hasn't expired.
@@ -496,7 +541,7 @@ Development Drive Stats:
                         except (OSError, ValueError, ImportError) as e:
                             emit_warning(Warning(source="stop", kind="recommender_failed", detail=f"recommender failed: {e}"))
 
-                        return {
+                        return _with_focus({
                             "continue": True,
                             "decision": "block",
                             "reason": (
@@ -508,7 +553,7 @@ Development Drive Stats:
                                 f"{recommendation}\n"
                                 f"Emergency escape: macf_tools mode set MANUAL_MODE --justification <reason>"
                             ),
-                        }
+                        })
                     break  # Timer expired — don't block
                 elif event.get("event") == "scope_cleared":
                     break  # Scope was cleared after timer — don't search further
