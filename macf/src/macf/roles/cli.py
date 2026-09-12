@@ -10,7 +10,9 @@ import json
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
+from . import calendar as cal
 from .models import ICON_SHELF, Duty, Role, dump
+from .priority import (duty_mark, most_urgent_mark, now, rank, rank_roles, review_mark, why)
 from .store import RoleError, RoleStore
 
 STATE_BOX = {"active": "◼", "pending": "◻", "paused": "⏸", "expired": "✔", "retired": "✔",
@@ -73,17 +75,22 @@ def _csv(items: Optional[List[str]]) -> List[str]:
     return out
 
 
-def _role_line(role: Role, n_open: int, n_all: int) -> str:
+def _role_line(role: Role, duties: List[Duty], at=None) -> str:
+    at = at or now()
     state = f"[{role.state}"
     if role.review_by:
         state += f" · review {role.review_by.strftime('%m-%d')}"
     if role.expires:
         state += f" · expires {role.expires.isoformat()}"
     state += "]"
-    return f"{STATE_BOX.get(role.state, '?')} {role.icon} {role.id}  {role.title}  {state}  duties {n_open} open / {n_all}"
+    n_open = sum(1 for d in duties if d.state in ("pending", "active"))
+    placed = rank(duties, at, role.expires)
+    mark = most_urgent_mark([duty_mark(p, at) for p in placed] + [review_mark(role, at)])
+    line = f"{STATE_BOX.get(role.state, '?')} {role.icon} {role.id}  {role.title}  {state}  duties {n_open} open / {len(duties)}"
+    return line + (f"  {mark}" if mark else "")
 
 
-def _duty_line(d: Duty) -> str:
+def _duty_line(d: Duty, mark: str = "") -> str:
     when = ""
     if d.due:
         when = f"  due {d.due.strftime('%a %m-%d')}" + (d.due.strftime(' %H:%M') if (d.due.hour or d.due.minute) else "")
@@ -91,7 +98,7 @@ def _duty_line(d: Duty) -> str:
         when = f"  {d.cadence}"
     imp = "" if d.importance == "normal" else f"  ({d.importance.upper()})"
     hz = f"  horizon {d.horizon}" if d.horizon else ""
-    return f"{STATE_BOX.get(d.state, '?')} 📌 {d.id}  {d.title}{when}{hz}{imp}"
+    return f"{STATE_BOX.get(d.state, '?')} 📌 {d.id}  {d.title}{when}{hz}{imp}" + (f"  {mark}" if mark else "")
 
 
 def _role_record(store: RoleStore, role: Role, folder) -> Dict[str, Any]:
@@ -139,10 +146,10 @@ def cmd_role_list(args: argparse.Namespace) -> int:
     if not pairs:
         print("no roles" + ("" if getattr(args, "all", False) else " (--all shows expired and retired)"))
         return 0
-    for role, folder in pairs:
-        duties = [d for d, _ in store.duties(folder)]
-        n_open = sum(1 for d in duties if d.state in ("pending", "active"))
-        print(_role_line(role, n_open, len(duties)))
+    at = now()
+    ranked = rank_roles([(r, [d for d, _ in store.duties(f)]) for r, f in pairs], at=at)
+    for role, placed in ranked:
+        print(_role_line(role, [p.duty for p in placed] + [d for d, _ in store.duties(store.folder_of(role)) if d.state in ("done", "deferred")], at))
     return 0
 
 
@@ -155,20 +162,20 @@ def cmd_role_show(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(_role_record(store, role, folder), indent=2))
         return 0
+    at = now()
     duties = [d for d, _ in store.duties(folder)]
-    n_open = sum(1 for d in duties if d.state in ("pending", "active"))
-    print(_role_line(role, n_open, len(duties)))
+    print(_role_line(role, duties, at))
     print(f"   folder:  {folder}")
     print(f"   tenure:  from {role.tenure_start}" + (f" to {role.expires}" if role.expires else ""))
     if role.review_by:
-        print(f"   review:  {role.review_by} (horizon {role.review_horizon})")
+        rm = review_mark(role, at)
+        print(f"   review:  {role.review_by} (horizon {role.review_horizon})" + (f"  {rm}" if rm else ""))
     for r in role.resources:
         print(f"   resource: {r}")
     show_done = getattr(args, "all", False)
-    for d in duties:
-        if d.state in ("done", "deferred") and not show_done:
-            continue
-        print("   " + _duty_line(d))
+    for p in rank(duties, at, role.expires, include_done=show_done):
+        d = p.duty
+        print("   " + _duty_line(d, duty_mark(p, at)))
         for tid, status, subject in store.live_tracks(d):
             print(f"        tracks #{tid} [{status or 'missing'}] {subject or ''}")
         for ev in d.evidence:
@@ -388,6 +395,61 @@ def cmd_duty_unlink(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_duty_why(args: argparse.Namespace) -> int:
+    """The tier and the fact that put the duty there."""
+    store = RoleStore()
+    try:
+        duty, path = store.find_duty(args.duty)
+        role, folder = store.role_of(duty)
+    except RoleError as e:
+        return _fail(e, args.json)
+    at = now()
+    duties = [d for d, _ in store.duties(folder)]
+    placed = rank(duties, at, role.expires, include_done=True)
+    p = next(x for x in placed if x.duty.id == duty.id)
+    position = [x.duty.id for x in placed if x.tier != 6].index(duty.id) + 1 if p.tier != 6 else None
+    if args.json:
+        print(json.dumps({"duty_id": duty.id, "tier": p.tier_name, "reason": p.reason,
+                          "occurrence": p.occurrence.isoformat() if p.occurrence else None,
+                          "entered": p.entered.isoformat() if p.entered else None,
+                          "mark": duty_mark(p, at), "position": position,
+                          "of": sum(1 for x in placed if x.tier != 6)}, indent=2))
+        return 0
+    mark = duty_mark(p, at)
+    print(f"📌 {duty.title}  ({role.icon} {role.title})" + (f"  {mark}" if mark else ""))
+    print(f"   {why(p)}")
+    if position:
+        print(f"   position {position} of {sum(1 for x in placed if x.tier != 6)} open duties in this role")
+    return 0
+
+
+def cmd_role_calendar(args: argparse.Namespace) -> int:
+    store = RoleStore()
+    at = now()
+    try:
+        start, end = cal.window(args.weeks, _date(getattr(args, "from_", None), "--from"), _date(args.to, "--to"), at)
+    except RoleError as e:
+        return _fail(e, args.json)
+    if end < start:
+        return _fail(RoleError("--to is before --from"), args.json)
+    pairs = [(r, [d for d, _ in store.duties(f)]) for r, f in store.roles()]
+    evs = cal.events(pairs, start, end, at)
+    if args.ics:
+        from pathlib import Path
+        out = Path(args.ics)
+        out.write_text(cal.ics(pairs, start, end, at))
+        if not args.json:
+            print(f"✅ wrote {out} ({sum(1 for _ in open(out)) } lines)")
+    if args.json:
+        print(json.dumps({"from": start.isoformat(), "to": end.isoformat(),
+                          "events": [e.to_json() for e in evs]}, indent=2))
+        return 0
+    if args.ics:
+        return 0
+    print(cal.grid(evs, start, end, at) if args.grid else cal.agenda(evs, start, end, at))
+    return 0
+
+
 # ---- registration ------------------------------------------------------------
 
 def add_role_parser(sub: argparse._SubParsersAction) -> None:
@@ -441,6 +503,15 @@ def add_role_parser(sub: argparse._SubParsersAction) -> None:
     g.add_argument("--retire", action="store_true", help="the appointment is being given up at this review")
     js(p); p.set_defaults(func=cmd_role_review)
 
+    p = rs.add_parser("calendar", help="roles x duties as an agenda, a week grid, JSON, or an .ics file")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--weeks", type=int, help="window from today (default 2)")
+    g.add_argument("--from", dest="from_", help="YYYY-MM-DD")
+    p.add_argument("--to", help="YYYY-MM-DD (with --from)")
+    p.add_argument("--grid", action="store_true", help="a week grid instead of the agenda")
+    p.add_argument("--ics", metavar="PATH", help="write an iCalendar file")
+    js(p); p.set_defaults(func=cmd_role_calendar)
+
     duty = rs.add_parser("duty", help="duties: declarations that point at their implementations")
     ds = duty.add_subparsers(dest="duty_cmd")
 
@@ -484,6 +555,10 @@ def add_role_parser(sub: argparse._SubParsersAction) -> None:
     p = ds.add_parser("link", help="point the duty at the tasks implementing it")
     p.add_argument("duty"); p.add_argument("tasks", nargs="+", help="task ids")
     js(p); p.set_defaults(func=cmd_duty_link)
+
+    p = ds.add_parser("why", help="the priority tier and the fact that put the duty there")
+    p.add_argument("duty")
+    js(p); p.set_defaults(func=cmd_duty_why)
 
     p = ds.add_parser("unlink", help="stop tracking tasks")
     p.add_argument("duty"); p.add_argument("tasks", nargs="+")
