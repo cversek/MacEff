@@ -30,6 +30,16 @@ __all__ = ["examine"]
 _RAW_LINK = re.compile(r"\[\[([^\]]+)\]\]")
 
 
+def _link_remedy(ca_type: str) -> str:
+    """How an orphan of this type joins the web. A duty is a JSON record with a
+    wiki_links field, governed by the roles policy; everything else is markdown."""
+    if ca_type == "duties":
+        return ("add concepts to the record's wiki_links field (role duty add --wiki-links, or edit "
+                "the JSON); see the roles policy on knowledge web participation for what a duty links")
+    return (f"add a ## Wiki-Links section; see the {ca_type} policy on knowledge web participation "
+            f"for what this type should link")
+
+
 def examine(agent_home: Optional[Path] = None,
             kg: Optional[Dict[str, Any]] = None) -> Diagnosis:
     """Examine the knowledge web and report what it cannot report about itself."""
@@ -83,9 +93,7 @@ def examine(agent_home: Optional[Path] = None,
                         "no wiki-link concepts; unreachable by concept query"),
                 remedy=("rewrite the intended links outside code formatting, or add a "
                         "## Wiki-Links section if the mentions were deliberate"
-                        if is_mention_only else
-                        f"add a ## Wiki-Links section; see the {ca_type} policy on "
-                        "knowledge web participation for what this type should link"),
+                        if is_mention_only else _link_remedy(ca_type)),
             ))
 
     # ---- normalization drift in source text --------------------------------

@@ -292,3 +292,30 @@ def test_cli_done_defer_review_lifecycle(store, lab, capsys):
     assert "no roles" in capsys.readouterr().out
     assert _run(["role", "list", "--all"]) == 0
     assert "Lab Course Assistant" in capsys.readouterr().out
+
+
+# ---- migration from the task store (policy: a role as a task is the anti-pattern) ----
+
+def test_migrate_a_position_and_its_duties_from_tasks(store, tasks, capsys):
+    import time
+    (tasks / "40.json").write_text(json.dumps({
+        "id": "40", "subject": "  #40 🔧 🎓 ROLE: Lab Course Assistant (standing)", "status": "in_progress",
+        "description": "<macf_task_metadata version=\"1.0\">\ntask_type: TASK\nparent_id: '000'\nupdates:\n"
+                       "- breadcrumb: s_abc12345/c_39/p_x/t_1789100000\n  description: ROLE prototype\n"
+                       "- breadcrumb: s_abc12345/c_39/p_x/t_1789100100\n  description: first week\n</macf_task_metadata>\n"}))
+    (tasks / "41.json").write_text(json.dumps({
+        "id": "41", "subject": "  #41 [^#40] 🔧 DUTY: board plan for the first section", "status": "pending",
+        "description": "<macf_task_metadata version=\"1.0\">\ntask_type: TASK\nparent_id: '40'\nupdates:\n"
+                       "- breadcrumb: s_abc12345/c_39/p_x/t_1789100200\n  description: draft written\n</macf_task_metadata>\n"}))
+    assert _run(["role", "create", "--from-task", "40", "--icon", "🎓", "--json"]) == 0
+    rec = json.loads(capsys.readouterr().out)
+    assert rec["title"] == "Lab Course Assistant (standing)"
+    kinds = [u["kind"] for u in rec["updates"]]
+    assert kinds == ["migrated", "migrated", "assign"] and rec["updates"][0]["description"] == "ROLE prototype"
+    assert rec["updates"][0]["breadcrumb"] == "s_abc12345/c_39/p_x/t_1789100000"
+    assert _run(["role", "duty", "add", rec["id"], "--from-task", "41", "--json"]) == 0
+    duty = json.loads(capsys.readouterr().out)
+    assert duty["title"] == "board plan for the first section"
+    assert [u["kind"] for u in duty["updates"]] == ["migrated", "declare"]
+    assert _run(["role", "create", "--from-task", "999"]) == 1
+    assert "does not exist" in capsys.readouterr().out
