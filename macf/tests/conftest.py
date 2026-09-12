@@ -1087,18 +1087,24 @@ def _no_live_telegram_credentials(request, monkeypatch):
 
     Two paths, one covered, and from the outside the fixture looked complete.
 
-    Scope of THIS fix, stated so it is not overread: it neutralises the
-    IN-PROCESS path only. A test that spawns a subprocess gets a fresh
-    interpreter where this patch does not exist, and no environment variable
-    exists to carry the refusal across that boundary -- creating one is a product
-    change and belongs to #330. ``test_hook_integration.py`` is skipped until
-    then for exactly that reason.
+    Two layers, because there are two ways out of this process:
+
+    1. The in-process patch below replaces the resolver, so a hook handler
+       imported and called directly cannot find credentials.
+    2. ``MACF_CHANNELS_DISABLED=1`` in the environment, which every subprocess
+       inherits. A test that spawns ``python3 hook.py`` or ``macf_tools ...``
+       gets a fresh interpreter where the patch does not exist; the resolver
+       honours the variable before it reads any file (``channels_disabled``).
+       Added after a full-suite run on a machine with a user-level channel
+       delivered the suite's notifications to the person behind it.
 
     Opt out with ``@pytest.mark.live_telegram_config`` when a test's subject IS
-    the resolution path.
+    the resolution path; the marker lifts both layers.
     """
     if request.node.get_closest_marker("live_telegram_config"):
+        monkeypatch.delenv("MACF_CHANNELS_DISABLED", raising=False)
         return
+    monkeypatch.setenv("MACF_CHANNELS_DISABLED", "1")
     monkeypatch.setattr(
         "macf.channels.telegram.resolve_telegram_config",
         lambda: None,
