@@ -295,10 +295,10 @@ Priority is **lexicographic by tier**, not a weighted score. A duty is in the fi
 |---|---|---|
 | **OVERDUE** | `due` (or the current occurrence) has passed and the duty is not done | nearest-past first |
 | **DUE_SOON** | now ≥ `due - horizon` | nearest due first |
-| **BLOCKING** | some other open duty of any role lists this one in `depends_on` | most dependents first |
-| **IMPORTANT** | `importance` is `critical` or `high` | critical before high |
+| **BLOCKING** | not itself blocked, and some other open duty of any role lists this one in `depends_on` | most dependents first |
+| **IMPORTANT** | not blocked, and `importance` is `critical` or `high` | critical before high |
 | **NORMAL** | none of the above, and not blocked | least recently serviced first |
-| **BLOCKED** | `depends_on` names an open duty | never surfaces above a runnable duty |
+| **BLOCKED** | `depends_on` names an open duty | never surfaces above a runnable duty; its blocker ranks instead |
 | **DONE / DEFERRED** | terminal states | listed only with `--all` |
 
 Ties within a tier break by `due` (earliest), then `importance`, then last serviced (oldest first). Paused roles' duties are excluded from every tier.
