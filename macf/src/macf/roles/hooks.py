@@ -109,7 +109,7 @@ def conscientiousness_nag(store: Optional[RoleStore] = None, at: Optional[dateti
             if tone:
                 mark = duty_mark(p, at)
                 return (f"{tone} Duty {p.tier_name} in an unfocused role: {role.icon} {role.title} -- "
-                        f"\"{p.duty.title}\" ({mark}). Focus it for the full list:  macf_tools role focus {role.id}")
+                        f"\"{p.duty.title}\" ({mark}). Focus it for the full list:  macf_tools role focus R{role.id}")
     return ""
 
 
@@ -224,7 +224,7 @@ def charter_context(store: Optional[RoleStore] = None) -> str:
     if not charter.exists():
         return ""
     engaged = [d.title for d, _ in store.engaged() if d.role_id == role.id]
-    head = f"🎯 You hold the role {role.icon} {role.title} ({role.id}). Its charter follows; the Boundaries bind every act taken in it."
+    head = f"🎯 You hold the role {role.icon} {role.title} (R{role.id}). Its charter follows; the Boundaries bind every act taken in it."
     if engaged:
         head += " Engaged duties: " + "; ".join(engaged) + "."
     return head + "\n\n" + charter.read_text().rstrip()

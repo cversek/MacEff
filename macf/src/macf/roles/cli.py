@@ -86,7 +86,7 @@ def _role_line(role: Role, duties: List[Duty], at=None) -> str:
     n_open = sum(1 for d in duties if d.state in ("pending", "active"))
     placed = rank(duties, at, role.expires)
     mark = most_urgent_mark([duty_mark(p, at) for p in placed] + [review_mark(role, at)])
-    line = f"{STATE_BOX.get(role.state, '?')} {role.icon} {role.id}  {role.title}  {state}  duties {n_open} open / {len(duties)}"
+    line = f"{STATE_BOX.get(role.state, '?')} R{role.id} {role.icon} {role.title}  {state}  duties {n_open} open / {len(duties)}"
     return line + (f"  {mark}" if mark else "")
 
 
@@ -99,7 +99,7 @@ def _duty_line(d: Duty, mark: str = "") -> str:
     imp = "" if d.importance == "normal" else f"  ({d.importance.upper()})"
     imp += "  (meta)" if d.meta else ""
     hz = f"  horizon {d.horizon}" if d.horizon else ""
-    return f"{STATE_BOX.get(d.state, '?')} 📌 {d.id}  {d.title}{when}{hz}{imp}" + (f"  {mark}" if mark else "")
+    return f"{STATE_BOX.get(d.state, '?')} D{d.id} 📌 {d.title}{when}{hz}{imp}" + (f"  {mark}" if mark else "")
 
 
 def _role_record(store: RoleStore, role: Role, folder) -> Dict[str, Any]:
@@ -135,7 +135,7 @@ def cmd_role_create(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(_role_record(store, role, folder), indent=2))
         return 0
-    print(f"✅ Role {role.id} assigned: {role.icon} {role.title}")
+    print(f"✅ Role R{role.id} assigned: {role.icon} {role.title}")
     print(f"   {folder}")
     print(f"   charter: {folder / 'charter.md'} (scaffold -- write it)")
     if icon not in ICON_SHELF:
@@ -282,7 +282,7 @@ def cmd_duty_add(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(dump(duty), indent=2))
         return 0
-    print(f"✅ Duty {duty.id} declared under {role.icon} {role.title}")
+    print(f"✅ Duty D{duty.id} declared under {role.icon} {role.title}")
     print("   " + _duty_line(duty))
     print(f"   {path}")
     return 0
@@ -291,7 +291,7 @@ def cmd_duty_add(args: argparse.Namespace) -> int:
 def print_duty_view(store: RoleStore, duty: Duty, path, role: Role, indent: str = "") -> None:
     """The formatted information view of one duty (what `duty show` prints)."""
     print(indent + _duty_line(duty))
-    print(f"{indent}   role:    {role.icon} {role.title} ({role.id})")
+    print(f"{indent}   role:    {role.icon} {role.title} (R{role.id})")
     if duty.body:
         print(f"{indent}   body:    {duty.body}")
     if duty.depends_on:
@@ -429,7 +429,7 @@ def cmd_duty_engage(args: argparse.Namespace) -> int:
         previous = current_focus()
         refocused = previous != role.id
         if refocused:
-            set_focus(role.id, previous, note="engaged " + ", ".join(d.id for d in duties))
+            set_focus(role.id, previous, note="engaged " + ", ".join("D" + d.id for d in duties))
     except RoleError as e:
         return _fail(e, args.json)
     if args.json:
@@ -442,7 +442,7 @@ def cmd_duty_engage(args: argparse.Namespace) -> int:
     for d in duties:
         print(f"▶️  engaged 📌 {d.title}  ({role.icon} {role.title})")
     if dropped:
-        print(f"   ⏸ disengaged {', '.join(dropped)} (attention moved)")
+        print(f"   ⏸ disengaged {', '.join('D' + x for x in dropped)} (attention moved)")
     if refocused:
         print(f"   🎯 focused {role.icon} {role.title}" + (f" (was {previous})" if previous else ""))
     print()
@@ -549,7 +549,7 @@ def cmd_role_focus(args: argparse.Namespace) -> int:
         if previous:
             try:
                 role, _ = store.find_role(previous)
-                print(f"🎯 {role.icon} {role.title} ({role.id})")
+                print(f"🎯 {role.icon} {role.title} (R{role.id})")
             except RoleError:
                 print(f"🎯 {previous} (role not found; run: macf_tools role unfocus)")
         else:

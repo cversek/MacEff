@@ -44,6 +44,12 @@ def lab(store):
     return role, folder
 
 
+def _nocode(line):
+    """The line with its dim R/D code removed, so tests can match the grammar around it."""
+    import re
+    return re.sub(r"(◼|◻|✔|⏸) [RD][0-9a-f]{6} ", r"\1 ", line)
+
+
 def _tool_calls(n, at=None):
     for _ in range(n):
         append_event("tool_call_started", {"tool": "Bash"})
@@ -57,7 +63,7 @@ def test_focused_role_expands_every_open_duty_never_truncated(store, lab):
         store.add_duty(role, folder, f"duty {i:02d}")
     lines = disp.stanza(store, "focused", role.id, at=NOW, ansi=False)
     assert lines[0] == "🎭 ROLES"
-    assert "🎯" in lines[1] and lines[1].startswith("◼ 🎓 Lab Course Assistant")
+    assert "🎯" in lines[1] and _nocode(lines[1]).startswith("◼ 🎓 Lab Course Assistant")
     assert sum(1 for l in lines if "📌" in l) == 40
 
 
@@ -77,9 +83,9 @@ def test_status_boxes_marks_and_the_role_line_carries_the_most_urgent(store, lab
     store.add_duty(role, folder, "plain")
     lines = disp.stanza(store, "focused", role.id, at=NOW, ansi=False)
     assert "🔴 OVERDUE 2d" in lines[1] and lines[1].endswith("🎯")     # expanded: the pointer is on a duty line
-    assert lines[2].startswith("    ◻ 📌 late") and "🔴 OVERDUE 2d" in lines[2]
-    assert lines[3].startswith("    ◻ 📌 soon") and "⏳2d" in lines[3]
-    assert lines[4].startswith("    ◻ 📌 plain")
+    assert _nocode(lines[2]).startswith("    ◻ 📌 late") and "🔴 OVERDUE 2d" in lines[2]
+    assert _nocode(lines[3]).startswith("    ◻ 📌 soon") and "⏳2d" in lines[3]
+    assert _nocode(lines[4]).startswith("    ◻ 📌 plain")
     assert sum(1 for l in lines if "👈" in l) == 1                   # ONE pointer in the whole stanza
 
 
@@ -94,27 +100,27 @@ def test_one_pointer_follows_the_last_touch_across_roles(store, lab):
     o, _ = store.add_duty(other, of, "intake")                        # newest touch: the librarian's duty
     lines = disp.stanza(store, "focused", role.id, at=NOW, ansi=False)
     with_ptr = [l for l in lines if "👈" in l]
-    assert len(with_ptr) == 1 and with_ptr[0].startswith("◼ 📚 Corpus Librarian")   # collapsed line
+    assert len(with_ptr) == 1 and _nocode(with_ptr[0]).startswith("◼ 📚 Corpus Librarian")   # collapsed line
     time.sleep(1.1)
     store.note_duty(d, folder, "drafted")                             # newest touch: a duty of the focused role
     lines = disp.stanza(store, "focused", role.id, at=NOW, ansi=False)
     with_ptr = [l for l in lines if "👈" in l]
-    assert len(with_ptr) == 1 and with_ptr[0].startswith("    ◻ 📌 board plan")
+    assert len(with_ptr) == 1 and _nocode(with_ptr[0]).startswith("    ◻ 📌 board plan")
     # unfocus: nothing written, the pointer moves to the same role's collapsed line
     lines = disp.stanza(store, "focused", None, at=NOW, ansi=False)
     with_ptr = [l for l in lines if "👈" in l]
-    assert len(with_ptr) == 1 and with_ptr[0].startswith("◼ 🎓 Lab Course Assistant")
+    assert len(with_ptr) == 1 and _nocode(with_ptr[0]).startswith("◼ 🎓 Lab Course Assistant")
     time.sleep(1.1)
     store.note_role(other, of, "shelf audit")                         # a role-level note on an expanded role
     lines = disp.stanza(store, "focused", other.id, at=NOW, ansi=False)
     with_ptr = [l for l in lines if "👈" in l]
     # an expanded role's own line never carries 👈: the note hands it to the role's newest duty
-    assert len(with_ptr) == 1 and with_ptr[0].startswith("    ◻ 📌 intake")
+    assert len(with_ptr) == 1 and _nocode(with_ptr[0]).startswith("    ◻ 📌 intake")
     assert not any("👈" in l and "🎯" in l for l in lines)
     # collapsed again (unfocus): the pointer comes back up to the role line and 🎯 goes
     lines = disp.stanza(store, "focused", None, at=NOW, ansi=False)
     with_ptr = [l for l in lines if "👈" in l]
-    assert len(with_ptr) == 1 and with_ptr[0].startswith("◼ 📚 Corpus Librarian") and "🎯" not in with_ptr[0]
+    assert len(with_ptr) == 1 and _nocode(with_ptr[0]).startswith("◼ 📚 Corpus Librarian") and "🎯" not in with_ptr[0]
 
 
 def test_focused_role_line_shows_the_focus_age_not_a_duty_age(store, lab):
@@ -211,7 +217,7 @@ def test_nag_fires_on_the_schedule_and_stops_after_refocus(store, lab):
         msg = rh.conscientiousness_nag(store, NOW)
         if msg:
             fired.append(n)
-            assert "🎓 Lab Course Assistant" in msg and f"macf_tools role focus {role.id}" in msg
+            assert "🎓 Lab Course Assistant" in msg and f"macf_tools role focus R{role.id}" in msg
             assert "DUE_SOON" in msg and "board plan" in msg
     assert fired == [4, 8, 16]
     set_focus(role.id, None)                       # acknowledged
@@ -396,7 +402,7 @@ def test_stanza_trims_titles_to_the_trees_title_width(store, lab):
     narrow = disp.stanza(store, "focused", None, at=NOW, ansi=False, title_width=40)[1]
     assert f"next: {disp.fit(long, 20)} (" in narrow and "last: " not in narrow and "👈" in narrow
     expanded = disp.stanza(store, "focused", role.id, at=NOW, ansi=False, title_width=40)
-    assert any(l.startswith(f"    ◻ 📌 {disp.fit(long, 40)}") for l in expanded)
+    assert any(_nocode(l).startswith(f"    ◻ 📌 {disp.fit(long, 40)}") for l in expanded)
     assert disp.fit(long, 40).endswith("...") and len(disp.fit(long, 40)) <= 40
     untrimmed = disp.stanza(store, "focused", role.id, at=NOW, ansi=False, title_width=0)
     assert any(long in l for l in untrimmed)
@@ -414,13 +420,13 @@ def test_a_fresh_focus_brings_the_pointer_up_then_engaging_moves_it_down(store, 
     set_focus(other.id, None)                                          # then the librarian is focused
     lines = disp.stanza(store, "focused", other.id, at=NOW, ansi=False)
     with_ptr = [l for l in lines if "👈" in l]
-    assert len(with_ptr) == 1 and with_ptr[0].startswith("◼ 📚 Corpus Librarian") and "🎯 0m  👈 0m" in with_ptr[0]
+    assert len(with_ptr) == 1 and _nocode(with_ptr[0]).startswith("◼ 📚 Corpus Librarian") and "🎯 0m  👈 0m" in with_ptr[0]
     time.sleep(1.1)
     o, op = store.add_duty(other, of, "intake")
     store.engage(o, op.parent)                                         # a duty is engaged: the finger moves down
     lines = disp.stanza(store, "focused", other.id, at=NOW, ansi=False)
     with_ptr = [l for l in lines if "👈" in l]
-    assert len(with_ptr) == 1 and with_ptr[0].startswith("    ◼ 📌 intake")
+    assert len(with_ptr) == 1 and _nocode(with_ptr[0]).startswith("    ◼ 📌 intake")
     assert "👈" not in lines[1] and "🎯" in lines[1]
 
 
@@ -437,3 +443,11 @@ def test_the_charter_meta_duty_is_engageable_while_boundaries_are_the_scaffold(s
     assert store.find_duty(meta.id)[0].state == "active"
     lines = disp.stanza(store, "focused", role.id, at=NOW, ansi=False)
     assert any("(meta)" in l and "Boundaries" in l for l in lines)
+
+
+def test_lines_carry_their_codes_before_the_marker(store, lab):
+    role, folder = lab
+    d, _ = store.add_duty(role, folder, "board plan")
+    lines = disp.stanza(store, "focused", role.id, at=NOW, ansi=False)
+    assert lines[1].startswith(f"◼ R{role.id} 🎓 Lab Course Assistant")
+    assert lines[2].startswith(f"    ◻ D{d.id} 📌 board plan")

@@ -369,13 +369,13 @@ def test_engage_is_exclusive_and_parallel_is_one_command(store, lab, capsys):
     assert _run(["role", "duty", "engage", "alpha"]) == 0
     assert _run(["role", "duty", "engage", "beta"]) == 0
     out = capsys.readouterr().out
-    assert f"disengaged {a.id}" in out
+    assert f"disengaged D{a.id}" in out
     a2, _ = store.find_duty(a.id)
     assert a2.state == "pending" and a2.updates[-1].kind == "disengage"
     assert {d.id for d, _ in store.engaged()} == {b.id}
     assert _run(["role", "duty", "engage", "alpha", "gamma"]) == 0
     out = capsys.readouterr().out
-    assert "PARALLEL engagement: 2 duties" in out and f"disengaged {b.id}" in out
+    assert "PARALLEL engagement: 2 duties" in out and f"disengaged D{b.id}" in out
     assert out.count("   path:") == 2 and out.count("── charter:") == 1
     assert {d.id for d, _ in store.engaged()} == {a.id, c.id}
     store.advance_duty(c, folder, "done", evidence=["7"])
@@ -424,3 +424,23 @@ def test_session_start_carries_the_focused_charter(store, lab):
     block = _focused_charter_block()
     assert block.startswith("\n<system-reminder>") and "You hold the role 🎓" in block
     assert "Engaged duties: alpha" in block and "Must not contact anyone" in block
+
+
+def test_code_shorthand_resolves_by_unique_prefix_and_refuses_ambiguity(store, lab, capsys):
+    """D442, D442..., d442d91 and a bare 442 all reach the duty; an ambiguous
+    prefix lists the candidates and asks; roles take R the same way."""
+    role, folder = lab
+    a, _ = store.add_duty(role, folder, "alpha")
+    b, _ = store.add_duty(role, folder, "beta")
+    for ref in (f"D{a.id}", f"d{a.id[:4]}", f"D{a.id[:3]}...", a.id[:5]):
+        assert store.find_duty(ref)[0].id == a.id, ref
+    assert store.find_role(f"R{role.id[:3]}")[0].id == role.id
+    assert store.find_role(f"R{role.id}...")[0].id == role.id
+    common = a.id[:1] if a.id[0] == b.id[0] else ""
+    if common:
+        with pytest.raises(RoleError) as e:
+            store.find_duty(f"D{common}")
+        assert "ambiguous" in str(e.value) and "say which" in str(e.value)
+    assert _run(["role", "duty", "show", f"D{a.id[:4]}"]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith(f"◻ D{a.id} 📌 alpha")                       # the code before the pin

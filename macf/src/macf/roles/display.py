@@ -159,7 +159,7 @@ def role_line(role: Role, placed: List[Placement], all_duties: Sequence[Duty], f
     box = BOX.get(role.state, "?")
     if ansi and focused and role.state == "active":
         box = f"{ANSI_RED}◼{ANSI_RESET}"       # lit like an in_progress task: attention is here
-    line = f"{box} {role.icon} {fit(role.title, title_width)}  {dim}{state}{reset}"
+    line = f"{box} {dim}R{role.id}{reset} {role.icon} {fit(role.title, title_width)}  {dim}{state}{reset}"
     if collapsed:
         half = (title_width // 2) if title_width else None
         ptr_id, ptr_ts = role_pointer(all_duties)
@@ -200,7 +200,7 @@ def duty_line(p: Placement, at: datetime, pointers: Sequence[Tuple[str, float]] 
     title = fit(d.title, title_width)
     if ansi and d.state == "done":
         title = f"{ANSI_DIM}{ANSI_STRIKE}{title}{ANSI_RESET}"   # as the tree strikes a completed task
-    line = f"    {box} 📌 {title}{imp}"
+    line = f"    {box} {dim}D{d.id}{reset} 📌 {title}{imp}"     # the code before the pin, as #N sits before a task
     if when:
         line += f"  {dim}{when}{reset}"
     mark = duty_mark(p, at)

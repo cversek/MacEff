@@ -122,38 +122,71 @@ class RoleStore:
                 return cand
         raise RoleError("could not allocate a unique id after 64 draws")
 
+    @staticmethod
+    def code_prefixes(ref: str, letter: str) -> List[str]:
+        """The hex prefixes a shorthand like ``D442``, ``D442...``, ``d442d91`` or a
+        bare ``442d91`` may mean, most specific first. An id can itself begin
+        with the letter (``d6183b``), so the bare reading is always kept too.
+        *letter* is ``D`` for duties and ``R`` for roles."""
+        r = (ref or "").strip().rstrip(".").strip()
+        out = []
+        if len(r) >= 2 and r[0].upper() == letter and re.fullmatch(r"[0-9a-fA-F]{1,6}", r[1:]):
+            out.append(r[1:].lower())
+        if re.fullmatch(r"[0-9a-fA-F]{2,6}", r):
+            out.append(r.lower())
+        return out
+
+    def _by_code(self, pool, ref: str, letter: str, what: str):
+        """Resolve a code shorthand against *pool*: exact id first, then a unique
+        prefix; an ambiguous prefix refuses and lists the candidates so the
+        caller can ask which was meant."""
+        for pre in self.code_prefixes(ref, letter):
+            exact = [p for p in pool if p[0].id == pre]
+            if exact:
+                return exact[0]
+        hits = []
+        for pre in self.code_prefixes(ref, letter):
+            hits += [p for p in pool if p[0].id.startswith(pre) and p not in hits]
+        if len(hits) == 1:
+            return hits[0]
+        if len(hits) > 1:
+            names = ", ".join(f"{letter}{x.id} {x.title}" for x, _ in hits)
+            raise RoleError(f"{ref!r} is ambiguous among {len(hits)} {what}: {names} -- say which")
+        return None
+
     def find_role(self, ref: str) -> Tuple[Role, Path]:
-        """By id, or by an unambiguous case-insensitive title prefix."""
+        """By id or code shorthand (``R629``, ``629...``), or by an unambiguous
+        case-insensitive title prefix."""
         ref = (ref or "").strip()
         if not ref:
             raise RoleError("a role id or title prefix is required")
         pairs = self.roles()
-        by_id = [p for p in pairs if p[0].id == ref.lower()]
+        by_id = self._by_code(pairs, ref, "R", "roles")
         if by_id:
-            return by_id[0]
+            return by_id
         hits = [p for p in pairs if p[0].title.lower().startswith(ref.lower())]
         if len(hits) == 1:
             return hits[0]
         if not hits:
             raise RoleError(f"no role matches {ref!r} (run: macf_tools role list)")
-        names = ", ".join(f"{r.id} {r.title}" for r, _ in hits)
-        raise RoleError(f"{ref!r} is ambiguous: {names}")
+        names = ", ".join(f"R{r.id} {r.title}" for r, _ in hits)
+        raise RoleError(f"{ref!r} is ambiguous: {names} -- say which")
 
     def find_duty(self, ref: str, role: Optional[Role] = None) -> Tuple[Duty, Path]:
         ref = (ref or "").strip()
         if not ref:
             raise RoleError("a duty id or title prefix is required")
         pool = self.all_duties() if role is None else self.duties(self.folder_of(role))
-        by_id = [p for p in pool if p[0].id == ref.lower()]
+        by_id = self._by_code(pool, ref, "D", "duties")
         if by_id:
-            return by_id[0]
+            return by_id
         hits = [p for p in pool if p[0].title.lower().startswith(ref.lower())]
         if len(hits) == 1:
             return hits[0]
         if not hits:
             raise RoleError(f"no duty matches {ref!r}")
-        names = ", ".join(f"{d.id} {d.title}" for d, _ in hits)
-        raise RoleError(f"{ref!r} is ambiguous: {names}")
+        names = ", ".join(f"D{d.id} {d.title}" for d, _ in hits)
+        raise RoleError(f"{ref!r} is ambiguous: {names} -- say which")
 
     def folder_of(self, role: Role) -> Path:
         for r, d in self.roles():
@@ -345,7 +378,7 @@ class RoleStore:
         if exclusive:
             for other, opath in self.engaged():
                 if other.id != duty.id:
-                    self.disengage(other, opath.parent, reason=f"engaged {duty.id} instead")
+                    self.disengage(other, opath.parent, reason=f"engaged D{duty.id} instead")
         ids = self._check_tracks(task_ids)
         if ids:
             duty.tracks = sorted(set(duty.tracks) | set(ids), key=lambda s: (len(s), s))
@@ -366,7 +399,7 @@ class RoleStore:
             self.check_engageable(d, p.parent)
         for other, opath in self.engaged():
             if other.id not in keep:
-                self.disengage(other, opath.parent, reason="engaged " + ", ".join(sorted(keep)) + " instead")
+                self.disengage(other, opath.parent, reason="engaged " + ", ".join("D" + k for k in sorted(keep)) + " instead")
         return [self.engage(d, p.parent, note, task_ids, exclusive=False) for d, p in pairs]
 
     def link(self, duty: Duty, folder: Path, task_ids: Iterable[str]) -> Duty:

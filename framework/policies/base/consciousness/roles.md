@@ -36,6 +36,7 @@ A **ROLE** is a formal appointment with a tenure and a review date. Its **DUTIES
 - When does the charter reach the agent's context?
 - Can a duty have sub-duties?
 - Why is nothing ordered by an integer?
+- How is a duty or role written and spoken of (`D442d91`, a unique prefix, the semantic tag)?
 - Is writing the charter, or reviewing the role, itself a duty?
 
 **3 Lifecycle**
@@ -173,7 +174,11 @@ agent/public/roles/2026-01-15_a3f9c2_Lab_Course_Assistant/
 
 ### 2.2 Identifiers
 
-Roles and duties are identified by **six hex characters** (`uuid4().hex[:6]`), allocated at creation and collision-checked within the store. Titles are for display. The CLI accepts an id or an unambiguous title prefix; an ambiguous prefix is refused with the candidates listed.
+Roles and duties are identified by **six hex characters** (`uuid4().hex[:6]`), allocated at creation and collision-checked within the store. Titles are for display.
+
+**Codes and shorthand.** Written down, a duty id wears a `D` and a role id an `R`: `D442d91`, `R62994b`. The code is shown dim in front of the marker on every line (`◼ D442d91 📌 ...`, `◼ R62994b 📚 ...`), where a task line shows its `#N`. In conversation a **unique prefix** is enough, with or without a trailing ellipsis: `D442`, `D442...`, `R629`. The CLI resolves a code by exact id, then by unique prefix, then falls back to an unambiguous case-insensitive title prefix. An ambiguous prefix is refused with the candidates listed, and the agent asks which was meant rather than picking one.
+
+**How the agent refers to a duty.** Always the full six with the letter, plus a short semantic tag drawn from the title: "the D442d91 Charter Drafting", "D090705, the Exp. 13 board plan". The code is what resolves; the tag is what a reader remembers. Bare titles drift and bare codes are opaque; the pair is the name.
 
 **Why not integers.** An integer id is read as an order, and the order it encodes is creation, which is the one ordering nobody wants. Every ordering in this policy is **computed at render time from stored facts** (§5) and none is stored.
 
@@ -390,21 +395,21 @@ Focus is **orthogonal to work mode**. The dashboard composes the focused role's 
 
 ### 8.2 Line grammar
 
-**Role line**: status box · icon · title · `[state · review MM-DD]` · approach mark · `🎯 age` if focused (the age of the focus, not of any duty) · `👈 age` if this **collapsed** line holds the stanza's pointer, or if the focus itself is the newest touch and no duty is engaged yet. Otherwise an expanded role's duty lines carry it. Status boxes are exactly the task tree's: `◼` active, `◻` pending, `✔` done or retired, `⏸` paused. The approach mark on a role line is the **most urgent** of its duties' marks, so a collapsed role still escalates.
+**Role line**: status box · `R<id>` (dim) · icon · title · `[state · review MM-DD]` · approach mark · `🎯 age` if focused (the age of the focus, not of any duty) · `👈 age` if this **collapsed** line holds the stanza's pointer, or if the focus itself is the newest touch and no duty is engaged yet. Otherwise an expanded role's duty lines carry it. Status boxes are exactly the task tree's: `◼` active, `◻` pending, `✔` done or retired, `⏸` paused. The approach mark on a role line is the **most urgent** of its duties' marks, so a collapsed role still escalates.
 
-**Duty line**: status box · `📌` · title · due or cadence · approach mark · `👈 age` if it is the last-touched duty in the stanza, or one of the engaged duties under a parallel engagement.
+**Duty line**: status box · `D<id>` (dim) · `📌` · title · due or cadence · approach mark · `👈 age` if it is the last-touched duty in the stanza, or one of the engaged duties under a parallel engagement.
 
 **Collapsed role line** adds `· last: <duty> (age) · next: <duty> (date)` so a one-line role still says what was touched and what is coming.
 
 ```
 🎭 ROLES
-◼ 📚 Corpus Librarian                 [active · review --]   · last: intake note (2d)
-◼ 🎓 Lab Course Assistant             [active · review 12-15]  ⏳3d  🎯 5h
-    ◻ 📌 confirm which section meets   due Mon 09-14  ⏳3d
-    ◼ 📌 board plan, first experiment  due Tue 09-15  ⏳4d   👈 2h
-    ◻ 📌 forum welcome message         (IMPORTANT)
-    ◻ 📌 weekly lab sections           weekly:tue  ⏳4d
-    ◻ 📌 end-of-term status refresh    due 12-15
+◼ R3f9a12 📚 Corpus Librarian                 [active · review --]   · last: intake note (2d)
+◼ R01d410 🎓 Lab Course Assistant             [active · review 12-15]  ⏳3d  🎯 5h
+    ◻ D951a01 📌 confirm which section meets   due Mon 09-14  ⏳3d
+    ◼ D090705 📌 board plan, first experiment  due Tue 09-15  ⏳4d   👈 2h
+    ◻ D1ae327 📌 forum welcome message         (IMPORTANT)
+    ◻ D6c02e4 📌 weekly lab sections           weekly:tue  ⏳4d
+    ◻ D2b77f0 📌 end-of-term status refresh    due 12-15
 ```
 
 ### 8.3 Expansion: never truncated

@@ -30,6 +30,7 @@ Read the sections on what a duty is, lifecycle, time properties (due, horizon, c
 8. **Boundaries** - What does the role's charter say it may do alone and what needs the operator's direction, and what does the policy say a duty never authorizes toward third parties?
 9. **Engagement** - What does engaging a duty do to the other active duties, how is a deliberate parallel engagement declared, and what does the command show?
 10. **Meta duties** - When the operator asks for work on the role itself (charter, review, migration), what does the policy say to declare first, and how is such a duty marked?
+11. **Names** - How is a duty written and referred to (the code, a unique prefix, the semantic tag), and what does the agent do when a prefix is ambiguous?
 
 ---
 
