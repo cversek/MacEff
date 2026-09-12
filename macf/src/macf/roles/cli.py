@@ -114,14 +114,21 @@ def cmd_role_create(args: argparse.Namespace) -> int:
     store = RoleStore()
     try:
         icon = args.icon or "🎭"
-        role, folder = store.create_role(
-            args.title, icon=icon,
-            tenure_start=_date(args.tenure_start, "--tenure-start"),
-            expires=_date(args.expires, "--expires"),
-            review_by=_date(args.review_by, "--review-by"),
-            review_horizon=args.review_horizon,
-            resources=_csv(args.resource), charter_seed=args.charter or "",
-            wiki_links=_csv(args.wiki_links), why=args.why or "")
+        fields = dict(icon=icon,
+                      tenure_start=_date(args.tenure_start, "--tenure-start"),
+                      expires=_date(args.expires, "--expires"),
+                      review_by=_date(args.review_by, "--review-by"),
+                      review_horizon=args.review_horizon,
+                      resources=_csv(args.resource), charter_seed=args.charter or "",
+                      wiki_links=_csv(args.wiki_links), why=args.why or "")
+        if args.from_task:
+            if args.title and not args.title.strip():
+                raise RoleError("--from-task takes the title from the task; pass a title to override it")
+            role, folder = store.create_role_from_task(args.from_task, title=args.title or None, **fields)
+        else:
+            if not args.title:
+                raise RoleError("a title is required (or --from-task N)")
+            role, folder = store.create_role(args.title, **fields)
     except (RoleError, ValueError) as e:
         return _fail(e, args.json)
     if args.json:
@@ -259,11 +266,16 @@ def cmd_duty_add(args: argparse.Namespace) -> int:
     store = RoleStore()
     try:
         role, folder = store.find_role(args.role)
-        duty, path = store.add_duty(
-            role, folder, args.title, body=args.body or "", importance=args.importance,
-            due=_datetime(args.due, "--due"), horizon=args.horizon, why=args.why or "",
-            cadence=args.cadence, depends_on=_csv(args.depends_on), tracks=_csv(args.tracks),
-            wiki_links=_csv(args.wiki_links))
+        fields = dict(body=args.body or "", importance=args.importance,
+                      due=_datetime(args.due, "--due"), horizon=args.horizon, why=args.why or "",
+                      cadence=args.cadence, depends_on=_csv(args.depends_on), tracks=_csv(args.tracks),
+                      wiki_links=_csv(args.wiki_links))
+        if args.from_task:
+            duty, path = store.add_duty_from_task(role, folder, args.from_task, title=args.title or None, **fields)
+        else:
+            if not args.title:
+                raise RoleError("a title is required (or --from-task N)")
+            duty, path = store.add_duty(role, folder, args.title, **fields)
     except (RoleError, ValueError) as e:
         return _fail(e, args.json)
     if args.json:
@@ -532,7 +544,8 @@ def add_role_parser(sub: argparse._SubParsersAction) -> None:
         p.add_argument("--json", action="store_true", help="print the record as JSON")
 
     p = rs.add_parser("create", help="assign a role (the ceremony is the maceff-assign-role skill)")
-    p.add_argument("title")
+    p.add_argument("title", nargs="?")
+    p.add_argument("--from-task", metavar="N", help="migrate a position held as a task: title from its subject, notes carried as updates")
     p.add_argument("--icon", help="one glyph; the policy shelf: " + " ".join(ICON_SHELF))
     p.add_argument("--tenure-start", help="YYYY-MM-DD (default today)")
     p.add_argument("--expires", help="YYYY-MM-DD")
@@ -598,7 +611,8 @@ def add_role_parser(sub: argparse._SubParsersAction) -> None:
 
     p = ds.add_parser("add", help="declare a duty under a role")
     p.add_argument("role", help="role id or title prefix")
-    p.add_argument("title")
+    p.add_argument("title", nargs="?")
+    p.add_argument("--from-task", metavar="N", help="migrate a duty held as a task: title from its subject, notes carried as updates")
     p.add_argument("--body", help="what must be true (a declaration, not a procedure)")
     p.add_argument("--importance", choices=("critical", "high", "normal", "low"), default="normal")
     p.add_argument("--due", help="YYYY-MM-DD or YYYY-MM-DDTHH:MM")

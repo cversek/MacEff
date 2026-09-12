@@ -199,6 +199,10 @@ class RoleStore:
         charter = CHARTER_SCAFFOLD.format(title=role.title)
         if charter_seed:
             charter = charter.replace("## Purpose\n\n", f"## Purpose\n\n{charter_seed.strip()}\n\n", 1)
+        if role.wiki_links:
+            # The charter is the role's knowledge-web node; the links given at
+            # assignment go into it now rather than waiting for a hand edit.
+            charter += " ".join(f"[[{w}]]" for w in role.wiki_links) + "\n"
         (folder / "charter.md").write_text(charter)
         role.updates.append(_update(why or "Role assigned", kind="assign"))
         self.save_role(role, folder)
@@ -228,7 +232,7 @@ class RoleStore:
                             "(roles policy: reasoning a horizon)")
         duty = Duty(id=self.new_id(), role_id=role.id, title=title, body=body, importance=importance,
                     due=due, horizon=horizon, cadence=cadence, depends_on=deps, tracks=tr,
-                    wiki_links=list(wiki_links))
+                    wiki_links=list(wiki_links), state="active" if tr else "pending")
         first = f"Declared. Horizon {horizon}: {why}" if horizon else (why or "Declared")
         duty.updates.append(_update(first, kind="declare"))
         path = self.save_duty(duty, folder)
@@ -316,6 +320,63 @@ class RoleStore:
         append_event("duty_serviced", {"duty_id": duty.id, "role_id": duty.role_id, "kind": "unlink",
                                        "tracks": ids})
         return duty
+
+    # ---- migration from the task store -------------------------------------
+
+    @staticmethod
+    def task_title(task) -> str:
+        """A task subject with its id, type markers and ROLE:/DUTY: prefixes removed."""
+        t = _ANSI_RE.sub("", task.subject).strip()
+        t = re.sub(r"^#\d+\s*", "", t)
+        t = re.sub(r"^\[\^#\d+\]\s*", "", t)
+        t = re.sub(r"^(?:[^\w\s]\s*)+", "", t)            # leading emoji markers
+        t = re.sub(r"^(?:ROLE|DUTY)\s*:\s*", "", t, flags=re.I)
+        t = re.sub(r"^(?:[^\w\s]\s*)+", "", t)
+        return t.strip() or task.subject.strip()
+
+    @staticmethod
+    def task_updates(task) -> List[Update]:
+        """A task's notes carried over as updates, keeping their breadcrumbs and
+        stamped from the breadcrumb's own timestamp so the record's order holds."""
+        out: List[Update] = []
+        if not task.mtmd:
+            return out
+        for u in task.mtmd.updates:
+            m = re.search(r"/t_(\d{10})", u.breadcrumb or "")
+            at = datetime.fromtimestamp(int(m.group(1))).replace(microsecond=0).isoformat() if m else now_iso()
+            out.append(Update(breadcrumb=u.breadcrumb or "migrated", description=u.description or "",
+                              at=at, agent=u.agent or "PA", kind="migrated"))
+        return out
+
+    def create_role_from_task(self, task_id: str, **kw) -> Tuple[Role, Path]:
+        task = self._task(str(task_id).lstrip("#"))
+        if task is None:
+            raise RoleError(f"task #{task_id} does not exist")
+        title = kw.pop("title", None) or self.task_title(task)
+        why = kw.pop("why", "") or f"Migrated from task #{task.id}"
+        role, folder = self.create_role(title, why=why, **kw)
+        carried = self.task_updates(task)
+        if carried:
+            role.updates = carried + role.updates
+            self.save_role(role, folder)
+        return role, folder
+
+    def add_duty_from_task(self, role: Role, folder: Path, task_id: str, **kw) -> Tuple[Duty, Path]:
+        task = self._task(str(task_id).lstrip("#"))
+        if task is None:
+            raise RoleError(f"task #{task_id} does not exist")
+        title = kw.pop("title", None) or self.task_title(task)
+        why = kw.pop("why", "")
+        if kw.get("horizon") and not why:
+            why = f"migrated from task #{task.id}; horizon reasoned at migration"
+        duty, path = self.add_duty(role, folder, title, why=why, **kw)
+        carried = self.task_updates(task)
+        if carried:
+            duty.updates = carried + duty.updates
+            if task.status == "in_progress" and duty.state == "pending":
+                duty.state = "active"
+            self.save_duty(duty, folder)
+        return duty, path
 
     # ---- the task store, read only -----------------------------------------
 
