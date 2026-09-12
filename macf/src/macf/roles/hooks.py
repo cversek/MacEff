@@ -224,6 +224,8 @@ def charter_context(store: Optional[RoleStore] = None) -> str:
     if not charter.exists():
         return ""
     engaged = [d.title for d, _ in store.engaged() if d.role_id == role.id]
+    from .focus import note_charter_shown
+    note_charter_shown(role.id, charter.stat().st_mtime)
     head = f"🎯 You hold the role {role.icon} {role.title} (R{role.id}). Its charter follows; the Boundaries bind every act taken in it."
     if engaged:
         head += " Engaged duties: " + "; ".join(engaged) + "."

@@ -7,6 +7,7 @@ the whole surface.
 """
 import argparse
 import json
+import sys
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
@@ -308,15 +309,33 @@ def print_duty_view(store: RoleStore, duty: Duty, path, role: Role, indent: str 
         print(f"{indent}     {u.at}  {u.kind:<8} {u.description}{extra}")
 
 
-def print_charter(folder) -> None:
-    """The role's charter, verbatim: the Boundaries have to be where the decision is made."""
+def print_charter(folder, role_id: str = "", suppress: bool = False) -> None:
+    """The role's charter, verbatim: the Boundaries have to be where the decision
+    is made. *suppress* (``--no-charter``) is honoured only when this charter,
+    unchanged, was already shown this cycle and session; otherwise it prints
+    anyway and says why."""
+    from .focus import charter_fresh, note_charter_shown
+    from macf.utils import get_current_session_id
     charter = folder / "charter.md"
     if not charter.exists():
         print(f"   (no charter at {charter})")
         return
+    mtime = charter.stat().st_mtime
+    if suppress:
+        try:
+            sid = get_current_session_id() or ""
+        except (OSError, ValueError) as e:
+            print(f"⚠️ MACF: session id unavailable, charter freshness judged by cycle only: {e}", file=sys.stderr)
+            sid = ""
+        if charter_fresh(role_id, mtime, sid):
+            print(f"   (charter not repeated: shown earlier this session; {charter})")
+            return
+        print("   (--no-charter ignored: the charter has not been shown this session, or changed since)")
     print(f"── charter: {charter} ──")
     print(charter.read_text().rstrip())
     print("── end charter ──")
+    if role_id:
+        note_charter_shown(role_id, mtime)
 
 
 def cmd_duty_show(args: argparse.Namespace) -> int:
@@ -449,7 +468,7 @@ def cmd_duty_engage(args: argparse.Namespace) -> int:
     for d, p in pairs:
         print_duty_view(store, d, p, role)
         print()
-    print_charter(folder)
+    print_charter(folder, role.id, suppress=bool(args.no_charter))
     return 0
 
 
@@ -573,7 +592,7 @@ def cmd_role_focus(args: argparse.Namespace) -> int:
     pending = due_now_unserviced(role, [d for d, _ in store.duties(folder)], at)
     if pending:
         print("   due now, unserviced: " + "; ".join(f"{p.duty.title} ({duty_mark(p, at)})" for p in pending))
-    print_charter(folder)
+    print_charter(folder, role.id, suppress=bool(args.no_charter))
     return 0
 
 
@@ -665,6 +684,8 @@ def add_role_parser(sub: argparse._SubParsersAction) -> None:
 
     p = rs.add_parser("focus", help="hold one role: its duties become a prioritized scope for the hooks")
     p.add_argument("role", nargs="?", help="id or title prefix; omit to show the current focus")
+    p.add_argument("--no-charter", action="store_true",
+                   help="do not reprint the charter; honoured only if it was already shown this session unchanged")
     p.add_argument("--note", help="why, recorded on the event")
     js(p); p.set_defaults(func=cmd_role_focus)
 
@@ -727,6 +748,8 @@ def add_role_parser(sub: argparse._SubParsersAction) -> None:
     p = ds.add_parser("engage", help="attention is on this duty now: active, noted, its role focused (the duty's "
                                      "task start); other active duties are disengaged; several ids = a parallel engagement")
     p.add_argument("duty", nargs="+", help="one id (exclusive) or several (deliberate parallel engagement)")
+    p.add_argument("--no-charter", action="store_true",
+                   help="do not reprint the charter; honoured only if it was already shown this session unchanged")
     p.add_argument("--note", help="what you are setting out to do")
     p.add_argument("--tracks", action="append", help="task ids implementing it, comma-separated")
     js(p); p.set_defaults(func=cmd_duty_engage)

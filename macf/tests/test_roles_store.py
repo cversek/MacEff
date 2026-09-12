@@ -444,3 +444,26 @@ def test_code_shorthand_resolves_by_unique_prefix_and_refuses_ambiguity(store, l
     assert _run(["role", "duty", "show", f"D{a.id[:4]}"]) == 0
     out = capsys.readouterr().out
     assert out.startswith(f"◻ D{a.id} 📌 alpha")                       # the code before the pin
+
+
+def test_no_charter_is_honoured_only_after_a_first_showing(store, lab, capsys, monkeypatch):
+    """--no-charter is ignored until the charter was shown this session; then it
+    skips the repeat; a changed charter prints again."""
+    import os, time
+    role, folder = lab
+    charter = folder / "charter.md"
+    charter.write_text("# x\n## Boundaries\nMay draft. Must not contact anyone.\n")
+    assert _run(["role", "focus", "Lab", "--no-charter"]) == 0
+    out = capsys.readouterr().out
+    assert "--no-charter ignored" in out and "Must not contact anyone" in out   # printed anyway, once
+    from macf.roles.focus import set_focus
+    set_focus(None, role.id)
+    assert _run(["role", "focus", "Lab", "--no-charter"]) == 0
+    out = capsys.readouterr().out
+    assert "charter not repeated" in out and "Must not contact anyone" not in out
+    time.sleep(1.1)
+    charter.write_text("# x\n## Boundaries\nMay draft. Must not contact anyone. Revised.\n")
+    set_focus(None, role.id)
+    assert _run(["role", "focus", "Lab", "--no-charter"]) == 0
+    out = capsys.readouterr().out
+    assert "changed since" in out and "Revised." in out

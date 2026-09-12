@@ -33,7 +33,7 @@ A **ROLE** is a formal appointment with a tenure and a review date. Its **DUTIES
 - How are roles and duties identified, and how does the CLI accept them?
 - What fields does a role record carry? A duty record?
 - What is `charter.md` for?
-- When does the charter reach the agent's context?
+- When does the charter reach the agent's context, and when may a repeat be suppressed?
 - Can a duty have sub-duties?
 - Why is nothing ordered by an integer?
 - How is a duty or role written and spoken of (`D442d91`, a unique prefix, the semantic tag)?
@@ -223,6 +223,8 @@ The charter is the role's human face and its knowledge-web node: purpose, bounda
 **Boundaries are the load-bearing section.** They state what the role may do on its own and what needs the operator's direction for that specific act. The default the policy sets, for every role: **a duty is a declaration of what must be true, never an authorization to act on the operator's behalf toward a third party** -- no message, draft, post, submission or commitment addressed to anyone else is implied by a duty. When a duty seems to need one, ask the operator, wait for the answer with a timeout suited to the duty's horizon, then continue with what can be done alone. `role duty engage` refuses while the Boundaries section is still the scaffold: an undescribed role cannot be worked, because working it is exactly how an agent over-reaches. The one exception is the meta duty that writes those Boundaries (§1.5).
 
 **The charter must be where the decision is made.** Boundaries on disk bind nothing; the agent acts from its context. So `role focus` prints the charter, `role duty engage` prints it after the views of the duties it engaged, and SessionStart injects the focused role's charter (with its engaged duties) into every new session while a role is focused -- a fresh session starts with none of what the focus command printed.
+
+**Suppressing the repeat.** Switching between roles whose charters are already fresh in context should not cost the context again. `role focus --no-charter` and `role duty engage --no-charter` skip the print, and the framework honours the flag **only after a required first showing**: the charter, unchanged, must have reached context earlier in the current cycle and session (a `role_charter_shown` event, written whenever focus, engage or SessionStart shows it). Otherwise the flag is ignored and the charter prints with a line saying why. The agent's judgement applies on top: if it has been a while, even within the session, leave the flag off and refresh the focus.
 
 ### 2.6 No nesting
 

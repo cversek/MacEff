@@ -26,13 +26,13 @@ Read the sections on servicing, pointers and focus; display; and focus as priori
 4. **Servicing** - What counts as a service, and which duties does a service clear from the gate's bound?
 5. **The escape** - What does the policy say unfocus records, what is the named anti-pattern, and what does an honest escape look like?
 6. **The nag** - What does the framework do when a duty in an unfocused role becomes due, and what acknowledges it?
-7. **The charter** - When does the focused role's charter reach my context, and what do its Boundaries bind?
+7. **The charter** - When does the focused role's charter reach my context, what do its Boundaries bind, and under what condition may `--no-charter` skip the repeat?
 
 ---
 
 ## Execution
 
-- To focus: `macf_tools role focus <id-or-title-prefix>`; read what it reports as due now and unserviced, and the charter it prints; then `macf_tools task tree` to see the expanded stanza.
+- To focus: `macf_tools role focus <id-or-title-prefix>`; read what it reports as due now and unserviced, and the charter it prints; then `macf_tools task tree` to see the expanded stanza. Switching back to a role whose charter is still fresh in context: add `--no-charter` (honoured only after a first showing this session); if it has been a while, leave it off.
 - To put a role down: service or defer what is due first where honest (`macf_tools role duty note|done|defer`), then `macf_tools role unfocus --note "<why>"`.
 - To see the current focus: `macf_tools role focus`.
 

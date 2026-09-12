@@ -36,6 +36,30 @@ def last_focus_event_for(role_id: str, after_epoch: float, scope: str = "cycle")
     return False
 
 
+CHARTER_EVENT = "role_charter_shown"
+
+
+def note_charter_shown(role_id: str, charter_mtime: float) -> None:
+    """The charter reached the agent's context (focus, engage, or SessionStart)."""
+    append_event(CHARTER_EVENT, {"role_id": role_id, "charter_mtime": charter_mtime})
+
+
+def charter_fresh(role_id: str, charter_mtime: float, session_id: str = "") -> bool:
+    """True if this role's charter, at this mtime, was shown earlier in the
+    current cycle and (when known) the current session -- so a repeat may be
+    suppressed without the Boundaries ever having been absent from context."""
+    for ev in read_events(reverse=True, scope="cycle"):
+        if ev.get("event") != CHARTER_EVENT:
+            continue
+        data = ev.get("data", {})
+        if data.get("role_id") != role_id:
+            continue
+        if session_id and not str(ev.get("breadcrumb", "")).startswith(f"s_{session_id[:8]}"):
+            return False                     # shown, but in another session: context did not carry it
+        return float(data.get("charter_mtime") or 0) >= charter_mtime
+    return False
+
+
 def set_focus(role_id: Optional[str], previous: Optional[str], unserviced: List[Dict[str, Any]] = (),
               note: str = "") -> None:
     """Record a focus change. *unserviced* is the audit trail an unfocus leaves
