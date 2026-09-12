@@ -34,10 +34,11 @@ def _epoch(dt: datetime) -> float:
 
 def _serviced_since(duty: Duty, since: datetime) -> bool:
     """Any breadcrumbed update at or after *since* counts as a service --
-    except the declaration itself: declaring a duty that is already due-now
-    does not service it."""
+    except the declaration itself (declaring a duty that is already due-now
+    does not service it) and a disengagement (putting a duty down does nothing
+    for it)."""
     for u in duty.updates:
-        if u.kind == "declare":
+        if u.kind in ("declare", "disengage"):
             continue
         try:
             if datetime.fromisoformat(u.at) >= since:
@@ -204,3 +205,26 @@ def roles_store_mtime(store: Optional[RoleStore] = None) -> float:
     if not store.root.exists():
         return 0.0
     return max((p.stat().st_mtime for p in store.root.rglob("*.json")), default=0.0)
+
+
+def charter_context(store: Optional[RoleStore] = None) -> str:
+    """The focused role's charter for SessionStart: the Boundaries must be in
+    context whenever the agent stands in a role, and a new session starts
+    with none of what the focus command printed. Empty when nothing is focused."""
+    focused = current_focus()
+    if not focused:
+        return ""
+    store = store or RoleStore()
+    try:
+        role, folder = store.find_role(focused)
+    except RoleError as e:
+        print(f"⚠️ MACF: focused role {focused} not found ({e}); run macf_tools role unfocus", file=sys.stderr)
+        return ""
+    charter = folder / "charter.md"
+    if not charter.exists():
+        return ""
+    engaged = [d.title for d, _ in store.engaged() if d.role_id == role.id]
+    head = f"🎯 You hold the role {role.icon} {role.title} ({role.id}). Its charter follows; the Boundaries bind every act taken in it."
+    if engaged:
+        head += " Engaged duties: " + "; ".join(engaged) + "."
+    return head + "\n\n" + charter.read_text().rstrip()

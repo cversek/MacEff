@@ -16,6 +16,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from .models import Duty, Role
 from .priority import (DONE, Placement, duty_mark, most_urgent_mark, now, rank, rank_roles,
                        review_mark)
+from .focus import current_focus_event
 from .store import RoleError, RoleStore
 
 ANSI_DIM, ANSI_RESET, ANSI_RED, ANSI_GREEN, ANSI_STRIKE = "\033[2m", "\033[0m", "\033[31m", "\033[32m", "\033[9m"
@@ -59,33 +60,60 @@ def touched_this_session(duty: Duty, session_id: Optional[str]) -> bool:
     return duty.updates[-1].breadcrumb.startswith(f"s_{session_id[:8]}")
 
 
+def last_touch(d: Duty) -> float:
+    """Epoch of the duty's newest touch. A disengagement is not a touch:
+    attention left that duty, it did not land there."""
+    for u in reversed(d.updates):
+        if u.kind != "disengage":
+            return _epoch(u.at)
+    return 0.0
+
+
 def role_pointer(duties: Sequence[Duty]) -> Tuple[Optional[str], float]:
-    """(duty id, epoch) of the role's newest-serviced duty."""
+    """(duty id, epoch) of the role's newest-touched duty."""
     best, best_ts = None, 0.0
     for d in duties:
-        if d.updates:
-            ts = _epoch(d.updates[-1].at)
-            if ts >= best_ts:            # same second: the later record wins
-                best, best_ts = d.id, ts
+        ts = last_touch(d)
+        if ts and ts >= best_ts:         # same second: the later record wins
+            best, best_ts = d.id, ts
     return best, best_ts
 
 
-def stanza_pointer(pairs: Sequence[Tuple[Role, Sequence[Duty]]]) -> Tuple[Optional[str], Optional[str], float]:
-    """The stanza's ONE 👈: (role id, duty id or None, epoch) of the newest touch
-    across every role and duty. A duty touch points at the duty's line when its
-    role is expanded and at the role's collapsed line otherwise; a role-level
-    note points at the role line. Unfocusing writes nothing, so the pointer
-    stays where the last work was until something else is touched."""
+def stanza_pointers(pairs: Sequence[Tuple[Role, Sequence[Duty]]],
+                    expanded: Sequence[str] = ()) -> List[Tuple[str, Optional[str], float]]:
+    """Where the stanza's 👈 goes: a list of (role id, duty id or None, epoch).
+
+    Normally ONE entry, the newest touch across every role and duty. A duty
+    touch points at the duty's line when its role is expanded and at the role's
+    collapsed line otherwise. An expanded role's own line never carries the
+    pointer (its 🎯 carries the focus age instead): a role-level note there
+    hands the pointer to that role's newest-touched duty, or to nobody.
+    Unfocusing writes nothing, so the pointer stays where the last work was.
+
+    Under a deliberate PARALLEL engagement -- more than one active duty across
+    the store -- every active duty gets its own pointer and age, so the
+    operator sees the situation at a glance.
+    """
+    active = [(role.id, d.id, last_touch(d)) for role, duties in pairs for d in duties if d.state == "active"]
+    if len(active) > 1:
+        return active
     best = (None, None, 0.0)
     for role, duties in pairs:
-        if role.updates:
-            ts = _epoch(role.updates[-1].at)
-            if ts >= best[2]:
-                best = (role.id, None, ts)
         did, ts = role_pointer(duties)
-        if did and ts >= best[2]:
+        if role.updates:
+            rts = _epoch(role.updates[-1].at)
+            if rts >= ts:
+                # the role note is this role's newest touch; expanded, it defers to the duty
+                did, ts = (did if role.id in expanded else None), rts
+        if ts >= best[2] and (did or role.id not in expanded):
             best = (role.id, did, ts)
-    return best
+    return [best] if best[0] else []
+
+
+def stanza_pointer(pairs: Sequence[Tuple[Role, Sequence[Duty]]]) -> Tuple[Optional[str], Optional[str], float]:
+    """The single newest touch, for callers that want one answer (see stanza_pointers)."""
+    ptrs = stanza_pointers(pairs)
+    return ptrs[0] if len(ptrs) == 1 else max(ptrs, key=lambda t: t[2]) if ptrs else (None, None, 0.0)
 
 
 def fit(text: str, width: Optional[int]) -> str:
@@ -106,7 +134,7 @@ def _when(d: Duty) -> str:
 
 def role_line(role: Role, placed: List[Placement], all_duties: Sequence[Duty], focused: bool,
               at: datetime, ansi: bool = True, collapsed: bool = False,
-              title_width: Optional[int] = 80) -> str:
+              title_width: Optional[int] = 80, focused_since: float = 0.0) -> str:
     """One role line. Titles are trimmed to *title_width* the way the tree trims
     task titles (40 in succinct mode, 80 otherwise); the collapsed line's last/next
     labels get half that, since they are context, not the subject."""
@@ -139,12 +167,14 @@ def role_line(role: Role, placed: List[Placement], all_duties: Sequence[Duty], f
     if mark:
         line += f"  {mark}"
     if focused:
-        line += "  🎯"
+        # the age beside 🎯 is the FOCUS time (the focus event), not any duty's touch
+        line += "  🎯" + (f" {dim}{rel_age(focused_since, at.timestamp())}{reset}" if focused_since else "")
     return line
 
 
-def duty_line(p: Placement, at: datetime, pointer: Optional[Tuple[str, float]] = None, ansi: bool = True,
+def duty_line(p: Placement, at: datetime, pointers: Sequence[Tuple[str, float]] = (), ansi: bool = True,
               title_width: Optional[int] = 80) -> str:
+    """*pointers* is the stanza's (duty id, epoch) set; this line gets 👈 if it is in it."""
     dim, reset = (ANSI_DIM, ANSI_RESET) if ansi else ("", "")
     d = p.duty
     box = BOX.get(d.state, "?")
@@ -163,8 +193,9 @@ def duty_line(p: Placement, at: datetime, pointer: Optional[Tuple[str, float]] =
     mark = duty_mark(p, at)
     if mark:
         line += f"  {mark}"
-    if pointer and pointer[0] == d.id and pointer[1]:
-        line += f"  👈 {dim}{rel_age(pointer[1], at.timestamp())}{reset}"
+    ts = dict(pointers).get(d.id)
+    if ts:
+        line += f"  👈 {dim}{rel_age(ts, at.timestamp())}{reset}"
     return line
 
 
@@ -181,31 +212,33 @@ def stanza(store: RoleStore, mode: str = "focused", focused_id: Optional[str] = 
     if not pairs:
         return []
     lines = ["🎭 ROLES"]
-    ptr_role, ptr_duty, ptr_ts = stanza_pointer(pairs)
+    ranked = rank_roles(pairs, focused_id, at)
+    expanded_ids = [r.id for r, _ in ranked
+                    if mode == "all" or show_all or (mode == "focused" and r.id == focused_id)]
+    pointers = stanza_pointers(pairs, expanded_ids)
     dim, reset = (ANSI_DIM, ANSI_RESET) if ansi else ("", "")
-    finger = f"  👈 {dim}{rel_age(ptr_ts, at.timestamp())}{reset}" if ptr_role else ""
-    for role, placed in rank_roles(pairs, focused_id, at):
+    focused_since = current_focus_event()[1] if focused_id else 0.0
+    for role, placed in ranked:
         duties = next(ds for r, ds in pairs if r.id == role.id)
-        expanded = mode == "all" or show_all or (mode == "focused" and role.id == focused_id)
-        if not expanded:
-            lines.append(role_line(role, placed, duties, role.id == focused_id, at, ansi, collapsed=True,
-                                   title_width=title_width)
-                         + (finger if role.id == ptr_role else ""))
+        mine = [(did, ts) for rid, did, ts in pointers if rid == role.id]
+        if role.id not in expanded_ids:
+            line = role_line(role, placed, duties, role.id == focused_id, at, ansi, collapsed=True,
+                             title_width=title_width, focused_since=focused_since)
+            if mine:                             # a collapsed line holds its duties' pointers
+                line += f"  👈 {dim}{rel_age(max(ts for _, ts in mine), at.timestamp())}{reset}"
+            lines.append(line)
             continue
-        head = role_line(role, placed, duties, role.id == focused_id, at, ansi, title_width=title_width)
-        if role.id == ptr_role and ptr_duty is None:
-            head += finger                       # the newest touch was a note on the role itself
-        lines.append(head)
+        lines.append(role_line(role, placed, duties, role.id == focused_id, at, ansi, title_width=title_width,
+                               focused_since=focused_since))
         everything = rank(duties, at, role.expires, include_done=True)
         hidden = 0
-        duty_ptr = (ptr_duty, ptr_ts) if role.id == ptr_role and ptr_duty else None
+        duty_ptr = [(did, ts) for did, ts in mine if did]
         for p in everything:                     # tier order; open duties never truncated
             if p.tier == DONE and not show_all and not touched_this_session(p.duty, session_id):
                 hidden += 1
                 continue
             lines.append(duty_line(p, at, duty_ptr, ansi, title_width))
         if hidden:
-            dim, reset = (ANSI_DIM, ANSI_RESET) if ansi else ("", "")
             lines.append(f"    {dim}({hidden} done/deferred hidden; task roles --all shows them){reset}")
     return lines
 

@@ -108,7 +108,54 @@ def test_one_pointer_follows_the_last_touch_across_roles(store, lab):
     store.note_role(other, of, "shelf audit")                         # a role-level note on an expanded role
     lines = disp.stanza(store, "focused", other.id, at=NOW, ansi=False)
     with_ptr = [l for l in lines if "👈" in l]
-    assert len(with_ptr) == 1 and with_ptr[0].startswith("◼ 📚 Corpus Librarian") and "🎯" in with_ptr[0]
+    # an expanded role's own line never carries 👈: the note hands it to the role's newest duty
+    assert len(with_ptr) == 1 and with_ptr[0].startswith("    ◻ 📌 intake")
+    assert not any("👈" in l and "🎯" in l for l in lines)
+    # collapsed again (unfocus): the pointer comes back up to the role line and 🎯 goes
+    lines = disp.stanza(store, "focused", None, at=NOW, ansi=False)
+    with_ptr = [l for l in lines if "👈" in l]
+    assert len(with_ptr) == 1 and with_ptr[0].startswith("◼ 📚 Corpus Librarian") and "🎯" not in with_ptr[0]
+
+
+def test_focused_role_line_shows_the_focus_age_not_a_duty_age(store, lab):
+    """The age beside 🎯 is bound to the focus event; a duty touched later
+    moves only the duty's 👈 age."""
+    role, folder = lab
+    d, _ = store.add_duty(role, folder, "board plan")
+    set_focus(role.id, None)
+    focus_at = time.time()
+    lines = disp.stanza(store, "focused", role.id, at=NOW, ansi=False)
+    assert lines[1].endswith("🎯 0m") and "👈" not in lines[1]
+    later = datetime.fromtimestamp(focus_at) + timedelta(hours=3)
+    time.sleep(1.1)
+    store.note_duty(d, folder, "drafted")
+    lines = disp.stanza(store, "focused", role.id, at=later, ansi=False)
+    assert lines[1].endswith("🎯 3h")                                  # the focus is 3h old
+    assert lines[2].endswith("👈 3h") or "👈" in lines[2]              # the duty line has its own age
+
+
+def test_parallel_engagement_shows_a_pointer_on_every_engaged_duty(store, lab):
+    """Several active duties = a deliberate parallel engagement; each gets 👈
+    so the operator sees the situation. One active duty = one pointer."""
+    role, folder = lab
+    (folder / "charter.md").write_text("# x\n## Boundaries\nMay draft. Must not contact anyone.\n")
+    a, ap = store.add_duty(role, folder, "alpha")
+    b, bp = store.add_duty(role, folder, "beta")
+    c, cp = store.add_duty(role, folder, "gamma")
+    store.engage_set([(a, ap), (b, bp)])
+    lines = disp.stanza(store, "focused", role.id, at=NOW, ansi=False)
+    with_ptr = [l for l in lines if "👈" in l]
+    assert len(with_ptr) == 2 and {l.split("📌 ")[1].split()[0] for l in with_ptr} == {"alpha", "beta"}
+    # collapsed: the role line carries the pointer once, at the newest age
+    lines = disp.stanza(store, "focused", None, at=NOW, ansi=False)
+    assert sum(l.count("👈") for l in lines) == 1
+    # an exclusive engage of gamma disengages both; back to one pointer
+    time.sleep(1.1)
+    store.engage(c, cp.parent)
+    assert {d.id for d, _ in store.engaged()} == {c.id}
+    lines = disp.stanza(store, "focused", role.id, at=NOW, ansi=False)
+    with_ptr = [l for l in lines if "👈" in l]
+    assert len(with_ptr) == 1 and "gamma" in with_ptr[0]
 
 
 def test_succinct_rule_for_completed_duties(store, lab, monkeypatch):

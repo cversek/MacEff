@@ -299,14 +299,23 @@ class RoleStore:
                                                  "reason": reason, "evidence": ev})
         return duty
 
-    def engage(self, duty: Duty, folder: Path, note: str = "", task_ids: Iterable[str] = ()) -> Duty:
-        """Attention is on this duty now: the duty's `task start`.
+    def engaged(self) -> List[Tuple[Duty, Path]]:
+        """Every active duty across the store: the duties attention is on."""
+        return [(d, p) for d, p in self.all_duties() if d.state == "active"]
 
-        pending/deferred -> active with an 'engage' update (a service, so the
-        gate's bound clears and the stanza pointer moves here). Focusing the
-        parent role is the caller's step, because focus is an event, not a
-        record. Tracking tasks may be attached in the same breath.
-        """
+    def disengage(self, duty: Duty, folder: Path, reason: str = "") -> Duty:
+        """active -> pending: attention moved elsewhere. Not a service: putting a
+        duty down does nothing for it, so the gate's bound does not move."""
+        if duty.state != "active":
+            return duty
+        duty.state = "pending"
+        duty.updates.append(_update("Disengaged" + (f": {reason}" if reason else ""), kind="disengage"))
+        self.save_duty(duty, folder)
+        append_event("duty_disengaged", {"duty_id": duty.id, "role_id": duty.role_id, "reason": reason})
+        return duty
+
+    def check_engageable(self, duty: Duty, folder: Path) -> None:
+        """The refusals engage applies before writing anything."""
         if duty.state == "done":
             raise RoleError(f"duty {duty.id} is done; reactivate is not a thing a done duty does (declare a new one)")
         # A role whose charter still carries the scaffold's Boundaries line has
@@ -317,6 +326,24 @@ class RoleStore:
             raise RoleError(f"the charter's Boundaries are still the scaffold ({charter}); write what this role "
                             "may do alone and what needs the operator's direction before engaging a duty "
                             "(roles policy: the charter)")
+
+    def engage(self, duty: Duty, folder: Path, note: str = "", task_ids: Iterable[str] = (),
+               exclusive: bool = True) -> Duty:
+        """Attention is on this duty now: the duty's `task start`.
+
+        pending/deferred -> active with an 'engage' update (a service, so the
+        gate's bound clears and the stanza pointer moves here). Engagement is
+        exclusive by default: every other active duty in the store is
+        disengaged first, because attention moved. A deliberate parallel
+        engagement passes exclusive=False (see engage_set). Focusing the
+        parent role is the caller's step, because focus is an event, not a
+        record. Tracking tasks may be attached in the same breath.
+        """
+        self.check_engageable(duty, folder)
+        if exclusive:
+            for other, opath in self.engaged():
+                if other.id != duty.id:
+                    self.disengage(other, opath.parent, reason=f"engaged {duty.id} instead")
         ids = self._check_tracks(task_ids)
         if ids:
             duty.tracks = sorted(set(duty.tracks) | set(ids), key=lambda s: (len(s), s))
@@ -328,6 +355,17 @@ class RoleStore:
         append_event("duty_serviced", {"duty_id": duty.id, "role_id": duty.role_id, "kind": "engage",
                                        "from_state": old, "tracks": ids})
         return duty
+
+    def engage_set(self, pairs: List[Tuple[Duty, Path]], note: str = "", task_ids: Iterable[str] = ()) -> List[Duty]:
+        """One command, several duties: the deliberate parallel engagement.
+        Everything outside the set is disengaged; the set is engaged together."""
+        keep = {d.id for d, _ in pairs}
+        for d, p in pairs:
+            self.check_engageable(d, p.parent)
+        for other, opath in self.engaged():
+            if other.id not in keep:
+                self.disengage(other, opath.parent, reason="engaged " + ", ".join(sorted(keep)) + " instead")
+        return [self.engage(d, p.parent, note, task_ids, exclusive=False) for d, p in pairs]
 
     def link(self, duty: Duty, folder: Path, task_ids: Iterable[str]) -> Duty:
         ids = self._check_tracks(task_ids)

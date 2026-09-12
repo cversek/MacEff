@@ -28,13 +28,14 @@ Read the sections on what a duty is, lifecycle, time properties (due, horizon, c
 6. **Tiers** - What tier will this duty land in, and how can I ask why?
 7. **Nesting** - May a duty have sub-duties, and what should be done instead?
 8. **Boundaries** - What does the role's charter say it may do alone and what needs the operator's direction, and what does the policy say a duty never authorizes toward third parties?
+9. **Engagement** - What does engaging a duty do to the other active duties, how is a deliberate parallel engagement declared, and what does the command show?
 
 ---
 
 ## Execution
 
 - Declare: `macf_tools role duty add <role> "<title>" [--due|--cadence] --horizon <Nd> --why "<reasoning>" [--importance] [--depends-on] [--tracks]`.
-- Take it up: `macf_tools role duty engage <duty> [--note] [--tracks N]` (the duty's task start: active, noted, its role focused).
+- Take it up: `macf_tools role duty engage <duty> [--note] [--tracks N]` (the duty's task start: active, noted, its role focused, the others disengaged); several ids in one command for a parallel engagement.
 - Point at work: `macf_tools role duty link <duty> <task ids>`; note progress: `macf_tools role duty note <duty> "<text>"`.
 - A cadence occurrence: `macf_tools role duty note <duty> "<text>" --done-on YYYY-MM-DD`.
 - Satisfied: `macf_tools role duty done <duty> --evidence <completed task id or CA path>`; no longer owed: `macf_tools role duty defer <duty> --reason "<why>"`.

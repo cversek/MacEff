@@ -287,6 +287,37 @@ def cmd_duty_add(args: argparse.Namespace) -> int:
     return 0
 
 
+def print_duty_view(store: RoleStore, duty: Duty, path, role: Role, indent: str = "") -> None:
+    """The formatted information view of one duty (what `duty show` prints)."""
+    print(indent + _duty_line(duty))
+    print(f"{indent}   role:    {role.icon} {role.title} ({role.id})")
+    if duty.body:
+        print(f"{indent}   body:    {duty.body}")
+    if duty.depends_on:
+        print(f"{indent}   after:   {', '.join(duty.depends_on)}")
+    for tid, status, subject in store.live_tracks(duty):
+        print(f"{indent}   tracks:  #{tid} [{status or 'missing'}] {subject or ''}")
+    for ev in duty.evidence:
+        print(f"{indent}   evidence: {ev}")
+    if duty.wiki_links:
+        print(f"{indent}   links:   {' '.join('[[' + w + ']]' for w in duty.wiki_links)}")
+    print(f"{indent}   path:    {path}")
+    for u in duty.updates:
+        extra = f" (done_on {u.done_on})" if u.done_on else ""
+        print(f"{indent}     {u.at}  {u.kind:<8} {u.description}{extra}")
+
+
+def print_charter(folder) -> None:
+    """The role's charter, verbatim: the Boundaries have to be where the decision is made."""
+    charter = folder / "charter.md"
+    if not charter.exists():
+        print(f"   (no charter at {charter})")
+        return
+    print(f"── charter: {charter} ──")
+    print(charter.read_text().rstrip())
+    print("── end charter ──")
+
+
 def cmd_duty_show(args: argparse.Namespace) -> int:
     store = RoleStore()
     try:
@@ -300,22 +331,7 @@ def cmd_duty_show(args: argparse.Namespace) -> int:
         rec["live_tracks"] = [{"task": t, "status": s, "subject": sub} for t, s, sub in store.live_tracks(duty)]
         print(json.dumps(rec, indent=2))
         return 0
-    print(_duty_line(duty))
-    print(f"   role:    {role.icon} {role.title} ({role.id})")
-    if duty.body:
-        print(f"   body:    {duty.body}")
-    if duty.depends_on:
-        print(f"   after:   {', '.join(duty.depends_on)}")
-    for tid, status, subject in store.live_tracks(duty):
-        print(f"   tracks:  #{tid} [{status or 'missing'}] {subject or ''}")
-    for ev in duty.evidence:
-        print(f"   evidence: {ev}")
-    if duty.wiki_links:
-        print(f"   links:   {' '.join('[[' + w + ']]' for w in duty.wiki_links)}")
-    print(f"   path:    {path}")
-    for u in duty.updates:
-        extra = f" (done_on {u.done_on})" if u.done_on else ""
-        print(f"     {u.at}  {u.kind:<8} {u.description}{extra}")
+    print_duty_view(store, duty, path, role)
     return 0
 
 
@@ -380,30 +396,59 @@ def cmd_duty_reactivate(args: argparse.Namespace) -> int:
 
 
 def cmd_duty_engage(args: argparse.Namespace) -> int:
-    """The duty's `task start`: active, a breadcrumbed engage note, the role focused."""
+    """The duty's `task start`: active, a breadcrumbed engage note, the role focused.
+
+    One duty is the normal case and it is exclusive: any other active duty is
+    disengaged, because attention moved. Several duties in one command is the
+    deliberate parallel engagement. Either way the command shows the view of
+    every duty it engaged and the role's charter, so the Boundaries are in
+    front of the agent at the moment the reflex fires.
+    """
     from .focus import current_focus, set_focus
     store = RoleStore()
     try:
-        duty, path = store.find_duty(args.duty)
-        role, folder = store.role_of(duty)
+        pairs = []
+        for ref in args.duty:
+            duty, path = store.find_duty(ref)
+            if all(d.id != duty.id for d, _ in pairs):
+                pairs.append((duty, path))
+        roles = {store.role_of(d)[0].id: store.role_of(d) for d, _ in pairs}
+        if len(roles) > 1:
+            raise RoleError("a parallel engagement stays inside one role (focus is one role); engage "
+                            + ", ".join(f"{r.icon} {r.title}" for r, _ in roles.values()) + " separately")
+        role, folder = next(iter(roles.values()))
         if role.state != "active":
             raise RoleError(f"{role.title} is {role.state}; engage a duty of an active role")
-        store.engage(duty, path.parent, args.note or "", _csv(args.tracks))
+        was_active = {d.id for d, _ in store.engaged()}
+        if len(pairs) == 1:
+            duties = [store.engage(pairs[0][0], pairs[0][1].parent, args.note or "", _csv(args.tracks))]
+        else:
+            duties = store.engage_set(pairs, args.note or "", _csv(args.tracks))
+        dropped = sorted(was_active - {d.id for d in duties})
         previous = current_focus()
         refocused = previous != role.id
         if refocused:
-            set_focus(role.id, previous, note=f"engaged duty {duty.id}")
+            set_focus(role.id, previous, note="engaged " + ", ".join(d.id for d in duties))
     except RoleError as e:
         return _fail(e, args.json)
     if args.json:
-        rec = dump(duty); rec["focused_role"] = role.id; rec["refocused"] = refocused
+        rec = {"engaged": [dump(d) for d in duties], "disengaged": dropped,
+               "focused_role": role.id, "refocused": refocused}
         print(json.dumps(rec, indent=2))
         return 0
-    print(f"▶️  engaged 📌 {duty.title}  ({role.icon} {role.title})")
+    if len(duties) > 1:
+        print(f"▶️  PARALLEL engagement: {len(duties)} duties of {role.icon} {role.title}")
+    for d in duties:
+        print(f"▶️  engaged 📌 {d.title}  ({role.icon} {role.title})")
+    if dropped:
+        print(f"   ⏸ disengaged {', '.join(dropped)} (attention moved)")
     if refocused:
         print(f"   🎯 focused {role.icon} {role.title}" + (f" (was {previous})" if previous else ""))
-    if duty.tracks:
-        print(f"   tracks {', '.join('#' + t for t in duty.tracks)}")
+    print()
+    for d, p in pairs:
+        print_duty_view(store, d, p, role)
+        print()
+    print_charter(folder)
     return 0
 
 
@@ -527,6 +572,7 @@ def cmd_role_focus(args: argparse.Namespace) -> int:
     pending = due_now_unserviced(role, [d for d, _ in store.duties(folder)], at)
     if pending:
         print("   due now, unserviced: " + "; ".join(f"{p.duty.title} ({duty_mark(p, at)})" for p in pending))
+    print_charter(folder)
     return 0
 
 
@@ -675,8 +721,9 @@ def add_role_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("duty"); p.add_argument("--reason", default="")
     js(p); p.set_defaults(func=cmd_duty_reactivate)
 
-    p = ds.add_parser("engage", help="attention is on this duty now: active, noted, its role focused (the duty's task start)")
-    p.add_argument("duty")
+    p = ds.add_parser("engage", help="attention is on this duty now: active, noted, its role focused (the duty's "
+                                     "task start); other active duties are disengaged; several ids = a parallel engagement")
+    p.add_argument("duty", nargs="+", help="one id (exclusive) or several (deliberate parallel engagement)")
     p.add_argument("--note", help="what you are setting out to do")
     p.add_argument("--tracks", action="append", help="task ids implementing it, comma-separated")
     js(p); p.set_defaults(func=cmd_duty_engage)
