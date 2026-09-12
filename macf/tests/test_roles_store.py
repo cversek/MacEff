@@ -319,3 +319,151 @@ def test_migrate_a_position_and_its_duties_from_tasks(store, tasks, capsys):
     assert [u["kind"] for u in duty["updates"]] == ["migrated", "declare"]
     assert _run(["role", "create", "--from-task", "999"]) == 1
     assert "does not exist" in capsys.readouterr().out
+
+
+def test_engage_is_the_dutys_task_start(store, lab, capsys):
+    """active, an engage update, tracks attached, the role focused; done refuses."""
+    from macf.roles.focus import current_focus
+    role, folder = lab
+    charter = folder / "charter.md"                                   # the fixture's charter is the scaffold
+    charter.write_text(charter.read_text().replace("What this role may do, and what it must not.",
+                       "May draft plans in the spoke. Must not contact anyone without direction."))
+    d, _ = store.add_duty(role, folder, "board plan")
+    assert current_focus() is None
+    assert _run(["role", "duty", "engage", "board", "--note", "drafting from the handout", "--tracks", "8"]) == 0
+    out = capsys.readouterr().out
+    assert "engaged 📌 board plan" in out and "focused 🎓" in out and "tracks #8" in out
+    d2, _ = store.find_duty(d.id)
+    assert d2.state == "active" and d2.tracks == ["8"] and d2.updates[-1].kind == "engage"
+    assert current_focus() == role.id
+    assert _run(["role", "duty", "engage", "board"]) == 0             # again: no refocus line
+    out = capsys.readouterr().out
+    assert "🎯 focused" not in out
+    assert "── charter:" in out and "Must not contact anyone" in out  # the Boundaries are printed at engage
+    assert "   path:" in out and "engage" in out                      # the duty's own view is printed
+    store.advance_duty(d2, folder, "done", evidence=["7"])
+    assert _run(["role", "duty", "engage", "board"]) == 1
+    assert "is done" in capsys.readouterr().out
+
+
+def test_engage_refuses_a_role_whose_boundaries_are_the_scaffold(store, capsys):
+    """Policy: an undescribed role cannot be worked; working it is how an agent over-reaches."""
+    role, folder = store.create_role("Lab Course Assistant", icon="🎓")   # scaffold charter
+    d, _ = store.add_duty(role, folder, "confirm the group")
+    assert _run(["role", "duty", "engage", "confirm"]) == 1
+    assert "Boundaries are still the scaffold" in capsys.readouterr().out
+    charter = folder / "charter.md"
+    charter.write_text(charter.read_text().replace("What this role may do, and what it must not.",
+                       "May read the mail. Must not contact anyone without direction."))
+    assert _run(["role", "duty", "engage", "confirm"]) == 0
+
+
+def test_engage_is_exclusive_and_parallel_is_one_command(store, lab, capsys):
+    """Engaging a second duty disengages the first (not a service); several ids
+    in one command engage together; a done duty in the set refuses the whole set."""
+    role, folder = lab
+    (folder / "charter.md").write_text("# x\n## Boundaries\nMay draft. Must not contact anyone.\n")
+    a, _ = store.add_duty(role, folder, "alpha")
+    b, _ = store.add_duty(role, folder, "beta")
+    c, _ = store.add_duty(role, folder, "gamma")
+    assert _run(["role", "duty", "engage", "alpha"]) == 0
+    assert _run(["role", "duty", "engage", "beta"]) == 0
+    out = capsys.readouterr().out
+    assert f"disengaged D{a.id}" in out
+    a2, _ = store.find_duty(a.id)
+    assert a2.state == "pending" and a2.updates[-1].kind == "disengage"
+    assert {d.id for d, _ in store.engaged()} == {b.id}
+    assert _run(["role", "duty", "engage", "alpha", "gamma"]) == 0
+    out = capsys.readouterr().out
+    assert "PARALLEL engagement: 2 duties" in out and f"disengaged D{b.id}" in out
+    assert out.count("   path:") == 2 and out.count("── charter:") == 1
+    assert {d.id for d, _ in store.engaged()} == {a.id, c.id}
+    store.advance_duty(c, folder, "done", evidence=["7"])
+    assert _run(["role", "duty", "engage", "alpha", "gamma"]) == 1  # nothing written for a bad set
+    assert "is done" in capsys.readouterr().out
+    assert {d.id for d, _ in store.engaged()} == {a.id}
+
+
+def test_disengage_is_not_a_service(store, lab):
+    """Putting a due-now duty down must not clear the gate's bound."""
+    from datetime import datetime, timedelta
+    from macf.roles import hooks as rh
+    from macf.roles.priority import now
+    role, folder = lab
+    (folder / "charter.md").write_text("# x\n## Boundaries\nMay draft. Must not contact anyone.\n")
+    late = datetime(now().year, now().month, now().day) - timedelta(days=1)
+    d, p = store.add_duty(role, folder, "late one", due=late, horizon="1d", why="w")
+    o, op = store.add_duty(role, folder, "other")
+    assert [x.duty.id for x in rh.due_now_unserviced(role, [d, o], now())] == [d.id]
+    store.engage(d, p.parent)                     # a service
+    assert rh.due_now_unserviced(role, [store.find_duty(d.id)[0], o], now()) == []
+    d2, _ = store.find_duty(d.id)
+    d2.updates = [u for u in d2.updates if u.kind != "engage"]   # forget the service, keep the state
+    store.disengage(d2, p.parent)
+    assert [x.duty.id for x in rh.due_now_unserviced(role, [store.find_duty(d.id)[0], o], now())] == [d.id]
+
+
+def test_focus_prints_the_charter(store, lab, capsys):
+    role, folder = lab
+    (folder / "charter.md").write_text("# x\n## Boundaries\nMay draft. Must not contact anyone.\n")
+    assert _run(["role", "focus", "Lab"]) == 0
+    out = capsys.readouterr().out
+    assert "🎯 focused 🎓" in out and "── charter:" in out and "Must not contact anyone" in out
+
+
+def test_session_start_carries_the_focused_charter(store, lab):
+    from macf.roles.hooks import charter_context
+    from macf.hooks.handle_session_start import _focused_charter_block
+    role, folder = lab
+    assert charter_context() == "" and _focused_charter_block() == ""
+    (folder / "charter.md").write_text("# x\n## Boundaries\nMay draft. Must not contact anyone.\n")
+    d, p = store.add_duty(role, folder, "alpha")
+    store.engage(d, p.parent)
+    from macf.roles.focus import set_focus
+    set_focus(role.id, None)
+    block = _focused_charter_block()
+    assert block.startswith("\n<system-reminder>") and "You hold the role 🎓" in block
+    assert "Engaged duties: alpha" in block and "Must not contact anyone" in block
+
+
+def test_code_shorthand_resolves_by_unique_prefix_and_refuses_ambiguity(store, lab, capsys):
+    """D442, D442..., d442d91 and a bare 442 all reach the duty; an ambiguous
+    prefix lists the candidates and asks; roles take R the same way."""
+    role, folder = lab
+    a, _ = store.add_duty(role, folder, "alpha")
+    b, _ = store.add_duty(role, folder, "beta")
+    for ref in (f"D{a.id}", f"d{a.id[:4]}", f"D{a.id[:3]}...", a.id[:5]):
+        assert store.find_duty(ref)[0].id == a.id, ref
+    assert store.find_role(f"R{role.id[:3]}")[0].id == role.id
+    assert store.find_role(f"R{role.id}...")[0].id == role.id
+    common = a.id[:1] if a.id[0] == b.id[0] else ""
+    if common:
+        with pytest.raises(RoleError) as e:
+            store.find_duty(f"D{common}")
+        assert "ambiguous" in str(e.value) and "say which" in str(e.value)
+    assert _run(["role", "duty", "show", f"D{a.id[:4]}"]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith(f"◻ D{a.id} 📌 alpha")                       # the code before the pin
+
+
+def test_no_charter_is_honoured_only_after_a_first_showing(store, lab, capsys, monkeypatch):
+    """--no-charter is ignored until the charter was shown this session; then it
+    skips the repeat; a changed charter prints again."""
+    import os, time
+    role, folder = lab
+    charter = folder / "charter.md"
+    charter.write_text("# x\n## Boundaries\nMay draft. Must not contact anyone.\n")
+    assert _run(["role", "focus", "Lab", "--no-charter"]) == 0
+    out = capsys.readouterr().out
+    assert "--no-charter ignored" in out and "Must not contact anyone" in out   # printed anyway, once
+    from macf.roles.focus import set_focus
+    set_focus(None, role.id)
+    assert _run(["role", "focus", "Lab", "--no-charter"]) == 0
+    out = capsys.readouterr().out
+    assert "charter not repeated" in out and "Must not contact anyone" not in out
+    time.sleep(1.1)
+    charter.write_text("# x\n## Boundaries\nMay draft. Must not contact anyone. Revised.\n")
+    set_focus(None, role.id)
+    assert _run(["role", "focus", "Lab", "--no-charter"]) == 0
+    out = capsys.readouterr().out
+    assert "changed since" in out and "Revised." in out
