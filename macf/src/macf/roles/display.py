@@ -70,6 +70,14 @@ def role_pointer(duties: Sequence[Duty]) -> Tuple[Optional[str], float]:
     return best, best_ts
 
 
+def fit(text: str, width: Optional[int]) -> str:
+    """Trim free text to *width* visible characters with the tree's '...' convention.
+    0 or None disables, as --title-width 0 does for the tree."""
+    if not width or width <= 0 or len(text) <= width:
+        return text
+    return text[:max(1, width - 3)].rstrip() + "..."
+
+
 def _when(d: Duty) -> str:
     if d.due:
         return d.due.strftime("due %a %m-%d") + (d.due.strftime(" %H:%M") if (d.due.hour or d.due.minute) else "")
@@ -79,23 +87,30 @@ def _when(d: Duty) -> str:
 
 
 def role_line(role: Role, placed: List[Placement], all_duties: Sequence[Duty], focused: bool,
-              at: datetime, ansi: bool = True, collapsed: bool = False) -> str:
+              at: datetime, ansi: bool = True, collapsed: bool = False,
+              title_width: Optional[int] = 80) -> str:
+    """One role line. Titles are trimmed to *title_width* the way the tree trims
+    task titles (40 in succinct mode, 80 otherwise); the collapsed line's last/next
+    labels get half that, since they are context, not the subject."""
     dim, reset = (ANSI_DIM, ANSI_RESET) if ansi else ("", "")
     state = f"[{role.state}"
     if role.review_by:
         state += f" · review {role.review_by:%m-%d}"
     state += "]"
     mark = most_urgent_mark([duty_mark(p, at) for p in placed] + [review_mark(role, at)])
-    line = f"{BOX.get(role.state, '?')} {role.icon} {role.title}  {dim}{state}{reset}"
+    line = f"{BOX.get(role.state, '?')} {role.icon} {fit(role.title, title_width)}  {dim}{state}{reset}"
     if collapsed:
+        half = (title_width // 2) if title_width else None
         ptr_id, ptr_ts = role_pointer(all_duties)
         last = next((d for d in all_duties if d.id == ptr_id), None)
         nxt = next((p for p in placed if p.occurrence is not None and p.tier != DONE), None)
         bits = []
-        if last is not None:
-            bits.append(f"last: {last.title} ({rel_age(ptr_ts, at.timestamp())})")
+        # In the scanning view (title_width <= 40) the 👈 age already says when
+        # the role was last touched; only 'next' earns its columns there.
+        if last is not None and (half is None or half > 20):
+            bits.append(f"last: {fit(last.title, half)} ({rel_age(ptr_ts, at.timestamp())})")
         if nxt is not None:
-            bits.append(f"next: {nxt.duty.title} ({nxt.occurrence:%m-%d})")
+            bits.append(f"next: {fit(nxt.duty.title, half)} ({nxt.occurrence:%m-%d})")
         if bits:
             line += f"  {dim}· " + " · ".join(bits) + reset
     if mark:
@@ -105,7 +120,8 @@ def role_line(role: Role, placed: List[Placement], all_duties: Sequence[Duty], f
     return line
 
 
-def duty_line(p: Placement, at: datetime, pointer: Optional[Tuple[str, float]] = None, ansi: bool = True) -> str:
+def duty_line(p: Placement, at: datetime, pointer: Optional[Tuple[str, float]] = None, ansi: bool = True,
+              title_width: Optional[int] = 80) -> str:
     dim, reset = (ANSI_DIM, ANSI_RESET) if ansi else ("", "")
     d = p.duty
     box = BOX.get(d.state, "?")
@@ -113,7 +129,7 @@ def duty_line(p: Placement, at: datetime, pointer: Optional[Tuple[str, float]] =
         box = f"{ANSI_GREEN}✔{ANSI_RESET}"
     when = _when(d)
     imp = "" if d.importance == "normal" else f" ({d.importance.upper()})"
-    line = f"    {box} 📌 {d.title}{imp}"
+    line = f"    {box} 📌 {fit(d.title, title_width)}{imp}"
     if when:
         line += f"  {dim}{when}{reset}"
     mark = duty_mark(p, at)
@@ -126,7 +142,7 @@ def duty_line(p: Placement, at: datetime, pointer: Optional[Tuple[str, float]] =
 
 def stanza(store: RoleStore, mode: str = "focused", focused_id: Optional[str] = None,
            session_id: Optional[str] = None, at: Optional[datetime] = None, ansi: bool = True,
-           show_all: bool = False) -> List[str]:
+           show_all: bool = False, title_width: Optional[int] = 80) -> List[str]:
     """Lines for the 🎭 ROLES stanza. Empty when there are no roles or mode is none."""
     if mode == "none":
         return []
@@ -142,11 +158,12 @@ def stanza(store: RoleStore, mode: str = "focused", focused_id: Optional[str] = 
         expanded = mode == "all" or show_all or (mode == "focused" and role.id == focused_id)
         pointer = role_pointer(duties)
         if not expanded:
-            lines.append(role_line(role, placed, duties, role.id == focused_id, at, ansi, collapsed=True)
+            lines.append(role_line(role, placed, duties, role.id == focused_id, at, ansi, collapsed=True,
+                                   title_width=title_width)
                          + (f"  👈 {ANSI_DIM if ansi else ''}{rel_age(pointer[1], at.timestamp())}{ANSI_RESET if ansi else ''}"
                             if pointer[0] else ""))
             continue
-        head = role_line(role, placed, duties, role.id == focused_id, at, ansi)
+        head = role_line(role, placed, duties, role.id == focused_id, at, ansi, title_width=title_width)
         if pointer[0]:
             head += f"  👈 {ANSI_DIM if ansi else ''}{rel_age(pointer[1], at.timestamp())}{ANSI_RESET if ansi else ''}"
         lines.append(head)
@@ -156,7 +173,7 @@ def stanza(store: RoleStore, mode: str = "focused", focused_id: Optional[str] = 
             if p.tier == DONE and not show_all and not touched_this_session(p.duty, session_id):
                 hidden += 1
                 continue
-            lines.append(duty_line(p, at, pointer, ansi))
+            lines.append(duty_line(p, at, pointer, ansi, title_width))
         if hidden:
             dim, reset = (ANSI_DIM, ANSI_RESET) if ansi else ("", "")
             lines.append(f"    {dim}({hidden} done/deferred hidden; task roles --all shows them){reset}")
