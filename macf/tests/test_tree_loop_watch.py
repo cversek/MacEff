@@ -221,3 +221,47 @@ class TestArchivedDescendantDoesNotPinTheChain(TestLoopWatchIsActuallyWired):
         out = self._render(monkeypatch, capsys, loop=False,
                            tasks_factory=self._archived_case)
         assert "OPEN-CHAIN" in out
+
+
+class TestTheLoopRedrawsOnlyForDisplayEvents:
+    """The events log grows by a line per tool call. Watching its mtime redrew the
+    loop every second while the agent worked, though nothing on screen changed.
+    Only events the tree renders -- scope, focus, work mode, task lifecycle --
+    may move the display clock."""
+
+    def _log(self, tmp_path, monkeypatch):
+        from macf import cli
+        log = tmp_path / "ev.jsonl"
+        log.write_text("")
+        cli._display_events_state.update(path=None, offset=0, mtime=0.0)
+        return log
+
+    def _append(self, log, event, ts):
+        import json
+        with open(log, "a") as f:
+            f.write(json.dumps({"timestamp": ts, "event": event, "data": {}}) + "\n")
+
+    def test_activity_lines_do_not_move_the_display_clock(self, tmp_path, monkeypatch):
+        from macf import cli
+        log = self._log(tmp_path, monkeypatch)
+        self._append(log, "scope_activated", 100.0)
+        assert cli._display_events_mtime(log) == 100.0
+        for i in range(50):
+            self._append(log, "tool_call_started", 200.0 + i)
+            self._append(log, "cli_command_invoked", 200.5 + i)
+        assert cli._display_events_mtime(log) == 100.0           # fifty appends, no redraw
+        self._append(log, "role_focus_change", 300.0)
+        assert cli._display_events_mtime(log) == 300.0
+        self._append(log, "scope_paused", 301.0)
+        assert cli._display_events_mtime(log) == 301.0
+
+    def test_a_rotated_log_resets_the_cursor(self, tmp_path, monkeypatch):
+        from macf import cli
+        log = self._log(tmp_path, monkeypatch)
+        self._append(log, "scope_activated", 100.0)
+        for _ in range(20):
+            self._append(log, "tool_call_started", 150.0)
+        assert cli._display_events_mtime(log) == 100.0
+        log.write_text("")                                        # rotated
+        self._append(log, "work_mode_change", 400.0)
+        assert cli._display_events_mtime(log) == 400.0
