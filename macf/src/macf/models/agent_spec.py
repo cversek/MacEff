@@ -229,7 +229,7 @@ class ConsciousnessArtifactsConfig(BaseModel):
     )
     public: Optional[List[str]] = Field(
         default=None,
-        description="Public artifact types (roadmaps, reports, observations, experiments, delegation_trails)"
+        description="Public artifact types (roadmaps, reports, observations, experiments, ideas, roles, delegation_trails)"
     )
     immutable_structure: bool = Field(
         default=True,
