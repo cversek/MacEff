@@ -300,6 +300,32 @@
         ]
       },
       {
+        "name": "roles",
+        "short_name": "ROLES",
+        "path": "base/consciousness/roles.md",
+        "CEP_triggers": [
+          "What is a ROLE, and how does it differ from a task and from a subagent role?",
+          "What is a DUTY, and why is it a declaration rather than a piece of work?",
+          "How do I reason a horizon for a duty when the operator did not supply one?",
+          "What are the priority tiers and what fact puts a duty in each?",
+          "Where does the roles stanza appear in task tree and what is its line grammar?",
+          "What does focus do in the hooks, and what bounds the Stop gate?",
+          "How is a role assigned, and how many should an agent hold?",
+          "What evidence does duty done require?"
+        ],
+        "keywords": [
+          "role",
+          "duty",
+          "focus",
+          "horizon",
+          "calendar",
+          "tenure",
+          "review",
+          "charter",
+          "standing"
+        ]
+      },
+      {
         "name": "checkpoints",
         "short_name": "CCP",
         "path": "base/consciousness/checkpoints.md",
@@ -1178,6 +1204,22 @@
           "accumulated"
         ],
         "policy": "base/consciousness/learnings.md"
+      },
+      "roles": {
+        "name": "roles",
+        "emoji": "\ud83c\udfad",
+        "description": "Standing positions (appointments with tenure and review) and their time-relevant duties",
+        "discovery_keys": [
+          "role",
+          "roles",
+          "duty",
+          "duties",
+          "focus",
+          "charter",
+          "tenure",
+          "standing_position"
+        ],
+        "policy": "base/consciousness/roles.md"
       }
     }
   },
@@ -1221,6 +1263,13 @@
       "SENTINEL": [
         "core_principles",
         "policy_awareness"
+      ],
+      "ROLE": [
+        "roles",
+        "task_management"
+      ],
+      "DUTY": [
+        "roles"
       ]
     },
     "lang_extensions": {
@@ -1262,6 +1311,9 @@
     ],
     "cep": [
       "policy_awareness#cep-navigation"
+    ],
+    "charter": [
+      "base/consciousness/roles"
     ],
     "checkpoint": [
       "base/consciousness/checkpoints",
@@ -1329,6 +1381,9 @@
     "dual_trace": [
       "base/consciousness/emotional_expression"
     ],
+    "duty": [
+      "base/consciousness/roles"
+    ],
     "egress": [
       "base/infrastructure/capability_boundaries"
     ],
@@ -1365,6 +1420,9 @@
     ],
     "feelings": [
       "base/consciousness/emotional_expression"
+    ],
+    "focus": [
+      "base/consciousness/roles"
     ],
     "git": [
       "base/development/git_discipline"
@@ -1513,6 +1571,12 @@
     "roadmaps": [
       "base/consciousness/roadmaps_drafting",
       "base/consciousness/roadmaps_following"
+    ],
+    "role": [
+      "base/consciousness/roles"
+    ],
+    "roles": [
+      "base/consciousness/roles"
     ],
     "skepticism": [
       "base/philosophy/empiricism"

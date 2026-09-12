@@ -203,6 +203,8 @@ Framework evolution required for new types:
 
 **When Justified**: Clear semantic distinction, community consensus, benefits all agents.
 
+**Example**: `agent/public/roles/` (standing positions and their duties, `roles.md`) was added on exactly this path -- a distinct claim the task store could not express, its own policy, then the schema and `start.py` so every provisioned agent has the directory.
+
 ---
 
 ## 4 Opting Out

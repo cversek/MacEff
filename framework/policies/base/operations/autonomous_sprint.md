@@ -334,6 +334,8 @@ At every Stop hook firing, check:
 - End-of-sprint resolution clears the gate when concrete work is exhausted; the parents-only state is the legitimate carry-through state
 - The pause justification for umbrella parents is the SAME as for any cycle-spanning structural deferral: "this work continues per roadmap; this cycle's scope is delivered"
 
+**Standing positions are not umbrellas.** A role (`roles.md`) -- a custody, an assistantship, an on-call seat -- is never in sprint scope and never a parent whose children must be done-or-paused; it lives on its own axis and ranks its duties by tier. If the only thing keeping the gate blocking is a position held as a task, the remedy is migration to a role, not the end-of-sprint pause. The focus gate a focused role adds to the Stop hook composes with this scope gate by concatenating reasons and shares the one idle-stop failsafe.
+
 **Anti-pattern**: holding the gate open indefinitely on mission parents while idle-looping, curating excessively, or producing make-work. The sprint has natural completion when scope is fully resolved (active children done + parents paused-or-completed).
 
 #### 3.3.4 Compaction Trigger Mechanics — Generative Output Pushes the Edge

@@ -1,35 +1,24 @@
 #!/usr/bin/env python3
 """Integration tests for SessionStart hook execution.
 
-SKIPPED PENDING GH #330. Executing these tests runs the SessionStart hook as a
-subprocess, and that hook resolves the machine's REAL Telegram credentials --
-resolve_telegram_config() reads ~/.claude/channels/telegram/ and does not honour
-TELEGRAM_STATE_DIR. Running this module sends live messages to a real person.
+These run the hook as a REAL subprocess. Until GH #330's guard landed the module
+was skipped outright: the hook resolved the machine's live Telegram credentials
+from ~/.claude/channels/telegram/ and every run messaged a real person, so the
+harm was the execution and only a skip helped. The autouse fixture now sets
+MACF_CHANNELS_DISABLED=1, the resolver honours it before reading any file, and
+the child interpreter inherits the environment -- the one thing that crosses the
+process boundary an in-process patch cannot.
 
-skip rather than xfail, deliberately: xfail still EXECUTES the test and would
-keep sending the messages while reporting the failure as expected. The harm here
-is the execution, not the assertion, so the only marker that helps is one that
-prevents the run.
+Kept in the live suite: it needs an installed hook and a real subprocess.
 
-The tests themselves are not wrong. The performance assertion in particular was
-an honest witness: measured, the hook costs 0.58s against a populated event log
-and 3.24s against an empty one, and an empty log is what isolation produces. It
-was reporting a genuine cliff on the path every fresh install takes.
-
-REMOVAL CONDITION: delete this marker when #330 lands. Phase 4 of the v0.6 work
-then relocates this module to the live suite, since it needs a real subprocess
-either way.
+The performance assertion is an honest witness: measured, the hook costs 0.58s
+against a populated event log and 3.24s against an empty one when it reached the
+network; with the guard it must not reach the network at all.
 """
 
 import pytest
 
-pytestmark = [
-    pytest.mark.live,
-    pytest.mark.skip(
-        reason="GH #330: executing these tests sends real Telegram messages "
-               "(hook resolves live credentials; TELEGRAM_STATE_DIR is not consulted)"
-    ),
-]
+pytestmark = [pytest.mark.live]
 
 import json
 import subprocess

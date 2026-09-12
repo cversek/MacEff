@@ -165,16 +165,40 @@ def _read_chat_id(config_dir: Path) -> Optional[str]:
         return None
 
 
+CHANNELS_DISABLED_ENV = "MACF_CHANNELS_DISABLED"
+
+
+def channels_disabled() -> bool:
+    """True when the environment forbids every outbound channel send.
+
+    ``MACF_CHANNELS_DISABLED=1`` is the guard GH #330 asked for: an explicit
+    opt-out that no automated context can miss. It is an environment variable
+    rather than a flag or a monkeypatch because the hazard crosses process
+    boundaries -- a test that spawns a hook or ``macf_tools`` gets a fresh
+    interpreter where an in-process patch does not exist, and the environment
+    is the only thing the child inherits. Measured before this guard: a full
+    test run on a machine with a user-level channel delivered its messages to
+    the person behind that channel.
+
+    Any value other than empty, ``0``, ``false`` or ``no`` disables.
+    """
+    v = os.environ.get(CHANNELS_DISABLED_ENV, "").strip().lower()
+    return v not in ("", "0", "false", "no")
+
+
 def resolve_telegram_config() -> Optional[Tuple[str, str]]:
     """Resolve Telegram bot token and chat ID with multi-tier fallback.
 
     Resolution order:
+    0. ``MACF_CHANNELS_DISABLED`` set -> None, before any file is read
     1. Project-level: {project_root}/.claude/channels/telegram/
     2. User-level: ~/.claude/channels/telegram/
 
     Returns:
         Tuple of (token, chat_id) if configured, None otherwise.
     """
+    if channels_disabled():
+        return None
     # Tier 1: Project-level
     try:
         from macf.utils.paths import find_project_root

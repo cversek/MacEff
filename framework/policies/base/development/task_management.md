@@ -308,6 +308,8 @@ updates:
 | 🏃 | SPRINT | ⚠️ XOR | Workload-defined autonomous session (sprint_log.md OR plan_ca_ref) |
 | ⏲️ | PLAY_TIME | ✅ play_log.md | Time-bounded autonomous play with mode chain |
 
+**Not task types**: 🎭 ROLE and 📌 DUTY are markers of the *roles* store (`agent/public/roles/`), a parallel system governed by `roles.md`. A standing position -- custody of a corpus, an assistantship for a term -- is a role, not a TASK kept `in_progress` by hand; the tree renders roles in their own stanza below the main tree, and none of this policy's open-parent mechanisms (trace frames, stale-resume, cascade start, completion guard, finalization reminder) apply to them.
+
 **Lightweight Phase Annotation**: For phases WITHOUT detailed subplan CAs, use `-` prefix:
 ```
 - Phase 1: Core CLI Commands
@@ -1612,6 +1614,8 @@ These five are **exhaustive**: attention is here, or below here, or the frame wa
 **Enclosure is about where attention *is*, not about what is open underneath.** The tempting shortcut — treat any frame with an in-progress descendant as enclosing — absolves a parent that was dropped *together with* its child. If attention is on an unrelated frame, an ancestor and its descendant are both dropped, and both should say so. The correct test walks up from the active frame.
 
 **Whatever is recommended for resumption must be a frame that was actually dropped.** The classification is read; the recommendation is *acted on*. Pointing an agent at a parked frame sends it at something legitimately waiting on a blocker, and pointing it at an enclosing frame sends it at an ancestor of where it already is — both at the moment of a discontinuity, when the agent has least context with which to notice the advice is wrong.
+
+**Roles and duties are not frames.** Tasks are owed; duties are due. A standing position held as a role (`roles.md`) never enters the stack, and its duties rank themselves by tier rather than owing a return. `task trace` lists no role as a frame; it carries a header naming the focused role, the duty last serviced and the duty next due, and the post-completion hand-back line names both the top owed frame and that next duty. A position that was being held as an `in_progress` TASK (the shape this section's `deferred` state was misreading as a dropped frame) should be migrated to a role and the task completed with a report naming it.
 
 A second, purely structural check needs no timestamps at all: **a completed parent with an in-progress descendant is a contradiction.** A mission cannot honestly be complete while a phase inside it is still running. This catches the case where a whole branch was declared finished with one frame still open, and it is cheaper and more certain than any staleness heuristic.
 
