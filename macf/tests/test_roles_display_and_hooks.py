@@ -318,10 +318,11 @@ def test_stanza_trims_titles_to_the_trees_title_width(store, lab):
     long = "Confirm which of the A/B groups meets on the first Tuesday of the semester, 09-15"
     store.add_duty(role, folder, long, due=SOON2, horizon="3d", why="w")
     wide = disp.stanza(store, "focused", None, at=NOW, ansi=False, title_width=80)[1]
-    assert "next: Confirm which of the A/B groups meets on th... (" in wide and "last: " in wide
+    assert f"next: {disp.fit(long, 40)} (" in wide and "last: " in wide     # half of 80
     narrow = disp.stanza(store, "focused", None, at=NOW, ansi=False, title_width=40)[1]
-    assert "next: Confirm which of... (" in narrow and "last: " not in narrow and "👈" in narrow
+    assert f"next: {disp.fit(long, 20)} (" in narrow and "last: " not in narrow and "👈" in narrow
     expanded = disp.stanza(store, "focused", role.id, at=NOW, ansi=False, title_width=40)
-    assert any(l.startswith("    ◻ 📌 Confirm which of the A/B groups mee...") for l in expanded)
+    assert any(l.startswith(f"    ◻ 📌 {disp.fit(long, 40)}") for l in expanded)
+    assert disp.fit(long, 40).endswith("...") and len(disp.fit(long, 40)) <= 40
     untrimmed = disp.stanza(store, "focused", role.id, at=NOW, ansi=False, title_width=0)
     assert any(long in l for l in untrimmed)

@@ -4601,10 +4601,55 @@ def get_display_mtime(tasks_dir) -> float:
         from .agent_events_log import get_log_path
         log_path = get_log_path()
         if log_path and log_path.exists():
-            latest = max(latest, log_path.stat().st_mtime)
+            latest = max(latest, _display_events_mtime(log_path))
     except (OSError, ImportError):
         pass  # event log unreadable: fall back to store-only detection
     return latest
+
+
+# Events that change what the tree renders. Everything else the log records
+# (tool calls, CLI invocations, notifications) is agent activity, and the log
+# grows by one line per tool call, so watching the file's mtime redrew the
+# loop every second whenever the agent was working -- a display that never
+# changed, moving constantly.
+_DISPLAY_EVENT_PREFIXES = ("scope_", "role_focus_change", "work_mode_change", "task_")
+_display_events_state = {"path": None, "offset": 0, "mtime": 0.0}
+
+
+def _display_events_mtime(log_path) -> float:
+    """Timestamp of the newest display-relevant event in the log.
+
+    Keeps a cursor so each poll reads only what was appended since the last
+    one; a rotated or truncated log resets the cursor and rescans the tail.
+    Roles and scope are both event-sourced, so this is what lets a focus
+    change or a scope pause appear in the loop within a second without the
+    loop repainting on every unrelated line.
+    """
+    import json as _json
+    st = _display_events_state
+    size = log_path.stat().st_size
+    if st["path"] != str(log_path) or size < st["offset"]:
+        # First call, or the file was rotated/truncated: read a bounded tail
+        # rather than the whole history, then continue from the end.
+        st.update(path=str(log_path), offset=max(0, size - 65536), mtime=0.0)
+    if size == st["offset"]:
+        return st["mtime"]
+    with open(log_path, "rb") as f:
+        f.seek(st["offset"])
+        chunk = f.read(size - st["offset"])
+    st["offset"] = size
+    file_mtime = log_path.stat().st_mtime
+    for line in chunk.splitlines():
+        try:
+            ev = _json.loads(line)
+        except ValueError:
+            continue
+        name = str(ev.get("event", ""))
+        if name.startswith(_DISPLAY_EVENT_PREFIXES):
+            # A record without its own timestamp still moved the display: date
+            # it by the write that appended it.
+            st["mtime"] = max(st["mtime"], float(ev.get("timestamp") or file_mtime))
+    return st["mtime"]
 
 
 def get_tasks_mtime(tasks_dir) -> float:
