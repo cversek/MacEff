@@ -1,0 +1,42 @@
+#!/bin/bash
+# Refuse a commit message (or, called by hand, a PR body) that points readers
+# at things they cannot find in this repository.
+#
+# An agent's working context has roadmaps with numbered phases, a task tree,
+# an ideas bank, sprints and cycles. None of that lives here. A message that
+# says "Phase 4 of the roadmap (task #242)" is not a security problem -- the
+# numbers reveal nothing -- but it sends a public reader looking for a
+# document that does not exist and leaves them unsure whether they are
+# missing something. Five pull requests in one evening carried such lines
+# before anyone said so, because the pre-commit gates scan staged files and
+# nothing read the prose.
+#
+# The calling-card footer is exempt: a line of the form
+#   [Name@id: task#N <breadcrumb>]
+# is the agreed attribution format for this repository and is recognisable as
+# an identifier rather than a reference.
+#
+# Usage: as a commit-msg hooklet the dispatcher passes the message file; by
+# hand, pass any text file (a PR body drafted before `gh pr create`).
+# Bash 3.2 compatible (macOS).
+set -uo pipefail
+
+MSG_FILE="${1:-}"
+[ -n "$MSG_FILE" ] && [ -f "$MSG_FILE" ] || exit 0
+
+# Comment lines are git's template; footer lines are the attribution format;
+# a Breadcrumb: line is the framework's documented forensic coordinate, not a
+# pointer at a document.
+BODY=$(grep -vE '^#' "$MSG_FILE" | grep -vE '^\[[A-Za-z0-9_-]+@[0-9a-f]+: task#[0-9]+ |^Breadcrumb: ' || true)
+
+PATTERNS='\b[Pp]hase [0-9]+ of (the|this|our)\b|\b[Pp]hase [0-9]+[.:] |\btask ?#[0-9]+|\bidea ?#[0-9]+|\broadmap (task|folder|phase)|\bMISSION #|\bsprint #[0-9]+|\bcycle [0-9]+\b|\bc_[0-9]+\b'
+HITS=$(printf '%s\n' "$BODY" | grep -nE "$PATTERNS" || true)
+[ -z "$HITS" ] && exit 0
+
+echo "[hooks] message refers to things a reader of this repository cannot find:" >&2
+echo "$HITS" | sed 's/^/[hooks]   /' >&2
+echo "[hooks] roadmap phases, task and idea numbers, sprints and cycles are the author's" >&2
+echo "[hooks] working context, not the repository's. Describe the change in the repository's" >&2
+echo "[hooks] own terms (files, policies, PR numbers). The calling-card footer line is exempt." >&2
+echo "[hooks] deliberate bypass: git commit --no-verify" >&2
+exit 1
