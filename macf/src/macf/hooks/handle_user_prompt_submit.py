@@ -266,6 +266,16 @@ Breadcrumb: {breadcrumb}"""
         # A recommender fired into every turn was stale noise with a maintenance
         # burden; see policy_awareness §2.5.
 
+        # Focused role: one line when something is due today/overdue or a
+        # review is inside its horizon; nothing otherwise (roles policy, the
+        # habituation budget). Never breaks the hook.
+        focus_line = ""
+        try:
+            from macf.roles.hooks import prompt_line
+            focus_line = prompt_line()
+        except (OSError, ValueError, ImportError, AttributeError) as e:
+            emit_warning(Warning(source="user_prompt_submit", kind="focus_line_failed", detail=f"focus line skipped: {e}"))
+
         # Format footer
         footer = format_macf_footer()
 
@@ -276,6 +286,7 @@ Breadcrumb: {breadcrumb}"""
             voice_transcript if voice_transcript else "",  # Voice auto-transcription
             boundary_guidance if boundary_guidance else "",
             memory_injection if memory_injection else "",  # EXPERIMENT: associative memories
+            focus_line,
             footer
         ]
         plain_content = chr(10).join([s for s in sections if s])

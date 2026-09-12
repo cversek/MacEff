@@ -450,6 +450,78 @@ def cmd_role_calendar(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_role_focus(args: argparse.Namespace) -> int:
+    """Focus a role (an event), or with no argument say which is focused."""
+    from .focus import current_focus, set_focus
+    from .hooks import due_now_unserviced
+    store = RoleStore()
+    previous = current_focus()
+    if not args.role:
+        if args.json:
+            print(json.dumps({"focused": previous}, indent=2))
+            return 0
+        if previous:
+            try:
+                role, _ = store.find_role(previous)
+                print(f"🎯 {role.icon} {role.title} ({role.id})")
+            except RoleError:
+                print(f"🎯 {previous} (role not found; run: macf_tools role unfocus)")
+        else:
+            print("no role is focused")
+        return 0
+    try:
+        role, folder = store.find_role(args.role)
+        if role.state != "active":
+            raise RoleError(f"{role.title} is {role.state}; only an active role can be focused")
+    except RoleError as e:
+        return _fail(e, args.json)
+    if previous == role.id:
+        print(f"🎯 {role.icon} {role.title} is already focused" if not args.json else json.dumps({"focused": role.id}))
+        return 0
+    set_focus(role.id, previous, note=args.note or "")
+    if args.json:
+        print(json.dumps({"focused": role.id, "previous": previous}, indent=2))
+        return 0
+    print(f"🎯 focused {role.icon} {role.title}" + (f" (was {previous})" if previous else ""))
+    at = now()
+    pending = due_now_unserviced(role, [d for d, _ in store.duties(folder)], at)
+    if pending:
+        print("   due now, unserviced: " + "; ".join(f"{p.duty.title} ({duty_mark(p, at)})" for p in pending))
+    return 0
+
+
+def cmd_role_unfocus(args: argparse.Namespace) -> int:
+    """Always allowed; records the due-now duties left unserviced at the moment of escape."""
+    from .focus import current_focus, set_focus
+    from .hooks import due_now_unserviced
+    store = RoleStore()
+    previous = current_focus()
+    if not previous:
+        print("no role is focused" if not args.json else json.dumps({"focused": None}))
+        return 0
+    unserviced = []
+    try:
+        role, folder = store.find_role(previous)
+        at = now()
+        unserviced = [{"duty_id": p.duty.id, "title": p.duty.title, "tier": p.tier_name}
+                      for p in due_now_unserviced(role, [d for d, _ in store.duties(folder)], at)]
+        if args.note:
+            store.note_role(role, folder, args.note, kind="unfocus")
+        label = f"{role.icon} {role.title}"
+    except RoleError:
+        label = previous
+    set_focus(None, previous, unserviced, note=args.note or "")
+    if args.json:
+        print(json.dumps({"focused": None, "previous": previous, "unserviced_due_now": unserviced}, indent=2))
+        return 0
+    print(f"✅ unfocused {label}")
+    if unserviced:
+        print("   left due-now and unserviced (recorded): " + "; ".join(u["title"] for u in unserviced))
+        if not args.note:
+            print("   an honest escape says why: macf_tools role note <id> \"...\", or duty defer --reason")
+    return 0
+
+
 # ---- registration ------------------------------------------------------------
 
 def add_role_parser(sub: argparse._SubParsersAction) -> None:
@@ -502,6 +574,15 @@ def add_role_parser(sub: argparse._SubParsersAction) -> None:
     g.add_argument("--expire", action="store_true", help="the appointment ended at this review")
     g.add_argument("--retire", action="store_true", help="the appointment is being given up at this review")
     js(p); p.set_defaults(func=cmd_role_review)
+
+    p = rs.add_parser("focus", help="hold one role: its duties become a prioritized scope for the hooks")
+    p.add_argument("role", nargs="?", help="id or title prefix; omit to show the current focus")
+    p.add_argument("--note", help="why, recorded on the event")
+    js(p); p.set_defaults(func=cmd_role_focus)
+
+    p = rs.add_parser("unfocus", help="put the focused role down (always allowed; what was due is recorded)")
+    p.add_argument("--note", help="why -- the honest escape; also noted on the role")
+    js(p); p.set_defaults(func=cmd_role_unfocus)
 
     p = rs.add_parser("calendar", help="roles x duties as an agenda, a week grid, JSON, or an .ics file")
     g = p.add_mutually_exclusive_group()
