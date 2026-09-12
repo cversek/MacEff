@@ -245,7 +245,7 @@ class TestCommitMsgStageAndPortableHooklets:
         assert any("10-no-session-url" in a for a in report["actions"])
         # nothing MacEff-specific came along: the style gate needs tools/ that this repo lacks
         assert not (repo / ".githooks" / "pre-commit.d" / "20-style").exists()
-        assert [h["name"] for h in list_hooklets(repo, "commit-msg")] == ["10-no-session-url"]
+        assert [h["name"] for h in list_hooklets(repo, "commit-msg")] == ["10-no-session-url", "20-no-private-refs"]
         # and the second install is a genuine no-op
         assert install_dispatcher(repo)["actions"] == []
 
@@ -294,3 +294,36 @@ class TestCommitMsgStageAndPortableHooklets:
         from macf.githooks import DISPATCHED_HOOKS
         for hook in DISPATCHED_HOOKS:
             assert (DISPATCHER.parent / hook).read_bytes() == DISPATCHER.read_bytes(), hook
+
+
+class TestPrivateReferencesAreRefused:
+    """A message that points a public reader at the author's roadmap phases, task
+    or idea numbers is refused; the calling-card footer line is not a reference."""
+
+    def _guard(self, tmp_path):
+        repo = _repo(tmp_path)
+        install_dispatcher(repo)
+        return repo / ".git" / "hooks.local.d" / "commit-msg.d" / "20-no-private-refs"
+
+    def test_phase_and_task_references_are_refused_and_named(self, tmp_path):
+        guard = self._guard(tmp_path)
+        msg = tmp_path / "m"
+        msg.write_text("feat: x\n\nPhase 4 of the ROLE system (roadmap task #242), on top of #376.\n")
+        r = subprocess.run(["bash", str(guard), str(msg)], capture_output=True, text=True)
+        assert r.returncode == 1
+        assert "cannot find" in r.stderr and "Phase 4 of the ROLE system" in r.stderr
+
+    def test_the_footer_and_pr_numbers_pass(self, tmp_path):
+        guard = self._guard(tmp_path)
+        msg = tmp_path / "m"
+        msg.write_text("feat: x\n\nFourth in the series, on top of #376. See roles.md.\n\n"
+                       "[IraMacEff@ee9a78: task#242 s_abc12345/c_40/p_x/t_1]\n")
+        r = subprocess.run(["bash", str(guard), str(msg)], capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+
+    @pytest.mark.parametrize("line", ["idea #247 is not here", "sprint #245 closed", "see the roadmap folder",
+                                      "Phase 2. Duties rank themselves", "MISSION #238 owns it", "in cycle 40 we"])
+    def test_each_private_vocabulary_shape(self, tmp_path, line):
+        guard = self._guard(tmp_path)
+        msg = tmp_path / "m"; msg.write_text(f"feat: x\n\n{line}\n")
+        assert subprocess.run(["bash", str(guard), str(msg)], capture_output=True, text=True).returncode == 1
