@@ -308,3 +308,20 @@ def test_mode_set_work_is_unaffected_by_focus(store, lab):
     assert format_mode_indicators({"AUTO_MODE", "DISCOVER"}, marker) == " 🤖 🎓🔍"
     assert format_mode_indicators({"AUTO_MODE", "SPRINT"}, marker) == " 🤖 🎓🏃"
     assert format_mode_indicators({"AUTO_MODE"}, "") == " 🤖"
+
+
+def test_stanza_trims_titles_to_the_trees_title_width(store, lab):
+    """The stanza follows the tree's truncation: titles to title_width with '...',
+    the collapsed line's last/next to half of it, and no last: label at all in the
+    40-column scanning view, where the pointer age already says when."""
+    role, folder = lab
+    long = "Confirm which of the A/B groups meets on the first Tuesday of the semester, 09-15"
+    store.add_duty(role, folder, long, due=SOON2, horizon="3d", why="w")
+    wide = disp.stanza(store, "focused", None, at=NOW, ansi=False, title_width=80)[1]
+    assert "next: Confirm which of the A/B groups meets on th... (" in wide and "last: " in wide
+    narrow = disp.stanza(store, "focused", None, at=NOW, ansi=False, title_width=40)[1]
+    assert "next: Confirm which of... (" in narrow and "last: " not in narrow and "👈" in narrow
+    expanded = disp.stanza(store, "focused", role.id, at=NOW, ansi=False, title_width=40)
+    assert any(l.startswith("    ◻ 📌 Confirm which of the A/B groups mee...") for l in expanded)
+    untrimmed = disp.stanza(store, "focused", role.id, at=NOW, ansi=False, title_width=0)
+    assert any(long in l for l in untrimmed)

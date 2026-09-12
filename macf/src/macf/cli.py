@@ -4786,7 +4786,8 @@ def cmd_task_roles(args: argparse.Namespace) -> int:
     from .roles.focus import current_focus
     from .roles.store import RoleStore
     lines = stanza(RoleStore(), "all", current_focus(), session_id=get_current_session_id(),
-                   show_all=getattr(args, "all", False))
+                   show_all=getattr(args, "all", False),
+                   title_width=getattr(args, "title_width", None) or 80)
     if not lines:
         print("no roles (assign one: macf_tools role create, or the maceff-assign-role skill)")
         return 0
@@ -5256,7 +5257,8 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
                 from .roles.store import RoleStore as _RoleStore
                 _lines = _roles_stanza(_RoleStore(), _roles_mode, _current_focus(),
                                        session_id=get_current_session_id(),
-                                       show_all=getattr(args, "all", False))
+                                       show_all=getattr(args, "all", False),
+                                       title_width=title_width)
                 if _lines:
                     print()
                     for _l in _lines:
@@ -11620,6 +11622,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # task tree
     task_roles_parser = task_sub.add_parser("roles", help="the roles stanza on its own, every role expanded")
     task_roles_parser.add_argument("--all", action="store_true", help="retired roles, done duties and every update")
+    task_roles_parser.add_argument("--title-width", type=int, metavar="N", help="trim titles to N characters (0 disables; default 80)")
     task_roles_parser.set_defaults(func=cmd_task_roles)
     task_tree_parser = task_sub.add_parser("tree", help="show task hierarchy tree")
     task_tree_parser.add_argument("task_id", nargs="?", default="000",
