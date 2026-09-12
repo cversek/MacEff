@@ -29,6 +29,6 @@ subagents:
 defaults:
   consciousness_artifacts:
     private: [checkpoints, reflections, learnings]
-    public: [roadmaps, reports, observations]
+    public: [roadmaps, reports, observations, roles]
   hooks:
     enabled: [session_start, stop]
