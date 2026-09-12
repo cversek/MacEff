@@ -319,3 +319,37 @@ def test_migrate_a_position_and_its_duties_from_tasks(store, tasks, capsys):
     assert [u["kind"] for u in duty["updates"]] == ["migrated", "declare"]
     assert _run(["role", "create", "--from-task", "999"]) == 1
     assert "does not exist" in capsys.readouterr().out
+
+
+def test_engage_is_the_dutys_task_start(store, lab, capsys):
+    """active, an engage update, tracks attached, the role focused; done refuses."""
+    from macf.roles.focus import current_focus
+    role, folder = lab
+    charter = folder / "charter.md"                                   # the fixture's charter is the scaffold
+    charter.write_text(charter.read_text().replace("What this role may do, and what it must not.",
+                       "May draft plans in the spoke. Must not contact anyone without direction."))
+    d, _ = store.add_duty(role, folder, "board plan")
+    assert current_focus() is None
+    assert _run(["role", "duty", "engage", "board", "--note", "drafting from the handout", "--tracks", "8"]) == 0
+    out = capsys.readouterr().out
+    assert "engaged 📌 board plan" in out and "focused 🎓" in out and "tracks #8" in out
+    d2, _ = store.find_duty(d.id)
+    assert d2.state == "active" and d2.tracks == ["8"] and d2.updates[-1].kind == "engage"
+    assert current_focus() == role.id
+    assert _run(["role", "duty", "engage", "board"]) == 0             # again: no refocus line
+    assert "focused" not in capsys.readouterr().out
+    store.advance_duty(d2, folder, "done", evidence=["7"])
+    assert _run(["role", "duty", "engage", "board"]) == 1
+    assert "is done" in capsys.readouterr().out
+
+
+def test_engage_refuses_a_role_whose_boundaries_are_the_scaffold(store, capsys):
+    """Policy: an undescribed role cannot be worked; working it is how an agent over-reaches."""
+    role, folder = store.create_role("Lab Course Assistant", icon="🎓")   # scaffold charter
+    d, _ = store.add_duty(role, folder, "confirm the group")
+    assert _run(["role", "duty", "engage", "confirm"]) == 1
+    assert "Boundaries are still the scaffold" in capsys.readouterr().out
+    charter = folder / "charter.md"
+    charter.write_text(charter.read_text().replace("What this role may do, and what it must not.",
+                       "May read the mail. Must not contact anyone without direction."))
+    assert _run(["role", "duty", "engage", "confirm"]) == 0

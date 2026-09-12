@@ -203,6 +203,8 @@ Roles and duties are identified by **six hex characters** (`uuid4().hex[:6]`), a
 
 The charter is the role's human face and its knowledge-web node: purpose, boundaries, what the role may and may not do, and pointers to the spokes, corpora or people it depends on. It is scaffolded at assignment with those headings and a `## Wiki-Links` section, and it is written by hand. A role whose charter is still the scaffold is a role nobody has yet described, and the review ritual (§3.4) says so.
 
+**Boundaries are the load-bearing section.** They state what the role may do on its own and what needs the operator's direction for that specific act. The default the policy sets, for every role: **a duty is a declaration of what must be true, never an authorization to act on the operator's behalf toward a third party** -- no message, draft, post, submission or commitment addressed to anyone else is implied by a duty. When a duty seems to need one, ask the operator, wait for the answer with a timeout suited to the duty's horizon, then continue with what can be done alone. `role duty engage` refuses while the Boundaries section is still the scaffold: an undescribed role cannot be worked, because working it is exactly how an agent over-reaches.
+
 ### 2.6 No nesting
 
 The store refuses a duty whose parent is a duty. A duty that seems to need sub-duties is either two duties of the same role or a duty whose implementation wants a task with phases.
@@ -225,7 +227,7 @@ The lifecycle runs on the same generic state machine the task system uses; the t
 
 ### 3.2 Duty states
 
-`pending` (declared, not yet worked) → `active` (has a tracked task, or was noted as in hand) → `done` (evidence recorded) or `deferred` (set aside with a reason, kept for the record). A deferred duty may be reactivated. A cadence duty is never `done` as a whole; its occurrences are, via `done_on` notes (§6.2).
+`pending` (declared, not yet worked) → `active` (engaged: attention is on it, or it has a tracked task) → `done` (evidence recorded) or `deferred` (set aside with a reason, kept for the record). A deferred duty may be reactivated. **`role duty engage` is the duty's `task start`**: it makes the duty active, records an engage update with its breadcrumb (a service, so the stanza pointer and the gate's bound both move), focuses the duty's role if another or none was focused, and may attach the implementing tasks in the same step. A cadence duty is never `done` as a whole; its occurrences are, via `done_on` notes (§6.2).
 
 ### 3.3 `done` requires evidence
 
@@ -350,7 +352,7 @@ A **service** is any touch of a task or a duty that writes a breadcrumbed update
 
 ### 7.2 Two pointers, differently scoped
 
-**👈 is descriptive**: where attention last landed. It is scoped **per tree** -- one in the main task tree (its newest task service, as today) and one per role (its newest-serviced duty). They coexist; no store steals another's marker; the ages beside them say which was most recent overall.
+**👈 is descriptive**: where attention last landed. It is scoped **per tree** -- one in the main task tree (its newest task service, as today) and **one in the roles stanza**: the single duty line or collapsed role line that was touched last across every role. They coexist; no store steals another's marker; the ages beside them say which was most recent overall. A role that was just unfocused keeps the pointer on its collapsed line until something else is touched, because unfocusing writes nothing.
 
 **🎯 is intentional**: what the agent has chosen to hold. It marks the focused role's line and nothing else.
 
@@ -372,9 +374,9 @@ Focus is **orthogonal to work mode**. The dashboard composes the focused role's 
 
 ### 8.2 Line grammar
 
-**Role line**: status box · icon · title · `[state · review MM-DD]` · approach mark · `🎯` if focused · `👈 age` if it holds the role's pointer. Status boxes are exactly the task tree's: `◼` active, `◻` pending, `✔` done or retired, `⏸` paused. The approach mark on a role line is the **most urgent** of its duties' marks, so a collapsed role still escalates.
+**Role line**: status box · icon · title · `[state · review MM-DD]` · approach mark · `🎯` if focused · `👈 age` if this collapsed line holds the stanza's pointer (an expanded role's line carries it only when the newest touch was a note on the role itself; otherwise the duty line does). Status boxes are exactly the task tree's: `◼` active, `◻` pending, `✔` done or retired, `⏸` paused. The approach mark on a role line is the **most urgent** of its duties' marks, so a collapsed role still escalates.
 
-**Duty line**: status box · `📌` · title · due or cadence · approach mark · `👈 age` if it is the role's last-serviced duty.
+**Duty line**: status box · `📌` · title · due or cadence · approach mark · `👈 age` if it is the last-touched duty in the stanza.
 
 **Collapsed role line** adds `· last: <duty> (age) · next: <duty> (date)` so a one-line role still says what was touched and what is coming.
 
@@ -518,7 +520,7 @@ There is no registry of participating types (`scholarship.md`); the graph builde
 
 ```
 macf_tools role create|list|show|note|pause|resume|expire|retire|review|focus|unfocus|calendar
-macf_tools role duty add|show|note|done|defer|link|unlink|why
+macf_tools role duty add|show|engage|note|done|defer|link|unlink|why
 macf_tools task roles [--all]
 macf_tools task tree --roles none|collapsed|focused|all
 ```
@@ -568,6 +570,10 @@ Every verb takes `--json`. Refusals print one `❌` line naming the reason and, 
 **❌ Unfocus to dodge the gate**
 - **Problem**: the focus gate blocks on an unserviced overdue duty and the agent unfocuses to stop.
 - **Fix**: defer with a reason, note why it waits, or unfocus with a note on the role; the event records what was due at the moment of escape either way.
+
+**❌ Over-reach: a duty read as a mandate**
+- **Problem**: a duty says "confirm which group meets first" and the agent drafts the email to the department under the operator's name; the duty named what must be true, not who may be contacted.
+- **Fix**: the charter's Boundaries; ask, wait with a timeout, then proceed without the outreach; the `engage` verb refuses an undescribed role.
 
 **❌ Done without evidence**
 - **Problem**: a duty marked done because it felt finished; nothing on record shows what satisfied it.

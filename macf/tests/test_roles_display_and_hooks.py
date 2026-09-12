@@ -76,12 +76,39 @@ def test_status_boxes_marks_and_the_role_line_carries_the_most_urgent(store, lab
     store.add_duty(role, folder, "soon", due=SOON2, horizon="3d", why="w")
     store.add_duty(role, folder, "plain")
     lines = disp.stanza(store, "focused", role.id, at=NOW, ansi=False)
-    assert "🔴 OVERDUE 2d" in lines[1] and lines[1].endswith("🎯" ) is False   # 👈 age comes last
-    assert lines[1].split("🎯")[1].strip().startswith("👈")
+    assert "🔴 OVERDUE 2d" in lines[1] and lines[1].endswith("🎯")     # expanded: the pointer is on a duty line
     assert lines[2].startswith("    ◻ 📌 late") and "🔴 OVERDUE 2d" in lines[2]
     assert lines[3].startswith("    ◻ 📌 soon") and "⏳2d" in lines[3]
     assert lines[4].startswith("    ◻ 📌 plain")
-    assert sum(1 for l in lines[2:] if "👈" in l) == 1               # one pointer per role
+    assert sum(1 for l in lines if "👈" in l) == 1                   # ONE pointer in the whole stanza
+
+
+def test_one_pointer_follows_the_last_touch_across_roles(store, lab):
+    """The stanza's single 👈 sits on whichever duty line or collapsed role line
+    was touched last; unfocusing writes nothing, so it stays put."""
+    import time
+    role, folder = lab
+    d, _ = store.add_duty(role, folder, "board plan")
+    other, of = store.create_role("Corpus Librarian", icon="📚")
+    time.sleep(1.1)
+    o, _ = store.add_duty(other, of, "intake")                        # newest touch: the librarian's duty
+    lines = disp.stanza(store, "focused", role.id, at=NOW, ansi=False)
+    with_ptr = [l for l in lines if "👈" in l]
+    assert len(with_ptr) == 1 and with_ptr[0].startswith("◼ 📚 Corpus Librarian")   # collapsed line
+    time.sleep(1.1)
+    store.note_duty(d, folder, "drafted")                             # newest touch: a duty of the focused role
+    lines = disp.stanza(store, "focused", role.id, at=NOW, ansi=False)
+    with_ptr = [l for l in lines if "👈" in l]
+    assert len(with_ptr) == 1 and with_ptr[0].startswith("    ◻ 📌 board plan")
+    # unfocus: nothing written, the pointer moves to the same role's collapsed line
+    lines = disp.stanza(store, "focused", None, at=NOW, ansi=False)
+    with_ptr = [l for l in lines if "👈" in l]
+    assert len(with_ptr) == 1 and with_ptr[0].startswith("◼ 🎓 Lab Course Assistant")
+    time.sleep(1.1)
+    store.note_role(other, of, "shelf audit")                         # a role-level note on an expanded role
+    lines = disp.stanza(store, "focused", other.id, at=NOW, ansi=False)
+    with_ptr = [l for l in lines if "👈" in l]
+    assert len(with_ptr) == 1 and with_ptr[0].startswith("◼ 📚 Corpus Librarian") and "🎯" in with_ptr[0]
 
 
 def test_succinct_rule_for_completed_duties(store, lab, monkeypatch):

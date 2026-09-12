@@ -379,6 +379,34 @@ def cmd_duty_reactivate(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_duty_engage(args: argparse.Namespace) -> int:
+    """The duty's `task start`: active, a breadcrumbed engage note, the role focused."""
+    from .focus import current_focus, set_focus
+    store = RoleStore()
+    try:
+        duty, path = store.find_duty(args.duty)
+        role, folder = store.role_of(duty)
+        if role.state != "active":
+            raise RoleError(f"{role.title} is {role.state}; engage a duty of an active role")
+        store.engage(duty, path.parent, args.note or "", _csv(args.tracks))
+        previous = current_focus()
+        refocused = previous != role.id
+        if refocused:
+            set_focus(role.id, previous, note=f"engaged duty {duty.id}")
+    except RoleError as e:
+        return _fail(e, args.json)
+    if args.json:
+        rec = dump(duty); rec["focused_role"] = role.id; rec["refocused"] = refocused
+        print(json.dumps(rec, indent=2))
+        return 0
+    print(f"▶️  engaged 📌 {duty.title}  ({role.icon} {role.title})")
+    if refocused:
+        print(f"   🎯 focused {role.icon} {role.title}" + (f" (was {previous})" if previous else ""))
+    if duty.tracks:
+        print(f"   tracks {', '.join('#' + t for t in duty.tracks)}")
+    return 0
+
+
 def cmd_duty_link(args: argparse.Namespace) -> int:
     store = RoleStore()
     try:
@@ -646,6 +674,12 @@ def add_role_parser(sub: argparse._SubParsersAction) -> None:
     p = ds.add_parser("reactivate", help="a deferred duty is owed again")
     p.add_argument("duty"); p.add_argument("--reason", default="")
     js(p); p.set_defaults(func=cmd_duty_reactivate)
+
+    p = ds.add_parser("engage", help="attention is on this duty now: active, noted, its role focused (the duty's task start)")
+    p.add_argument("duty")
+    p.add_argument("--note", help="what you are setting out to do")
+    p.add_argument("--tracks", action="append", help="task ids implementing it, comma-separated")
+    js(p); p.set_defaults(func=cmd_duty_engage)
 
     p = ds.add_parser("link", help="point the duty at the tasks implementing it")
     p.add_argument("duty"); p.add_argument("tasks", nargs="+", help="task ids")

@@ -23,6 +23,7 @@ from ..utils.json_io import write_json_safely
 from .models import (DUTY_MACHINE, ROLE_MACHINE, Duty, Role, Update, dump)
 
 ROLES_DIR_ENV = "MACF_ROLES_DIR"
+SCAFFOLD_BOUNDARIES = "What this role may do, and what it must not."
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 CHARTER_SCAFFOLD = """# {title}
 
@@ -296,6 +297,36 @@ class RoleStore:
         append_event("duty_lifecycle_advanced", {"duty_id": duty.id, "role_id": duty.role_id,
                                                  "from_state": old, "to_state": new_state,
                                                  "reason": reason, "evidence": ev})
+        return duty
+
+    def engage(self, duty: Duty, folder: Path, note: str = "", task_ids: Iterable[str] = ()) -> Duty:
+        """Attention is on this duty now: the duty's `task start`.
+
+        pending/deferred -> active with an 'engage' update (a service, so the
+        gate's bound clears and the stanza pointer moves here). Focusing the
+        parent role is the caller's step, because focus is an event, not a
+        record. Tracking tasks may be attached in the same breath.
+        """
+        if duty.state == "done":
+            raise RoleError(f"duty {duty.id} is done; reactivate is not a thing a done duty does (declare a new one)")
+        # A role whose charter still carries the scaffold's Boundaries line has
+        # never said what it may do alone and what needs the operator; working
+        # its duties is how an agent over-reaches on the operator's behalf.
+        charter = folder / "charter.md"
+        if charter.exists() and SCAFFOLD_BOUNDARIES in charter.read_text():
+            raise RoleError(f"the charter's Boundaries are still the scaffold ({charter}); write what this role "
+                            "may do alone and what needs the operator's direction before engaging a duty "
+                            "(roles policy: the charter)")
+        ids = self._check_tracks(task_ids)
+        if ids:
+            duty.tracks = sorted(set(duty.tracks) | set(ids), key=lambda s: (len(s), s))
+        old = duty.state
+        duty.state = "active"
+        text = "Engaged" + (f": {note}" if note else "") + (f" [tracks {', '.join('#' + i for i in ids)}]" if ids else "")
+        duty.updates.append(_update(text, kind="engage"))
+        self.save_duty(duty, folder)
+        append_event("duty_serviced", {"duty_id": duty.id, "role_id": duty.role_id, "kind": "engage",
+                                       "from_state": old, "tracks": ids})
         return duty
 
     def link(self, duty: Duty, folder: Path, task_ids: Iterable[str]) -> Duty:
