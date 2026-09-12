@@ -18,7 +18,7 @@ from .priority import (DONE, Placement, duty_mark, most_urgent_mark, now, rank, 
                        review_mark)
 from .store import RoleError, RoleStore
 
-ANSI_DIM, ANSI_RESET, ANSI_RED, ANSI_GREEN = "\033[2m", "\033[0m", "\033[31m", "\033[32m"
+ANSI_DIM, ANSI_RESET, ANSI_RED, ANSI_GREEN, ANSI_STRIKE = "\033[2m", "\033[0m", "\033[31m", "\033[32m", "\033[9m"
 BOX = {"active": "◼", "pending": "◻", "paused": "⏸", "expired": "✔", "retired": "✔", "done": "✔", "deferred": "⏸"}
 MODES = ("none", "collapsed", "focused", "all")
 
@@ -154,7 +154,10 @@ def duty_line(p: Placement, at: datetime, pointer: Optional[Tuple[str, float]] =
         box = f"{ANSI_RED}◼{ANSI_RESET}"       # a duty with work in flight, as the tree shows in_progress
     when = _when(d)
     imp = "" if d.importance == "normal" else f" ({d.importance.upper()})"
-    line = f"    {box} 📌 {fit(d.title, title_width)}{imp}"
+    title = fit(d.title, title_width)
+    if ansi and d.state == "done":
+        title = f"{ANSI_DIM}{ANSI_STRIKE}{title}{ANSI_RESET}"   # as the tree strikes a completed task
+    line = f"    {box} 📌 {title}{imp}"
     if when:
         line += f"  {dim}{when}{reset}"
     mark = duty_mark(p, at)
