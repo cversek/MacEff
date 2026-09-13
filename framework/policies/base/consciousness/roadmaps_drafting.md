@@ -168,9 +168,9 @@ roadmap — which is the intended route to implementation, not a detour around i
 - Subplan naming?
 - How subplans relate to parent?
 
-**6 Git Discipline**
-- When to commit roadmaps?
-- Commit-before-revise protocol?
+**6 Revision and Delivery**
+- Why is there no commit step for a roadmap?
+- How is plan evolution recorded without git?
 - Revision tracking?
 
 **6.3 Delivery Requirement**
@@ -834,45 +834,44 @@ Phases must specify **what** (interface, behavior) not **how** (implementation).
 
 ---
 
-## 6 Git Discipline Integration
+## 6 Revision and Delivery
 
-### 6.1 Commit-Before-Revise
+### 6.1 Revise In Place, and Record Why
 
-**Rule**: Roadmaps and subplans MUST be committed to git BEFORE revisions.
+**The consciousness artifact tree is not a git repository.** Most CAs are
+write-once, or extended without redaction rather than rewritten, so a per-agent CA
+repo was retired as overhead that bought nothing. A roadmap is durable the moment
+it is written; there is no commit to make and no version to lose.
+
+This policy previously required committing a roadmap before revising it. That rule
+existed to buy four things, and every one of them is still owed — just from a
+different mechanism:
+
+| What the commit bought | Where it comes from now |
+|---|---|
+| Forensic trail of plan evolution | **§6.2 Revision History**, in the document itself |
+| Accountability: planned vs changed | The revision entry names what changed and why |
+| Recovery of an earlier version | **Extend, never redact** — superseded text stays, marked superseded |
+| Learning: why plans evolved | The rationale is written where the plan is read |
 
 **Workflow**:
 1. Create roadmap/subplan
-2. **COMMIT to git** (initial version)
-3. Begin execution
-4. Discover need for revision
-5. **COMMIT current version** (before changes)
-6. Revise plan
-7. **COMMIT revised version** (with rationale in commit message)
+2. Begin execution
+3. Discover need for revision
+4. **Add a Revision History entry first** — date, breadcrumb, and the reason
+5. Revise the plan, marking superseded text rather than deleting it
 
-**Why**:
-- **Forensic trail**: See plan evolution over time
-- **Accountability**: Know what was planned vs what changed
-- **Recovery**: Revert to earlier plan version if needed
-- **Learning**: Understand why plans evolved
+**The discipline that replaced the commit is harder, not softer.** A git history
+lets you delete a paragraph and still recover it. A document with no version
+control does not: once text is gone it is gone, so the obligation not to redact is
+load-bearing rather than stylistic. **Never delete a claim on new evidence —
+downgrade it, or mark it SUPERSEDED.** The archaeology is the point, and in an
+unversioned tree the document is the only place it can live.
 
-**Commit Message Format**:
-```bash
-git commit -m "roadmap: Create AgentX v0.3 Phase 4 deployment plan
+**This says nothing about the code a roadmap's phases produce.** That lives in a
+real repository, `git_discipline.md` governs it, and §6.3 states when it must ship.
 
-- 13-point validation checklist
-- Repository cloning strategy
-- Risk assessment with friction points
-- Breadcrumb: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890
-"
-
-git commit -m "roadmap: Revise Phase 4.4 validation (added GitHub auth check)
-
-Discovered SSH key authentication critical for private repos.
-Added validation step 4.4.11 for GitHub auth before repo cloning.
-
-- Breadcrumb: s_abc12345/c_42/g_def5678/p_e5f6g7h/t_1761345678
-"
-```
+---
 
 ### 6.2 Revision History Section
 
@@ -1318,7 +1317,8 @@ This creates bidirectional link:
 - ❌ **Vague phase definitions** - "Work on feature" instead of measurable criteria
 - ❌ **Missing folder structure** - Flat roadmap file instead of folder with subplans/archives
 - ❌ **Lettered phases** - "Phase A", "Phase B" instead of numbered (1, 2)
-- ❌ **No git commits** - Creating roadmap without version control
+- ❌ **Silent revision** - Rewriting a plan without a Revision History entry, in a
+  tree that has no git history to recover the old text from
 - ❌ **Missing mission** - Jumping straight to phases without strategic context
 - ❌ **Subjective criteria** - "Working well" instead of "Test suite passes: 19/19 green"
 
@@ -1388,9 +1388,10 @@ The claim that survives a roadmap is not the roadmap. It is the report, learning
 
 ---
 
-**Policy Established**: Roadmaps as hierarchical planning infrastructure with folder-based organization, measurable completion criteria, and git-tracked evolution. Create roadmaps early for complex multi-phase work to preserve strategic intent across compaction boundaries.
+**Policy Established**: Roadmaps as hierarchical planning infrastructure with folder-based organization, measurable completion criteria, and in-document revision history. Create roadmaps early for complex multi-phase work to preserve strategic intent across compaction boundaries.
 
-**Core Wisdom**: "Plan with folder structure. Number your phases. Measure your criteria. Commit before revising. Templates accelerate drafting."
+**Core Wisdom**: "Plan with folder structure. Number your phases. Measure your
+criteria. Record why you revised, and never redact. Templates accelerate drafting."
 
 ---
 

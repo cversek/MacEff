@@ -5,7 +5,8 @@
 **Category**: Consciousness - Execution
 **Status**: ACTIVE
 **Updated**: 2025-11-18
-**Dependencies**: task_management.md, git_discipline.md
+**Dependencies**: task_management.md, git_discipline.md (which governs the CODE
+repositories a phase delivers into — the consciousness artifact tree is not one)
 **Related**: roadmaps_drafting.md (creation), delegation_guidelines.md (handoffs)
 
 ---
@@ -72,7 +73,7 @@ Roadmaps preserve strategic intent across context loss. This policy ensures agen
 - Verify success criteria?
 - Generate breadcrumb?
 - Update roadmap.md?
-- Commit changes?
+- Deliver the phase's code?
 
 **3.2 DETOUR Handling**
 - What are detours?
@@ -344,7 +345,6 @@ created_by: PA
    - Generate breadcrumb
    - Update TODO (mark completed with breadcrumb)
    - Update roadmap.md (phase completion breadcrumb)
-   - Commit changes
 
 6. **Move to next phase**
    - Archive if phase contains many nested items
@@ -377,19 +377,18 @@ created_by: PA
    - Mark status COMPLETE
    - Optionally add completion notes
 
-5. **Commit changes**
-   ```bash
-   git add agent/public/roadmaps/2025-10-27_Name/roadmap.md
-   git commit -m "roadmap: Complete Phase 2 Docker Infrastructure [s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890]"
-   ```
+5. **Deliver the phase's code** — see `roadmaps_drafting.md` §6.3.
 
-6. **Deliver the phase's code** — see `roadmaps_drafting.md` §6.3.
+   **Updating the roadmap is not evidence that anything shipped.** A phase whose
+   deliverable is code is not complete until that code is delivered by whatever
+   route the roadmap declared — for a public repository, a merged PR.
 
-   **Step 5 commits the roadmap DOCUMENT, not the code the phase produced.** Doing
-   it is not evidence that anything shipped, and the two are easy to conflate here
-   precisely because this step says "commit". A phase whose deliverable is code is
-   not complete until that code is delivered by whatever route the roadmap declared
-   — for a public repository, a merged PR.
+   **There is no step here that commits the roadmap itself.** The consciousness
+   artifact tree is not a git repository: most CAs are write-once or extended
+   without redaction, so the per-agent CA repo was retired as overhead. A roadmap
+   is durable the moment it is written. What needs delivering is the *code*, and
+   conflating the two is what the retired step made easy — an agent could commit
+   the document, see a green git status, and feel a phase had shipped.
 
    Pin the PR into the tree so the obligation is visible to the completion protocol
    rather than only to a reader:
@@ -600,7 +599,6 @@ Encountered docker-compose working directory dependency [Roadmap 2025-11-11 "Doc
 2. Create friction_points.md if doesn't exist
 3. Document FP with discovery breadcrumb
 4. Continue work after resolution
-5. Commit friction documentation
 
 **Benefits**:
 - **Learning capture**: Blockers become knowledge
@@ -672,8 +670,7 @@ The legacy pattern used TodoWrite with manual archiving:
 **Update Protocol**:
 1. Change status field in roadmap.md header
 2. Add completion breadcrumb if marking COMPLETE
-3. Commit status change to git
-4. Consider creating completion report or reflection
+3. Consider creating completion report or reflection
 
 ### 7.2 Revision History
 
@@ -751,7 +748,8 @@ With observability → trust, delegation, strategic partnership.
 - **roadmaps_drafting.md**: Creating roadmaps (folder structure, templates, planning)
 - **task_management.md**: Task list discipline (breadcrumbs, hierarchy, completion)
 - **delegation_guidelines.md**: SA execution (handoffs, checkpoints, reflections)
-- **git_discipline.md**: Commit discipline (archive commits, forensic trail)
+- **git_discipline.md**: Commit discipline for the CODE repositories a roadmap's
+  phases deliver into. It does not apply to the CA tree, which is not versioned.
 
 ---
 
