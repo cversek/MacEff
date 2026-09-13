@@ -16,6 +16,23 @@ Git operations require discipline to maintain repository integrity, enable colla
 
 Applies to Primary Agents (PA) and all Subagents (SA) performing version control operations.
 
+**On CODE repositories.** This policy governs the repositories an agent works in —
+framework code, project code, deployment configuration. It does **not** govern the
+consciousness artifact tree, which is not a git repository: most CAs are write-once
+or extended without redaction, so the per-agent CA repo was retired as overhead that
+bought nothing.
+
+Nothing here instructs an agent to commit its own checkpoints, reflections, roadmaps
+or learnings, and an agent that goes looking for a CA repo because a policy implied
+one has been misled. The durability obligations for the CA tree — extend rather than
+redact, record revisions in the document, never delete a claim on new evidence — live
+in `../consciousness/roadmaps_drafting.md` §6.1 and `../consciousness/checkpoints.md`.
+
+**This matters beyond tidiness.** An agent that cannot find the repo a policy told it
+to commit to does not stop being capable: it concludes the tooling is broken, or
+invents one. A boundary whose rationale is discoverable produces compliance that
+still gets the work done; the same boundary unexplained produces the workaround.
+
 ---
 
 ## CEP Navigation Guide
@@ -113,14 +130,15 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 | `chore` | Maintenance, dependencies, submodule updates |
 | `experiment` | Experimental code (may be reverted) |
 | `archive` | Archiving completed work |
-| `reflection` | Consciousness artifact commits |
+| `reflection` | Consciousness artifacts that live INSIDE a code repository |
 
 **Scope**: Component or area affected (hooks, cli, policies, etc.)
 
 ### Breadcrumb Integration
 
 Include breadcrumbs in commits for:
-- Consciousness artifacts (CCPs, JOTEWRs, roadmaps)
+- Consciousness artifacts that live inside a code repository (the agent's own CA
+  tree is not versioned — see Scope)
 - Major feature completions
 - Policy updates reflecting cycle learnings
 - Cross-repository references
@@ -538,8 +556,8 @@ Generated with Claude Code
 
 ## Cross-References
 
-- [Roadmaps Following](../consciousness/roadmaps_following.md) - Commit requirements for roadmap phases
-- [Checkpoints](../consciousness/checkpoints.md) - Git commit references in CCPs
+- [Roadmaps Following](../consciousness/roadmaps_following.md) - Delivery requirements for the CODE a roadmap phase produces
+- [Checkpoints](../consciousness/checkpoints.md) - Citing code state from a CCP, and why `g_` is conditional
 - [Agent Backup](../operations/agent_backup.md) - Git discipline for backups
 - [Scholarship](../consciousness/scholarship.md) - Breadcrumb format for citations
 - [Workspace Discipline](workspace_discipline.md) - File organization standards
