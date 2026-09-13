@@ -112,6 +112,18 @@ def detect_session_migration(current_session_id: str) -> tuple[bool, str, str]:
     return True, "", previous_session_id
 
 
+def _focused_charter_block() -> str:
+    """The focused role's charter as one more system-reminder, or ''. A failure
+    here must never break session start; it is reported and skipped."""
+    try:
+        from macf.roles.hooks import charter_context
+        text = charter_context()
+    except Exception as e:                       # roles store absent or unreadable
+        print(f"⚠️ MACF: charter injection skipped: {e}", file=sys.stderr)
+        return ""
+    return f"\n<system-reminder>\n{text}\n</system-reminder>" if text else ""
+
+
 def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
     """
     Run SessionStart hook logic.
@@ -497,6 +509,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 "hookSpecificOutput": {
                     "hookEventName": "SessionStart",
                     "additionalContext": f"<system-reminder>\n{recovery_msg}\n</system-reminder>"
+                                         + _focused_charter_block()
                 }
             }
 
@@ -601,7 +614,7 @@ Session Context:
             emit_warning(Warning(source="session_start", kind="telegram_send_failed", detail=f"session-start telegram notification failed: {e}"))
 
         # Pattern C: top-level systemMessage for user + hookSpecificOutput for agent
-        additional_context = f"<system-reminder>\n{message}\n</system-reminder>"
+        additional_context = f"<system-reminder>\n{message}\n</system-reminder>" + _focused_charter_block()
 
         # AUTO_MODE resume kick (issue #164): SessionStart:resume hands the turn
         # back to the user, which strands an unattended AUTO_MODE agent. Hooks

@@ -23,6 +23,7 @@ from ..utils.json_io import write_json_safely
 from .models import (DUTY_MACHINE, ROLE_MACHINE, Duty, Role, Update, dump)
 
 ROLES_DIR_ENV = "MACF_ROLES_DIR"
+SCAFFOLD_BOUNDARIES = "What this role may do, and what it must not."
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 CHARTER_SCAFFOLD = """# {title}
 
@@ -121,38 +122,71 @@ class RoleStore:
                 return cand
         raise RoleError("could not allocate a unique id after 64 draws")
 
+    @staticmethod
+    def code_prefixes(ref: str, letter: str) -> List[str]:
+        """The hex prefixes a shorthand like ``D442``, ``D442...``, ``d442d91`` or a
+        bare ``442d91`` may mean, most specific first. An id can itself begin
+        with the letter (``d6183b``), so the bare reading is always kept too.
+        *letter* is ``D`` for duties and ``R`` for roles."""
+        r = (ref or "").strip().rstrip(".").strip()
+        out = []
+        if len(r) >= 2 and r[0].upper() == letter and re.fullmatch(r"[0-9a-fA-F]{1,6}", r[1:]):
+            out.append(r[1:].lower())
+        if re.fullmatch(r"[0-9a-fA-F]{2,6}", r):
+            out.append(r.lower())
+        return out
+
+    def _by_code(self, pool, ref: str, letter: str, what: str):
+        """Resolve a code shorthand against *pool*: exact id first, then a unique
+        prefix; an ambiguous prefix refuses and lists the candidates so the
+        caller can ask which was meant."""
+        for pre in self.code_prefixes(ref, letter):
+            exact = [p for p in pool if p[0].id == pre]
+            if exact:
+                return exact[0]
+        hits = []
+        for pre in self.code_prefixes(ref, letter):
+            hits += [p for p in pool if p[0].id.startswith(pre) and p not in hits]
+        if len(hits) == 1:
+            return hits[0]
+        if len(hits) > 1:
+            names = ", ".join(f"{letter}{x.id} {x.title}" for x, _ in hits)
+            raise RoleError(f"{ref!r} is ambiguous among {len(hits)} {what}: {names} -- say which")
+        return None
+
     def find_role(self, ref: str) -> Tuple[Role, Path]:
-        """By id, or by an unambiguous case-insensitive title prefix."""
+        """By id or code shorthand (``R629``, ``629...``), or by an unambiguous
+        case-insensitive title prefix."""
         ref = (ref or "").strip()
         if not ref:
             raise RoleError("a role id or title prefix is required")
         pairs = self.roles()
-        by_id = [p for p in pairs if p[0].id == ref.lower()]
+        by_id = self._by_code(pairs, ref, "R", "roles")
         if by_id:
-            return by_id[0]
+            return by_id
         hits = [p for p in pairs if p[0].title.lower().startswith(ref.lower())]
         if len(hits) == 1:
             return hits[0]
         if not hits:
             raise RoleError(f"no role matches {ref!r} (run: macf_tools role list)")
-        names = ", ".join(f"{r.id} {r.title}" for r, _ in hits)
-        raise RoleError(f"{ref!r} is ambiguous: {names}")
+        names = ", ".join(f"R{r.id} {r.title}" for r, _ in hits)
+        raise RoleError(f"{ref!r} is ambiguous: {names} -- say which")
 
     def find_duty(self, ref: str, role: Optional[Role] = None) -> Tuple[Duty, Path]:
         ref = (ref or "").strip()
         if not ref:
             raise RoleError("a duty id or title prefix is required")
         pool = self.all_duties() if role is None else self.duties(self.folder_of(role))
-        by_id = [p for p in pool if p[0].id == ref.lower()]
+        by_id = self._by_code(pool, ref, "D", "duties")
         if by_id:
-            return by_id[0]
+            return by_id
         hits = [p for p in pool if p[0].title.lower().startswith(ref.lower())]
         if len(hits) == 1:
             return hits[0]
         if not hits:
             raise RoleError(f"no duty matches {ref!r}")
-        names = ", ".join(f"{d.id} {d.title}" for d, _ in hits)
-        raise RoleError(f"{ref!r} is ambiguous: {names}")
+        names = ", ".join(f"D{d.id} {d.title}" for d, _ in hits)
+        raise RoleError(f"{ref!r} is ambiguous: {names} -- say which")
 
     def folder_of(self, role: Role) -> Path:
         for r, d in self.roles():
@@ -216,7 +250,7 @@ class RoleStore:
                  importance: str = "normal", due: Optional[datetime] = None,
                  horizon: Optional[str] = None, why: str = "", cadence: Optional[str] = None,
                  depends_on: Iterable[str] = (), tracks: Iterable[str] = (),
-                 wiki_links: Iterable[str] = ()) -> Tuple[Duty, Path]:
+                 wiki_links: Iterable[str] = (), meta: bool = False) -> Tuple[Duty, Path]:
         if role.state in ("expired", "retired"):
             raise RoleError(f"role {role.id} is {role.state}; a duty cannot be added to it")
         # Dependencies may cross roles (BLOCKING counts dependents of any
@@ -231,7 +265,7 @@ class RoleStore:
             raise RoleError("--horizon needs --why: the reasoning is the duty's first note "
                             "(roles policy: reasoning a horizon)")
         duty = Duty(id=self.new_id(), role_id=role.id, title=title, body=body, importance=importance,
-                    due=due, horizon=horizon, cadence=cadence, depends_on=deps, tracks=tr,
+                    meta=meta, due=due, horizon=horizon, cadence=cadence, depends_on=deps, tracks=tr,
                     wiki_links=list(wiki_links), state="active" if tr else "pending")
         first = f"Declared. Horizon {horizon}: {why}" if horizon else (why or "Declared")
         duty.updates.append(_update(first, kind="declare"))
@@ -297,6 +331,76 @@ class RoleStore:
                                                  "from_state": old, "to_state": new_state,
                                                  "reason": reason, "evidence": ev})
         return duty
+
+    def engaged(self) -> List[Tuple[Duty, Path]]:
+        """Every active duty across the store: the duties attention is on."""
+        return [(d, p) for d, p in self.all_duties() if d.state == "active"]
+
+    def disengage(self, duty: Duty, folder: Path, reason: str = "") -> Duty:
+        """active -> pending: attention moved elsewhere. Not a service: putting a
+        duty down does nothing for it, so the gate's bound does not move."""
+        if duty.state != "active":
+            return duty
+        duty.state = "pending"
+        duty.updates.append(_update("Disengaged" + (f": {reason}" if reason else ""), kind="disengage"))
+        self.save_duty(duty, folder)
+        append_event("duty_disengaged", {"duty_id": duty.id, "role_id": duty.role_id, "reason": reason})
+        return duty
+
+    def check_engageable(self, duty: Duty, folder: Path) -> None:
+        """The refusals engage applies before writing anything."""
+        if duty.state == "done":
+            raise RoleError(f"duty {duty.id} is done; reactivate is not a thing a done duty does (declare a new one)")
+        # A role whose charter still carries the scaffold's Boundaries line has
+        # never said what it may do alone and what needs the operator; working
+        # its duties is how an agent over-reaches on the operator's behalf.
+        # The one exception is the meta duty that writes those Boundaries: the
+        # scaffold cannot be replaced any other way.
+        charter = folder / "charter.md"
+        if not duty.meta and charter.exists() and SCAFFOLD_BOUNDARIES in charter.read_text():
+            raise RoleError(f"the charter's Boundaries are still the scaffold ({charter}); write what this role "
+                            "may do alone and what needs the operator's direction before engaging a duty "
+                            "(roles policy: the charter; declare the charter as a --meta duty and engage that)")
+
+    def engage(self, duty: Duty, folder: Path, note: str = "", task_ids: Iterable[str] = (),
+               exclusive: bool = True) -> Duty:
+        """Attention is on this duty now: the duty's `task start`.
+
+        pending/deferred -> active with an 'engage' update (a service, so the
+        gate's bound clears and the stanza pointer moves here). Engagement is
+        exclusive by default: every other active duty in the store is
+        disengaged first, because attention moved. A deliberate parallel
+        engagement passes exclusive=False (see engage_set). Focusing the
+        parent role is the caller's step, because focus is an event, not a
+        record. Tracking tasks may be attached in the same breath.
+        """
+        self.check_engageable(duty, folder)
+        if exclusive:
+            for other, opath in self.engaged():
+                if other.id != duty.id:
+                    self.disengage(other, opath.parent, reason=f"engaged D{duty.id} instead")
+        ids = self._check_tracks(task_ids)
+        if ids:
+            duty.tracks = sorted(set(duty.tracks) | set(ids), key=lambda s: (len(s), s))
+        old = duty.state
+        duty.state = "active"
+        text = "Engaged" + (f": {note}" if note else "") + (f" [tracks {', '.join('#' + i for i in ids)}]" if ids else "")
+        duty.updates.append(_update(text, kind="engage"))
+        self.save_duty(duty, folder)
+        append_event("duty_serviced", {"duty_id": duty.id, "role_id": duty.role_id, "kind": "engage",
+                                       "from_state": old, "tracks": ids})
+        return duty
+
+    def engage_set(self, pairs: List[Tuple[Duty, Path]], note: str = "", task_ids: Iterable[str] = ()) -> List[Duty]:
+        """One command, several duties: the deliberate parallel engagement.
+        Everything outside the set is disengaged; the set is engaged together."""
+        keep = {d.id for d, _ in pairs}
+        for d, p in pairs:
+            self.check_engageable(d, p.parent)
+        for other, opath in self.engaged():
+            if other.id not in keep:
+                self.disengage(other, opath.parent, reason="engaged " + ", ".join("D" + k for k in sorted(keep)) + " instead")
+        return [self.engage(d, p.parent, note, task_ids, exclusive=False) for d, p in pairs]
 
     def link(self, duty: Duty, folder: Path, task_ids: Iterable[str]) -> Duty:
         ids = self._check_tracks(task_ids)

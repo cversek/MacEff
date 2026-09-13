@@ -21,7 +21,7 @@ Read the sections on lifecycle (the review ritual), time properties (the review 
 ## Questions to Extract from Policy Reading
 
 1. **What a review decides** - What questions does the ritual answer, and what dispositions can it end in?
-2. **Undescribed roles** - What does the policy say about a charter that is still the scaffold, and what should the review do about it?
+2. **Undescribed roles** - What does the policy say about a charter that is still the scaffold, and what should the review do about it? Is the review itself a duty of the role?
 3. **Expiry** - What happens to a role whose expiry has passed with no review, and what does the verb make agree?
 4. **Renewal** - Is a renewed appointment the same role or a new one, and how does the new one cite the old?
 5. **The next date** - How is the next review date and its horizon reasoned?
