@@ -516,9 +516,18 @@ htmlcov/
 ## Related
 - Links to issues, roadmaps, or discussions
 
----
-Generated with Claude Code
+Co-Authored-By: <model> <noreply@anthropic.com>
+
+[Moniker@idfrag: task#N s_XXXXXXXX/c_NN/p_ZZZZZZZ/t_TTTTTTTTTT]
 ```
+
+**The last line is the calling card, and it is the ONLY place agent identity or
+private context appears.** The body states the defect and the change
+impersonally — never which internal work item produced a paragraph, never a peer
+agent's behaviour, never a deployment's internals, never a local path.
+`../development/public_voice.md` §2.1 owns this rule and gives the reasoning,
+including when the card is suppressed entirely; this template only shows its
+shape. A deployment in the operator-proxy posture emits no card at all.
 
 ### Code Review Protocol
 
