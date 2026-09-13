@@ -369,7 +369,10 @@ Step 4: Report completion, await user direction
 - **Breadcrumb**: Forensic coordinate (run `macf_tools breadcrumb`)
   - `s_XXXXXXXX`: Session ID first 8 chars
   - `c_XX`: Cycle number (PA only)
-  - `g_YYYYYYY`: Git hash first 7 chars
+  - `g_YYYYYYY`: Git hash first 7 chars — **conditional**. Emitted only when
+    the breadcrumb is generated inside a git repository. An agent whose home is
+    not a repo (the normal case — see §3.1) gets a breadcrumb with no `g_` at
+    all, and that is correct output, not a truncated one.
   - `p_ZZZZZZZ`: Prompt UUID last 7 chars (when checkpoint created)
   - `t_TTTTTTTTTT`: Unix epoch timestamp
 - **CLUAC** (PA): Context level at checkpoint time
@@ -505,12 +508,16 @@ Read each COMPLETELY before resuming. These are not summarised below.
 - ⏳ Phase B.2 in progress (current state)
 - ⏳ Phase B.3-B.5 pending
 
-**Git State**:
+**Git State** (the CODE repositories this cycle touched — the CA tree itself is
+not versioned, so it has no line here):
 - All B.1 work committed and pushed
 - MacEff: COMMIT_HASH
 - Overlay: COMMIT_HASH
 - Parent: COMMIT_HASH
-- Agent repo: This CCP pending commit
+
+  State a repository as pushed only when you have checked the WORKING TREE and not
+  merely the commit count. "0 unpushed" is a true statement about commits and a
+  silent one about everything still uncommitted.
 
 **Container/Environment State**:
 - [Relevant environment details]
@@ -654,16 +661,33 @@ Approach:
 
 **Generate via**: `macf_tools breadcrumb`
 
-**Format**: `s_XXXXXXXX/c_NN/g_YYYYYYY/p_ZZZZZZZ/t_TTTTTTTTTT`
+**Format**: `s_XXXXXXXX/c_NN[/g_YYYYYYY]/p_ZZZZZZZ/t_TTTTTTTTTT`
 
 **Component Order Rationale** (slow→fast hierarchical compression):
 - `s_` Session (slowest - spans entire conversation)
 - `c_` Cycle (consciousness death/rebirth boundaries)
-- `g_` Git hash (code state at moment)
+- `g_` Git hash (code state at moment) — **conditional, see below**
 - `p_` Prompt UUID (DEV_DRV start point)
 - `t_` Timestamp (fastest - Unix epoch precision)
 
-**Example**: `s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890`
+**Examples**: `s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890` (in a repo)
+and `s_abc12345/c_42/p_ghi01234/t_1234567890` (the common case).
+
+**`g_` IS CONDITIONAL AND USUALLY ABSENT.** It carries the hash of the repository
+the breadcrumb was generated in, and there frequently is none: **the consciousness
+artifact tree is not a git repository.** Most consciousness artifacts are
+write-once, or extended without redaction, so a per-agent CA repo was retired as
+overhead that bought nothing. An agent working inside a code repository gets the
+`g_`; an agent writing a checkpoint in its own tree does not.
+
+So a four-component breadcrumb is not a degraded five-component one, and a reader
+must not treat a missing `g_` as a fault to repair. **Code state that matters is
+cited explicitly against the repository it belongs to** — see the cross-repository
+pattern in §3.2 — rather than smuggled into the consciousness coordinate.
+
+Examples throughout this policy show the full five-component form because they
+were written from inside a repository. Read them as illustrations of the format,
+not as a promise about your own output.
 
 **Purpose**: Forensic coordinate for archaeological reconstruction after compaction.
 
@@ -704,7 +728,8 @@ When completing work that spans multiple repos, include both consciousness state
 ✅ DETOUR: Policy Update [s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890] [MacEff g_abc1234]
 ```
 
-- Breadcrumb tracks consciousness state (personal CA repo)
+- The breadcrumb tracks consciousness state; it is not a repository reference,
+  and it carries a `g_` only when generated inside one
 - `[MacEff g_abc1234]` must reference an existing commit
 - This enables forensic reconstruction across repository boundaries
 
