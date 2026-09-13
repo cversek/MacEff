@@ -4597,6 +4597,13 @@ def get_display_mtime(tasks_dir) -> float:
     a reader the whole frame is current.
     """
     latest = get_tasks_mtime(tasks_dir)
+    # The roles stanza renders the roles store too: a duty done or engaged
+    # must redraw as promptly as a task edit does.
+    try:
+        from .roles.hooks import roles_store_mtime
+        latest = max(latest, roles_store_mtime())
+    except (OSError, ImportError, ValueError):
+        pass  # no roles store: store-only detection
     try:
         from .agent_events_log import get_log_path
         log_path = get_log_path()
@@ -4612,7 +4619,7 @@ def get_display_mtime(tasks_dir) -> float:
 # grows by one line per tool call, so watching the file's mtime redrew the
 # loop every second whenever the agent was working -- a display that never
 # changed, moving constantly.
-_DISPLAY_EVENT_PREFIXES = ("scope_", "role_focus_change", "work_mode_change", "task_")
+_DISPLAY_EVENT_PREFIXES = ("scope_", "role_", "duty_", "work_mode_change", "task_")
 _display_events_state = {"path": None, "offset": 0, "mtime": 0.0}
 
 

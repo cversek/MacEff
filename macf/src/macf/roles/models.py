@@ -131,6 +131,7 @@ class Duty(BaseModel):
     body: str = ""
     state: str = "pending"
     importance: str = "normal"
+    meta: bool = False                                    # the role's own upkeep: charter, review, migration
     due: Optional[datetime] = None
     horizon: Optional[str] = None
     cadence: Optional[str] = None

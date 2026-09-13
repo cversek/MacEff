@@ -27,6 +27,7 @@ Read the sections on what a role is, assignment, time properties, and the store.
 4. **Review** - What is the review date for, and what does its horizon mean? How is a horizon reasoned when the operator does not supply one?
 5. **Icons** - What icon shelf does the policy define, and how are icons offered?
 6. **Charter** - What is the charter, what does its scaffold contain, and when is a role considered undescribed?
+7. **Meta duties** - Is writing the charter itself a duty of the role, how is it declared, and what may it do that other duties cannot while the Boundaries are the scaffold?
 7. **First duties** - What must a dated or recurring duty carry, and who reasons it?
 
 ---
@@ -35,7 +36,7 @@ Read the sections on what a role is, assignment, time properties, and the store.
 
 1. Count the agent's active roles (`macf_tools role list`) and apply the policy's warning if the count exceeds its soft cap; ask the operator to confirm.
 2. Interview the operator with AskUserQuestion for each fact the ceremony collects: title, tenure start and expiry, review date and its reasoned horizon, purpose and boundaries, resources, and the icon -- offering the three best-fit shelf icons for the described role plus Other.
-3. Create the role with the collected facts (`macf_tools role create ...`), then open the scaffolded charter and replace its headings with the operator's sentences; add `[[wiki_links]]` for the concepts the role is about.
+3. Create the role with the collected facts (`macf_tools role create ...`); declare and engage the charter as the role's first duty (`macf_tools role duty add <role> "Write the charter" --meta`, then `role duty engage`); write the charter from the operator's sentences with `[[wiki_links]]` for the concepts the role is about; mark the duty done with the charter as evidence.
 4. For each first duty the operator names, declare it (`macf_tools role duty add ...`), reasoning and recording the horizon per the policy when one is not given.
 5. Show the result (`macf_tools role show <id>`) and offer to focus it (`maceff-role-focus`).
 

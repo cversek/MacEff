@@ -33,12 +33,16 @@ A **ROLE** is a formal appointment with a tenure and a review date. Its **DUTIES
 - How are roles and duties identified, and how does the CLI accept them?
 - What fields does a role record carry? A duty record?
 - What is `charter.md` for?
+- When does the charter reach the agent's context, and when may a repeat be suppressed?
 - Can a duty have sub-duties?
 - Why is nothing ordered by an integer?
+- How is a duty or role written and spoken of (`D442d91`, a unique prefix, the semantic tag)?
+- Is writing the charter, or reviewing the role, itself a duty?
 
 **3 Lifecycle**
 - What states can a role be in, and what moves it between them?
 - What states can a duty be in?
+- What does `duty engage` do, what does it disengage, and how is a parallel engagement declared?
 - What does `duty done` require, and why does it refuse without evidence?
 - What is the review ritual, and when is it due?
 
@@ -63,6 +67,8 @@ A **ROLE** is a formal appointment with a tenure and a review date. Its **DUTIES
 **7 Servicing, Pointers, and Focus**
 - What counts as servicing a duty?
 - Why are there two pointers, and how is each scoped?
+- Where does 👈 go when a role is expanded, collapsed, or just unfocused, and when does the stanza show more than one?
+- What age does 🎯 carry?
 - What is focus, how is it stored, and how many roles can be focused?
 - Is focus a work mode?
 
@@ -134,6 +140,12 @@ This is also what retires the umbrella-parent workaround in `autonomous_sprint.m
 
 ---
 
+### 1.5 The role's own upkeep is a duty too
+
+Work *on* a role -- writing or revising its charter and Boundaries, migrating a position into the store, preparing its review, refreshing its resources -- is not exempt from the vocabulary because it is about the role rather than about the world. It is a **meta duty**: declared on the role (`role duty add <role> "Write the charter's Boundaries" --meta`), typically **untimed**, and expected to be **done soon after it is declared**, with the charter or record it produced as its evidence. When the operator says "write the charter", "review this role", or "add the migration", the first act is to declare that duty and engage it, and only then to do the work; jumping straight to the edit leaves the role's own history in the transcript instead of on the role.
+
+A meta duty is marked `meta: true` in its record and ranks like any other duty. It has one privilege: **the charter meta duty is the single duty `engage` will take up while the Boundaries are still the scaffold**, because the scaffold cannot be written any other way (§2.5). Every other duty of that role waits for it.
+
 ## 2 Identity and the Store
 
 ### 2.1 Location and layout
@@ -162,7 +174,11 @@ agent/public/roles/2026-01-15_a3f9c2_Lab_Course_Assistant/
 
 ### 2.2 Identifiers
 
-Roles and duties are identified by **six hex characters** (`uuid4().hex[:6]`), allocated at creation and collision-checked within the store. Titles are for display. The CLI accepts an id or an unambiguous title prefix; an ambiguous prefix is refused with the candidates listed.
+Roles and duties are identified by **six hex characters** (`uuid4().hex[:6]`), allocated at creation and collision-checked within the store. Titles are for display.
+
+**Codes and shorthand.** Written down, a duty id wears a `D` and a role id an `R`: `D442d91`, `R62994b`. The code is shown dim in front of the marker on every line (`◼ D442d91 📌 ...`, `◼ R62994b 📚 ...`), where a task line shows its `#N`. In conversation a **unique prefix** is enough, with or without a trailing ellipsis: `D442`, `D442...`, `R629`. The CLI resolves a code by exact id, then by unique prefix, then falls back to an unambiguous case-insensitive title prefix. An ambiguous prefix is refused with the candidates listed, and the agent asks which was meant rather than picking one.
+
+**How the agent refers to a duty.** Always the full six with the letter, plus a short semantic tag drawn from the title: "the D442d91 Charter Drafting", "D090705, the Exp. 13 board plan". The code is what resolves; the tag is what a reader remembers. Bare titles drift and bare codes are opaque; the pair is the name.
 
 **Why not integers.** An integer id is read as an order, and the order it encodes is creation, which is the one ordering nobody wants. Every ordering in this policy is **computed at render time from stored facts** (§5) and none is stored.
 
@@ -190,6 +206,7 @@ Roles and duties are identified by **six hex characters** (`uuid4().hex[:6]`), a
 | `state` | `pending`, `active`, `done`, `deferred` (§3.2) |
 | `body` | what must be true -- a declaration, not a procedure |
 | `importance` | `critical`, `high`, `normal`, `low` |
+| `meta` | `true` for the role's own upkeep (charter, review, migration); §1.5 |
 | `due` | optional date, or date-time |
 | `horizon` | required when `due` or `cadence` is set (§4) |
 | `cadence` | optional, grammar in §4.3 |
@@ -202,6 +219,12 @@ Roles and duties are identified by **six hex characters** (`uuid4().hex[:6]`), a
 ### 2.5 `charter.md`
 
 The charter is the role's human face and its knowledge-web node: purpose, boundaries, what the role may and may not do, and pointers to the spokes, corpora or people it depends on. It is scaffolded at assignment with those headings and a `## Wiki-Links` section, and it is written by hand. A role whose charter is still the scaffold is a role nobody has yet described, and the review ritual (§3.4) says so.
+
+**Boundaries are the load-bearing section.** They state what the role may do on its own and what needs the operator's direction for that specific act. The default the policy sets, for every role: **a duty is a declaration of what must be true, never an authorization to act on the operator's behalf toward a third party** -- no message, draft, post, submission or commitment addressed to anyone else is implied by a duty. When a duty seems to need one, ask the operator, wait for the answer with a timeout suited to the duty's horizon, then continue with what can be done alone. `role duty engage` refuses while the Boundaries section is still the scaffold: an undescribed role cannot be worked, because working it is exactly how an agent over-reaches. The one exception is the meta duty that writes those Boundaries (§1.5).
+
+**The charter must be where the decision is made.** Boundaries on disk bind nothing; the agent acts from its context. So `role focus` prints the charter, `role duty engage` prints it after the views of the duties it engaged, and SessionStart injects the focused role's charter (with its engaged duties) into every new session while a role is focused -- a fresh session starts with none of what the focus command printed.
+
+**Suppressing the repeat.** Switching between roles whose charters are already fresh in context should not cost the context again. `role focus --no-charter` and `role duty engage --no-charter` skip the print, and the framework honours the flag **only after a required first showing**: the charter, unchanged, must have reached context earlier in the current cycle and session (a `role_charter_shown` event, written whenever focus, engage or SessionStart shows it). Otherwise the flag is ignored and the charter prints with a line saying why. The agent's judgement applies on top: if it has been a while, even within the session, leave the flag off and refresh the focus.
 
 ### 2.6 No nesting
 
@@ -225,7 +248,7 @@ The lifecycle runs on the same generic state machine the task system uses; the t
 
 ### 3.2 Duty states
 
-`pending` (declared, not yet worked) → `active` (has a tracked task, or was noted as in hand) → `done` (evidence recorded) or `deferred` (set aside with a reason, kept for the record). A deferred duty may be reactivated. A cadence duty is never `done` as a whole; its occurrences are, via `done_on` notes (§6.2).
+`pending` (declared, not yet worked) → `active` (engaged: attention is on it, or it has a tracked task) → `done` (evidence recorded) or `deferred` (set aside with a reason, kept for the record). A deferred duty may be reactivated. **`role duty engage` is the duty's `task start`**: it makes the duty active, records an engage update with its breadcrumb (a service, so the stanza pointer and the gate's bound both move), focuses the duty's role if another or none was focused, may attach the implementing tasks in the same step, and shows the formatted view of each duty it engaged followed by the role's charter. **Engagement is exclusive by default**: engaging a duty disengages every other active duty in the store (`active` → `pending` with a `disengage` update), because attention moved. A disengagement is not a service and not a touch -- putting a duty down does nothing for it, so neither the gate's bound nor the pointer moves to it. **A deliberate parallel engagement is one command with several ids** (`role duty engage A B`), all in one role; the set is engaged together and everything outside it is disengaged. Parallel engagement is the rarer case and the stanza says so (§7.2). A cadence duty is never `done` as a whole; its occurrences are, via `done_on` notes (§6.2).
 
 ### 3.3 `done` requires evidence
 
@@ -350,9 +373,11 @@ A **service** is any touch of a task or a duty that writes a breadcrumbed update
 
 ### 7.2 Two pointers, differently scoped
 
-**👈 is descriptive**: where attention last landed. It is scoped **per tree** -- one in the main task tree (its newest task service, as today) and one per role (its newest-serviced duty). They coexist; no store steals another's marker; the ages beside them say which was most recent overall.
+**👈 is descriptive**: where attention last landed. It is scoped **per tree** -- one in the main task tree (its newest task service, as today) and **one in the roles stanza**: the duty line or collapsed role line that was touched last across every role. They coexist; no store steals another's marker; the ages beside them say which was most recent overall. **An expanded role's own line never carries 👈 for a note on the role**: the note hands the pointer to that role's newest-touched duty. **Focusing is a touch**: when the focus event is the newest thing in the stanza and the role has no active duty yet, the pointer comes up to the focused line after 🎯 and its age, and moves down (possibly multiplying) once duties are engaged. A role that was just unfocused collapses, and the pointer comes back up to its collapsed line (with 🎯 gone) until something else is touched, because unfocusing writes nothing. A disengagement is not a touch.
 
-**🎯 is intentional**: what the agent has chosen to hold. It marks the focused role's line and nothing else.
+**Under a parallel engagement (§3.2) the stanza shows one 👈 per engaged duty**, each with its own age, so the operator sees that attention is split; a focus newer than all of them is shown as well. One active duty, one pointer.
+
+**🎯 is intentional**: what the agent has chosen to hold. It marks the focused role's line and nothing else, and it carries its own age: **the time since the focus event**, which is separate from any duty's engagement time.
 
 ### 7.3 Focus is a layer, not a mode
 
@@ -372,21 +397,21 @@ Focus is **orthogonal to work mode**. The dashboard composes the focused role's 
 
 ### 8.2 Line grammar
 
-**Role line**: status box · icon · title · `[state · review MM-DD]` · approach mark · `🎯` if focused · `👈 age` if it holds the role's pointer. Status boxes are exactly the task tree's: `◼` active, `◻` pending, `✔` done or retired, `⏸` paused. The approach mark on a role line is the **most urgent** of its duties' marks, so a collapsed role still escalates.
+**Role line**: status box · `R<id>` (dim) · icon · title · `[state · review MM-DD]` · approach mark · `🎯 age` if focused (the age of the focus, not of any duty) · `👈 age` if this **collapsed** line holds the stanza's pointer, or if the focus itself is the newest touch and no duty is engaged yet. Otherwise an expanded role's duty lines carry it. Status boxes are exactly the task tree's: `◼` active, `◻` pending, `✔` done or retired, `⏸` paused. The approach mark on a role line is the **most urgent** of its duties' marks, so a collapsed role still escalates.
 
-**Duty line**: status box · `📌` · title · due or cadence · approach mark · `👈 age` if it is the role's last-serviced duty.
+**Duty line**: status box · `D<id>` (dim) · `📌` · title · due or cadence · approach mark · `👈 age` if it is the last-touched duty in the stanza, or one of the engaged duties under a parallel engagement.
 
 **Collapsed role line** adds `· last: <duty> (age) · next: <duty> (date)` so a one-line role still says what was touched and what is coming.
 
 ```
 🎭 ROLES
-◼ 📚 Corpus Librarian                 [active · review --]   · last: intake note (2d)
-◼ 🎓 Lab Course Assistant             [active · review 12-15]  ⏳3d  🎯 👈 2h
-    ◻ 📌 confirm which section meets   due Mon 09-14  ⏳3d
-    ◻ 📌 board plan, first experiment  due Tue 09-15  ⏳4d   👈 2h
-    ◻ 📌 forum welcome message         (IMPORTANT)
-    ◻ 📌 weekly lab sections           weekly:tue  ⏳4d
-    ◻ 📌 end-of-term status refresh    due 12-15
+◼ R3f9a12 📚 Corpus Librarian                 [active · review --]   · last: intake note (2d)
+◼ R01d410 🎓 Lab Course Assistant             [active · review 12-15]  ⏳3d  🎯 5h
+    ◻ D951a01 📌 confirm which section meets   due Mon 09-14  ⏳3d
+    ◼ D090705 📌 board plan, first experiment  due Tue 09-15  ⏳4d   👈 2h
+    ◻ D1ae327 📌 forum welcome message         (IMPORTANT)
+    ◻ D6c02e4 📌 weekly lab sections           weekly:tue  ⏳4d
+    ◻ D2b77f0 📌 end-of-term status refresh    due 12-15
 ```
 
 ### 8.3 Expansion: never truncated
@@ -518,7 +543,7 @@ There is no registry of participating types (`scholarship.md`); the graph builde
 
 ```
 macf_tools role create|list|show|note|pause|resume|expire|retire|review|focus|unfocus|calendar
-macf_tools role duty add|show|note|done|defer|link|unlink|why
+macf_tools role duty add|show|engage|note|done|defer|link|unlink|why   # engage takes one id (exclusive) or several (parallel)
 macf_tools task roles [--all]
 macf_tools task tree --roles none|collapsed|focused|all
 ```
@@ -568,6 +593,10 @@ Every verb takes `--json`. Refusals print one `❌` line naming the reason and, 
 **❌ Unfocus to dodge the gate**
 - **Problem**: the focus gate blocks on an unserviced overdue duty and the agent unfocuses to stop.
 - **Fix**: defer with a reason, note why it waits, or unfocus with a note on the role; the event records what was due at the moment of escape either way.
+
+**❌ Over-reach: a duty read as a mandate**
+- **Problem**: a duty says "confirm which group meets first" and the agent drafts the email to the department under the operator's name; the duty named what must be true, not who may be contacted.
+- **Fix**: the charter's Boundaries; ask, wait with a timeout, then proceed without the outreach; the `engage` verb refuses an undescribed role.
 
 **❌ Done without evidence**
 - **Problem**: a duty marked done because it felt finished; nothing on record shows what satisfied it.
