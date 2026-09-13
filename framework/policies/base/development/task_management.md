@@ -1031,8 +1031,11 @@ GH_ISSUE tasks bridge to external GitHub issues. Completion requires the agent t
    - Commit links (automated from `--commit` hashes)
    - Verification method (automated from `--verified` text)
    - Agent calling card footer: `[AgentName: task#N breadcrumb]` for traceability —
-     **opt-in only**, gated by `opsec.public_attribution` in `{agent_home}/.maceff/config.json`
-     (default `false`; see below)
+     gated by `opsec.public_attribution` in `{agent_home}/.maceff/config.json`
+     (default `false`; see below). **The gate is per-deployment, not
+     per-artifact**: where it is on, the card is the default on the artifacts that
+     take one, and `../development/public_voice.md` §2.1 governs placement and
+     what the body may never contain.
    - Issue closed with reason "completed"
 
    **Calling-card attribution is opt-in (`opsec.public_attribution`)**:
@@ -1056,7 +1059,10 @@ GH_ISSUE tasks bridge to external GitHub issues. Completion requires the agent t
    deliberately — the intended case is dogfooding agents contributing to MacEff
    or other repos where agent traceability is part of the development story.
    The `--report` body itself must still never contain private-context
-   non-sequiturs; the gate covers only the structured footer.
+   non-sequiturs; the gate covers only the structured footer. That body rule is
+   general rather than a property of issue closeout — see
+   `../development/public_voice.md` §2.1, which states it once for every public
+   surface and specifies the last-line placement for pull requests.
 
    **Agent Responsibility in the Report**: The `--report` text IS the professional contribution. Draft it with the posture of an excellent OSS maintainer:
    - Thank the contributor for the report (if filed by someone other than the closing agent)
