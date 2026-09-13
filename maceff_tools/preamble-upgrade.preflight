@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Precondition for preamble-upgrade: can it run at all?
+#
+# preamble-upgrade is the last step of framework-upgrade, and the three steps
+# before it have already written by the time it starts. So its requirements are
+# checked HERE, before step 1, and a failure refuses the whole upgrade instead of
+# half-applying it. See maceff_tools/framework-upgrade.
+#
+# Exits 0 if the step could run. On failure, prints what is wrong AND the
+# variable that fixes it — the remedy belongs in the error, not in the source.
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=common.sh
+source "${SCRIPT_DIR}/common.sh"
+
+PA_USER="${PA:-}"
+CONTAINER="${CONTAINER_NAME:-maceff-sandbox}"
+rc=0
+
+if ! docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null | grep -q '^true$'; then
+  echo "preamble-upgrade: container '${CONTAINER}' is not running." >&2
+  echo "                  set CONTAINER_NAME=<name> for this deployment, or start it." >&2
+  rc=1
+elif [[ -z "$PA_USER" ]]; then
+  echo "preamble-upgrade: no PA user resolved. Set PA=<username>." >&2
+  rc=1
+elif ! docker exec "$CONTAINER" id "$PA_USER" >/dev/null 2>&1; then
+  echo "preamble-upgrade: PA user '${PA_USER}' does not exist in container '${CONTAINER}'." >&2
+  echo "                  set PA=<username> to a PA of this deployment." >&2
+  rc=1
+fi
+
+exit "$rc"
