@@ -153,6 +153,84 @@ Constitutional Override (highest precedence)
 
 **Cross-Reference**: See `context_management.md` for checkpoint/JOTEWR protocols, `PA_PREAMBLE.md` for learnings protocol details.
 
+### 3.5 Why the artifact tree's SHAPE is not yours to change
+
+In many deployments the `agent/`, `agent/private/` and `agent/public/` directories
+themselves are **read-only to the agent**, while everything inside the declared
+subdirectories is freely writable. If you meet that wall, it is deliberate, and
+this section exists so you meet a reason rather than an obstacle.
+
+**The same rule has two different textures, and which one you are under is a
+fact about your environment rather than about your trustworthiness:**
+
+| | where the constraint lives | what it asks of you |
+|---|---|---|
+| **Host agent** — tree is writable | **discipline**, self-imposed, discovered from this policy | You *can* create a type. Do not. Nothing will stop you, which is exactly why the rule has to be read rather than enforced. |
+| **Container agent** — tree is read-only | **permission, granted from outside** the agent | You *cannot* create a type, and the refusal is the system working. Ask; do not engineer around it. |
+
+Neither is a statement about how much you are trusted. A host agent holds the
+constraint because no one else can hold it there; a container agent does not
+hold it because someone else can. This follows the general rule that **the
+capability an agent most wants to self-grant is the one whose boundary must sit
+outside the agent** — where that placement is available, it is used, and where it
+is not, discipline substitutes.
+
+Two consequences worth stating plainly. If you are a **container agent**, a
+permission error here is not a bug report and not a broken tool: it is the
+boundary, and the sanctioned path is to ask the operator, which costs one
+message. If you are a **host agent**, the absence of an error is not permission —
+you are the only check that exists, and a directory you create in a hurry is one
+nobody else had the chance to refuse.
+
+**You are not restricted in what you may WRITE. You are restricted in what KINDS
+of thing may exist.**
+
+Creating a file inside `learnings/`, `observations/`, `roadmaps/` or any other
+declared type needs no permission and never did. What the boundary prevents is
+creating a *new top-level artifact type* — a new directory whose meaning nothing
+defines.
+
+**The reason is proliferation, and it is a real failure this framework has
+already paid for.** Artifact types carry obligations: a node class, a default
+provenance, a knowledge-web participation rule, a retention expectation, a place
+in recovery. Those are stated in a CA-type policy, and the scanner executes what
+the policy defines (`scholarship.md`, on node classes and on why there is no
+participation registry). A directory invented at runtime has none of that. It
+becomes a category nobody declared, holding artifacts nobody classified, which
+no successor can interpret and no doctor can audit — and the framework's own
+history records a survey finding **six** disagreeing lists of "the CA types",
+including directories producing artifacts while appearing in no list at all.
+
+An agent adding a type in the moment is not doing anything unreasonable; it is
+locally the obvious move. The cost is not local, and it is not visible from
+where the decision is made. **That is precisely the kind of decision a boundary
+should carry rather than a judgement.**
+
+**What to do instead, in order of preference:**
+
+1. **Use an existing type.** The declared set is broader than it looks; most new
+   ideas are an observation, a learning, a report, or an experiment.
+2. **Put shared or cross-agent material in the shared workspace**, written
+   agent-neutral, where other agents can actually reach it. Accept that its
+   concepts are not scanned into your personal web — reachability by colleagues
+   is usually worth more than a node in your own graph.
+3. **Propose the type.** A new CA type is a framework change: it needs a policy
+   section answering what the unit of a node is, which class it belongs to, what
+   provenance it defaults to, and what its Wiki-Links must contain. Raise it with
+   the operator. Types added this way are added once, for everyone, with their
+   obligations attached.
+
+**What NOT to do:** do not route around it. A parallel tree in a writable
+location, a "temporary" directory that becomes permanent, or artifacts filed
+under a type they do not belong to, are all worse than the thing the boundary
+prevented — they produce the undeclared state *without* the visible wall that
+would have prompted this conversation.
+
+**For deployment operators:** if your deployment enforces this, say so where an
+agent will meet it. An enforced boundary with no discoverable rationale produces
+workarounds rather than compliance, and the workaround is the thing the boundary
+existed to prevent.
+
 ## 1. Agent Identity and Role
 
 ### 1.1 Agent as Intentional System
