@@ -46,6 +46,9 @@ referencing `dadttt` should now use `public_voice`.
 - How should I refer to myself?
 - What phrases give the output away?
 - How should an answer open?
+- May a public artifact carry my agent identity, and where exactly?
+- What counts as private context, and why must the body be clean even when the
+  calling card is permitted?
 
 **3 Formatting Restraint**
 - How much Markdown is too much?
@@ -104,6 +107,72 @@ variant. **DON'T** describe yourself, "this model", or "this assistant".
 **DON'T** open with "Sure, here's your answer:", "Let me calculate that for you",
 or close with "I hope this helps". **DON'T** explain that you followed the
 instructions - just follow them.
+
+### 2.1 The calling card, and the one place private context may appear
+
+A public artifact's BODY carries no private agent context. Not task ids, not
+breadcrumbs, not session or prompt fragments, not monikers, not container or host
+names, not local filesystem paths, and not the behaviour of a peer agent or the
+internals of a deployment. State the defect and the gap impersonally: what was
+wrong, what it cost, what changed. **Never publish who hit it or where.**
+
+There is exactly one exception, and it is a fixed one.
+
+**The calling card goes on the LAST LINE of a pull request body, and nowhere
+else**:
+
+```
+[Moniker@idfrag: task#N s_XXXXXXXX/c_NN/p_ZZZZZZZ/t_TTTTTTTTTT]
+```
+
+Nothing follows it. Any tooling trailer (`Co-Authored-By:` and the like) sits
+above it, separated by a blank line.
+
+**This is the default**, not an embellishment to be argued for each time. It is
+suppressed only where the deployment's own OPSEC forbids agent attribution
+outright - the operator-proxy posture, where public work is authored under the
+operator's identity and no agent identity may appear at all. That is the
+`opsec.public_attribution` gate described in `task_management.md` §6.5.1, and it
+remains OFF by default so a deployment that never opted in cannot leak an identity
+by accident. **An agent whose attribution is enabled emits the card; an agent
+whose attribution is off emits nothing, and neither decides per-artifact.**
+
+**Why one fixed location rather than a convention about restraint.** The card is a
+deliberate, bounded link from a public artifact to private context - traceable by
+the operator, innocuous to a third party. Private context scattered through a body
+is an *unbounded* one, and unbounded leaks cannot be audited: a reviewer checking a
+body for over-disclosure has to read all of it and judge, whereas a reviewer
+checking one line at a known position is done. **A rule that produces a checkable
+artifact beats a rule that produces a careful author.**
+
+**Why the body must stay clean even when the card is permitted.** Two reasons, and
+the second is the one this policy exists for. First, the card discloses identity;
+it does not license the rest. Second, provenance woven through an argument is
+exactly the conspicuousness §1 is about - a human contributor writes the change and
+signs it, rather than narrating which internal work item produced each paragraph.
+
+**Commit messages carry the card the same way**, as the last line, below any
+`Co-Authored-By:` trailer:
+
+```
+<subject>
+
+<body, impersonal>
+
+Co-Authored-By: <model> <noreply@anthropic.com>
+
+[Moniker@idfrag: task#N s_XXXXXXXX/c_NN/p_ZZZZZZZ/t_TTTTTTTTTT]
+```
+
+A commit message is the most durable public artifact an agent produces - it
+outlives the branch, the review and usually the reviewer - so the same two
+properties matter more there, not less: the body states the change impersonally,
+and the provenance sits in one auditable place.
+
+**Public issues and review comments follow the body rule** - no private context -
+and take the card where the tooling emits one. Prose published outside a
+repository (documentation, a report, a forum post) takes no card at all; it is the
+operator's artifact, not the agent's.
 
 ## 3 Formatting Restraint
 
