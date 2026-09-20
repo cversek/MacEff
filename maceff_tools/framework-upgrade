@@ -10,6 +10,18 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # died partway through on a script that had not existed for as long as anyone
 # had been running it. The preflight below exists so a missing step is a named
 # error before any work happens, rather than a half-applied upgrade.
+#
+# That preflight originally checked only that each step's FILE existed, which is
+# the failure that had just been observed rather than the property the sentence
+# above names. A step can also be present and unable to START -- preamble-upgrade
+# needs a running container and a PA user inside it -- and because it runs last,
+# the three steps that write have already written when it refuses. Same
+# half-applied upgrade, different cause.
+#
+# So a step may ship a sibling "<script>.preflight" declaring what it needs.
+# Every precondition runs before step 1 writes anything, and all failures are
+# reported together: an operator fixing two environment variables should learn
+# about both on the first run. A step with no .preflight has no precondition.
 STEPS=(
   "Syncing policies:policy-sync"
   "Syncing templates:template-sync"
@@ -20,7 +32,7 @@ STEPS=(
 echo "=== MacEff Framework Upgrade ==="
 echo ""
 
-# Preflight: every step script must exist and be executable before we start.
+# Preflight, part 1: every step script must exist and be executable.
 missing=0
 for step in "${STEPS[@]}"; do
   script="${step#*:}"
@@ -31,6 +43,22 @@ for step in "${STEPS[@]}"; do
 done
 if [[ "$missing" -gt 0 ]]; then
   echo "error: ${missing} upgrade step(s) unavailable — refusing to run a partial upgrade" >&2
+  exit 1
+fi
+
+# Preflight, part 2: every step that declares a precondition must be able to run.
+# Collect all failures rather than stopping at the first, then refuse as a set.
+unmet=0
+for step in "${STEPS[@]}"; do
+  script="${step#*:}"
+  check="${SCRIPT_DIR}/${script}.preflight"
+  [[ -x "$check" ]] || continue
+  if ! "$check"; then
+    unmet=$((unmet + 1))
+  fi
+done
+if [[ "$unmet" -gt 0 ]]; then
+  echo "error: ${unmet} upgrade step(s) cannot run — refusing before anything is written" >&2
   exit 1
 fi
 
