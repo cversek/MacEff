@@ -13,6 +13,7 @@ non-ASCII em-dash — both of which had slipped past manual grep sweeps.
 Deliberate disclosures bypass with a reviewed `git commit --no-verify`.
 """
 import json
+import re
 import os
 import stat
 import sys
@@ -364,6 +365,16 @@ def main():
         print(json.dumps(sorted(fired)))
         return 0
 
+    # A profile may EXEMPT specific matched text -- never a category, never a
+    # secret. The case: a private deployment repository whose own agents sign
+    # their reviews with their calling cards; the built-in "agent uuid" rule is
+    # right for every public target and wrong for the one repository those
+    # agents are the subject of. The exemption is a list of regexes matched
+    # against the TEXT the rule caught, so `[A-Za-z]+@63e6b2` exempts one
+    # deployment's cards and nothing else; a secret-class label is never exempt.
+    exempt = [re.compile(p) for p in profile.get("exempt", [])]
+    def exempted(label, tok):
+        return (not is_secret(label)) and tok is not None and any(x.fullmatch(tok) for x in exempt)
     hits = []
     for fname, text in staged_added_lines():
         for rx, label, kind in checks:
@@ -371,7 +382,7 @@ def main():
             if m:
                 if is_secret(label):
                     hits.append((fname, label, None, None))
-                else:
+                elif not exempted(label, m.group(0)):
                     hits.append((fname, label, m.group(0), text.strip()[:100]))
     if hits:
         print("COMMIT REJECTED: leakage in staged changes")
@@ -681,8 +692,14 @@ def scan_text(text: Any, *, part: str = "body",
         return ScanResult(unscanned=[part])
 
     use = checks if checks is not None else compiled_checks(profile, env)
+    # `exempt` (profile): regexes matched against the caught TEXT; a match drops the
+    # finding unless its label is secret-class. See the hook template for the case.
+    exempt = [re.compile(x) for x in (profile or {}).get("exempt", [])]
+    def _exempt(label, tok):
+        return exempt and not is_credential_label(label, profile) and any(x.fullmatch(tok) for x in exempt)
     found = [Finding(part, label, m.start(), m.end())
-             for rx, label in use for m in rx.finditer(text)]
+             for rx, label in use for m in rx.finditer(text)
+             if not _exempt(label, m.group(0))]
     return ScanResult(findings=found)
 
 
