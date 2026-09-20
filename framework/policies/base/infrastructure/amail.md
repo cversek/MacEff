@@ -3,6 +3,10 @@
 **Type**: Infrastructure (opt-in)
 **Scope**: All agents (PA and SA), and the broker that serves them
 **Status**: ACTIVE — specification. No implementation is authorized by this document.
+**Version**: 1.3.1 — §2.3 states that the broker reads no home either: threading questions
+are answered from a broker-owned correspondence ledger. Patch: a correction to how an
+existing rule was met, found by a deployment where the identity model held.
+
 **Version**: 1.3.0 — adds rung 1s (§2.1.1): two brokers that share a filesystem hand mail
 broker-to-broker through a declared intake on that filesystem, the domain carries locality
 without the address recording a route, and the receiving broker keeps the judgement. Minor:
@@ -293,6 +297,22 @@ resulting property is worth more than the convenience it costs:
 path while a sibling path keeps writing directly leaves the privilege requirement
 intact and hides it behind whichever path happens to be exercised — the property
 then holds by coverage rather than by construction, which is not a property at all.
+
+**The broker does not read a home either.** Two checks once opened a Maildir: a
+reply's parent must be a message the sender can see, and an inbound message's
+asserted parent or thread must be one the recipient has. A broker running as the
+uid this section says it runs as cannot enter either home, and on the first
+deployment where that held every `--reply-to` and every cross-mount delivery
+failed with a permission error on a home — refused correctly by the filesystem,
+attempted incorrectly by the broker. Both questions are about what the broker
+itself did (it delivered the parent, it accepted the thread), so the broker keeps
+a **correspondence ledger**, broker-owned and agent-readable, of every message it
+handed to an agent or accepted from one, with the thread facts, and answers
+threading questions from that record. A question the ledger cannot answer is
+refused (a reply to an unseen parent) or declined (an asserted thread is not
+joined), never resolved by opening a home. This is the same rule as the write
+side: hand-off in, ledger out, and no path across the boundary in either
+direction.
 
 **Across a mount the same rule holds twice.** On rung 1s (§2.1.1) the sending
 broker hands off into the *peer broker's* intake, never into an agent's box, and

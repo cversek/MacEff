@@ -418,6 +418,13 @@ class BrokerDeployConfig(BaseModel):
                     "each submitted message. Without it a sender holds a copy "
                     "of what it sent and cannot learn whether it left, which "
                     "is the outbound face of a silent drop.")
+    ledger_dir: Optional[Path] = Field(
+        default=Path("/var/lib/amail_broker/ledger"),
+        description="broker-owned, agent-READABLE record of what the broker "
+                    "handed to each agent and accepted from it "
+                    "(ledger/<agent>/<message_id>.json, with the thread "
+                    "facts). The broker answers every threading question "
+                    "from here and never opens an agent's home.")
     rate_limit_dir: Optional[Path] = Field(
         default=Path("/var/lib/amail_broker/ratelimit"),
         description="broker-owned, agent-READABLE rate-limit state. On disk "
@@ -519,6 +526,7 @@ class BrokerDeployConfig(BaseModel):
             inbound_quarantine=self.inbound_quarantine,
             inbound_handoff=self.inbound_handoff,
             dispositions_dir=self.dispositions_dir,
+            ledger_dir=self.ledger_dir,
             rate_limiter=self._build_rate_limiter(addressing.agents),
             transport=self._build_transport(),
             opsec_scan=self._build_scan() if self.opsec_scan else None,
