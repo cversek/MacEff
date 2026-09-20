@@ -228,12 +228,74 @@ HOOK_TEMPLATE = '''#!/usr/bin/env python3
 Installed by an external tool; the pattern profile lives outside this repo
 on purpose. Bypass after human review with: git commit --no-verify
 """
+import getpass
 import json
+import os
 import re
+import socket
 import subprocess
 import sys
 
 PROFILE_PATH = {profile_path!r}
+
+# The always-on secret shapes, rendered from the installing module at install
+# time. Static and public (they describe what a key LOOKS like, not any key), so
+# copying them here discloses nothing; rendering rather than hand-copying means
+# the hook and the CLI scanner cannot drift.
+SECRET_SHAPED = {secret_shaped!s}
+
+
+def _literal(value):
+    return r"(?<![A-Za-z0-9_])" + re.escape(value) + r"(?![A-Za-z0-9_])"
+
+
+def environment_checks():
+    """The six environment-derived categories, derived HERE, at run time.
+
+    Never written into the profile or into this file: the module that installs
+    this hook refuses to put the host's own name into a file that lives on the
+    host and that a future hand might copy. Prefer the installing module's own
+    derivation when it is importable (it also knows the agent's moniker from the
+    calling card); fall back to what the stdlib can see when it is not.
+    """
+    try:
+        from macf.opsec import environment_patterns  # noqa: WPS433 - optional
+        return [(re.compile(p), label, "hard") for p, label in environment_patterns()]
+    except ImportError:
+        pass
+    out = []
+    try:
+        host = socket.gethostname().strip()
+    except OSError:
+        host = ""
+    if len(host) >= 4:
+        out.append((re.compile(_literal(host)), "hostname", "hard"))
+        first = host.split(".")[0]
+        if first != host and len(first) >= 4:
+            out.append((re.compile(_literal(first)), "hostname", "hard"))
+    try:
+        user = getpass.getuser().strip()
+    except (OSError, KeyError):
+        user = ""
+    if len(user) >= 4:
+        out.append((re.compile(_literal(user)), "local username", "hard"))
+    home = os.path.expanduser("~").strip()
+    if home and home != "~":
+        out.append((re.compile(_literal(home)), "agent home path", "hard"))
+    out.append((re.compile(r"(?:/home|/Users|/root)/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*"),
+                "filesystem path", "hard"))
+    out.append((re.compile(r"@[0-9a-f]{{6}}\b"), "agent uuid", "hard"))
+    print("pre-commit gate: macf not importable; environment checks derived from the "
+          "stdlib only (agent moniker not redacted)", file=sys.stderr)
+    return out
+
+
+def all_checks(profile):
+    checks = [(re.compile(p), label, "hard") for p, label in profile.get("hard", [])]
+    checks += [(re.compile(p), label, "soft") for p, label in profile.get("soft", [])]
+    checks += [(re.compile(p), label, "hard") for p, label in SECRET_SHAPED]
+    checks += environment_checks()
+    return checks
 
 
 def staged_added_lines():
@@ -256,8 +318,7 @@ def main():
     except (OSError, ValueError) as e:
         print("pre-commit gate: cannot read profile %s (%s); failing closed" % (PROFILE_PATH, e))
         return 1
-    checks = [(re.compile(p), label, "hard") for p, label in profile.get("hard", [])]
-    checks += [(re.compile(p), label, "soft") for p, label in profile.get("soft", [])]
+    checks = all_checks(profile)
     # Labels a profile marks as SECRET-CLASS. A finding of this class is
     # reported WITHOUT the matched text and WITHOUT the surrounding line.
     #
@@ -280,7 +341,28 @@ def main():
         return label in secret_labels or any(
             k in label.lower() for k in
             ("credential", "secret", "token", "password", "private key",
-             "api key", "email address"))
+             "api key", "ssh public key", "access key", "email address"))
+
+    if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
+        # Installed-but-inert is the failure this exists to catch: a gate that
+        # runs and reports clean is trusted MORE than no gate. Feed synthetic
+        # lines through the same matcher and report which categories fired.
+        # Labels only -- the decoy contains this host's own name.
+        decoy = []
+        try:
+            decoy.append("deployed on " + socket.gethostname() + " by " + getpass.getuser())
+        except (OSError, KeyError):
+            pass
+        decoy.append("see " + os.path.expanduser("~") + "/notes for the details")
+        decoy.append("token = ghp_" + "A" * 36)
+        decoy.append("-----BEGIN RSA PRIVATE KEY-----")
+        fired = set()
+        for text in decoy:
+            for rx, label, kind in checks:
+                if rx.search(text):
+                    fired.add(label)
+        print(json.dumps(sorted(fired)))
+        return 0
 
     hits = []
     for fname, text in staged_added_lines():
@@ -380,8 +462,39 @@ def install_hook(repo: Path, profile: Optional[Path] = None) -> Dict[str, Any]:
         )
 
     checker = hooks_dir / "check_context_leakage.py"
-    checker.write_text(HOOK_TEMPLATE.format(profile_path=str(profile_path)))
+    checker.write_text(HOOK_TEMPLATE.format(
+        profile_path=str(profile_path),
+        secret_shaped=json.dumps(SECRET_SHAPED),
+    ))
     os.chmod(checker, checker.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    # Self-test before reporting success. The hook applied only the profile's
+    # vocabulary for its whole life before this: a hostname, a username, a home
+    # path and a provider token committed cleanly under the default profile,
+    # and nothing said so, because "installed" was reported on write, not on
+    # behaviour. Now "installed" means "refused a decoy in every category it
+    # exists for".
+    import subprocess as _sp
+    probe = _sp.run([sys.executable, str(checker), "--self-test"],
+                    capture_output=True, text=True, cwd=str(repo), timeout=30)
+    try:
+        fired = set(json.loads(probe.stdout.strip() or "[]"))
+    except ValueError:
+        fired = set()
+    required = {"local username", "filesystem path",
+                "github token", "private key material"}
+    # Not required: "hostname" (only where the host has a name >= 4 chars) and
+    # "agent home path" (only where an agent home exists -- under a test runner
+    # or a plain developer account there is none, and the probe cannot tell the
+    # two apart from outside). "local username" and "filesystem path" carry the
+    # environment half of the check on every host; the two secret shapes carry
+    # the credential half.
+    missing = sorted(required - fired)
+    if missing:
+        raise RuntimeError(
+            "opsec hook installed but INERT for: " + ", ".join(missing)
+            + " -- refusing to report success. stderr: " + probe.stderr.strip()[:300])
+    self_test = {"fired": sorted(fired), "stderr": probe.stderr.strip()}
 
     # Install the dispatcher and take a NUMBERED SLOT rather than owning the
     # single pre-commit file.
@@ -412,6 +525,7 @@ def install_hook(repo: Path, profile: Optional[Path] = None) -> Dict[str, Any]:
         "hooklet": str(hooklet),
         "dispatcher_actions": dispatch["actions"],
         "adopted": dispatch["adopted"],
+        "self_test": self_test,
     }
 
 
@@ -430,7 +544,13 @@ def install_hook(repo: Path, profile: Optional[Path] = None) -> Dict[str, Any]:
 ### template keeps its own small matcher because it must run stdlib-only in
 ### whatever python3 a committer has, with macf possibly not installed at all
 ### -- but both read the SAME profile, so the vocabulary cannot diverge even
-### though the two loops are separate.
+### though the two loops are separate. The secret shapes are RENDERED into the
+### hook at install time from SECRET_SHAPED below, and the environment
+### categories are derived at run time (from this module when importable, from
+### the stdlib when not), so the three sources compiled_checks() names are the
+### three the hook applies. For a long time they were not: the hook compiled
+### the profile alone, and the two categories the gate was built for -- this
+### host's identifiers and credential material -- were the two it never checked.
 ### ---------------------------------------------------------------------------
 
 #: A part that could not be read as text. NOT an empty finding list: the amail

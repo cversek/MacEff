@@ -134,3 +134,64 @@ class TestCredentialSentinelScoping:
     def test_module_defining_the_marker_is_not_flagged(self):
         source = 'SENTINEL = "MACEFF-SECRET-SENTINEL:gmail_grant:must-not-leave-host"\n'
         assert self._hits(source) == []
+
+
+# --- The gate applies every source compiled_checks() names, not the profile alone ------
+#
+# For its whole life before these tests the installed hook compiled only the profile
+# JSON. A hostname, a username, a home path and a provider token committed cleanly
+# under the default profile, and "installed" was reported on write. These tests fix
+# the contract: the hook refuses the environment categories and the secret shapes,
+# and install_hook refuses to report success on a hook that would not.
+
+
+def _env_decoy():
+    import getpass
+    import os
+    import socket
+    return ("deployed on %s by %s from %s/work\n"
+            % (socket.gethostname(), getpass.getuser(), os.path.expanduser("~")))
+
+
+def test_environment_identifiers_rejected_with_default_profile(repo, profile):
+    install_hook(repo, profile)
+    (repo / "notes.md").write_text(_env_decoy())
+    _git(repo, "add", "notes.md")
+    r = _git(repo, "commit", "-m", "env leak", check=False)
+    out = r.stdout + r.stderr
+    assert r.returncode != 0, out
+    assert "COMMIT REJECTED" in out
+    assert "[local username]" in out or "[hostname]" in out
+    assert "[agent home path]" in out or "[filesystem path]" in out
+
+
+def test_secret_shapes_rejected_and_withheld(repo, profile):
+    install_hook(repo, profile)
+    token = "ghp_" + "Q" * 36
+    (repo / "conf.py").write_text("x = 1  # " + token + "\n")
+    _git(repo, "add", "conf.py")
+    r = _git(repo, "commit", "-m", "token", check=False)
+    out = r.stdout + r.stderr
+    assert r.returncode != 0
+    assert "[github token]" in out
+    # The gate must not print what it refuses.
+    assert token not in out
+    assert "withheld as secret-class" in out
+
+
+def test_install_self_test_reports_categories(repo, profile):
+    facts = install_hook(repo, profile)
+    fired = set(facts["self_test"]["fired"])
+    assert {"local username", "filesystem path",
+            "github token", "private key material"} <= fired
+
+
+def test_install_refuses_inert_hook(repo, profile, monkeypatch):
+    # Break the rendered hook's matcher source so no category can fire, and the
+    # installer must refuse rather than report success.
+    import macf.opsec as opsec
+    broken = opsec.HOOK_TEMPLATE.replace("checks = all_checks(profile)",
+                                         "checks = []")
+    monkeypatch.setattr(opsec, "HOOK_TEMPLATE", broken)
+    with pytest.raises(RuntimeError, match="INERT"):
+        install_hook(repo, profile)

@@ -12855,6 +12855,11 @@ def cmd_opsec_install_hook(args: argparse.Namespace) -> int:
     except ValueError as e:
         print(f"❌ {e}")
         return 1
+    except RuntimeError as e:
+        # The installer wrote the hook, probed it with a decoy, and the decoy
+        # passed. "Installed" would be a lie about the one property that matters.
+        print(f"❌ {e}")
+        return 1
     # Report the EFFECT, not the attempt. A message describing the call rather
     # than the result is how a provisioning command came to say "appended" for
     # something that replaced -- telling the operator the one outcome they
@@ -12867,6 +12872,9 @@ def cmd_opsec_install_hook(args: argparse.Namespace) -> int:
         print("   • dispatcher already current — nothing changed")
 
     print("✅ OPSEC scan installed as pre-commit hooklet 10-opsec")
+    fired = facts.get("self_test", {}).get("fired", [])
+    print(f"   Self-test: refused a decoy in {len(fired)} categories "
+          f"({', '.join(fired)})")
     print(f"   Repo:     {facts['repo']}")
     print(f"   Hooklet:  {facts['hooklet']}")
     print(f"   Profile:  {facts['profile']} (edit patterns there; NEVER commit it)")
