@@ -162,6 +162,7 @@ carried over.
 | kill the watcher | the watchdog alarms within its interval, naming the dead pid |
 | leave an entry in the spool past the bound | the receiver alarms that its spool is not draining, and **keeps accepting** |
 | stop the container | the host-side gate reports UNREACHABLE — distinct from unhealthy, because nothing was measured |
+| make an agent's home unreadable to the broker (it should already be) and send `--reply-to` a message that agent received | delivered; the broker answered from `ledger/<agent>/` and never opened the home. Before 1.3.1 this was a PermissionError on the sender's Maildir |
 
 Pair every one with its acceptance. A refusal with no matching acceptance proves
 only that the code path can raise, not that it discriminates.

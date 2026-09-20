@@ -307,6 +307,19 @@ class BrokerConfig:
     #: the same reason as the quarantine.
     inbound_handoff: Optional[Path] = None
 
+    #: Broker-owned, agent-READABLE record of every message the broker has
+    #: handed to an agent (received) or accepted from one (sent), per agent:
+    #: ledger/<agent>/<message_id>.json with the thread facts. THIS IS WHAT
+    #: THE BROKER CONSULTS INSTEAD OF AN AGENT'S HOME. Two checks used to open
+    #: a Maildir -- a reply's parent must be a message the sender can see, and
+    #: an inbound message's asserted parent or thread must be one the recipient
+    #: has -- and both raised PermissionError the moment the broker ran as a
+    #: uid that could not enter the home, which is the uid the design says it
+    #: runs as. The evidence for both questions is something the broker itself
+    #: did, so it is recorded where the broker can read it. `None` falls back
+    #: to a sibling of the disposition store, then of the hand-off root.
+    ledger_dir: Optional[Path] = None
+
     #: Rung 1s: peer deployments whose pickup-box root is reachable through
     #: this filesystem, keyed by the peer's MAIL DOMAIN (lower-cased). The
     #: domain is the locality: a recipient under one of these domains is
@@ -796,6 +809,81 @@ class Broker:
                   file=sys.stderr)
             return None
 
+    # ------------------------------------------------------------------ ledger
+
+    def _ledger_root(self) -> Optional[Path]:
+        if self.config.ledger_dir is not None:
+            return Path(self.config.ledger_dir)
+        if self.config.dispositions_dir is not None:
+            return Path(self.config.dispositions_dir).parent / "ledger"
+        if self.config.inbound_handoff is not None:
+            return Path(self.config.inbound_handoff).parent / "ledger"
+        return None
+
+    def record_seen(self, agent: str, message: Message, direction: str,
+                    via: str = "") -> Optional[Path]:
+        """Write that *agent* has seen *message*: received (handed into its
+        box) or sent (accepted from it). Broker-owned, 0644, never rewritten:
+        the first record stands and a later one with the same id is a no-op.
+
+        The broker never opens a home. This ledger is the only evidence it
+        consults about what an agent has, and it holds only what the broker
+        itself did -- which is exactly the set of facts the two threading
+        checks need, because a message an agent can legitimately reply to or
+        be threaded under is one this broker delivered or accepted.
+        """
+        root = self._ledger_root()
+        if root is None:
+            print(f"⚠️ MACF: no ledger configured; that '{agent}' {direction} "
+                  f"{message.message_id} is unrecorded, so a reply to it will be "
+                  f"refused as unseen", file=sys.stderr)
+            return None
+        d = root / agent
+        d.mkdir(mode=0o755, parents=True, exist_ok=True)
+        f = d / f"{message.message_id}.json"
+        if f.exists():
+            return f
+        rec = {"message_id": message.message_id, "thread_id": message.thread_id,
+               "parent": message.parent, "sender": message.sender,
+               "to": list(message.to or []), "direction": direction,
+               "via": via, "at": _now_iso()}
+        tmp = f.with_name(f.name + ".tmp")
+        tmp.write_text(json.dumps(rec, indent=1))
+        tmp.chmod(0o644)
+        os.replace(tmp, f)
+        return f
+
+    def seen(self, agent: str, message_id: str) -> Optional[Dict[str, Any]]:
+        """The ledger record for *message_id* in *agent*'s ledger, or None."""
+        root = self._ledger_root()
+        if root is None or not message_id:
+            return None
+        f = root / agent / f"{message_id}.json"
+        if not f.is_file():
+            return None                      # unseen: the ordinary answer, not a failure
+        try:
+            return json.loads(f.read_text())
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"⚠️ MACF: ledger record {f} unreadable ({e}); treated as "
+                  f"unseen, which refuses rather than trusts", file=sys.stderr)
+            return None
+
+    def thread_seen(self, agent: str, thread_id: str) -> bool:
+        """Whether any message in *agent*'s ledger belongs to *thread_id*."""
+        root = self._ledger_root()
+        if root is None or not thread_id:
+            return False
+        d = root / agent
+        if not d.is_dir():
+            return False
+        for f in d.glob("*.json"):
+            try:
+                if json.loads(f.read_text()).get("thread_id") == thread_id:
+                    return True
+            except (OSError, json.JSONDecodeError):
+                continue
+        return False
+
     def hand_off(self, agent: str, message: Message, trust: str) -> Path:
         """Hand a delivered message into the recipient's pickup box.
 
@@ -852,7 +940,12 @@ class Broker:
             "rung": "local",
             "origin_domain": self.config.domain,
         }
-        return self._write_pair(box, stem, sidecar, payload)
+        written = self._write_pair(box, stem, sidecar, payload)
+        # The one place every delivery to a local box passes (rung 1, the
+        # internet path's accept_inbound, the peer-intake sweep), so it is
+        # where "this agent has this message" is written down.
+        self.record_seen(agent, message, "received")
+        return written
 
     @staticmethod
     def _write_pair(box: Path, stem: str, sidecar: Dict[str, Any],
@@ -1073,8 +1166,14 @@ class Broker:
 
     # -------------------------------------------------------------------- submit
 
-    def canonicalize(self, sender: str, message: Message, home: Optional[Path]) -> List[str]:
+    def canonicalize(self, sender: str, message: Message,
+                     home: Optional[Path] = None) -> List[str]:
         """Rebuild every field the submitter does not own. Returns refusal reasons.
+
+        `home` is accepted and IGNORED: it was the sender's Maildir, opened to
+        check a reply's parent, and the broker must never open a home (see
+        the ledger). The parameter stays so callers and tests written against
+        the old signature keep working; nothing reads it.
 
         THIS EXISTS BECAUSE FIXING FIELDS ONE AT A TIME DOES NOT CONVERGE. Three
         audit rounds each found a different submitter-controlled field on the same
@@ -1194,12 +1293,18 @@ class Broker:
         if message.parent is not None:
             if not _ID_RE.match(message.parent or ""):
                 reasons.append("parent is not a valid message identifier")
-            elif home is not None:
-                from .store import find as _find
-                if _find(home, message.parent) is None:
-                    reasons.append(
-                        "parent names a message this sender cannot see; a reply "
-                        "must continue a thread the sender actually received")
+            elif self.seen(sender, message.parent) is None:
+                # FROM THE LEDGER, NEVER FROM THE HOME. This used to open the
+                # sender's Maildir, which the broker's own identity model says
+                # it cannot enter -- and on a deployment where that model held,
+                # every --reply-to failed with PermissionError on the sender's
+                # home. What the check needs is whether this broker delivered
+                # or accepted the parent for this sender, and that is the
+                # broker's own record.
+                reasons.append(
+                    "parent names a message this sender cannot see; a reply "
+                    "must continue a thread the sender actually received (or "
+                    "sent) through this broker")
         if message.thread_id and not _THR_RE.match(message.thread_id):
             reasons.append("thread_id is not a valid thread identifier")
 
@@ -1293,6 +1398,11 @@ class Broker:
             self._record_fate(sender, message, "gate-refused", gate)
             return {"ok": False, "refused": [f"pre-send gate: {gate}"],
                     "message_id": message.message_id}
+
+        # SENT, in the ledger, before the delivery loop: a sender may reply to
+        # its own message on a thread it opened, and that fact is the broker's
+        # (it accepted the submission), not the sender's home's.
+        self.record_seen(sender, message, "sent")
 
         delivered, failures = [], []
         for r in message.to:
@@ -1461,12 +1571,9 @@ class Broker:
         unintegrated guard for the whole period nothing called it; that entry
         is retired with this caller.
         """
-        from .store import quarantine
-        from .store import read_all as store_read_all
         agent = self.config.agent_for(recipient)
         if not agent:
             raise DeliveryError(f"'{recipient}' is not a local mailbox")
-        home = self.config.agent_homes[agent]
 
         # Canonicalise INBOUND too. This is the other path that writes a Message
         # to storage, and the one where the message is genuinely hostile rather
@@ -1566,13 +1673,19 @@ class Broker:
         # path, still open on its twin — which is the asymmetry that keeps
         # recurring, so it is now closed on both.
         #
-        # ONE scan, not two. store_find() and store_thread() each deserialise the
-        # entire mailbox, so asking both questions separately doubled the cost of
-        # every delivered message for no additional guarantee.
-        existing = store_read_all(home) if (message.parent or message.thread_id) else []
+        # FROM THE LEDGER, NEVER FROM THE HOME. This block used to read the
+        # recipient's whole Maildir to answer two questions -- is the asserted
+        # parent a message the recipient has, is the asserted thread one the
+        # recipient is in -- and every Message carries a thread_id, so every
+        # inbound delivery took the branch. A broker running as the uid the
+        # design says it runs as cannot enter that home, and the first
+        # deployment where that was true failed every peer-intake delivery
+        # with PermissionError on the recipient's Maildir. Both questions are
+        # about what THIS BROKER delivered to or accepted from the recipient,
+        # which is what the ledger holds.
         if message.parent is not None:
-            visible = any(m.message_id == message.parent for m in existing)
-            if not _ID_RE.match(message.parent or "") or not visible:
+            if not _ID_RE.match(message.parent or "") or \
+                    self.seen(agent, message.parent) is None:
                 message.parent = None
         if message.thread_id and not _THR_RE.match(message.thread_id):
             message.thread_id = new_id("thr")
@@ -1580,13 +1693,12 @@ class Broker:
             # A well-formed thread_id with no visible parent is an assertion of
             # membership in a conversation this sender has shown no part of. It
             # gets its own thread rather than the one it named.
-            if any(m.thread_id == message.thread_id for m in existing):
+            if self.thread_seen(agent, message.thread_id):
                 message.thread_id = new_id("thr")
         message.sender = remote_sender
 
         # Same unified path: inbound peer mail is handed off, not written
-        # across the boundary. `home` is retained above only to read the
-        # recipient's existing threads for the parent/thread checks.
+        # across the boundary.
         self.hand_off(agent, message, message.trust or "")
         if self.audit:
             self.audit.inbound(sender=message.sender, recipient=recipient,

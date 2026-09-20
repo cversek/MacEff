@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Policy: `amail.md` 1.3.0, §2.1.1 (locality is carried by the domain; where the write lands and why it is not the pickup box; what a deployment declares and who provisions what); `docs/AMAIL_DEPLOYMENT.md` gains the host-and-container section with its break table
 - Host-side plumbing: `amail.json` `broker_config` + `autostart` let the client start the daemon on first use; `amail status` and the daemon banner label such a broker `agent-launched` (same code path, not the same boundary)
 
+**amail correspondence ledger: the broker never opens a home** (`macf.amail`):
+- `ledger/<agent>/<message_id>.json`, broker-owned and agent-readable, written at every hand-off (received) and every accepted submission (sent), with the thread facts (`ledger_dir` in `broker_config.yaml`, default `/var/lib/amail_broker/ledger`)
+- `canonicalize` answers "can this sender see the parent of its reply" from the ledger instead of the sender's Maildir (`--reply-to` no longer fails with PermissionError on a deployment where the broker cannot enter homes); `accept_inbound` answers the asserted-parent and asserted-thread checks from the ledger instead of the recipient's Maildir (the reverse direction of rung 1s on a different-uid deployment)
+- Policy: `amail.md` 1.3.1, §2.3 "the broker does not read a home either"; deployment doc break-table row
+
 ## [0.6.0] - 2026-08-29
 
 ### Summary
