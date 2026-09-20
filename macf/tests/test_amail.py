@@ -3383,15 +3383,10 @@ class TestNoGuardWithoutACallSite:
     #: that retires the exemption. An entry here is a debt, not a dispensation:
     #: when the named subsystem lands, the entry must be deleted and this test
     #: will then require a real call site.
-    KNOWN_UNINTEGRATED = {
-        # The inbound delivery/quarantine path. Nothing calls it because there
-        # is no inbound path yet -- that is the Phase 5.3 transport decision and
-        # the Phase 6 round trip. It is ahead of its integration point rather
-        # than orphaned inside a finished system, which is a different fault
-        # from the two named above and must not be conflated with them.
-        # REMOVE THIS ENTRY when an inbound receiver hands messages to the
-        # broker; the test then demands the call site.
-        "accept_inbound",
+    KNOWN_UNINTEGRATED: set = {
+        # `accept_inbound` sat here for the whole period nothing called it.
+        # The rung-1s peer-intake sweep is its first production caller, so
+        # the entry is retired and the sweep below demands the call site.
     }
 
     GUARD_PREFIXES = ("assert_", "check_", "verify_", "validate_", "ensure_",
