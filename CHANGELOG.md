@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `canonicalize` answers "can this sender see the parent of its reply" from the ledger instead of the sender's Maildir (`--reply-to` no longer fails with PermissionError on a deployment where the broker cannot enter homes); `accept_inbound` answers the asserted-parent and asserted-thread checks from the ledger instead of the recipient's Maildir (the reverse direction of rung 1s on a different-uid deployment)
 - Policy: `amail.md` 1.3.1, §2.3 "the broker does not read a home either"; deployment doc break-table row
 
+### Fixed
+
+- **roles: one clock** (`roles/store.py`): declarations and updates are stamped through `priority.now()`, the clock `MACF_ROLES_NOW` pins, instead of `datetime.now()`. Two tests pinned the poll clock to 2026-09-14 while the fixture declared at wall time; once the wall clock passed 09-15 the "never before declared" floor dropped the occurrence under test and `main` CI went red for everyone (#397). The source-tier fixture now pins its clock; the display tests, which order touches against wall-clock focus events, deliberately run unpinned; a seam test asserts the store stamps with the pinned clock
+
 ## [0.6.0] - 2026-08-29
 
 ### Summary

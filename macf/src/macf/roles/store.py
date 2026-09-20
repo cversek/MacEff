@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
 
 from ..agent_events_log import append_event
+from .priority import now as _clock
 from ..lifecycle import IllegalTransition, check_transition
 from ..utils.breadcrumbs import get_breadcrumb
 from ..utils.json_io import write_json_safely
@@ -62,7 +63,13 @@ def slug(title: str) -> str:
 
 
 def now_iso() -> str:
-    return datetime.now().replace(microsecond=0).isoformat()
+    # One clock. ``priority.now()`` is the seam ``MACF_ROLES_NOW`` pins; every
+    # timestamp the roles code WRITES must come from the same clock every tier
+    # READS, or a pinned test freezes the poll and not the declaration -- and
+    # ``occurrences()`` floors at ``declared_on``, so a declaration stamped by
+    # the wall clock after the pinned date silently drops the occurrence under
+    # test. That is how two tests came to encode an expiry date (#397).
+    return _clock().replace(microsecond=0).isoformat()
 
 
 def _update(description: str, kind: str = "note", done_on: Optional[date] = None,
@@ -221,7 +228,7 @@ class RoleStore:
                     review_horizon: Optional[str] = None, resources: Iterable[str] = (),
                     charter_seed: str = "", wiki_links: Iterable[str] = (),
                     why: str = "") -> Tuple[Role, Path]:
-        tenure_start = tenure_start or date.today()
+        tenure_start = tenure_start or _clock().date()   # same clock as every other stamp
         rid = self.new_id()
         role = Role(id=rid, title=title, icon=icon, tenure_start=tenure_start, expires=expires,
                     review_by=review_by, review_horizon=review_horizon,

@@ -32,7 +32,14 @@ SOON3 = TODAY + timedelta(days=3)         # ⏳3d with a 3d horizon (entered TOD
 @pytest.fixture
 def store(tmp_path, monkeypatch):
     monkeypatch.setenv("MACF_ROLES_DIR", str(tmp_path / "roles"))
-    monkeypatch.setenv("MACF_ROLES_NOW", NOW.isoformat())
+    # Deliberately NOT pinned. These tests order touches against focus events,
+    # and focus is recorded through the events log on the WALL clock. Since the
+    # store stamps through the same seam the tiers read (#397), pinning
+    # MACF_ROLES_NOW here would freeze every store stamp at one instant while
+    # the focus clock kept moving -- two clocks again, from the other side. So
+    # the roles clock runs on wall time in this file (its fallback), the
+    # sleeps below are what advance it, and renders pass `at=NOW` explicitly.
+    monkeypatch.delenv("MACF_ROLES_NOW", raising=False)
     monkeypatch.setenv("MACF_TOUCH_NAG_BASE", "4")
     return RoleStore()
 
