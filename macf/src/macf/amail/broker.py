@@ -397,7 +397,18 @@ class BrokerConfig:
         local, _, dom = addr.partition("@")  # noqa: MACEFF005 - str.partition's (before, sep, after) contract is fixed by the stdlib; there is no callee whose order can change
         if dom != self.domain.lower():
             return None
-        return local if local in self.agent_homes else None
+        # The local part is case-insensitive; the declared key keeps the case
+        # it was written with. Fold at lookup, and return the DECLARED name,
+        # because that is the key every other table (homes, boxes) is under.
+        # Found by a second deployment whose agent keys were not lowercase:
+        # its peer intake rejected every pair as "not a mailbox of this
+        # broker" after reading and hashing it -- and found AGAIN when a
+        # later squash replaced this loop with an exact match. The test in
+        # test_amail_shared_rung.py is what keeps it from a third time.
+        for name in self.agent_homes:
+            if name.lower() == local:
+                return name
+        return None
 
     def shared_for(self, address: str) -> Optional[SharedRoute]:
         """The route when *address* is under a peer deployment reachable

@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **roles: one clock** (`roles/store.py`): declarations and updates are stamped through `priority.now()`, the clock `MACF_ROLES_NOW` pins, instead of `datetime.now()`. Two tests pinned the poll clock to 2026-09-14 while the fixture declared at wall time; once the wall clock passed 09-15 the "never before declared" floor dropped the occurrence under test and `main` CI went red for everyone (#397). The source-tier fixture now pins its clock; the display tests, which order touches against wall-clock focus events, deliberately run unpinned; a seam test asserts the store stamps with the pinned clock
+- **amail rung 1s: a mixed-case agent key is a mailbox again** (`BrokerConfig.agent_for`): the case-fold lookup that returns the DECLARED key (so the accepted pair lands in the pickup box keyed by it) was lost in the ledger squash and replaced by an exact match; every pair to a deployment whose agent keys are not lowercase was read, hashed and rejected as "not a mailbox of this deployment". Restored, with the regression test that was missing the first time (`test_amail_shared_rung.py::TestAMixedCaseAgentKeyIsStillAMailbox`)
 
 ## [0.6.0] - 2026-08-29
 
