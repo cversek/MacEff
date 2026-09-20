@@ -3,6 +3,11 @@
 **Type**: Infrastructure (opt-in)
 **Scope**: All agents (PA and SA), and the broker that serves them
 **Status**: ACTIVE — specification. No implementation is authorized by this document.
+**Version**: 1.3.0 — adds rung 1s (§2.1.1): two brokers that share a filesystem hand mail
+broker-to-broker through a declared intake on that filesystem, the domain carries locality
+without the address recording a route, and the receiving broker keeps the judgement. Minor:
+a new normative rung, derived from a measured gap (host and container on one machine).
+
 **Version**: 1.2.0 — §6b.0 answers what to do INSTEAD of a refused send, makes the rate
 limit observable to the good-faith agent it targets, settles whose contacts are checked,
 and states that outbound controls are scoped by PATH rather than by authorship (the seam
@@ -46,6 +51,9 @@ becomes tractable once the address stops encoding how the message travels.
 - What is the delivery ladder?
 - How does the broker choose a rung?
 - Why does the same address work on one host and across many?
+- Two brokers share a filesystem (a host and a container on it): which rung, and where does the write land?
+- How is locality visible to a broker when the address must not record it?
+- What must a deployment declare to reach a peer through a shared filesystem, and who provisions what?
 - How does delivery actually complete, and who performs the final write?
 - What must a deployment provision before mail can be delivered at all?
 - Where is the authoritative mail store?
@@ -155,12 +163,78 @@ cheapest rung that can reach the recipient:
 
 | Rung | Condition | Mechanism |
 |---|---|---|
-| 1 | Recipient's mailbox is on this host | Direct write into the recipient's mail store |
+| 1 | Recipient's mailbox is on this host | Hand-off into the recipient's pickup box (§2.3) |
+| 1s | Recipient's broker shares a filesystem with this one | Broker-to-broker hand-off into the peer broker's intake on that filesystem (§2.1.1) |
 | 2 | Recipient's broker is reachable on a private network | Broker-to-broker transfer over that network |
 | 3 | Anything else | Hand to the configured outbound relay |
 
 Rung selection is **runtime state**, evaluated per message. It is never recorded in
 the address, the contact list, or the message itself.
+
+### 2.1.1 Locality is carried by the domain, and a shared filesystem is rung 1s
+
+**The gap this closes, measured.** A deployment running its broker inside a
+container, and an agent on the same machine outside it, could not exchange mail
+through their clients. Host to container was possible only by hand: compose a
+message with the framework's models, write the sidecar and `.amsg` pair into the
+container's pickup box with the right ownership, `docker cp`. Container to host
+was refused, correctly: *rung 1 (local) does not apply and remote delivery is not
+configured*. A host and a container on it are the same machine in every sense
+except mount namespace, and fell through every rung.
+
+**Locality is the domain.** §1.2 forbids the address from naming a route, and
+nothing here changes that. But the mail domain is already per deployment (§1.1),
+so `agent@<deployment-domain>` already says which broker owns the mailbox. The
+broker therefore maps a **domain to a rung**: its own domain is rung 1; a domain
+it has a shared hand-off declared for is rung 1s; anything else falls through to
+2 and 3. Moving an agent between deployments changes its domain, which is the one
+thing that *should* change; contacts, stored mail and the message format do not.
+
+**Where the write lands, and why it is not the pickup box.** The pickup box is
+the boundary between an agent and **its own** broker. The broker that writes
+there has consulted the recipient's contact book, classified the message with the
+recipient's keys, and vouched for both in the sidecar — and a broker on the other
+side of a mount can do none of that, because it cannot read the peer's book. A
+pair it wrote into the box would carry an authorization claim nobody made, and
+moving the recipient-side check to ingest would put an authorization predicate in
+agent-side code, which §3.1 forbids. So rung 1s is **broker to broker**: the
+sending broker writes into the peer broker's **intake**,
+`<peer hand-off root>/_peers/<sending domain>/`, and the peer broker sweeps it
+through the same inbound path internet mail takes — its contacts, its keys, its
+quarantine, its audit, its hand-off into the real pickup box. Ingest on the
+recipient side is unchanged. It is rung 2's shape with the filesystem as the
+wire, which is why it sits between 1 and 2.
+
+**What the sending broker decides, and what it does not.** It checks that the
+*sender* may write to the destination (the sender's own book, before any rung is
+chosen, exactly as for every other rung). It makes no claim about acceptance and
+classifies no trust; the sidecar says so (`rung: shared`, `origin_domain`,
+authorization outcome `peer-intake`). The receiving broker treats the sender field
+as a claim, and rejects a pair whose sender is not under the domain whose intake
+carried it: the intake directory is the one fact about origin the mount can be
+trusted for, and a disagreeing sender field is a forgery attempt rather than a
+routing error. Only intakes for **declared** peers are read; a directory for an
+undeclared domain is left alone and named, because reading it would let anyone
+who can write the mount speak for a domain.
+
+**What a deployment declares.** Per peer domain: the peer's hand-off root **as it
+appears on this side of the mount**, and the owner and group that root's intake
+carries **as the kernel on this side sees them** — the mount's id mapping, stated
+so the broker can verify the intake before every write and refuse on a mismatch
+with the two numbers side by side. Ownership is *verified, never applied*: an
+unprivileged broker cannot chown across a uid boundary, and §2.3 exists so
+nothing on the mail path needs to. The intake is **provisioned by the peer**
+(owner: the peer's broker; group: one the writing broker belongs to on its side;
+mode 2770) and is never created across the mount, for the reason §2.3 gives about
+pickup boxes: a directory created on demand from the wrong side is unreadable by
+the very broker it was meant for, silently. A second deployment adopts the rung by
+adding one declaration and one mount.
+
+**What the sidecar names.** The rung, on both sides: the sending broker writes
+`rung: shared`; the receiving broker's hand-off into the pickup box writes
+`rung: local`, because that write *is* rung 1 — its own broker, its own
+judgement. The audit records `shared` at the sender and *via shared hand-off
+from <domain>* at the receiver.
 
 The consequence worth stating plainly: adding a second host, moving an agent between
 hosts, or gaining and losing a private network changes **nothing** about addressing,
@@ -219,6 +293,14 @@ resulting property is worth more than the convenience it costs:
 path while a sibling path keeps writing directly leaves the privilege requirement
 intact and hides it behind whichever path happens to be exercised — the property
 then holds by coverage rather than by construction, which is not a property at all.
+
+**Across a mount the same rule holds twice.** On rung 1s (§2.1.1) the sending
+broker hands off into the *peer broker's* intake, never into an agent's box, and
+the peer broker hands off into the box as itself. Two hand-offs, no cross-uid
+write, and the final write is still made by the only broker that holds the
+recipient's book. The intake is provisioned like a pickup box — by its owner, in
+advance — and the writer verifies its declared ownership before writing rather
+than creating or correcting it.
 
 ---
 
@@ -828,6 +910,10 @@ whoever did.
 - *Thread directory naming was unowned.* Resolved by §5.2: minted by the opener,
   never renamed.
 - *No diagnostic trail existed for a channel outage.* Resolved by §3.3.
+- *A host and a container on it fell through every rung, and mail crossed by
+  `docker cp`.* Resolved by rung 1s (§2.1.1): the domain is the locality, the
+  deployment declares the shared hand-off and its id mapping, and the peer broker
+  keeps the judgement.
 - *Protocol shaped by its first transport.* Resolved by writing this before the
   client, and by §5.3 naming what must not propagate inward.
 

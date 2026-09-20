@@ -9536,6 +9536,17 @@ def _amail_config() -> dict:
     cfg.setdefault("contacts", os.environ.get(
         "MACF_AMAIL_CONTACTS", "/var/lib/amail_broker/contacts.json"))
     cfg.setdefault("agent", os.environ.get("MACEFF_AGENT_NAME", ""))
+    # A HOST-SIDE broker the agent's own client may start. Two keys:
+    # `broker_config` names the broker's deployment config (the same file the
+    # daemon reads), and `autostart` says the client may launch the daemon
+    # when the socket is absent. Both default OFF: a broker the agent launches
+    # runs as the agent's uid and is a process the agent controls, so it is
+    # not the boundary the spec's broker is -- it is the same code path (one
+    # scrub, one audit, one ledger, one delivery ladder) offered to a host
+    # deployment whose trust tier rests on supervision rather than on
+    # separation. `amail status` says so whenever it is in use.
+    cfg.setdefault("broker_config", os.environ.get("MACF_AMAIL_BROKER_CONFIG", ""))
+    cfg.setdefault("autostart", os.environ.get("MACF_AMAIL_AUTOSTART", "") in ("1", "true", "yes"))
     # The agent's OWN private signing key. It lives in the agent's home, not the
     # broker's: a signing key proves authorship and reaches nothing, so holding
     # one does not give a compromised agent any reach it did not have. Keeping it
@@ -10046,6 +10057,68 @@ def cmd_amail_keygen(args: argparse.Namespace) -> int:
     return 0
 
 
+def _broker_socket_ready(sock: Path, timeout: float = 0.0) -> bool:
+    """True when something answers on the broker socket (within timeout)."""
+    import socket as _socket
+    import time as _time
+    deadline = _time.monotonic() + timeout
+    while True:
+        if sock.exists():
+            try:
+                s = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+                s.settimeout(1.0)
+                s.connect(str(sock))
+                s.close()
+                return True
+            except OSError:
+                pass
+        if _time.monotonic() >= deadline:
+            return False
+        _time.sleep(0.2)
+
+
+def _ensure_host_broker(cfg: dict) -> str:
+    """Start the broker daemon for a host deployment that declared autostart,
+    when nothing answers on the socket. Returns a note for the caller's output
+    ("" when nothing was done), and never raises: a broker that could not be
+    started leaves the send to fail the honest way, at the socket.
+
+    THIS IS NOT THE SPEC'S BROKER. It runs as this uid, launched by the agent
+    it serves, unsupervised by anything but the agent. What it provides is the
+    single code path -- the pre-send gate, the rate limit, the audit record,
+    the disposition ledger, the delivery ladder with its rung 1s -- so host
+    mail is scrubbed, recorded and delivered by the same rules as container
+    mail and the container's own broker still enforces its own contacts on
+    what arrives. The audit line says `launched_by=agent` so no reader takes
+    it for a boundary.
+    """
+    import subprocess
+    # Declared first, probed second: a deployment that did not opt in gets no
+    # probe at all, so this never touches a deployment broker's socket (a probe
+    # connection can occupy a listen backlog and turn a reachable broker into
+    # an unreachable one for the caller that follows).
+    if not cfg.get("autostart") or not cfg.get("broker_config"):
+        return ""
+    sock = Path(cfg["socket"])
+    if _broker_socket_ready(sock):
+        return ""
+    env = dict(os.environ, AMAIL_BROKER_CONFIG=str(cfg["broker_config"]),
+               AMAIL_BROKER_LAUNCHED_BY="agent")
+    log = Path(cfg["broker_config"]).with_suffix(".broker.log")
+    try:
+        with open(log, "ab") as out:
+            subprocess.Popen([sys.executable, "-m", "macf.amail.daemons.broker"],
+                             env=env, stdin=subprocess.DEVNULL, stdout=out,
+                             stderr=subprocess.STDOUT, start_new_session=True)
+    except OSError as e:
+        return f"⚠️ could not start the host broker ({e}); see {log}"
+    if _broker_socket_ready(sock, timeout=5.0):
+        return (f"ℹ️  started an agent-launched host broker on {sock} (uid "
+                f"{os.getuid()}, unsupervised; log {log}). Same code path as a "
+                f"deployment broker, not the same boundary.")
+    return f"⚠️ host broker was launched but nothing answers on {sock} yet; see {log}"
+
+
 def cmd_amail_send(args: argparse.Namespace) -> int:
     """Submit a message to the broker.
 
@@ -10088,6 +10161,10 @@ def cmd_amail_send(args: argparse.Namespace) -> int:
             return 1
         msg = parent.reply(sender=msg.sender, body=body, subject=args.subject)
         msg.to = list(args.to) or msg.to
+
+    note = _ensure_host_broker(cfg)
+    if note:
+        print(note, file=sys.stderr)
 
     # SIGN BEFORE SUBMITTING, if this agent has a key.
     #
@@ -10313,6 +10390,9 @@ def cmd_amail_status(args: argparse.Namespace) -> int:
 
     cfg = _amail_config()
     sock = Path(cfg["socket"])
+    started = _ensure_host_broker(cfg)
+    if started:
+        print(started, file=sys.stderr)
     reachable = False
     if sock.exists():
         try:
@@ -10364,6 +10444,11 @@ def cmd_amail_status(args: argparse.Namespace) -> int:
         "address": f"{cfg['agent']}@{cfg['domain']}" if cfg["agent"] and cfg["domain"] else None,
         "socket": str(sock),
         "broker_reachable": reachable,
+        # A broker the agent's own client may launch is not the boundary the
+        # spec's broker is; the status surface says which kind this is.
+        "broker_kind": ("agent-launched, unsupervised, same uid as the agent"
+                        if cfg.get("autostart") and cfg.get("broker_config")
+                        else "deployment"),
         "maildir": str(box) if box else None,
         "own_store": local,
         # The quarantine count is the load-bearing one: an empty inbox and an
@@ -10379,7 +10464,8 @@ def cmd_amail_status(args: argparse.Namespace) -> int:
         _local_str = "own-store counts unavailable"
     print(f"address:  {info['address'] or '(unconfigured)'}")
     print(f"maildir:  {info['maildir'] or '(unknown)'}  [{_local_str}]")
-    print(f"broker:   {'✅ reachable' if reachable else '❌ unreachable'} at {sock}")
+    print(f"broker:   {'✅ reachable' if reachable else '❌ unreachable'} at {sock}"
+          + (f"  [{info['broker_kind']}]" if info["broker_kind"] != "deployment" else ""))
     # The pickup box is how a recipient learns it has mail awaiting custody
     # transfer — the one count that calls for an action, so it gets its own
     # line rather than a slot in the summary.

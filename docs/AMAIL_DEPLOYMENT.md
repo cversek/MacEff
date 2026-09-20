@@ -168,6 +168,75 @@ only that the code path can raise, not that it discriminates.
 
 ---
 
+## Two deployments on one machine (a host and a container): rung 1s
+
+A host broker and a container broker on the same machine share a filesystem
+through a bind mount, and the spec's rung 1s (`amail.md` §2.1.1) delivers
+between them broker-to-broker over that mount. Nothing about addressing or
+contacts changes; a deployment adopts the rung with **one declaration and one
+mount**, in each direction it wants.
+
+**The declaration**, in `broker_config.yaml`, keyed by the peer's mail domain:
+
+```yaml
+shared_handoffs:
+  box.local:                       # the container deployment's domain
+    handoff: /srv/box/amail/handoff  # its inbound_handoff, as mounted HERE
+    uid: 100999                      # owner of its intake, as this kernel sees it
+    gid: 101005                      # group of its intake, as this kernel sees it
+    note: "container 'box', compose service amail, mounted at /srv/box/amail"
+shared_sweep_seconds: 5            # how often this broker reads its OWN intake
+```
+
+**The mount.** Each side's `inbound_handoff` root is visible to the other:
+`-v /srv/box/amail/handoff:/var/lib/amail/handoff` gives the host the
+container's root at `/srv/box/amail/handoff`, and a second mount gives the
+container the host's root. One mount per direction; a single shared root that
+holds both deployments' trees also works.
+
+**What each side provisions, for the other to write into.** Under its own
+root, `_peers/<peer domain>/`, owned by its own broker, group one the *peer's*
+broker belongs to as the kernel on the peer's side sees it, mode 2770. The
+writing broker never creates this directory (§2.3: a box created from the
+wrong side is unreadable by its owner, silently); an absent intake refuses
+the send and names the path. The `uid`/`gid` in the declaration are what the
+writer **verifies** before every write — the mount's id mapping, which is why
+they are numbers as seen from the writer's side, not the peer's.
+
+**What happens on a send.** The sender's broker checks the sender's contacts
+(unchanged), then writes sidecar + `.amsg` into the peer's intake with
+`rung: shared` and `origin_domain`. The peer's broker sweeps its intake on
+`shared_sweep_seconds`, verifies the pair (hash, sender under the intake's
+domain, recipient one of its own agents), and accepts it through the same
+inbound path internet mail takes: its contacts, its keys, its quarantine, its
+audit, its hand-off into the recipient's pickup box as rung 1. The recipient's
+next `amail list` ingests as before. Rejected pairs go to `<intake>/rejected/`
+with the reason; refused senders go to the quarantine, as they always have.
+
+**A host-side broker.** The host needs a broker for its agents to reach the
+socket. The same daemon runs on the host from a host config (`AMAIL_BROKER_CONFIG`
+pointing at it, a socket path under the agent's home rather than `/run/amail`).
+When a host deployment sets `autostart: true` and `broker_config` in the
+agent's `~/.maceff/amail.json`, the client starts the daemon on first use if
+nothing answers on the socket. **Say what that is:** a broker the agent's own
+client launched, as the agent's uid, unsupervised. It is not the boundary the
+spec's broker is against that agent — it is the same code path (gate, rate
+limit, audit, ledger, ladder) so host mail is handled by the same rules, and
+the container's own broker still enforces its own contacts on what arrives.
+`amail status` labels it `agent-launched`, and the daemon's banner says so. A
+host deployment whose agents share one uid needs a claimed-identity rule this
+document does not yet carry; until it does, one host agent per uid.
+
+**Verifying it, which means breaking it** — pair each with its acceptance:
+
+| break | expect |
+|---|---|
+| remove the peer's `_peers/<your domain>/` | your send refuses, naming the path; nothing is created across the mount |
+| declare a `gid` one off from the mount's | refused with both numbers side by side; nothing written |
+| a pair in `_peers/x.local/` whose sender is under `y.local` | rejected into `rejected/` by the receiving broker, audited; nothing reaches a box |
+| a `_peers/<undeclared domain>/` directory | left unread and named on stderr; never consumed |
+| recipient's book lacks the sender | delivered into the peer's intake, then quarantined on the peer's side; the sender's ledger says delivered (custody passed to the peer broker), the peer's audit says quarantined |
+
 ## Supervision, and where it ends
 
 Read `service_supervision.md` (`macf_tools policy read service_supervision`) —

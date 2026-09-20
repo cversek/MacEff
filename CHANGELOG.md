@@ -7,8 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet. Changes land here as they merge, so the next release is described
-as it is built rather than reconstructed from the log afterwards.
+### Added
+
+**amail rung 1s: brokers that share a filesystem** (`macf.amail`):
+- A broker maps a peer deployment's mail domain to a declared hand-off root reachable through this filesystem (`shared_handoffs` in `broker_config.yaml`, with the mount's uid/gid mapping) and delivers by writing sidecar + `.amsg` into the peer broker's intake, `<root>/_peers/<sending domain>/`, never into an agent's pickup box
+- The receiving broker sweeps its own intake (`Broker.sweep_shared`, a thread in the daemon on `shared_sweep_seconds`) and accepts each pair through `accept_inbound`: its contacts, its keys, its quarantine, its audit, its hand-off. Pairs that fail verification, or whose sender is not under the domain whose intake carried them, are kept in `rejected/`; intakes for undeclared domains are never read
+- `accept_inbound` gains its first production caller; the orphan-guard exemption it carried is retired
+- Policy: `amail.md` 1.3.0, §2.1.1 (locality is carried by the domain; where the write lands and why it is not the pickup box; what a deployment declares and who provisions what); `docs/AMAIL_DEPLOYMENT.md` gains the host-and-container section with its break table
+- Host-side plumbing: `amail.json` `broker_config` + `autostart` let the client start the daemon on first use; `amail status` and the daemon banner label such a broker `agent-launched` (same code path, not the same boundary)
 
 ## [0.6.0] - 2026-08-29
 
