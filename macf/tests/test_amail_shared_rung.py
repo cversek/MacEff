@@ -160,6 +160,47 @@ class TestHostToContainer:
         assert msgs[0].sender == f"ira@{HOST}"
 
 
+class TestAMixedCaseAgentKeyIsStillAMailbox:
+    """A deployment declares its agents under the keys it chose -- `SilverFox`,
+    not `silverfox` -- and every table (homes, pickup boxes, addressing) is
+    under that key. The sending broker lower-cases the local part into the
+    sidecar, because the address is case-insensitive. The receiving broker
+    must fold at lookup and hand back the DECLARED key, or every pair to a
+    mixed-case agent is read, hashed and then rejected as "not a mailbox".
+
+    This was fixed once and then lost in a squash that touched the same lines,
+    which is exactly the kind of loss a test exists to make loud. It runs
+    the whole seam -- two brokers, one tree -- because a unit test of
+    `agent_for` alone would not show that the accepted pair lands in the
+    box that is keyed by the declared name."""
+
+    def test_agent_for_folds_case_and_returns_the_declared_key(self, tmp_path):
+        box, _ = _deployment(tmp_path, "box", BOX, {"SilverFox": [f"ira@{HOST}"]},
+                             {HOST: tmp_path / "host" / "handoff"})
+        assert box.config.agent_for(f"silverfox@{BOX}") == "SilverFox"
+        assert box.config.agent_for(f"SILVERFOX@{BOX.upper()}") == "SilverFox"
+        assert box.config.agent_for(f"SilverFox@{BOX}") == "SilverFox"
+        assert box.config.agent_for(f"nobody@{BOX}") is None
+
+    def test_a_pair_for_a_mixed_case_agent_is_accepted_into_its_declared_box(self, tmp_path):
+        host_root = tmp_path / "host" / "handoff"
+        box_root = tmp_path / "box" / "handoff"
+        host, _ = _deployment(tmp_path, "host", HOST, {"ira": [f"SilverFox@{BOX}"]},
+                              {BOX: box_root})
+        box, _ = _deployment(tmp_path, "box", BOX, {"SilverFox": [f"ira@{HOST}"]},
+                             {HOST: host_root})
+        peer_intake(host_root, BOX).mkdir(parents=True, mode=0o2770)
+        peer_intake(box_root, HOST).mkdir(parents=True, mode=0o2770)
+        r = host.submit("ira", _msg(f"ira@{HOST}", f"SilverFox@{BOX}"))
+        assert r["ok"], r
+        results = box.sweep_shared()
+        assert results and results[0]["accepted"] is True, results
+        boxed = sorted((box.config.inbound_handoff / "SilverFox").glob("*.amsg"))
+        assert len(boxed) == 1, "the pair must land in the box keyed by the DECLARED name"
+        assert not list(peer_intake(box.config.inbound_handoff, HOST).glob("*.amsg"))
+        assert not list((peer_intake(box.config.inbound_handoff, HOST) / "rejected").glob("*.amsg"))
+
+
 class TestContainerToHost:
     def test_the_reverse_direction_is_the_same_mechanism(self, tmp_path):
         """The refusal the issue measured -- 'rung 1 (local) does not apply and
