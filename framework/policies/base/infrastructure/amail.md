@@ -224,8 +224,10 @@ so the broker can verify the intake before every write and refuse on a mismatch
 with the two numbers side by side. Ownership is *verified, never applied*: an
 unprivileged broker cannot chown across a uid boundary, and §2.3 exists so
 nothing on the mail path needs to. The intake is **provisioned by the peer**
-(owner: the peer's broker; group: one the writing broker belongs to on its side;
-mode 2770) and is never created across the mount, for the reason §2.3 gives about
+(owner: the peer's broker; group: the writing broker's *primary* gid as the peer's
+kernel sees it, because a broker may run with supplementary groups cleared; mode
+2770; pairs written 0644 inside it, which the 2770 directory keeps private) and is
+never created across the mount, for the reason §2.3 gives about
 pickup boxes: a directory created on demand from the wrong side is unreadable by
 the very broker it was meant for, silently. A second deployment adopts the rung by
 adding one declaration and one mount.

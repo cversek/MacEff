@@ -384,7 +384,16 @@ class BrokerConfig:
         local, _, dom = addr.partition("@")  # noqa: MACEFF005 - str.partition's (before, sep, after) contract is fixed by the stdlib; there is no callee whose order can change
         if dom != self.domain.lower():
             return None
-        return local if local in self.agent_homes else None
+        # The local part is case-insensitive; the declared key keeps the case
+        # it was written with. Fold at lookup, and return the DECLARED name,
+        # because that is the key every other table (homes, boxes) is under.
+        # Found by a second deployment whose agent keys were not lowercase:
+        # its peer intake rejected every pair as "not a mailbox of this
+        # broker" after reading and hashing it.
+        for name in self.agent_homes:
+            if name.lower() == local:
+                return name
+        return None
 
     def shared_for(self, address: str) -> Optional[SharedRoute]:
         """The route when *address* is under a peer deployment reachable
@@ -856,7 +865,8 @@ class Broker:
 
     @staticmethod
     def _write_pair(box: Path, stem: str, sidecar: Dict[str, Any],
-                    payload: bytes, gid: Optional[int] = None) -> Path:
+                    payload: bytes, gid: Optional[int] = None,
+                    mode: int = 0o640) -> Path:
         """Sidecar first, message second, mirroring the inbound handoff: a
         message without its sidecar is an unexplained artifact, while a
         sidecar without its message is a visibly interrupted delivery.
@@ -866,11 +876,20 @@ class Broker:
         for a box that is not setgid, and it is attempted BEFORE the message
         body is written so a failure leaves a sidecar-only entry (visibly
         interrupted) rather than an unreadable message.
+
+        `mode` is 0640 for a pickup box (owner: this broker, group: the
+        recipient) and 0644 for a PEER INTAKE. Across a mount the reader is
+        a different uid that owns the directory but not the file, and a
+        broker launched with its supplementary groups cleared holds only its
+        primary gid, so group-read cannot be arranged from the reader's side.
+        The intake is 2770, so the wider file mode exposes nothing to anyone
+        who cannot already enter the directory. Measured on a second
+        deployment: 0640 gave `unreadable pair: [Errno 13]` on every sweep.
         """
         base = box / stem
         side = base.with_suffix(".json")
         side.write_text(json.dumps(sidecar, indent=1))
-        side.chmod(0o640)
+        side.chmod(mode)
         if gid is not None and side.stat().st_gid != gid:
             try:
                 os.chown(side, -1, gid)
@@ -883,7 +902,7 @@ class Broker:
                     f"wrote. Nothing was handed off.") from e
         msg = base.with_suffix(".amsg")
         msg.write_bytes(payload)
-        msg.chmod(0o640)
+        msg.chmod(mode)
         if gid is not None and msg.stat().st_gid != gid:
             os.chown(msg, -1, gid)
         return msg
@@ -910,7 +929,10 @@ class Broker:
         unprivileged broker cannot place a directory in another broker's
         group on the far side of a mount, and one it made on demand would be
         unreadable by the very broker it was meant for, silently (spec 2.3).
-        So an absent intake refuses, naming what the peer must provision.
+        So an absent intake refuses, naming what the peer must provision:
+        owner the peer's broker, group THIS broker's PRIMARY gid as the peer's
+        kernel sees it (a broker may run with supplementary groups cleared,
+        so the primary is the only one that can be counted on), mode 2770.
 
         OWNERSHIP IS VERIFIED, NOT APPLIED. The deployment declared what the
         box's owner and group look like from here (the mount's id mapping);
@@ -971,7 +993,8 @@ class Broker:
             "rung": "shared",
             "origin_domain": self.config.domain,
         }
-        return self._write_pair(box, stem, sidecar, payload, gid=decl.gid)
+        return self._write_pair(box, stem, sidecar, payload, gid=decl.gid,
+                                mode=0o644)
 
     def _rung(self, recipient: str) -> str:
         if self.config.agent_for(recipient):

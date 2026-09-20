@@ -356,3 +356,35 @@ class TestTheHostSideClient:
         cli.cmd_amail_status(argparse.Namespace(json=True))
         out = json.loads(capsys.readouterr().out)
         assert out["broker_kind"].startswith("agent-launched")
+
+
+class TestFoundOnTheSecondDeployment:
+    """Two findings from adopting the rung on a host broker and a container
+    broker with DIFFERENT uids, reported back in the deployment doc's own
+    spirit: what you had to do that is not written above is the finding."""
+
+    def test_pairs_in_a_peer_intake_are_readable_without_group_membership(self, tmp_path):
+        """A broker launched with its supplementary groups cleared holds only
+        its primary gid. It owns the intake but not the files the peer wrote,
+        so a 0640 pair whose group is the writer's is unreadable to it. The
+        intake is 2770; the pair is 0644."""
+        import stat
+        host, box = _pair(tmp_path)
+        host.submit("ira", _msg(f"ira@{HOST}", f"manny@{BOX}"))
+        amsg = next(peer_intake(box.config.inbound_handoff, HOST).glob("*.amsg"))
+        for f in (amsg, amsg.with_suffix(".json")):
+            assert stat.S_IMODE(f.stat().st_mode) == 0o644, f
+        # And the local rung keeps its tighter mode: the box's group IS the reader.
+        box.sweep_shared()
+        boxed = next((box.config.inbound_handoff / "manny").glob("*.amsg"))
+        assert stat.S_IMODE(boxed.stat().st_mode) == 0o640
+
+    def test_the_local_part_resolves_regardless_of_declared_case(self, tmp_path):
+        """`agent_for` folds the address; the declared key kept its case, so a
+        deployment with a mixed-case agent name rejected every pair at its
+        intake as 'not a mailbox of this broker' -- after reading and hashing
+        it. The lookup folds both sides and returns the DECLARED name."""
+        cfg = BrokerConfig(domain=BOX, agent_homes={"Manny": tmp_path / "m"})
+        assert cfg.agent_for(f"manny@{BOX}") == "Manny"
+        assert cfg.agent_for(f"MANNY@{BOX.upper()}") == "Manny"
+        assert cfg.agent_for(f"nobody@{BOX}") is None

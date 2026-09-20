@@ -195,13 +195,22 @@ container the host's root. One mount per direction; a single shared root that
 holds both deployments' trees also works.
 
 **What each side provisions, for the other to write into.** Under its own
-root, `_peers/<peer domain>/`, owned by its own broker, group one the *peer's*
-broker belongs to as the kernel on the peer's side sees it, mode 2770. The
-writing broker never creates this directory (§2.3: a box created from the
-wrong side is unreadable by its owner, silently); an absent intake refuses
-the send and names the path. The `uid`/`gid` in the declaration are what the
-writer **verifies** before every write — the mount's id mapping, which is why
-they are numbers as seen from the writer's side, not the peer's.
+root, `_peers/<peer domain>/`: owner its own broker, group the **writer's
+primary gid** as this kernel sees it, mode 2770. The primary, not "a group the
+writer belongs to": `start.py` launches brokers with `setpriv --clear-groups`,
+so a broker holds only its primary gid and nothing can be arranged through
+supplementary membership on either side. The writer creates pairs **0644**
+inside it (the directory is 2770, so the wider file mode exposes nothing to
+anyone who cannot already enter it), which is what lets the owner read files
+it does not own with its groups cleared. A default ACL granting the owner
+read (`setfacl -d -m u:<owner>:r-- <intake>`) is the equivalent when a
+deployment prefers 0640 files. The writing broker never creates the
+directory (§2.3: a box created from the wrong side is unreadable by its
+owner, silently); an absent intake refuses the send and names the path. The
+`uid`/`gid` in the declaration are what the writer **verifies** before every
+write — the mount's id mapping, which is why they are numbers as seen from the
+writer's side, not the peer's. Found on the second deployment: with 0640
+pairs the sweep reported `unreadable pair: [Errno 13]` on every pass.
 
 **What happens on a send.** The sender's broker checks the sender's contacts
 (unchanged), then writes sidecar + `.amsg` into the peer's intake with
@@ -233,6 +242,8 @@ document does not yet carry; until it does, one host agent per uid.
 |---|---|
 | remove the peer's `_peers/<your domain>/` | your send refuses, naming the path; nothing is created across the mount |
 | declare a `gid` one off from the mount's | refused with both numbers side by side; nothing written |
+| launch the receiving broker with its groups cleared and write 0640 pairs | every sweep reports `unreadable pair`; the 0644 pair mode is what makes the happy path work |
+| declare an agent key in mixed case | its address still resolves; the local part is case-insensitive and the lookup folds |
 | a pair in `_peers/x.local/` whose sender is under `y.local` | rejected into `rejected/` by the receiving broker, audited; nothing reaches a box |
 | a `_peers/<undeclared domain>/` directory | left unread and named on stderr; never consumed |
 | recipient's book lacks the sender | delivered into the peer's intake, then quarantined on the peer's side; the sender's ledger says delivered (custody passed to the peer broker), the peer's audit says quarantined |
