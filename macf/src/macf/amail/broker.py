@@ -15,13 +15,22 @@ no server address for an agent to repoint and no credential to misuse.
 DELIVERY LADDER. Every message is addressed as mail; the rung is chosen here, at
 delivery time, and is never recorded in the address or the contact list:
 
-    rung 1  recipient's mailbox is on this host   -> direct Maildir write
-    rung 2  peer broker on a private network      -> not implemented (seam below)
-    rung 3  anything else                         -> outbound relay (Phase 6)
+    rung 1   recipient's mailbox is on this host          -> pickup box, direct write
+    rung 1s  recipient's broker shares a filesystem with   -> pickup box across the
+             this one (a bind-mounted hand-off root)          mount, same write
+    rung 2   peer broker on a private network             -> not implemented (seam below)
+    rung 3   anything else                                -> outbound relay (Phase 6)
 
-Rung 1 is implemented. The others raise a specific, logged error rather than
-silently succeeding — a transport that reports delivery it did not perform is the
-failure this whole subsystem is built to avoid.
+Rungs 1 and 1s are implemented. The others raise a specific, logged error rather
+than silently succeeding — a transport that reports delivery it did not perform
+is the failure this whole subsystem is built to avoid.
+
+LOCALITY IS CARRIED BY THE DOMAIN. The address never records a rung, and it does
+not need to: the mail domain is per deployment, so `agent@<deployment>` already
+says which broker owns the mailbox. This broker maps a domain to a rung -- its
+own domain is rung 1, a domain it has a shared hand-off declared for is rung 1s,
+anything else falls through -- and moving an agent between deployments changes
+its domain, which is the one thing that should change.
 """
 from __future__ import annotations
 
@@ -219,6 +228,52 @@ class DeliveryError(RuntimeError):
     """Transport could not deliver. Never swallowed into a success."""
 
 
+#: The peer-intake subtree of a hand-off root. One directory per PEER DOMAIN,
+#: provisioned by the broker that owns the root, written by the peer's broker
+#: across the mount, swept by the owner. Kept beside the agents' boxes so one
+#: mount carries both directions of a pair of deployments.
+PEERS_DIRNAME = "_peers"
+
+
+def peer_intake(handoff_root: Path, origin_domain: str) -> Path:
+    """Where a broker at *origin_domain* writes into the deployment whose
+    hand-off root is *handoff_root*."""
+    return Path(handoff_root) / PEERS_DIRNAME / origin_domain.strip().lower()
+
+
+@dataclass(frozen=True)
+class SharedHandoff:
+    """A peer deployment's pickup-box root, reachable through this filesystem.
+
+    Declared per DOMAIN (see BrokerConfig.shared_handoffs). `handoff` is the
+    peer's hand-off root as it appears on THIS side of the mount: the peer's
+    `inbound_handoff`, bind-mounted here. `uid` and `gid` are the owner and
+    group the peer's boxes carry AS THE KERNEL ON THIS SIDE SEES THEM -- the
+    mount's id mapping, declared so the broker can verify the box it is about
+    to write into before writing, and refuse on a mismatch rather than leave a
+    file the recipient cannot read. They are checked, never applied: an
+    unprivileged broker cannot chown across a uid boundary, and the pickup-box
+    model exists so that nothing on the mail path needs to.
+    """
+
+    handoff: Path
+    uid: Optional[int] = None
+    gid: Optional[int] = None
+    note: str = ""
+
+
+@dataclass(frozen=True, kw_only=True)
+class SharedRoute:
+    """Where a rung-1s recipient resolves: the peer's domain, the address
+    local-part, and the declaration to reach that peer. Named rather than
+    positional: `domain` and `local` are both strings, and a swapped pair
+    would type-check, run, and write into the wrong intake."""
+
+    domain: str
+    local: str
+    decl: SharedHandoff
+
+
 @dataclass
 class BrokerConfig:
     """Everything the broker needs. Paths, not secrets — the credential is read
@@ -251,6 +306,23 @@ class BrokerConfig:
     #: here until the recipient ingests it into its own store. Optional for
     #: the same reason as the quarantine.
     inbound_handoff: Optional[Path] = None
+
+    #: Rung 1s: peer deployments whose pickup-box root is reachable through
+    #: this filesystem, keyed by the peer's MAIL DOMAIN (lower-cased). The
+    #: domain is the locality: a recipient under one of these domains is
+    #: delivered by writing into the peer's box across the mount, exactly as
+    #: rung 1 writes into a local box. Authorization is unchanged -- the
+    #: sender's contacts decide who may be written to, and the recipient's
+    #: own book decides acceptance at ingest, because the sending broker
+    #: cannot read the peer's book and must not pretend it did.
+    shared_handoffs: Dict[str, SharedHandoff] = field(default_factory=dict)
+
+    #: How often the broker sweeps its OWN peer intake (rung 1s, receiving
+    #: side): handoff/_peers/<domain>/ for each declared peer. Mail a peer
+    #: broker wrote there is accepted through the same inbound path internet
+    #: mail takes, so nothing reaches a pickup box without this broker's
+    #: contact check and classification.
+    shared_sweep_seconds: float = 5.0
 
     #: The outbound transport -- the broker's only route to the internet, and
     #: the holder of nothing. It performs NO authorization: destination, rate
@@ -314,6 +386,23 @@ class BrokerConfig:
             return None
         return local if local in self.agent_homes else None
 
+    def shared_for(self, address: str) -> Optional[SharedRoute]:
+        """The route when *address* is under a peer deployment reachable
+        through a declared shared hand-off; else None.
+
+        Rung 1 is asked first by the caller: an address under our OWN domain is
+        never shared, even if an operator declared our domain here by mistake
+        -- the local box is the authoritative one for our agents.
+        """
+        addr = address.strip().lower()
+        local, _, dom = addr.partition("@")  # noqa: MACEFF005 - str.partition's (before, sep, after) contract is fixed by the stdlib; there is no callee whose order can change
+        if not local or not dom or dom == self.domain.lower():
+            return None
+        decl = self.shared_handoffs.get(dom)
+        if decl is None:
+            return None
+        return SharedRoute(domain=dom, local=local, decl=decl)
+
 
 @dataclass(frozen=True)
 class DeliveryOutcome:
@@ -329,7 +418,7 @@ class DeliveryOutcome:
     two shapes in one function. All three are converted here.
     """
 
-    rung: str      #: "local" or "internet" -- which delivery path was taken
+    rung: str      #: "local", "shared" or "internet" -- which delivery path was taken
     trust: str     #: what verification actually proved, "" when not applicable
     state: str     #: "delivered", "refused", or the transport's own state
     detail: str    #: human-readable reason; "" on success
@@ -340,6 +429,7 @@ class Broker:
         self.config = config
         self.contacts = ContactBook(config.contacts_path) if config.contacts_path else None
         self.audit = AuditLog(config.audit_path) if config.audit_path else None
+        self._warned_peers: set = set()
 
     # ---------------------------------------------------------------- enforcement
 
@@ -755,19 +845,140 @@ class Broker:
             # Disagreement is information, not noise: it is what a compromised
             # or stale broker looks like from the recipient's side.
             "broker_trust": trust,
+            # The rung and the writing broker's domain, so ingest can tell a
+            # box entry its own broker wrote from one a PEER broker wrote
+            # across a mount (rung 1s), where the recipient-side acceptance
+            # check has not yet been made.
+            "rung": "local",
+            "origin_domain": self.config.domain,
         }
+        return self._write_pair(box, stem, sidecar, payload)
+
+    @staticmethod
+    def _write_pair(box: Path, stem: str, sidecar: Dict[str, Any],
+                    payload: bytes, gid: Optional[int] = None) -> Path:
+        """Sidecar first, message second, mirroring the inbound handoff: a
+        message without its sidecar is an unexplained artifact, while a
+        sidecar without its message is a visibly interrupted delivery.
+
+        `gid`, when given, is the group the pair must carry so the recipient
+        can read it. A setgid box already inherits it; the explicit chgrp is
+        for a box that is not setgid, and it is attempted BEFORE the message
+        body is written so a failure leaves a sidecar-only entry (visibly
+        interrupted) rather than an unreadable message.
+        """
         base = box / stem
-        # Sidecar first, message second, mirroring the inbound handoff: a
-        # message without its sidecar is an unexplained artifact, while a
-        # sidecar without its message is a visibly interrupted delivery.
-        base.with_suffix(".json").write_text(json.dumps(sidecar, indent=1))
-        base.with_suffix(".json").chmod(0o640)
-        base.with_suffix(".amsg").write_bytes(payload)
-        base.with_suffix(".amsg").chmod(0o640)
-        return base.with_suffix(".amsg")
+        side = base.with_suffix(".json")
+        side.write_text(json.dumps(sidecar, indent=1))
+        side.chmod(0o640)
+        if gid is not None and side.stat().st_gid != gid:
+            try:
+                os.chown(side, -1, gid)
+            except OSError as e:
+                side.unlink(missing_ok=True)
+                raise DeliveryError(
+                    f"cannot give {side.name} to group {gid} ({e}): this "
+                    f"broker is not a member of the recipient's group as the "
+                    f"kernel sees it, so the recipient could not read what it "
+                    f"wrote. Nothing was handed off.") from e
+        msg = base.with_suffix(".amsg")
+        msg.write_bytes(payload)
+        msg.chmod(0o640)
+        if gid is not None and msg.stat().st_gid != gid:
+            os.chown(msg, -1, gid)
+        return msg
+
+    def hand_off_shared(self, domain: str, local: str, decl: SharedHandoff,
+                        message: Message) -> Path:
+        """Rung 1s: hand a message to a PEER deployment's broker across a
+        shared filesystem.
+
+        NOT INTO THE RECIPIENT'S PICKUP BOX. The pickup box is the boundary
+        between an agent and ITS OWN broker: the broker that writes there has
+        consulted the recipient's contact book, classified the message with
+        the recipient's keys, and vouched for both in the sidecar. This
+        broker can do none of that for a peer's agent -- it cannot read the
+        peer's book -- so a pair it wrote into the box would carry an
+        authorization claim nobody made. Instead it writes into the peer
+        BROKER's intake, `<peer handoff>/_peers/<this domain>/`, and the peer
+        broker takes it from there through the same inbound path internet
+        mail takes (`accept_inbound`): its contacts, its keys, its quarantine,
+        its audit, its hand-off. Broker to broker, which is what the ladder's
+        rung 2 always was; the filesystem is just a cheaper wire.
+
+        THE INTAKE IS PROVISIONED BY THE PEER, never created here: an
+        unprivileged broker cannot place a directory in another broker's
+        group on the far side of a mount, and one it made on demand would be
+        unreadable by the very broker it was meant for, silently (spec 2.3).
+        So an absent intake refuses, naming what the peer must provision.
+
+        OWNERSHIP IS VERIFIED, NOT APPLIED. The deployment declared what the
+        box's owner and group look like from here (the mount's id mapping);
+        the broker checks the box against that before writing. A mismatch
+        means the mount is not what the declaration says -- the wrong path,
+        or a mapping that changed -- and a file written under it would be one
+        the recipient cannot read, so the write is refused with the two
+        numbers side by side.
+
+        WHAT THE SIDECAR SAYS IS THE TRUTH OF WHAT WAS DECIDED HERE, and no
+        more: this broker checked that the SENDER may write to this address
+        (its own book, before any rung was chosen). It makes no claim about
+        acceptance and classifies no trust. The peer broker treats the pair
+        as inbound from a peer: the sender field is a claim, re-canonicalised
+        and re-classified on that side.
+        """
+        box = peer_intake(Path(decl.handoff), self.config.domain)
+        if not box.is_dir():
+            raise DeliveryError(
+                f"no peer intake for this deployment at the shared hand-off "
+                f"for '{domain}': expected {box}. The PEER provisions it "
+                f"(owner: its broker, group: one this broker belongs to on "
+                f"this side of the mount, mode 2770); this broker does not "
+                f"create it across the mount. Nothing was handed off.")
+        st = box.stat()
+        if decl.gid is not None and st.st_gid != decl.gid:
+            raise DeliveryError(
+                f"peer intake {box} has gid {st.st_gid}, but the shared hand-off "
+                f"for '{domain}' declares gid {decl.gid}. The mount is not what "
+                f"the declaration says; a file written here would carry the "
+                f"wrong group and the peer broker could not read it. Refusing.")
+        if decl.uid is not None and st.st_uid != decl.uid:
+            raise DeliveryError(
+                f"peer intake {box} has uid {st.st_uid}, but the shared hand-off "
+                f"for '{domain}' declares uid {decl.uid}. The mount is not what "
+                f"the declaration says. Refusing.")
+        if not os.access(box, os.W_OK):
+            raise DeliveryError(
+                f"peer intake {box} is not writable by this broker (uid "
+                f"{os.geteuid()}): join its group on this side of the mount, "
+                f"or fix the mount. Nothing was handed off.")
+        payload = message.serialize().encode("utf-8")
+        stem = f"{int(time.time())}-{message.message_id}"
+        sidecar = {
+            "kind": "bundle",
+            "handed_off_at": _now_iso(),
+            "message_id": message.message_id,
+            "sender": message.sender,
+            "recipient": f"{local}@{domain}",
+            "raw_sha256": hashlib.sha256(payload).hexdigest(),
+            "authorization": {
+                "outcome": "peer-intake",
+                "reason": (f"sender '{message.sender}' is permitted this "
+                           f"destination by its own broker at "
+                           f"'{self.config.domain}'; acceptance is the peer "
+                           f"broker's decision, made on its side"),
+            },
+            "rung": "shared",
+            "origin_domain": self.config.domain,
+        }
+        return self._write_pair(box, stem, sidecar, payload, gid=decl.gid)
 
     def _rung(self, recipient: str) -> str:
-        return "local" if self.config.agent_for(recipient) else "relay"
+        if self.config.agent_for(recipient):
+            return "local"
+        if self.config.shared_for(recipient):
+            return "shared"
+        return "relay"
 
     def _deliver_one(self, recipient: str, message: Message
                      ) -> Tuple[str, str, str, str]:
@@ -821,6 +1032,15 @@ class Broker:
             # pickup box and only the recipient can move it from there.
             return DeliveryOutcome(rung="local", trust=trust,
                                    state="delivered", detail="")
+        shared = self.config.shared_for(recipient)
+        if shared:
+            # RUNG 1s: the peer's box, across the mount. The same terminal fact
+            # as rung 1 -- the message is in the recipient's pickup box and
+            # only the recipient can move it from there. No trust verdict:
+            # the recipient classifies at ingest with its own keys.
+            self.hand_off_shared(shared.domain, shared.local, shared.decl, message)
+            return DeliveryOutcome(rung="shared", trust="",
+                                   state="delivered", detail="")
         # RUNG 3: the internet, via a transport that performs NO authorization.
         # Everything that decides whether this message may exist has already
         # run -- destination, rate limit, pre-send gate -- because a transport
@@ -829,8 +1049,9 @@ class Broker:
         transport = getattr(self.config, "transport", None)
         if transport is None:
             raise DeliveryError(
-                f"no transport for '{recipient}': rung 1 (local) does not apply "
-                "and remote delivery is not configured. Refusing to report "
+                f"no transport for '{recipient}': rung 1 (local) does not apply, "
+                f"no shared hand-off is declared for its domain (rung 1s), and "
+                "remote delivery is not configured. Refusing to report "
                 "success for a message that was not sent."
             )
         # THE CREDENTIAL IS READ HERE, at send time, and is the LAST thing
@@ -1222,25 +1443,23 @@ class Broker:
             return TrustClass.SUSPECT
         return TrustClass.DOMAIN_AUTH if domain_authenticated else TrustClass.UNVERIFIED
 
-    def accept_inbound(self, message: Message, recipient: str) -> Dict[str, Any]:
+    def accept_inbound(self, message: Message, recipient: str,
+                       via: str = "") -> Dict[str, Any]:
         """Deliver inbound mail, or quarantine it when the sender is unlisted.
 
         An allowlisted sender is an AUTHORIZATION fact, not an authenticity or
         safety one. Nothing here establishes that a message is genuinely from
         whom it claims, and message bodies remain data rather than instructions.
 
-        NOT YET INTEGRATED -- READ THIS BEFORE TRUSTING ITS TEST COVERAGE.
-        Nothing in production calls this. There is no inbound path yet: that is
-        the transport decision and the round trip, neither of which has run. Its
-        several dozen passing tests therefore establish that the classification
-        LOGIC behaves, and establish nothing whatever about it being reached,
-        ordered correctly against delivery, or fed real messages.
+        FIRST PRODUCTION CALLER: the rung 1s sweep (`sweep_shared`), which
+        feeds it pairs a PEER BROKER wrote into this broker's intake across a
+        shared filesystem. The internet receiver still has its own path in
+        `inbound.py`. `via` names the route for the audit record, so a reader
+        can tell peer-intake mail from internet mail with the same sender.
 
-        The hazard is the impression, not the code: a well-tested control reads
-        as a live one. Whoever builds the inbound receiver is the first person
-        who can make this true, and should treat the coverage as a starting
-        point rather than a warrant. The guard sweep in the test suite carries a
-        matching exemption that must be deleted at that moment.
+        The test suite's orphan sweep carried this method as a known
+        unintegrated guard for the whole period nothing called it; that entry
+        is retired with this caller.
         """
         from .store import quarantine
         from .store import read_all as store_read_all
@@ -1331,7 +1550,8 @@ class Broker:
             if self.audit:
                 self.audit.inbound(sender=message.sender, recipient=recipient,
                                    message_id=message.message_id,
-                                   decision="quarantined", reason=reason,
+                                   decision="quarantined",
+                                   reason=(f"{reason}; via {via}" if via else reason),
                                    trust=message.trust)
             return {"ok": True, "decision": "quarantined", "reason": reason}
 
@@ -1375,9 +1595,126 @@ class Broker:
                                # So an investigator can tell "the sender lied"
                                # apart from "we edited it and the signature
                                # stopped covering what we stored".
-                               reason=(f"broker truncated: {','.join(truncated)}"
-                                       if truncated else None))
+                               reason="; ".join(x for x in (
+                                   f"broker truncated: {','.join(truncated)}" if truncated else "",
+                                   f"via {via}" if via else "") if x) or None)
         return {"ok": True, "decision": "delivered"}
+
+    # ------------------------------------------------------- rung 1s, receiving
+
+    def sweep_shared(self) -> List[Dict[str, Any]]:
+        """Accept what peer brokers have written into THIS broker's intake.
+
+        For each declared peer domain, `<inbound_handoff>/_peers/<domain>/`
+        holds sidecar + .amsg pairs a peer broker wrote across the mount. Each
+        is verified (hash against sidecar, deserialisable, addressed to one of
+        our agents, sender under the domain that wrote it) and then handed to
+        `accept_inbound`, which owns the decision: the recipient's contact
+        book, the recipient's keys, quarantine on refusal, the audit record,
+        and the hand-off into the real pickup box. So nothing a peer wrote
+        reaches an agent's box without this broker's judgement -- the same
+        property rung 1 has, with the judgement made by the only broker that
+        can make it.
+
+        ONLY DECLARED PEERS ARE READ. A directory under _peers/ for a domain
+        this deployment has not declared is a peer nobody agreed to; it is
+        left alone and named on stderr rather than consumed, because reading
+        it would let anyone who can write the mount speak for a domain.
+
+        A PEER MAY ONLY SPEAK FOR ITS OWN DOMAIN. A pair in `_peers/x.local/`
+        whose sender is `someone@y.local` is rejected: the intake directory is
+        the one fact about origin this broker can trust (the peer provisioned
+        and the mount carries it), and a sender field disagreeing with it is
+        a forgery attempt, not a routing error.
+
+        A pair that fails verification is moved to `<intake>/rejected/` with
+        the reason in its sidecar, broker-owned, never deleted: evidence that
+        the check fired. Returns one result dict per pair examined.
+        """
+        results: List[Dict[str, Any]] = []
+        root = self.config.inbound_handoff
+        if root is None or not self.config.shared_handoffs:
+            return results
+        peers = Path(root) / "_peers"
+        if not peers.is_dir():
+            return results
+        declared = {d.lower() for d in self.config.shared_handoffs}
+        for undeclared in sorted(p for p in peers.iterdir()
+                                 if p.is_dir() and p.name.lower() not in declared):
+            if undeclared.name not in self._warned_peers:
+                self._warned_peers.add(undeclared.name)
+                print(f"⚠️ MACF: {undeclared} is a peer intake for a domain this "
+                      f"deployment has not declared in shared_handoffs; leaving "
+                      f"it unread", file=sys.stderr)
+        for dom in sorted(declared):
+            intake = peers / dom
+            if not intake.is_dir():
+                continue
+            for amsg in sorted(intake.glob("*.amsg")):
+                results.append(self._accept_peer_pair(dom, amsg))
+        return results
+
+    def _accept_peer_pair(self, dom: str, amsg: Path) -> Dict[str, Any]:
+        sidecar = amsg.with_suffix(".json")
+        entry: Dict[str, Any] = {"name": amsg.name, "peer": dom}
+
+        def reject(reason: str) -> Dict[str, Any]:
+            aside = amsg.parent / "rejected"
+            aside.mkdir(mode=0o700, exist_ok=True)
+            try:
+                meta = json.loads(sidecar.read_text()) if sidecar.exists() else {}
+            except (OSError, json.JSONDecodeError):
+                meta = {}
+            meta["rejected"] = {"reason": reason, "at": _now_iso()}
+            try:
+                (aside / amsg.name).write_bytes(amsg.read_bytes())
+                (aside / sidecar.name).write_text(json.dumps(meta, indent=1))
+                amsg.unlink()
+                sidecar.unlink(missing_ok=True)
+            except OSError as e:
+                print(f"⚠️ MACF: rejected peer pair {amsg.name} could not be "
+                      f"moved aside ({e}); it stays in the intake", file=sys.stderr)
+            if self.audit:
+                self.audit.error(context="peer-intake",
+                                 detail=f"{dom}/{amsg.name}: {reason}")
+            entry.update(accepted=False, reason=reason)
+            return entry
+
+        try:
+            payload = amsg.read_bytes()
+            meta = json.loads(sidecar.read_text())
+        except (OSError, json.JSONDecodeError) as e:
+            return reject(f"unreadable pair: {e}")
+        actual = hashlib.sha256(payload).hexdigest()
+        if meta.get("raw_sha256") != actual:
+            return reject(f"hash mismatch (sidecar {str(meta.get('raw_sha256'))[:12]}, "
+                          f"bytes {actual[:12]})")
+        try:
+            message = Message.deserialize(payload.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as e:
+            return reject(f"undeserializable message: {e}")
+        recipient = str(meta.get("recipient") or "")
+        if not self.config.agent_for(recipient):
+            return reject(f"recipient '{recipient}' is not a mailbox of this deployment")
+        sender_dom = message.sender.rpartition("@")[2].lower()  # noqa: MACEFF005 - str.rpartition's (before, sep, after) contract is fixed by the stdlib
+        if sender_dom != dom:
+            return reject(f"sender '{message.sender}' is not under '{dom}', the "
+                          f"domain whose intake carried it; a peer may only "
+                          f"speak for its own domain")
+        try:
+            outcome = self.accept_inbound(message, recipient,
+                                         via=f"shared hand-off from {dom}")
+        except Exception as e:  # noqa: BLE001 - the pair must not vanish on an unexpected error
+            return reject(f"{type(e).__name__}: {e}")
+        try:
+            amsg.unlink()
+            sidecar.unlink(missing_ok=True)
+        except OSError as e:
+            print(f"⚠️ MACF: accepted peer pair {amsg.name} could not be removed "
+                  f"({e}); it will be accepted again as a duplicate", file=sys.stderr)
+        entry.update(accepted=True, decision=outcome.get("decision"),
+                     reason=outcome.get("reason", ""))
+        return entry
 
     # -------------------------------------------------------------- credentials
 

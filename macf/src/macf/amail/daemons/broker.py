@@ -88,20 +88,53 @@ def main() -> int:
         return 1
 
     try:
-        server = serve(Broker(cfg))  # binds the socket, chmods 0666, serves in a thread
+        broker_obj = Broker(cfg)
+        server = serve(broker_obj)  # binds the socket, chmods 0666, serves in a thread
     except PermissionError as e:
         # serve() refuses on exposed credentials, writable contact lists, and
         # an empty uid table. Each message names its own remedy; pass it through.
         print(f"refusing to start: {e}", file=sys.stderr)
         return 1
 
-    print(f"amail broker (unprivileged, uid {os.geteuid()}) serving on "
-          f"{cfg.socket_path}", flush=True)
+    launched_by = os.environ.get("AMAIL_BROKER_LAUNCHED_BY", "")
+    print(f"amail broker (unprivileged, uid {os.geteuid()}"
+          f"{', launched by the agent it serves: same uid, unsupervised' if launched_by == 'agent' else ''}"
+          f") serving on {cfg.socket_path}", flush=True)
     print(f"  domain: {cfg.domain}", flush=True)
     print("  agents: " + ", ".join(
         f"{n}(uid {u})" for u, n in sorted(cfg.agent_uids.items())), flush=True)
     print(f"  handoff: {cfg.inbound_handoff}  quarantine: {cfg.inbound_quarantine}",
           flush=True)
+    for dom, decl in sorted(cfg.shared_handoffs.items()):
+        # Rung 1s, said out loud at startup: which domains this broker reaches
+        # by writing across a mount, and through which path. A rung nobody
+        # can see is one an agent routes around.
+        print(f"  shared:  {dom} -> {decl.handoff} (uid {decl.uid}, gid "
+              f"{decl.gid}){' ' + decl.note if decl.note else ''}", flush=True)
+
+    if cfg.shared_handoffs:
+        # RUNG 1s, RECEIVING SIDE. Peer brokers write into this broker's
+        # intake across the mount; nothing consumes it unless this thread
+        # runs. Kept in the broker process rather than a separate daemon so
+        # a deployment adopting the rung starts one thing, not two, and so
+        # the judgement is made by the process that holds the contact book.
+        import threading
+        import time as _time
+
+        def _sweeper() -> None:
+            while True:
+                try:
+                    for r in broker_obj.sweep_shared():
+                        print(f"  peer-intake {r['peer']}/{r['name']}: "
+                              f"{'accepted, ' + str(r.get('decision')) if r.get('accepted') else 'rejected, ' + str(r.get('reason'))}",
+                              flush=True)
+                except Exception as e:  # noqa: BLE001 - the sweeper must outlive one bad sweep
+                    print(f"⚠️ MACF: peer-intake sweep failed: {type(e).__name__}: {e}",
+                          file=sys.stderr, flush=True)
+                _time.sleep(cfg.shared_sweep_seconds)
+
+        threading.Thread(target=_sweeper, name="amail-peer-intake", daemon=True).start()
+        print(f"  sweeping peer intake every {cfg.shared_sweep_seconds:g}s", flush=True)
 
     stop = signal.sigwait({signal.SIGTERM, signal.SIGINT})
     print(f"shutting down on {signal.Signals(stop).name}", flush=True)

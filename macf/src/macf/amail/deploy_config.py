@@ -32,7 +32,7 @@ import yaml
 from pydantic import (BaseModel, ConfigDict, Field, field_validator,
                       model_validator)
 
-from macf.amail.broker import BrokerConfig
+from macf.amail.broker import BrokerConfig, SharedHandoff
 
 
 class ConfigError(Exception):
@@ -314,6 +314,40 @@ class AddressingConfig(BaseModel):
         return v
 
 
+class SharedHandoffDecl(BaseModel):
+    """One peer deployment reachable through this filesystem (rung 1s).
+
+    Keyed by the peer's MAIL DOMAIN in `BrokerDeployConfig.shared_handoffs`.
+    The domain is the locality: it already says which broker owns the mailbox,
+    so it is the natural key for "how do I reach that broker's boxes", and
+    nothing about the address, the contact list or the message records the
+    rung. A deployment adopts the rung by declaring one of these and one mount.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    handoff: Path = Field(
+        description="the peer's pickup-box root (its `inbound_handoff`) as it "
+                    "appears on THIS side of the mount. Boxes are "
+                    "<handoff>/<agent>/, provisioned by the peer; this broker "
+                    "writes into them and never creates them.")
+    uid: Optional[int] = Field(
+        default=None,
+        description="the owner the peer's boxes carry as the kernel on this "
+                    "side sees it (the mount's id mapping). Verified before "
+                    "every write; a mismatch refuses the delivery.")
+    gid: Optional[int] = Field(
+        default=None,
+        description="the group the peer's boxes carry as seen from here. "
+                    "Verified before every write, and applied to the pair "
+                    "when the box is not setgid. This broker must be a member "
+                    "of it on this side of the mount.")
+    note: str = Field(
+        default="",
+        description="operator's note: which deployment this is, where the "
+                    "mount is declared.")
+
+
 class BrokerDeployConfig(BaseModel):
     #: Minimum macf this configuration needs. Optional, and checked BEFORE the
     #: fields are, so a lagging package says so instead of rejecting keys it has
@@ -399,6 +433,22 @@ class BrokerDeployConfig(BaseModel):
                     "agent composed them.")
     rate_limit_window_seconds: int = Field(
         default=3600, description="the sliding window, in seconds")
+    shared_handoffs: Dict[str, SharedHandoffDecl] = Field(
+        default_factory=dict,
+        description="rung 1s: peer deployments whose pickup-box root is "
+                    "reachable through this filesystem, keyed by the peer's "
+                    "mail domain. A recipient under one of these domains is "
+                    "delivered by writing into the peer's box across the "
+                    "mount, exactly as a local recipient is. Authorization is "
+                    "unchanged: the sender's contacts still decide, and the "
+                    "recipient's own book decides acceptance at ingest. "
+                    "Declaring this deployment's OWN domain here is refused; "
+                    "that is rung 1.")
+    shared_sweep_seconds: float = Field(
+        default=5.0,
+        description="rung 1s, receiving side: how often the broker sweeps its "
+                    "own peer intake (handoff/_peers/<domain>/) and accepts "
+                    "what peer brokers wrote there through the inbound path.")
     transport_endpoint: Optional[str] = Field(
         default=None,
         description="the outbound submission endpoint. Null until the outbound "
@@ -445,8 +495,22 @@ class BrokerDeployConfig(BaseModel):
         test suite asserts the two sides agree rather than trusting this note.
         """
         addressing = self.load_addressing()
+        shared = {}
+        for dom, decl in self.shared_handoffs.items():
+            key = dom.strip().lower()
+            if key == addressing.domain.strip().lower():
+                raise ConfigError(
+                    f"shared_handoffs declares '{dom}', which is this "
+                    f"deployment's own domain. Our own agents are rung 1 (the "
+                    f"local pickup box); a shared hand-off is for a PEER "
+                    f"deployment's domain. Refusing rather than let two rungs "
+                    f"claim the same mailboxes.")
+            shared[key] = SharedHandoff(handoff=decl.handoff, uid=decl.uid,
+                                        gid=decl.gid, note=decl.note)
         return BrokerConfig(
             domain=addressing.domain,
+            shared_handoffs=shared,
+            shared_sweep_seconds=self.shared_sweep_seconds,
             agent_homes={name: b.home for name, b in addressing.agents.items()},
             contacts_path=self.addressing_path,
             audit_path=self.audit_path,
