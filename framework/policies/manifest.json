@@ -116,7 +116,8 @@
         ],
         "likely_policies": [
           "coding_standards",
-          "coding_standards_python"
+          "coding_standards_python",
+          "coding_standards_rust"
         ]
       },
       {
@@ -1086,6 +1087,32 @@
           "pytest",
           "fixtures",
           "python tests"
+        ]
+      },
+      {
+        "name": "rust_coding_standards",
+        "short_name": "RS_CODE",
+        "path": "lang/rust/coding_standards.md",
+        "CEP_triggers": [
+          "Where may unwrap, expect and panic! appear, and where never?",
+          "When is a typed error required and when is an opaque one acceptable?",
+          "When is unsafe permitted and what must accompany it?",
+          "What may never happen inside an async task?",
+          "What gates a new dependency, and what must CI run?",
+          "What is the clippy baseline and how is a lint waived?",
+          "Where is TDD mandatory and how is it evidenced?",
+          "How is a secret typed so it cannot leak by accident?"
+        ],
+        "keywords": [
+          "rust",
+          "cargo",
+          "clippy",
+          "unsafe",
+          "async",
+          "tokio",
+          "thiserror",
+          "newtype",
+          "supply chain"
         ]
       }
     ]
