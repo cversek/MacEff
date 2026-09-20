@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **opsec: a profile may `exempt` specific caught text** (`opsec.py`, hook template and `scan_text`): a list of regexes full-matched against the text a rule caught; a match drops the finding unless the label is secret-class. The case: a private deployment repository whose own agents sign review records with their calling cards — the built-in "agent uuid" rule is right for every public target and wrong for the one repository those agents are the subject of. Category waivers are not possible; a stranger's fragment beside an exempt card still fires; a secret beside one still fires (tests)
+
 **`lang/rust/coding_standards.md`** — the framework's first Rust standard, modelled on `lang/python` and registered in the policy manifest (`rust_coding_standards`, `RS_CODE`). Nine sections, 28 criteria, each with a *Recognised in review by* clause naming the observable a reviewer looks for: typed errors at boundaries and no hot-path panics; ownership and newtypes for units; `unsafe` forbidden by default with a named second reviewer; async that never blocks and is bounded everywhere; dependency hygiene (lockfile, `--locked`, minimal features, `cargo-audit`/`cargo-deny`, SBOM, MSRV); a clippy pedantic baseline with reasoned waivers only; TDD mandatory for chain- and money-touching crates, evidenced by red-before-green history and a mutation line per new test; secrets as types; structured logs; an anti-pattern table and an amendment rule. Written by a deployment that pre-registered it before its first Rust code
 
 **amail rung 1s: brokers that share a filesystem** (`macf.amail`):
