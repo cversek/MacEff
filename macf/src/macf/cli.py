@@ -560,6 +560,63 @@ def cmd_budget(_: argparse.Namespace) -> int:
     print(json.dumps(payload, indent=2))
     return 0
 
+def _budget_run(fn) -> int:
+    from macf.budget import BudgetError
+    try:
+        return fn()
+    except BudgetError as e:
+        print(f"❌ {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_budget_sample(args: argparse.Namespace) -> int:
+    from macf import budget
+    def go() -> int:
+        s = budget.sample(fresh=args.fresh, manual=args.manual)
+        if args.json:
+            print(json.dumps(s, indent=2)); return 0
+        head = "reused the sample from" if s.get("reused") else "sampled"
+        age = (time.time() - s["t"]) / 60
+        print(f"{head} {age:.0f} min ago ({s['source']}): " + " · ".join(
+            f"{budget.label(l)} {l['percent']:g}%" for l in s["limits"] if l["percent"] is not None))
+        return 0
+    return _budget_run(go)
+
+
+def cmd_budget_status(args: argparse.Namespace) -> int:
+    from macf import budget
+    def go() -> int:
+        st = budget.status()
+        print(json.dumps(st, indent=2) if args.json else budget.format_status(st, brief=args.brief))
+        return 0
+    return _budget_run(go)
+
+
+def cmd_budget_log(args: argparse.Namespace) -> int:
+    from macf import budget
+    def go() -> int:
+        since = time.time() - args.since * 3600 if args.since else None
+        print(budget.format_log(budget.samples(since=since)))
+        return 0
+    return _budget_run(go)
+
+
+def cmd_budget_mode_set(args: argparse.Namespace) -> int:
+    from macf import budget
+    def go() -> int:
+        rec = budget.set_mode(args.mode, target=args.target, by=args.by, scope=args.scope)
+        print(f"budget mode {rec['mode']}" + (f": target {rec['target']:g}% of {rec['scope'] or 'week'} by {rec['by'] or 'its reset'}"
+                                              if rec["mode"] == "burn" else ""))
+        return 0
+    return _budget_run(go)
+
+
+def cmd_budget_mode_show(args: argparse.Namespace) -> int:
+    from macf import budget
+    print(json.dumps(budget.current_mode(), indent=2))
+    return 0
+
+
 def cmd_list_ccps(args: argparse.Namespace) -> int:
     """List consciousness checkpoints with timestamps."""
     try:
@@ -11263,7 +11320,30 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     set_title_parser.set_defaults(func=cmd_env_set_term_title)
     sub.add_parser("time", help="print current local time with CCP gap").set_defaults(func=cmd_time)
-    sub.add_parser("budget", help="print budget thresholds (JSON)").set_defaults(func=cmd_budget)
+    budget_p = sub.add_parser("budget", help="print budget thresholds (JSON); subcommands: the subscription's rate limits")
+    budget_p.set_defaults(func=cmd_budget)
+    budget_sub = budget_p.add_subparsers(dest="budget_cmd")
+    b = budget_sub.add_parser("sample", help="read the rate limits (or a pasted /usage summary) into a budget_sampled event")
+    b.add_argument("--fresh", action="store_true", help="fetch even if the last fetch is only minutes old")
+    b.add_argument("--manual", metavar="TEXT", help="e.g. 'session 24 @18:50 week 3 Fable 4' when no credential is reachable")
+    b.add_argument("--json", action="store_true")
+    b.set_defaults(func=cmd_budget_sample)
+    b = budget_sub.add_parser("status", help="latest limits, burn rate, projection to each reset")
+    b.add_argument("--json", action="store_true")
+    b.add_argument("--brief", action="store_true", help="one line")
+    b.set_defaults(func=cmd_budget_status)
+    b = budget_sub.add_parser("log", help="samples of the last week as a table")
+    b.add_argument("--since", metavar="HOURS", type=float, help="only the last N hours")
+    b.set_defaults(func=cmd_budget_log)
+    b = budget_sub.add_parser("mode", help="the operator's intent for the allowance")
+    mode_sub = b.add_subparsers(dest="budget_mode_cmd", required=True)
+    m = mode_sub.add_parser("set", help="conserve | normal | burn")
+    m.add_argument("mode", choices=["conserve", "normal", "burn"])
+    m.add_argument("--target", type=float, help="burn: percent to reach (default 100)")
+    m.add_argument("--by", metavar="ISO_TIME", help="burn: deadline (default the scope's reset)")
+    m.add_argument("--scope", metavar="NAME", help="burn: session, week, or a model name as /usage shows it (default week)")
+    m.set_defaults(func=cmd_budget_mode_set)
+    mode_sub.add_parser("show", help="the current mode").set_defaults(func=cmd_budget_mode_show)
 
     # New consciousness commands
     list_parser = sub.add_parser("list", help="list consciousness artifacts")

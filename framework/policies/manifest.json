@@ -1672,6 +1672,19 @@
     "location": "base/infrastructure/",
     "policies": [
       {
+        "name": "credit_budget",
+        "short_name": "CREDIT",
+        "path": "base/infrastructure/credit_budget.md",
+        "CEP_triggers": [
+          "How much of the subscription's allowance is left, and when does it reset?",
+          "Where do the budget numbers come from, and which part of the reply is trusted?",
+          "What may never happen to the CLI's OAuth token when sampling usage?",
+          "What does burn mode promise, and what does it need to be meaningful?",
+          "What if no credential is reachable to sample the rate limits?"
+        ],
+        "keywords": ["budget", "usage", "rate limit", "allowance", "credit", "burn", "reset", "subscription"]
+      },
+      {
         "name": "amail",
         "short_name": "AMAIL",
         "path": "base/infrastructure/amail.md",
