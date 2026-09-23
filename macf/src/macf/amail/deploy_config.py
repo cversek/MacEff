@@ -26,13 +26,32 @@ configuration becomes broker authority.
 import sys
 import pwd
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Literal, Tuple
 
 import yaml
 from pydantic import (BaseModel, ConfigDict, Field, field_validator,
                       model_validator)
 
 from macf.amail.broker import BrokerConfig, SharedHandoff
+
+
+#: What a broker consults to know it is inside a container: the file Docker
+#: writes at the root of every container it starts. A test points this at a
+#: temporary path to fake either answer.
+CONTAINER_MARKER = Path("/.dockerenv")
+
+
+def in_container() -> bool:
+    return CONTAINER_MARKER.exists()
+
+
+def _shared_uid_table(addressing: "AddressingConfig") -> Dict[int, Tuple[str, ...]]:
+    """uid -> the names bound to it, for uids declared shared (amail.md §1.3)."""
+    table: Dict[int, List[str]] = {}
+    for name, b in addressing.agents.items():
+        if b.shared_uid:
+            table.setdefault(b.uid, []).append(name)
+    return {uid: tuple(sorted(names)) for uid, names in table.items()}
 
 
 class ConfigError(Exception):
@@ -273,6 +292,13 @@ class AgentAddressing(AgentBinding):
     """
 
     contacts: List[Any] = Field(default_factory=list)
+    shared_uid: bool = Field(
+        default=False,
+        description="this agent's uid names more than one agent (amail.md §1.3). "
+                    "Permitted only under `tier: host`, and only when every agent "
+                    "on that uid is marked the same way; the broker then takes "
+                    "the submitting identity from the client's claim and audits "
+                    "it as a claim.")
     rate_limit: Optional[int] = Field(
         default=None,
         description="this agent's submission cap per window, overriding the "
@@ -293,25 +319,77 @@ class AddressingConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     domain: str = Field(description="the address domain this deployment owns")
+    tier: Literal["container", "host"] = Field(
+        default="container",
+        description="which tier this deployment runs under (amail.md §7.5). "
+                    "`container` is what every file written before the tier "
+                    "existed means; `host` is declared by a deployment on the "
+                    "operator's own machine and is justified by supervision.")
+    supervision: Optional[str] = Field(
+        default=None,
+        description="who or what watches a host-tier deployment: "
+                    "`operator-at-terminal` or `hypervisor`. Required under "
+                    "`tier: host`; `none` is refused, because the tier's "
+                    "justification is supervision and a file may not declare "
+                    "the tier while declaring the justification absent.")
     agents: Dict[str, AgentAddressing] = Field(
         description="address local-part -> agent")
 
     @field_validator("agents")
     @classmethod
-    def _agents_nonempty_and_uids_unique(cls, v: Dict[str, AgentAddressing]):
+    def _agents_nonempty(cls, v: Dict[str, AgentAddressing]):
         if not v:
             raise ValueError(
                 "no agents configured: an empty table means nobody can be "
                 "authenticated and every submission would be refused")
-        uids: Dict[int, str] = {}
-        for name, binding in v.items():
-            if binding.uid in uids:
-                raise ValueError(
-                    f"agents {uids[binding.uid]!r} and {name!r} share uid "
-                    f"{binding.uid}: the uid table is the authentication table, "
-                    "and one uid cannot be two identities")
-            uids[binding.uid] = name
         return v
+
+    @model_validator(mode="after")
+    def _tier_and_uids(self):
+        """One uid names one agent, unless the host tier says otherwise.
+
+        Under the container tier the uid table IS the authentication table
+        (§1.3): a repeated uid is refused with the same message it always had.
+        Under the host tier a uid may repeat among agents that all declare
+        `shared_uid: true`; an unmarked agent on a repeated uid is still
+        refused, so a file cannot drift into sharing by omission. The tier
+        itself needs a named supervision, and may not be loaded inside a
+        container -- that last refusal is here, on the addressing file, so
+        both daemons get it from the one place they both read.
+        """
+        if self.tier == "host":
+            if not self.supervision or self.supervision.strip().lower() == "none":
+                raise ValueError(
+                    "tier: host declared without a supervision (amail.md §1.3, "
+                    "§7.5): the host tier is justified by supervision, so name "
+                    "it -- operator-at-terminal or hypervisor -- or drop the tier")
+            if in_container():
+                raise ValueError(
+                    f"tier: host declared, but this process is inside a "
+                    f"container ({CONTAINER_MARKER} exists). The tier is a "
+                    f"declaration a deployment on the operator's own machine "
+                    f"makes (amail.md §1.3); a container may not make it. "
+                    f"Refusing to start.")
+        uids: Dict[int, str] = {}
+        for name, binding in self.agents.items():
+            if binding.uid in uids:
+                other = uids[binding.uid]
+                both_shared = binding.shared_uid and self.agents[other].shared_uid
+                if self.tier == "host" and both_shared:
+                    continue
+                if self.tier == "host":
+                    raise ValueError(
+                        f"agents {other!r} and {name!r} share uid {binding.uid} "
+                        f"but not both are marked shared_uid: true; under the "
+                        f"host tier a uid may repeat only among agents that "
+                        f"all declare it shared (amail.md §1.3)")
+                raise ValueError(
+                    f"agents {other!r} and {name!r} share uid "
+                    f"{binding.uid}: the uid table is the authentication table, "
+                    "and one uid cannot be two identities (declare tier: host "
+                    "and shared_uid on both to share one, amail.md §1.3)")
+            uids[binding.uid] = name
+        return self
 
 
 class SharedHandoffDecl(BaseModel):
@@ -532,7 +610,11 @@ class BrokerDeployConfig(BaseModel):
             opsec_scan=self._build_scan() if self.opsec_scan else None,
             refuse_unscanned=self.refuse_unscanned,
             refuse_context=self.refuse_context,
-            agent_uids={b.uid: name for name, b in addressing.agents.items()},
+            agent_uids={b.uid: name for name, b in addressing.agents.items()
+                        if not b.shared_uid},
+            shared_uid_agents=_shared_uid_table(addressing),
+            tier=addressing.tier,
+            supervision=addressing.supervision,
         )
 
     def load_addressing(self) -> "AddressingConfig":

@@ -125,8 +125,11 @@ class AuditLog:
         # when module globals may already be gone.
         try:
             self.close()
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001 - teardown: anything may be half-gone
+            try:
+                print(f"⚠️ MACF: audit log close at teardown: {e}", file=sys.stderr)
+            except (OSError, ValueError, AttributeError, TypeError):
+                pass    # stderr itself may be gone at interpreter teardown
 
     @contextmanager
     def _spare_released(self) -> Iterator[bool]:
@@ -179,9 +182,11 @@ class AuditLog:
             except OSError:
                 pass
             f = os.fdopen(fd, "a")
-        except BaseException:
+        except BaseException as e:
+            # Not swallowed: the descriptor is released and the same
+            # exception continues to the caller.
             os.close(fd)
-            raise
+            raise e
         try:
             yield f
         finally:
@@ -292,7 +297,7 @@ class AuditLog:
 
     def allowed(self, *, sender: str, recipients: List[str], message_id: str,
                 rung: str, trust: Optional[Any] = None,
-                authorship: Optional[str] = None) -> None:
+                authorship: Optional[str] = None, tier: Optional[str] = None) -> None:
         """`trust` is what a READER of the message can establish; `authorship` is
         what the BROKER established at submission.
 
@@ -311,13 +316,18 @@ class AuditLog:
             rec["trust"] = trust
         if authorship:
             rec["authorship"] = authorship
+        if tier:
+            # The boundary this line was written under (amail.md §3.3): a log
+            # read on another day must say whether a host-tier broker wrote it.
+            rec["tier"] = tier
         self._append(rec)
 
     def refused(self, *, sender: str, recipients: List[str], reason: str,
-                message_id: Optional[str] = None) -> None:
+                message_id: Optional[str] = None, tier: Optional[str] = None) -> None:
         self._append({
             "decision": "refused", "direction": "outbound", "sender": sender,
             "recipients": recipients, "reason": reason, "message_id": message_id,
+            **({"tier": tier} if tier else {}),
         })
 
     def inbound(self, *, sender: str, recipient: str, message_id: str,
