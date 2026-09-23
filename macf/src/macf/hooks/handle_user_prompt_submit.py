@@ -214,6 +214,11 @@ Breadcrumb: {breadcrumb}"""
 
         # Format token section
         token_section = format_token_context_full(token_info)
+        # The subscription budget: one line only when a limit crosses a band (credit_budget policy)
+        from macf.budget import hook_lines
+        budget_line = hook_lines("prompt")
+        if budget_line:
+            token_section = f"{token_section}\n{budget_line}"
 
         # Voice message detection: if prompt contains channel voice metadata,
         # inject a transcription directive for the agent
