@@ -171,19 +171,47 @@ def test_parallel_engagement_shows_a_pointer_on_every_engaged_duty(store, lab):
     assert len(with_ptr) == 1 and "gamma" in with_ptr[0]
 
 
-def test_succinct_rule_for_completed_duties(store, lab, monkeypatch):
+def test_succinct_rule_for_completed_duties(store, lab):
     role, folder = lab
     d, _ = store.add_duty(role, folder, "welcome")
     store.advance_duty(d, folder, "deferred", "not needed")
     d2, _ = store.find_duty(d.id)
-    sess = d2.updates[-1].breadcrumb.split("/")[0][2:]          # the session that touched it
-    shown = disp.stanza(store, "focused", role.id, session_id=sess, at=NOW, ansi=False)
+    touched = datetime.fromisoformat(d2.updates[-1].at).timestamp()
+    # restarted before the touch: still this session's work, shown
+    shown = disp.stanza(store, "focused", role.id, restart_epoch=touched - 60, at=NOW, ansi=False)
     assert any("📌 welcome" in l for l in shown)
-    hidden = disp.stanza(store, "focused", role.id, session_id="deadbeef", at=NOW, ansi=False)
+    # restarted after the touch: hidden behind the count
+    hidden = disp.stanza(store, "focused", role.id, restart_epoch=touched + 60, at=NOW, ansi=False)
     assert not any("📌 welcome" in l for l in hidden)
     assert any("1 done/deferred hidden" in l for l in hidden)
-    everything = disp.stanza(store, "focused", role.id, session_id="deadbeef", at=NOW, ansi=False, show_all=True)
+    # no restart on record: shown; --all: always shown
+    assert any("📌 welcome" in l for l in disp.stanza(store, "focused", role.id, at=NOW, ansi=False, read_restart=False))
+    everything = disp.stanza(store, "focused", role.id, restart_epoch=touched + 60, at=NOW, ansi=False, show_all=True)
     assert any("📌 welcome" in l for l in everything)
+
+
+def test_the_last_restart_is_the_latest_session_started_and_a_compaction_is_not_one(store, lab):
+    """A claude -c resume keeps the session id, so the rule cannot key on it;
+    it keys on the session_started event the SessionStart hook writes. The
+    compaction path writes compaction_detected instead, which must not count."""
+    assert disp.last_restart_epoch() is None                       # fresh isolated log
+    append_event("session_started", {"session_id": "abc", "cycle": 1})
+    first = disp.last_restart_epoch()
+    assert first is not None
+    time.sleep(0.01)
+    append_event("compaction_detected", {"session_id": "abc", "cycle": 2})
+    assert disp.last_restart_epoch() == first                      # compaction ignored
+    time.sleep(0.01)
+    append_event("session_started", {"session_id": "abc", "cycle": 2})   # same id, a real restart
+    assert disp.last_restart_epoch() > first
+    # and the stanza reads it when not told: a duty deferred before the restart hides
+    role, folder = lab
+    d, _ = store.add_duty(role, folder, "old")
+    store.advance_duty(d, folder, "deferred", "done before the restart")
+    time.sleep(1.1)                                                # store stamps at second precision
+    append_event("session_started", {"session_id": "abc", "cycle": 2})
+    lines = disp.stanza(store, "focused", role.id, at=NOW, ansi=False)
+    assert not any("📌 old" in l for l in lines) and any("1 done/deferred hidden" in l for l in lines)
 
 
 def test_trace_header_and_next_duty_line(store, lab):
