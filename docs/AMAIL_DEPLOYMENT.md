@@ -224,9 +224,9 @@ client launched, as the agent's uid, unsupervised. It is not the boundary the
 spec's broker is against that agent — it is the same code path (gate, rate
 limit, audit, ledger, ladder) so host mail is handled by the same rules, and
 the container's own broker still enforces its own contacts on what arrives.
-`amail status` labels it `agent-launched`, and the daemon's banner says so. A
-host deployment whose agents share one uid needs a claimed-identity rule this
-document does not yet carry; until it does, one host agent per uid.
+`amail status` labels it `agent-launched`, and the daemon's banner says so. Its
+standing, and the rule for a host whose agents share one uid, is the host tier
+below.
 
 **Verifying it, which means breaking it** — pair each with its acceptance:
 
@@ -237,6 +237,61 @@ document does not yet carry; until it does, one host agent per uid.
 | a pair in `_peers/x.local/` whose sender is under `y.local` | rejected into `rejected/` by the receiving broker, audited; nothing reaches a box |
 | a `_peers/<undeclared domain>/` directory | left unread and named on stderr; never consumed |
 | recipient's book lacks the sender | delivered into the peer's intake, then quarantined on the peer's side; the sender's ledger says delivered (custody passed to the peer broker), the peer's audit says quarantined |
+
+## The host tier: agents on the operator's own machine
+
+Everything above is the container tier: one uid per agent, a broker under a uid
+of its own, an operator who is not watching. The spec's §7.5 defines a second
+tier for the other shape — agents running on the operator's machine as the
+operator's uid, with every tool call in a transcript the operator reads — and
+§1.3 carries its declarations. The justification is supervision, never intent:
+where the container tier prevents, this tier detects, and the declaration says
+who is watching.
+
+**The declaration**, in the addressing file:
+
+```yaml
+tier: host                          # default is container; every older file means container
+supervision: operator-at-terminal   # or hypervisor; `none` refuses to start
+agents:
+  ira:
+    account: cversek
+    shared_uid: true                # this uid names more than one agent
+    contacts: [ctb, ...]
+  ctb:
+    account: cversek
+    shared_uid: true
+    contacts: [ira, ...]
+```
+
+**What it changes.** On a uid marked shared, the broker takes the submitting
+identity from the client's claim (the agent name the client holds for itself),
+accepts it only if the file binds that name to the connecting uid, and writes
+`claimed:<name>` in the audit, the sidecar and the ledger — never
+`so_peercred:<name>`, which stays the word for a kernel-established identity.
+The agent-launched broker (previous section) is this tier's normal case: the
+daemon banner and `amail status` say `host tier, supervised by
+operator-at-terminal`, and every audit line carries `tier: host`. Contacts,
+directions, the rate limit, the gate, the ledger and the ladder are untouched.
+
+**Refusals**, each naming the rule it applies:
+
+| declaration | result |
+|---|---|
+| `tier: host` loaded by a broker or inbound consumer inside a container (`/.dockerenv`) | refuses to start: the tier is declared by a deployment, and a container is not one that may declare it |
+| two agents on one uid without `tier: host` and `shared_uid` on both | refused as today: the uid table is the authentication table |
+| `autostart: true` in `amail.json` against a container-tier addressing file | the client refuses to launch a broker and says which tier would permit it |
+| `tier: host` with `supervision: none` or no `supervision` | refused: a tier justified by supervision cannot declare its absence |
+
+**Verifying it, which means breaking it:**
+
+| break | expect |
+|---|---|
+| submit from a shared uid claiming a name the file does not bind to it | refused, reason names the claim and the uid; audit line written with the refusal |
+| submit from an unshared uid with a claim that disagrees with the kernel's answer | accepted under the kernel's name; a discrepancy line in the audit |
+| read another agent's counts by claiming their name on a shared uid the file binds only to you | refused; no path takes a name for a mailbox |
+| `grep claimed: audit.log` on the host | every host submission, and no line from the container's broker |
+| copy the host addressing file into the container | the container's broker refuses to start, naming §1.3 |
 
 ## Supervision, and where it ends
 

@@ -5,6 +5,9 @@
   "base_path": "/opt/maceff/policies",
   "consciousness_patterns": {
     "description": "CEPs help agents recognize when they need specific knowledge",
+    "host_tier": [
+      "base/infrastructure/amail"
+    ],
     "triggers": [
       {
         "pattern": "delegation_uncertainty",
@@ -1605,6 +1608,9 @@
     "roles": [
       "base/consciousness/roles"
     ],
+    "shared_uid": [
+      "base/infrastructure/amail"
+    ],
     "skepticism": [
       "base/philosophy/empiricism"
     ],
@@ -1636,6 +1642,9 @@
     "submodule": [
       "base/development/git_discipline"
     ],
+    "supervision_tier": [
+      "base/infrastructure/amail"
+    ],
     "task": [
       "base/development/task_management"
     ],
@@ -1654,6 +1663,9 @@
     ],
     "transplant": [
       "base/operations/agent_backup"
+    ],
+    "trust_tier": [
+      "base/infrastructure/amail"
     ],
     "validation": [
       "base/development/debugging_and_validation"
