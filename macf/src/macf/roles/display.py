@@ -5,14 +5,16 @@ Line grammar: status box, icon, title, [state · review MM-DD], approach
 mark, 🎯 for the focused role, then 👈 and age. The focused role is expanded
 to every open duty in tier order and never truncated; other roles collapse to
 one line carrying last and next. Completed duties follow the succinct rule:
-shown while touched in this session, hidden after a restart, always with
---all.
+shown while touched since the last restart, hidden after one, always with
+--all. "Restart" is the latest ``session_started`` event, not the session id:
+a ``claude -c`` resume keeps the id, so an id test never hides anything.
 """
 import sys
 import time
 from datetime import datetime
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from ..agent_events_log import read_events
 from .models import Duty, Role
 from .priority import (DONE, Placement, duty_mark, most_urgent_mark, now, rank, rank_roles,
                        review_mark)
@@ -52,12 +54,27 @@ def rel_age(epoch: float, at_epoch: Optional[float] = None) -> str:
     return f"{secs // 86400}d"
 
 
-def touched_this_session(duty: Duty, session_id: Optional[str]) -> bool:
+def last_restart_epoch() -> Optional[float]:
+    """Epoch of the most recent ``session_started`` event, or None when the log
+    holds none. A compaction writes ``compaction_detected``, not this, so it
+    does not count as a restart: the rule is about the terminal being reopened."""
+    for ev in read_events(reverse=True, scope="all"):
+        if ev.get("event") == "session_started":
+            return float(ev.get("timestamp") or 0.0)
+    return None
+
+
+def touched_since_restart(duty: Duty, restart_epoch: Optional[float]) -> bool:
     """The succinct rule: a done/deferred duty stays visible while its last
-    update's breadcrumb carries this session's id."""
-    if not session_id or not duty.updates:
+    update is newer than the last restart. No restart on record: visible."""
+    if not duty.updates:
         return False
-    return duty.updates[-1].breadcrumb.startswith(f"s_{session_id[:8]}")
+    if restart_epoch is None:
+        return True
+    try:
+        return datetime.fromisoformat(duty.updates[-1].at).timestamp() >= restart_epoch
+    except ValueError:
+        return True             # a hand-edited timestamp is not a reason to hide the duty
 
 
 def last_touch(d: Duty) -> float:
@@ -213,12 +230,18 @@ def duty_line(p: Placement, at: datetime, pointers: Sequence[Tuple[str, float]] 
 
 
 def stanza(store: RoleStore, mode: str = "focused", focused_id: Optional[str] = None,
-           session_id: Optional[str] = None, at: Optional[datetime] = None, ansi: bool = True,
-           show_all: bool = False, title_width: Optional[int] = 80) -> List[str]:
-    """Lines for the 🎭 ROLES stanza. Empty when there are no roles or mode is none."""
+           restart_epoch: Optional[float] = None, at: Optional[datetime] = None, ansi: bool = True,
+           show_all: bool = False, title_width: Optional[int] = 80,
+           read_restart: bool = True) -> List[str]:
+    """Lines for the 🎭 ROLES stanza. Empty when there are no roles or mode is none.
+
+    ``restart_epoch`` is the last restart for the succinct rule; None reads it
+    from the events log unless ``read_restart`` is False (tests with no log)."""
     if mode == "none":
         return []
     at = at or now()
+    if restart_epoch is None and read_restart and not show_all:
+        restart_epoch = last_restart_epoch()
     pairs = [(r, [d for d, _ in store.duties(f)]) for r, f in store.roles()]
     if not show_all:
         pairs = [(r, ds) for r, ds in pairs if r.state in ("active", "paused")]
@@ -250,7 +273,7 @@ def stanza(store: RoleStore, mode: str = "focused", focused_id: Optional[str] = 
         hidden = 0
         duty_ptr = [(did, ts) for did, ts in mine if did]
         for p in everything:                     # tier order; open duties never truncated
-            if p.tier == DONE and not show_all and not touched_this_session(p.duty, session_id):
+            if p.tier == DONE and not show_all and not touched_since_restart(p.duty, restart_epoch):
                 hidden += 1
                 continue
             lines.append(duty_line(p, at, duty_ptr, ansi, title_width))
