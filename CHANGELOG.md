@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **roles: completed duties hide after a restart** (`roles/display.py`): the succinct rule compared a done duty's last breadcrumb with the current session id, and a `claude -c` resume keeps the id, so a role with fourteen completed duties across three cycles listed every one after every restart. The rule now reads the latest `session_started` event (`last_restart_epoch`) and hides a done or deferred duty whose last update is older than it; a compaction writes no such event and does not count; with no restart on record everything stays visible; `--all` unchanged. `stanza()` takes `restart_epoch` instead of `session_id` (#414)
+
 ### Added
 
 - **opsec: a profile may `exempt` specific caught text** (`opsec.py`, hook template and `scan_text`): a list of regexes full-matched against the text a rule caught; a match drops the finding unless the label is secret-class. The case: a private deployment repository whose own agents sign review records with their calling cards — the built-in "agent uuid" rule is right for every public target and wrong for the one repository those agents are the subject of. Category waivers are not possible; a stranger's fragment beside an exempt card still fires; a secret beside one still fires (tests)
