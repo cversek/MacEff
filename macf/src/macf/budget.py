@@ -235,8 +235,13 @@ def status(now: Optional[float] = None) -> dict:
             if by_h and by_h > 0:
                 row["pace_needed"] = round((mode["target"] - l["percent"]) / by_h, 2)
         rows.append(row)
+    from macf.utils.environment import current_model
+    model = current_model()
+    family = model["display"].split(" ")[0].lower() if model["id"] != "unknown" else None
+    for r in rows:  # the limits this agent's own work is filling right now
+        r["spending"] = r["kind"] != "weekly_scoped" or (family is not None and r["label"].lower().startswith(family))
     return {"sampled_at": latest["t"], "age_min": round((now - latest["t"]) / 60, 1), "source": latest["source"],
-            "mode": mode, "limits": rows}
+            "model": model, "mode": mode, "limits": rows}
 
 
 def format_status(st: dict, brief: bool = False) -> str:
@@ -246,12 +251,15 @@ def format_status(st: dict, brief: bool = False) -> str:
             s += f" ({r['hours_left']:g}h to reset)"
         return s
     if brief:
-        return " · ".join(one(r) for r in st["limits"]) + f"  [{st['mode']['mode']}, sample {st['age_min']:g} min old]"
-    lines = [f"budget mode: {st['mode']['mode']}" + (f" (target {st['mode']['target']:g}% of {st['mode'].get('scope') or 'week'}"
+        model = (st.get("model") or {}).get("display", "unknown")
+        return " · ".join(one(r) for r in st["limits"]) + f"  [{model}, {st['mode']['mode']}, sample {st['age_min']:g} min old]"
+    m = st.get("model") or {}
+    lines = [f"running on: {m.get('display', 'unknown')} ({m.get('id', '?')}, from {m.get('source', '?')})",
+             f"budget mode: {st['mode']['mode']}" + (f" (target {st['mode']['target']:g}% of {st['mode'].get('scope') or 'week'}"
              f"{' by ' + st['mode']['by'] if st['mode'].get('by') else ' by its reset'})" if st['mode']['mode'] == 'burn' else ""),
              f"latest sample: {st['age_min']:g} min old ({st['source']})"]
     for r in st["limits"]:
-        lines.append(f"  {one(r)}")
+        lines.append(f"  {one(r)}" + ("" if r.get("spending", True) else "  (not this model)"))
         bits = []
         if r["rate_last_hour"] is not None:
             bits.append(f"{r['rate_last_hour']:+g}%/h last hour")

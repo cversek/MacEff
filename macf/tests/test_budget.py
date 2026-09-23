@@ -131,3 +131,16 @@ def test_status_without_samples_says_what_to_do(log, capsys):
     """No samples is a refusal that names the command, through the CLI's error path."""
     assert cmd_budget_status(argparse.Namespace(json=False, brief=False)) == 1
     assert "budget sample" in capsys.readouterr().err
+
+
+def test_status_names_the_running_model_and_what_it_spends(log, monkeypatch):
+    """Session and week always fill; a per-model weekly cap fills only when it is this model's family."""
+    monkeypatch.setattr(budget.time, "time", lambda: T0)
+    monkeypatch.setattr("macf.utils.environment.current_model",
+                        lambda session_id=None: {"id": "claude-opus-5-5", "display": "Opus 5.5", "source": "transcript"})
+    budget.sample(fetch=lambda: REPLY, fresh=True)
+    st = budget.status()
+    assert st["model"]["display"] == "Opus 5.5"
+    spend = {r["label"]: r["spending"] for r in st["limits"]}
+    assert spend == {"session": True, "week": True, "Fable": False}
+    assert "Opus 5.5" in budget.format_status(st, brief=True) and "(not this model)" in budget.format_status(st)

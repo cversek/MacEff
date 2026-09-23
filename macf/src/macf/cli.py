@@ -38,7 +38,7 @@ from .utils import (
     get_total_context,
 )
 from .modes import detect_auto_mode
-from .utils.environment import detect_model
+from .utils.environment import current_model, detect_model
 
 # -------- ANSI escape codes --------
 ANSI_RESET = "\033[0m"
@@ -347,7 +347,9 @@ def cmd_env(args: argparse.Namespace) -> int:
         "versions": {
             "macf": _ver,
             "claude_code": get_claude_code_version() or "(unavailable)",
-            "model": detect_model(),
+            "model": (_model := current_model())["id"],
+            "model_display": _model["display"],
+            "model_source": _model["source"],
             "context_window": f"{get_total_context():,}",
             "python_path": sys.executable,
             "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
@@ -429,7 +431,8 @@ def cmd_env(args: argparse.Namespace) -> int:
         print("Versions")
         print(f"  MACF:         {data['versions']['macf']}")
         print(f"  Claude Code:  {data['versions']['claude_code']}")
-        print(f"  Model:        {data['versions']['model']}")
+        _v = data['versions']
+        print(f"  Model:        {_v.get('model_display', _v['model'])} ({_v['model']}, from {_v.get('model_source', '?')})")
         print(f"  Context:      {data['versions']['context_window']} tokens")
         print(f"  Python:       {data['versions']['python_path']} ({data['versions']['python_version']})")
         print()
