@@ -134,6 +134,7 @@ def format_macf_footer() -> str:
     Returns:
         ```
         ---
+        Model: {display} ({model_id})
         🏗️ MACF Tools {__version__} | Claude Code {cc_version}
         Environment: {rich_environment}
         ```
@@ -153,7 +154,17 @@ def format_macf_footer() -> str:
     else:
         version_line = f"🏗️ MACF Tools {__version__} (Multi-Agent Coordination Framework)"
 
+    try:
+        from .environment import current_model
+        m = current_model()
+        model_line = f"Model: {m['display']} ({m['id']})" if m["id"] != "unknown" else "Model: unknown"
+    except Exception as e:
+        # Deliberately broad: this is a GUARD. The footer rides on every hook and must never take one down.
+        print(f"⚠️ MACF: footer model line skipped: {e}", file=sys.stderr)
+        model_line = "Model: unknown"
+
     return f"""---
+{model_line}
 {version_line}
 Environment: {environment}"""
 
