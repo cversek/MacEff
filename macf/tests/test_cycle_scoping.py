@@ -227,3 +227,119 @@ class TestCarryGapIsLoud:
         assert (auto, source) == (True, "event")
         assert not any(e["event"] == "carry_forward_missing"
                        for e in read_events(reverse=True, scope="all"))
+
+
+def _marker(ts, cycle, families=("mode", "scope", "timer"), complete=True):
+    return _ev("state_carried", ts, cycle=cycle, keys=[],
+               families=list(families), complete=complete)
+
+
+class TestScopeCarry:
+    """Sprint and play-time scope are event-sourced and read cycle-scoped, so a
+    scope that is not carried is empty on the far side of the first compaction:
+    the gate stops holding and the SPRINT mode-lock ends with no task finished."""
+
+    def test_sprint_scope_survives_a_boundary(self, isolated_events_log):
+        from macf.task.scope import get_scope_state
+        _write(isolated_events_log, [
+            _ev("scope_activated", 100, task_ids=["10", "11", "12"]),
+            _ev("scope_paused", 101, task_ids=["11"], justification="blocked"),
+            _ev("scope_task_completed", 102, task_id="12"),
+            _ev(CYCLE_BOUNDARY_EVENT, 200, cycle=2),
+        ])
+
+        carried = carry_state_forward(current_cycle=2)
+
+        assert "scope" in carried
+        assert get_scope_state() == {"10": "active", "11": "paused", "12": "inactive"}
+
+    def test_scope_survives_a_second_boundary(self, isolated_events_log):
+        """The carried snapshot is itself carried: nothing is lost by the chain."""
+        from macf.agent_events_log import append_event
+        from macf.task.scope import get_scope_state
+        _write(isolated_events_log, [
+            _ev("scope_activated", 100, task_ids=["10", "11"]),
+            _ev("scope_task_completed", 101, task_id="11"),
+            _ev(CYCLE_BOUNDARY_EVENT, 200, cycle=2),
+        ])
+        carry_state_forward(current_cycle=2)
+        append_event(CYCLE_BOUNDARY_EVENT, {"cycle": 3})
+
+        carry_state_forward(current_cycle=3)
+
+        assert get_scope_state() == {"10": "active", "11": "inactive"}
+
+    def test_a_running_timer_is_carried_and_an_expired_one_is_not(self, isolated_events_log):
+        import time
+        from macf.task.scope import get_active_timer
+        _write(isolated_events_log, [
+            _ev("scope_timer_set", 100, timer_end_epoch=time.time() - 60),
+            _ev("scope_timer_set", 101, timer_end_epoch=time.time() + 3600),
+            _ev(CYCLE_BOUNDARY_EVENT, 200, cycle=2),
+        ])
+        assert "timer" in carry_state_forward(current_cycle=2)
+        assert get_active_timer()["active"] is True
+
+        _write(isolated_events_log, [
+            _ev("scope_timer_set", 100, timer_end_epoch=time.time() - 60),
+            _ev(CYCLE_BOUNDARY_EVENT, 200, cycle=2),
+        ])
+        assert "timer" not in carry_state_forward(current_cycle=2)
+        assert get_active_timer()["active"] is False
+
+
+class TestCarryBaseCaseAndOrder:
+
+    def test_state_older_than_one_cycle_is_carried(self, isolated_events_log):
+        """No boundary ever carried, so the one-cycle fold had no base case: a
+        mode set two cycles before the first carry was stranded forever."""
+        _write(isolated_events_log, [
+            _ev("mode_change", 100, mode="AUTO_MODE", enabled=True, cycle=1),
+            _ev(CYCLE_BOUNDARY_EVENT, 200, cycle=2),
+            _ev("tool_call", 201, name="x"),
+            _ev(CYCLE_BOUNDARY_EVENT, 300, cycle=3),
+        ])
+
+        assert carry_state_forward(current_cycle=3) == ["AUTO_MODE"]
+        marker = next(e for e in read_events(reverse=True) if e["event"] == "state_carried")
+        assert marker["data"]["bootstrapped"] is True
+        assert marker["data"]["complete"] is True
+
+    def test_a_withdrawn_authority_is_not_resurrected(self, isolated_events_log):
+        """AUTO_MODE then MANUAL_MODE in one cycle are two keys. Emitted newest
+        first, the older AUTO_MODE became the latest mode_change after the
+        boundary and the operator's de-escalation was undone."""
+        from macf import event_queries
+        event_queries._carry_gaps_reported.clear()
+        _write(isolated_events_log, [
+            _ev("mode_change", 100, mode="AUTO_MODE", enabled=True, cycle=1),
+            _ev("mode_change", 101, mode="MANUAL_MODE", enabled=False, cycle=1),
+            _ev(CYCLE_BOUNDARY_EVENT, 200, cycle=2),
+        ])
+
+        carry_state_forward(current_cycle=2)
+
+        latest = next(e for e in read_events(reverse=True) if e["event"] == "mode_change")
+        assert latest["data"]["mode"] == "MANUAL_MODE"
+        assert event_queries.get_auto_mode_from_events("sess1234")[0] is False
+
+    @pytest.mark.parametrize("families, complete, expect_carried", [
+        (("mode", "scope", "timer"), True, False),   # a complete carry bounds the walk
+        (("mode",), True, True),                     # an old-style marker does not
+        (("mode", "scope", "timer"), False, True),   # nor does a carry that failed
+    ])
+    def test_the_walk_stops_at_a_complete_carry(self, isolated_events_log,
+                                                 families, complete, expect_carried):
+        """Both polarities, or the bound is unshown. The trap is a USER_REMOTE in
+        cycle 1 that cycle 2's carry did not re-assert: a walk that respects the
+        marker must not find it, and one that ignores it must."""
+        _write(isolated_events_log, [
+            _ev("mode_change", 100, mode="USER_REMOTE", enabled=True, cycle=1),
+            _ev(CYCLE_BOUNDARY_EVENT, 200, cycle=2),
+            _marker(201, 2, families=families, complete=complete),
+            _ev(CYCLE_BOUNDARY_EVENT, 300, cycle=3),
+        ])
+
+        carried = carry_state_forward(current_cycle=3)
+
+        assert ("USER_REMOTE" in carried) is expect_carried

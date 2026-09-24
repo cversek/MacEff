@@ -214,13 +214,27 @@ def get_scope_state() -> Dict[str, str]:
     Returns:
         Dict of {task_id: 'active' | 'paused' | 'inactive'}
     """
-    scope_types = {
-        "scope_activated", "scope_task_completed", "scope_cleared",
-        "scope_paused", "scope_unpaused", "scope_added", "scope_removed",
-    }
     events = [e for e in read_events(limit=None, reverse=False)
-              if e.get("event", "") in scope_types]
+              if e.get("event", "") in SCOPE_EVENT_TYPES]
+    return replay_scope_events(events)
 
+
+#: Every event type that changes scope membership. The replay below is the only
+#: interpreter of these, so a reader that needs scope state from some window
+#: other than the current cycle (the boundary carry) replays through it rather
+#: than keeping a second copy of the rules.
+SCOPE_EVENT_TYPES = frozenset({
+    "scope_activated", "scope_task_completed", "scope_cleared",
+    "scope_paused", "scope_unpaused", "scope_added", "scope_removed",
+})
+
+
+def replay_scope_events(events) -> Dict[str, str]:
+    """Fold scope events, oldest first, into ``{task_id: status}``.
+
+    Pure: no log access. ``get_scope_state`` feeds it the current cycle; the
+    boundary carry feeds it the window since the last complete carry.
+    """
     state: Dict[str, str] = {}
 
     for event in events:
