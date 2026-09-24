@@ -502,6 +502,30 @@ Development Drive Stats:
         elif _focus["text"]:
             message += f"\n\n{_focus['text']}"
 
+        # --- Burn gate (credit_budget policy): with no scope or focus holding the stop, an operator's burn intent
+        # holds it while the allowance is below target, the deadline is ahead and open work exists. AUTO_MODE only;
+        # same failsafe counter as the other gates; `budget mode set normal` always clears it.
+        _burn = {"block": False, "text": ""}
+        try:
+            from macf.budget import burn_gate
+            _burn = burn_gate(auto_mode)
+        except Exception as _e:
+            # Deliberately broad: a GUARD. The budget must never fail a Stop.
+            emit_warning(Warning(source="stop", kind="burn_gate_failed", detail=f"burn gate error (non-blocking): {_e}"))
+        if _burn["block"]:
+            try:
+                from macf.task.scope_gate_failsafe import decrement_and_check
+                _remaining, _fail_open = decrement_and_check()
+                if _fail_open:
+                    _msg = (f"{format_macf_brand()} | ⚠️ Burn gate fail-open: the idle-stop failsafe reached 0. "
+                            f"Stopping. Pick up the open work, or run macf_tools budget mode set normal.")
+                    emit_warning(Warning(source="stop", kind="burn_gate_failed", detail=_msg))
+                    return {"continue": True, "systemMessage": _msg}
+                return {"continue": True, "decision": "block",
+                        "reason": f"{_burn['text']}\n\n(idle-stop counter: {_remaining} remaining)"}
+            except (OSError, ValueError, ImportError, AttributeError) as _e:
+                emit_warning(Warning(source="stop", kind="burn_gate_failed", detail=f"burn gate failsafe error (non-blocking): {_e}"))
+
         # --- Timer gate: block stop if autonomous work timer is still active ---
         # This fires when scope is EMPTY (all tasks done) but timer hasn't expired.
         # It's the HARD enforcement of reflexive self-motivation: the agent MUST

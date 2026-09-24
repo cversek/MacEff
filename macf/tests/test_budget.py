@@ -226,3 +226,70 @@ def test_plan_lists_scoped_work_first_with_clean_subjects(log, monkeypatch, opus
     work = budget.plan()["work"]
     assert [w["id"] for w in work] == ["272", "60"] and work[0]["scoped"]
     assert work[1]["subject"] == "🗺️ MISSION: Old"
+
+
+# ── Phase 3: the burn gate ───────────────────────────────────────────────────
+
+WORK = [{"id": "272", "type": "PHASE", "status": "in_progress", "scoped": True, "subject": "Phase 2: plan"}]
+
+
+@pytest.fixture
+def burning(log, monkeypatch, opus):
+    """Burn to 95% of the week by the week's reset, week at 40%, open work present, clock at T0."""
+    monkeypatch.setattr(budget.time, "time", lambda: T0)
+    monkeypatch.setattr(budget, "open_work", lambda: list(WORK))
+    budget.sample(fetch=lambda: reply_at(10, 40, 1), fresh=True)
+    budget.set_mode("burn", target=95, scope="week")
+    return monkeypatch
+
+
+def test_burn_gate_holds_only_when_every_condition_holds(burning):
+    g = budget.burn_gate(auto_mode=True)
+    assert g["block"] and "Burn mode: week at 40% of a 95% target" in g["text"] and "#272" in g["text"]
+    assert "budget mode set normal" in g["text"]
+    assert not budget.burn_gate(auto_mode=False)["block"]                      # MANUAL_MODE never holds
+
+
+def test_burn_gate_releases_on_target_deadline_no_work_or_normal(burning):
+    burning.setattr(budget, "open_work", lambda: [])
+    assert not budget.burn_gate(True)["block"]                                   # nothing worth spending it on
+    burning.setattr(budget, "open_work", lambda: list(WORK))
+    budget.set_mode("burn", target=95, scope="week", by="2026-09-01T00:00:00-04:00")
+    assert not budget.burn_gate(True)["block"]                                   # deadline passed
+    budget.set_mode("burn", target=35, scope="week")
+    assert not budget.burn_gate(True)["block"]                                   # target already reached
+    budget.set_mode("normal")
+    assert not budget.burn_gate(True)["block"]                                   # the operator's escape
+
+
+def _stop(auto):
+    from unittest.mock import patch
+    from macf.hooks.handle_stop import run
+    with patch("macf.hooks.handle_stop.detect_auto_mode", return_value=(auto, "test")):
+        return run(json.dumps({"stop_reason": "end_turn", "session_id": "test-sess"}))
+
+
+@pytest.fixture
+def stop_env(burning, tmp_path):
+    burning.setenv("MACEFF_AGENT_HOME_DIR", str(tmp_path))
+    from macf.utils.paths import find_agent_home
+    find_agent_home.cache_clear()
+    from macf.task.scope_gate_failsafe import reset
+    reset()
+    yield
+    reset()
+
+
+def test_stop_hook_holds_in_burn_and_fails_open_with_the_shared_failsafe(stop_env):
+    from macf.task.scope_gate_failsafe import COUNT_INIT
+    assert _stop(False).get("decision") != "block"
+    results = [_stop(True) for _ in range(COUNT_INIT)]
+    assert all(r.get("decision") == "block" and "Burn mode" in r["reason"] for r in results[:-1])
+    assert all("idle-stop counter" in r["reason"] for r in results[:-1])
+    assert results[-1].get("decision") != "block" and "fail-open" in results[-1].get("systemMessage", "")
+
+
+def test_stop_hook_released_by_mode_normal(stop_env):
+    assert _stop(True).get("decision") == "block"
+    budget.set_mode("normal")
+    assert _stop(True).get("decision") != "block"
