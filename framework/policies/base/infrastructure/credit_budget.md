@@ -37,8 +37,14 @@ intends for them. This policy says where the numbers come from, what may be kept
 - What is a window, and why are rates never computed across a reset?
 - How often may the endpoint be asked?
 
+**3.1 Unasked Reminders**
+- When does the budget show up without being asked, and why so rarely?
+- What is the warning before the five-hour wall, and what does it ask for?
+- When do the hooks sample on their own, and when do they never touch a credential?
+
 **4 Intent: conserve, normal, burn**
 - What does each mode promise?
+- What does `budget plan` offer an agent told to spend the allowance?
 - What does burn need to be meaningful, and what are its defaults?
 - How long does a mode last?
 
@@ -86,6 +92,25 @@ at eight days, one day past the longest window, because nothing older can bear o
 The endpoint is asked at most once every few minutes; a `sample` inside that interval returns the last one unless
 `--fresh`. Anything that samples automatically relies on this and must not pass `--fresh`.
 
+### 3.1 Unasked Reminders
+
+The budget reaches the agent unasked in two places, both governed by `mode_system`'s nag design: computed from
+observed state, naming the remedy, and rare, because every line injected into context spends the agent's willingness
+to read the next one.
+
+- **The prompt line** appears when a limit this model is filling (the session window, the weekly cap, and a per-model
+  cap only if it is this model's) enters a new band, 50, 75 and 90 percent by default (`MACEFF_BUDGET_BANDS`), and in
+  burn when the pace still needed moves by more than a point. It records what it showed as a `budget_notice` event and
+  stays silent until something changes.
+- **The wall warning** fires once per five-hour window, before a tool call, when the window reaches 90 percent
+  (`MACEFF_BUDGET_WALL`). Running out of the window stops work with no hook afterwards, unlike a compaction, so the
+  remedy it names is a task note or checkpoint for the work in hand.
+
+The hooks refresh the sample themselves at most every ten minutes (`MACEFF_BUDGET_AUTOSAMPLE_MIN`) with a short
+timeout, and **only for an agent that has sampled in the last week**: an installation that never asked for its budget
+never has a credential read on its behalf. Anything failing inside the budget code yields no line; it never fails a
+hook.
+
 ## 4 Intent: conserve, normal, burn
 
 `budget mode set` records what the operator wants from the allowance, as a `budget_mode_set` event.
@@ -95,6 +120,9 @@ The endpoint is asked at most once every few minutes; a `sample` inside that int
 - **burn**: the allowance is expiring and the operator wants it spent on real work. Burn names a **target** percent
   (default 100), a **scope** (`session`, `week`, or a model's name as `/usage` shows it; default `week`) and a
   **deadline** (default the scope's reset). `status` then reports the pace still needed.
+
+`budget plan` shows the status arithmetic beside the open work it could buy: tasks in the active scope first, then open
+missions, phases, experiments and detours. It lists what exists; it proposes nothing new.
 
 A mode is intent, not permission: burn never authorizes work the agent would not otherwise be authorized to do, and
 it is spent on work that already exists (open mission phases, scoped tasks), not on work invented to consume credit.

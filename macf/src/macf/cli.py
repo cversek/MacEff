@@ -595,6 +595,15 @@ def cmd_budget_status(args: argparse.Namespace) -> int:
     return _budget_run(go)
 
 
+def cmd_budget_plan(args: argparse.Namespace) -> int:
+    from macf import budget
+    def go() -> int:
+        p = budget.plan()
+        print(json.dumps(p, indent=2) if args.json else budget.format_plan(p))
+        return 0
+    return _budget_run(go)
+
+
 def cmd_budget_log(args: argparse.Namespace) -> int:
     from macf import budget
     def go() -> int:
@@ -11335,6 +11344,9 @@ def _build_parser() -> argparse.ArgumentParser:
     b.add_argument("--json", action="store_true")
     b.add_argument("--brief", action="store_true", help="one line")
     b.set_defaults(func=cmd_budget_status)
+    b = budget_sub.add_parser("plan", help="status plus the open work the allowance could be spent on")
+    b.add_argument("--json", action="store_true")
+    b.set_defaults(func=cmd_budget_plan)
     b = budget_sub.add_parser("log", help="samples of the last week as a table")
     b.add_argument("--since", metavar="HOURS", type=float, help="only the last N hours")
     b.set_defaults(func=cmd_budget_log)
