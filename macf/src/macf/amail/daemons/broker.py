@@ -101,8 +101,13 @@ def main() -> int:
           f"{', launched by the agent it serves: same uid, unsupervised' if launched_by == 'agent' else ''}"
           f") serving on {cfg.socket_path}", flush=True)
     print(f"  domain: {cfg.domain}", flush=True)
+    print(f"  tier:    {cfg.tier}"
+          + (f", supervised by {cfg.supervision}" if cfg.tier == "host" else "")
+          + (" (agent-launched)" if launched_by == "agent" else ""), flush=True)
     print("  agents: " + ", ".join(
-        f"{n}(uid {u})" for u, n in sorted(cfg.agent_uids.items())), flush=True)
+        [f"{n}(uid {u})" for u, n in sorted(cfg.agent_uids.items())]
+        + [f"{'/'.join(ns)}(shared uid {u}, identity by claim)"
+           for u, ns in sorted(cfg.shared_uid_agents.items())]), flush=True)
     print(f"  handoff: {cfg.inbound_handoff}  quarantine: {cfg.inbound_quarantine}",
           flush=True)
     for dom, decl in sorted(cfg.shared_handoffs.items()):

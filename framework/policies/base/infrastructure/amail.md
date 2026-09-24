@@ -993,9 +993,9 @@ a tier justified by supervision cannot be declared alongside its own absence.
   name to the connecting uid and marks the uid shared. This is weaker than the
   kernel credential and the audit says so on every line: `claimed:<name>`, never
   `so_peercred:<name>`. A claim outside the uid's names is refused. On an unshared
-  uid the claim is ignored and, if it disagrees with the kernel's answer, recorded
-  as a discrepancy, because a client that claims to be someone else on a uid that
-  can name it is worth a line in the log.
+  uid the kernel's answer stands and a claim that disagrees with it is refused
+  and recorded, as it always was: a client that claims to be someone else on a
+  uid that can name it has a bug or an intention, and both deserve a line.
 - *The broker the agent's own client launches* is the tier's normal case rather
   than an anomaly. It runs as the agent's uid and the agent could stop it; under the
   container tier that is disqualifying and under the host tier it is what the

@@ -274,6 +274,30 @@ class SharedRoute:
     decl: SharedHandoff
 
 
+class Identity(str):
+    """An agent name that remembers how the broker established it.
+
+    A str, so every place that treats the sender as a name keeps working;
+    ``how`` is the audit word -- ``so_peercred`` from the kernel credential,
+    ``claimed`` from a client claim on a uid the host tier declares shared
+    (amail.md §3.3, §7.5). An empty name with ``candidates`` is an unsettled
+    identity on a shared uid, resolved by ``Broker.settle``.
+    """
+    how: str
+    uid: int
+    candidates: Tuple[str, ...]
+
+    def __new__(cls, name: str, how: str = "so_peercred", uid: int = -1,
+                candidates: Tuple[str, ...] = ()):
+        obj = str.__new__(cls, name)
+        obj.how, obj.uid, obj.candidates = how, uid, tuple(candidates)
+        return obj
+
+
+def _how(sender: Any) -> str:
+    return getattr(sender, "how", "so_peercred")
+
+
 @dataclass
 class BrokerConfig:
     """Everything the broker needs. Paths, not secrets — the credential is read
@@ -387,6 +411,13 @@ class BrokerConfig:
     #: mapping is the fact. An empty mapping means nobody can be authenticated and
     #: every submission is refused — see Broker.identify().
     agent_uids: Dict[int, str] = field(default_factory=dict)
+    #: Host tier (amail.md §7.5): uids declared shared by several agents, and
+    #: the names bound to each. A submission from such a uid is identified by
+    #: the client's claim, audited as `claimed:<name>` -- never by the kernel
+    #: word. Empty under the container tier.
+    shared_uid_agents: Dict[int, Tuple[str, ...]] = field(default_factory=dict)
+    tier: str = "container"
+    supervision: Optional[str] = None
 
     def address_for(self, agent: str) -> str:
         return f"{agent}@{self.domain}"
@@ -1413,7 +1444,7 @@ class Broker:
         # SENT, in the ledger, before the delivery loop: a sender may reply to
         # its own message on a thread it opened, and that fact is the broker's
         # (it accepted the submission), not the sender's home's.
-        self.record_seen(sender, message, "sent")
+        self.record_seen(sender, message, "sent", via=f"{_how(sender)}:{sender}")
 
         delivered, failures = [], []
         for r in message.to:
@@ -1446,7 +1477,8 @@ class Broker:
                                    # What the KERNEL established. No reader of the
                                    # stored message can re-derive it, so it has
                                    # nowhere to live but a broker-owned record.
-                                   authorship=f"so_peercred:{sender}")
+                                   authorship=f"{_how(sender)}:{sender}",
+                                   tier=self.config.tier)
             for f in failures:
                 self.audit.error(context="delivery", detail=f"{f['recipient']}: {f['error']}")
 
@@ -1938,8 +1970,14 @@ class Broker:
                             count=sum(counts.values()))
         return {"ok": True, **counts, "budget": budget}
 
-    def identify(self, conn: socket.socket) -> str:
+    def identify(self, conn: socket.socket) -> "Identity":
         """Authenticate the connecting process from kernel-supplied credentials.
+
+        Returns an Identity: a str (the agent name) carrying ``how`` -- the
+        word the audit writes for the way it was established. On a uid the
+        host tier declares shared, the name is not yet known: the Identity is
+        unsettled (empty name, the bound names in ``candidates``) and
+        ``settle`` chooses from the client's claim.
 
         SO_PEERCRED returns the pid/uid/gid the kernel recorded at connect time.
         The peer cannot influence it, which is what makes a world-writable socket
@@ -1959,12 +1997,48 @@ class Broker:
             ) from e
 
         agent = self.config.agent_uids.get(uid)
-        if not agent:
+        if agent:
+            return Identity(agent, how="so_peercred", uid=uid)
+        shared = self.config.shared_uid_agents.get(uid)
+        if shared:
+            return Identity("", how="claimed", uid=uid, candidates=shared)
+        raise PermissionError(
+            f"uid {uid} is not a provisioned agent; refusing submission. "
+            "Reaching the socket is not authorization."
+        )
+
+    def settle(self, who: "Identity", claimed: Optional[str]) -> "Identity":
+        """Resolve the submitting identity against the client's claim.
+
+        Kernel-named uid: the claim must agree or the request is refused and
+        recorded -- a client that believes it is someone else has a bug or an
+        intention, and both deserve a line. Shared uid (host tier, §7.5): the
+        claim IS the identity, accepted only if the addressing file binds that
+        name to this uid, and it travels as `claimed:` wherever identity is
+        written, so no reader takes it for the kernel's word.
+        """
+        if who:
+            if claimed is not None and claimed != who:
+                if self.audit:
+                    self.audit.refused(sender=who, recipients=[], tier=self.config.tier,
+                                       reason=f"identity mismatch: peer is '{who}', claimed '{claimed}'")
+                raise PermissionError(
+                    f"submitted as '{claimed}' but the connecting process is '{who}'")
+            return who
+        if not claimed:
             raise PermissionError(
-                f"uid {uid} is not a provisioned agent; refusing submission. "
-                "Reaching the socket is not authorization."
-            )
-        return agent
+                f"uid {who.uid} is declared shared by {', '.join(who.candidates)} "
+                f"and the request carries no sender claim; a shared uid cannot "
+                f"be identified without one (amail.md §1.3)")
+        if claimed not in who.candidates:
+            if self.audit:
+                self.audit.refused(sender=f"uid:{who.uid}", recipients=[], tier=self.config.tier,
+                                   reason=f"claim '{claimed}' is not bound to shared uid {who.uid} "
+                                          f"(bound: {', '.join(who.candidates)})")
+            raise PermissionError(
+                f"claimed '{claimed}', but uid {who.uid} is bound to "
+                f"{', '.join(who.candidates)} (amail.md §1.3)")
+        return Identity(claimed, how="claimed", uid=who.uid, candidates=who.candidates)
 
     def assert_credential_custody(self) -> None:
         """Refuse to run if the transport credential is exposed.
@@ -2197,7 +2271,7 @@ class _Handler(socketserver.StreamRequestHandler):
             # reachable set would become the union of everyone's contacts, and the
             # audit log would blame the impersonated agent. SO_PEERCRED is supplied
             # by the kernel about the connected process and cannot be forged by it.
-            sender = broker.identify(self.connection)
+            who = broker.identify(self.connection)
 
             # A TOTAL deadline, not a per-recv one. socket timeout resets on
             # every byte received, so a one-byte-per-second trickle holds a
@@ -2219,17 +2293,11 @@ class _Handler(socketserver.StreamRequestHandler):
             if not raw:
                 return
             req = json.loads(raw.decode("utf-8"))
-            claimed = req.get("sender")
-            if claimed is not None and claimed != sender:
-                # Refused rather than silently corrected: a client that believes
-                # it is someone else has a bug or an intention, and both deserve
-                # a record.
-                if broker.audit:
-                    broker.audit.refused(
-                        sender=sender, recipients=[],
-                        reason=f"identity mismatch: peer is '{sender}', claimed '{claimed}'")
-                raise PermissionError(
-                    f"submitted as '{claimed}' but the connecting process is '{sender}'")
+            # The kernel named the uid; the claim settles the rest. On an
+            # unshared uid a disagreeing claim is refused and recorded; on a
+            # uid the host tier declares shared the claim is the identity
+            # (amail.md §7.5), and every record downstream says `claimed:`.
+            sender = broker.settle(who, req.get("sender"))
 
             # OPERATION DISPATCH. `op` is absent in every client written before
             # other operations existed, and absent means "submit" — so the wire
@@ -2270,7 +2338,7 @@ class _Handler(socketserver.StreamRequestHandler):
                 # that said nothing about who.
                 broker.audit.error(context="request",
                                    detail=f"{type(e).__name__}: {e}",
-                                   sender=sender if "sender" in dir() else None)
+                                   sender=(sender if "sender" in dir() else (who if "who" in dir() and who else None)))
         try:
             self.wfile.write((json.dumps(resp) + "\n").encode("utf-8"))
         except OSError as e:
@@ -2425,7 +2493,7 @@ def serve(broker: Broker) -> _Server:
     """
     # Enforce the guarantee at the moment it starts mattering.
     broker.assert_credential_custody()
-    if not broker.config.agent_uids:
+    if not broker.config.agent_uids and not broker.config.shared_uid_agents:
         raise PermissionError(
             "no agent_uids configured: with a world-writable socket and no uid "
             "mapping, no submitter can be authenticated and every submission "
