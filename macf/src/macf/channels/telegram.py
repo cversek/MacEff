@@ -131,6 +131,10 @@ class NotifyResult:
 
     success: bool
     warning: Optional[Warning] = None
+    #: True when the send was handed to a background process. ``success`` then
+    #: means the hand-off happened, not that anything was delivered; delivery
+    #: failures are recorded by that process as ``telegram_send_failed`` events.
+    deferred: bool = False
 
     def __bool__(self) -> bool:  # noqa: D401
         return self.success
@@ -310,9 +314,37 @@ def _build_network_warning(e: BaseException, page: int, total: int) -> Warning:
     )
 
 
+def _send_in_background(text: str, prefix: str, page_size: int,
+                        parse_mode: Optional[str]) -> NotifyResult:
+    """Hand the send to a detached process and return at once.
+
+    A hook is a short-lived process, so a thread cannot do this: it would die
+    with the hook before the request finished. The child is detached so it
+    outlives the hook, and it resolves the credentials itself: only the message
+    crosses the process boundary, never the token.
+    """
+    import subprocess
+    payload = json.dumps({"text": text, "prefix": prefix,
+                          "page_size": page_size, "parse_mode": parse_mode})
+    try:
+        child = subprocess.Popen(
+            [sys.executable, "-m", "macf.channels.telegram"],
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True, close_fds=True,
+        )
+        child.stdin.write(payload.encode("utf-8"))
+        child.stdin.close()
+    except OSError as e:
+        return NotifyResult(success=False, deferred=True, warning=Warning(
+            source="telegram", kind="background_send_failed",
+            detail=f"could not start the background Telegram send: {e}"))
+    return NotifyResult(success=True, deferred=True)
+
+
 def send_telegram_notification(text: str, prefix: str = "",
                                page_size: int = 4000,
-                               parse_mode: Optional[str] = None) -> NotifyResult:
+                               parse_mode: Optional[str] = None,
+                               background: bool = False) -> NotifyResult:
     """Send a message to the configured Telegram chat, paginating if needed.
 
     Long messages are split into multiple pages. When paginated, the prefix
@@ -329,6 +361,9 @@ def send_telegram_notification(text: str, prefix: str = "",
         parse_mode: Optional Telegram parse mode ("HTML" or "MarkdownV2").
             Default None sends plain text. When using HTML, caller must
             escape content with _html_escape().
+        background: Hand the send to a detached process and return without
+            touching the network. For callers on a latency-sensitive path, such
+            as a hook the client waits on. The result is then ``deferred``.
 
     Returns:
         :class:`NotifyResult`. ``result.success`` mirrors the original
@@ -344,6 +379,11 @@ def send_telegram_notification(text: str, prefix: str = "",
         # absence. Preserve the historical "silently False" behavior for
         # callers that treat Telegram as opt-in.
         return NotifyResult(success=False)
+
+    if background:
+        # Checked after the config so an unconfigured host, and every test,
+        # starts no process at all.
+        return _send_in_background(text, prefix, page_size, parse_mode)
 
     token, chat_id = config
 
@@ -461,3 +501,25 @@ def send_telegram_document(content: str, filename: str,
             user_remediation=_classify_network_exception(e)[2],
         ))
         return False
+
+
+def _run_background_send() -> int:
+    """Entry point of the detached process ``_send_in_background`` starts.
+
+    Nothing is watching this process: its stderr goes nowhere and it has no
+    caller to hand a warning to. A failure is therefore written to the events
+    log, the one place it can still be found.
+    """
+    payload = json.loads(sys.stdin.read() or "{}")
+    result = send_telegram_notification(
+        payload.get("text", ""), prefix=payload.get("prefix", ""),
+        page_size=payload.get("page_size", 4000), parse_mode=payload.get("parse_mode"))
+    if result.warning is not None:
+        from macf.agent_events_log import append_event
+        append_event("telegram_send_failed", {
+            "kind": result.warning.kind, "detail": result.warning.detail, "deferred": True})
+    return 0 if result.success else 1
+
+
+if __name__ == "__main__":
+    sys.exit(_run_background_send())

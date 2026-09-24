@@ -602,13 +602,15 @@ Session Context:
             "time_gap": gap_display
         })
 
-        # Notify Telegram (non-blocking)
+        # Notify Telegram in a detached process. The client waits on this hook,
+        # and a synchronous send spent most of the hook's run on the network.
         try:
             from macf.channels.telegram import send_telegram_notification
             _cl = token_info.get("cl_level", "?")
             send_telegram_notification(
                 f"Compactions: {compaction_count}\nGap: {gap_display}\nCL: {_cl}",
-                prefix="\U0001f680 Session Started"
+                prefix="\U0001f680 Session Started",
+                background=True,
             )
         except (ImportError, OSError, ConnectionError) as e:
             emit_warning(Warning(source="session_start", kind="telegram_send_failed", detail=f"session-start telegram notification failed: {e}"))

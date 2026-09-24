@@ -545,3 +545,15 @@ def test_fresh_auto_mode_no_resumption_prompt(mock_dependencies):
     """The kick is resume-specific: fresh startups don't get it."""
     result = _run_shared_path(mock_dependencies, '{"source": "startup"}', auto_mode=True)
     assert "AUTO_MODE RESUME" not in result["hookSpecificOutput"]["additionalContext"]
+
+
+def test_session_start_does_not_wait_on_the_network(mock_dependencies):
+    """The client waits on this hook, and a synchronous send spent most of its
+    run on the network. Every send from it must be handed off."""
+    from macf.hooks.handle_session_start import run
+    with patch('macf.transcript_monitor.daemon.is_running', return_value=True), \
+         patch('macf.channels.telegram.send_telegram_notification') as m_send:
+        run("")
+    assert m_send.call_count >= 1, "precondition: the hook sends on this path"
+    for call in m_send.call_args_list:
+        assert call.kwargs.get("background") is True, call
