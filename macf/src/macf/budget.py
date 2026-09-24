@@ -426,3 +426,39 @@ def hook_lines(which: str, now: Optional[float] = None) -> Optional[str]:
         # Deliberately broad: this is a GUARD, not a handler. The hook continues without the budget line.
         print(f"⚠️ MACF: budget {which} line skipped: {type(e).__name__}: {e}", file=sys.stderr)
         return None
+
+
+# ── the burn gate ─────────────────────────────────────────────────────────────
+
+def burn_gate(auto_mode: bool, now: Optional[float] = None) -> dict:
+    """Whether the Stop hook should hold the session to spend an expiring allowance: ``{"block": bool, "text": str}``.
+
+    Holds only when every condition is true: AUTO_MODE; mode is burn; the burn's limit is below its target; its
+    deadline and reset have not passed; and open work exists to spend it on. MANUAL_MODE never holds, and
+    ``budget mode set normal`` always clears it. The hook applies the shared idle-stop failsafe.
+    """
+    now = now or time.time()
+    off = {"block": False, "text": ""}
+    if not auto_mode:
+        return off
+    mode = current_mode(now)
+    if mode.get("mode") != "burn" or not samples(now=now):
+        return off
+    st = status(now)
+    want = (mode.get("scope") or "week").lower()
+    row = next((r for r in st["limits"] if r["label"].lower() == want or (r["kind"] == "weekly_all" and want == "week")), None)
+    if row is None or row["percent"] is None:
+        return off
+    target = mode.get("target") or 100.0
+    deadline_h = _hours_to(mode.get("by"), now) if mode.get("by") else row["hours_left"]
+    if row["percent"] >= target or deadline_h is None or deadline_h <= 0:
+        return off
+    work = open_work()
+    if not work:
+        return off
+    pace = f", needs {row['pace_needed']:+g}%/h" if "pace_needed" in row else ""
+    lines = [f"💳 Burn mode: {row['label']} at {row['percent']:g}% of a {target:g}% target, {deadline_h:.1f} h to the "
+             f"deadline{pace} [{st['model']['display']}]. Open work to spend it on:"]
+    lines += [f"  #{w['id']} {w['subject'][:80]}" for w in work[:5]]
+    lines.append("Continue with that work, or end the burn: macf_tools budget mode set normal")
+    return {"block": True, "text": "\n".join(lines)}

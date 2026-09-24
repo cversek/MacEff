@@ -45,6 +45,10 @@ intends for them. This policy says where the numbers come from, what may be kept
 **4 Intent: conserve, normal, burn**
 - What does each mode promise?
 - What does `budget plan` offer an agent told to spend the allowance?
+
+**4.1 The Burn Gate**
+- When does burn mode hold a session open at Stop, and when does it never?
+- How does the operator end it, and what bounds it if nobody does?
 - What does burn need to be meaningful, and what are its defaults?
 - How long does a mode last?
 
@@ -126,6 +130,18 @@ missions, phases, experiments and detours. It lists what exists; it proposes not
 
 A mode is intent, not permission: burn never authorizes work the agent would not otherwise be authorized to do, and
 it is spent on work that already exists (open mission phases, scoped tasks), not on work invented to consume credit.
+
+### 4.1 The Burn Gate
+
+In AUTO_MODE, burn is more than a report: the Stop hook holds the session while **all** of these hold: the mode is
+burn; the burn's limit is below its target; the deadline (and the limit's reset) is still ahead; and open work
+exists to spend it on (the same list `budget plan` shows). The reason it gives names the limit, the target, the time
+left, the pace needed and the open work.
+
+It never holds in MANUAL_MODE, where the operator is present and decides. It composes after the scope and focus
+gates, which already hold a session with scoped work or due duties, and it shares their idle-stop failsafe: an agent
+that keeps stopping without working is let through when the counter reaches zero, as with every gate.
+`budget mode set normal` always ends it. A gate that could trap a session with no escape would be worse than none.
 
 ## 5 Anti-Patterns
 
