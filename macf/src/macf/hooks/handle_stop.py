@@ -222,6 +222,21 @@ Development Drive Stats:
             except (ImportError, OSError, ValueError) as _e:
                 emit_warning(Warning(source="stop", kind="recoverable_error_gate_failed", detail=f"recoverable-error gate error: {_e}"))
 
+        # --- An injected /compact passes once, ahead of every holding gate ---
+        # The queued command is only submitted when this turn ends; refusing
+        # the Stop would strand the compaction the carry-through design needs.
+        # After this one passage every gate holds again.
+        _bypass = None
+        try:
+            from macf.stop_bypass import consume
+            _bypass = consume()
+        except (OSError, ValueError, ImportError) as _e:
+            emit_warning(Warning(source="stop", kind="stop_bypass_failed", detail=f"inject bypass error (non-blocking): {_e}"))
+        if _bypass:
+            return {"continue": True, "systemMessage": (
+                f"{format_macf_brand()} | ⏭️ Stop allowed once for the injected "
+                f"/{_bypass['command']}; every gate holds again after it.")}
+
         # --- Focus gate (roles policy): the focused role's priority list is
         # injected on every Stop; it BLOCKS only in AUTO_MODE while due-now
         # duties are unserviced. It composes with the scope gate below by
