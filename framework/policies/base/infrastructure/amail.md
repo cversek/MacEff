@@ -3,6 +3,12 @@
 **Type**: Infrastructure (opt-in)
 **Scope**: All agents (PA and SA), and the broker that serves them
 **Status**: ACTIVE — specification. No implementation is authorized by this document.
+**Version**: 1.4.0 — adds the host tier (§7.5) and the declarations that carry it (§1.3):
+a deployment may declare itself supervised, mark a uid as shared by several agents, and
+have the broker take the submitting identity from a claim the audit names as a claim.
+Minor: a new normative tier, justified by supervision rather than by intent (§7.3), with
+its refusals stated where they are enforced. The container tier is unchanged.
+
 **Version**: 1.3.1 — §2.3 states that the broker reads no home either: threading questions
 are answered from a broker-owned correspondence ledger. Patch: a correction to how an
 existing rule was met, found by a deployment where the identity model held.
@@ -50,6 +56,7 @@ becomes tractable once the address stops encoding how the message travels.
 - What does an amail address look like?
 - Who assigns addresses, and where are they declared?
 - Why must an address never name a host, a network, or a transport?
+- What are the two tiers a deployment may declare, and what does marking a uid as shared mean?
 
 **2 Delivery Model**
 - What is the delivery ladder?
@@ -70,6 +77,7 @@ becomes tractable once the address stops encoding how the message travels.
 - Why must a deployment be refused for a MISSING credential and not only an exposed
   one, and what does a custody check report on absent input?
 - What must the audit record contain, and why is it mandatory?
+- How does the audit say the way a submitting identity was established, and why are there two words for it?
 
 **4 Contact Lists**
 - What is the default contact list for an agent?
@@ -113,6 +121,9 @@ becomes tractable once the address stops encoding how the message travels.
 - Why is credential custody insufficient without egress policy?
 - Why must a deployment decision rest on blast radius rather than on intent?
 - What does this document assume about its own completeness?
+- Why does a second, higher trust tier exist, and what justifies it if intent does not?
+- What does the host tier change, and what does it leave exactly as it was?
+- Why must a host-tier declaration refuse to run inside a container, and where is that enforced?
 
 **8 Resolved and Deferred Questions**
 - Which previously open questions does this specification settle?
@@ -155,6 +166,34 @@ moment the correspondent left it.
 
 A private network is a **transport**. So is a smarthost. So is a local filesystem
 write. The address is stable across all of them.
+
+### 1.3 The tier, and a uid declared as shared
+
+The addressing file declares which of two tiers the deployment runs under. The
+tiers are stated in §7.5; what belongs here is the declaration and what the broker
+does with it.
+
+- `tier: container` (the default, and what every file written before this version
+  means) or `tier: host`.
+- Under the container tier the uid table is the authentication table: every agent
+  has its own uid, and one uid names one agent. A file in which two agents share a
+  uid is refused.
+- Under the host tier an agent MAY be marked `shared_uid: true`. Uids may then
+  repeat, but only among agents so marked, and the broker takes the submitting
+  identity for such a uid from a **claim** the client sends — accepted only if the
+  claim names an agent bound to that uid, refused with the reason otherwise, and
+  recorded as a claim wherever identity is recorded (§3.3).
+- A host-tier file names its `supervision` (§7.5). `none` is refused: the tier's
+  justification is supervision, and a file may not declare the tier while declaring
+  the justification absent.
+- A broker or inbound consumer that finds itself inside a container refuses to start
+  from a host-tier file. The tier is a declaration a deployment makes, not a
+  detection the broker performs, and the one place the declaration can be wrong in
+  a way the deployment cannot argue with is a container claiming to be a host.
+
+Nothing else in the file changes meaning. Contacts, directions, rate limits and keys
+are read identically under both tiers, which is what makes the tier a statement
+about identity and supervision rather than a second protocol.
 
 ---
 
@@ -472,8 +511,16 @@ demonstration of a refusal.
 
 The broker MUST append a record for every submission and every inbound message,
 recording at minimum: timestamp, direction, submitting or sending identity,
-recipients, the allow-or-refuse decision, the reason on refusal, and the rung chosen
-on delivery.
+recipients, the allow-or-refuse decision, the reason on refusal, the rung chosen
+on delivery, and the tier the broker ran under (§1.3).
+
+**How the identity was established is part of the record, and it has two words.**
+A submitting identity taken from the kernel's credential on the socket is written
+`so_peercred:<name>`; one taken from a client's claim under the host tier is
+written `claimed:<name>`. The two are never collapsed into one field that a reader
+might take for the stronger. A log read later must say what boundary it was written
+under, and a reader who has only ever seen the first word must not be able to
+mistake the second for it.
 
 This is mandatory rather than advisory because of a recorded failure: a
 communications channel went silent for roughly forty-five minutes and afterwards
@@ -914,6 +961,72 @@ the frame.** An implementer SHOULD assume this document has a comparable blind s
 somewhere, and SHOULD prefer a reviewer who did not write it and was not briefed by
 whoever did.
 
+### 7.5 The host tier: supervision, not intent
+
+§7.3 rules out intent as the variable, and everything above it was written for
+one deployment shape: agents in a container, each under its own uid, an operator
+who is not watching. There is a second shape this specification has to serve. An
+agent that runs on the operator's own machine, as the operator's own uid, with
+its every tool call written to a transcript the operator reads and a terminal
+the operator sits at, is not in the same position as the container agent, and
+pretending it is produces the wrong control in both directions: the container's
+restrictions cannot be installed there (the uid table cannot separate two agents
+that share one uid, and a broker that must not share a uid with its agents has
+no uid to run as), and applying them anyway would deny the operator's own
+assistant a mailbox on a machine where the operator can see everything it does.
+
+**What justifies the second tier is supervision, and only that.** Not that the
+host agent is better behaved — §7.3 stands, and a host agent's inputs are as
+attacker-controlled as anyone's. The difference is that on the host the
+compromised-by-input case is *observable*: the tool calls are in the transcript,
+the operator is present, and the audit (§3.3) is read by someone with authority
+to act. Where the container tier prevents, the host tier detects. That is a
+weaker property, it is stated as a weaker property, and a deployment that
+declares the host tier is declaring that the observation is real: the
+`supervision` field names who or what is watching, and `none` is refused because
+a tier justified by supervision cannot be declared alongside its own absence.
+
+**What the tier changes.**
+
+- *Identity on a shared uid* comes from a claim (§1.3). The client sends the name
+  it holds for itself; the broker accepts it only if the addressing file binds that
+  name to the connecting uid and marks the uid shared. This is weaker than the
+  kernel credential and the audit says so on every line: `claimed:<name>`, never
+  `so_peercred:<name>`. A claim outside the uid's names is refused. On an unshared
+  uid the claim is ignored and, if it disagrees with the kernel's answer, recorded
+  as a discrepancy, because a client that claims to be someone else on a uid that
+  can name it is worth a line in the log.
+- *The broker the agent's own client launches* is the tier's normal case rather
+  than an anomaly. It runs as the agent's uid and the agent could stop it; under the
+  container tier that is disqualifying and under the host tier it is what the
+  supervision covers. The daemon and `amail status` name the tier and the
+  supervision, and every audit line carries the tier, so a log read on another day
+  says what boundary it was written under.
+- *Refusals move to where the declaration can be wrong.* A host-tier file refuses to
+  run inside a container; a shared uid refuses without the tier; an agent-launched
+  broker refuses without the tier; the tier refuses without a named supervision.
+  Each refusal names the rule it applies so that the fix is an edit to a
+  declaration, not a search.
+
+**What the tier does not change.** Contact lists and their directions, the rate
+limit, the pre-send gate, the classification of inbound mail as untrusted input
+(§6.2), the correspondence ledger, the delivery ladder and the rung a message
+takes. A host agent's outbound reach is still exercised against people (§7.3),
+and the contact list bounds it exactly as before. The tier is about who the broker
+believes is talking to it and what watches the conversation; it is not a licence.
+
+**Cadence is a routing property, not a broker rule.** Host agents typically write
+when the operator directs it, and do not reply to an acknowledgement with another
+acknowledgement. That is guidance to the agent and to whoever configures how
+notices reach it; the broker enforces none of it, because the tier's argument is
+that the operator is watching, and an operator who is watching can say so.
+
+**Why this is stated as a tier and not as a set of exceptions.** A deployment that
+loosened the container rules one field at a time would end with a broker whose
+guarantees could not be read off its configuration. A named tier is one word a
+reader can look up, with a list of what it changes and a list of what it does not,
+and a refusal for every combination that would have meant something else.
+
 ---
 
 ## 8 Resolved and Deferred Questions
@@ -936,6 +1049,12 @@ whoever did.
   keeps the judgement.
 - *Protocol shaped by its first transport.* Resolved by writing this before the
   client, and by §5.3 naming what must not propagate inward.
+- *Host agents had no tier: the container rules could not be installed on the
+  operator's own machine, and an agent-launched broker ran with an honest label and
+  no standing.* Deferred on 2026-08-05 until the container had proved the design;
+  resolved by §7.5 and §1.3: a declared tier justified by supervision, identity on a
+  shared uid taken from a claim the audit names as a claim, refusals where the
+  declaration can be wrong, and nothing the container tier permits changed.
 
 **Deferred, with reasons:**
 
