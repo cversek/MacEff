@@ -127,51 +127,73 @@ def get_rich_environment_string() -> str:
     return f"{base_env} - {hostname} {os_name} {os_version}"
 
 
-def detect_model(session_id: Optional[str] = None) -> str:
-    """Detect current model from JSONL transcript.
+def model_display_name(model_id: str) -> str:
+    """Human name for a model id: ``claude-opus-5-5`` -> ``Opus 5.5``, ``claude-haiku-4-5-20251001`` -> ``Haiku 4.5``.
 
-    Reads last 100KB of session transcript, extracts model field
-    from the most recent assistant message.
-
-    Args:
-        session_id: Optional session ID. Auto-detected if not provided.
-
-    Returns:
-        Model string (e.g., 'claude-opus-4-6') or 'unknown'
+    Ids that do not follow the ``claude-<family>-<major>-<minor>`` shape are returned unchanged.
     """
-    # Lazy imports to avoid circular dependency
+    import re
+    base = model_id.split("[")[0]
+    m = re.match(r"claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?$", base)
+    if not m:
+        return model_id
+    family, major, minor = m.group(1).capitalize(), m.group(2), m.group(3)
+    return f"{family} {major}.{minor}" if minor else f"{family} {major}"
+
+
+def _model_from_transcript(path: Path) -> Optional[str]:
+    """The model of the newest assistant message in a transcript, scanning backwards until one is found."""
+    from .streaming import iter_lines_reverse
+    for line in iter_lines_reverse(path):
+        if '"assistant"' not in line or '"model"' not in line:
+            continue
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if data.get("type") == "assistant":
+            m = (data.get("message") or {}).get("model")
+            if m and not m.startswith("<"):
+                return m
+    return None
+
+
+def current_model(session_id: Optional[str] = None) -> Dict[str, str]:
+    """The model this agent is running, as ``{"id", "display", "source"}``. The one place MACF answers this.
+
+    Sources, in order: ``ANTHROPIC_MODEL`` (an explicit override); the newest assistant message in this
+    session's transcript; the newest assistant message in the most recently written transcript of the same
+    project (source ``last seen``: a new session has no reply of its own yet). ``unknown`` when none answers.
+    Never raises.
+    """
     from .session import get_current_session_id
     from .paths import get_session_transcript_path
 
-    if not session_id:
-        session_id = get_current_session_id()
-    if session_id == "unknown":
-        return "unknown"
+    def result(mid: str, source: str) -> Dict[str, str]:
+        return {"id": mid, "display": model_display_name(mid), "source": source}
 
-    jsonl_path = get_session_transcript_path(session_id)
-    if not jsonl_path or not Path(jsonl_path).exists():
-        return "unknown"
-
+    env = os.environ.get("ANTHROPIC_MODEL")
+    if env:
+        return result(env, "ANTHROPIC_MODEL")
     try:
-        with open(jsonl_path, "rb") as f:
-            file_size = f.seek(0, os.SEEK_END)
-            scan_size = min(100 * 1024, file_size)
-            if scan_size > 0:
-                f.seek(-scan_size, os.SEEK_END)
-                content = f.read().decode("utf-8", errors="ignore")
-                model = "unknown"
-                for line in content.split("\n"):
-                    if not line.strip():
-                        continue
-                    try:
-                        data = json.loads(line)
-                        if data.get("type") == "assistant":
-                            m = data.get("message", {}).get("model")
-                            if m:
-                                model = m
-                    except (json.JSONDecodeError, UnicodeDecodeError):
-                        continue
-                return model
-    except (OSError, IOError, ValueError) as e:
-        print(f"⚠️ MACF: model detection from transcript failed: {e}", file=sys.stderr)
-        return "unknown"
+        sid = session_id or get_current_session_id()
+        path = Path(get_session_transcript_path(sid)) if sid and sid != "unknown" else None
+        if path and path.exists():
+            mid = _model_from_transcript(path)
+            if mid:
+                return result(mid, "transcript")
+        folder = path.parent if path else None
+        if folder and folder.is_dir():
+            others = sorted((p for p in folder.glob("*.jsonl") if p != path), key=lambda p: p.stat().st_mtime, reverse=True)
+            for other in others[:3]:
+                mid = _model_from_transcript(other)
+                if mid:
+                    return result(mid, "last seen")
+    except (OSError, ValueError, TypeError) as e:
+        print(f"⚠️ MACF: model detection failed: {e}", file=sys.stderr)
+    return {"id": "unknown", "display": "unknown", "source": "none"}
+
+
+def detect_model(session_id: Optional[str] = None) -> str:
+    """Model id of the running agent, or 'unknown'. Kept for callers that want the bare id; see current_model()."""
+    return current_model(session_id)["id"]
