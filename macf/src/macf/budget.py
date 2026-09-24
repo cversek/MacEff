@@ -75,12 +75,14 @@ def read_token() -> str:
     return tok
 
 
-def fetch_reply(token_source: Callable[[], str] = read_token) -> dict:
-    """One request to the usage endpoint. The token lives only in this frame."""
+def fetch_reply(token_source: Optional[Callable[[], str]] = None, timeout: float = 20) -> dict:
+    """One request to the usage endpoint. The token lives only in this frame. The token source is looked up at call
+    time, not bound as a default, so whatever replaces read_token (a test, a container reader) is the one used."""
+    token_source = token_source or read_token
     req = urllib.request.Request(USAGE_URL, headers={
         "Authorization": f"Bearer {token_source()}", "anthropic-beta": USAGE_BETA, "Accept": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=20) as r:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.load(r)
     except urllib.error.HTTPError as e:
         raise BudgetError(f"usage endpoint answered HTTP {e.code}; use `budget sample --manual`")
@@ -155,7 +157,7 @@ def samples(since: Optional[float] = None, now: Optional[float] = None) -> list[
 
 
 def sample(fresh: bool = False, manual: Optional[str] = None,
-           fetch: Callable[[], dict] = fetch_reply, now: Optional[float] = None) -> dict:
+           fetch: Optional[Callable[[], dict]] = None, now: Optional[float] = None) -> dict:
     """Take a sample and append ``budget_sampled``. An endpoint fetch within MIN_FETCH_INTERVAL of the
     last one returns that one instead unless ``fresh``."""
     now = now or time.time()
@@ -165,7 +167,7 @@ def sample(fresh: bool = False, manual: Optional[str] = None,
         last = next(iter(s for s in reversed(samples(now=now)) if s["source"] == "endpoint"), None)
         if last and not fresh and now - last["t"] < MIN_FETCH_INTERVAL:
             return dict(last, reused=True)
-        lim, source = parse_limits(fetch()), "endpoint"
+        lim, source = parse_limits((fetch or fetch_reply)()), "endpoint"
         if not lim:
             raise BudgetError("the reply carried no limits list; the endpoint may have changed. Use --manual")
     append_event("budget_sampled", {"source": source, "limits": lim})
@@ -281,3 +283,146 @@ def format_log(hist: list[dict]) -> str:
         rows.append(f"{t}  {s['source']:<8} " + " · ".join(f"{label(l)} {l['percent']:g}%" for l in s["limits"]
                                                          if l["percent"] is not None))
     return "\n".join(rows) or "(no samples in the last week)"
+
+
+# ── plan ─────────────────────────────────────────────────────────────────────
+
+HEAVY_TYPES = ("MISSION", "PHASE", "EXPERIMENT", "DETOUR")
+
+
+def open_work() -> list[dict]:
+    """Open heavy work the allowance could buy: scoped tasks first, then open mission/phase/experiment/detour tasks."""
+    from macf.task.reader import TaskReader
+    from macf.task.scope import get_scope_state
+    try:
+        scope = get_scope_state()
+    except (OSError, ValueError) as e:
+        print(f"⚠️ MACF: scope read failed (plan lists unscoped work only): {e}", file=sys.stderr)
+        scope = {}
+    out = []
+    for t in TaskReader().read_all_tasks():
+        if t.status == "completed":
+            continue
+        in_scope = scope.get(str(t.id)) == "active"
+        if in_scope or (t.task_type or "") in HEAVY_TYPES:
+            subject = re.sub(r"\x1b\[[0-9;]*m", "", t.subject)
+            subject = re.sub(r"^\s*#\d+\s*(\[\^#\d+\]\s*)?", "", subject).strip()
+            out.append({"id": str(t.id), "type": t.task_type or "TASK", "status": t.status, "scoped": in_scope,
+                        "subject": subject})
+    out.sort(key=lambda w: (not w["scoped"], w["status"] != "in_progress", int(w["id"]) if w["id"].isdigit() else 0))
+    return out
+
+
+def plan(now: Optional[float] = None) -> dict:
+    """The status arithmetic plus the open work it could be spent on."""
+    st = status(now)
+    return dict(st, work=open_work())
+
+
+def format_plan(p: dict, limit: int = 12) -> str:
+    lines = [format_status(p), "", "open work (scoped first):"]
+    for w in p["work"][:limit]:
+        lines.append(f"  #{w['id']:<5} {w['type']:<10} {'👀 ' if w['scoped'] else ''}{w['subject'][:90]}")
+    if len(p["work"]) > limit:
+        lines.append(f"  ... {len(p['work']) - limit} more (macf_tools task tree)")
+    if not p["work"]:
+        lines.append("  (none open: an allowance with nothing worth spending it on is not a reason to invent work)")
+    return "\n".join(lines)
+
+
+# ── hooks: threshold lines, never a line per prompt ─────────────────────────
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, default))
+    except ValueError:
+        return default
+
+
+def bands() -> list[float]:
+    raw = os.environ.get("MACEFF_BUDGET_BANDS", "50,75,90")
+    try:
+        return sorted(float(x) for x in raw.split(",") if x.strip())
+    except ValueError:
+        return [50.0, 75.0, 90.0]
+
+
+def maybe_autosample(now: Optional[float] = None) -> Optional[dict]:
+    """Refresh the sample from a hook, at most every MACEFF_BUDGET_AUTOSAMPLE_MIN minutes (default 10), and only for
+    an agent that has sampled in the last week: nothing reads a credential on an installation that never asked to."""
+    now = now or time.time()
+    hist = samples(now=now)
+    if not hist or now - hist[-1]["t"] < 60 * _env_float("MACEFF_BUDGET_AUTOSAMPLE_MIN", 10):
+        return None
+    return sample(now=now, fetch=lambda: fetch_reply(timeout=5))  # a hook may not wait 20 s
+
+
+def _last_notices(now: float) -> dict:
+    seen = {}
+    for e in _recent("budget_notice", now):
+        seen.setdefault(e["data"].get("key"), e["data"])
+    return seen
+
+
+def _key(row: dict, what: str) -> str:
+    return f"{what}:{row['kind']}:{row['label']}:{row['resets_at']}"
+
+
+def prompt_notice(now: Optional[float] = None) -> Optional[str]:
+    """One line when a limit this model is spending enters a new band since the last line, or, in burn, when the pace
+    still needed moves by more than a point. None otherwise. Records what it showed so it does not repeat."""
+    now = now or time.time()
+    if not samples(now=now):
+        return None  # no budget in use here: nothing to report, not a failure
+    st = status(now)
+    seen = _last_notices(now)
+    out = []
+    for r in st["limits"]:
+        if not r.get("spending", True) or r["percent"] is None:
+            continue
+        band = max([b for b in bands() if r["percent"] >= b], default=None)
+        k = _key(r, "band")
+        if band is not None and (seen.get(k) or {}).get("value") != band:
+            append_event("budget_notice", {"key": k, "value": band})
+            out.append(f"{r['label']} {r['percent']:g}% (≥{band:g}%, resets in {r['hours_left']:g}h)")
+        if "pace_needed" in r:
+            k = _key(r, "pace")
+            prev = (seen.get(k) or {}).get("value")
+            if prev is None or abs(r["pace_needed"] - prev) > 1:
+                append_event("budget_notice", {"key": k, "value": r["pace_needed"]})
+                obs = r["rate_last_hour"] if r["rate_last_hour"] is not None else r["rate_window"]
+                out.append(f"burn {r['label']}: needs {r['pace_needed']:+g}%/h" + (f", running {obs:+g}%/h" if obs is not None else ""))
+    if not out:
+        return None
+    return "💳 budget: " + "; ".join(out) + f" [{st['model']['display']}, {st['mode']['mode']}] (details: macf_tools budget status)"
+
+
+def wall_warning(now: Optional[float] = None) -> Optional[str]:
+    """Once per session window, when it reaches MACEFF_BUDGET_WALL percent (default 90): the window's exhaustion is a
+    forced pause with no SessionStart after it, so the remedy is a checkpoint before the wall."""
+    now = now or time.time()
+    if not samples(now=now):
+        return None  # no budget in use here: nothing to report, not a failure
+    st = status(now)
+    wall = _env_float("MACEFF_BUDGET_WALL", 90)
+    for r in st["limits"]:
+        if r["kind"] != "session" or r["percent"] is None or r["percent"] < wall:
+            continue
+        k = _key(r, "wall")
+        if k in _last_notices(now):
+            return None
+        append_event("budget_notice", {"key": k, "value": r["percent"]})
+        return (f"💳 5-hour window at {r['percent']:g}% (resets in {r['hours_left']:g}h). Work stops at the wall with no "
+                f"recovery hook: write a task note or checkpoint for the work in hand now.")
+    return None
+
+
+def hook_lines(which: str, now: Optional[float] = None) -> Optional[str]:
+    """Entry point for hooks. A GUARD: budget reporting must never take a hook down."""
+    try:
+        maybe_autosample(now)
+        return prompt_notice(now) if which == "prompt" else wall_warning(now)
+    except Exception as e:
+        # Deliberately broad: this is a GUARD, not a handler. The hook continues without the budget line.
+        print(f"⚠️ MACF: budget {which} line skipped: {type(e).__name__}: {e}", file=sys.stderr)
+        return None

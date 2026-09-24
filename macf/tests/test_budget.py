@@ -144,3 +144,85 @@ def test_status_names_the_running_model_and_what_it_spends(log, monkeypatch):
     spend = {r["label"]: r["spending"] for r in st["limits"]}
     assert spend == {"session": True, "week": True, "Fable": False}
     assert "Opus 5.5" in budget.format_status(st, brief=True) and "(not this model)" in budget.format_status(st)
+
+
+# ── Phase 2: plan and threshold lines ────────────────────────────────────────
+
+@pytest.fixture
+def opus(monkeypatch):
+    monkeypatch.setattr("macf.utils.environment.current_model",
+                        lambda session_id=None: {"id": "claude-opus-5-5", "display": "Opus 5.5", "source": "transcript"})
+
+
+def test_band_line_shows_once_per_band(log, monkeypatch, opus):
+    """A limit entering a band gets one line; the next prompt in the same band gets none; the next band gets one."""
+    clock = {"t": T0}
+    monkeypatch.setattr(budget.time, "time", lambda: clock["t"])
+    budget.sample(fetch=lambda: reply_at(52, 10, 1), fresh=True)
+    first = budget.prompt_notice()
+    assert first and "session 52%" in first and "≥50%" in first
+    assert budget.prompt_notice() is None
+    clock["t"] += 600
+    budget.sample(fetch=lambda: reply_at(77, 10, 1), fresh=True)
+    assert "≥75%" in budget.prompt_notice()
+
+
+def test_no_credential_is_read_where_nobody_asked(log, monkeypatch):
+    """An installation with no sample in the last week never auto-samples: the hook reads no credential."""
+    monkeypatch.setattr(budget, "read_token", lambda: pytest.fail("credential read without a prior sample"))
+    monkeypatch.setattr(budget.urllib.request, "urlopen", lambda *a, **k: pytest.fail("network call without a prior sample"))
+    assert budget.maybe_autosample(now=T0) is None
+    assert budget.hook_lines("prompt", now=T0) is None
+
+
+def test_autosample_waits_for_its_interval(log, monkeypatch, opus):
+    clock = {"t": T0}
+    monkeypatch.setattr(budget.time, "time", lambda: clock["t"])
+    calls = []
+    monkeypatch.setattr(budget, "fetch_reply", lambda **kw: calls.append(1) or REPLY)
+    budget.sample(fetch=lambda: REPLY, fresh=True)
+    clock["t"] += 120
+    assert budget.maybe_autosample() is None and not calls
+    clock["t"] += 600
+    assert budget.maybe_autosample() is not None and len(calls) == 1
+
+
+def test_wall_warning_once_per_window(log, monkeypatch, opus):
+    """At the wall threshold the 5-hour window warns once, naming the remedy; a new window may warn again."""
+    monkeypatch.setattr(budget.time, "time", lambda: T0)
+    budget.sample(fetch=lambda: reply_at(93, 10, 1), fresh=True)
+    w = budget.wall_warning()
+    assert w and "93%" in w and "task note or checkpoint" in w
+    assert budget.wall_warning() is None
+    r = reply_at(95, 10, 1); r["limits"][0]["resets_at"] = "2026-09-23T22:49:00-04:00"
+    budget.sample(fetch=lambda: r, fresh=True)
+    assert budget.wall_warning() is not None
+
+
+def test_burn_pace_line_moves_only_past_a_point(log, monkeypatch, opus):
+    clock = {"t": T0}
+    monkeypatch.setattr(budget.time, "time", lambda: clock["t"])
+    budget.set_mode("burn", target=95, scope="week", by="2026-09-23T15:59:00-04:00")
+    budget.sample(fetch=lambda: reply_at(1, 40, 1), fresh=True)
+    assert "burn week: needs" in budget.prompt_notice()
+    assert budget.prompt_notice() is None
+
+
+def test_hook_lines_are_a_guard(log, monkeypatch):
+    """Anything going wrong inside the budget code yields no line, never an exception in the hook."""
+    monkeypatch.setattr(budget, "maybe_autosample", lambda now=None: 1 / 0)
+    assert budget.hook_lines("prompt") is None and budget.hook_lines("wall") is None
+
+
+def test_plan_lists_scoped_work_first_with_clean_subjects(log, monkeypatch, opus):
+    from types import SimpleNamespace as NS
+    tasks = [NS(id="60", status="in_progress", task_type="MISSION", subject="\x1b[2m #60\x1b[22m 🗺️ MISSION: Old"),
+             NS(id="272", status="in_progress", task_type="PHASE", subject="#272 [^#270] 📋 Phase 2: plan"),
+             NS(id="5", status="completed", task_type="PHASE", subject="done")]
+    monkeypatch.setattr("macf.task.reader.TaskReader.read_all_tasks", lambda self: tasks)
+    monkeypatch.setattr("macf.task.scope.get_scope_state", lambda: {"272": "active"})
+    monkeypatch.setattr(budget.time, "time", lambda: T0)
+    budget.sample(fetch=lambda: REPLY, fresh=True)
+    work = budget.plan()["work"]
+    assert [w["id"] for w in work] == ["272", "60"] and work[0]["scoped"]
+    assert work[1]["subject"] == "🗺️ MISSION: Old"

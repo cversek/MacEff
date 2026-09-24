@@ -519,6 +519,10 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # Pattern C: top-level systemMessage for user + hookSpecificOutput for agent
         user_message = f"{message} {token_context_minimal}"
         # Build additionalContext with policy injections prepended
+        from macf.budget import hook_lines
+        wall = hook_lines("wall")  # once per 5-hour window, at the wall threshold
+        if wall:
+            user_message = f"{user_message}\n{wall}"
         base_context = f"<system-reminder>\n{user_message}\n</system-reminder>"
         full_context = injection_content + base_context if injection_content else base_context
 
