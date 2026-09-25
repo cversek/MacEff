@@ -534,8 +534,16 @@ def send_slash_to_self(command: str, target: str = "") -> int:
                   "--target <name|pid> (see `auto-restart list`).",
                   file=sys.stderr)
         return 1
-    return send_keys(data.get("name") or str(data.get("supervisor_pid")),
-                     [cmd], enter=True)
+    rc = send_keys(data.get("name") or str(data.get("supervisor_pid")),
+                   [cmd], enter=True)
+    if rc == 0:
+        # A queued /compact is only submitted when the turn ends, and the Stop
+        # gates exist to refuse that. Arm one passage, only after delivery and
+        # only on the self-resolved path: with --target the pane may belong to
+        # another session, and this log's gates are this session's.
+        from .stop_bypass import arm
+        arm(command)
+    return rc
 
 
 def send_keys(target: str, keys: list, enter: bool = True) -> int:
