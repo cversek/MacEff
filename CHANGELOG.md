@@ -47,6 +47,10 @@ Gmail, event-log rotation, and commit-message guards. Sprints now survive compac
 
 **Commit-message guards** (`macf_tools githooks`): a `commit-msg` stage in the dispatcher and two portable hooklets, delivered by the installer, that refuse a Claude Code session link and a citation of planning documents the repository does not hold.
 
+**Hook output as changes** (`macf.hooks.emission`, #407): `UserPromptSubmit` and the Stop hook's `DEV_DRV Complete` summary send their full block once, then only what changed since that hook last spoke, under a one-line header carrying the clock, breadcrumb and CL. The previous body is read from the event log, so the first block after a compaction and the first of a session are full; so is one older than `hooks.full_every_mins` (30), and every block when `hooks.output` is `full`. The operator's copy is coloured (`NO_COLOR` turns it off); gate reasons are never shortened.
+
+**Knowledge-web curation tools** (#392): tasks carry wiki-links in their metadata and join the web; `knowledge link` and `unlink` edit any artifact type in its own shape; `knowledge doctor` reports orphans as one line per type, with `--since`, `--type` and `--all` to list them; `knowledge status` gives every curation metric in one call; `knowledge gaps --reject` records a wrong suggestion with the artifact so it is not suggested again, and `--clusters` proposes concepts from keywords several artifacts declare; `learnings index add` and `verify` keep the learnings index and its consultation trigger true. Linkless task records now count in the doctor's orphan census.
+
 **Policies**: reports as dated folders with a provenance sidecar, versioned deliverables and a LaTeX-to-PDF path; mailbox access as a bounded capability; a MISSION is not complete while its code is unshipped; why the shape of the artifact tree is not the agent's to change; the artifact tree is not a git repository; and the calling card as the last line, and only the last line, of a public artifact.
 
 ### Fixed
