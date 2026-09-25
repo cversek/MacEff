@@ -7,12 +7,9 @@ from functools import lru_cache
 
 import sys
 
-try:
-    from importlib.metadata import version
-    __version__ = version("macf")
-except Exception as e:
-    __version__ = "0.0.0-dev"  # Fallback for development
-    print(f"⚠️ MACF: macf package version unavailable, using {__version__}: {e}", file=sys.stderr)
+# The one resolver: a source checkout's own version, else the installed one.
+# Hook headers are stamped from this, which is why it cannot keep a copy.
+from .._version import VERSION as __version__
 
 from .environment import get_rich_environment_string
 
