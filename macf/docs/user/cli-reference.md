@@ -2066,6 +2066,17 @@ Generate interactive HTML visualization (d3.js force-directed graph).
 macf_tools knowledge viz [output]
 ```
 
+### learnings index add / verify
+
+Keep the master learnings index (`agent/private/learnings/INDEX.md`) and its consultation trigger true.
+
+```bash
+macf_tools learnings index add <file> --cluster <name> [--hook "<WHEN ...>"]
+macf_tools learnings index verify [--memory PATH] [--json]
+```
+
+`add` files one learning under its cluster heading, in the shape of the cluster's existing entries, and updates the cluster's `(N)`, the total and the date; a new cluster is created and named in the output as one the trigger must now carry. `verify` is the doctor for this corpus: entries that name no file, learnings no entry names, counts that are wrong, and a trigger that misses a cluster, does not point at the index, or states a stale count. The trigger is looked for at the platform's per-project memory file; `--memory` names another path, and a trigger it cannot find is reported with every path it tried.
+
 ---
 
 ## Voice Services (v0.5.0+)

@@ -11317,6 +11317,31 @@ def cmd_knowledge_link(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_learnings_index_add(args: argparse.Namespace) -> int:
+    """File a learning under its cluster in the master index."""
+    from .learnings_index import add_entry
+    try:
+        ok, msg = add_entry(args.file, args.cluster, hook=args.hook or "")
+    except OSError as e:
+        print(f"❌ could not update the index: {e}")
+        return 1
+    print(("✅ " if ok else "ℹ️  ") + msg)
+    return 0 if ok else 1
+
+
+def cmd_learnings_index_verify(args: argparse.Namespace) -> int:
+    """The learnings-index doctor: entries, counts, and the consultation trigger."""
+    from .diagnostics import Severity, format_diagnosis
+    from .learnings_index import verify
+    from pathlib import Path as _Path
+    dx = verify(memory_file=_Path(args.memory).expanduser() if args.memory else None)
+    if getattr(args, "json_output", False):
+        print(json.dumps(dx.to_dict(), indent=2, default=str))
+    else:
+        print(format_diagnosis(dx))
+    return 1 if dx.counts().get(Severity.ACUTE, 0) else 0
+
+
 def cmd_knowledge_viz(args: argparse.Namespace) -> int:
     """Generate interactive HTML knowledge graph visualization."""
     from .knowledge_web import generate_web_html
@@ -13020,6 +13045,20 @@ def _build_parser() -> argparse.ArgumentParser:
         _p.add_argument("target", help="path, node id, task:N or idea:N")
         _p.add_argument("concepts", nargs="+", help="one or more concepts, with or without [[ ]]")
         _p.set_defaults(func=cmd_knowledge_link)
+
+    learnings_parser = sub.add_parser("learnings", help="the learnings index and its consultation trigger")
+    learnings_sub = learnings_parser.add_subparsers(dest="learnings_cmd")
+    li_parser = learnings_sub.add_parser("index", help="maintain and verify the master learnings index")
+    li_sub = li_parser.add_subparsers(dest="learnings_index_cmd")
+    li_add = li_sub.add_parser("add", help="file a learning under its cluster, keeping the counts true")
+    li_add.add_argument("file", help="the learning's file name (or path) in agent/private/learnings")
+    li_add.add_argument("--cluster", required=True, help="the cluster heading to file it under")
+    li_add.add_argument("--hook", default="", help='when to consult it, e.g. "WHEN a bug resists the first hypothesis"')
+    li_add.set_defaults(func=cmd_learnings_index_add)
+    li_verify = li_sub.add_parser("verify", help="check entries, counts and the consultation trigger")
+    li_verify.add_argument("--memory", help="path to the auto-loaded memory file, if not the platform default")
+    li_verify.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")
+    li_verify.set_defaults(func=cmd_learnings_index_verify)
 
     kg_viz = knowledge_sub.add_parser("viz", help="generate interactive HTML visualization")
     kg_viz.add_argument("output", nargs="?", default="", help="output path (default: /tmp/macf_knowledge_graph.html)")

@@ -426,6 +426,12 @@ and retiring one only when its cluster empties. The trigger is the ONLY learning
 content in the memory file; keep it lean. Verify that the trigger's path to INDEX.md
 resolves.
 
+`macf_tools learnings index add` files an entry under its cluster and keeps the
+counts and date current, and `macf_tools learnings index verify` checks the rest:
+every entry resolves, every learning is indexed, the counts are true, and the
+trigger names every cluster and points at the index. It is the doctor for this
+corpus (`corpus_integrity.md`), so a curation ends when it reports nothing.
+
 ### 4.4 Knowledge Web Participation
 
 Sections 4.1–4.3 describe the *index* — a curated, human-readable path into the corpus. This section covers the *graph*, which is a different mechanism with a different failure mode: the index is maintained by a curation step, while the graph is built by scanning artifacts for `[[concept]]` links. An artifact can be perfectly indexed and still invisible to the graph.
