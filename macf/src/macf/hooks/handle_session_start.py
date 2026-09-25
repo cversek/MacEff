@@ -413,18 +413,12 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             # so state that is not re-asserted is genuinely absent. Absent is the
             # honest answer, and for authority-granting modes it is also the safe
             # one — authority cannot be inherited by accident.
+            #
+            # The carry writes its own state_carried marker, including when it
+            # carried nothing: the marker is what bounds the next boundary's
+            # walk, so it has to exist for a quiet cycle too.
             from macf.cycle_carry import carry_state_forward
-            carried_keys = carry_state_forward(current_cycle=cycle_number)
-            if carried_keys:
-                append_event(
-                    event="state_carried",
-                    data={
-                        "session_id": session_id,
-                        "cycle": cycle_number,
-                        "keys": sorted(carried_keys),
-                    },
-                    hook_input=data
-                )
+            carry_state_forward(current_cycle=cycle_number)
 
             # Append auto_mode_detected event for forensic reconstruction
             # (auto_mode already detected earlier for state snapshot)
