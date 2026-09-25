@@ -540,6 +540,22 @@ RESOLVED_SETTINGS: List[Dict[str, Any]] = [
         "description": "Minutes of no user input before USER_IDLE engages",
     },
     {
+        "name": "hooks.output",
+        "env_var": "MACF_HOOK_OUTPUT",
+        "config_path": "hooks.output",
+        "default": "diff",
+        "coerce": None,
+        "description": "'diff' sends only what changed since a hook's last block; 'full' always sends the whole block",
+    },
+    {
+        "name": "hooks.full_every_mins",
+        "env_var": "MACF_HOOK_FULL_EVERY_MINS",
+        "config_path": "hooks.full_every_mins",
+        "default": 30,
+        "coerce": int,
+        "description": "Minutes after which a hook sends its full block again instead of a diff",
+    },
+    {
         "name": "agent_identity.calling_card",
         "env_var": "MACEFF_AGENT_NAME",
         "config_path": "agent_identity.calling_card",
