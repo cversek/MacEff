@@ -164,6 +164,12 @@ Task management policy governs the use of Claude Code native Task* tools (TaskCr
 - Why is a parent whose phase is running not a dropped frame?
 - How do I see what I was in the middle of?
 
+**17 Knowledge Web Participation**
+- Is a task a node in the knowledge web, and when?
+- What class and provenance does a task node carry?
+- What should a task link, and what must it never link?
+- Where do a task's wiki-links live, and how are they added?
+
 === CEP_NAV_BOUNDARY ===
 
 ---
@@ -261,6 +267,7 @@ updates:                            # Extensible update list
     description: Architecture design
 archived: false
 archived_at: null
+wiki_links: []                      # Knowledge-web concepts (§17)
 custom: {}                             # Type-specific extension fields
 ```
 
@@ -1653,6 +1660,24 @@ A session resume is a rejoin, not a rebirth: the supervisor restarts the client 
 Where an operator directs an agent by interruption, the two parties hold different responsibilities. The operator is entitled to raise something the moment it is noticed and then move on; that is what makes correcting cheap enough to do at all. The cost of that arrangement is that **someone must hold the interrupted work, and it is not the operator.**
 
 An agent that services the newest instruction and silently drops the previous one has not merely forgotten a task. It has broken the contract that made interrupting safe — and the operator, having moved on by design, is the last party able to notice.
+
+---
+
+## 17 Knowledge Web Participation
+
+Definitions of class and provenance live in `../consciousness/scholarship.md` and are cited here, not restated. This section answers the four questions that policy asks of every artifact type.
+
+**Unit of a node.** The task record. The home store is an artifact directory under the agent tree, so it participates like any other (scholarship: no participation registry); a task joins the web when its MTMD carries `wiki_links`, and a task without them is not a node. A linkless task therefore appears in the knowledge doctor's orphan census like any other linkless artifact; that census is honest, and the doctor summarises it by type rather than listing each record. A task can also appear without links of its own, as the far end of a role duty's `tracks` or `evidence` pointer (`roles.md`).
+
+**Class.** Temporal record. A task says what was to be done and how it stood; its status changes without the task being wrong, and "which work touched X" is the question it answers.
+
+**Provenance.** Lived. A task opened by another agent in a shared store is still a record of work in this deployment, not inherited knowledge.
+
+**What a task links.** The domains the work is about, as a checkpoint tags the domains a cycle worked on: two or three concepts, chosen by querying the web first (`macf_tools knowledge query`). Never the task's own number, an issue number, or a word that only happens to be in its subject; a concept minted from an identifier connects to nothing and is exactly the noise the gap detector proposes from subject text.
+
+**Where the links live, and why not in `custom`.** `wiki_links` is a top-level MTMD field (§1.3) because it applies to every task type, and `custom` holds type-specific extension data whose existing keys are grant-protected (§8). Curation metadata that needs a grant for every added concept would not get curated.
+
+**How to add them.** `macf_tools knowledge link <task_id> <concept> ...`, the same verb that links every other artifact type; `knowledge unlink` removes.
 
 
 ## Wiki-Links

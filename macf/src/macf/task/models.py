@@ -105,6 +105,11 @@ class MacfTaskMetaData:
 
     # (scope_status field RETIRED — scope is event-sourced via get_scope_state)
 
+    # Optional - knowledge-web concepts (task_management: knowledge web
+    # participation). Top-level rather than in custom: it applies to every
+    # task type, and existing custom keys are grant-protected.
+    wiki_links: List[str] = field(default_factory=list)
+
     # Optional - custom fields
     custom: Dict[str, Any] = field(default_factory=dict)
 
@@ -169,6 +174,7 @@ class MacfTaskMetaData:
             updates=updates,
             archived=data.get("archived", False),
             archived_at=data.get("archived_at"),
+            wiki_links=list(data.get("wiki_links") or []),
             custom=data.get("custom", {}),
         )
 
@@ -269,6 +275,8 @@ class MacfTaskMetaData:
             data["archived"] = self.archived
         if self.archived_at:
             data["archived_at"] = self.archived_at
+        if self.wiki_links:
+            data["wiki_links"] = list(self.wiki_links)
         if self.custom:
             data["custom"] = self.custom
 

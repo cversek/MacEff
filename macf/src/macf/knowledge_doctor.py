@@ -36,7 +36,11 @@ def _link_remedy(ca_type: str) -> str:
     if ca_type == "duties":
         return ("add concepts to the record's wiki_links field (role duty add --wiki-links, or edit "
                 "the JSON); see the roles policy on knowledge web participation for what a duty links")
-    return (f"add a ## Wiki-Links section; see the {ca_type} policy on knowledge web participation "
+    if ca_type == "tasks":
+        return ("macf_tools knowledge link task:<id> <concept>; see the task_management policy on "
+                "knowledge web participation for what a task links")
+    return (f"add a ## Wiki-Links section (or macf_tools knowledge link <path> <concept>); see the "
+            f"{ca_type} policy on knowledge web participation "
             f"for what this type should link")
 
 

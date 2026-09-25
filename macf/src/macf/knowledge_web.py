@@ -23,6 +23,7 @@ graph's possible protocols only the web exists so far, and naming the web
 import re
 import json
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
@@ -61,6 +62,9 @@ _NODE_CLASS: Dict[str, str] = {
     "tasks": "temporal_record",        # a duty's evidence or tracks pointer into the task store
 }
 _DEFAULT_CLASS = "conceptual_authority"
+
+# A task record in the home store: N.json, or .N.json when hidden.
+_TASK_FILE = re.compile(r"\.?\d+\.json")
 
 
 def _type_roots(agent_home: Path) -> List[Tuple[str, Path]]:
@@ -127,11 +131,52 @@ def _walk_type(ca_type: str, root: Path) -> Iterator[Tuple[str, Path, Path]]:
         # participate through the same walk so the doctor sees them too.
         for f in sorted(root.rglob("DUTY_*.json")):
             yield "duties", root, f
+    if ca_type == "tasks":
+        # Task records carry wiki_links in their metadata (task_management:
+        # knowledge web participation). A hidden task is stored as .N.json.
+        for f in sorted(root.glob("*.json")):
+            if _TASK_FILE.fullmatch(f.name):
+                yield "tasks", root, f
+
+
+@dataclass(frozen=True, kw_only=True)
+class TaskRecord:
+    """What the web reads from one task record."""
+    id: str
+    title: str
+    concepts: List[str]
+
+
+def task_record(content: str, path: Optional[Path] = None) -> Optional[TaskRecord]:
+    """The id, title and concepts of a task record, or None if it is not one.
+
+    The metadata is only parsed when it mentions wiki_links, so a walk over a
+    store of mostly linkless tasks stays cheap.
+    """
+    try:
+        rec = json.loads(content)
+    except ValueError as e:
+        print(f"⚠️ MACF: task record {path or ''} unreadable for the web: {e}", file=sys.stderr)
+        return None
+    if not isinstance(rec, dict) or "id" not in rec:
+        return None
+    concepts: List[str] = []
+    desc = rec.get("description") or ""
+    if "wiki_links" in desc:
+        from .task.models import MacfTaskMetaData
+        from .concepts import normalize_concepts
+        mtmd = MacfTaskMetaData.parse(desc)
+        concepts = normalize_concepts(mtmd.wiki_links) if mtmd else []
+    title = re.sub(r"\x1b\[[0-9;]*m", "", str(rec.get("subject", ""))).strip()[:50]
+    return TaskRecord(id=str(rec["id"]), title=title or f"task #{rec['id']}", concepts=concepts)
 
 
 def concepts_of(ca_type: str, path: Path, content: str) -> List[str]:
     """The concepts a walked file carries: [[links]] in markdown, the
-    wiki_links field in a duty record."""
+    wiki_links field in a duty record or in a task's metadata."""
+    if ca_type == "tasks" and path.suffix == ".json":
+        rec = task_record(content, path)
+        return rec.concepts if rec else []
     if ca_type == "duties":
         try:
             import json as _json
@@ -244,6 +289,16 @@ def build_knowledge_web(scan_dirs: Optional[List[Path]] = None) -> Dict[str, Any
             for concept in concepts_of(ca_type, md_file, content):
                 wiki_index[concept].add(node_id)
             duty_records.append((node_id, rec, md_file))
+            continue
+        if ca_type == "tasks" and md_file.suffix == ".json":
+            rec = task_record(content, md_file)
+            if not rec or not rec.concepts:
+                continue
+            node_id = f"tasks:#{rec.id}"
+            ca_nodes[node_id] = {"type": "tasks", "title": rec.title, "path": str(md_file),
+                                 "node_class": node_class_for("tasks")}
+            for concept in rec.concepts:
+                wiki_index[concept].add(node_id)
             continue
         concepts = extract_wiki_concepts(content)
         if not concepts:

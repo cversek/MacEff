@@ -11216,6 +11216,31 @@ def cmd_knowledge_doctor(args: argparse.Namespace) -> int:
     return 1 if dx.counts().get(Severity.ACUTE, 0) else 0
 
 
+def cmd_knowledge_link(args: argparse.Namespace) -> int:
+    """Add (or with unlink, remove) wiki-link concepts on any artifact."""
+    from .knowledge_link import LinkError, apply_links
+
+    remove = getattr(args, "knowledge_cmd", "") == "unlink"
+    try:
+        r = apply_links(args.target, args.concepts, remove=remove)
+    except LinkError as e:
+        print(f"❌ {e}")
+        return 1
+    except OSError as e:
+        print(f"❌ could not update {args.target}: {e}")
+        return 1
+    verb = "unlinked" if remove else "linked"
+    if r.changed:
+        print(f"✅ {r.target}: {verb} {', '.join(f'[[{c}]]' for c in r.changed)}")
+    else:
+        print(f"ℹ️  {r.target}: nothing to change")
+    print(f"   Concepts: {', '.join(r.concepts) if r.concepts else '(none)'}")
+    if r.still_inline:
+        print(f"   ⚠️  still used inline in the prose, so still linked: {', '.join(r.still_inline)} "
+              f"(inline uses are the author's; edit the passage if the link should go)")
+    return 0
+
+
 def cmd_knowledge_viz(args: argparse.Namespace) -> int:
     """Generate interactive HTML knowledge graph visualization."""
     from .knowledge_web import generate_web_html
@@ -12892,6 +12917,15 @@ def _build_parser() -> argparse.ArgumentParser:
     kg_doctor.add_argument("--json", dest="json_output", action="store_true",
                            help="machine-readable output")
     kg_doctor.set_defaults(func=cmd_knowledge_doctor)
+
+    for _verb, _help in (("link", "add wiki-link concepts to an artifact of any type"),
+                         ("unlink", "remove wiki-link concepts from an artifact")):
+        _p = knowledge_sub.add_parser(_verb, help=_help, description=(
+            f"{_help.capitalize()}. TARGET is a markdown path, a node id as graph/gaps print it, "
+            f"task:N (or #N), or idea:N. Concepts are normalized the way the web normalizes them."))
+        _p.add_argument("target", help="path, node id, task:N or idea:N")
+        _p.add_argument("concepts", nargs="+", help="one or more concepts, with or without [[ ]]")
+        _p.set_defaults(func=cmd_knowledge_link)
 
     kg_viz = knowledge_sub.add_parser("viz", help="generate interactive HTML visualization")
     kg_viz.add_argument("output", nargs="?", default="", help="output path (default: /tmp/macf_knowledge_graph.html)")

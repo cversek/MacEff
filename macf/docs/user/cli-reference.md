@@ -2022,15 +2022,34 @@ macf_tools knowledge query "concept or keyword"
 Detect missing wiki-links and suggest connections.
 
 ```bash
-macf_tools knowledge gaps [--min-score SCORE]
+macf_tools knowledge gaps [--json]
 ```
+
+### knowledge doctor
+
+Report what the web cannot see about itself: orphaned artifacts (no wiki-links), normalization drift in source text, singleton concepts, and nodes without a class.
+
+```bash
+macf_tools knowledge doctor [--json]
+```
+
+### knowledge link / unlink
+
+Add or remove wiki-link concepts on an artifact of any type, in that artifact's own shape: the `## Wiki-Links` section of a markdown artifact, `links.wiki_links` of an idea, or `wiki_links` in a task's metadata. Concepts are normalized as the web normalizes them, and linking a concept that is already present changes nothing. `unlink` edits only the section; a concept still used inline in the prose is reported and left alone.
+
+```bash
+macf_tools knowledge link <target> <concept> [<concept> ...]
+macf_tools knowledge unlink <target> <concept> [<concept> ...]
+```
+
+`<target>` is a markdown path, a node id as `graph` and `gaps` print it (`learnings:2026-...`), `task:N` (or `#N`), or `idea:N`. A bare number is refused, since an idea and a task can share it. Role duties declare their links with `role duty add --wiki-links`.
 
 ### knowledge viz
 
 Generate interactive HTML visualization (d3.js force-directed graph).
 
 ```bash
-macf_tools knowledge viz [--output PATH]
+macf_tools knowledge viz [output]
 ```
 
 ---
