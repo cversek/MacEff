@@ -8,11 +8,7 @@ try:
 except ImportError:
     ZoneInfo = None
 
-try:
-    from importlib.metadata import version
-    _ver = version("macf")
-except (ImportError, Exception):
-    _ver = "0.0.0"
+from ._version import VERSION as _ver, installed_version
 
 from .config import ConsciousnessConfig
 from .hooks.compaction import detect_compaction, inject_recovery
@@ -11300,7 +11296,14 @@ def _build_parser() -> argparse.ArgumentParser:
             super().__init__(option_strings, dest, nargs=0, **kwargs)
 
         def __call__(self, parser, namespace, values, option_string=None):
-            print(f"{parser.prog} {_ver}{_editable_source_suffix()}")
+            suffix = _editable_source_suffix()
+            # A stale install is shown, not silently corrected: anything that
+            # still reads the installed metadata directly sees the old number.
+            installed = installed_version()
+            if installed != _ver:
+                stale = f"installed metadata says {installed}"
+                suffix = f"{suffix[:-1]}; {stale})" if suffix.endswith(")") else f" ({stale})"
+            print(f"{parser.prog} {_ver}{suffix}")
             parser.exit()
 
     p.add_argument("--version", action=_VersionAction,
