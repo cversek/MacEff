@@ -147,8 +147,65 @@ class TestDiagnoseIsTotal:
     def test_it_returns_every_section_even_with_nothing_running(self, monkeypatch, tmp_path):
         from macf.utils import supervision
         monkeypatch.setattr(supervision, "live_supervisors", lambda: [])
+        # Ancestry reads the live registry; without this the answer would
+        # depend on whether the test runs under a supervisor.
+        monkeypatch.setattr("macf.supervisor._find_own_supervisor", lambda: None)
         monkeypatch.setenv("MACEFF_AGENT_NAME", "probe")
         d = supervision.diagnose()
         for key in ("agent", "supervision", "session", "context_window", "artifacts"):
             assert key in d, f"{key} missing — a diagnostic that omits a section reads as a clean one"
         assert d["supervision"]["supervised"] is False
+
+
+class TestSupervisionByAncestry:
+    """The readout the restart policy branches on. A supervisor is named by the
+    deployment's --name, which need not be the calling card; keyed on the name,
+    a renamed agent read as unsupervised while its supervisor was running."""
+
+    SUP = {"supervisor_pid": 4242, "child_pid": 4243, "name": "agent1",
+           "restart_count": 0, "tmux_session": "agent1"}
+
+    def _diagnose(self, monkeypatch, own, agent=None):
+        from macf.utils import supervision
+        monkeypatch.setattr(supervision, "live_supervisors", lambda: [self.SUP])
+        monkeypatch.setattr("macf.supervisor._find_own_supervisor", lambda: own)
+        monkeypatch.setenv("MACEFF_AGENT_NAME", "CardName")
+        return supervision.diagnose(agent)
+
+    def test_a_renamed_agent_is_supervised_by_its_ancestor(self, monkeypatch):
+        s = self._diagnose(monkeypatch, own=self.SUP)["supervision"]
+        assert s["supervised"] is True
+        assert s["resolved_by"] == "ancestry"
+        assert s["name_differs"] is True
+        assert s["other_live_supervisors"] == []
+
+    def test_no_ancestor_and_no_matching_name_is_unsupervised(self, monkeypatch):
+        s = self._diagnose(monkeypatch, own=None)["supervision"]
+        assert s["supervised"] is False and s["resolved_by"] is None
+        assert [o["pid"] for o in s["other_live_supervisors"]] == [4242]
+
+    def test_an_explicitly_named_agent_is_not_answered_by_this_process_ancestry(self, monkeypatch):
+        """Ancestry says who supervises THIS process, nothing about another agent."""
+        s = self._diagnose(monkeypatch, own=self.SUP, agent="SomeoneElse")["supervision"]
+        assert s["supervised"] is False
+
+    def test_the_readout_names_the_supervisor_and_how_it_was_found(self, monkeypatch):
+        from macf.utils import supervision
+        text = supervision.format_diagnosis(self._diagnose(monkeypatch, own=self.SUP))
+        assert "pid 4242" in text and "named agent1" in text and "found by ancestry" in text
+        assert "NONE running" not in text
+
+
+def test_an_artifact_check_that_could_not_run_says_so(monkeypatch):
+    """Swallowed, the failure left no artifacts line and the readout looked clean."""
+    from macf.utils import supervision
+
+    def broken(**_):
+        raise OSError("harness home unreadable")
+
+    monkeypatch.setattr(supervision, "live_supervisors", lambda: [])
+    monkeypatch.setattr("macf.supervisor._find_own_supervisor", lambda: None)
+    monkeypatch.setattr("macf.utils.harness.default_params", broken)
+    monkeypatch.setenv("MACEFF_AGENT_NAME", "probe")
+    text = supervision.format_diagnosis(supervision.diagnose())
+    assert "ARTIFACTS:  not checked -- OSError: harness home unreadable" in text

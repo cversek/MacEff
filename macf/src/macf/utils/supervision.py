@@ -116,9 +116,25 @@ def diagnose(agent: Optional[str] = None) -> Dict[str, Any]:
     expected = None if ambiguous else resolved
 
     # --- supervision --------------------------------------------------------
+    # For this process the verdict comes from ancestry: a supervisor is named
+    # by whatever the deployment passed as --name, which need not be the
+    # calling card, so a name lookup read a renamed agent as unsupervised, and
+    # the restart policy branches on exactly this reading. The name is kept as
+    # the path for an explicitly named agent, where ancestry says nothing, and
+    # as a last resort.
     sups = live_supervisors()
-    mine = [s for s in sups if s.get("name") == expected] if expected else []
-    others = [s for s in sups if s.get("name") != expected]
+    resolved_by = None
+    mine = []
+    if agent is None:
+        from ..supervisor import _find_own_supervisor
+        own = _find_own_supervisor()
+        if own is not None:
+            mine, resolved_by = [own], "ancestry"
+    if not mine and expected:
+        mine = [s for s in sups if s.get("name") == expected]
+        resolved_by = "name" if mine else None
+    mine_pids = {s.get("supervisor_pid") for s in mine}
+    others = [s for s in sups if s.get("supervisor_pid") not in mine_pids]
 
     # --- this process's own session ----------------------------------------
     in_tmux = bool(os.environ.get("TMUX"))
@@ -133,6 +149,7 @@ def diagnose(agent: Optional[str] = None) -> Dict[str, Any]:
 
     # --- artifacts ----------------------------------------------------------
     drift = None
+    unchecked = None
     if not ambiguous:
         try:
             p = default_params(agent=expected)
@@ -140,8 +157,10 @@ def diagnose(agent: Optional[str] = None) -> Dict[str, Any]:
             for path in (p.start, p.child_path, p.functions):
                 if not path.exists():
                     drift.append(f"{path.name}: ABSENT")
-        except Exception:
-            drift = None
+        except (OSError, ValueError, KeyError) as e:
+            # Recorded, not swallowed: with no line for the artifacts the
+            # readout would look clean, which is the opposite of what happened.
+            drift, unchecked = None, f"{type(e).__name__}: {e}"
 
     return {
         "agent": {
@@ -154,6 +173,11 @@ def diagnose(agent: Optional[str] = None) -> Dict[str, Any]:
         },
         "supervision": {
             "supervised": bool(mine),
+            "resolved_by": resolved_by,
+            # Informational, never the verdict: a supervisor named for a session
+            # rather than the card is a normal deployment choice.
+            "name_differs": bool(mine) and bool(expected) and any(
+                s.get("name") != expected for s in mine),
             "supervisors": [
                 {"pid": s.get("supervisor_pid"), "name": s.get("name"),
                  "restarts": s.get("restart_count"), "session": s.get("tmux_session")}
@@ -180,7 +204,7 @@ def diagnose(agent: Optional[str] = None) -> Dict[str, Any]:
             "matches_expected": (current == expected) if (current and expected) else None,
         },
         "context_window": context_window_integrity(),
-        "artifacts": {"missing": drift},
+        "artifacts": {"missing": drift, "unchecked": unchecked},
     }
 
 
@@ -198,9 +222,11 @@ def format_diagnosis(d: Dict[str, Any]) -> str:
         lines.append(f"  Agent:        {a['identifier']}  ({a['calling_card']}, via {a['resolved_from']})")
 
     if s["supervised"]:
+        how = f", found by {s['resolved_by']}" if s.get("resolved_by") else ""
         for sup in s["supervisors"]:
+            named = (f", named {sup['name']}" if s.get("name_differs") else "")
             lines.append(f"  Supervisor:   pid {sup['pid']} — {sup['restarts']} restart(s), "
-                         f"session {sup['session']}")
+                         f"session {sup['session']}{named}{how}")
     else:
         lines.append(f"  Supervisor:   NONE running for {a['identifier'] or 'any resolved agent'} "
                      f"(this session is not supervised — a crash will not restart it)")
@@ -231,5 +257,7 @@ def format_diagnosis(d: Dict[str, Any]) -> str:
 
     if d["artifacts"]["missing"]:
         lines.append(f"  ⚠️  ARTIFACTS:  {'; '.join(d['artifacts']['missing'])}")
+    elif d["artifacts"].get("unchecked"):
+        lines.append(f"  ⚠️  ARTIFACTS:  not checked -- {d['artifacts']['unchecked']}")
 
     return "\n".join(lines)
