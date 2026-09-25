@@ -63,6 +63,12 @@ For each gap suggestion:
 - **50-67% confidence**: Evaluate whether the keyword overlap reflects real conceptual connection
 - **Below 50%**: Skip unless you have domain knowledge confirming the link
 
+A suggestion you judge wrong gets declined, not just skipped, so the next curation does not judge it again:
+
+```bash
+macf_tools knowledge gaps --reject <node> <concept>
+```
+
 ### Step 3: Query Before Linking
 
 Before adding a wiki-link, query the concept to understand what you're connecting to:
@@ -103,7 +109,7 @@ Leaving orphans is a legitimate outcome. Some artifacts genuinely need a decisio
 
 Before curating, think:
 
-1. **Are there new concepts that should exist?** If 3+ CAs share a theme not in the seed vocabulary, create a new concept.
+1. **Are there new concepts that should exist?** `macf_tools knowledge gaps --clusters` lists the keywords three or more artifacts declare with no concept yet. Query each before creating it, then link its members.
 2. **Are existing concepts too broad?** If `[[hooks]]` connects 20+ nodes, consider splitting into `[[hooks_lifecycle]]` and `[[hooks_injection]]`.
 3. **Are there orphan CAs?** Do not answer this from memory or intuition — Step 1's doctor run answers it by measurement, across every participating type rather than the two you happen to think of. The reason this question is worth asking at all is that the artifacts most likely to be orphaned are the ones written last at lowest context, which is exactly when the linking step gets dropped.
 4. **Is normalization consistent?** Check for `.md` suffixes, capitalization, or hyphen vs underscore variants of the same concept.

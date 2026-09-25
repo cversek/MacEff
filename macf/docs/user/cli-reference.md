@@ -2022,8 +2022,12 @@ macf_tools knowledge query "concept or keyword"
 Detect missing wiki-links and suggest connections.
 
 ```bash
-macf_tools knowledge gaps [--json]
+macf_tools knowledge gaps [--json] [--all]
+macf_tools knowledge gaps --reject <target> <concept> [<concept> ...]
+macf_tools knowledge gaps --clusters [--json]
 ```
+
+A suggestion judged wrong is declined with `--reject`, which records it with the artifact (`<!-- not linked: ... -->` in markdown, `not_linked` in an idea or a task's metadata) so it is not suggested again; `--all` shows declined suggestions, marked `✗`. `--clusters` lists keywords that three or more artifacts declare in a `**Keywords**:` line and no concept carries yet, with the artifacts that declare each, which is where a new concept usually comes from.
 
 ### knowledge doctor
 

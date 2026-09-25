@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
-from .concepts import extract_wiki_concepts
+from .concepts import extract_not_linked, extract_wiki_concepts
 
 # Unit-of-node: which files in a type's directory carry the claims. Defined by
 # each CA-type policy's "Knowledge Web Participation" section and executed
@@ -145,6 +145,7 @@ class TaskRecord:
     id: str
     title: str
     concepts: List[str]
+    not_linked: List[str]
 
 
 def task_record(content: str, path: Optional[Path] = None) -> Optional[TaskRecord]:
@@ -161,14 +162,18 @@ def task_record(content: str, path: Optional[Path] = None) -> Optional[TaskRecor
     if not isinstance(rec, dict) or "id" not in rec:
         return None
     concepts: List[str] = []
+    not_linked: List[str] = []
     desc = rec.get("description") or ""
-    if "wiki_links" in desc:
+    if "wiki_links" in desc or "not_linked" in desc:
         from .task.models import MacfTaskMetaData
         from .concepts import normalize_concepts
         mtmd = MacfTaskMetaData.parse(desc)
-        concepts = normalize_concepts(mtmd.wiki_links) if mtmd else []
+        if mtmd:
+            concepts = normalize_concepts(mtmd.wiki_links)
+            not_linked = normalize_concepts(mtmd.not_linked)
     title = re.sub(r"\x1b\[[0-9;]*m", "", str(rec.get("subject", ""))).strip()[:50]
-    return TaskRecord(id=str(rec["id"]), title=title or f"task #{rec['id']}", concepts=concepts)
+    return TaskRecord(id=str(rec["id"]), title=title or f"task #{rec['id']}", concepts=concepts,
+                      not_linked=not_linked)
 
 
 def concepts_of(ca_type: str, path: Path, content: str) -> List[str]:
@@ -296,7 +301,7 @@ def build_knowledge_web(scan_dirs: Optional[List[Path]] = None) -> Dict[str, Any
                 continue
             node_id = f"tasks:#{rec.id}"
             ca_nodes[node_id] = {"type": "tasks", "title": rec.title, "path": str(md_file),
-                                 "node_class": node_class_for("tasks")}
+                                 "node_class": node_class_for("tasks"), "not_linked": rec.not_linked}
             for concept in rec.concepts:
                 wiki_index[concept].add(node_id)
             continue
@@ -315,7 +320,8 @@ def build_knowledge_web(scan_dirs: Optional[List[Path]] = None) -> Dict[str, Any
         title = title_match.group(1)[:50] if title_match else md_file.stem[:50]
         ca_nodes[node_id] = {"type": ca_type, "title": title,
                              "path": str(md_file),
-                             "node_class": node_class_for(ca_type)}
+                             "node_class": node_class_for(ca_type),
+                             "not_linked": extract_not_linked(content)}
         path_to_node[str(md_file.resolve())] = node_id
         for concept in concepts:
             wiki_index[concept].add(node_id)
@@ -692,11 +698,14 @@ _STOP_WORDS = frozenset(
 )
 
 
-def detect_web_gaps(kg: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+def detect_web_gaps(kg: Optional[Dict[str, Any]] = None,
+                    include_rejected: bool = False) -> List[Dict[str, Any]]:
     """Detect missing wiki-links by comparing node title keywords with wiki concepts.
 
     For each node with degree < 3, extract title keywords and check overlap
     with existing wiki concepts. Returns gap suggestions sorted by confidence.
+    A concept the artifact has declined (its ``not_linked``) is left out, or
+    with ``include_rejected`` kept and marked ``rejected``.
     """
     if kg is None:
         kg = build_knowledge_web()
@@ -745,7 +754,7 @@ def detect_web_gaps(kg: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]
         words = set(re.findall(r'[a-z_]+', text.lower().replace("-", "_")))
         return words - _STOP_WORDS
 
-    def _check_node(node_id, title: str, node_type: str, node_degree: int):
+    def _check_node(node_id, title: str, node_type: str, node_degree: int, declined=()):
         if node_degree >= 3:
             return  # Well-connected nodes don't need gap analysis
         title_keywords = _extract_keywords(title)
@@ -766,6 +775,9 @@ def detect_web_gaps(kg: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]
             confidence = len(overlap) / max(len(concept_keywords), 1)
             if confidence < 0.5:
                 continue
+            rejected = concept in declined
+            if rejected and not include_rejected:
+                continue
             # Find which cluster this concept belongs to
             target_cluster = None
             for member in concept_members:
@@ -782,6 +794,7 @@ def detect_web_gaps(kg: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]
                 "overlap_keywords": sorted(overlap),
                 "confidence": round(confidence, 2),
                 "target_cluster": target_cluster or "isolated",
+                "rejected": rejected,
             })
 
     # Check ideas. Archived ideas are retired seeds -- suggesting new links
@@ -791,16 +804,86 @@ def detect_web_gaps(kg: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]
         if idea.get("status") == "archived":
             continue
         deg = len(edges.get(idea_id, set()))
-        _check_node(idea_id, idea.get("title", ""), "idea", deg)
+        from .concepts import normalize_concepts
+        declined = set(normalize_concepts(idea.get("links", {}).get("not_linked") or []))
+        _check_node(idea_id, idea.get("title", ""), "idea", deg, declined)
 
     # Check CA nodes
     for ca_id, info in ca_nodes.items():
         deg = len(edges.get(ca_id, set()))
-        _check_node(ca_id, info.get("title", ""), info.get("type", "ca"), deg)
+        _check_node(ca_id, info.get("title", ""), info.get("type", "ca"), deg,
+                    set(info.get("not_linked") or ()))
 
     # Sort by confidence descending
     gaps.sort(key=lambda g: (-g["confidence"], g["node_id"]))
     return gaps
+
+
+_KEYWORDS_LINE = re.compile(r"\*\*Keywords\*\*:\s*(.+)|^keywords:\s*(.+)$", re.MULTILINE)
+
+
+def declared_keywords(content: str) -> List[str]:
+    """The subject terms an author declared: a ``**Keywords**:`` line, or a
+    ``keywords:`` front-matter field. Tokens written in ALL CAPS are activation
+    markers (the learnings policy's LEARN), not subjects, and are skipped."""
+    m = _KEYWORDS_LINE.search(content[:4000])
+    if not m:
+        return []
+    from .concepts import normalize_concepts
+    raw = [t.strip() for t in re.split(r"[,;]", m.group(1) or m.group(2))]
+    return normalize_concepts(t for t in raw if t and not (t.isupper() and t.replace("_", "").isalpha()))
+
+
+def suggest_concepts(kg: Optional[Dict[str, Any]] = None, min_members: int = 3) -> List[Dict[str, Any]]:
+    """Keywords several artifacts declare that no concept carries yet.
+
+    A concept exists only once something links it, so a subject that many
+    artifacts name can have no node at all. An author who wrote a keyword and
+    never linked it has already said what the artifact is about; this finds the
+    keywords at least ``min_members`` artifacts share. Every walked file is
+    read, orphans included, since those are the likeliest members.
+
+    Titles were measured as the source first and rejected: on one corpus they
+    produced 868 candidates led by "learn", "complete" and "checkpoint", while
+    declared keywords produced 95 led by real subjects. The cost is coverage:
+    only artifacts that declare keywords are seen.
+    """
+    from collections import defaultdict
+    from .utils.paths import find_agent_home
+
+    kg = kg or build_knowledge_web()
+    covered = set(kg.get("wiki_index", {}))
+    members: Dict[str, List[str]] = defaultdict(list)
+    agent_home = find_agent_home()
+    for _ca_type, _root, path in (iter_web_files(agent_home) if agent_home else []):
+        if path.suffix != ".md":
+            continue
+        try:
+            content = path.read_text(errors="replace")
+        except OSError:
+            continue
+        for kw in declared_keywords(content):
+            if len(kw) > 3 and kw not in covered:
+                members[kw].append(str(path))
+    out = [{"concept": k, "count": len(v), "members": v} for k, v in members.items() if len(v) >= min_members]
+    out.sort(key=lambda d: (-d["count"], d["concept"]))
+    return out
+
+
+def format_concept_suggestions(suggestions: List[Dict[str, Any]], limit: int = 25) -> str:
+    if not suggestions:
+        return "No declared keyword is shared by several artifacts without a concept."
+    lines = [f"🧩 {len(suggestions)} declared keywords shared by several artifacts with no concept yet", ""]
+    for s in suggestions[:limit]:
+        shown = ", ".join(Path(m).stem for m in s["members"][:4])
+        more = f" +{s['count'] - 4}" if s["count"] > 4 else ""
+        lines.append(f"  [[{s['concept']}]]  {s['count']} artifacts: {shown}{more}")
+    if len(suggestions) > limit:
+        lines.append(f"  ... {len(suggestions) - limit} more (--json for all)")
+    lines.append("")
+    lines.append("💡 A real subject becomes a concept with one knowledge link per member; "
+                 "query it first so it does not duplicate one that exists under another name.")
+    return "\n".join(lines)
 
 
 def format_gap_report(gaps: List[Dict[str, Any]]) -> str:
@@ -822,10 +905,15 @@ def format_gap_report(gaps: List[Dict[str, Any]]) -> str:
         else:
             node_label = g["node_id"][:30]
         concept = f"[[{g['suggested_concept']}]]"
+        if g.get("rejected"):
+            concept = f"✗ {concept}"
         conf = f"{g['confidence']:.0%}"
         cluster = g["target_cluster"][:25]
         lines.append(f"{node_label:<30} {concept:<22} {conf:>5}  {cluster}")
 
     lines.append("")
-    lines.append(f"💡 Add suggested [[concepts]] to Wiki-Links sections to strengthen the knowledge web.")
+    lines.append("💡 knowledge link <node> <concept> to accept a suggestion; "
+                 "knowledge gaps --reject <node> <concept> to stop it being suggested.")
+    if any(g.get("rejected") for g in gaps):
+        lines.append("   ✗ marks a suggestion the artifact has already declined.")
     return "\n".join(lines)

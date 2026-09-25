@@ -11186,11 +11186,39 @@ def cmd_knowledge_query(args: argparse.Namespace) -> int:
 
 
 def cmd_knowledge_gaps(args: argparse.Namespace) -> int:
-    """Detect missing wiki-links in the knowledge graph."""
-    from .knowledge_web import detect_web_gaps, format_gap_report, build_knowledge_web
+    """Detect missing wiki-links, decline a wrong suggestion, or propose new concepts."""
+    from .knowledge_web import (detect_web_gaps, format_gap_report, build_knowledge_web,
+                                suggest_concepts, format_concept_suggestions)
+
+    reject = getattr(args, "reject", None)
+    if reject:
+        from .knowledge_link import LinkError, decline
+        target, concepts = reject[0], reject[1:]
+        if not concepts:
+            print("❌ --reject takes a target and at least one concept")
+            return 2
+        try:
+            r = decline(target, concepts)
+        except LinkError as e:
+            print(f"❌ {e}")
+            return 1
+        except OSError as e:
+            print(f"❌ could not update {target}: {e}")
+            return 1
+        if r.changed:
+            print(f"✅ {r.target}: will not suggest {', '.join(f'[[{c}]]' for c in r.changed)} again")
+        else:
+            print(f"ℹ️  {r.target}: already declined")
+        print(f"   Declined: {', '.join(r.concepts)}")
+        return 0
 
     kg = build_knowledge_web()
-    gaps = detect_web_gaps(kg)
+    if getattr(args, "clusters", False):
+        found = suggest_concepts(kg)
+        print(json.dumps(found, indent=2) if getattr(args, "json_output", False)
+              else format_concept_suggestions(found))
+        return 0
+    gaps = detect_web_gaps(kg, include_rejected=getattr(args, "all_gaps", False))
     if getattr(args, "json_output", False):
         print(json.dumps(gaps, indent=2))
     else:
@@ -12957,6 +12985,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
     kg_gaps = knowledge_sub.add_parser("gaps", help="detect missing wiki-links")
     kg_gaps.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")
+    kg_gaps.add_argument("--reject", nargs="+", metavar=("TARGET", "CONCEPT"),
+                         help="record that concepts are wrong for TARGET, so they are not suggested again")
+    kg_gaps.add_argument("--all", dest="all_gaps", action="store_true",
+                         help="include suggestions an artifact has declined, marked")
+    kg_gaps.add_argument("--clusters", action="store_true",
+                         help="keywords several artifacts declare that no concept carries yet")
     kg_gaps.set_defaults(func=cmd_knowledge_gaps)
 
     kg_doctor = knowledge_sub.add_parser(

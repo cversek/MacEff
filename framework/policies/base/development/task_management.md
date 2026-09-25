@@ -268,6 +268,7 @@ updates:                            # Extensible update list
 archived: false
 archived_at: null
 wiki_links: []                      # Knowledge-web concepts (§17)
+not_linked: []                      # Concepts judged wrong for this task (§17)
 custom: {}                             # Type-specific extension fields
 ```
 
@@ -1677,7 +1678,7 @@ Definitions of class and provenance live in `../consciousness/scholarship.md` an
 
 **Where the links live, and why not in `custom`.** `wiki_links` is a top-level MTMD field (§1.3) because it applies to every task type, and `custom` holds type-specific extension data whose existing keys are grant-protected (§8). Curation metadata that needs a grant for every added concept would not get curated.
 
-**How to add them.** `macf_tools knowledge link <task_id> <concept> ...`, the same verb that links every other artifact type; `knowledge unlink` removes.
+**How to add them.** `macf_tools knowledge link task:<id> <concept> ...`, the same verb that links every other artifact type; `knowledge unlink` removes. A concept `knowledge gaps` keeps proposing and a curator has judged wrong goes in `not_linked` through `knowledge gaps --reject`, as for every type (scholarship: declining a suggested concept).
 
 
 ## Wiki-Links

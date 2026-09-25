@@ -19,9 +19,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from .concepts import extract_wiki_concepts, normalize_concepts
+from .concepts import extract_not_linked, extract_wiki_concepts, normalize_concepts
 
-__all__ = ["LinkResult", "LinkError", "resolve_target", "apply_links"]
+__all__ = ["LinkResult", "LinkError", "resolve_target", "apply_links", "decline"]
 
 _SECTION = re.compile(r"(^##\s*Wiki-Links\s*\n)(.*?)(?=^##\s|\Z)", re.MULTILINE | re.DOTALL | re.IGNORECASE)
 _TASK_REF = re.compile(r"^(?:tasks?:)?#?(\d+)$")
@@ -180,3 +180,77 @@ def get_idea_links(idea_id: str) -> Optional[List[str]]:
     from .ideas import get_idea
     result = get_idea(int(idea_id))
     return None if result is None else list(result["idea"].get("links", {}).get("wiki_links") or [])
+
+
+_NOT_LINKED_LINE = re.compile(r"<!--\s*not linked:.*?-->\n?", re.IGNORECASE | re.DOTALL)
+
+
+def _decline_markdown(text: str, concepts: List[str]) -> Tuple[str, List[str]]:
+    """Merge concepts into the one ``<!-- not linked: ... -->`` line, placing it
+    at the end of the Wiki-Links section when there is one, else at the end."""
+    declined = extract_not_linked(text)
+    new = [c for c in concepts if c not in declined]
+    if not new:
+        return text, []
+    line = f"<!-- not linked: {', '.join(declined + new)} -->\n"
+    text = _NOT_LINKED_LINE.sub("", text)
+    m = _SECTION.search(text)
+    if m:
+        body = m.group(2).rstrip("\n") + "\n" + line
+        tail = "\n" if m.end(2) < len(text) else ""
+        return text[:m.start(2)] + body + tail + text[m.end(2):], new
+    sep = "" if text.endswith("\n") else "\n"
+    return f"{text}{sep}{line}", new
+
+
+def decline(ref: str, raw_concepts: List[str]) -> LinkResult:
+    """Record that suggested concepts are wrong for one artifact.
+
+    The judgement is kept with the artifact, beside its links (scholarship:
+    declining a suggested concept), so gap detection stops proposing it and no
+    later curation re-judges it. ``LinkResult.concepts`` is the declined set.
+    """
+    concepts = normalize_concepts(raw_concepts)
+    if not concepts:
+        raise LinkError("no concepts left after normalization")
+    kind, handle = resolve_target(ref)
+
+    if kind == "idea":
+        from .ideas import update_idea
+        before = set((_idea_record(handle) or {}).get("links", {}).get("not_linked") or [])
+        result = update_idea(int(handle), not_linked=concepts)
+        if result is None:
+            raise LinkError(f"idea #{handle} not found")
+        after = list(result["idea"].get("links", {}).get("not_linked") or [])
+        return LinkResult("idea", f"idea #{handle}", [c for c in after if c not in before], after)
+
+    if kind == "task":
+        from .task import TaskReader, update_task_file, MacfTaskMetaData
+        from .task.models import MacfTaskUpdate
+        from .utils.breadcrumbs import get_breadcrumb
+        import copy
+        task = TaskReader().read_task(handle)
+        if not task:
+            raise LinkError(f"task #{handle} not found")
+        mtmd = copy.deepcopy(task.mtmd) if task.mtmd else MacfTaskMetaData()
+        new = [c for c in concepts if c not in (mtmd.not_linked or [])]
+        if new:
+            mtmd.not_linked = list(mtmd.not_linked or []) + new
+            mtmd.updates.append(MacfTaskUpdate(breadcrumb=get_breadcrumb(), agent="PA",
+                                               description=f"Declined {', '.join(new)} (knowledge web)"))
+            if not update_task_file(handle, {"description": task.description_with_updated_mtmd(mtmd)}):
+                raise LinkError(f"task #{handle} could not be written")
+        return LinkResult("task", f"task #{handle}", new, list(mtmd.not_linked))
+
+    path = Path(handle)
+    text = path.read_text()
+    new_text, new = _decline_markdown(text, concepts)
+    if new_text != text:
+        path.write_text(new_text)
+    return LinkResult("markdown", str(path), new, extract_not_linked(new_text))
+
+
+def _idea_record(idea_id: str) -> Optional[dict]:
+    from .ideas import get_idea
+    result = get_idea(int(idea_id))
+    return None if result is None else result["idea"]
