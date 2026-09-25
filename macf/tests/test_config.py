@@ -116,24 +116,50 @@ class TestPathResolution:
 
     def test_find_agent_root_in_container_environment(self, monkeypatch):
         """
-        Test path resolution in container environment.
+        In a container with no declared home, the home comes from the uid.
 
-        When running in container (/.dockerenv exists), should:
-        - Use /home/{user}/agent/ path structure
-        - Create directories if they don't exist
-        - Return absolute path
+        $USER is deliberately set to a name that is not this process's user: a
+        supervisor-launched client may have no environment at all, and a guessed
+        name produced a home that did not exist.
         """
-        monkeypatch.setenv("USER", "testuser")
+        import pwd
+        monkeypatch.setenv("USER", "not-this-process")
         monkeypatch.delenv("MACF_AGENT_ROOT", raising=False)
+        monkeypatch.delenv("MACEFF_AGENT_HOME_DIR", raising=False)
 
-        # Mock _is_container to return True and _find_project_root to return None
         with patch.object(ConsciousnessConfig, '_is_container', return_value=True):
             with patch.object(ConsciousnessConfig, '_find_project_root', return_value=None):
-                config = ConsciousnessConfig(agent_name="testuser")
-                agent_root = config.agent_root
+                agent_root = ConsciousnessConfig(agent_name="testuser").agent_root
 
-        expected_path = Path("/home/testuser/agent")
-        assert agent_root == expected_path
+        assert agent_root == Path(pwd.getpwuid(os.getuid()).pw_dir) / "agent"
+
+    def test_a_declared_home_beats_the_container_guess(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("MACF_AGENT_ROOT", raising=False)
+        monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(tmp_path))
+        from macf.utils.paths import find_agent_home
+        find_agent_home.cache_clear()
+        with patch.object(ConsciousnessConfig, '_is_container', return_value=True):
+            agent_root = ConsciousnessConfig(agent_name="x").agent_root
+        find_agent_home.cache_clear()
+        assert agent_root == tmp_path / "agent"
+
+    def test_the_explicit_override_still_beats_a_declared_home(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("MACF_AGENT_ROOT", str(tmp_path / "override"))
+        monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(tmp_path))
+        with patch.object(ConsciousnessConfig, '_is_container', return_value=True):
+            agent_root = ConsciousnessConfig(agent_name="x").agent_root
+        assert agent_root == tmp_path / "override"
+
+    def test_a_uid_with_no_passwd_entry_falls_back_loudly(self, monkeypatch, capsys):
+        import pwd
+        monkeypatch.setenv("USER", "fallback-user")
+
+        def no_entry(uid):
+            raise KeyError(f"getpwuid(): uid not found: {uid}")
+
+        monkeypatch.setattr(pwd, "getpwuid", no_entry)
+        assert ConsciousnessConfig._container_home() == Path("/home/fallback-user")
+        assert "falling back to $USER" in capsys.readouterr().err
 
     def test_find_agent_root_in_host_environment(self, temp_claude_project, monkeypatch):
         """

@@ -123,12 +123,12 @@ class ConsciousnessConfig:
 
         Detection priority (highest to lowest):
         1. MACF_AGENT_ROOT environment variable override
-        2. Container detection (/.dockerenv exists)
-        3. MACEFF_AGENT_HOME_DIR, resolved through find_agent_home()
+        2. MACEFF_AGENT_HOME_DIR, resolved through find_agent_home()
+        3. Container detection (/.dockerenv exists), home from the process uid
         4. Host with .claude project
         5. Fallback to home directory
 
-        Step 3 exists because this resolver and ``utils.paths.find_agent_home``
+        Step 2 exists because this resolver and ``utils.paths.find_agent_home``
         are two ways to answer one question, and they disagreed. That one
         documents MACEFF_AGENT_HOME_DIR as "explicit configuration takes
         precedence"; this one did not consult it at all, so a caller arriving
@@ -153,17 +153,20 @@ class ConsciousnessConfig:
         if env_root := os.getenv("MACF_AGENT_ROOT"):
             return Path(env_root)
 
-        # 2. Container detection (/.dockerenv exists)
-        if self._is_container():
-            user = os.getenv("USER", "user")
-            return Path(f"/home/{user}/agent")
-
-        # 3. Declared agent home. Delegated rather than re-read from the
+        # 2. Declared agent home. Delegated rather than re-read from the
         # environment, so the validation and creation semantics stay in one
         # place; agent_root is the `agent/` directory *inside* the home.
+        # Above the container guess below: a declaration always beats a guess.
         if os.getenv("MACEFF_AGENT_HOME_DIR"):
             from .utils.paths import find_agent_home
             return find_agent_home() / "agent"
+
+        # 3. Container detection (/.dockerenv exists). The home comes from the
+        # process's uid, not $USER: a supervisor-launched client has a uid and
+        # may have no environment, and a guessed name produced a home that did
+        # not exist, so the post-compaction reading list reported no artifacts.
+        if self._is_container():
+            return self._container_home() / "agent"
 
         # 4. Host with .claude project
         if project_root := self._find_project_root():
@@ -172,6 +175,19 @@ class ConsciousnessConfig:
 
         # 5. Fallback to home directory
         return Path.home() / ".macf" / self.agent_name / "agent"
+
+    @staticmethod
+    def _container_home() -> Path:
+        """The home directory of the user this process runs as."""
+        import pwd
+        try:
+            return Path(pwd.getpwuid(os.getuid()).pw_dir)
+        except KeyError as e:
+            # A uid with no passwd entry. $USER is the only remaining signal;
+            # say that it is being used, since it is the guess this replaced.
+            print(f"⚠️ MACF: no passwd entry for uid {os.getuid()} ({e}); "
+                  f"falling back to $USER for the agent home", file=sys.stderr)
+            return Path(f"/home/{os.getenv('USER', 'user')}")
 
     def get_public_path(self) -> Path:
         """
