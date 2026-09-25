@@ -7,9 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- **roles: completed duties hide after a restart** (`roles/display.py`): the succinct rule compared a done duty's last breadcrumb with the current session id, and a `claude -c` resume keeps the id, so a role with fourteen completed duties across three cycles listed every one after every restart. The rule now reads the latest `session_started` event (`last_restart_epoch`) and hides a done or deferred duty whose last update is older than it; a compaction writes no such event and does not count; with no restart on record everything stays visible; `--all` unchanged. `stanza()` takes `restart_epoch` instead of `session_id` (#414)
+Since 0.6.0: standing roles beside the task system, agent-to-agent mail, a push-wake
+notification daemon, the subscription budget made visible to the agent, per-agent
+Gmail, event-log rotation, and commit-message guards. Sprints now survive compaction.
 
 ### Added
 
@@ -33,10 +33,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `canonicalize` answers "can this sender see the parent of its reply" from the ledger instead of the sender's Maildir (`--reply-to` no longer fails with PermissionError on a deployment where the broker cannot enter homes); `accept_inbound` answers the asserted-parent and asserted-thread checks from the ledger instead of the recipient's Maildir (the reverse direction of rung 1s on a different-uid deployment)
 - Policy: `amail.md` 1.3.1, §2.3 "the broker does not read a home either"; deployment doc break-table row
 
+**Roles: standing positions beside the task system** (`macf.roles`, `roles.md`): a role is an appointment with a tenure and a review date, and its duties are dated declarations that point at the tasks implementing them. The policy, then a parallel store and CLI (`macf_tools role`), priority tiers with `role duty why`, a due-approach ramp and a calendar with iCalendar export, a roles stanza under `task tree`, focus as an event-sourced scope the hooks act on, knowledge-web participation for charters and duties, a skill suite for assignment, focus, duties and review, and migration of a position that had been held as a task.
+
+**amail, agent-to-agent mail** (`macf.amail`, `amail.md`): landed in six reviewed carves, in dependency order. Primitives, Maildir storage and the contact list, the broker as the only holder of credentials with an agent-side client that holds no power, the inbound path and its supervised daemons, and container provisioning with a success criterion. A bundle a person carries between hosts, which reaches no broker, is gated by the same pre-send scan.
+
+**Push-wake notification daemon** (`macf.notify`): delivers a notice into an agent's session from outside it, with the agent's right not to be told. Event sources are declarations with a stated contract, and one coalescing floor is owned by the daemon rather than by each source.
+
+**Budget: the subscription's rate limits as a budget the agent can see** (`macf_tools budget`, `credit_budget.md`): `sample`, `status`, `log` and `mode` over the session window and the weekly caps, the budget in the hooks at thresholds only with a warning before the five-hour wall, `budget plan`, and a burn-mode Stop gate bounded like the other gates (#416)
+
+**Per-agent Gmail** (`macf_tools gmail`): an agent reads and drafts mail through an OAuth grant held in its own home, with a private encrypted cache, query shortcuts and saved queries, attachment retrieval, and local hybrid search whose index lives in memory only.
+
+**Event-log rotation** (`macf_tools events rotate`): history before the current cycle moves into a verified, compressed archive, and a forensic query whose filter names another cycle or an interval reads across the seam.
+
+**Commit-message guards** (`macf_tools githooks`): a `commit-msg` stage in the dispatcher and two portable hooklets, delivered by the installer, that refuse a Claude Code session link and a citation of planning documents the repository does not hold.
+
+**Policies**: reports as dated folders with a provenance sidecar, versioned deliverables and a LaTeX-to-PDF path; mailbox access as a bounded capability; a MISSION is not complete while its code is unshipped; why the shape of the artifact tree is not the agent's to change; the artifact tree is not a git repository; and the calling card as the last line, and only the last line, of a public artifact.
+
 ### Fixed
 
+- **roles: completed duties hide after a restart** (`roles/display.py`): the succinct rule compared a done duty's last breadcrumb with the current session id, and a `claude -c` resume keeps the id, so a role with fourteen completed duties across three cycles listed every one after every restart. The rule now reads the latest `session_started` event (`last_restart_epoch`) and hides a done or deferred duty whose last update is older than it; a compaction writes no such event and does not count; with no restart on record everything stays visible; `--all` unchanged. `stanza()` takes `restart_epoch` instead of `session_id` (#414)
 - **roles: one clock** (`roles/store.py`): declarations and updates are stamped through `priority.now()`, the clock `MACF_ROLES_NOW` pins, instead of `datetime.now()`. Two tests pinned the poll clock to 2026-09-14 while the fixture declared at wall time; once the wall clock passed 09-15 the "never before declared" floor dropped the occurrence under test and `main` CI went red for everyone (#397). The source-tier fixture now pins its clock; the display tests, which order touches against wall-clock focus events, deliberately run unpinned; a seam test asserts the store stamps with the pinned clock
 - **amail rung 1s: a mixed-case agent key is a mailbox again** (`BrokerConfig.agent_for`): the case-fold lookup that returns the DECLARED key (so the accepted pair lands in the pickup box keyed by it) was lost in the ledger squash and replaced by an exact match; every pair to a deployment whose agent keys are not lowercase was read, hashed and rejected as "not a mailbox of this deployment". Restored, with the regression test that was missing the first time (`test_amail_shared_rung.py::TestAMixedCaseAgentKeyIsStillAMailbox`)
+- **Sprints carry through compaction** (#393, #358): sprint and play-time scope, and a running play-time timer, are carried across the cycle boundary; state set more than one cycle before it is recovered; and a mode withdrawn in the same cycle it was granted is no longer re-asserted after the boundary
+- **An injected `/compact` can end the turn that queued it** (#391): the Stop gates allow one passage for it, and only for compaction
+- **`--version` and every hook stamp report the checkout's version** on an editable install, not the one frozen at install time, and `--version` names a stale install (#394)
+- **SessionStart no longer waits on the network** to announce a session; the notice is handed to a detached process that resolves its own credentials (#330)
+- **Tests no longer reach a live channel** from a spawned subprocess: `MACF_CHANNELS_DISABLED` refuses every Telegram send and is inherited by child processes (#330)
+- **A declared agent home beats the container guess**, and the guess takes the home from the process uid rather than `$USER` (#413)
+- **The supervision readout decides by process ancestry**, so a supervisor named for its session rather than the calling card is still found (#411)
+- **amail**: a descriptor leak that was wedging a live deployment (#346); the broker's pre-send scrub now separates credential material, which it refuses, from the framework's own vocabulary, which it had also been refusing
+- **notify**: the deferred queue dropped notices under concurrency while reporting them held
+- **macOS**: notify, the amail broker and the test suite work there; Unix socket paths had run past the platform limit (#367)
+- **opsec**: the credential-assignment pattern now reads JSON, and the pre-commit hook written by `opsec install-hook` applies the host-identifier and secret patterns it was built for (#395)
+- **gmail**: a draft's body and every attachment are scanned for credentials before the draft exists; read output and the destination guard were corrected after the first real run
+- **Container shell**: a POSIX login shell sourcing the `BASH_ENV` wrapper died and exited 0
+- **`framework-upgrade`** refuses to start when its last step cannot run, instead of completing three of four steps (#386)
+- **Roles**: the stanza follows the tree's title width; one pointer per stanza; `duty engage` refuses until a role's Boundaries are written
+- **A supervisor test** asserted machine speed rather than supervisor behaviour
 
 ## [0.6.0] - 2026-08-29
 
