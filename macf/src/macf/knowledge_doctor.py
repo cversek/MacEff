@@ -44,9 +44,40 @@ def _link_remedy(ca_type: str) -> str:
             f"for what this type should link")
 
 
+_DATED = re.compile(r"^(\d{4}-\d{2}-\d{2})")
+
+
+def artifact_date(path: Path) -> float:
+    """When an artifact was made: the date in its name or its folder's, else
+    when it was last modified. Curation edits move the modified time, so the
+    name wins whenever it carries a date."""
+    import datetime as _dt
+    for name in (path.name, path.parent.name):
+        m = _DATED.match(name)
+        if m:
+            try:
+                return _dt.datetime.strptime(m.group(1), "%Y-%m-%d").timestamp()
+            except ValueError:
+                continue
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
 def examine(agent_home: Optional[Path] = None,
-            kg: Optional[Dict[str, Any]] = None) -> Diagnosis:
-    """Examine the knowledge web and report what it cannot report about itself."""
+            kg: Optional[Dict[str, Any]] = None,
+            *,
+            orphans: str = "all",
+            since: Optional[float] = None,
+            orphan_type: Optional[str] = None) -> Diagnosis:
+    """Examine the knowledge web and report what it cannot report about itself.
+
+    ``orphans`` is how the orphan census is reported. ``"all"`` lists each
+    orphan. ``"summary"`` gives one finding per type and lists individually only
+    the orphans in view: those dated on or after ``since``, and every orphan of
+    ``orphan_type``. The chart's orphan count is the whole census either way.
+    """
     from .knowledge_web import build_knowledge_web, concepts_of, iter_web_files
     from .utils.paths import find_agent_home
 
@@ -80,6 +111,24 @@ def examine(agent_home: Optional[Path] = None,
             mention_only.append(path)
 
     for ca_type, paths in sorted(orphans_by_type.items()):
+        if orphans == "summary":
+            in_view = [p for p in paths
+                       if ca_type == orphan_type or (since is not None and artifact_date(p) >= since)]
+            rest = len(paths) - len(in_view)
+            if rest:
+                import datetime as _dt
+                dates = sorted(artifact_date(p) for p in paths if p not in in_view)
+                span = " to ".join(dict.fromkeys(
+                    _dt.datetime.fromtimestamp(d).strftime("%Y-%m-%d") for d in (dates[0], dates[-1])))
+                findings.append(Finding(
+                    check="orphans",
+                    severity=Severity.CHRONIC,
+                    subject=f"{ca_type}: {rest} orphan{'s' if rest != 1 else ''}"
+                            + (f" (and {len(in_view)} listed below)" if in_view else ""),
+                    detail=f"no wiki-link concepts, dated {span}",
+                    remedy=f"{_link_remedy(ca_type)}; list them with knowledge doctor --type {ca_type}",
+                ))
+            paths = in_view
         for p in paths:
             is_mention_only = p in mention_only
             # Nested CA types (experiments, roadmaps) put the identifying name

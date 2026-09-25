@@ -11208,12 +11208,60 @@ def cmd_knowledge_doctor(args: argparse.Namespace) -> int:
     from .diagnostics import Severity, format_diagnosis
     from .knowledge_doctor import examine
 
-    dx = examine()
+    since = None
+    if getattr(args, "since", None):
+        try:
+            since = _parse_since(args.since)
+        except ValueError as e:
+            print(f"❌ {e}")
+            return 2
+    view = "all" if getattr(args, "all_orphans", False) else "summary"
+    dx = examine(orphans=view, since=since, orphan_type=getattr(args, "orphan_type", None))
     if getattr(args, "json_output", False):
         print(json.dumps(dx.to_dict(), indent=2, default=str))
     else:
         print(format_diagnosis(dx))
     return 1 if dx.counts().get(Severity.ACUTE, 0) else 0
+
+
+def _parse_since(value: str) -> float:
+    """A date (YYYY-MM-DD) or an age (7d, 12h) as an epoch cutoff."""
+    import datetime as _dt
+    import re as _re
+    import time as _time
+    m = _re.fullmatch(r"(\d+)([dh])", value.strip())
+    if m:
+        return _time.time() - int(m.group(1)) * (86400 if m.group(2) == "d" else 3600)
+    try:
+        return _dt.datetime.strptime(value.strip(), "%Y-%m-%d").timestamp()
+    except ValueError:
+        raise ValueError(f"--since takes a date (2026-09-01) or an age (7d, 12h), not {value!r}")
+
+
+def cmd_knowledge_status(args: argparse.Namespace) -> int:
+    """Every curation metric in one call, so before and after are one command each."""
+    from .knowledge_doctor import examine
+    from .knowledge_web import build_knowledge_web, detect_web_gaps
+    from .diagnostics import Severity
+
+    kg = build_knowledge_web()
+    dx = examine(kg=kg, orphans="summary")
+    counts = dx.counts()
+    s = kg["stats"]
+    status = {
+        "nodes": s.get("total_nodes", 0), "cas": s.get("total_cas", 0), "ideas": s.get("total_ideas", 0),
+        "edges": s.get("total_edges", 0), "cross_ca_edges": s.get("cross_ca_edges", 0),
+        "concepts": s.get("wiki_concepts", 0),
+        "files_examined": dx.chart.vitals.get("files_examined", 0),
+        "orphans": dx.chart.vitals.get("orphans", 0),
+        "acute": counts.get(Severity.ACUTE, 0), "chronic": counts.get(Severity.CHRONIC, 0),
+        "gaps": len(detect_web_gaps(kg)),
+    }
+    if getattr(args, "json_output", False):
+        print(json.dumps(status, indent=2))
+    else:
+        print("🕸️ " + "  ".join(f"{k}={v}" for k, v in status.items()))
+    return 0
 
 
 def cmd_knowledge_link(args: argparse.Namespace) -> int:
@@ -12916,7 +12964,19 @@ def _build_parser() -> argparse.ArgumentParser:
         help="report orphans, drift, singletons and registry gaps the graph cannot see")
     kg_doctor.add_argument("--json", dest="json_output", action="store_true",
                            help="machine-readable output")
+    kg_doctor.add_argument("--since", metavar="DATE|Nd",
+                           help="also list each orphan dated on or after this (2026-09-01, or 7d)")
+    kg_doctor.add_argument("--type", dest="orphan_type", metavar="TYPE",
+                           help="list every orphan of one type (the bulk pass)")
+    kg_doctor.add_argument("--all", dest="all_orphans", action="store_true",
+                           help="list every orphan individually instead of one line per type")
     kg_doctor.set_defaults(func=cmd_knowledge_doctor)
+
+    kg_status = knowledge_sub.add_parser(
+        "status", help="the curation metrics in one call: graph counts, doctor chart, gap count")
+    kg_status.add_argument("--json", dest="json_output", action="store_true",
+                           help="machine-readable output")
+    kg_status.set_defaults(func=cmd_knowledge_status)
 
     for _verb, _help in (("link", "add wiki-link concepts to an artifact of any type"),
                          ("unlink", "remove wiki-link concepts from an artifact")):

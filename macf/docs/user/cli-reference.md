@@ -2030,7 +2030,17 @@ macf_tools knowledge gaps [--json]
 Report what the web cannot see about itself: orphaned artifacts (no wiki-links), normalization drift in source text, singleton concepts, and nodes without a class.
 
 ```bash
-macf_tools knowledge doctor [--json]
+macf_tools knowledge doctor [--json] [--since DATE|Nd] [--type TYPE] [--all]
+```
+
+Orphans are reported as one line per type by default, since the backlog is the same on every run. `--since` also lists each orphan dated on or after a point (the date in its name or its folder's, else its modified time), `--type` lists every orphan of one type for a bulk pass, and `--all` lists every orphan. The chart's orphan count is the whole census in every view.
+
+### knowledge status
+
+Every curation metric in one call: nodes, CAs, ideas, edges, cross-CA edges, concepts, files examined, orphans, acute and chronic findings, and the gap count.
+
+```bash
+macf_tools knowledge status [--json]
 ```
 
 ### knowledge link / unlink
