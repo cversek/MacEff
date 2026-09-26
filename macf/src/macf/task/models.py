@@ -10,6 +10,17 @@ import re
 import yaml
 
 
+def _yaml_loader():
+    """libyaml's safe loader when PyYAML was built with it, else the pure-Python one.
+
+    Same results, about fifteen times faster, and every command that reads the
+    whole task store parses one metadata block per task: on a store of 1,324
+    tasks the pure-Python loader was about 2 s of `task get`. Chosen per call so
+    a PyYAML without libyaml still works.
+    """
+    return getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
+
 @dataclass
 class MacfTaskUpdate:
     """
@@ -126,7 +137,7 @@ class MacfTaskMetaData:
         yaml_content = match.group(1).strip()
 
         try:
-            data = yaml.safe_load(yaml_content) or {}
+            data = yaml.load(yaml_content, Loader=_yaml_loader()) or {}
         except yaml.YAMLError:
             return None
 
