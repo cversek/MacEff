@@ -77,6 +77,7 @@ Gmail, event-log rotation, and commit-message guards. Sprints now survive compac
 - **The prompt hook no longer reads the whole transcript on every prompt**: the last user prompt is found from the end of the file, using the transcript path the hook is given; on a long-lived session's 664 MB transcript the hook went from about 0.9 s to 0.18 s
 - **A command group run without a subcommand prints its help** (`macf_tools knowledge`, `task`, `role`, `idea`, `task scope`, ...) instead of raising AttributeError
 - **A carried mode keeps the cycle it was granted in** when its event predates the `cycle` field: the record's breadcrumb dates it, where the carry had stamped the boundary's own cycle as its origin
+- **Hooks read the event log once per invocation** (`shared_event_reads` on every hook's `run()`): the questions a hook asks the log share one parse instead of streaming it from the end each time. On a long-lived deployment PreToolUse went from about 305 ms to 137 ms per tool call and Stop from 262 ms to 133 ms. Readers inside a hook are handed shared event objects and must not modify them; `MACF_EVENTS_MEMO_CHECK` makes an invocation that did fail, and the test suite sets it
 
 ## [0.6.0] - 2026-08-29
 
