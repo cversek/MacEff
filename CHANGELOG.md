@@ -51,7 +51,7 @@ Gmail, event-log rotation, and commit-message guards. Sprints now survive compac
 
 **Knowledge-web curation tools** (#392): tasks carry wiki-links in their metadata and join the web; `knowledge link` and `unlink` edit any artifact type in its own shape; `knowledge doctor` reports orphans as one line per type, with `--since`, `--type` and `--all` to list them; `knowledge status` gives every curation metric in one call; `knowledge gaps --reject` records a wrong suggestion with the artifact so it is not suggested again, and `--clusters` proposes concepts from keywords several artifacts declare; `learnings index add` and `verify` keep the learnings index and its consultation trigger true. Linkless task records now count in the doctor's orphan census.
 
-**Policies**: reports as dated folders with a provenance sidecar, versioned deliverables and a LaTeX-to-PDF path; mailbox access as a bounded capability; a MISSION is not complete while its code is unshipped; why the shape of the artifact tree is not the agent's to change; the artifact tree is not a git repository; and the calling card as the last line, and only the last line, of a public artifact.
+**Policies**: reports as dated folders with a provenance sidecar, versioned deliverables and a LaTeX-to-PDF path; mailbox access as a bounded capability; a MISSION is not complete while its code is unshipped; why the shape of the artifact tree is not the agent's to change; the artifact tree is not a git repository; the calling card as the last line, and only the last line, of a public artifact; and how a learning that a later one corrects is marked, so that the learnings index stops presenting both as true.
 
 ### Fixed
 
