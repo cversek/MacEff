@@ -27,18 +27,18 @@ def detect_compaction(transcript_path: Path) -> bool:
     import json
     import time
 
+    from itertools import islice
+    from macf.utils.streaming import iter_lines_reverse
+
     # Retry up to 3 times to handle write timing race condition
     # Observed: marker can be written 10-34ms after hook starts
     for attempt in range(3):
-        # Read all lines
-        with open(transcript_path) as f:
-            lines = f.readlines()
+        # Check the last 100 messages for compact_boundary, read from the end
+        # (SessionStart runs early, so the marker is recent; the transcript
+        # before it can be hundreds of megabytes and is not needed)
+        tail = [l for l in islice((l for l in iter_lines_reverse(transcript_path) if l.strip()), 100)]
 
-        # Check last 100 messages for compact_boundary
-        # (SessionStart runs early, so marker should be recent)
-        start_idx = max(0, len(lines) - 100)
-
-        for line in lines[start_idx:]:
+        for line in tail:
             try:
                 msg = json.loads(line)
                 if (msg.get('type') == 'system' and
