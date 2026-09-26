@@ -97,9 +97,10 @@ def iter_lines_reverse(
         if position <= 0:
             return
 
-        # remainder holds the partial leading line from the current chunk,
-        # whose continuation lives in the next (older) chunk we'll read.
-        remainder = b""
+        # The pieces of the line being read, newest piece first. A line that
+        # spans many chunks is joined once, when its start is found; re-joining
+        # it for every chunk it spans made a long line cost its length squared.
+        pending = []
 
         while position > 0:
             read_size = min(chunk_size, position)
@@ -107,20 +108,18 @@ def iter_lines_reverse(
             f.seek(position)
             chunk = f.read(read_size)
 
-            # The remainder from the previous iteration represents the START
-            # of a line whose REST is at the END of THIS (older) chunk.
-            # Concatenate so the split below produces complete lines.
-            data = chunk + remainder
-            lines = data.split(b"\n")
+            pieces = chunk.split(b"\n")
+            # The chunk's last piece ends the pending line. With no newline in
+            # the chunk, the line goes on into the next (older) chunk.
+            pending.append(pieces[-1])
+            if len(pieces) == 1:
+                continue
+            yield b"".join(reversed(pending)).decode(encoding, errors="replace")
+            # Whole lines inside the chunk, newest first.
+            for line in reversed(pieces[1:-1]):
+                yield line.decode(encoding, errors="replace")
+            # The first piece may begin in an earlier chunk.
+            pending = [pieces[0]]
 
-            if position > 0:
-                # First piece may be incomplete — its prefix lives in an
-                # even earlier chunk. Save it as the new remainder.
-                remainder = lines[0]
-                # Yield the rest newest-first (last index is most recent).
-                for line in reversed(lines[1:]):
-                    yield line.decode(encoding, errors="replace")
-            else:
-                # No more chunks; every piece is complete.
-                for line in reversed(lines):
-                    yield line.decode(encoding, errors="replace")
+        # The start of the file begins the last line.
+        yield b"".join(reversed(pending)).decode(encoding, errors="replace")
