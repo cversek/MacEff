@@ -13,11 +13,14 @@ Schema: {timestamp, event, breadcrumb, data, hook_input}
 """
 
 import fcntl
+import functools
 import json
+import os
 import sys
+import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Generator, List, Optional
+from typing import Any, Callable, Dict, Generator, List, Optional, Tuple
 
 from .utils import (
     find_agent_home,
@@ -191,19 +194,26 @@ def append_event(
             "hook_input": hook_input if hook_input is not None else {}
         }
 
+        line = json.dumps(event_record)
+
         # Atomic append with file locking
         with open(log_path, 'a') as f:
             # Acquire exclusive lock
             fcntl.flock(f.fileno(), fcntl.LOCK_EX)
             try:
-                f.write(json.dumps(event_record) + '\n')
+                size_before = os.fstat(f.fileno()).st_size
+                f.write(line + '\n')
                 f.flush()
+                # Still under the lock, so nothing else wrote between the two
+                # sizes: a shared window that had seen size_before can take this
+                # record at its newest end instead of being read again.
+                _note_own_append(log_path, size_before, line, os.fstat(f.fileno()))
             finally:
                 # Release lock
                 fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
         # Set permissions on first write
-        if log_path.stat().st_size == len(json.dumps(event_record)) + 1:
+        if log_path.stat().st_size == len(line) + 1:
             log_path.chmod(0o600)
 
         return True
@@ -217,6 +227,212 @@ def append_event(
 # the single place the boundary is named -- a second spelling elsewhere would
 # make some queries stop at a different place than others.
 CYCLE_BOUNDARY_EVENT = "compaction_detected"
+
+
+# ── One shared read per hook invocation ───────────────────────────────────────
+#
+# A hook asks the log many questions in one invocation: whether AUTO_MODE is on,
+# which cycle this is, the budget, the role in focus. Each question streams the
+# log backwards from its end, so on a long cycle one PreToolUse call parsed the
+# same few thousand events about twenty-seven times. Inside shared_event_reads
+# those reads share one parse. Outside it nothing changes.
+
+#: Source bytes a shared window keeps parsed before deeper events are read
+#: privately. Events carry their hook input, so lines run to kilobytes, and the
+#: first carry after an upgrade walks the whole history from inside SessionStart.
+SHARED_READ_CAP_BYTES = 32 * 1024 * 1024
+
+#: When set, a canonical copy of every shared event is kept and compared when the
+#: invocation returns, so a reader that changed an event it was given fails. The
+#: test suite sets it.
+MEMO_CHECK_ENV = "MACF_EVENTS_MEMO_CHECK"
+
+_shared = threading.local()
+
+
+def _reverse_source(log_path: Path, end: int) -> Generator[Optional[str], None, None]:
+    """The live log as it was at ``end`` bytes, newest first; then ``None``; then
+    the archives, newest first.
+
+    The ``None`` marks where the live log ends. A cycle read that has not met a
+    boundary stops there, as the streaming path does, which never opens an
+    archive for a cycle read.
+    """
+    yield from iter_lines_reverse(log_path, end=end)
+    yield None
+    from .eventlog.archive import iter_archive_lines, select_archives
+    for archive in reversed(select_archives(log_path)):
+        yield from iter_archive_lines(archive, reverse=True)
+
+
+def _parse(line: str) -> Optional[dict]:
+    line = line.strip()
+    if not line:
+        return None
+    try:
+        return json.loads(line)
+    except json.JSONDecodeError:
+        return None  # noqa: MACEFF003 - a malformed line is skipped, exactly as the streaming path skips it
+
+
+class _Window:
+    """One log's events, parsed once, newest first, as deep as any reader has gone.
+
+    ``body`` holds the file as it was when the window opened, read lazily from
+    the end; ``head`` holds what this process appended since, oldest first. A
+    change to the file by anyone else ends the window; a reader already
+    iterating keeps the one it started on, which is what a streaming reader
+    sees, since a reverse read never saw appends made after it began.
+    """
+
+    def __init__(self, log_path: Path, key: Tuple, check: bool):
+        self.log_path = log_path
+        self.key = key
+        self.end = key[2]
+        self.head: List[dict] = []
+        self.body: List[dict] = []
+        self.live_len: Optional[int] = None
+        self.taken = 0
+        self.stored = 0
+        self.capped = False
+        self.done = False
+        self.source = _reverse_source(log_path, self.end)
+        self.check = check
+        self.copies: List[Tuple[dict, str]] = []
+
+    def keep(self, event: dict) -> None:
+        if self.check:
+            self.copies.append((event, json.dumps(event, sort_keys=True)))
+
+    def _step(self) -> None:
+        """Take one item from the source: an event into ``body``, the end of
+        the live log, or the end of everything."""
+        try:
+            line = next(self.source)
+        except StopIteration:
+            self.done = True
+            return
+        except OSError as e:
+            print(f"⚠️ MACF: event log read failed: {e}", file=sys.stderr)
+            self.done = True
+            return
+        self.taken += 1
+        if line is None:
+            self.live_len = len(self.body)
+            return
+        event = _parse(line)
+        if event is None:
+            return
+        self.body.append(event)
+        self.keep(event)
+        self.stored += len(line)
+        if self.stored >= SHARED_READ_CAP_BYTES:
+            self.capped = True
+            self.source.close()
+
+    def _beyond(self, live_only: bool) -> Generator[dict, None, None]:
+        """Past the cap: read on privately from where the window stopped."""
+        source = _reverse_source(self.log_path, self.end)
+        try:
+            for _ in range(self.taken):
+                next(source)
+            for line in source:
+                if line is None:
+                    if live_only:
+                        return
+                    continue
+                event = _parse(line)
+                if event is not None:
+                    yield event
+        except (StopIteration, OSError) as e:
+            if isinstance(e, OSError):
+                print(f"⚠️ MACF: event log read failed: {e}", file=sys.stderr)
+
+    def events(self, live_only: bool) -> Generator[dict, None, None]:
+        """Newest first. ``live_only`` stops where the live log ends."""
+        for i in range(len(self.head) - 1, -1, -1):
+            yield self.head[i]
+        i = 0
+        while True:
+            at_live_end = live_only and self.live_len is not None and i >= self.live_len
+            if at_live_end:
+                return
+            if i < len(self.body):
+                yield self.body[i]
+                i += 1
+            elif self.capped:
+                yield from self._beyond(live_only)
+                return
+            elif self.done:
+                return
+            else:
+                self._step()
+
+    def changed(self) -> List[str]:
+        return [e.get("event", "?") for e, copy in self.copies
+                if json.dumps(e, sort_keys=True) != copy]
+
+
+def _shared_window() -> Optional[_Window]:
+    """The window for the log as it is now, or None outside shared_event_reads."""
+    if not getattr(_shared, "active", False):
+        return None
+    log_path = get_log_path()
+    try:
+        st = os.stat(log_path)
+    except OSError:
+        return None  # noqa: MACEFF003 - no window; the streaming path reads the archives or reports the failure
+    key = (str(log_path), st.st_ino, st.st_size, st.st_mtime_ns)
+    window = _shared.window
+    if window is None or window.key != key:
+        window = _Window(log_path, key, check=bool(os.environ.get(MEMO_CHECK_ENV)))
+        _shared.window = window
+        _shared.windows.append(window)
+    return window
+
+
+def _note_own_append(log_path: Path, size_before: int, line: str,
+                     after: os.stat_result) -> None:
+    """Extend the shared window with a record this process just wrote, if the
+    window had seen the file up to exactly where the record begins."""
+    window = getattr(_shared, "window", None) if getattr(_shared, "active", False) else None
+    if window is None or window.key[0] != str(log_path):
+        return
+    if window.key[2] != size_before or window.key[1] != after.st_ino:
+        return  # written to by someone else since; the next read opens a new window
+    event = json.loads(line)
+    window.head.append(event)
+    window.keep(event)
+    window.key = (window.key[0], after.st_ino, after.st_size, after.st_mtime_ns)
+
+
+def shared_event_reads(fn: Callable) -> Callable:
+    """Let every event-log read inside ``fn`` share one parse of the log.
+
+    For hook entry points, which ask the log many questions per invocation.
+    Readers get the events a streaming read would give, in the same order. They
+    must not modify them: the next reader is handed the same objects. With
+    ``MACF_EVENTS_MEMO_CHECK`` set, an invocation in which a reader modified a
+    shared event raises when it returns.
+    """
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        if getattr(_shared, "active", False):
+            return fn(*args, **kwargs)
+        _shared.active, _shared.window, _shared.windows = True, None, []
+        try:
+            result = fn(*args, **kwargs)
+        finally:
+            windows = _shared.windows
+            _shared.active, _shared.window, _shared.windows = False, None, []
+        changed = [name for window in windows for name in window.changed()]
+        if changed:
+            raise AssertionError(
+                f"event log readers modified {len(changed)} shared event(s) in place "
+                f"({', '.join(sorted(set(changed)))}); copy an event before changing it")
+        return result
+    wrapper.shares_event_reads = True
+    return wrapper
 
 
 def read_events(
@@ -307,6 +523,16 @@ def read_events(
         window = list(read_events(limit=limit, reverse=True, scope="cycle"))
         for event in reversed(window):
             yield event
+        return
+
+    # Inside a hook invocation, reverse reads of either scope share one parse
+    # (see shared_event_reads). A deprecated numeric limit is not served there.
+    shared = _shared_window() if reverse and limit is None else None
+    if shared is not None:
+        for event in shared.events(live_only=(scope == "cycle")):
+            yield event
+            if scope == "cycle" and event.get("event") == CYCLE_BOUNDARY_EVENT:
+                return
         return
 
     try:

@@ -29,6 +29,7 @@ from macf.utils import (
 from macf.modes import detect_auto_mode
 from macf.hooks.hook_logging import log_hook_event
 from macf.observability import Warning, emit_warning
+from macf.agent_events_log import shared_event_reads
 
 # EXPERIMENT: Memory injection script path (Cycle 337)
 MEMORY_RECALL_SCRIPT = Path(__file__).parent.parent.parent / "agent/public/experiments/2026-01-15_140000_001_Claude-Mem_Associative_Injection/artifacts/memory-recall.py"
@@ -115,6 +116,7 @@ def record_user_activity_from_payload(prompt: str) -> bool:
         return False
 
 
+@shared_event_reads
 def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
     """
     Run UserPromptSubmit hook logic.

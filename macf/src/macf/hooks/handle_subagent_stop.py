@@ -25,11 +25,12 @@ from macf.utils import (
     get_breadcrumb
 )
 from macf.modes import detect_auto_mode
-from macf.agent_events_log import append_event
+from macf.agent_events_log import append_event, shared_event_reads
 from macf.hooks.hook_logging import log_hook_event
 from macf.observability import Warning, emit_warning
 
 
+@shared_event_reads
 def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
     """
     Run SubagentStop hook logic.

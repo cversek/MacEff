@@ -14,7 +14,7 @@ size.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Generator, Union
+from typing import Generator, Optional, Union
 
 
 def iter_lines_forward(
@@ -51,8 +51,13 @@ def iter_lines_reverse(
     path: Union[str, Path],
     chunk_size: int = 65536,
     encoding: str = "utf-8",
+    end: Optional[int] = None,
 ) -> Generator[str, None, None]:
     """Yield decoded lines from ``path`` in reverse order (newest first).
+
+    ``end`` starts the read at that byte offset instead of at EOF, so a reader
+    can take the file as it was at a known size and not see what was appended
+    after. It is clamped to the file's size.
 
     Reads the file backwards from EOF in ``chunk_size`` byte chunks. Within
     each chunk, lines are split on ``b'\\n'``. The trailing fragment of a
@@ -88,8 +93,8 @@ def iter_lines_reverse(
     p = Path(path)
     with open(p, "rb") as f:
         f.seek(0, 2)  # SEEK_END
-        position = f.tell()
-        if position == 0:
+        position = f.tell() if end is None else min(end, f.tell())
+        if position <= 0:
             return
 
         # remainder holds the partial leading line from the current chunk,

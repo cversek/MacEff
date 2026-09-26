@@ -12,10 +12,11 @@ from typing import Dict, Any
 from macf.utils import (
     get_current_session_id,
 )
-from macf.agent_events_log import append_event, elide_large_values
+from macf.agent_events_log import append_event, elide_large_values, shared_event_reads
 from macf.hooks.hook_logging import log_hook_event
 
 
+@shared_event_reads
 def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
     """
     Run PostToolUse hook logic.
