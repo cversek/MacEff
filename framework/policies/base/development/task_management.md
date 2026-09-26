@@ -1668,7 +1668,7 @@ An agent that services the newest instruction and silently drops the previous on
 
 Definitions of class and provenance live in `../consciousness/scholarship.md` and are cited here, not restated. This section answers the four questions that policy asks of every artifact type.
 
-**Unit of a node.** The task record. The home store is an artifact directory under the agent tree, so it participates like any other (scholarship: no participation registry); a task joins the web when its MTMD carries `wiki_links`, and a task without them is not a node. A linkless task therefore appears in the knowledge doctor's orphan census like any other linkless artifact; that census is honest, and the doctor summarises it by type rather than listing each record. A task can also appear without links of its own, as the far end of a role duty's `tracks` or `evidence` pointer (`roles.md`).
+**Unit of a node.** The task record. The home store is an artifact directory under the agent tree, so it participates like any other (scholarship: no participation registry), and a store the configuration moves elsewhere (§0) participates where it is; a task joins the web when its MTMD carries `wiki_links`, and a task without them is not a node. A linkless task therefore appears in the knowledge doctor's orphan census like any other linkless artifact; that census is honest, and the doctor summarises it by type rather than listing each record. A task can also appear without links of its own, as the far end of a role duty's `tracks` or `evidence` pointer (`roles.md`).
 
 **Class.** Temporal record. A task says what was to be done and how it stood; its status changes without the task being wrong, and "which work touched X" is the question it answers.
 
@@ -1678,7 +1678,7 @@ Definitions of class and provenance live in `../consciousness/scholarship.md` an
 
 **Where the links live, and why not in `custom`.** `wiki_links` is a top-level MTMD field (§1.3) because it applies to every task type, and `custom` holds type-specific extension data whose existing keys are grant-protected (§8). Curation metadata that needs a grant for every added concept would not get curated.
 
-**How to add them.** `macf_tools knowledge link task:<id> <concept> ...`, the same verb that links every other artifact type; `knowledge unlink` removes. A concept `knowledge gaps` keeps proposing and a curator has judged wrong goes in `not_linked` through `knowledge gaps --reject`, as for every type (scholarship: declining a suggested concept).
+**How to add them.** Task links need the home store: a legacy per-session store is not walked, and its completed tasks can be deleted, so the link verb refuses there and names `task store-init`. `macf_tools knowledge link task:<id> <concept> ...`, the same verb that links every other artifact type; `knowledge unlink` removes. A concept `knowledge gaps` keeps proposing and a curator has judged wrong goes in `not_linked` through `knowledge gaps --reject`, as for every type (scholarship: declining a suggested concept).
 
 
 ## Wiki-Links

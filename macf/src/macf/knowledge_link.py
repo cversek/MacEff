@@ -118,7 +118,18 @@ def _edit_markdown(text: str, concepts: List[str], remove: bool) -> Tuple[str, L
     return text[:m.start(2)] + rebuilt + text[m.end(2):], new
 
 
+def _require_home_store() -> None:
+    """Task links are read from the home task store; refuse to write them
+    anywhere else. A legacy per-session store is not walked, and its completed
+    tasks can be deleted by the client, so a link written there is lost."""
+    from .task.reader import TaskReader
+    if TaskReader._resolve_home_store() is None:
+        raise LinkError("task links live in the home task store, and this deployment has none; "
+                        "macf_tools task store-init provisions it (task_management: task storage)")
+
+
 def _edit_task(task_id: str, concepts: List[str], remove: bool) -> LinkResult:
+    _require_home_store()
     from .task import TaskReader, update_task_file, MacfTaskMetaData
     from .task.models import MacfTaskUpdate
     from .utils.breadcrumbs import get_breadcrumb
@@ -229,6 +240,7 @@ def decline(ref: str, raw_concepts: List[str]) -> LinkResult:
         from .task.models import MacfTaskUpdate
         from .utils.breadcrumbs import get_breadcrumb
         import copy
+        _require_home_store()
         task = TaskReader().read_task(handle)
         if not task:
             raise LinkError(f"task #{handle} not found")

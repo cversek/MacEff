@@ -105,3 +105,22 @@ def test_an_idea_is_linked_through_its_own_update(home):
 def test_ambiguous_or_foreign_targets_are_refused(home, ref, says):
     with pytest.raises(LinkError, match=says):
         resolve_target(ref)
+
+
+def test_a_task_store_outside_the_agent_tree_is_still_walked(home, tmp_path, monkeypatch):
+    """MACF_TASK_STORE_DIR or the task_store config can move the store; links
+    written into a moved store must still be read."""
+    elsewhere = tmp_path / "elsewhere_tasks"
+    elsewhere.mkdir()
+    _task(elsewhere, "31", "#31 moved store", links=["deployment"])
+    monkeypatch.setenv("MACF_TASK_STORE_DIR", str(elsewhere))
+    assert "tasks:#31" in kw.build_knowledge_web()["wiki_index"]["deployment"]
+
+
+def test_without_a_home_store_task_links_are_refused(home, monkeypatch):
+    """A legacy per-session store is not walked and its completed tasks can be
+    deleted, so a link written there would be lost; say how to fix it instead."""
+    monkeypatch.delenv("MACF_TASK_STORE_DIR")
+    monkeypatch.setenv("MACF_TASKS_DIR", str(home.home / "legacy"))
+    with pytest.raises(LinkError, match="store-init"):
+        apply_links("task:12", ["hooks"])

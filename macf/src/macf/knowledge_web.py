@@ -103,6 +103,20 @@ def _type_roots(agent_home: Path) -> List[Tuple[str, Path]]:
             roots.append(("policies", pol))
     except (OSError, ImportError):
         pass
+    # The task store participates wherever it is configured to live. It sits
+    # under the agent tree by default, but MACF_TASK_STORE_DIR or the
+    # task_store config can move it, and a moved store must not silently drop
+    # out of the web while task links are still being written into it.
+    try:
+        from .task.reader import TaskReader
+        store = TaskReader._resolve_home_store()
+    except (OSError, ImportError, ValueError) as e:
+        print(f"⚠️ MACF: task store not resolved for the web: {e}", file=sys.stderr)
+        store = None
+    if store is not None and store.is_dir():
+        known = {r.resolve() for _, r in roots}
+        if store.resolve() not in known:
+            roots.append(("tasks", store))
     return roots
 
 
