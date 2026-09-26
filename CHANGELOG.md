@@ -74,6 +74,7 @@ Gmail, event-log rotation, and commit-message guards. Sprints now survive compac
 - **`framework-upgrade`** refuses to start when its last step cannot run, instead of completing three of four steps (#386)
 - **Roles**: the stanza follows the tree's title width; one pointer per stanza; `duty engage` refuses until a role's Boundaries are written
 - **A supervisor test** asserted machine speed rather than supervisor behaviour
+- **The prompt hook no longer reads the whole transcript on every prompt**: the last user prompt is found from the end of the file, using the transcript path the hook is given; on a long-lived session's 664 MB transcript the hook went from about 0.9 s to 0.18 s
 - **A command group run without a subcommand prints its help** (`macf_tools knowledge`, `task`, `role`, `idea`, `task scope`, ...) instead of raising AttributeError
 
 ## [0.6.0] - 2026-08-29
