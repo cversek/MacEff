@@ -73,6 +73,11 @@ Agents accumulate reusable wisdom through learnings - compact, cross-referenced 
 - Which learnings might need bidirectional cross-link updates?
 - How does discovery differ for single vs batch curation?
 
+3.4 Correcting an Earlier Learning
+- A later learning shows an earlier one was wrong: what goes in each of them?
+- Why is the earlier learning framed rather than rewritten or deleted?
+- How are the two halves checked against each other?
+
 4 Knowledge Web Architecture
 - What's the knowledge web?
 - How to navigate it?
@@ -293,6 +298,37 @@ Before writing new learnings, survey the existing knowledge web to identify cros
 - Back-links ensure bidirectional discovery (A references B, B references A)
 - Topic cluster awareness prevents duplicate learnings on the same insight
 - Discovery before writing makes good scholarship the default, not an afterthought
+
+### 3.4 Correcting an Earlier Learning
+
+A learning records what an agent believed when it wrote it. When a later learning shows that
+belief was wrong, the earlier one stays in the index and still reads as true: an agent that
+consults the index before acting meets the wrong claim stated with the same confidence as the
+right one, and nothing tells it which came last. Correction has two halves, and both are
+required.
+
+**In the correcting learning**, a `Corrects:` entry in its Cross-References names the earlier
+one and says in a clause what was wrong:
+
+```markdown
+- **Corrects**: `2025-11-03_retries_fix_flaky_tests_learning.md` (retries hide the race; they do not fix it)
+```
+
+**In the corrected learning**, a banner directly under its title, and nothing else changed:
+
+```markdown
+> **SUPERSEDED** (marked YYYY-MM-DD, <breadcrumb>): <what is wrong, in a sentence or two>.
+> Corrected by [<title>](<file>). Kept for the record of how the belief formed.
+```
+
+**Frame, do not rewrite.** The body records what a past instance believed and why, and how the
+mistake was made is often the more useful lesson. Rewriting it erases that; deleting it breaks
+every link to it. The banner puts the correction first without removing what lies beneath.
+
+**The halves check each other.** Every `Corrects:` entry names a learning whose first line after
+the title is a SUPERSEDED banner, and every banner names the learning that corrected it. A
+curation that finds a correction stated only in passing ("this contradicts...", "unlike the
+earlier finding...") adds both halves.
 
 ## 4. Knowledge Web Architecture
 
