@@ -171,6 +171,30 @@ def test_parallel_engagement_shows_a_pointer_on_every_engaged_duty(store, lab):
     assert len(with_ptr) == 1 and "gamma" in with_ptr[0]
 
 
+def test_a_duty_active_only_because_it_tracks_a_task_is_not_engaged(store, lab, monkeypatch):
+    """Tracking a task makes a duty active, not engaged: it gets no pointer, and
+    engaging another duty does not record a disengagement it never had."""
+    role, folder = lab
+    (folder / "charter.md").write_text("# x\n## Boundaries\nMay draft. Must not contact anyone.\n")
+    monkeypatch.setattr(store, "_task", lambda tid: object())
+    tracked, _ = store.add_duty(role, folder, "tracked", tracks=["7"])
+    work, wp = store.add_duty(role, folder, "work")
+    assert tracked.state == "active"
+    time.sleep(1.1)
+    store.engage(work, wp.parent)
+    tracked, _ = store.find_duty(tracked.id)
+    assert tracked.state == "active"
+    assert not [u for u in tracked.updates if u.kind == "disengage"]
+    assert {d.id for d, _ in store.engaged()} == {work.id}
+    with_ptr = [l for l in disp.stanza(store, "focused", role.id, at=NOW, ansi=False) if "👈" in l]
+    assert len(with_ptr) == 1 and "work" in with_ptr[0]
+    # put down, then active again by tracking a task: still not engaged
+    store.disengage(work, wp.parent)
+    work, _ = store.find_duty(work.id)
+    store.link(work, wp.parent, ["7"])
+    work, _ = store.find_duty(work.id)
+    assert work.state == "active" and not work.is_engaged()
+
 def test_succinct_rule_for_completed_duties(store, lab):
     role, folder = lab
     d, _ = store.add_duty(role, folder, "welcome")

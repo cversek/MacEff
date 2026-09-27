@@ -340,8 +340,9 @@ class RoleStore:
         return duty
 
     def engaged(self) -> List[Tuple[Duty, Path]]:
-        """Every active duty across the store: the duties attention is on."""
-        return [(d, p) for d, p in self.all_duties() if d.state == "active"]
+        """Every engaged duty across the store: the duties attention is on. A duty
+        active only because it tracks a task is not one (Duty.is_engaged)."""
+        return [(d, p) for d, p in self.all_duties() if d.is_engaged()]
 
     def disengage(self, duty: Duty, folder: Path, reason: str = "") -> Duty:
         """active -> pending: attention moved elsewhere. Not a service: putting a
