@@ -18,7 +18,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from .models import Message
 
@@ -526,9 +526,46 @@ def thread(home: Path, thread_id: str) -> List[Message]:
 
 
 def find(home: Path, message_id: str) -> Optional[Message]:
+    """A received message, by its id. The agent's own sent copies are find_sent's."""
     for m in read_all(home):
         if m.message_id == message_id:
             return m
+    return None
+
+
+def find_sent(home: Path, message_id: str) -> Optional[Tuple[Message, Optional[dict]]]:
+    """One of this agent's own sent copies, by either of its ids, with its record.
+
+    A sent message is known by TWO ids, and each rule that makes it so is
+    deliberate. The copy is written before submission (spec O5c.6), so it can
+    only carry the id the agent generated. The broker mints its own when it
+    accepts the message, because a submitter-chosen id could shadow another.
+    And the copy is never rewritten (spec O5c.1). Every record outside this
+    home -- the recipient's copy, the broker's ledger, the disposition -- uses
+    the broker's id, and the submission record beside the copy holds both, so a
+    lookup by either id goes through it.
+
+    Returns (copy, record). The record is None for a copy that was never
+    annotated, which is a different fact from one that was never submitted.
+    find() stays received mail only: a caller holding a sent copy needs its
+    record to use it correctly, to show the id the rest of the world knows the
+    message by and to continue it under that id.
+    """
+    sd = sent_dir(home)
+    if not message_id or not sd.is_dir():
+        return None
+    for f in sorted(sd.iterdir()):
+        if not f.is_file():
+            continue
+        record = read_sent_sidecar(home, f.name)
+        try:
+            m = Message.deserialize(f.read_text())
+        except (OSError, ValueError) as e:
+            print(f"⚠️ MACF: unreadable sent copy {f.name} ({e}); skipped while "
+                  f"looking for {message_id}", file=sys.stderr)
+            continue
+        if message_id in (m.message_id, (record or {}).get("broker_message_id")):
+            return m, record
     return None
 
 
