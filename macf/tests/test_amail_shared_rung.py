@@ -202,6 +202,16 @@ class TestEveryRecipientOfOnePeerDomainIsHandedItsOwnPair:
             boxed = list((box.config.inbound_handoff / agent).glob("*.amsg"))
             assert len(boxed) == 1, f"{agent} did not receive its copy"
 
+    def test_a_recipient_listed_twice_is_delivered_once_and_not_failed(self, tmp_path):
+        """With pairs never overwritten, a repeated recipient must be folded
+        before delivery, or its second copy would report a false failure."""
+        host, box = self._two_agent_box(tmp_path)
+        m = Message(sender=f"ira@{HOST}", to=[f"manny@{BOX}", f"Manny@{BOX}"],
+                    subject="rung 1s", body="twice")
+        r = host.submit("ira", m)
+        assert r["ok"] and not r["failures"], r
+        assert [d["recipient"] for d in r["delivered"]] == [f"manny@{BOX}"]
+
     def test_a_pair_is_never_written_over_an_existing_one(self, tmp_path):
         """Any future name collision must fail as an undelivered recipient,
         not pass as delivered after replacing someone else's pair."""
