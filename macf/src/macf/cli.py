@@ -11408,7 +11408,24 @@ def cmd_shell_setup(args: argparse.Namespace) -> int:
 
 
 # -------- parser --------
+def _memoize_argparse_gettext() -> None:
+    """Look up each of argparse's own strings once per process.
+
+    argparse translates a few fixed strings ("show this help message and exit"
+    and the like) every time it builds a parser or adds an argument, and each
+    gettext lookup stats the locale directories whether or not a translation
+    exists. Building this parser made about 5,300 lookups of three strings,
+    13 of its 24 ms. A translation still applies; it is found once. Only the
+    stock function is wrapped, so an argparse that stops using it is left alone.
+    """
+    import functools
+    import gettext
+    if getattr(argparse, "_", None) is gettext.gettext:
+        argparse._ = functools.lru_cache(maxsize=None)(gettext.gettext)
+
+
 def _build_parser() -> argparse.ArgumentParser:
+    _memoize_argparse_gettext()
     p = argparse.ArgumentParser(
         prog="macf_tools", description="macf demo CLI (no external deps)"
     )
