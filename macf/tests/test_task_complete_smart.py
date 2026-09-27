@@ -131,6 +131,21 @@ def run_complete(args, fake_reader, extra_patches=None):
         return cmd_task_complete(args)
 
 
+_T0 = 1790000000       # a session's creation time, as its creation_breadcrumb records it
+
+
+def _learnings_at(*epochs):
+    """Learning files named for the given moments, in this test's agent home."""
+    from datetime import datetime
+    from macf.learnings_index import learnings_dir
+    d = learnings_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "INDEX.md").write_text("# index\n")
+    for i, ts in enumerate(epochs):
+        (d / f"{datetime.fromtimestamp(ts):%Y-%m-%d_%H%M%S}_l{i}_learning.md").write_text("x\n")
+    return d
+
+
 # ---------------------------------------------------------------------------
 # TC01: SPRINT all children completed → completes cleanly
 # ---------------------------------------------------------------------------
@@ -271,11 +286,18 @@ class TestSprintAutoAggregate:
         "0/0", which reads as "nothing was done" for a sprint that may have done
         plenty.
         """
+        # The ideas and learnings are counted at the close, as task_management
+        # defines them; the stored counters are stale on purpose and must not
+        # be what the report says.
         sprint = _make_fake_task(70, task_type="SPRINT", custom={
             "goal": "Build dashboard",
-            "ideas_captured": 2,
-            "learnings_curated": 1,
-        })
+            "ideas_captured": 5,
+            "learnings_curated": 7,
+        }, updates=[_make_fake_update("SPRINT: 💡 cache the parse"),
+                    _make_fake_update("SPRINT: a routine note"),
+                    _make_fake_update("SPRINT: 💡 a second idea")])
+        sprint.mtmd.creation_breadcrumb = f"s_t/c_1/g_a/p_b/t_{_T0}"
+        _learnings_at(_T0 + 60, _T0 - 3600)
         reader = _make_reader(sprint, [], tmp_path)
         args = _make_args(70, report="Manual summary")
 
@@ -291,6 +313,7 @@ class TestSprintAutoAggregate:
         )
         assert "2 ideas" in args.report
         assert "1 learnings" in args.report
+        assert "5 ideas" not in args.report and "7 learnings" not in args.report
 
 
 # ---------------------------------------------------------------------------
@@ -320,6 +343,63 @@ class TestSprintIdeaPrompt:
         out = capsys.readouterr().out
         assert "💡 2 ideas in task notes" in out
         assert "macf_tools idea create" in out
+
+
+# ---------------------------------------------------------------------------
+# The close counts the session's ideas and learnings, and fills the scope table
+# ---------------------------------------------------------------------------
+
+class TestSprintCloseCountsWhatTheSessionProduced:
+
+    def _note(self, text, ts):
+        u = _make_fake_update(text)
+        u.breadcrumb = f"s_t/c_1/g_a/p_b/t_{ts}"
+        return u
+
+    def test_scoped_tasks_ideas_count_from_the_start_and_the_table_is_filled(self, tmp_path, capsys):
+        import os
+        event_log = tmp_path / ".maceff" / "agent_events_log.jsonl"
+        event_log.parent.mkdir(parents=True)
+        event_log.touch()
+        log = tmp_path / "sprint" / "sprint_log.md"
+        log.parent.mkdir()
+        log.write_text("## Scoped Tasks\n\n| # | Title | Status |\n|---|-------|--------|\n"
+                       "| — | (populated at launch) | — |\n\n## Final Synthesis\n")
+        with patch.dict(os.environ, {"MACEFF_AGENT_HOME_DIR": str(tmp_path)}):
+            from macf.task.scope import set_scope, pause_scoped_tasks
+            set_scope(["95", "96"])
+            pause_scoped_tasks(["96"], justification="waiting on review")
+            sprint = _make_fake_task(95, task_type="SPRINT", custom={"goal": "G"},
+                                     updates=[self._note("SPRINT: 💡 on the sprint", _T0 + 5)],
+                                     plan_ca_ref=str(log))
+            sprint.mtmd.creation_breadcrumb = f"s_t/c_1/g_a/p_b/t_{_T0}"
+            member = _make_fake_task(96, task_type="BUG", updates=[
+                self._note("💡 written before the sprint began", _T0 - 5),
+                self._note("SPRINT: 💡 written during it", _T0 + 10),
+            ])
+            member.subject = "\x1b[2m#96\x1b[22m 🐛 BUG: the member"
+            reader = _make_reader(sprint, [], tmp_path)
+            reader.return_value.read_task.side_effect = lambda tid: {"95": sprint, "96": member}.get(str(tid))
+            args = _make_args(95, report="done", force=True, justification="the member waits on review")
+
+            rc = run_complete(args, reader)
+
+        assert rc == 0
+        assert "2 ideas captured" in args.report, args.report
+        assert "💡 2 ideas in task notes" in capsys.readouterr().out
+        text = log.read_text()
+        assert "(populated at launch)" not in text
+        assert "| #96 | 🐛 BUG: the member | paused |" in text, text
+
+    def test_learnings_are_not_counted_without_a_start(self, tmp_path):
+        _learnings_at(_T0 + 60)
+        sprint = _make_fake_task(97, task_type="SPRINT", custom={"goal": "G", "learnings_curated": 0})
+        sprint.mtmd.creation_breadcrumb = None
+        args = _make_args(97, report="done")
+
+        assert run_complete(args, _make_reader(sprint, [], tmp_path)) == 0
+        assert "Learnings not counted" in args.report, args.report
+        assert "0 learnings" not in args.report
 
 
 # ---------------------------------------------------------------------------
@@ -392,9 +472,11 @@ class TestPlayTimeAutoAggregate:
             "timer_minutes": 45,
             "mode_transitions": [{"mode": "DISCOVER"}, {"mode": "EXPERIMENT"}],
             "markov_gates": [{"gate": 1}, {"gate": 2}],
-            "ideas_captured": 3,
-            "learnings_curated": 2,
-        })
+            "ideas_captured": 0,          # never moved by plain 💡 notes
+            "learnings_curated": 0,       # never written at all
+        }, updates=[_make_fake_update(f"DISCOVER: 💡 idea {i}") for i in range(3)])
+        pt.mtmd.creation_breadcrumb = f"s_t/c_1/g_a/p_b/t_{_T0}"
+        _learnings_at(_T0 + 60, _T0 + 120, _T0 - 60)
         reader = _make_reader(pt, [], tmp_path)
         args = _make_args(92, report="Human summary")
 
