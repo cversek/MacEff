@@ -26,6 +26,7 @@ test = [
     "lancedb>=0.26.0",  # For hybrid search / recommend tests
     "tomli>=2.0.0; python_version < '3.11'",  # pyproject introspection in test_ci_extras_coverage (tomllib is 3.11+)
     "PyJWT>=2.0.0",  # the ingest receiver imports it at module scope; its drain-coupling logic is under test
+    "markdown>=3.0",  # markdown present's heading rule is under test; without it the renderer falls back to <pre>
 ]
 viz = [
     "markdown>=3.0",  # Markdown-to-HTML for CA presentation
