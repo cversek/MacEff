@@ -148,7 +148,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
 
         # Get current message UUID from JSONL (message written before hook fires)
         from macf.utils.session import get_last_user_prompt_uuid
-        current_prompt_uuid = get_last_user_prompt_uuid(session_id)
+        current_prompt_uuid = get_last_user_prompt_uuid(session_id, transcript_path=transcript_path)
 
         # Capture the FULL operator prompt for forensic recovery and prompt-content
         # analysis (#119). This was truncated to the first 200 chars, which silently
