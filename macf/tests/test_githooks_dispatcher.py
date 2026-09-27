@@ -296,6 +296,27 @@ class TestCommitMsgStageAndPortableHooklets:
             assert (DISPATCHER.parent / hook).read_bytes() == DISPATCHER.read_bytes(), hook
 
 
+
+def test_the_dispatcher_source_falls_back_to_MACEFF_ROOT_DIR(tmp_path, monkeypatch):
+    """A package installed from a checkout mounted elsewhere is not inside the tree
+    it would copy from; the deployment's MACEFF_ROOT_DIR names that tree."""
+    import macf.githooks as gh
+    real = gh._canonical_hooks_dir()
+    monkeypatch.setattr(gh, "__file__", str(tmp_path / "a" / "b" / "c" / "githooks.py"))
+    monkeypatch.delenv("MACEFF_ROOT_DIR", raising=False)
+    with pytest.raises(ValueError, match="MACEFF_ROOT_DIR"):
+        gh._canonical_hooks_dir()
+    monkeypatch.setenv("MACEFF_ROOT_DIR", str(real.parent))
+    assert gh._canonical_hooks_dir() == real
+
+
+def test_githooks_install_takes_a_source_root(tmp_path, capsys):
+    import argparse
+    from macf.cli import cmd_githooks_install
+    repo = _repo(tmp_path)
+    rc = cmd_githooks_install(argparse.Namespace(repo=str(repo), source_root=str(tmp_path / "nowhere")))
+    assert rc == 1 and "no .githooks directory" in capsys.readouterr().out
+
 class TestPrivateReferencesAreRefused:
     """A message that points a public reader at the author's roadmap phases, task
     or idea numbers is refused; the calling-card footer line is not a reference."""
@@ -320,6 +341,20 @@ class TestPrivateReferencesAreRefused:
                        "[IraMacEff@ee9a78: task#242 s_abc12345/c_40/p_x/t_1]\n")
         r = subprocess.run(["bash", str(guard), str(msg)], capture_output=True, text=True)
         assert r.returncode == 0, r.stderr
+
+    def test_a_card_scoped_to_any_work_item_passes(self, tmp_path):
+        guard = self._guard(tmp_path)
+        msg = tmp_path / "m"
+        msg.write_text("feat: x\n\nA duty's work.\n\n[IraMacEff@ee9a78: duty#3e6719 s_abc12345/c_40/p_x/t_1]\n\n")
+        r = subprocess.run(["bash", str(guard), str(msg)], capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+
+    def test_a_card_shaped_line_before_the_end_is_read_as_prose(self, tmp_path):
+        guard = self._guard(tmp_path)
+        msg = tmp_path / "m"
+        msg.write_text("feat: x\n\n[IraMacEff@ee9a78: task#242 s_abc12345/c_40/p_x/t_1]\n\nMore prose.\n")
+        r = subprocess.run(["bash", str(guard), str(msg)], capture_output=True, text=True)
+        assert r.returncode == 1 and "c_40" in r.stderr
 
     @pytest.mark.parametrize("line", ["idea #247 is not here", "sprint #245 closed", "see the roadmap folder",
                                       "Phase 2. Duties rank themselves", "MISSION #238 owns it", "in cycle 40 we"])

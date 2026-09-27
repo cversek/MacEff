@@ -4,7 +4,10 @@ Real git repos, real commits: a staged leak must be rejected by the
 installed hook; a clean commit must pass; --no-verify must bypass.
 """
 import json
+import os
+import shlex
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -196,6 +199,57 @@ def test_install_refuses_inert_hook(repo, profile, monkeypatch):
     with pytest.raises(RuntimeError, match="INERT"):
         install_hook(repo, profile)
 
+
+
+# ---- the interpreter that runs is the one the install certified (#429) ------------
+
+def test_the_shim_runs_the_interpreter_the_install_certified(repo, profile):
+    shim = Path(install_hook(repo, profile)["hooklet"]).read_text()
+    assert f"PY={shlex.quote(sys.executable)}" in shim and "exec python3" not in shim
+
+
+def test_a_checker_that_cannot_import_macf_refuses_unless_told_otherwise(repo, profile):
+    install_hook(repo, profile)
+    (repo / "clean.md").write_text("nothing private here\n")
+    _git(repo, "add", "clean.md")
+    # -I -S: no site-packages and no PYTHONPATH, so no macf, as under a stray python3.
+    bare = [sys.executable, "-I", "-S", str(repo / ".git" / "hooks" / "check_context_leakage.py")]
+    refused = subprocess.run(bare, cwd=repo, capture_output=True, text=True)
+    assert refused.returncode == 1 and "cannot import macf" in refused.stderr
+    opted = subprocess.run(bare, cwd=repo, capture_output=True, text=True,
+                           env=dict(os.environ, MACF_OPSEC_STDLIB_ONLY="1"))
+    assert opted.returncode == 0, opted.stderr
+
+
+def test_the_moniker_is_required_where_there_is_one(repo, profile, tmp_path, monkeypatch):
+    import macf.opsec as opsec
+    from macf.utils.paths import find_agent_home
+    home = tmp_path / "agent_home"
+    home.mkdir()
+    (home / ".maceff_primary_agent.id").write_text("Decoyagent@0f1e2d\n")
+    monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(home))
+    find_agent_home.cache_clear()
+    assert "agent moniker" in install_hook(repo, profile)["self_test"]["fired"]
+    # A checker that cannot see the moniker is not reported as installed.
+    monkeypatch.setattr(opsec, "HOOK_TEMPLATE",
+                        opsec.HOOK_TEMPLATE.replace("decoy.extend(self_test_decoys())", "pass"))
+    with pytest.raises(RuntimeError, match="agent moniker"):
+        install_hook(repo, profile)
+    find_agent_home.cache_clear()
+
+
+def test_a_shim_that_does_not_run_the_checker_is_refused_and_removed(repo, profile, monkeypatch):
+    import macf.opsec as opsec
+    monkeypatch.setattr(opsec, "SHIM_TEMPLATE", "#!/bin/sh\n# {python}\nexit 0\n")
+    with pytest.raises(RuntimeError, match="through its shim"):
+        install_hook(repo, profile)
+    assert not (repo / ".git" / "hooks.local.d" / "pre-commit.d" / "10-opsec").exists()
+
+
+def test_nothing_is_written_when_the_dispatcher_source_is_missing(repo, profile, tmp_path):
+    with pytest.raises(ValueError, match=".githooks"):
+        install_hook(repo, profile, source_root=tmp_path / "not_a_checkout")
+    assert not (repo / ".git" / "hooks" / "check_context_leakage.py").exists()
 
 class TestProfileExemptions:
     """A private deployment's own agents sign their review records with their

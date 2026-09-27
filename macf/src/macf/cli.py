@@ -13083,6 +13083,9 @@ def _build_parser() -> argparse.ArgumentParser:
     opsec_install.add_argument("repo", help="path to the target git repository")
     opsec_install.add_argument("--profile", default=None,
                                help="pattern profile JSON (default: agent-home default profile, created if absent)")
+    opsec_install.add_argument("--source-root", default=None,
+                               help="MacEff checkout to take the hook dispatcher from, when this package "
+                                    "is not installed from one (default: the package's checkout, then MACEFF_ROOT_DIR)")
     opsec_install.set_defaults(func=cmd_opsec_install_hook)
 
     # ── githooks ─────────────────────────────────────────────────────────
@@ -13093,6 +13096,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="install the dispatcher, ADOPTING any pre-existing hook rather than replacing it")
     gh_install.add_argument("repo", nargs="?", default=".",
                             help="path to the git repository (default: cwd)")
+    gh_install.add_argument("--source-root", default=None,
+                            help="MacEff checkout to take the dispatcher from, when this package is not "
+                                 "installed from one (default: the package's checkout, then MACEFF_ROOT_DIR)")
     gh_install.set_defaults(func=cmd_githooks_install)
     gh_list = gh_sub.add_parser(
         "list", help="show every hooklet that would run, in dispatch order")
@@ -13115,7 +13121,8 @@ def cmd_opsec_install_hook(args: argparse.Namespace) -> int:
 
     try:
         profile = Path(args.profile) if args.profile else None
-        facts = install_hook(Path(args.repo), profile)
+        source_root = Path(args.source_root) if args.source_root else None
+        facts = install_hook(Path(args.repo), profile, source_root=source_root)
     except ValueError as e:
         print(f"❌ {e}")
         return 1
@@ -13184,7 +13191,8 @@ def cmd_githooks_install(args: argparse.Namespace) -> int:
     from .githooks import install_dispatcher
 
     try:
-        facts = install_dispatcher(Path(args.repo))
+        facts = install_dispatcher(
+            Path(args.repo), source_root=Path(args.source_root) if args.source_root else None)
     except ValueError as e:
         print(f"❌ {e}")
         return 1

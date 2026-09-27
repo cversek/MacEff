@@ -2289,11 +2289,14 @@ Install the dispatcher into a repository, adopting any pre-existing hook rather 
 
 **Syntax:**
 ```bash
-macf_tools githooks install [repo]
+macf_tools githooks install [--source-root DIR] [repo]
 ```
 
 **Arguments:**
 - `repo` - Path to the git repository (default: CWD)
+
+**Options:**
+- `--source-root DIR` - MacEff checkout to take the dispatcher from. By default it is the checkout this package is installed from, then `MACEFF_ROOT_DIR`; a package installed from a checkout mounted somewhere else (a container's bind mount, a non-editable install) needs one of the two.
 
 **Related:** `githooks list`, `opsec install-hook`
 
@@ -2411,7 +2414,7 @@ Install a pre-commit gate that rejects staged private-context leaks.
 
 **Syntax:**
 ```bash
-macf_tools opsec install-hook [--profile PROFILE] <repo>
+macf_tools opsec install-hook [--profile PROFILE] [--source-root DIR] <repo>
 ```
 
 **Arguments:**
@@ -2419,6 +2422,9 @@ macf_tools opsec install-hook [--profile PROFILE] <repo>
 
 **Options:**
 - `--profile PROFILE` - Pattern profile JSON (default: agent-home default profile, created if absent)
+- `--source-root DIR` - MacEff checkout to take the hook dispatcher from (as for `githooks install`)
+
+The hook runs the Python interpreter that performed the install, which is also the one its self-test certifies; the self-test is run a second time through the installed hook, and the agent's moniker is required among the categories it refuses wherever the agent has a calling card. If that interpreter later cannot import macf, the hook refuses every commit rather than check without the moniker: reinstall, or set `MACF_OPSEC_STDLIB_ONLY=1` for a commit to accept the reduced gate. Nothing is written until the dispatcher source and the profile have been found.
 
 **Related:** `githooks install`
 

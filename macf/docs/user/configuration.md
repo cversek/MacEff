@@ -257,6 +257,23 @@ export MACF_EVENTS_MEMO_CHECK=1
 export MACF_SESSION_RETENTION_DAYS=14
 ```
 
+### `MACF_OPSEC_STDLIB_ONLY`
+
+**Purpose**: Accept the reduced OPSEC pre-commit gate for a commit. The gate installed by
+`opsec install-hook` runs the interpreter that installed it; when that interpreter can no longer
+import macf, the gate cannot read the agent's moniker, and it refuses every commit rather than
+pass the moniker unchecked.
+
+**Value**: `1` accepts the gate without the moniker check.
+
+**Default**: Unset: the gate refuses. The remedy is to reinstall it with `macf_tools opsec
+install-hook <repo>` under an interpreter that imports macf.
+
+**Example**:
+```bash
+MACF_OPSEC_STDLIB_ONLY=1 git commit -m "..."
+```
+
 ### `CLAUDE_PROJECT_DIR`
 
 **Purpose**: Claude Code project directory (used for project root detection).

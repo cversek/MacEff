@@ -79,10 +79,17 @@ def _canonical_hooks_dir(source_root: Optional[Path] = None) -> Path:
     if candidate.is_dir():
         return candidate
 
+    # A package installed from a checkout mounted somewhere else (a container's
+    # bind mount, a non-editable install) is not inside that tree. The
+    # deployment names its MacEff installation in MACEFF_ROOT_DIR already.
+    env_root = os.environ.get("MACEFF_ROOT_DIR")
+    if env_root and (Path(env_root) / ".githooks").is_dir():
+        return Path(env_root) / ".githooks"
+
     raise ValueError(
         "cannot locate the canonical .githooks directory. This installer copies "
-        "from the MacEff source tree; an installed-but-not-checked-out package "
-        "does not carry one. Pass source_root explicitly."
+        "from the MacEff source tree, and this package is not inside one. Pass "
+        "--source-root <MacEff checkout>, or set MACEFF_ROOT_DIR to it."
     )
 
 
