@@ -11,10 +11,13 @@
 # before anyone said so, because the pre-commit gates scan staged files and
 # nothing read the prose.
 #
-# The calling-card footer is exempt: a line of the form
-#   [Name@id: task#N <breadcrumb>]
+# The calling-card footer is exempt: the message's last non-blank line, when
+# it has the form
+#   [Name@id: <scope>#<id> <breadcrumb>]
 # is the agreed attribution format for this repository and is recognisable as
-# an identifier rather than a reference.
+# an identifier rather than a reference, whatever the work item it is scoped
+# to (task#N, duty#<hex>, ...). Only the last line: a card-shaped line
+# anywhere else is prose and is read like prose.
 #
 # Usage: as a commit-msg hooklet the dispatcher passes the message file; by
 # hand, pass any text file (a PR body drafted before `gh pr create`).
@@ -24,10 +27,18 @@ set -uo pipefail
 MSG_FILE="${1:-}"
 [ -n "$MSG_FILE" ] && [ -f "$MSG_FILE" ] || exit 0
 
-# Comment lines are git's template; footer lines are the attribution format;
-# a Breadcrumb: line is the framework's documented forensic coordinate, not a
+# Comment lines are git's template; the footer is the attribution format; a
+# Breadcrumb: line is the framework's documented forensic coordinate, not a
 # pointer at a document.
-BODY=$(grep -vE '^#' "$MSG_FILE" | grep -vE '^\[[A-Za-z0-9_-]+@[0-9a-f]+: task#[0-9]+ |^Breadcrumb: ' || true)
+BODY=$(grep -vE '^#' "$MSG_FILE" | awk '
+  { line[NR] = $0 }
+  END {
+    last = NR
+    while (last > 0 && line[last] ~ /^[[:space:]]*$/) last--
+    card = last > 0 && line[last] ~ /^\[[A-Za-z0-9_-]+@[0-9a-f]+: [A-Za-z_]+#[0-9A-Za-z]+ [^]]*\][[:space:]]*$/
+    for (i = 1; i <= NR; i++)
+      if (!(card && i == last) && line[i] !~ /^Breadcrumb: /) print line[i]
+  }' || true)
 
 PATTERNS='\b[Pp]hase [0-9]+ of (the|this|our)\b|\b[Pp]hase [0-9]+[.:] |\btask ?#[0-9]+|\bidea ?#[0-9]+|\broadmap (task|folder|phase)|\bMISSION #|\bsprint #[0-9]+|\bcycle [0-9]+\b|\bc_[0-9]+\b'
 HITS=$(printf '%s\n' "$BODY" | grep -nE "$PATTERNS" || true)

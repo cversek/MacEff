@@ -221,8 +221,10 @@ def _moniker_from(home) -> Optional[str]:
 
 
 ### The hook body written into <repo>/.git/hooks/. Reads the profile at run
-### time so pattern edits do not require reinstallation. Kept dependency-free
-### (stdlib only) because it runs in whatever python3 the committer has.
+### time so pattern edits do not require reinstallation. Imports only the stdlib
+### at load; it runs under the interpreter the install certified (rendered into
+### the shim) and takes the environment categories from macf there. When that
+### interpreter can no longer import macf, it refuses rather than check less.
 HOOK_TEMPLATE = '''#!/usr/bin/env python3
 """Pre-commit gate: reject staged lines that leak private context.
 
@@ -263,7 +265,16 @@ def environment_checks():
         from macf.opsec import environment_patterns  # noqa: WPS433 - optional
         return [(re.compile(p), label, "hard") for p, label in environment_patterns()]
     except ImportError:
-        pass
+        # The stdlib cannot read the agent's moniker, so this gate would pass the
+        # one category most likely to leak from an agent's commits, and exit 0 on
+        # content the certified configuration refuses. Refuse instead; an
+        # explicit opt-in accepts the reduced gate.
+        if os.environ.get("MACF_OPSEC_STDLIB_ONLY") != "1":
+            print("pre-commit gate: REFUSED -- " + sys.executable + " cannot import macf, so "
+                  "this gate would run without the agent moniker. Reinstall with: "
+                  "macf_tools opsec install-hook <repo>. To accept the reduced gate for one "
+                  "commit: MACF_OPSEC_STDLIB_ONLY=1 git commit ...", file=sys.stderr)
+            sys.exit(1)
     out = []
     try:
         host = socket.gethostname().strip()
@@ -357,6 +368,12 @@ def main():
         decoy.append("see " + os.path.expanduser("~") + "/notes for the details")
         decoy.append("token = ghp_" + "A" * 36)
         decoy.append("-----BEGIN RSA PRIVATE KEY-----")
+        decoy.append("reach the author at mailbox@0a1b2c")
+        try:
+            from macf.opsec import self_test_decoys  # noqa: WPS433 - optional
+            decoy.extend(self_test_decoys())
+        except ImportError:
+            pass
         fired = set()
         for text in decoy:
             for rx, label, kind in checks:
@@ -418,8 +435,29 @@ if __name__ == "__main__":
 '''
 
 SHIM_TEMPLATE = '''#!/bin/sh
-exec python3 "$(git rev-parse --git-common-dir)/hooks/check_context_leakage.py"
+# The interpreter the install certified, not whichever python3 comes first on
+# the committer's PATH: that one may not import macf, and would check less.
+PY={python}
+if [ ! -x "$PY" ]; then
+  echo "pre-commit gate: $PY is gone; reinstall with: macf_tools opsec install-hook <repo>" >&2
+  exit 1
+fi
+exec "$PY" "$(git rev-parse --git-common-dir)/hooks/check_context_leakage.py" "$@"
 '''
+
+
+def self_test_decoys() -> List[str]:
+    """Decoy lines for the categories only macf can derive, for the installed
+    checker's self-test: today the agent's moniker, read from its calling card.
+    Empty when there is no calling card to read."""
+    try:
+        from .utils.paths import find_agent_home
+        home = find_agent_home()
+    except (ImportError, OSError) as e:
+        print(f"⚠️ MACF: agent home not resolvable for the opsec self-test ({e})", file=sys.stderr)
+        return []
+    mon = _moniker_from(home) if home else None
+    return [f"reviewed and signed by {mon}"] if mon else []
 
 
 def default_profiles_dir() -> Path:
@@ -439,8 +477,18 @@ def ensure_default_profile() -> Path:
     return path
 
 
-def install_hook(repo: Path, profile: Optional[Path] = None) -> Dict[str, Any]:
-    """Install the leakage gate into repo's git hooks. Returns install facts."""
+def install_hook(repo: Path, profile: Optional[Path] = None,
+                 source_root: Optional[Path] = None) -> Dict[str, Any]:
+    """Install the leakage gate into repo's git hooks. Returns install facts.
+
+    Everything the install depends on is found before anything is written: a
+    dispatcher source that could not be located used to fail after the checker
+    was already in place, leaving a checker that no hook ran.
+    """
+    import shlex
+    import subprocess as _sp
+    from .githooks import _canonical_hooks_dir, install_dispatcher
+
     repo = Path(repo).resolve()
     git_dir = repo / ".git"
     if not git_dir.exists():
@@ -455,7 +503,8 @@ def install_hook(repo: Path, profile: Optional[Path] = None) -> Dict[str, Any]:
             actual = (actual / common.read_text().strip()).resolve()
         git_dir = actual
     hooks_dir = git_dir / "hooks"
-    hooks_dir.mkdir(parents=True, exist_ok=True)
+
+    _canonical_hooks_dir(source_root)   # raises before anything is written
 
     profile_path = Path(profile).resolve() if profile else ensure_default_profile()
     if not profile_path.exists():
@@ -472,6 +521,7 @@ def install_hook(repo: Path, profile: Optional[Path] = None) -> Dict[str, Any]:
             "list is private vocabulary and must live outside the tree"
         )
 
+    hooks_dir.mkdir(parents=True, exist_ok=True)
     checker = hooks_dir / "check_context_leakage.py"
     checker.write_text(HOOK_TEMPLATE.format(
         profile_path=str(profile_path),
@@ -485,27 +535,32 @@ def install_hook(repo: Path, profile: Optional[Path] = None) -> Dict[str, Any]:
     # and nothing said so, because "installed" was reported on write, not on
     # behaviour. Now "installed" means "refused a decoy in every category it
     # exists for".
-    import subprocess as _sp
-    probe = _sp.run([sys.executable, str(checker), "--self-test"],
-                    capture_output=True, text=True, cwd=str(repo), timeout=30)
-    try:
-        fired = set(json.loads(probe.stdout.strip() or "[]"))
-    except ValueError:
-        fired = set()
-    required = {"local username", "filesystem path",
+    required = {"local username", "filesystem path", "agent uuid",
                 "github token", "private key material"}
     # Not required: "hostname" (only where the host has a name >= 4 chars) and
     # "agent home path" (only where an agent home exists -- under a test runner
     # or a plain developer account there is none, and the probe cannot tell the
     # two apart from outside). "local username" and "filesystem path" carry the
     # environment half of the check on every host; the two secret shapes carry
-    # the credential half.
+    # the credential half. The agent moniker is required wherever this
+    # environment has one: it is the category a checker that cannot import
+    # macf drops, and the one most likely to leak from an agent's commits.
+    if "agent moniker" in {label for _, label in environment_patterns()}:
+        required.add("agent moniker")
+
+    def _probe(cmd):
+        run = _sp.run(cmd, capture_output=True, text=True, cwd=str(repo), timeout=30)
+        try:
+            return set(json.loads(run.stdout.strip() or "[]")), run.stderr.strip()
+        except ValueError:
+            return set(), run.stderr.strip()
+
+    fired, stderr = _probe([sys.executable, str(checker), "--self-test"])
     missing = sorted(required - fired)
     if missing:
         raise RuntimeError(
             "opsec hook installed but INERT for: " + ", ".join(missing)
-            + " -- refusing to report success. stderr: " + probe.stderr.strip()[:300])
-    self_test = {"fired": sorted(fired), "stderr": probe.stderr.strip()}
+            + " -- refusing to report success. stderr: " + stderr[:300])
 
     # Install the dispatcher and take a NUMBERED SLOT rather than owning the
     # single pre-commit file.
@@ -520,20 +575,34 @@ def install_hook(repo: Path, profile: Optional[Path] = None) -> Dict[str, Any]:
     # The hooklet goes in the PER-CLONE directory, never the versioned one: it
     # hardcodes the path to a private pattern file, and committing that would
     # publish one developer's private vocabulary to everyone who clones.
-    from .githooks import install_dispatcher
-
-    dispatch = install_dispatcher(repo)
+    dispatch = install_dispatcher(repo, source_root=source_root)
     local_d = Path(dispatch["local_dir"]) / "pre-commit.d"
     local_d.mkdir(parents=True, exist_ok=True)
     hooklet = local_d / "10-opsec"
-    hooklet.write_text(SHIM_TEMPLATE)
+    # The interpreter is this one, which just passed the self-test, and not a
+    # bare python3: the hook would run whichever python3 the committer's PATH
+    # finds, certified by nothing. Never resolved -- a venv's python is a
+    # symlink, and it is the symlink that puts macf on the path.
+    hooklet.write_text(SHIM_TEMPLATE.format(python=shlex.quote(sys.executable)))
     os.chmod(hooklet, hooklet.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    # And once more through the hook as git will run it, so what is certified
+    # is the installed path and not only the checker beside it.
+    fired, stderr = _probe([str(hooklet), "--self-test"])
+    missing = sorted(required - fired)
+    if missing:
+        hooklet.unlink()
+        raise RuntimeError(
+            "opsec hook INERT when run through its shim, for: " + ", ".join(missing)
+            + " -- the shim was removed. stderr: " + stderr[:300])
+    self_test = {"fired": sorted(fired), "stderr": stderr}
 
     return {
         "repo": str(repo),
         "hooks_dir": str(hooks_dir),
         "profile": str(profile_path),
         "hooklet": str(hooklet),
+        "interpreter": sys.executable,
         "dispatcher_actions": dispatch["actions"],
         "adopted": dispatch["adopted"],
         "self_test": self_test,
