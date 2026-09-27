@@ -111,11 +111,12 @@ def stanza_pointers(pairs: Sequence[Tuple[Role, Sequence[Duty]]],
     after 🎯 and its age, and moves down once a duty is engaged. Unfocusing
     writes nothing, so the pointer stays where the last work was.
 
-    Under a deliberate PARALLEL engagement -- more than one active duty across
-    the store -- every active duty gets its own pointer and age, so the
-    operator sees the situation at a glance.
+    Under a deliberate PARALLEL engagement -- more than one engaged duty across
+    the store -- every engaged duty gets its own pointer and age, so the
+    operator sees the situation at a glance. A duty active only because it
+    tracks a task is not engaged and gets no pointer of its own.
     """
-    active = [(role.id, d.id, last_touch(d)) for role, duties in pairs for d in duties if d.state == "active"]
+    active = [(role.id, d.id, last_touch(d)) for role, duties in pairs for d in duties if d.is_engaged()]
     best = (None, None, 0.0)
     for role, duties in pairs:
         did, ts = role_pointer(duties)
@@ -124,7 +125,7 @@ def stanza_pointers(pairs: Sequence[Tuple[Role, Sequence[Duty]]],
             if rts >= ts:
                 # the role note is this role's newest touch; expanded, it defers to the duty
                 did, ts = (did if role.id in expanded else None), rts
-        if role.id == focus[0] and focus[1] >= ts and not any(d.state == "active" for d in duties):
+        if role.id == focus[0] and focus[1] >= ts and not any(d.is_engaged() for d in duties):
             did, ts = None, focus[1]         # the focus itself is the newest touch: the finger sits by 🎯
             if ts >= best[2]:
                 best = (role.id, did, ts)

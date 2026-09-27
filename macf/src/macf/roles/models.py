@@ -173,6 +173,23 @@ class Duty(BaseModel):
     def _deps(cls, v: List[str]) -> List[str]:
         return [_check_id(d) for d in v]
 
+    def is_engaged(self) -> bool:
+        """Attention was put on this duty with `duty engage` and has not moved since.
+
+        'active' is broader: declaring a duty that tracks a task, or linking one,
+        makes it active without anyone engaging it. Engagement is read from the
+        duty's own updates, the latest engage not followed by a disengagement or
+        a change of state, so no second state is stored.
+        """
+        if self.state != "active":
+            return False
+        for u in reversed(self.updates):
+            if u.kind == "engage":
+                return True
+            if u.kind in ("disengage", "active", "pending", "deferred", "done"):
+                return False
+        return False
+
     @model_validator(mode="after")
     def _time_rules(self) -> "Duty":
         # Horizon belongs to the duty: a dated or recurring duty with no
