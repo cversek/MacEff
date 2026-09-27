@@ -7,10 +7,6 @@ from functools import lru_cache
 
 import sys
 
-# The one resolver: a source checkout's own version, else the installed one.
-# Hook headers are stamped from this, which is why it cannot keep a copy.
-from .._version import VERSION as __version__
-
 from .environment import get_rich_environment_string
 
 
@@ -143,6 +139,10 @@ def format_macf_footer() -> str:
         Environment: {rich_environment}
         ```
     """
+    # The one resolver: a source checkout's own version, else the installed one.
+    # Hook headers are stamped from this, which is why it cannot keep a copy.
+    # Imported here so that importing the utilities does not load importlib.metadata.
+    from .._version import VERSION as __version__
     environment = get_rich_environment_string()
     cc_version = get_claude_code_version()
 

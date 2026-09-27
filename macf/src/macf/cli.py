@@ -8,14 +8,9 @@ try:
 except ImportError:
     ZoneInfo = None
 
-from ._version import VERSION as _ver, installed_version
-
 from .config import ConsciousnessConfig
-from .hooks.compaction import detect_compaction, inject_recovery
 from .agent_events_log import append_event
 from .event_queries import get_cycle_number_from_events
-from .task.reader import TaskReader
-from .task.create import subject_with_live_parent
 from .utils import (
     get_current_session_id,
     get_dev_scripts_dir,
@@ -272,6 +267,8 @@ def cmd_tree(args: argparse.Namespace, root_parser: argparse.ArgumentParser = No
 
 def cmd_env(args: argparse.Namespace) -> int:
     """Print comprehensive environment summary."""
+    from .task.reader import TaskReader
+    from ._version import VERSION as _ver
     temporal = get_temporal_context()
     session_id = get_current_session_id()
 
@@ -1167,6 +1164,7 @@ def cmd_framework_install(args: argparse.Namespace) -> int:
 
 def cmd_hook_test(args: argparse.Namespace) -> int:
     """Test compaction detection on current session."""
+    from .hooks.compaction import detect_compaction, inject_recovery
     try:
         # Find current session JSONL file
         claude_dir = Path.home() / ".claude" / "projects"
@@ -4394,6 +4392,7 @@ def cmd_events_gaps(args: argparse.Namespace) -> int:
 
 def cmd_task_list(args: argparse.Namespace) -> int:
     """List tasks from current session with hierarchy and metadata."""
+    from .task.create import subject_with_live_parent
     from .task import TaskReader, MacfTask
 
     reader = TaskReader()
@@ -4542,6 +4541,7 @@ def cmd_task_list(args: argparse.Namespace) -> int:
 
 def cmd_task_get(args: argparse.Namespace) -> int:
     """Get detailed information about a specific task."""
+    from .task.create import subject_with_live_parent
     from .task import TaskReader
 
     # Parse task ID (handle #N or N format, support string IDs like "000")
@@ -4924,6 +4924,7 @@ def cmd_task_roles(args: argparse.Namespace) -> int:
 
 def cmd_task_tree(args: argparse.Namespace) -> int:
     """Display task hierarchy tree from a root task."""
+    from .task.create import subject_with_live_parent
     import time
     from pathlib import Path
     from .task import TaskReader
@@ -6166,6 +6167,7 @@ def _doctor_check_subject_markers(tasks) -> "list[tuple[str, str, str]]":
     Returns:
         list of (task_id, stored_subject, corrected_subject) for divergent tasks.
     """
+    from .task.create import subject_with_live_parent
     findings = []
     for t in tasks:
         corrected = subject_with_live_parent(t)
@@ -11422,6 +11424,7 @@ def _build_parser() -> argparse.ArgumentParser:
             super().__init__(option_strings, dest, nargs=0, **kwargs)
 
         def __call__(self, parser, namespace, values, option_string=None):
+            from ._version import VERSION as _ver, installed_version
             suffix = _editable_source_suffix()
             # A stale install is shown, not silently corrected: anything that
             # still reads the installed metadata directly sees the old number.

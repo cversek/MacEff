@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .cadence import CadenceError, parse_cadence, parse_horizon_minutes
+from .shelf import ICON_SHELF  # re-exported: importers still name the shelf's old home
 
 ID_RE = re.compile(r"^[0-9a-f]{6}$")
 
@@ -31,21 +32,6 @@ DUTY_MACHINE = {
 }
 
 IMPORTANCE = ("critical", "high", "normal", "low")
-
-# The ten-icon shelf from the policy. A vocabulary, not a constraint: the
-# operator's own glyph is always accepted by the record.
-ICON_SHELF = {
-    "🎓": "teaching, academic",
-    "🎩": "steward, officer",
-    "🧢": "coach, trainer",
-    "⛑️": "on-call, safety, operations",
-    "👑": "lead, owner",
-    "🪖": "guard, security",
-    "📚": "librarian, custodian",
-    "🗄️": "archivist",
-    "🔬": "researcher, analyst",
-    "⚖️": "reviewer, adjudicator",
-}
 
 
 def _check_id(v: str) -> str:
