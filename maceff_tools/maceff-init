@@ -6,7 +6,7 @@ set -euo pipefail
 #
 # Usage:
 #   maceff-init                    # Interactive mode (prompts before overwriting)
-#   maceff-init --force-overwrite  # Non-interactive (backs up and overwrites existing .maceff/)
+#   maceff-init --force-overwrite  # Non-interactive (copies .maceff/ to a backup, refreshes it in place)
 
 FORCE_OVERWRITE=false
 
@@ -23,7 +23,7 @@ while [[ $# -gt 0 ]]; do
             echo "Initialize .maceff/ directory structure for MacEff development."
             echo ""
             echo "Options:"
-            echo "  --force-overwrite    Backup existing .maceff/ and create fresh (non-interactive)"
+            echo "  --force-overwrite    Back up .maceff/ (a copy) and refresh it in place (non-interactive)"
             echo "  -h, --help           Show this help message"
             exit 0
             ;;
@@ -84,14 +84,57 @@ normalize_policies_layout() {
     fi
 }
 
+# Make DST hold exactly what SRC holds without replacing any directory DST
+# already has: a bind mount follows a directory's inode, so a directory removed
+# and recreated is invisible to it. rsync does this; where it is missing, the
+# same in three passes.
+sync_in_place() {
+    local src="$1" dst="$2" rel
+    # Two existing directories or nothing: every removal below is "$dst/<path>".
+    if [[ -z "$src" || -z "$dst" || ! -d "$src" || ! -d "$dst" ]]; then
+        error "sync_in_place needs two existing directories (got '$src' and '$dst')"
+        return 1
+    fi
+    if command -v rsync >/dev/null 2>&1; then
+        rsync -a --delete "$src/" "$dst/"
+        return
+    fi
+    # 1. clear what cp cannot overwrite: a changed type, or a symlink
+    while IFS= read -r -d '' rel; do
+        if [[ -d "$src/$rel" && ! -L "$src/$rel" ]]; then
+            if [[ -L "$dst/$rel" || ( -e "$dst/$rel" && ! -d "$dst/$rel" ) ]]; then rm -f "$dst/$rel"; fi
+        elif [[ -d "$dst/$rel" && ! -L "$dst/$rel" ]]; then
+            rm -rf "$dst/$rel"
+        elif [[ -L "$src/$rel" && ( -e "$dst/$rel" || -L "$dst/$rel" ) ]]; then
+            rm -f "$dst/$rel"
+        fi
+    done < <(cd "$src" && find . -mindepth 1 -print0)
+    # 2. copy over, merging into the directories that are already there
+    cp -pPR "$src/." "$dst/"
+    # 3. remove what the new overlay no longer has, deepest first
+    while IFS= read -r -d '' rel; do
+        if [[ ! -e "$src/$rel" && ! -L "$src/$rel" ]]; then rm -rf "$dst/$rel"; fi
+    done < <(cd "$dst" && find . -mindepth 1 -depth -print0)
+}
+
 # Check if .maceff/ already exists
 if [[ -d "$MACEFF_DIR" ]]; then
     if [[ "$FORCE_OVERWRITE" == "true" ]]; then
-        # Non-interactive: backup and proceed
+        # Non-interactive: back up, then refresh IN PLACE. A container that
+        # bind-mounts .maceff/framework holds the directory's inode, not its
+        # path: moving the tree aside left every running container serving the
+        # old copy until it restarted, with nothing to say so. So the backup is
+        # a copy, the new overlay is built beside the tree, and it is synced
+        # into the tree at the end; existing directories keep their inodes.
         BACKUP_DIR="${MACEFF_DIR}.backup-$(date +%Y%m%d-%H%M%S)"
         warn "Directory .maceff/ already exists! (--force-overwrite specified)"
-        log "Backing up to: $BACKUP_DIR"
-        mv "$MACEFF_DIR" "$BACKUP_DIR"
+        log "Backing up (a copy) to: $BACKUP_DIR"
+        cp -pPR "$MACEFF_DIR" "$BACKUP_DIR"
+        REFRESH_TARGET="$MACEFF_DIR"
+        BUILD_TMP="$(mktemp -d "${REFRESH_TARGET}.build-XXXXXX")"
+        MACEFF_DIR="$BUILD_TMP"
+        # BUILD_TMP, never MACEFF_DIR: MACEFF_DIR is pointed back at the tree later
+        trap 'rm -rf "$BUILD_TMP"' EXIT  # a failed build leaves the tree as it was
     else
         # Interactive: require explicit flag for safety
         error "Directory .maceff/ already exists!"
@@ -294,6 +337,15 @@ EOF
     log "  ✓ Created docker-compose.override.yml template"
 else
     log "  ℹ docker-compose.override.yml already exists - skipping"
+fi
+
+# A refresh was built beside the tree; bring it into the tree in place.
+if [[ -n "${REFRESH_TARGET:-}" ]]; then
+    sync_in_place "$BUILD_TMP" "$REFRESH_TARGET"
+    rm -rf "$BUILD_TMP"
+    trap - EXIT
+    MACEFF_DIR="$REFRESH_TARGET"
+    log "  ✓ Refreshed .maceff/ in place (running containers that mount it see the new files)"
 fi
 
 # Display success message
