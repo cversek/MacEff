@@ -9727,6 +9727,24 @@ def _trust_badge(message) -> str:
     return _TRUST_BADGES.get(value, f"❔ [unrecognised classification: {_term_safe(value)}]")
 
 
+def _sent_badge(record) -> str:
+    """The label for one of the agent's OWN sent copies, where a received
+    message shows its trust badge.
+
+    A trust label reports who authored someone else's message; about the
+    agent's own words it has nothing to say. What the copy cannot say for
+    itself is how far its submission got and which id the broker gave it, and
+    that id is the one the recipient, the ledger and the disposition use.
+    """
+    if record is None:
+        return "📤 [sent by you — no submission record]"
+    state = _term_safe(str(record.get("state") or "?"))
+    minted = record.get("broker_message_id")
+    if minted:
+        return f"📤 [sent by you — {state}; the broker's id for it is {_term_safe(minted)}]"
+    return f"📤 [sent by you — {state}; the broker gave it no id]"
+
+
 # ── gmail: per-agent Gmail through a local grant (shape mirrors amail) ──────────
 
 
@@ -10221,12 +10239,24 @@ def cmd_amail_send(args: argparse.Namespace) -> int:
                   subject=args.subject or "", body=body)
     if args.reply_to:
         from macf.amail import store
-        parent = store.find(Path(cfg["home"]), args.reply_to) if cfg["home"] else None
+        mailbox = Path(cfg["home"]) if cfg["home"] else None
+        parent = store.find(mailbox, args.reply_to) if mailbox else None
+        own = None
+        if parent is None and mailbox:
+            own = store.find_sent(mailbox, args.reply_to)
+            parent = own[0] if own else None
         if parent is None:
             print(f"❌ no message '{args.reply_to}' in this mailbox to reply to")
             return 1
         msg = parent.reply(sender=msg.sender, body=body, subject=args.subject)
         msg.to = list(args.to) or msg.to
+        record = own[1] if own else None
+        if record and record.get("broker_message_id"):
+            # A follow-up to this agent's own message. The broker checks a
+            # reply's parent against its ledger, which knows the message only
+            # by the id the broker minted; the sent copy carries the one
+            # generated here before submission.
+            msg.parent = record["broker_message_id"]
 
     note = _ensure_host_broker(cfg)
     if note:
@@ -10405,6 +10435,11 @@ def cmd_amail_read(args: argparse.Namespace) -> int:
     directly from the store the agent owns. No broker is consulted and none
     is required — a stopped broker must not make the permanent record
     unreadable.
+
+    The agent's own sent copies are read the same way, by either of their ids:
+    the one generated here before submission, which the copy carries, or the
+    one the broker minted, which `send` reports and every record outside this
+    home uses (see store.find_sent).
     """
     from macf.amail import store
 
@@ -10414,6 +10449,9 @@ def cmd_amail_read(args: argparse.Namespace) -> int:
         return 1
     home = Path(cfg["home"])
     m = store.find(home, args.message_id)
+    own = store.find_sent(home, args.message_id) if m is None else None
+    if own is not None:
+        m = own[0]
     if m is None:
         # Not a bundle id — the same ref may name an internet delivery
         # (name or content-sha prefix), read the same way: directly.
@@ -10438,13 +10476,16 @@ def cmd_amail_read(args: argparse.Namespace) -> int:
         print("❌ no such message")
         return 1
     if args.json:
-        print(json.dumps(m.to_dict(), indent=2))
+        doc = m.to_dict()
+        if own is not None:
+            doc["submission"] = own[1]
+        print(json.dumps(doc, indent=2))
         return 0
     # The badge is printed from stored metadata BEFORE the message, and the
     # message body is neutralised so it cannot redraw what was already shown.
     # Both halves are needed: a label the body can forge is decorative, and a
     # label the body can erase is worse.
-    print(_trust_badge(m))
+    print(_sent_badge(own[1]) if own is not None else _trust_badge(m))
     print(_term_safe(m.serialize()))
     return 0
 
