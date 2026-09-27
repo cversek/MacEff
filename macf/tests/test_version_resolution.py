@@ -44,13 +44,14 @@ def test_the_checkout_wins_over_a_stale_install(tmp_path, monkeypatch):
 def test_version_names_a_stale_install(monkeypatch, capsys):
     """Corrected silently, a stale install would stay invisible to anything that
     still reads the metadata directly. --version says so instead."""
-    from macf import cli
-    monkeypatch.setattr(cli, "installed_version", lambda: "0.5.1.dev0")
+    from macf import _version, cli
+    # --version reads the lookup from _version when it runs, not at import.
+    monkeypatch.setattr(_version, "installed_version", lambda: "0.5.1.dev0")
     monkeypatch.setattr(cli, "_editable_source_suffix", lambda: " (main @ abc1234)")
     with pytest.raises(SystemExit):
         cli.main(["--version"])
     out = capsys.readouterr().out
-    assert f"{cli._ver} (main @ abc1234; installed metadata says 0.5.1.dev0)" in out
+    assert f"{_version.VERSION} (main @ abc1234; installed metadata says 0.5.1.dev0)" in out
 
 
 def test_no_module_keeps_its_own_copy_of_the_lookup():
