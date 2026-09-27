@@ -13370,8 +13370,26 @@ def main(argv=None) -> None:
         except Exception as e:
             # Log error but don't break CLI functionality (use print, not sys.stderr)
             print(f"🏗️ MACF | ❌ CLI event logging error: {e}")
-        exit(args.func(args))
+        func = getattr(args, "func", None)
+        if func is None:
+            # A command group named without a subcommand. Show what the group
+            # offers, the way running it bare is used to find out, and exit 2
+            # as argparse does for anything else missing.
+            _deepest_parser(parser, args).print_help()
+            exit(2)
+        exit(func(args))
     parser.print_help()
+
+
+def _deepest_parser(parser: argparse.ArgumentParser, args: argparse.Namespace) -> argparse.ArgumentParser:
+    """The parser of the deepest command group the arguments named."""
+    current = parser
+    while True:
+        sub = next((a for a in current._actions if isinstance(a, argparse._SubParsersAction)), None)
+        chosen = getattr(args, sub.dest, None) if sub is not None else None
+        if not chosen or chosen not in sub.choices:
+            return current
+        current = sub.choices[chosen]
 
 if __name__ == "__main__":
     main()
