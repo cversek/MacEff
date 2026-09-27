@@ -133,31 +133,59 @@ def priority_list(role: Role, placed: List[Placement], at: datetime) -> str:
 def focus_gate(auto_mode: bool, store: Optional[RoleStore] = None, at: Optional[datetime] = None) -> Dict[str, Any]:
     """What the Stop hook injects for the focused role, and whether it blocks.
 
-    Returns {"text": str, "block": bool, "unserviced": [duty ids]}. The list is
-    injected on every Stop; the stop is blocked only in AUTO_MODE and only while
-    due-now duties are unserviced. Undated duties never block.
+    Returns {"text": str, "role": the focused role's id, "block": bool,
+    "unserviced": [duty ids]}. The stop is blocked only in AUTO_MODE and only
+    while due-now duties are unserviced. Undated duties never block.
     """
     store = store or RoleStore()
     at = at or now()
     focused = current_focus()
     if not focused:
-        return {"text": "", "block": False, "unserviced": []}
+        return {"text": "", "role": "", "block": False, "unserviced": []}
     try:
         role, folder = store.find_role(focused)
     except RoleError as e:
         print(f"⚠️ MACF: focused role {focused} not found ({e}); run macf_tools role unfocus", file=sys.stderr)
-        return {"text": "", "block": False, "unserviced": []}
+        return {"text": "", "role": "", "block": False, "unserviced": []}
     duties = [d for d, _ in store.duties(folder)]
     placed = rank(duties, at, role.expires)
     text = priority_list(role, placed, at)
     pending = due_now_unserviced(role, duties, at)
     if not pending:
-        return {"text": text, "block": False, "unserviced": []}
+        return {"text": text, "role": role.id, "block": False, "unserviced": []}
     names = ", ".join(f"\"{p.duty.title}\"" for p in pending)
     text += (f"\n\n🛡️ Due-now duties unserviced: {names}.\n"
              f"Service each (macf_tools role duty note|done|defer <id>), or put the role down honestly: "
              f"macf_tools role unfocus (recorded with what was due).")
-    return {"text": text, "block": bool(auto_mode), "unserviced": [p.duty.id for p in pending]}
+    return {"text": text, "role": role.id, "block": bool(auto_mode), "unserviced": [p.duty.id for p in pending]}
+
+
+def focus_text(focus: Dict[str, Any], session_id: str, reader: str) -> str:
+    """The focus gate's text as one reader should get it: whole the first time,
+    then only its lines that moved, and nothing at all when none did.
+
+    ``reader`` names whose copy this is (the Stop hook sends ``"agent"`` for a
+    block reason). Each reader is compared with its own last copy, because the
+    agent sees a Stop only when it is blocked: one copy for every reader would
+    tell the agent "unchanged" about lines it was never sent. The whole text
+    goes out on a reader's first Stop in a session or cycle and every time when
+    ``hooks.output`` is ``full``, and never again on a timer. Role lines that
+    did not move are not repeated, not even as a heading, since restating them
+    is what teaches a reader to skip the one that moved.
+    """
+    if not focus.get("text"):
+        return ""
+    from ..hooks.emission import emit
+    header = focus["text"].splitlines()[0].rstrip(":")
+    try:
+        em = emit(f"stop_duties:{focus['role']}:{reader}", session_id, focus["text"], header, (),
+                  periodic_full=False)
+    except (OSError, ValueError) as e:
+        print(f"⚠️ MACF: role lines sent whole, their last copy could not be compared: {e}", file=sys.stderr)
+        return focus["text"]
+    if not em.full and not em.changed:
+        return ""
+    return em.operator if reader == "operator" else em.agent
 
 
 def prompt_line(store: Optional[RoleStore] = None, at: Optional[datetime] = None) -> str:

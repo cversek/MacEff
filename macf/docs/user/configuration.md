@@ -46,7 +46,7 @@ Use **inline env vars** for ephemeral overrides (one invocation, one test). Use 
 | Idle timeout | `MACF_USER_IDLE_TIMEOUT_MINS` | `session.user_idle_timeout_mins` | `10` | Minutes before USER_IDLE engages |
 | Calling card | `MACEFF_AGENT_NAME` | `agent_identity.calling_card` | (none) | Display name for the agent |
 | Hook output | `MACF_HOOK_OUTPUT` | `hooks.output` | `diff` | `diff` sends only what changed since a hook's last block; `full` always sends the whole block |
-| Full block interval | `MACF_HOOK_FULL_EVERY_MINS` | `hooks.full_every_mins` | `30` | Minutes after which a hook sends its full block again |
+| Full block interval | `MACF_HOOK_FULL_EVERY_MINS` | `hooks.full_every_mins` | `30` | Minutes after which `user_prompt_submit` sends its full block again; `stop` never does, since its message carries the focused role's duty list |
 
 **Inspect resolution** at any time:
 ```bash
