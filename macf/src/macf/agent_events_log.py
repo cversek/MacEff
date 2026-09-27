@@ -16,11 +16,12 @@ import fcntl
 import functools
 import json
 import os
+import re
 import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, Generator, List, Optional, Tuple
+from typing import Any, Callable, Dict, Generator, Iterable, List, Optional, Tuple
 
 from .utils import (
     find_agent_home,
@@ -439,6 +440,7 @@ def read_events(
     limit: Optional[int] = None,
     reverse: bool = True,
     scope: str = "cycle",
+    only: Optional[Iterable[str]] = None,
 ) -> Generator[dict, None, None]:
     """
     Read events from log (generator for memory efficiency).
@@ -488,6 +490,11 @@ def read_events(
             ``compaction_detected``, inclusive — the boundary event belongs to
             the cycle it opens. ``"all"`` reads the whole log and must be asked
             for explicitly, at a site that says why.
+        only: Event names to yield; ``None`` yields every event. A line that
+            does not contain one of the names as a JSON string cannot be one
+            of those events and is skipped without being parsed, which is most
+            of what a scan costs. In cycle scope the boundary is still
+            recognised, and yielded only if it is named.
 
     Yields:
         Event dictionaries
@@ -513,6 +520,11 @@ def read_events(
             "An unrecognised scope silently reading everything is how the "
             "unbounded case comes back."
         )
+    names = None if only is None else frozenset([only] if isinstance(only, str) else only)
+    # The boundary must still be seen to stop a cycle-scoped read, named or not.
+    needles = None if names is None else re.compile("|".join(
+        re.escape(f'"{name}"') for name in sorted(
+            names | ({CYCLE_BOUNDARY_EVENT} if scope == "cycle" else set()))))
 
     # A forward CYCLE read is served by materialising the reverse window and
     # flipping it. That is affordable for exactly the reason the whole design
@@ -520,7 +532,7 @@ def read_events(
     # readers get the same bound as reverse ones instead of an exemption. A
     # forward ALL read still streams; nothing is materialised there.
     if scope == "cycle" and not reverse:
-        window = list(read_events(limit=limit, reverse=True, scope="cycle"))
+        window = list(read_events(limit=limit, reverse=True, scope="cycle", only=names))
         for event in reversed(window):
             yield event
         return
@@ -530,7 +542,8 @@ def read_events(
     shared = _shared_window() if reverse and limit is None else None
     if shared is not None:
         for event in shared.events(live_only=(scope == "cycle")):
-            yield event
+            if names is None or event.get("event") in names:
+                yield event
             if scope == "cycle" and event.get("event") == CYCLE_BOUNDARY_EVENT:
                 return
         return
@@ -567,6 +580,8 @@ def read_events(
             line = line.strip()
             if not line:
                 continue
+            if needles is not None and not needles.search(line):
+                continue
 
             try:
                 event = json.loads(line)
@@ -574,16 +589,19 @@ def read_events(
                 # Skip malformed lines
                 continue
 
-            yield event
+            wanted = names is None or event.get("event") in names
+            if wanted:
+                yield event
 
             # Yielded BEFORE the break: the boundary opens the cycle it marks,
             # and callers that read the cycle number read it off this event.
             if scope == "cycle" and event.get("event") == CYCLE_BOUNDARY_EVENT:
                 break
 
-            count += 1
-            if limit is not None and count >= limit:
-                break
+            if wanted:
+                count += 1
+                if limit is not None and count >= limit:
+                    break
 
     except (OSError, IOError) as e:
         print(f"⚠️ MACF: event log read failed: {e}", file=sys.stderr)

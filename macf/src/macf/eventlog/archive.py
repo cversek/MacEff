@@ -25,7 +25,6 @@ sequence holds the same ``flock`` the writers use, so a concurrent append blocks
 rather than landing in the gap.
 """
 import fcntl
-import hashlib
 import json
 import lzma
 import os
@@ -190,6 +189,9 @@ def iter_log_lines(
 
 
 def _sha256_lines(lines) -> str:
+    # Imported here: hashlib costs a whole-history read about 3 ms to load,
+    # and only rotation and verification hash anything.
+    import hashlib
     h = hashlib.sha256()
     for line in lines:
         h.update(line.encode("utf-8"))

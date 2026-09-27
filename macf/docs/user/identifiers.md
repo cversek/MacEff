@@ -127,7 +127,7 @@ Query: `get_cycle_number_from_events()`
 
 Short SHA of current HEAD commit, capturing repository state at the moment.
 
-**Generation**: `git rev-parse --short HEAD`
+**Generation**: the first seven characters of HEAD's commit, read from the project repository's own files (a branch ref, `packed-refs`, a detached HEAD, a linked worktree). When the environment redirects git (`GIT_DIR` and similar) or the files do not state HEAD plainly, `git rev-parse --short=7 HEAD` is asked instead. Seven characters always: git lengthens its abbreviation when seven are ambiguous in a repository, and a breadcrumb should not depend on which path computed it.
 
 ### Purpose
 
