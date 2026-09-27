@@ -5,18 +5,21 @@ Handlers take an argparse namespace and return an exit code. Refusals are one
 nothing else. Registration is one call from the main parser so this file owns
 the whole surface.
 """
+from __future__ import annotations
+
 import argparse
 import json
 import sys
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from . import calendar as cal
-from .models import ICON_SHELF, Duty, Role, dump
-from .priority import (duty_mark, most_urgent_mark, now, rank, rank_roles, review_mark, why)
-from .store import RoleError, RoleStore
+from .shelf import ICON_SHELF
 
-STATE_BOX = {"active": "◼", "pending": "◻", "paused": "⏸", "expired": "✔", "retired": "✔",
+if TYPE_CHECKING:  # the signatures' names; the commands import them when they run
+    from .models import Duty, Role
+    from .store import RoleStore
+
+STATE_BOX ={"active": "◼", "pending": "◻", "paused": "⏸", "expired": "✔", "retired": "✔",
              "done": "✔", "deferred": "⏸"}
 
 
@@ -50,6 +53,7 @@ def _fail(e: Exception, as_json: bool = False) -> int:
 
 
 def _date(text: Optional[str], flag: str) -> Optional[date]:
+    from .store import RoleError
     if text is None:
         return None
     try:
@@ -59,6 +63,7 @@ def _date(text: Optional[str], flag: str) -> Optional[date]:
 
 
 def _datetime(text: Optional[str], flag: str) -> Optional[datetime]:
+    from .store import RoleError
     if text is None:
         return None
     for fmt in ("%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
@@ -77,6 +82,7 @@ def _csv(items: Optional[List[str]]) -> List[str]:
 
 
 def _role_line(role: Role, duties: List[Duty], at=None) -> str:
+    from .priority import duty_mark, most_urgent_mark, now, rank, review_mark
     at = at or now()
     state = f"[{role.state}"
     if role.review_by:
@@ -104,6 +110,7 @@ def _duty_line(d: Duty, mark: str = "") -> str:
 
 
 def _role_record(store: RoleStore, role: Role, folder) -> Dict[str, Any]:
+    from .models import dump
     rec = dump(role)
     rec["folder"] = str(folder)
     rec["duties"] = [dump(d) for d, _ in store.duties(folder)]
@@ -113,6 +120,7 @@ def _role_record(store: RoleStore, role: Role, folder) -> Dict[str, Any]:
 # ---- role verbs --------------------------------------------------------------
 
 def cmd_role_create(args: argparse.Namespace) -> int:
+    from .store import RoleError, RoleStore
     store = RoleStore()
     try:
         icon = args.icon or "🎭"
@@ -145,6 +153,8 @@ def cmd_role_create(args: argparse.Namespace) -> int:
 
 
 def cmd_role_list(args: argparse.Namespace) -> int:
+    from .store import RoleStore
+    from .priority import now, rank_roles
     store = RoleStore()
     pairs = store.roles()
     if not getattr(args, "all", False):
@@ -163,6 +173,8 @@ def cmd_role_list(args: argparse.Namespace) -> int:
 
 
 def cmd_role_show(args: argparse.Namespace) -> int:
+    from .store import RoleError, RoleStore
+    from .priority import duty_mark, now, rank, review_mark
     store = RoleStore()
     try:
         role, folder = store.find_role(args.role)
@@ -200,6 +212,8 @@ def cmd_role_show(args: argparse.Namespace) -> int:
 
 
 def cmd_role_note(args: argparse.Namespace) -> int:
+    from .store import RoleError, RoleStore
+    from .models import dump
     store = RoleStore()
     try:
         role, folder = store.find_role(args.role)
@@ -214,6 +228,8 @@ def cmd_role_note(args: argparse.Namespace) -> int:
 
 
 def _advance_role(args: argparse.Namespace, new_state: str) -> int:
+    from .store import RoleError, RoleStore
+    from .models import dump
     store = RoleStore()
     try:
         role, folder = store.find_role(args.role)
@@ -235,6 +251,8 @@ def cmd_role_retire(args): return _advance_role(args, "retired")
 
 def cmd_role_review(args: argparse.Namespace) -> int:
     """Record a review: outcome, and the next review date with its horizon."""
+    from .models import Role, dump
+    from .store import RoleError, RoleStore
     store = RoleStore()
     try:
         role, folder = store.find_role(args.role)
@@ -265,6 +283,8 @@ def cmd_role_review(args: argparse.Namespace) -> int:
 # ---- duty verbs --------------------------------------------------------------
 
 def cmd_duty_add(args: argparse.Namespace) -> int:
+    from .store import RoleError, RoleStore
+    from .models import dump
     store = RoleStore()
     try:
         role, folder = store.find_role(args.role)
@@ -339,6 +359,8 @@ def print_charter(folder, role_id: str = "", suppress: bool = False) -> None:
 
 
 def cmd_duty_show(args: argparse.Namespace) -> int:
+    from .store import RoleError, RoleStore
+    from .models import dump
     store = RoleStore()
     try:
         duty, path = store.find_duty(args.duty)
@@ -356,6 +378,8 @@ def cmd_duty_show(args: argparse.Namespace) -> int:
 
 
 def cmd_duty_note(args: argparse.Namespace) -> int:
+    from .store import RoleError, RoleStore
+    from .models import dump
     store = RoleStore()
     try:
         duty, path = store.find_duty(args.duty)
@@ -374,6 +398,8 @@ def cmd_duty_note(args: argparse.Namespace) -> int:
 
 
 def cmd_duty_done(args: argparse.Namespace) -> int:
+    from .store import RoleError, RoleStore
+    from .models import dump
     store = RoleStore()
     try:
         duty, path = store.find_duty(args.duty)
@@ -388,6 +414,8 @@ def cmd_duty_done(args: argparse.Namespace) -> int:
 
 
 def cmd_duty_defer(args: argparse.Namespace) -> int:
+    from .store import RoleError, RoleStore
+    from .models import dump
     store = RoleStore()
     try:
         duty, path = store.find_duty(args.duty)
@@ -402,6 +430,8 @@ def cmd_duty_defer(args: argparse.Namespace) -> int:
 
 
 def cmd_duty_reactivate(args: argparse.Namespace) -> int:
+    from .store import RoleError, RoleStore
+    from .models import dump
     store = RoleStore()
     try:
         duty, path = store.find_duty(args.duty)
@@ -424,6 +454,8 @@ def cmd_duty_engage(args: argparse.Namespace) -> int:
     every duty it engaged and the role's charter, so the Boundaries are in
     front of the agent at the moment the reflex fires.
     """
+    from .store import RoleError, RoleStore
+    from .models import dump
     from .focus import current_focus, set_focus
     store = RoleStore()
     try:
@@ -473,6 +505,8 @@ def cmd_duty_engage(args: argparse.Namespace) -> int:
 
 
 def cmd_duty_link(args: argparse.Namespace) -> int:
+    from .store import RoleError, RoleStore
+    from .models import dump
     store = RoleStore()
     try:
         duty, path = store.find_duty(args.duty)
@@ -487,6 +521,8 @@ def cmd_duty_link(args: argparse.Namespace) -> int:
 
 
 def cmd_duty_unlink(args: argparse.Namespace) -> int:
+    from .store import RoleError, RoleStore
+    from .models import dump
     store = RoleStore()
     try:
         duty, path = store.find_duty(args.duty)
@@ -502,6 +538,8 @@ def cmd_duty_unlink(args: argparse.Namespace) -> int:
 
 def cmd_duty_why(args: argparse.Namespace) -> int:
     """The tier and the fact that put the duty there."""
+    from .store import RoleError, RoleStore
+    from .priority import duty_mark, now, rank, why
     store = RoleStore()
     try:
         duty, path = store.find_duty(args.duty)
@@ -529,6 +567,9 @@ def cmd_duty_why(args: argparse.Namespace) -> int:
 
 
 def cmd_role_calendar(args: argparse.Namespace) -> int:
+    from .store import RoleError, RoleStore
+    from . import calendar as cal
+    from .priority import now
     store = RoleStore()
     at = now()
     try:
@@ -557,6 +598,8 @@ def cmd_role_calendar(args: argparse.Namespace) -> int:
 
 def cmd_role_focus(args: argparse.Namespace) -> int:
     """Focus a role (an event), or with no argument say which is focused."""
+    from .store import RoleError, RoleStore
+    from .priority import duty_mark, now
     from .focus import current_focus, set_focus
     from .hooks import due_now_unserviced
     store = RoleStore()
@@ -598,6 +641,8 @@ def cmd_role_focus(args: argparse.Namespace) -> int:
 
 def cmd_role_unfocus(args: argparse.Namespace) -> int:
     """Always allowed; records the due-now duties left unserviced at the moment of escape."""
+    from .store import RoleError, RoleStore
+    from .priority import now
     from .focus import current_focus, set_focus
     from .hooks import due_now_unserviced
     store = RoleStore()
