@@ -20,6 +20,8 @@ task hierarchy, blockedBy, lineage, promoted_to and provenance edges; of the
 graph's possible protocols only the web exists so far, and naming the web
 "graph" is how the unbuilt remainder disappears into the name.
 """
+import fnmatch
+import os
 import re
 import json
 import sys
@@ -131,10 +133,28 @@ def iter_web_files(agent_home: Path) -> Iterator[Tuple[str, Path, Path]]:
         yield from _walk_type(ca_type, root)
 
 
+# Directories that hold tools' files, never artifacts, defined in the
+# scholarship policy (no participation registry: a tool's directory is not an
+# artifact-producing location). An experiment that vendors a JavaScript bundle
+# brings thousands: on one agent's tree, 7,700 of the 8,300 directories the web
+# walked, twice per `knowledge status`, for no participating file.
+_TOOL_DIRS = frozenset({"node_modules", "__pycache__", ".git", ".venv"})
+
+
+def _files_under(root: Path, pattern: str) -> List[Path]:
+    """Files under `root` whose name matches `pattern`, sorted, skipping tool
+    directories. Like rglob, it does not follow symlinked directories."""
+    found: List[Path] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in _TOOL_DIRS]
+        found.extend(Path(dirpath) / n for n in filenames if fnmatch.fnmatchcase(n, pattern))
+    return sorted(found)
+
+
 def _walk_type(ca_type: str, root: Path) -> Iterator[Tuple[str, Path, Path]]:
     """The per-type walk: markdown units, plus duty records under a roles root."""
     unit = _UNIT_OF_NODE.get(ca_type)
-    for f in sorted(root.rglob("*.md")):
+    for f in _files_under(root, "*.md"):
         if f.name == "INDEX.md":
             continue
         if unit is not None and f.stem not in unit:
@@ -143,7 +163,7 @@ def _walk_type(ca_type: str, root: Path) -> Iterator[Tuple[str, Path, Path]]:
     if ca_type == "roles":
         # Duties are JSON records with a wiki_links field, as ideas are; they
         # participate through the same walk so the doctor sees them too.
-        for f in sorted(root.rglob("DUTY_*.json")):
+        for f in _files_under(root, "DUTY_*.json"):
             yield "duties", root, f
     if ca_type == "tasks":
         # Task records carry wiki_links in their metadata (task_management:

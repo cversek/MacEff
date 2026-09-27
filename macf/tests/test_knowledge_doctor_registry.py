@@ -27,6 +27,15 @@ def test_any_artifact_dir_is_discovered_without_declaration(tmp_path):
     assert ("brand_new_type", "artifact.md") in walked
 
 
+def test_tool_directories_are_not_walked(tmp_path):
+    """A vendored dependency tree or a cache holds tools' files, never artifacts."""
+    _mk(tmp_path, "public/notes/nested/kept.md")
+    for tool_dir in ("node_modules/pkg", "__pycache__", ".git/info", ".venv/lib"):
+        _mk(tmp_path, f"public/notes/{tool_dir}/README.md")
+    walked = [str(p.relative_to(r)) for t, r, p in iter_web_files(tmp_path) if t == "notes"]
+    assert walked == ["nested/kept.md"]
+
+
 def test_unit_of_node_experiments(tmp_path):
     """Protocol and analysis carry the claims; per-arm data is evidence."""
     _mk(tmp_path, "public/experiments/2026-01-01_x/protocol.md")
