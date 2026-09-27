@@ -1490,3 +1490,63 @@ class TestTaskTraceRendering:
         out = self._run(isolated_task_env['env'], "--path", "3", "--full").stdout
         assert "y" * 120 in out
         assert "…" not in out
+
+
+class TestScopeSetExpandsChildren:
+    """`scope set <parent>` brings in each named parent's open children."""
+
+    @staticmethod
+    def _write_task(session_dir, task_id, status, parent="'000'"):
+        mtmd = ("task_type: TASK\ncreation_breadcrumb: s_t/c_1/g_a/p_b/t_1000\n"
+                f"created_cycle: 1\ncreated_by: PA\nparent_id: {parent}\n")
+        desc = f'Task\n\n<macf_task_metadata version="1.0">\n{mtmd}</macf_task_metadata>'
+        (session_dir / f"{task_id}.json").write_text(json.dumps(
+            {"id": str(task_id), "subject": f"Task {task_id}", "description": desc,
+             "status": status}))
+
+    def test_open_children_of_every_named_parent_join_the_scope(self, isolated_task_env):
+        import re
+        d, env = isolated_task_env['session_dir'], isolated_task_env['env']
+        for tid, status, parent in [(10, 'in_progress', "'000'"), (11, 'pending', "'10'"),
+                                    (12, 'completed', "'10'"), (20, 'pending', "'000'"),
+                                    (21, 'in_progress', "'20'"), (30, 'pending', "'000'")]:
+            self._write_task(d, tid, status, parent)
+        result = subprocess.run(['macf_tools', 'task', 'scope', 'set', '10', '20'],
+                                capture_output=True, text=True, env=env)
+        assert result.returncode == 0, result.stderr
+        show = subprocess.run(['macf_tools', 'task', 'scope', 'show'],
+                              capture_output=True, text=True, env=env).stdout
+        scoped = set(re.findall(r'#(\d+)\b', show))
+        assert {'10', '11', '20', '21'} <= scoped, show
+        assert not {'12', '30'} & scoped, show
+
+    def test_the_store_is_read_once_however_many_ids_are_named(self, monkeypatch):
+        """Each read parses every task file; it used to happen once per id."""
+        import argparse
+        import macf.cli as cli
+        import macf.task as task_mod
+        from macf.task.models import MacfTask, MacfTaskMetaData
+
+        tasks = [MacfTask(id=tid, subject=f"Task {tid}", description="", status="pending",
+                          mtmd=MacfTaskMetaData(parent_id=parent, custom={}))
+                 for tid, parent in [("000", None), ("1", "000"), ("2", "000"), ("3", "000")]]
+        reads = {"n": 0}
+
+        class _Reader:
+            session_uuid = None
+            session_path = None
+
+            def read_all_tasks(self):
+                reads["n"] += 1
+                return list(tasks)
+
+            def read_task(self, tid):
+                return next((t for t in tasks if t.id == str(tid)), None)
+
+        monkeypatch.setattr(task_mod, "TaskReader", _Reader)
+        counts = []
+        for ids in (["1"], ["1", "2", "3"]):
+            reads["n"] = 0
+            assert cli.cmd_task_scope_set(argparse.Namespace(task_ids=ids, timer=0)) == 0
+            counts.append(reads["n"])
+        assert counts[0] == counts[1], counts

@@ -4458,16 +4458,16 @@ def cmd_task_list(args: argparse.Namespace) -> int:
     # Sort root tasks numerically (zero-pad string IDs for proper ordering)
     root_tasks = sorted(root_tasks, key=lambda t: str(t.id).zfill(10))
 
+    # Every parent's children, found in one pass (see task.hierarchy).
+    from .task.hierarchy import children_index
+    children_of = children_index(tasks)
+
     def get_children(parent_id):
-        # Normalize both sides to str() so a task whose parent_id was stored as
-        # int (e.g. mutated by a prior int-coercing `metadata set` — see GH #112
-        # Bug 1) still matches the framework's string sentinel "000" and any
-        # string parent IDs going forward.
+        # Normalize to str() so a parent_id stored as int (e.g. mutated by a
+        # prior int-coercing `metadata set` — see GH #112 Bug 1) still matches
+        # the framework's string sentinel "000" and any string parent IDs.
         target = str(parent_id) if parent_id is not None else None
-        return sorted(
-            [t for t in tasks if (str(t.parent_id) if t.parent_id is not None else None) == target],
-            key=lambda t: str(t.id).zfill(10),
-        )
+        return list(children_of.get(target, ()))
 
     # Scope markers are sourced from the EVENT LOG — the single source of truth the
     # gate uses — not the per-task MTMD scope_status field. That field is a
@@ -4983,15 +4983,13 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
 
         root = task_map[root_id]
 
+        # Every parent's children, found in one pass (see task.hierarchy).
+        from .task.hierarchy import children_index
+        children_of = children_index(all_tasks)
+
         def get_children(parent_id):
-            # Zero-pad IDs for proper numeric string sorting.
-            # Normalize both sides to str() to handle tasks with int parent_id
-            # (see GH #112 Bug 1 — int-coerced legacy entries).
             target = str(parent_id) if parent_id is not None else None
-            return sorted(
-                [t for t in all_tasks if (str(t.parent_id) if t.parent_id is not None else None) == target],
-                key=lambda t: t.id.zfill(10),
-            )
+            return list(children_of.get(target, ()))
 
         def has_active_sibling(task, siblings):
             """Check if any sibling is active (in_progress or pending)."""
@@ -8263,6 +8261,7 @@ def cmd_task_scope_set(args: argparse.Namespace) -> int:
     # who pass a parent ID alongside its already-known children don't see
     # duplicate entries or inflated counts in the success output.
     expanded = []
+    children_of = None
     for tid in raw_ids:
         task = reader.read_task(tid)
         if not task:
@@ -8270,15 +8269,14 @@ def cmd_task_scope_set(args: argparse.Namespace) -> int:
             continue
         if tid not in expanded:
             expanded.append(tid)
-        # Check for children
-        all_tasks = reader.read_all_tasks()
-        children = [t for t in all_tasks if t.mtmd and str(getattr(t.mtmd, "parent_id", "")) == tid]
-        if children:
-            for child in children:
-                if child.status in ("pending", "in_progress"):
-                    child_id = child.id
-                    if child_id not in expanded:
-                        expanded.append(child_id)
+        # Check for children. The store is read once, not once per id: each
+        # read parses every task file.
+        if children_of is None:
+            from .task.hierarchy import children_index
+            children_of = children_index(reader.read_all_tasks())
+        for child in children_of.get(tid, ()):
+            if child.status in ("pending", "in_progress") and child.id not in expanded:
+                expanded.append(child.id)
 
     if not expanded:
         print("❌ No valid tasks to scope")
