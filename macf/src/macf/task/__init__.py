@@ -8,7 +8,6 @@ Task files are stored at: ~/.claude/tasks/{session_uuid}/*.json
 """
 
 from .models import MacfTask, MacfTaskMetaData, MacfTaskUpdate
-from .custom_models import SprintCustom, PlayTimeCustom
 from .reader import TaskReader, get_current_session_tasks, get_all_session_tasks, update_task_file, add_task_note
 from .archive import (
     archive_task,
@@ -62,3 +61,18 @@ __all__ = [
     "TYPES_REQUIRING_PLAN_CA",
     "VALID_TASK_TYPES",
 ]
+
+_LAZY = {"SprintCustom": ".custom_models", "PlayTimeCustom": ".custom_models"}
+
+
+def __getattr__(name):
+    # Loaded on first use: the custom models import pydantic, which most task
+    # commands never need (they read tasks; only creating a sprint or play time
+    # and the sprint gate build these). ``from macf.task import SprintCustom``
+    # still works; it arrives here.
+    if name in _LAZY:
+        import importlib
+        value = getattr(importlib.import_module(_LAZY[name], __name__), name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
