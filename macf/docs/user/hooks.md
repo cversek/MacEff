@@ -324,7 +324,7 @@ Most hooks inject temporal context as system-reminders:
 🏗️ MACF 🤖 | DEV_DRV Started | 11:11:00 PM | s_.../c_529/g_.../p_.../t_... | CL62 · 8 unchanged
 ```
 
-A line that changed is sent with a marker: `~` for a `Key: value` line whose value moved, `+` for a new line, `−` for one that went away. The header always carries the clock, the breadcrumb and CL, and the count of lines left out, so nothing important is inferred from absence.
+A line that changed is sent with a marker: `~` for a `Key: value` line whose value moved, `+` for a new line, `−` for one that went away. The header always carries the clock, the breadcrumb and CL, and the count of lines left out, so nothing important is inferred from absence. It also carries the week's usage of the subscription, `wk 42%`, from the newest budget sample (the record `macf_tools budget status` reports; a sample more than an hour old says how old): after the drive length on the `stop` line, at the end of the `user_prompt_submit` line. The full blocks show it as a `Weekly usage:` line, which, like the clock, is never compared.
 
 The full block comes back on the first emission of a session, on the first emission after a compaction, when the last one is more than `hooks.full_every_mins` old (30 by default), and always when `hooks.output` is `full` (see `configuration.md`). Every full body is kept in the event log as a `hook_emission` event, which is also what the next emission is compared against.
 

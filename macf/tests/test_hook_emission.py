@@ -144,3 +144,29 @@ def test_each_hook_diffs_against_its_own_last_block(mock_dependencies, quiet_liv
     _prompt()
     assert "Development Drive Stats:" in stop("")["systemMessage"]
     assert "Day: Wednesday" not in _prompt()[0]
+
+
+# ---- the week's usage rides in the one-line header, like the clock ------------------------
+
+def _week(pct):
+    """A budget sample carrying the all-models weekly limit."""
+    append_event("budget_sampled", {"source": "test", "limits": [
+        {"kind": "weekly_all", "scope": None, "percent": float(pct), "severity": "normal", "resets_at": None}]})
+
+
+def test_the_stop_line_carries_the_week_after_the_drive_length(quiet_stop):
+    from macf.hooks.handle_stop import run
+    _week(42)
+    assert "- This Drive: 45s\n- Weekly usage: 42%" in run("")["systemMessage"]
+    _week(43)
+    second = run("")["systemMessage"]
+    assert "drive 45s | wk 43%" in second and "Weekly usage" not in second   # never a diff line
+
+
+def test_the_prompt_line_ends_with_the_week(mock_dependencies, quiet_live_lines):
+    _week(42)
+    assert "Weekly usage: 42%" in _prompt()[0]
+    _week(43)
+    body = _lines(_prompt()[0])
+    assert len(body) == 1 and "| wk 43% ·" in body[0], body
+

@@ -37,7 +37,7 @@ from macf.modes import (
 # Lines of the DEV_DRV Complete block that change every turn by design; the
 # diff header carries the clock, breadcrumb, CL and this drive's duration.
 STOP_VOLATILE = ("Current Time:", "Breadcrumb:", "Tokens Used:", "CL Level:", "Remaining:",
-                 "- This Drive:", "- Prompt:", "- Total Drives:", "- Total Duration:")
+                 "- This Drive:", "- Weekly usage:", "- Prompt:", "- Total Drives:", "- Total Duration:")
 
 
 @shared_event_reads
@@ -147,6 +147,17 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             emit_warning(Warning(source="stop", kind="mode_detection_failed", detail=f"mode detection failed in stop hook: {e}"))
             mode_indicator = " 🤖" if auto_mode else ""
 
+        # The week's usage from the budget's newest sample, the record `budget
+        # status` reports, shown after the drive length. It moves on its own, so
+        # it is carried like the clock and never becomes a diff line.
+        try:
+            from macf.budget import weekly_usage
+            _week = weekly_usage()
+        except ImportError as e:
+            emit_warning(Warning(source="stop", kind="weekly_usage_failed", detail=f"weekly usage skipped: {e}"))
+            _week = None
+        _week_line = f"\n- Weekly usage: {_week}" if _week else ""
+
         # Format message with full timestamp and DEV_DRV summary
         message = f"""{format_macf_brand(indicators=mode_indicator)} | DEV_DRV Complete
 Current Time: {temporal_ctx['timestamp_formatted']}
@@ -155,7 +166,7 @@ Time of Day: {temporal_ctx['time_of_day']}
 Breadcrumb: {breadcrumb}
 
 Development Drive Stats:
-- This Drive: {duration_str}
+- This Drive: {duration_str}{_week_line}
 - Prompt: {uuid_display}
 - Total Drives: {stats['count']}
 - Total Duration: {total_duration_str}
@@ -176,7 +187,7 @@ Development Drive Stats:
             from macf.utils import get_minimal_timestamp
             _stop_header = (f"{format_macf_brand(indicators=mode_indicator)} | DEV_DRV Complete | "
                             f"{get_minimal_timestamp()} | {breadcrumb} | CL{token_info['cl_level']} | "
-                            f"drive {duration_str}")
+                            f"drive {duration_str}" + (f" | wk {_week}" if _week else ""))
         except (ImportError, KeyError) as e:
             emit_warning(Warning(source="stop", kind="emission_diff_failed",
                                  detail=f"sending the full block: {e}"))

@@ -428,6 +428,32 @@ def hook_lines(which: str, now: Optional[float] = None) -> Optional[str]:
         return None
 
 
+
+def weekly_usage(now: Optional[float] = None) -> Optional[str]:
+    """The all-models weekly limit, "42%", for the hooks' lines.
+
+    Read from the newest sample, the same record ``budget status`` reports, and
+    the read stops there, so a hook pays for one short read and not the week's
+    history. A sample more than an hour old says how old it is. None when there
+    is no sample this week, or the newest carries no weekly limit. A GUARD, like
+    hook_lines: the budget must never take a hook down.
+    """
+    try:
+        now = now or time.time()
+        newest = next(iter(_recent("budget_sampled", now)), None)
+        if newest is None:
+            return None  # noqa: MACEFF003 - no sample this week is the answer, not a failure to get one
+        pct = next((l.get("percent") for l in newest["data"].get("limits", [])
+                    if l.get("kind") == "weekly_all"), None)
+        if pct is None:
+            return None  # noqa: MACEFF003 - a sample without a weekly limit has nothing to show
+        age_h = (now - newest["timestamp"]) / 3600
+        return f"{pct:g}%" + (f" ({age_h:.0f}h old)" if age_h >= 1 else "")
+    except Exception as e:  # noqa: BLE001 - GUARD, not handler: see coding_standards
+        # Deliberately broad: a GUARD, not a handler. The header goes out without it.
+        print(f"⚠️ MACF: weekly usage skipped: {type(e).__name__}: {e}", file=sys.stderr)
+        return None
+
 # ── the burn gate ─────────────────────────────────────────────────────────────
 
 def burn_gate(auto_mode: bool, now: Optional[float] = None) -> dict:

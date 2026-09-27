@@ -33,7 +33,7 @@ from macf.agent_events_log import shared_event_reads
 
 # Lines that change on every prompt by design. The diff header carries them
 # (clock, breadcrumb, CL); diffing them would report a change every time.
-UPS_VOLATILE = ("Current Time:", "Breadcrumb:", "Tokens Used:", "CL Level:", "Remaining:")
+UPS_VOLATILE = ("Current Time:", "Breadcrumb:", "Tokens Used:", "CL Level:", "Remaining:", "Weekly usage:")
 
 # EXPERIMENT: Memory injection script path (Cycle 337)
 MEMORY_RECALL_SCRIPT = Path(__file__).parent.parent.parent / "agent/public/experiments/2026-01-15_140000_001_Claude-Mem_Associative_Injection/artifacts/memory-recall.py"
@@ -225,6 +225,14 @@ Breadcrumb: {breadcrumb}"""
         budget_line = hook_lines("prompt")
         if budget_line:
             token_section = f"{token_section}\n{budget_line}"
+        # The week's usage from the newest sample (the record `budget status`
+        # reports), read after hook_lines has had its chance to refresh it. It
+        # moves on its own, so it is carried like the clock: at the end of the
+        # one-line header, and as a line the diff never compares.
+        from macf.budget import weekly_usage
+        week = weekly_usage()
+        if week:
+            token_section = f"{token_section}\nWeekly usage: {week}"
 
         # Voice message detection: if prompt contains channel voice metadata,
         # inject a transcription directive for the agent
@@ -310,7 +318,8 @@ Breadcrumb: {breadcrumb}"""
             from macf.hooks.emission import emit
             from macf.utils import get_minimal_timestamp
             header = (f"{format_macf_brand(indicators=mode_indicator)} | DEV_DRV Started | "
-                      f"{get_minimal_timestamp()} | {breadcrumb} | CL{token_info['cl_level']}")
+                      f"{get_minimal_timestamp()} | {breadcrumb} | CL{token_info['cl_level']}"
+                      + (f" | wk {week}" if week else ""))
             emission = emit("user_prompt_submit", session_id, plain_content, header, UPS_VOLATILE)
             agent_content, operator_content = emission.agent, emission.operator
         except (ImportError, OSError, ValueError, KeyError) as e:

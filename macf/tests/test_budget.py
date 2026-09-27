@@ -293,3 +293,22 @@ def test_stop_hook_released_by_mode_normal(stop_env):
     assert _stop(True).get("decision") == "block"
     budget.set_mode("normal")
     assert _stop(True).get("decision") != "block"
+
+
+def test_weekly_usage_is_the_newest_samples_week_and_says_when_it_is_stale(log, monkeypatch):
+    clock = {"t": T0}
+    monkeypatch.setattr(budget.time, "time", lambda: clock["t"])
+    assert budget.weekly_usage() is None                          # no sample this week
+    budget.sample(fetch=lambda: reply_at(10, 70, 74), fresh=True)
+    clock["t"] = T0 + 600
+    budget.sample(fetch=lambda: reply_at(12, 71, 75), fresh=True)
+    assert budget.weekly_usage() == "71%"                         # the newest, and the all-models week
+    clock["t"] = T0 + 600 + 3 * 3600
+    assert budget.weekly_usage() == "71% (3h old)"
+
+
+def test_weekly_usage_is_a_guard(log, monkeypatch, capsys):
+    def broken(*a, **k):
+        raise OSError("log gone")
+    monkeypatch.setattr(budget, "_recent", broken)
+    assert budget.weekly_usage() is None and "weekly usage skipped" in capsys.readouterr().err
