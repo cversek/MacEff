@@ -15,6 +15,7 @@ These tests drive the real script in a scratch deployment rather than reading
 it, because the property is what ends up on disk.
 """
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -46,10 +47,10 @@ def deployment(tmp_path):
     return tmp_path
 
 
-def _run(deployment):
+def _run(deployment, env=None):
     proc = subprocess.run([str(deployment / "MacEff" / "maceff_tools" / "maceff-init"),
                            "--force-overwrite"],
-                          capture_output=True, text=True)
+                          capture_output=True, text=True, env=env)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     return proc.stdout + proc.stderr, deployment / "MacEff" / ".maceff" / "framework"
 
@@ -152,3 +153,44 @@ def test_config_is_not_duplicated_into_the_framework_tree(deployment):
         "config/ did not reach its real destination"
     assert not (fw / "config").exists(), \
         "config/ was duplicated into the framework tree"
+
+
+# --- a refresh is made in place (#408) ------------------------------------
+
+def _path_without_rsync(tmp_path):
+    """Every command on PATH except rsync, so the script takes its portable sync."""
+    bin_dir = tmp_path / "bin-no-rsync"
+    bin_dir.mkdir()
+    for d in os.environ["PATH"].split(os.pathsep):
+        if not os.path.isdir(d):
+            continue
+        for name in os.listdir(d):
+            target = os.path.join(d, name)
+            if name != "rsync" and not (bin_dir / name).exists() and os.access(target, os.X_OK):
+                (bin_dir / name).symlink_to(target)
+    assert shutil.which("rsync", path=str(bin_dir)) is None
+    return dict(os.environ, PATH=str(bin_dir))
+
+
+@pytest.mark.parametrize("sync", ["rsync", "portable"])
+def test_a_refresh_keeps_the_directory_a_container_mounts(deployment, tmp_path, sync):
+    """A running container bind-mounts .maceff/framework and holds its inode, not its
+    path. Moving the tree aside left it serving the old copy until it restarted; a
+    refresh must update the directories in place, and the backup is a copy."""
+    if sync == "rsync" and not shutil.which("rsync"):
+        pytest.skip("rsync not installed here")
+    env = None if sync == "rsync" else _path_without_rsync(tmp_path)
+    upstream = deployment / "MacEff" / "framework" / "templates"
+    _out, fw = _run(deployment, env)
+    mounted = (fw.stat().st_ino, (fw / "templates").stat().st_ino)
+
+    (upstream / "t.md").unlink()
+    (upstream / "new.md").write_text("new\n")
+    _out, fw = _run(deployment, env)
+
+    assert (fw.stat().st_ino, (fw / "templates").stat().st_ino) == mounted
+    assert (fw / "templates" / "new.md").read_text() == "new\n"
+    assert not (fw / "templates" / "t.md").exists()
+    backups = list((deployment / "MacEff").glob(".maceff.backup-*"))
+    assert len(backups) == 1 and (backups[0] / "framework" / "templates" / "t.md").exists()
+    assert not list((deployment / "MacEff").glob(".maceff.build-*"))
