@@ -286,7 +286,12 @@ def get_cycle_number_from_events() -> int:
     # (the boundary event is included), but the cycle_correction and
     # state_snapshot fallbacks both live before it -- and those are exactly the
     # paths that run when the boundary is missing or wrong.
-    for event in read_events(limit=None, reverse=True, scope="all"):
+    #
+    # only=: every breadcrumb asks this, and parsing the events between here
+    # and the boundary was most of its cost; lines that cannot be one of the
+    # three sources are now skipped unparsed.
+    sources = ("cycle_correction", "compaction_detected", "state_snapshot")
+    for event in read_events(limit=None, reverse=True, scope="all", only=sources):
         event_type = event.get("event")
 
         # Highest priority: cycle_correction (manual fix for test pollution)

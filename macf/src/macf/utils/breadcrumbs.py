@@ -8,7 +8,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
-from .paths import find_project_root
+from .paths import find_git_worktree, find_project_root, git_location_redirected
 from .session import get_current_session_id
 from .json_io import read_json
 
@@ -219,23 +219,81 @@ def _find_possible_agent_ids(session_id: str) -> list:
         print(f"⚠️ MACF: agent ID scan failed: {e}", file=sys.stderr)
         return []
 
+def _is_object_id(text: str) -> bool:
+    return len(text) in (40, 64) and all(c in "0123456789abcdef" for c in text)
+
+
+def _head_from_files(worktree: Path) -> Optional[str]:
+    """HEAD's commit id read from the repository's own files, or None when they
+    do not state it plainly: a reftable store, a symbolic ref naming another
+    symbolic ref, an unborn branch, anything unrecognised. None sends the
+    caller to git, and so does an OSError, which propagates.
+    """
+    dot_git = worktree / ".git"
+    if dot_git.is_file():  # a linked worktree or submodule: "gitdir: <path>"
+        text = dot_git.read_text(encoding="utf-8").strip()
+        if not text.startswith("gitdir:"):
+            return None
+        git_dir = Path(text[len("gitdir:"):].strip())
+        git_dir = git_dir if git_dir.is_absolute() else worktree / git_dir
+    else:
+        git_dir = dot_git
+    head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+    if not head.startswith("ref:"):
+        return head if _is_object_id(head) else None  # detached
+    ref = head[len("ref:"):].strip()
+    common = git_dir  # a linked worktree keeps its branches in the main repository
+    if (git_dir / "commondir").is_file():
+        named = Path((git_dir / "commondir").read_text(encoding="utf-8").strip())
+        common = named if named.is_absolute() else git_dir / named
+    for base in (git_dir, common):
+        if (base / ref).is_file():
+            value = (base / ref).read_text(encoding="utf-8").strip()
+            return value if _is_object_id(value) else None
+    if (common / "packed-refs").is_file():
+        for line in (common / "packed-refs").read_text(encoding="utf-8").splitlines():
+            fields = line.split(" ")  # "<id> <refname>"; ref names hold no spaces
+            if len(fields) == 2 and fields[1] == ref and _is_object_id(fields[0]):
+                return fields[0]
+    return None
+
+
 def extract_current_git_hash() -> Optional[str]:
     """
     Extract current git commit hash (short form).
 
+    Read from the repository's files when they state HEAD plainly, which costs
+    a few file reads where running git costs a process on every breadcrumb;
+    otherwise git is asked. Always the first seven characters: git lengthens
+    its abbreviation when seven are ambiguous in the repository, and a
+    breadcrumb should not change with the path that computed it.
+
     Returns:
         Short git hash (7 chars) like "c3ec870" or None if not in git repo
     """
+    root = find_project_root()
+    if not git_location_redirected():
+        try:
+            worktree = find_git_worktree(root)
+            if worktree is None:
+                return None
+            oid = _head_from_files(worktree)
+        except (OSError, UnicodeDecodeError) as e:
+            print(f"⚠️ MACF: could not read HEAD from the repository files ({e}); asking git",
+                  file=sys.stderr)
+            oid = None
+        if oid:
+            return oid[:7]
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--short=7", "HEAD"],
             capture_output=True,
             text=True,
             timeout=1,
-            cwd=find_project_root(),
+            cwd=root,
         )
         if result.returncode == 0:
-            return result.stdout.strip()
+            return result.stdout.strip()[:7]
     except Exception as e:
         print(f"⚠️ MACF: Git command failed (fallback: no prompt_uuid): {e}", file=sys.stderr)
 

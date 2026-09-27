@@ -481,6 +481,18 @@ def read_events(limit=None, reverse=True, scope="cycle"):
 
 **Benefit**: Iterate over any number of events in bounded memory.
 
+### Reading One Kind of Event
+
+**Problem**: A question about one kind of event (which cycle is this, the last mode change)
+parsed every event between the end of the log and its answer, and parsing is most of what a
+scan costs.
+
+**Solution**: `read_events(only=...)` names the events wanted. A line that does not contain
+one of the names as a JSON string cannot be one of them and is skipped without being parsed;
+a line that only mentions a name, in its data, is parsed and dropped. In cycle scope the
+boundary is still recognised whether or not it is named. The cycle lookup behind every
+breadcrumb reads this way.
+
 ### One Parse per Hook Invocation
 
 **Problem**: A hook asks the log many questions in one invocation (the mode, the cycle, the
