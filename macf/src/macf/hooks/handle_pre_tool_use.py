@@ -21,7 +21,7 @@ from macf.utils import (
 )
 from macf.modes import (detect_active_modes, anticipate_mode_change, format_mode_indicators,
                         get_active_task_type_marker, detect_auto_mode)
-from macf.agent_events_log import append_event, elide_large_values
+from macf.agent_events_log import append_event, elide_large_values, shared_event_reads
 from macf.event_queries import get_active_policy_injections_from_events
 from macf.hooks.hook_logging import log_hook_event
 from macf.observability import Warning, emit_warning
@@ -121,6 +121,7 @@ def _touch_discipline_nag(session_id: str) -> str:
     return ""
 
 
+@shared_event_reads
 def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
     """
     Run PreToolUse hook logic.

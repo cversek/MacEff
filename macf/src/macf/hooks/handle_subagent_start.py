@@ -33,6 +33,7 @@ from macf.utils import (
 from macf.event_queries import get_deleg_drv_bridge_by_agent_id
 from macf.hooks.hook_logging import log_hook_event
 from macf.observability import Warning, emit_warning
+from macf.agent_events_log import shared_event_reads
 
 
 def _format_deleg_drv_tag(
@@ -60,6 +61,7 @@ def _format_deleg_drv_tag(
     return f"[{''.join(parts)}]"
 
 
+@shared_event_reads
 def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
     """Process SubagentStart hook input and emit the bridge event.
 

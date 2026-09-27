@@ -33,7 +33,7 @@ from macf.hooks.recovery import (
 )
 from macf.hooks.hook_logging import log_hook_event
 from macf.observability import Warning, emit_warning
-from macf.agent_events_log import append_event
+from macf.agent_events_log import append_event, shared_event_reads
 from macf.event_queries import (
     get_last_session_end_time_from_events,
     get_compaction_count_from_events,
@@ -124,6 +124,7 @@ def _focused_charter_block() -> str:
     return f"\n<system-reminder>\n{text}\n</system-reminder>" if text else ""
 
 
+@shared_event_reads
 def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
     """
     Run SessionStart hook logic.

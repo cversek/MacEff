@@ -226,6 +226,23 @@ export MACEFF_USER=pa_user001
 export MACF_EVENTS_LOG_PATH=/tmp/test_events.jsonl
 ```
 
+### `MACF_EVENTS_MEMO_CHECK`
+
+**Purpose**: Fail a hook invocation in which code modified an event it read from the log. Inside
+a hook, readers share event objects, so a modification would be seen by the next reader; with
+this set, a canonical copy of every shared event is kept and compared when the invocation
+returns.
+
+**Value**: Any non-empty value turns it on.
+
+**Default**: Off. The framework's test suite sets it for every test; a deployment with its own
+hook-side code should set it in its tests too.
+
+**Example**:
+```bash
+export MACF_EVENTS_MEMO_CHECK=1
+```
+
 ### `MACF_SESSION_RETENTION_DAYS`
 
 **Purpose**: Configure session retention policy.

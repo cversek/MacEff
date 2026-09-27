@@ -15,7 +15,7 @@ from macf.utils import (
     get_current_session_id,
     get_breadcrumb
 )
-from macf.agent_events_log import append_event
+from macf.agent_events_log import append_event, shared_event_reads
 from macf.hooks.hook_logging import log_hook_event
 from macf.observability import Warning, emit_warning
 
@@ -80,6 +80,7 @@ def _send_permission_preview(tool_name, tool_input, send_notification, send_docu
         send_notification(msg, parse_mode="HTML")
 
 
+@shared_event_reads
 def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
     """
     Run PermissionRequest hook logic.

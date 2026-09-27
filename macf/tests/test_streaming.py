@@ -167,3 +167,48 @@ def test_reverse_does_not_materialize_large_file(tmp_path: Path):
 
     # Sanity: we actually read something.
     assert count == 50
+
+
+# --- Lines longer than a chunk --------------------------------------------
+
+def _whole_file_reverse(path: Path, end=None):
+    """What a reverse read must yield: the file split on newlines, reversed."""
+    data = path.read_bytes()[:end]
+    if not data:
+        return []
+    return [piece.decode("utf-8", errors="replace") for piece in reversed(data.split(b"\n"))]
+
+
+def test_reverse_matches_a_whole_file_split_for_any_chunking(tmp_path: Path):
+    """Random files, chunk sizes and end offsets, including lines many chunks
+    long, multibyte characters and undecodable bytes."""
+    import random
+    rng = random.Random(1790465430)
+    alphabet = [b"a", b"z", b"{", b'"', "é".encode(), "漢".encode(), "🙂".encode(), b"\xff"]
+    for case in range(300):
+        lines = [b"".join(rng.choice(alphabet) for _ in range(rng.choice([0, 1, 3, 17, 90, 400])))
+                 for _ in range(rng.randint(0, 12))]
+        data = b"\n".join(lines) + (b"\n" if rng.random() < 0.7 else b"")
+        p = tmp_path / f"case{case}.jsonl"
+        p.write_bytes(data)
+        chunk = rng.choice([1, 2, 3, 7, 16, 64, 4096])
+        end = rng.choice([None, None, rng.randint(0, len(data) + 5)])
+        got = list(iter_lines_reverse(p, chunk_size=chunk, end=end))
+        assert got == _whole_file_reverse(p, end), f"case {case}: chunk={chunk} end={end} data={data!r}"
+
+
+def test_a_line_many_chunks_long_is_joined_once(tmp_path: Path):
+    """A line that spans chunks used to be re-copied once per chunk it spans:
+    quadratic in its length. The event log holds 39 MB events, and reading one
+    backwards took 4.7 s and 2.7 GB. Here an 8 MB line in 4 KB chunks, which
+    the quadratic version needs seconds for and a linear one milliseconds."""
+    import time
+    p = tmp_path / "long.jsonl"
+    p.write_bytes(b'{"a": 1}\n{"big": "' + b"x" * 8_000_000 + b'"}\n{"b": 2}\n')
+
+    start = time.perf_counter()
+    lengths = [len(line) for line in iter_lines_reverse(p, chunk_size=4096)]
+    elapsed = time.perf_counter() - start
+
+    assert lengths == [0, 8, 8_000_011, 8]
+    assert elapsed < 1.0, f"an 8 MB line took {elapsed:.2f} s to read backwards"

@@ -23,7 +23,7 @@ from macf.utils import (
     get_boundary_guidance,
     get_breadcrumb
 )
-from macf.agent_events_log import append_event
+from macf.agent_events_log import append_event, shared_event_reads
 from macf.hooks.hook_logging import log_hook_event
 from macf.observability import Warning, emit_warning
 from macf.modes import (
@@ -40,6 +40,7 @@ STOP_VOLATILE = ("Current Time:", "Breadcrumb:", "Tokens Used:", "CL Level:", "R
                  "- This Drive:", "- Prompt:", "- Total Drives:", "- Total Duration:")
 
 
+@shared_event_reads
 def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
     """
     Run Stop hook logic.
