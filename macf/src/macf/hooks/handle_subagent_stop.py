@@ -188,7 +188,7 @@ Delegation Drive Stats:
                 body_lines.append(f"Reply: {reply_preview}")
             send_telegram_notification(
                 "\n".join(body_lines),
-                prefix="\U0001f4dc DELEG_DRV Complete",
+                prefix="\U0001f4dc DELEG_DRV Complete", background=True,
             )
         except (ImportError, OSError, ConnectionError) as e:
             emit_warning(Warning(source="subagent_stop", kind="deleg_drv_telegram_failed", detail=f"DELEG_DRV telegram notification failed (non-blocking): {e}"))

@@ -85,7 +85,8 @@ CL: {token_info.get('cl_level', 'N/A')}
             from macf.channels.telegram import send_telegram_notification
             send_telegram_notification(
                 f"Cycle: {cycle_number}\nCL: {token_info.get('cl_level', 'N/A')}\nTokens: {token_info.get('tokens_used', '?')} / {token_info.get('context_window', '?')}\nSource: {data.get('source', 'auto')}",
-                prefix="\U0001f6a8 COMPACTION IMMINENT"
+                prefix="\U0001f6a8 COMPACTION IMMINENT",
+                background=True,
             )
         except (ImportError, OSError, ConnectionError) as e:
             emit_warning(Warning(source="pre_compact", kind="telegram_send_failed", detail=f"pre-compact telegram notification failed (non-blocking): {e}"))
