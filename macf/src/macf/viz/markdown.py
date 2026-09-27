@@ -18,6 +18,7 @@ Usage::
     path = MarkdownPresenter("notes.md").render("/tmp/notes.html")
 """
 import hashlib
+import re
 import sys
 import webbrowser
 from datetime import datetime
@@ -27,6 +28,27 @@ from typing import Optional
 
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
+
+
+def _spaced_headings():
+    """A markdown extension: an ATX heading needs a space or tab after its # run.
+
+    CommonMark requires it; Python-Markdown does not, so "#304 fixed it" rendered as
+    an <h1>: a sentence that opens with an issue reference became a heading and
+    entered the outline and the table of contents. Same processor, same priority,
+    one rule stricter: "#", "# Title" and "## Title ##" are still headings.
+    """
+    from markdown.blockprocessors import HashHeaderProcessor
+    from markdown.extensions import Extension
+
+    class SpacedHashHeaderProcessor(HashHeaderProcessor):
+        RE = re.compile(r"(?:^|\n)(?P<level>#{1,6})(?P<header>(?:[ \t](?:\\.|[^\\])*?)?)#*(?:\n|$)")
+
+    class SpacedHeadings(Extension):
+        def extendMarkdown(self, md):
+            md.parser.blockprocessors.register(SpacedHashHeaderProcessor(md.parser), "hashheader", 70)
+
+    return SpacedHeadings()
 
 
 def _convert_md_to_html(md_text: str) -> str:
@@ -41,7 +63,7 @@ def _convert_md_to_html(md_text: str) -> str:
         import markdown
         return markdown.markdown(
             md_text,
-            extensions=["extra", "codehilite", "toc"],
+            extensions=["extra", "codehilite", "toc", _spaced_headings()],
             extension_configs={
                 "codehilite": {"css_class": "highlight", "guess_lang": False},
             },
