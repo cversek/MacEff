@@ -357,8 +357,16 @@ class TestPrivateReferencesAreRefused:
         assert r.returncode == 1 and "c_40" in r.stderr
 
     @pytest.mark.parametrize("line", ["idea #247 is not here", "sprint #245 closed", "see the roadmap folder",
-                                      "Phase 2. Duties rank themselves", "MISSION #238 owns it", "in cycle 40 we"])
+                                      "Phase 2. Duties rank themselves", "MISSION #238 owns it", "in cycle 40 we",
+                                      "BUG #1067 made it three states", "DETOUR #99 shipped it", "EXPERIMENT #1366 found it"])
     def test_each_private_vocabulary_shape(self, tmp_path, line):
         guard = self._guard(tmp_path)
         msg = tmp_path / "m"; msg.write_text(f"feat: x\n\n{line}\n")
         assert subprocess.run(["bash", str(guard), str(msg)], capture_output=True, text=True).returncode == 1
+
+    def test_github_references_in_prose_pass(self, tmp_path):
+        guard = self._guard(tmp_path)
+        msg = tmp_path / "m"
+        msg.write_text("fix: x\n\nFixes #338. The bug #410 describes is the same class, and PR #446 did the rest.\n")
+        r = subprocess.run(["bash", str(guard), str(msg)], capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr

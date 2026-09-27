@@ -2,8 +2,9 @@
 # Refuse a commit message (or, called by hand, a PR body) that points readers
 # at things they cannot find in this repository.
 #
-# An agent's working context has roadmaps with numbered phases, a task tree,
-# an ideas bank, sprints and cycles. None of that lives here. A message that
+# An agent's working context has roadmaps with numbered phases, a task tree
+# (whose items are labelled by type: BUG #N, DETOUR #N, EXPERIMENT #N), an
+# ideas bank, sprints and cycles. None of that lives here. A message that
 # says "Phase 4 of the roadmap (task #242)" is not a security problem -- the
 # numbers reveal nothing -- but it sends a public reader looking for a
 # document that does not exist and leaves them unsure whether they are
@@ -40,7 +41,7 @@ BODY=$(grep -vE '^#' "$MSG_FILE" | awk '
       if (!(card && i == last) && line[i] !~ /^Breadcrumb: /) print line[i]
   }' || true)
 
-PATTERNS='\b[Pp]hase [0-9]+ of (the|this|our)\b|\b[Pp]hase [0-9]+[.:] |\btask ?#[0-9]+|\bidea ?#[0-9]+|\broadmap (task|folder|phase)|\bMISSION #|\bsprint #[0-9]+|\bcycle [0-9]+\b|\bc_[0-9]+\b'
+PATTERNS='\b[Pp]hase [0-9]+ of (the|this|our)\b|\b[Pp]hase [0-9]+[.:] |\btask ?#[0-9]+|\b(BUG|DETOUR|EXPERIMENT|DELEG|TASK) ?#[0-9]+|\bidea ?#[0-9]+|\broadmap (task|folder|phase)|\bMISSION #|\bsprint #[0-9]+|\bcycle [0-9]+\b|\bc_[0-9]+\b'
 HITS=$(printf '%s\n' "$BODY" | grep -nE "$PATTERNS" || true)
 [ -z "$HITS" ] && exit 0
 
