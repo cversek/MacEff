@@ -81,6 +81,7 @@ Scholarship policy establishes enhanced citation practices for consciousness art
 - Why is normative a class of its own rather than a kind of conceptual authority?
 - What is provenance, and why is it an axis independent of class?
 - What must each CA-type policy answer about its own participation?
+- Which directories under the agent tree are not artifact-producing locations, and what may that list never be used for?
 
 **4 Citation Examples by CA Type**
 - What does a citation look like for each CA type?
@@ -636,11 +637,12 @@ There is **no registry of participating types**, and none may be introduced. The
 
 **Participation is emergent and universal.** Every artifact-producing location under the agent tree participates, discovered from the filesystem rather than declared; the framework policies participate the same way. An individual artifact joins the web by carrying `[[links]]` — writing them *is* the act of joining, and a file without concepts simply never becomes a node. The undeclared-but-real state in which artifacts accumulate unseen is thereby **inexpressible rather than checked-for**: a directory cannot be missing from a list that does not exist.
 
-Three rules follow:
+Four rules follow:
 
 1. **Policy defines, code executes.** Unit-of-node and node class are defined in each CA-type policy's knowledge-web participation section; the scanner carries only derivation rules that apply those definitions, each citing the policy that owns it. A distinction whose definition lives only in code is a registry wearing different clothes.
 2. **One walk.** The web builder and any doctor examine the same files through the same traversal. A checker with its own copy of the walk will drift from the thing it checks, and the drift will be silent.
 3. **Linkless is visible, not excluded.** A location whose artifacts carry no links participates and shows as orphaned. That census is honest noise, curable by annotation — never by de-registering the location, which is the old failure restated.
+4. **A tool's directory is not an artifact-producing location.** A dependency tree or a cache (`node_modules`, `__pycache__`, `.git`, `.venv`) holds files the agent did not write, so the walk does not descend into one; an experiment that vendors a bundle can otherwise make the walk many times slower while adding no node anyone could annotate. This list is the definition the scanner executes. A name belongs on it only if no agent could author an artifact there, and it is never a way to quiet a linkless location, which rule 3 forbids.
 
 ---
 
