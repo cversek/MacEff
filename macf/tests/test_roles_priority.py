@@ -198,6 +198,26 @@ def test_events_walk_roles_and_duties_with_done_and_missed(semester):
     assert [e.when.date() for e in evs if e.kind == "occurrence"][-1] == date(2026, 12, 15)
 
 
+def test_a_date_only_occurrence_is_missed_only_after_its_day_ends():
+    # The tiers read an occurrence with no time as the whole day (end_of_day);
+    # the calendar must not call it missed while the day is still running.
+    role = Role(id="aaaaa1", title="Lab", icon="🎓", tenure_start=date(2026, 9, 1))
+    sweep = _duty("sweep", id="d00009", role_id="aaaaa1", cadence="weekly:tue", horizon="1d")
+    during = datetime(2026, 9, 15, 9, 0)                        # Tuesday morning
+    (e,) = cal.events([(role, [sweep])], date(2026, 9, 15), date(2026, 9, 15), during)
+    assert not e.missed
+    assert pr.duty_mark(pr.classify(sweep, [sweep], during), during) == "⏰ today"
+    text = cal.agenda([e], date(2026, 9, 15), date(2026, 9, 15), during)
+    assert "⏰ today" in text and "✗" not in text
+    after = datetime(2026, 9, 16, 0, 1)
+    (e,) = cal.events([(role, [sweep])], date(2026, 9, 15), date(2026, 9, 15), after)
+    assert e.missed
+    # an occurrence with a time is missed once that time has passed, as before
+    early = _duty("early", id="d00010", role_id="aaaaa1", cadence="weekly:tue at 08:00", horizon="1d")
+    (e,) = cal.events([(role, [early])], date(2026, 9, 15), date(2026, 9, 15), during)
+    assert e.missed
+
+
 def test_agenda_and_grid_render(semester):
     role, duties = semester
     at = datetime(2026, 9, 12, 9, 0)
