@@ -7,11 +7,37 @@ Catches:
   3. except BaseException:      — too broad, no binding
   4. except ... as <var>:       — bound but <var> never used in except body
 
+A catch in 1-3 whose body ends by re-raising is not silent and is not flagged:
+cleaning up a partial write under `except BaseException:` and then `raise` is
+the idiom for undoing it whatever interrupted it, KeyboardInterrupt included.
+
 Exit 0 if clean, exit 1 with details if violations found.
 """
 import re
 import sys
 import textwrap
+
+
+def _ends_by_raising(lines: list, start: int, except_indent: int) -> bool:
+    """Whether the handler whose body starts at lines[start] ends with a raise.
+
+    Only the last statement at the body's own level counts. A raise nested
+    under a condition leaves the other path falling through silently.
+    """
+    body_indent = None
+    last = None
+    for text in lines[start:]:
+        stripped = text.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(text) - len(text.lstrip())
+        if indent <= except_indent:
+            break
+        if body_indent is None:
+            body_indent = indent
+        if indent == body_indent:
+            last = stripped
+    return last is not None and re.match(r"raise\b", last) is not None
 
 
 def check_file(filepath: str) -> list:
@@ -33,6 +59,9 @@ def check_file(filepath: str) -> list:
         # except Exception:  |  except:  |  except BaseException:
         if re.match(r'^except\s*(Exception|BaseException)?\s*:', stripped):
             if ' as ' not in stripped:
+                except_indent = len(line) - len(line.lstrip())
+                if _ends_by_raising(lines, i, except_indent):
+                    continue
                 reason = "bare catch without binding"
                 violations.append((i, stripped, reason))
                 continue
