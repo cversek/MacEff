@@ -103,14 +103,20 @@ def _get_session_id_from_mtime() -> str:
         or "unknown"
     )
 
-def get_last_user_prompt_uuid(session_id: Optional[str] = None) -> Optional[str]:
+def get_last_user_prompt_uuid(session_id: Optional[str] = None,
+                              transcript_path: Optional[str] = None) -> Optional[str]:
     """
     Get UUID of the last user prompt in current session.
 
-    Reads JSONL backwards to find most recent message with role='user'.
+    Reads the transcript from its end and stops at the most recent user text
+    prompt, so the cost is the tail since that prompt, not the transcript. A
+    long-lived session's transcript runs to hundreds of megabytes, and reading
+    all of it on every prompt was most of this hook's time.
 
     Args:
         session_id: Session ID (auto-detected if None)
+        transcript_path: The transcript's path when the caller has it (every
+            hook payload carries it); otherwise it is searched for by session id
 
     Returns:
         Message UUID (message.id) or None if not found
@@ -121,11 +127,12 @@ def get_last_user_prompt_uuid(session_id: Optional[str] = None) -> Optional[str]
     if session_id == "unknown":
         return None
 
-    # Find JSONL file
+    # Find JSONL file: the caller's path when it has one, else search
     jsonl_pattern = f"{session_id}.jsonl"
-    project_dirs = [Path.home() / ".claude" / "projects"]
+    project_dirs = [] if transcript_path and Path(transcript_path).exists() \
+        else [Path.home() / ".claude" / "projects"]
 
-    jsonl_path = None
+    jsonl_path = Path(transcript_path) if not project_dirs else None
     for project_dir in project_dirs:
         if not project_dir.exists():
             continue
@@ -140,11 +147,8 @@ def get_last_user_prompt_uuid(session_id: Optional[str] = None) -> Optional[str]
 
     # Read backwards to find last user message
     try:
-        with open(jsonl_path, 'r') as f:
-            lines = f.readlines()
-
-        # Iterate backwards
-        for line in reversed(lines):
+        from .streaming import iter_lines_reverse
+        for line in iter_lines_reverse(jsonl_path):
             line = line.strip()
             if not line:
                 continue

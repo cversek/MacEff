@@ -114,7 +114,7 @@ def test_dev_drv_lifecycle(temp_log_file, temp_agent_state, monkeypatch):
     test_prompt_uuid = "test-prompt-uuid-123"
     monkeypatch.setattr(
         'macf.utils.session.get_last_user_prompt_uuid',
-        lambda session_id: test_prompt_uuid
+        lambda session_id, transcript_path=None: test_prompt_uuid
     )
 
     # Start DEV_DRV
