@@ -347,3 +347,56 @@ class TestScopeStatusFieldRetired:
         assert check["active_count"] == 0    # 12 removed, 11 inactive, 10 paused
         assert check["paused_count"] == 1
         assert check["inactive_count"] == 1
+
+
+class TestCompletionKeepsPausedMembers:
+    """Completing a task clears the scope only when nothing in it is still open.
+
+    A paused member is open: it waits on an external blocker and resumes with
+    ``scope unpause``. Clearing it away when the last ACTIVE member completes,
+    or when a task outside the scope completes, loses that record.
+    """
+
+    def test_completing_a_task_outside_the_scope_changes_nothing(self, isolated_events):
+        from macf.task.scope import set_scope, pause_scoped_tasks, complete_scoped_task, get_scope_state
+        set_scope(["1", "2"])
+        pause_scoped_tasks(["1", "2"], justification="waiting on review")
+        before = isolated_events.read_text()
+
+        result = complete_scoped_task("99")
+
+        assert get_scope_state() == {"1": "paused", "2": "paused"}
+        assert not result["success"]
+        assert isolated_events.read_text() == before     # no event for a task the scope never held
+
+    def test_last_active_member_completing_keeps_the_paused_ones(self, isolated_events):
+        from macf.task.scope import set_scope, pause_scoped_tasks, complete_scoped_task, get_scope_state
+        set_scope(["1", "2", "3"])
+        pause_scoped_tasks(["3"], justification="waiting on review")
+        complete_scoped_task("1")
+
+        result = complete_scoped_task("2")
+
+        assert not result["auto_cleared"]
+        assert get_scope_state() == {"1": "inactive", "2": "inactive", "3": "paused"}
+
+    def test_a_paused_member_is_not_held_back_as_the_last_active_one(self, isolated_events):
+        import time
+        from macf.agent_events_log import append_event
+        from macf.task.scope import set_scope, pause_scoped_tasks, is_task_timer_blocked
+        set_scope(["1", "2"])
+        pause_scoped_tasks(["2"], justification="waiting on review")
+        append_event("scope_timer_set", {"timer_end_epoch": time.time() + 3600})
+
+        assert not is_task_timer_blocked("2")["blocked"]     # completing it ends nothing early
+        assert is_task_timer_blocked("1")["blocked"]         # the last active member still waits
+
+    def test_last_open_member_completing_still_clears(self, isolated_events):
+        from macf.task.scope import set_scope, complete_scoped_task, get_scope_state
+        set_scope(["1", "2"])
+        complete_scoped_task("1")
+
+        result = complete_scoped_task("2")
+
+        assert result["auto_cleared"]
+        assert get_scope_state() == {}

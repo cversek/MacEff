@@ -9362,15 +9362,19 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
         # fires, and the Stop-hook scope gate nags long after the sprint is done.
         # This runs in the shared success path, so it covers force-completion too:
         # a force-completed sprint releases its children (they return to the tree
-        # at their real status; they are not fake-completed).
+        # at their real status; they are not fake-completed). Paused members are
+        # released here too: completing a member never clears them away, since a
+        # paused task is still open, so its owner's completion is what lets go.
         if task_type in ("SPRINT", "PLAY_TIME"):
             try:
                 from .task.scope import get_scope_check, clear_scope
-                if get_scope_check().get("active_count", 0) > 0:
+                _check = get_scope_check()
+                if _check.get("active_count", 0) + _check.get("paused_count", 0) > 0:
                     clr = clear_scope()
                     if clr.get("success"):
                         swept = len(set(
                             clr.get("active_removed", [])
+                            + clr.get("paused_removed", [])
                             + clr.get("inactive_removed", [])
                             + clr.get("orphans_swept", [])
                         ))
