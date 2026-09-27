@@ -81,7 +81,8 @@ Breadcrumb: {breadcrumb}
             from macf.channels.telegram import send_telegram_notification
             send_telegram_notification(
                 f"Cycle: {cycle_number}\nReason: {data.get('reason', 'unknown')}\nTokens used: {token_info.get('tokens_used', '?')}\nCL: {token_info.get('cl_level', 'N/A')}",
-                prefix="\U0001f6d1 Session Ended"
+                prefix="\U0001f6d1 Session Ended",
+                background=True,
             )
         except (ImportError, OSError, ConnectionError) as e:
             emit_warning(Warning(source="session_end", kind="telegram_send_failed", detail=f"session-end telegram notification failed (non-blocking): {e}"))

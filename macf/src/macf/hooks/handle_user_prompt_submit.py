@@ -331,7 +331,8 @@ Breadcrumb: {breadcrumb}"""
             from macf.channels.telegram import send_telegram_notification
             send_telegram_notification(
                 f"{token_section}",
-                prefix="\U0001f4ac DEV_DRV Started"
+                prefix="\U0001f4ac DEV_DRV Started",
+                background=True,
             )
         except (ImportError, OSError, ConnectionError) as e:
             emit_warning(Warning(source="user_prompt_submit", kind="telegram_send_failed", detail=f"DEV_DRV telegram notification failed (non-blocking): {e}"))
