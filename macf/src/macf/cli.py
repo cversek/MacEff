@@ -8818,6 +8818,80 @@ def _write_final_synthesis(log_path, aggregate: str, open_children) -> None:
     Path(log_path).write_text(new_text, encoding="utf-8")
 
 
+def _autowork_counts(task, reader, scoped_ids):
+    """The ideas and learnings of a SPRINT or PLAY_TIME, counted at its close.
+
+    task_management defines both as facts about the session: ideas_captured is
+    the 💡-prefix note count, learnings_curated the learning files created in
+    the session's window. The close used to read them from the task's custom
+    fields, where ideas moved only on `task note --idea` (the sprint skill asks
+    for plain 💡 notes) and nothing ever wrote learnings, so every close
+    reported 0 learnings whatever had been curated.
+
+    Ideas: 💡 notes on the task itself, plus those written on the tasks in its
+    scope since it began. Learnings: files in the learnings directory named for
+    a moment at or after its creation, or None when that cannot be counted (no
+    creation time, no directory), so the report says so instead of 0.
+    """
+    from datetime import datetime as _dt
+    from .utils.breadcrumbs import parse_breadcrumb
+
+    def _when(breadcrumb):
+        parsed = parse_breadcrumb(breadcrumb) if isinstance(breadcrumb, str) else None
+        return parsed.get("timestamp") if parsed else None
+
+    def _ideas(t, since=None):
+        n = 0
+        for u in ((getattr(t.mtmd, "updates", None) or []) if t is not None and t.mtmd else []):
+            if "💡 " not in (getattr(u, "description", "") or ""):
+                continue
+            if since is not None:
+                at = _when(getattr(u, "breadcrumb", None))
+                if at is None or at < since:
+                    continue
+            n += 1
+        return n
+
+    started = _when(getattr(task.mtmd, "creation_breadcrumb", None)) if task.mtmd else None
+    ideas = _ideas(task)
+    learnings = None
+    if started is not None:
+        for tid in scoped_ids:
+            if str(tid) != str(task.id):
+                ideas += _ideas(reader.read_task(str(tid)), since=started)
+        from .learnings_index import learnings_dir
+        ldir = learnings_dir()
+        if ldir.is_dir():
+            since = _dt.fromtimestamp(started)
+            learnings = 0
+            for p in ldir.glob("*.md"):
+                try:
+                    named = _dt.strptime(p.name[:17], "%Y-%m-%d_%H%M%S")
+                except ValueError:
+                    continue      # INDEX.md, and anything else not named for a moment
+                if named >= since:
+                    learnings += 1
+    return ideas, learnings
+
+
+def _fill_scoped_table(log_path, reader, scoped) -> None:
+    """Replace the sprint log's placeholder table row with the scope as it
+    stood at the close. A table already filled in by hand is left alone."""
+    from pathlib import Path
+    placeholder = "| — | (populated at launch) | — |"
+    text = Path(log_path).read_text(encoding="utf-8")
+    if placeholder not in text or not scoped:
+        return
+    names = {"inactive": "completed", "paused": "paused", "active": "open"}
+    rows = []
+    for tid, state in sorted(scoped.items(), key=lambda kv: int(kv[0]) if str(kv[0]).isdigit() else 0):
+        t = reader.read_task(str(tid))
+        title = _strip_ansi(getattr(t, "subject", "") or "") if t is not None else "(not found)"
+        title = re.sub(r'^\s*#\d+\s*(\[\^#\d+\]\s*)?', '', title).replace("|", "\\|")
+        rows.append(f"| #{tid} | {title} | {names.get(state, state)} |")
+    Path(log_path).write_text(text.replace(placeholder, "\n".join(rows), 1), encoding="utf-8")
+
+
 def _gh_pr_find_linked_issue_tasks(linked_issues: list, repo_slug: str) -> list:
     """Find local, still-open GH_ISSUE tasks whose gh_issue_number is in
     `linked_issues` for the same repo. Returns list of (task_id:int, task)."""
@@ -9181,11 +9255,19 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
             if _paused_n:
                 _progress += f" ({_paused_n} paused)"
 
-        _ideas = _custom.get("ideas_captured", 0)
-        _learnings = _custom.get("learnings_curated", 0)
+        # Counted here, as task_management defines them, not read from custom
+        # fields that the sprint's own practice never moves.
+        try:
+            _ideas, _learnings = _autowork_counts(task, reader, list(_scoped))
+        except (ImportError, OSError, ValueError) as e:
+            print(f"⚠️ MACF: could not count the sprint's ideas and learnings: {e}",
+                  file=sys.stderr)
+            _ideas, _learnings = None, None
+        _ideas_txt = f"{_ideas} ideas captured" if _ideas is not None else "Ideas not counted"
+        _learn_txt = f"{_learnings} learnings curated" if _learnings is not None else "Learnings not counted"
         _aggregate = (
             f'Goal: "{_goal}". {_progress.capitalize()}. '
-            f'{_ideas} ideas captured. {_learnings} learnings curated.'
+            f'{_ideas_txt}. {_learn_txt}.'
         )
         if args.report:
             args.report = args.report + " | " + _aggregate
@@ -9199,15 +9281,14 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
                 _log_path = _find_sprint_log(_plan_ref)
                 if _log_path:
                     _write_final_synthesis(_log_path, _aggregate, _open_children if '_open_children' in dir() else [])
+                    _fill_scoped_table(_log_path, reader, _scoped)
             except (OSError, ValueError) as e:
                 import sys as _sys
                 print(f"⚠️ MACF: sprint_log update failed (non-blocking): {e}", file=_sys.stderr)
 
-        # 4. Prompt about ideas in task notes
-        _updates = getattr(task.mtmd, 'updates', []) if task.mtmd else []
-        _idea_notes = [u for u in _updates if '💡 ' in getattr(u, 'description', '')]
-        if _idea_notes:
-            print(f"💡 {len(_idea_notes)} ideas in task notes — promote them to formal idea CAs after sprint with macf_tools idea create.")
+        # 4. Prompt about ideas in task notes: the same count the synthesis gives
+        if _ideas:
+            print(f"💡 {_ideas} ideas in task notes — promote them to formal idea CAs after sprint with macf_tools idea create.")
 
         # 5. Auto-clear SPRINT work mode if it's currently active
         # The SPRINT mode locks Markov; once the SPRINT task ends we want
@@ -9242,13 +9323,20 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
         _timer_min = _custom.get("timer_minutes", 0)
         _mode_trans = _custom.get("mode_transitions", [])
         _markov = _custom.get("markov_gates", [])
-        _ideas = _custom.get("ideas_captured", 0)
-        _learnings = _custom.get("learnings_curated", 0)
+        try:
+            from .task.scope import get_scope_state
+            _ideas, _learnings = _autowork_counts(task, reader, list(get_scope_state() or {}))
+        except (ImportError, OSError, ValueError) as e:
+            print(f"⚠️ MACF: could not count the session's ideas and learnings: {e}",
+                  file=sys.stderr)
+            _ideas, _learnings = None, None
         _modes_used = len(_mode_trans) + 1
+        _ideas_txt = f"{_ideas} ideas" if _ideas is not None else "ideas not counted"
+        _learn_txt = f"{_learnings} learnings" if _learnings is not None else "learnings not counted"
         _aggregate = (
             f'Goal: "{_goal}". Timer: {_timer_min}min. '
             f'Modes used: {_modes_used}. Markov gates: {len(_markov)}. '
-            f'{_ideas} ideas, {_learnings} learnings.'
+            f'{_ideas_txt}, {_learn_txt}.'
         )
         if args.report:
             args.report = args.report + " | " + _aggregate
@@ -9266,11 +9354,9 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
                 import sys as _sys
                 print(f"⚠️ MACF: play_log update failed (non-blocking): {e}", file=_sys.stderr)
 
-        # 4. Prompt about ideas in task notes
-        _updates = getattr(task.mtmd, 'updates', []) if task.mtmd else []
-        _idea_notes = [u for u in _updates if '💡 ' in getattr(u, 'description', '')]
-        if _idea_notes:
-            print(f"💡 {len(_idea_notes)} ideas in task notes — promote them to formal idea CAs after sprint with macf_tools idea create.")
+        # 4. Prompt about ideas in task notes: the same count the synthesis gives
+        if _ideas:
+            print(f"💡 {_ideas} ideas in task notes — promote them to formal idea CAs after sprint with macf_tools idea create.")
 
         # 5. Clear the scope timer so subsequent Stop hook fires don't gate
         # on a now-completed PLAY_TIME's expiration window. Targeted event:

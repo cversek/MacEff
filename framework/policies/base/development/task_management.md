@@ -632,8 +632,8 @@ custom:
   scoped_progress:
     completed: 2
     total: 3
-  ideas_captured: 0          # 💡-prefix note count
-  learnings_curated: 0       # learning files created during sprint window
+  ideas_captured: 0          # 💡-prefix note count (completion counts the notes themselves)
+  learnings_curated: 0       # learning files created during sprint window (counted at completion)
   initial_work_mode: SPRINT  # always SPRINT for this type
   closure_invoked: false
 ```

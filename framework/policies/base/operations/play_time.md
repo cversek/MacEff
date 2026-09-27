@@ -302,7 +302,7 @@ Document all activity in task notes with the current work mode as prefix:
 - Chain advance: `DISCOVER → EXPERIMENT via chain_advance (chain[0] → chain[1])`
 - Markov override: `BUILD: recommender suggested CURATE, chose BUILD because [justification]`
 
-**Idea capture**: Use `💡` prefix on task notes. After PLAY_TIME, curate `💡` notes into formal idea CAs with user guidance. Increment `custom.ideas_captured` in MTMD.
+**Idea capture**: Use `💡` prefix on task notes. After PLAY_TIME, curate `💡` notes into formal idea CAs with user guidance. Completion counts the `💡` notes, and the learning files dated inside the session, for its synthesis; nothing needs incrementing by hand.
 
 ### 7.2 Mode Transition Log
 
