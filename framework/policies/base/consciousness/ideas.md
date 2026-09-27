@@ -118,6 +118,7 @@ Ideas use JSON format (v1.0):
     "related_ideas": [7, 11],
     "related_learnings": ["filename.md"],
     "wiki_links": ["[[concept_name]]"],
+    "not_linked": [],
     "promoted_to": null,
     "archived_reason": null
   },
@@ -199,6 +200,7 @@ Ideas do NOT push themselves into implementation. They are **pulled**:
 - An experiment protocol **references** an idea as inspiration → idea status becomes `promoted`
 - A roadmap **cites** an idea as motivation → idea status becomes `promoted`
 - `promoted_to` field records what the idea became (experiment ID, roadmap path, etc.)
+- `not_linked` holds concepts a curator judged wrong for this idea, so `knowledge gaps` stops proposing them (scholarship: declining a suggested concept)
 
 This prevents speculative ideas from self-launching. Implementation decisions are conscious choices, not automatic escalation.
 

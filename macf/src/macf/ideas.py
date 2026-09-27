@@ -178,8 +178,13 @@ def update_idea(
     promoted_to: Optional[str] = None,
     wiki_links: Optional[List[str]] = None,
     remove_wiki_links: Optional[List[str]] = None,
+    not_linked: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Update an idea's status, promotion target, or wiki-links.
+
+    `not_linked` records concepts a curator judged wrong for this idea, so
+    gap detection stops proposing them (scholarship: declining a suggested
+    concept).
 
     `wiki_links` are normalized and merged into the existing set (order
     preserved, duplicates dropped); `remove_wiki_links` prunes links found to be
@@ -237,6 +242,18 @@ def update_idea(
                     "breadcrumb": breadcrumb,
                 })
         links["wiki_links"] = current
+
+    if not_linked:
+        links = idea.setdefault("links", {})
+        declined = list(links.get("not_linked") or [])
+        new = [w for w in _normalize_wiki_links(not_linked) if w not in declined]
+        if new:
+            links["not_linked"] = declined + new
+            idea.setdefault("history", []).append({
+                "timestamp": ts_str,
+                "action": f"not_linked_added:{','.join(new)}",
+                "breadcrumb": breadcrumb,
+            })
 
     with open(path, "w") as f:
         json.dump(idea, f, indent=2)

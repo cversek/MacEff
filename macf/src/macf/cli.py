@@ -11186,11 +11186,39 @@ def cmd_knowledge_query(args: argparse.Namespace) -> int:
 
 
 def cmd_knowledge_gaps(args: argparse.Namespace) -> int:
-    """Detect missing wiki-links in the knowledge graph."""
-    from .knowledge_web import detect_web_gaps, format_gap_report, build_knowledge_web
+    """Detect missing wiki-links, decline a wrong suggestion, or propose new concepts."""
+    from .knowledge_web import (detect_web_gaps, format_gap_report, build_knowledge_web,
+                                suggest_concepts, format_concept_suggestions)
+
+    reject = getattr(args, "reject", None)
+    if reject:
+        from .knowledge_link import LinkError, decline
+        target, concepts = reject[0], reject[1:]
+        if not concepts:
+            print("❌ --reject takes a target and at least one concept")
+            return 2
+        try:
+            r = decline(target, concepts)
+        except LinkError as e:
+            print(f"❌ {e}")
+            return 1
+        except OSError as e:
+            print(f"❌ could not update {target}: {e}")
+            return 1
+        if r.changed:
+            print(f"✅ {r.target}: will not suggest {', '.join(f'[[{c}]]' for c in r.changed)} again")
+        else:
+            print(f"ℹ️  {r.target}: already declined")
+        print(f"   Declined: {', '.join(r.concepts)}")
+        return 0
 
     kg = build_knowledge_web()
-    gaps = detect_web_gaps(kg)
+    if getattr(args, "clusters", False):
+        found = suggest_concepts(kg)
+        print(json.dumps(found, indent=2) if getattr(args, "json_output", False)
+              else format_concept_suggestions(found))
+        return 0
+    gaps = detect_web_gaps(kg, include_rejected=getattr(args, "all_gaps", False))
     if getattr(args, "json_output", False):
         print(json.dumps(gaps, indent=2))
     else:
@@ -11208,7 +11236,105 @@ def cmd_knowledge_doctor(args: argparse.Namespace) -> int:
     from .diagnostics import Severity, format_diagnosis
     from .knowledge_doctor import examine
 
-    dx = examine()
+    since = None
+    if getattr(args, "since", None):
+        try:
+            since = _parse_since(args.since)
+        except ValueError as e:
+            print(f"❌ {e}")
+            return 2
+    view = "all" if getattr(args, "all_orphans", False) else "summary"
+    dx = examine(orphans=view, since=since, orphan_type=getattr(args, "orphan_type", None))
+    if getattr(args, "json_output", False):
+        print(json.dumps(dx.to_dict(), indent=2, default=str))
+    else:
+        print(format_diagnosis(dx))
+    return 1 if dx.counts().get(Severity.ACUTE, 0) else 0
+
+
+def _parse_since(value: str) -> float:
+    """A date (YYYY-MM-DD) or an age (7d, 12h) as an epoch cutoff."""
+    import datetime as _dt
+    import re as _re
+    import time as _time
+    m = _re.fullmatch(r"(\d+)([dh])", value.strip())
+    if m:
+        return _time.time() - int(m.group(1)) * (86400 if m.group(2) == "d" else 3600)
+    try:
+        return _dt.datetime.strptime(value.strip(), "%Y-%m-%d").timestamp()
+    except ValueError:
+        raise ValueError(f"--since takes a date (2026-09-01) or an age (7d, 12h), not {value!r}")
+
+
+def cmd_knowledge_status(args: argparse.Namespace) -> int:
+    """Every curation metric in one call, so before and after are one command each."""
+    from .knowledge_doctor import examine
+    from .knowledge_web import build_knowledge_web, detect_web_gaps
+    from .diagnostics import Severity
+
+    kg = build_knowledge_web()
+    dx = examine(kg=kg, orphans="summary")
+    counts = dx.counts()
+    s = kg["stats"]
+    status = {
+        "nodes": s.get("total_nodes", 0), "cas": s.get("total_cas", 0), "ideas": s.get("total_ideas", 0),
+        "edges": s.get("total_edges", 0), "cross_ca_edges": s.get("cross_ca_edges", 0),
+        "concepts": s.get("wiki_concepts", 0),
+        "files_examined": dx.chart.vitals.get("files_examined", 0),
+        "orphans": dx.chart.vitals.get("orphans", 0),
+        "acute": counts.get(Severity.ACUTE, 0), "chronic": counts.get(Severity.CHRONIC, 0),
+        "gaps": len(detect_web_gaps(kg)),
+    }
+    if getattr(args, "json_output", False):
+        print(json.dumps(status, indent=2))
+    else:
+        print("🕸️ " + "  ".join(f"{k}={v}" for k, v in status.items()))
+    return 0
+
+
+def cmd_knowledge_link(args: argparse.Namespace) -> int:
+    """Add (or with unlink, remove) wiki-link concepts on any artifact."""
+    from .knowledge_link import LinkError, apply_links
+
+    remove = getattr(args, "knowledge_cmd", "") == "unlink"
+    try:
+        r = apply_links(args.target, args.concepts, remove=remove)
+    except LinkError as e:
+        print(f"❌ {e}")
+        return 1
+    except OSError as e:
+        print(f"❌ could not update {args.target}: {e}")
+        return 1
+    verb = "unlinked" if remove else "linked"
+    if r.changed:
+        print(f"✅ {r.target}: {verb} {', '.join(f'[[{c}]]' for c in r.changed)}")
+    else:
+        print(f"ℹ️  {r.target}: nothing to change")
+    print(f"   Concepts: {', '.join(r.concepts) if r.concepts else '(none)'}")
+    if r.still_inline:
+        print(f"   ⚠️  still used inline in the prose, so still linked: {', '.join(r.still_inline)} "
+              f"(inline uses are the author's; edit the passage if the link should go)")
+    return 0
+
+
+def cmd_learnings_index_add(args: argparse.Namespace) -> int:
+    """File a learning under its cluster in the master index."""
+    from .learnings_index import add_entry
+    try:
+        ok, msg = add_entry(args.file, args.cluster, hook=args.hook or "")
+    except OSError as e:
+        print(f"❌ could not update the index: {e}")
+        return 1
+    print(("✅ " if ok else "ℹ️  ") + msg)
+    return 0 if ok else 1
+
+
+def cmd_learnings_index_verify(args: argparse.Namespace) -> int:
+    """The learnings-index doctor: entries, counts, and the consultation trigger."""
+    from .diagnostics import Severity, format_diagnosis
+    from .learnings_index import verify
+    from pathlib import Path as _Path
+    dx = verify(memory_file=_Path(args.memory).expanduser() if args.memory else None)
     if getattr(args, "json_output", False):
         print(json.dumps(dx.to_dict(), indent=2, default=str))
     else:
@@ -12884,6 +13010,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
     kg_gaps = knowledge_sub.add_parser("gaps", help="detect missing wiki-links")
     kg_gaps.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")
+    kg_gaps.add_argument("--reject", nargs="+", metavar=("TARGET", "CONCEPT"),
+                         help="record that concepts are wrong for TARGET, so they are not suggested again")
+    kg_gaps.add_argument("--all", dest="all_gaps", action="store_true",
+                         help="include suggestions an artifact has declined, marked")
+    kg_gaps.add_argument("--clusters", action="store_true",
+                         help="keywords several artifacts declare that no concept carries yet")
     kg_gaps.set_defaults(func=cmd_knowledge_gaps)
 
     kg_doctor = knowledge_sub.add_parser(
@@ -12891,7 +13023,42 @@ def _build_parser() -> argparse.ArgumentParser:
         help="report orphans, drift, singletons and registry gaps the graph cannot see")
     kg_doctor.add_argument("--json", dest="json_output", action="store_true",
                            help="machine-readable output")
+    kg_doctor.add_argument("--since", metavar="DATE|Nd",
+                           help="also list each orphan dated on or after this (2026-09-01, or 7d)")
+    kg_doctor.add_argument("--type", dest="orphan_type", metavar="TYPE",
+                           help="list every orphan of one type (the bulk pass)")
+    kg_doctor.add_argument("--all", dest="all_orphans", action="store_true",
+                           help="list every orphan individually instead of one line per type")
     kg_doctor.set_defaults(func=cmd_knowledge_doctor)
+
+    kg_status = knowledge_sub.add_parser(
+        "status", help="the curation metrics in one call: graph counts, doctor chart, gap count")
+    kg_status.add_argument("--json", dest="json_output", action="store_true",
+                           help="machine-readable output")
+    kg_status.set_defaults(func=cmd_knowledge_status)
+
+    for _verb, _help in (("link", "add wiki-link concepts to an artifact of any type"),
+                         ("unlink", "remove wiki-link concepts from an artifact")):
+        _p = knowledge_sub.add_parser(_verb, help=_help, description=(
+            f"{_help.capitalize()}. TARGET is a markdown path, a node id as graph/gaps print it, "
+            f"task:N (or #N), or idea:N. Concepts are normalized the way the web normalizes them."))
+        _p.add_argument("target", help="path, node id, task:N or idea:N")
+        _p.add_argument("concepts", nargs="+", help="one or more concepts, with or without [[ ]]")
+        _p.set_defaults(func=cmd_knowledge_link)
+
+    learnings_parser = sub.add_parser("learnings", help="the learnings index and its consultation trigger")
+    learnings_sub = learnings_parser.add_subparsers(dest="learnings_cmd")
+    li_parser = learnings_sub.add_parser("index", help="maintain and verify the master learnings index")
+    li_sub = li_parser.add_subparsers(dest="learnings_index_cmd")
+    li_add = li_sub.add_parser("add", help="file a learning under its cluster, keeping the counts true")
+    li_add.add_argument("file", help="the learning's file name (or path) in agent/private/learnings")
+    li_add.add_argument("--cluster", required=True, help="the cluster heading to file it under")
+    li_add.add_argument("--hook", default="", help='when to consult it, e.g. "WHEN a bug resists the first hypothesis"')
+    li_add.set_defaults(func=cmd_learnings_index_add)
+    li_verify = li_sub.add_parser("verify", help="check entries, counts and the consultation trigger")
+    li_verify.add_argument("--memory", help="path to the auto-loaded memory file, if not the platform default")
+    li_verify.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")
+    li_verify.set_defaults(func=cmd_learnings_index_verify)
 
     kg_viz = knowledge_sub.add_parser("viz", help="generate interactive HTML visualization")
     kg_viz.add_argument("output", nargs="?", default="", help="output path (default: /tmp/macf_knowledge_graph.html)")

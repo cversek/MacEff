@@ -45,12 +45,12 @@ future agent performs actually finds this work.
 ### Step 1: Baseline
 
 ```bash
-macf_tools knowledge graph --json    # Current node/edge counts
-macf_tools knowledge doctor          # What is unreachable, drifting, or undeclared?
+macf_tools knowledge status --json   # Every metric below, in one call
+macf_tools knowledge doctor          # What is unreachable, drifting, or undeclared? (one line per type)
 macf_tools knowledge gaps            # What connections are missing between CONNECTED nodes?
 ```
 
-Record baseline metrics in task notes: nodes, edges, cross-CA edges, **orphan count**, acute/chronic counts, gap count.
+Record baseline metrics in task notes: nodes, edges, cross-CA edges, **orphan count**, acute/chronic counts, gap count. `knowledge status` returns all of them; note the time too, since Step 5 uses it.
 
 **Run the doctor before gaps, and understand why the order matters.** `gaps` compares keyword overlap between nodes that are *already connected*, so an artifact with no wiki-links is dropped before comparison begins. It can therefore report "no gaps detected" while a third of the corpus has no edges at all — which is exactly what happened in the run that motivated building the doctor. `gaps` finds missing edges *between* participants; the doctor finds artifacts that are not participants. They answer different questions and the doctor's is the prior one.
 
@@ -62,6 +62,12 @@ For each gap suggestion:
 - **100% confidence**: Almost certainly genuine — add the wiki-link
 - **50-67% confidence**: Evaluate whether the keyword overlap reflects real conceptual connection
 - **Below 50%**: Skip unless you have domain knowledge confirming the link
+
+A suggestion you judge wrong gets declined, not just skipped, so the next curation does not judge it again:
+
+```bash
+macf_tools knowledge gaps --reject <node> <concept>
+```
 
 ### Step 3: Query Before Linking
 
@@ -75,8 +81,11 @@ This prevents spurious links — if the subgraph doesn't relate to your node, th
 
 ### Step 4: Add Wiki-Links
 
-**For ideas** (JSON files): Update the `links.wiki_links` array
-**For learnings/observations** (markdown): Add or update `## Wiki-Links` section
+```bash
+macf_tools knowledge link <target> <concept> [<concept> ...]
+```
+
+One verb for every type: a markdown path or node id (the `## Wiki-Links` section is created or extended), `idea:N`, or `task:N`. It normalizes concepts and skips any already present. `knowledge unlink` removes.
 
 Wiki-link format: `[[concept_name]]` — lowercase, underscores, no `.md` suffix.
 Aim for 2-5 concepts per artifact.
@@ -84,9 +93,8 @@ Aim for 2-5 concepts per artifact.
 ### Step 5: Re-Verify
 
 ```bash
-macf_tools knowledge doctor           # Orphans should decrease
-macf_tools knowledge gaps             # Should decrease
-macf_tools knowledge graph --json     # Edge count should increase
+macf_tools knowledge status --json               # The deltas against Step 1
+macf_tools knowledge doctor --since <baseline>   # Names each orphan newer than the baseline
 ```
 
 Record post-curation metrics **including the orphan count**. The delta is the evidence of value.
@@ -101,7 +109,7 @@ Leaving orphans is a legitimate outcome. Some artifacts genuinely need a decisio
 
 Before curating, think:
 
-1. **Are there new concepts that should exist?** If 3+ CAs share a theme not in the seed vocabulary, create a new concept.
+1. **Are there new concepts that should exist?** `macf_tools knowledge gaps --clusters` lists the keywords three or more artifacts declare with no concept yet. Query each before creating it, then link its members.
 2. **Are existing concepts too broad?** If `[[hooks]]` connects 20+ nodes, consider splitting into `[[hooks_lifecycle]]` and `[[hooks_injection]]`.
 3. **Are there orphan CAs?** Do not answer this from memory or intuition — Step 1's doctor run answers it by measurement, across every participating type rather than the two you happen to think of. The reason this question is worth asking at all is that the artifacts most likely to be orphaned are the ones written last at lowest context, which is exactly when the linking step gets dropped.
 4. **Is normalization consistent?** Check for `.md` suffixes, capitalization, or hyphen vs underscore variants of the same concept.
