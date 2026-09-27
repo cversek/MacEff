@@ -21,8 +21,8 @@ the two guarantees that matter for free:
 The full block is also sent on a hook's first emission in a session, when the
 last one is older than ``hooks.full_every_mins``, and always when
 ``hooks.output`` is ``full``. A caller can turn the timer off, as the Stop
-hook does for the focused role's duty list: after its first full copy a
-reader is sent only what changed in it.
+hook does: its message carries the focused role's duty list, and a timed
+full block would restate the role's lines with nothing in them changed.
 
 The agent's copy is plain text with markers. The operator's copy is the same
 diff in colour: a hook's systemMessage is shown in the terminal and never sent
@@ -57,10 +57,12 @@ _RESET = "\033[0m"
 
 @dataclass
 class Emission:
-    """What to send, and whether it was the full block."""
+    """What to send, whether it was the full block, and how many lines of a
+    diff changed (none means the reader has all of it already)."""
     agent: str
     operator: str
     full: bool
+    changed: int = 0
 
 
 def _setting_output_mode() -> str:
@@ -199,4 +201,5 @@ def emit(hook: str, session_id: str, block: str, header: str, volatile: Sequence
         agent=render(header, entries, unchanged, color=False),
         operator=render(header, entries, unchanged, color=_color_enabled()),
         full=False,
+        changed=len(entries),
     )

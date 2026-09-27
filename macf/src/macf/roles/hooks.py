@@ -133,64 +133,59 @@ def priority_list(role: Role, placed: List[Placement], at: datetime) -> str:
 def focus_gate(auto_mode: bool, store: Optional[RoleStore] = None, at: Optional[datetime] = None) -> Dict[str, Any]:
     """What the Stop hook injects for the focused role, and whether it blocks.
 
-    Returns {"text": str, "block": bool, "unserviced": [duty ids]}, with the
-    text's two parts beside it for ``focus_text``: "list" (the priority list)
-    and "gate" (the unserviced duties and their remedy, empty when none are),
-    and "role", the focused role's id. The stop is blocked only in AUTO_MODE
-    and only while due-now duties are unserviced. Undated duties never block.
+    Returns {"text": str, "role": the focused role's id, "block": bool,
+    "unserviced": [duty ids]}. The stop is blocked only in AUTO_MODE and only
+    while due-now duties are unserviced. Undated duties never block.
     """
-    silent = {"text": "", "list": "", "gate": "", "role": "", "block": False, "unserviced": []}
     store = store or RoleStore()
     at = at or now()
     focused = current_focus()
     if not focused:
-        return silent
+        return {"text": "", "role": "", "block": False, "unserviced": []}
     try:
         role, folder = store.find_role(focused)
     except RoleError as e:
         print(f"⚠️ MACF: focused role {focused} not found ({e}); run macf_tools role unfocus", file=sys.stderr)
-        return silent
+        return {"text": "", "role": "", "block": False, "unserviced": []}
     duties = [d for d, _ in store.duties(folder)]
     placed = rank(duties, at, role.expires)
-    listing = priority_list(role, placed, at)
+    text = priority_list(role, placed, at)
     pending = due_now_unserviced(role, duties, at)
     if not pending:
-        return {"text": listing, "list": listing, "gate": "", "role": role.id, "block": False, "unserviced": []}
+        return {"text": text, "role": role.id, "block": False, "unserviced": []}
     names = ", ".join(f"\"{p.duty.title}\"" for p in pending)
-    gate = (f"🛡️ Due-now duties unserviced: {names}.\n"
-            f"Service each (macf_tools role duty note|done|defer <id>), or put the role down honestly: "
-            f"macf_tools role unfocus (recorded with what was due).")
-    return {"text": f"{listing}\n\n{gate}", "list": listing, "gate": gate, "role": role.id,
-            "block": bool(auto_mode), "unserviced": [p.duty.id for p in pending]}
+    text += (f"\n\n🛡️ Due-now duties unserviced: {names}.\n"
+             f"Service each (macf_tools role duty note|done|defer <id>), or put the role down honestly: "
+             f"macf_tools role unfocus (recorded with what was due).")
+    return {"text": text, "role": role.id, "block": bool(auto_mode), "unserviced": [p.duty.id for p in pending]}
 
 
 def focus_text(focus: Dict[str, Any], session_id: str, reader: str) -> str:
-    """The focus gate's text for one reader, its duty list cut to what changed
-    since that reader last saw it.
+    """The focus gate's text as one reader should get it: whole the first time,
+    then only its lines that moved, and nothing at all when none did.
 
-    ``reader`` is ``"agent"`` for a block reason and ``"operator"`` for the
-    terminal's systemMessage. Each is compared with its own last copy, because
-    the agent never sees a systemMessage: one copy for both would tell the
-    agent "unchanged" about a list it was never sent. A reader gets the whole
-    list on its first Stop in a session or cycle, and every time when
-    ``hooks.output`` is ``full``, but never again on a timer: a duty list that
-    has not moved is not news, and repeating it is how the line that did move
-    gets skipped. A block reason keeps its gate lines whole, since they say why
-    this stop is refused; the operator's copy is shortened throughout.
+    ``reader`` names whose copy this is (the Stop hook sends ``"agent"`` for a
+    block reason). Each reader is compared with its own last copy, because the
+    agent sees a Stop only when it is blocked: one copy for every reader would
+    tell the agent "unchanged" about lines it was never sent. The whole text
+    goes out on a reader's first Stop in a session or cycle and every time when
+    ``hooks.output`` is ``full``, and never again on a timer. Role lines that
+    did not move are not repeated, not even as a heading, since restating them
+    is what teaches a reader to skip the one that moved.
     """
     if not focus.get("text"):
         return ""
     from ..hooks.emission import emit
-    header = focus["list"].splitlines()[0].rstrip(":")
-    hook = f"stop_duties:{focus['role']}:{reader}"
+    header = focus["text"].splitlines()[0].rstrip(":")
     try:
-        if reader == "agent":
-            listing = emit(hook, session_id, focus["list"], header, (), periodic_full=False).agent
-            return f"{listing}\n\n{focus['gate']}" if focus["gate"] else listing
-        return emit(hook, session_id, focus["text"], header, (), periodic_full=False).operator
+        em = emit(f"stop_duties:{focus['role']}:{reader}", session_id, focus["text"], header, (),
+                  periodic_full=False)
     except (OSError, ValueError) as e:
-        print(f"⚠️ MACF: duty list sent whole, its last copy could not be compared: {e}", file=sys.stderr)
+        print(f"⚠️ MACF: role lines sent whole, their last copy could not be compared: {e}", file=sys.stderr)
         return focus["text"]
+    if not em.full and not em.changed:
+        return ""
+    return em.operator if reader == "operator" else em.agent
 
 
 def prompt_line(store: Optional[RoleStore] = None, at: Optional[datetime] = None) -> str:

@@ -378,10 +378,11 @@ def test_stop_hook_composes_focus_gate(store, lab, tmp_path, monkeypatch):
     # AUTO: blocked with the list, no active scope needed
     r = _stop(True)
     assert r.get("decision") == "block" and "late" in r["reason"] and "idle-stop counter" in r["reason"]
-    # service clears it
+    # service clears it, and the operator is told what moved, not the list again
     store.note_duty(d, folder, "handled")
     r = _stop(True)
-    assert r.get("decision") != "block" and "duty priorities" in r.get("systemMessage", "")
+    msg = r.get("systemMessage", "")
+    assert r.get("decision") != "block" and "− 🛡️ Due-now duties unserviced" in msg and "duty priorities" not in msg
 
 
 def test_stop_hook_focus_and_scope_gates_concatenate(store, lab, tmp_path, monkeypatch):
@@ -414,7 +415,7 @@ def test_focus_gate_fails_open_with_the_shared_failsafe(store, lab, tmp_path, mo
     assert results[-1].get("decision") != "block" and "fail-open" in results[-1].get("systemMessage", "")
 
 
-# ---- the duty list on Stop: whole once, then what changed (#407) ----------------------------
+# ---- role lines on Stop: whole once, then only what moved (#407) ----------------------------
 
 @pytest.fixture
 def stopping(store, lab, tmp_path, monkeypatch):
@@ -428,39 +429,56 @@ def stopping(store, lab, tmp_path, monkeypatch):
     return role, folder
 
 
-def test_the_duty_list_is_sent_once_then_only_what_changed(store, stopping):
+def test_role_lines_are_sent_once_then_only_counted_until_one_moves(store, stopping):
     role, folder = stopping
     store.add_duty(role, folder, "undated")
     store.add_duty(role, folder, "second")
     assert "NORMAL    undated" in _stop(False)["systemMessage"]
     again = _stop(False)["systemMessage"]
-    assert "duty priorities · 2 unchanged" in again and "undated" not in again
+    assert "unchanged" in again and len(again.splitlines()) == 1     # the role is only a count
     store.add_duty(role, folder, "fresh")
-    changed = _stop(False)["systemMessage"]
-    assert "+   NORMAL    fresh" in changed and "undated" not in changed
+    moved = _stop(False)["systemMessage"]
+    assert "+   NORMAL    fresh" in moved and "duty priorities" not in moved and "undated" not in moved
 
 
-def test_a_block_reason_is_compared_with_what_the_agent_was_sent(store, stopping):
-    """The agent reads a Stop only when it is blocked, so its copy of the list is
-    compared with the last block reason, never with the operator's messages; the
-    gate lines saying why this stop is refused arrive whole every time."""
+def test_the_agent_gets_the_role_lines_once_then_only_what_moved(store, stopping):
+    """The agent reads a Stop only when it is blocked, so its copy is compared with
+    what its own block reasons carried, never with the operator's messages; a block
+    that repeats nothing still says why the stop was refused."""
     role, folder = stopping
     store.add_duty(role, folder, "undated")
     store.add_duty(role, folder, "late", due=LATE, horizon="1d", why="w")
-    _stop(False)                                   # the operator is sent the list
-    assert "NORMAL    undated" in _stop(True)["reason"]   # the agent never was
+    _stop(False)                                               # the operator is sent the lines
+    first = _stop(True)["reason"]                              # the agent never was
+    assert "NORMAL    undated" in first and 'Due-now duties unserviced: "late"' in first
     again = _stop(True)["reason"]
-    assert "duty priorities · 2 unchanged" in again and "undated" not in again
-    assert 'Due-now duties unserviced: "late"' in again and "role unfocus" in again
+    assert "duty priorities" not in again and "undated" not in again and "Due-now duties" not in again
+    assert "Stop blocked in AUTO_MODE" in again and "idle-stop counter" in again
+    store.add_duty(role, folder, "fresh")
+    moved = _stop(True)["reason"]
+    assert "+   NORMAL    fresh" in moved and "undated" not in moved
 
 
-def test_the_duty_list_is_not_resent_on_a_timer_but_full_output_sends_it(store, stopping, monkeypatch):
+def test_a_blocked_stop_records_nothing_as_shown_to_the_operator(store, stopping):
+    from macf.agent_events_log import read_events
+    role, folder = stopping
+    store.add_duty(role, folder, "late", due=LATE, horizon="1d", why="w")
+
+    def recorded():
+        return sum(1 for e in read_events(reverse=True)
+                   if e.get("event") == "hook_emission" and e["data"]["hook"] == "stop")
+    _stop(False)
+    assert recorded() == 1
+    assert _stop(True).get("decision") == "block"               # its reason replaces the summary
+    assert recorded() == 1
+
+
+def test_no_timer_resends_the_role_lines_but_full_output_does(store, stopping, monkeypatch):
     role, folder = stopping
     store.add_duty(role, folder, "undated")
-    monkeypatch.setenv("MACF_HOOK_FULL_EVERY_MINS", "0")    # every timed block is full each time
+    monkeypatch.setenv("MACF_HOOK_FULL_EVERY_MINS", "0")       # a timed block would be full every time
     _stop(False)
-    again = _stop(False)["systemMessage"]
-    assert "duty priorities · 1 unchanged" in again and "NORMAL    undated" not in again
+    assert "undated" not in _stop(False)["systemMessage"]
     monkeypatch.setenv("MACF_HOOK_OUTPUT", "full")
     assert "NORMAL    undated" in _stop(False)["systemMessage"]
 
