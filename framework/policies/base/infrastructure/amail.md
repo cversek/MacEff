@@ -3,6 +3,12 @@
 **Type**: Infrastructure (opt-in)
 **Scope**: All agents (PA and SA), and the broker that serves them
 **Status**: ACTIVE — specification. No implementation is authorized by this document.
+**Version**: 1.4.1 — §5.1 and §6b.1 say who mints the message id (the broker, on
+acceptance) and what that means for the sender's copy: it keeps the id the sender
+generated, so a sent message has two ids, joined by the record beside the copy. Patch:
+the rules were already in the code, each with its reason; the specification did not say
+them, and a deployment found the two ids disagreeing.
+
 **Version**: 1.4.0 — adds the host tier (§7.5) and the declarations that carry it (§1.3):
 a deployment may declare itself supervised, mark a uid as shared by several agents, and
 have the broker take the submitting identity from a claim the audit names as a claim.
@@ -103,6 +109,8 @@ becomes tractable once the address stops encoding how the message travels.
 - How does the broker know who I am, and why can I not simply claim a sender?
 - Why is there a rate limit, and whose asset is it protecting?
 - Who writes the sender's copy of a message, and why is it never the broker?
+- Why does my sent copy carry a different id from the one `send` reported, and which
+  id does a reply to my own message name?
 - Why is what became of a sent message not the sender's to assert, and where does that
   fact live?
 - Why is a disposition recorded as a history rather than a last value, and what must an
@@ -574,7 +582,7 @@ Every message MUST carry:
 
 | Field | Meaning |
 |---|---|
-| message id | Globally unique, generated locally, never reused |
+| message id | Globally unique, never reused; minted by the broker when it accepts the message, never chosen by the submitter (the sender's own copy: §6b.1) |
 | thread id | Minted by whoever opens the thread; carried unchanged by every reply |
 | parent | Message id this replies to; absent on the first message of a thread |
 | from / to | amail addresses |
@@ -747,6 +755,15 @@ written by the **agent**, never by the broker: the filesystem is the access path
 agent's store, and a broker writing into an agent's home is precisely the cross-uid
 write §2.3 exists to remove. It MUST remain readable with the broker stopped, for the
 same reason a memory requiring a running service to read is not a memory.
+
+A sent message therefore has **two ids**. The copy is written before submission, so it
+carries the id the sender generated; the broker then mints the id the recipient, the
+ledger and the disposition use (§5.1); and the copy is never rewritten to match. The
+submission record kept beside the copy holds both. The sender MUST be able to find its
+own message by either id, and a reply continuing it MUST name the broker's id, the only
+one the broker's ledger knows it by. The two are joined at lookup, because each
+alternative breaks a rule: rewriting the copy breaks immutability, and letting the
+submitter choose the id lets a message shadow another.
 
 ### 6b.2 What became of it is not the sender's to assert
 
