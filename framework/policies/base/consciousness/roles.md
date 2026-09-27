@@ -464,9 +464,11 @@ The schedule is expressed in `B` rather than as a fresh constant so that it trac
 
 ### 9.2 Focused role: the Stop gate
 
-Every Stop hook injects the focused role's **full duty priority list** in tier order with approach marks. The gate is **bounded** by *due-now duties unserviced*: duties at DUE_SOON, today or OVERDUE that have had **no service** (note, done, defer-with-reason) since they entered that tier.
+Every Stop hook carries the focused role's **duty priority list** in tier order with approach marks, and sends each reader **only what changed** since that reader last saw it. The whole list goes out once, on the reader's first Stop in a session or cycle; after that a Stop carries one line naming the role and counting the lines that did not move, plus those that did, marked `+` when new and `−` when gone (a duty whose tier or approach mark moved appears as both, as it stands and as it was). The agent reads a Stop only when it is blocked and the operator reads every one, so each is compared with its own last copy. Nothing re-sends the list on a timer. A list restated on every stop spends the budget that `mode_system.md` names (habituation is the real budget) and teaches both readers to skip the line that moved; `hooks.output: full` sends it whole every time for an operator who wants that.
 
-- **AUTO_MODE**: while any due-now duty is unserviced, the stop is blocked with that list as the reason, exactly as the sprint scope gate blocks on remaining scope.
+The gate is **bounded** by *due-now duties unserviced*: duties at DUE_SOON, today or OVERDUE that have had **no service** (note, done, defer-with-reason) since they entered that tier.
+
+- **AUTO_MODE**: while any due-now duty is unserviced, the stop is blocked, exactly as the sprint scope gate blocks on remaining scope. The reason names the unserviced duties and the remedy **in full on every blocked stop**, beneath the list's changes: it says why this stop is refused.
 - **MANUAL_MODE**: the list is injected and the stop is allowed.
 
 Undated duties never block. A cadence duty blocks only for its current occurrence. A duty that was serviced after entering its tier does not block again until it enters a later tier.

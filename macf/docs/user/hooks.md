@@ -330,7 +330,7 @@ The full block comes back on the first emission of a session, on the first emiss
 
 The copy in your terminal is coloured (green added, dim red removed, yellow changed). A hook's systemMessage never reaches the model, so the colour costs no tokens; the agent's copy is plain. Set `NO_COLOR` to turn the colour off.
 
-Gate messages from `stop` (scope, focus, burn, timer) are never shortened. `pre_tool_use` is a single line already and is unchanged.
+The focused role's duty list, which `stop` carries on every stop (roles policy, the Stop gate), follows the same rule without the timer: each reader is sent it whole once per session or cycle, then only what moved in it, under one line counting the rest. The agent sees a stop only when it is blocked and the operator sees every one, so each is compared with its own last copy. The gates' own reasons (scope, focus, burn, timer) are never shortened: a blocked stop always names what is holding it and how to clear it. `pre_tool_use` is a single line already and is unchanged.
 
 ### Compaction Detection (session_start)
 

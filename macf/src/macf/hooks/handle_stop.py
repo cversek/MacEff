@@ -167,9 +167,9 @@ Development Drive Stats:
 
         # Only what changed since the last DEV_DRV Complete (#407), applied to
         # the summary alone and before anything is appended to it: the focused
-        # role's duty list is injected whole on every Stop (roles policy), the
-        # error nudge is about this stop, and every gate returns its reason in
-        # full. The summary reaches the operator's terminal, not the agent.
+        # role's duty list is diffed on its own, per reader (focus_text below),
+        # the error nudge is about this stop, and every gate returns its reason
+        # in full. The summary reaches the operator's terminal, not the agent.
         try:
             from macf.hooks.emission import emit
             from macf.utils import get_minimal_timestamp
@@ -258,10 +258,11 @@ Development Drive Stats:
                 f"{format_macf_brand()} | ⏭️ Stop allowed once for the injected "
                 f"/{_bypass['command']}; every gate holds again after it.")}
 
-        # --- Focus gate (roles policy): the focused role's priority list is
-        # injected on every Stop; it BLOCKS only in AUTO_MODE while due-now
-        # duties are unserviced. It composes with the scope gate below by
-        # concatenating reasons, and shares the one idle-stop failsafe.
+        # --- Focus gate (roles policy): the focused role's priority list goes
+        # out with every Stop, cut to what changed since each reader last saw
+        # it; it BLOCKS only in AUTO_MODE while due-now duties are unserviced.
+        # It composes with the scope gate below by concatenating reasons, and
+        # shares the one idle-stop failsafe.
         _focus = {"text": "", "block": False, "unserviced": []}
         try:
             from macf.roles.hooks import focus_gate
@@ -269,14 +270,25 @@ Development Drive Stats:
         except (OSError, ValueError, ImportError, AttributeError) as _e:
             emit_warning(Warning(source="stop", kind="focus_gate_failed", detail=f"focus gate error (non-blocking): {_e}"))
 
+        _focus_sent = {}
+
+        def _focus_for(reader):
+            """The focus text as this reader is sent it: "agent" for a block
+            reason, "operator" for the systemMessage. Once per Stop, since
+            rendering it records what the reader was sent."""
+            if reader not in _focus_sent:
+                from macf.roles.hooks import focus_text
+                _focus_sent[reader] = focus_text(_focus, session_id, reader)
+            return _focus_sent[reader]
+
         def _with_focus(result):
             """Append the focus text to a gate result; a block reason concatenates."""
             if not _focus["text"]:
                 return result
             if result.get("decision") == "block":
-                result["reason"] = f"{result.get('reason', '')}\n\n{_focus['text']}"
+                result["reason"] = f"{result.get('reason', '')}\n\n{_focus_for('agent')}"
             else:
-                result["systemMessage"] = f"{result.get('systemMessage', '')}\n\n{_focus['text']}"
+                result["systemMessage"] = f"{result.get('systemMessage', '')}\n\n{_focus_for('operator')}"
             return result
 
         # --- Scope gate: block stop if active scoped tasks remain ---
@@ -529,14 +541,14 @@ Development Drive Stats:
                 return {
                     "continue": True,
                     "decision": "block",
-                    "reason": (f"{_focus['text']}\n\n"
+                    "reason": (f"{_focus_for('agent')}\n\n"
                                f"Stop blocked in AUTO_MODE while due-now duties of the focused role are unserviced "
                                f"(idle-stop counter: {_remaining} remaining)."),
                 }
             except (OSError, ValueError, ImportError, AttributeError) as _e:
                 emit_warning(Warning(source="stop", kind="focus_gate_failed", detail=f"focus-only gate error (non-blocking): {_e}"))
         elif _focus["text"]:
-            message += f"\n\n{_focus['text']}"
+            message += f"\n\n{_focus_for('operator')}"
 
         # --- Burn gate (credit_budget policy): with no scope or focus holding the stop, an operator's burn intent
         # holds it while the allowance is below target, the deadline is ahead and open work exists. AUTO_MODE only;

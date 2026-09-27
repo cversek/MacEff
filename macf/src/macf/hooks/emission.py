@@ -20,7 +20,9 @@ the two guarantees that matter for free:
 
 The full block is also sent on a hook's first emission in a session, when the
 last one is older than ``hooks.full_every_mins``, and always when
-``hooks.output`` is ``full``.
+``hooks.output`` is ``full``. A caller can turn the timer off, as the Stop
+hook does for the focused role's duty list: after its first full copy a
+reader is sent only what changed in it.
 
 The agent's copy is plain text with markers. The operator's copy is the same
 diff in colour: a hook's systemMessage is shown in the terminal and never sent
@@ -164,13 +166,16 @@ def last_body(hook: str, session_id: str, since_epoch: float) -> Optional[List[s
     return None
 
 
-def emit(hook: str, session_id: str, block: str, header: str, volatile: Sequence[str]) -> Emission:
+def emit(hook: str, session_id: str, block: str, header: str, volatile: Sequence[str],
+         periodic_full: bool = True) -> Emission:
     """Decide full or diff for this emission, record it, and render both copies.
 
     ``block`` is the full block exactly as it would have been sent before;
     ``header`` is the one line that stands in for it when only the changes are
     sent, and must carry anything the reader needs every time (clock,
-    breadcrumb, context level).
+    breadcrumb, context level). With ``periodic_full`` false the block is not
+    re-sent on a timer: it is full only when the reader has nothing to compare
+    against, or when ``hooks.output`` is ``full``.
     """
     from macf.agent_events_log import append_event
 
@@ -178,7 +183,8 @@ def emit(hook: str, session_id: str, block: str, header: str, volatile: Sequence
     prev = None
     if _setting_output_mode() != "full" and session_id:
         try:
-            prev = last_body(hook, session_id, time.time() - _setting_full_every_mins() * 60)
+            since = time.time() - _setting_full_every_mins() * 60 if periodic_full else 0.0
+            prev = last_body(hook, session_id, since)
         except (OSError, ValueError) as e:
             print(f"⚠️ MACF: previous {hook} emission unreadable, sending the full block: {e}",
                   file=sys.stderr)

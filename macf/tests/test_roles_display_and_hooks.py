@@ -414,6 +414,65 @@ def test_focus_gate_fails_open_with_the_shared_failsafe(store, lab, tmp_path, mo
     assert results[-1].get("decision") != "block" and "fail-open" in results[-1].get("systemMessage", "")
 
 
+# ---- the duty list on Stop: whole once, then what changed (#407) ----------------------------
+
+@pytest.fixture
+def stopping(store, lab, tmp_path, monkeypatch):
+    """A focused role and the Stop hook's agent home, with plain text to match."""
+    monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(tmp_path))
+    monkeypatch.setenv("NO_COLOR", "1")
+    from macf.utils.paths import find_agent_home
+    find_agent_home.cache_clear()
+    role, folder = lab
+    set_focus(role.id, None)
+    return role, folder
+
+
+def test_the_duty_list_is_sent_once_then_only_what_changed(store, stopping):
+    role, folder = stopping
+    store.add_duty(role, folder, "undated")
+    store.add_duty(role, folder, "second")
+    assert "NORMAL    undated" in _stop(False)["systemMessage"]
+    again = _stop(False)["systemMessage"]
+    assert "duty priorities · 2 unchanged" in again and "undated" not in again
+    store.add_duty(role, folder, "fresh")
+    changed = _stop(False)["systemMessage"]
+    assert "+   NORMAL    fresh" in changed and "undated" not in changed
+
+
+def test_a_block_reason_is_compared_with_what_the_agent_was_sent(store, stopping):
+    """The agent reads a Stop only when it is blocked, so its copy of the list is
+    compared with the last block reason, never with the operator's messages; the
+    gate lines saying why this stop is refused arrive whole every time."""
+    role, folder = stopping
+    store.add_duty(role, folder, "undated")
+    store.add_duty(role, folder, "late", due=LATE, horizon="1d", why="w")
+    _stop(False)                                   # the operator is sent the list
+    assert "NORMAL    undated" in _stop(True)["reason"]   # the agent never was
+    again = _stop(True)["reason"]
+    assert "duty priorities · 2 unchanged" in again and "undated" not in again
+    assert 'Due-now duties unserviced: "late"' in again and "role unfocus" in again
+
+
+def test_the_duty_list_is_not_resent_on_a_timer_but_full_output_sends_it(store, stopping, monkeypatch):
+    role, folder = stopping
+    store.add_duty(role, folder, "undated")
+    monkeypatch.setenv("MACF_HOOK_FULL_EVERY_MINS", "0")    # every timed block is full each time
+    _stop(False)
+    again = _stop(False)["systemMessage"]
+    assert "duty priorities · 1 unchanged" in again and "NORMAL    undated" not in again
+    monkeypatch.setenv("MACF_HOOK_OUTPUT", "full")
+    assert "NORMAL    undated" in _stop(False)["systemMessage"]
+
+
+def test_the_first_stop_after_a_compaction_sends_the_whole_list(store, stopping):
+    role, folder = stopping
+    store.add_duty(role, folder, "undated")
+    _stop(False)
+    append_event("compaction_detected", {"session_id": "test-sess"})
+    assert "NORMAL    undated" in _stop(False)["systemMessage"]
+
+
 def test_mode_set_work_is_unaffected_by_focus(store, lab):
     """Focus is a layer beside the work mode, not a mode."""
     from macf.modes.detection import format_mode_indicators
