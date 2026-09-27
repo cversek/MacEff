@@ -160,6 +160,60 @@ class TestHostToContainer:
         assert msgs[0].sender == f"ira@{HOST}"
 
 
+class TestEveryRecipientOfOnePeerDomainIsHandedItsOwnPair:
+    """One send to two agents of the same peer domain writes two pairs into ONE
+    intake (the intake is per peer domain, not per recipient). Named by time
+    and message id alone, the second pair replaced the first, and only the
+    last-listed recipient ever received the message -- while every recipient
+    was recorded delivered."""
+
+    def _two_agent_box(self, tmp_path):
+        host_root = tmp_path / "host" / "handoff"
+        box_root = tmp_path / "box" / "handoff"
+        host, _ = _deployment(tmp_path, "host", HOST,
+                              {"ira": [f"manny@{BOX}", f"ada@{BOX}"]},
+                              {BOX: box_root})
+        box, _ = _deployment(tmp_path, "box", BOX,
+                             {"manny": [f"ira@{HOST}"], "ada": [f"ira@{HOST}"]},
+                             {HOST: host_root})
+        peer_intake(host_root, BOX).mkdir(parents=True, mode=0o2770)
+        peer_intake(box_root, HOST).mkdir(parents=True, mode=0o2770)
+        return host, box
+
+    def test_two_recipients_leave_two_pairs_in_the_intake(self, tmp_path):
+        host, box = self._two_agent_box(tmp_path)
+        m = Message(sender=f"ira@{HOST}", to=[f"manny@{BOX}", f"ada@{BOX}"],
+                    subject="rung 1s", body="to both")
+        r = host.submit("ira", m)
+        assert r["ok"], r
+        intake = peer_intake(box.config.inbound_handoff, HOST)
+        recipients = sorted(json.loads(p.with_suffix(".json").read_text())["recipient"]
+                            for p in intake.glob("*.amsg"))
+        assert recipients == [f"ada@{BOX}", f"manny@{BOX}"]
+
+    def test_the_sweep_delivers_to_every_recipient_not_only_the_last(self, tmp_path):
+        host, box = self._two_agent_box(tmp_path)
+        m = Message(sender=f"ira@{HOST}", to=[f"manny@{BOX}", f"ada@{BOX}"],
+                    subject="rung 1s", body="to both")
+        host.submit("ira", m)
+        results = box.sweep_shared()
+        assert [x["accepted"] for x in results] == [True, True]
+        for agent in ("manny", "ada"):
+            boxed = list((box.config.inbound_handoff / agent).glob("*.amsg"))
+            assert len(boxed) == 1, f"{agent} did not receive its copy"
+
+    def test_a_pair_is_never_written_over_an_existing_one(self, tmp_path):
+        """Any future name collision must fail as an undelivered recipient,
+        not pass as delivered after replacing someone else's pair."""
+        box_dir = tmp_path / "intake"
+        box_dir.mkdir()
+        Broker._write_pair(box_dir, "1-msg-x", {"recipient": "first"}, b"first")
+        with pytest.raises(DeliveryError, match="1-msg-x"):
+            Broker._write_pair(box_dir, "1-msg-x", {"recipient": "second"}, b"second")
+        assert (box_dir / "1-msg-x.amsg").read_bytes() == b"first"
+        assert json.loads((box_dir / "1-msg-x.json").read_text())["recipient"] == "first"
+
+
 class TestAMixedCaseAgentKeyIsStillAMailbox:
     """A deployment declares its agents under the keys it chose -- `SilverFox`,
     not `silverfox` -- and every table (homes, pickup boxes, addressing) is
