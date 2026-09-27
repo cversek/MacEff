@@ -15,6 +15,16 @@ from macf.utils import get_token_info
 from macf.cli import cmd_context
 
 
+def _info_from_transcript(tmp_path, line):
+    """get_token_info over a real one-line transcript, no compaction on record."""
+    path = tmp_path / "session.jsonl"
+    path.write_text(line + "\n")
+    with patch('macf.utils.tokens._compaction_lower_bound_iso', return_value=""), \
+         patch('macf.utils.tokens.get_current_session_id', return_value='test'), \
+         patch('macf.utils.tokens.get_session_transcript_path', return_value=str(path)):
+        return get_token_info()
+
+
 class TestGetTokenInfo:
     """Test suite for get_token_info() function (4-6 focused tests)."""
 
@@ -64,7 +74,7 @@ class TestGetTokenInfo:
         assert result['tokens_remaining'] == get_total_context()
         assert result['percentage_remaining'] == 100.0
 
-    def test_cl_calculation_accuracy(self):
+    def test_cl_calculation_accuracy(self, tmp_path):
         """
         Test CLUAC = round(percentage_remaining).
 
@@ -84,20 +94,7 @@ class TestGetTokenInfo:
             }
         })
 
-        with patch('macf.utils.tokens._compaction_lower_bound_iso', return_value=""):
-            with patch('macf.utils.get_current_session_id', return_value='test-session'):
-                with patch('macf.utils.get_session_transcript_path', return_value='/fake/path.jsonl'):
-                    with patch('pathlib.Path.exists', return_value=True):
-                        with patch('builtins.open', create=True) as mock_open:
-                            # Setup mock file
-                            mock_file = MagicMock()
-                            mock_file.__enter__.return_value = mock_file
-                            mock_file.read.return_value = mock_jsonl_content.encode('utf-8')
-                            mock_file.seek.return_value = 0
-                            mock_file.__iter__.return_value = [mock_jsonl_content.encode('utf-8') + b'\n']
-                            mock_open.return_value = mock_file
-
-                            result = get_token_info()
+        result = _info_from_transcript(tmp_path, mock_jsonl_content)
 
         # Verify calculation: 100000 actual tokens used
         from macf.utils.tokens import get_total_context
@@ -154,7 +151,7 @@ class TestGetTokenInfo:
         assert 'tokens_used' in result
         assert 'cl_level' in result
 
-    def test_tokens_used_reflects_actual_jsonl(self):
+    def test_tokens_used_reflects_actual_jsonl(self, tmp_path):
         """
         Test that tokens_used reflects actual JSONL usage without any buffer added.
 
@@ -174,19 +171,7 @@ class TestGetTokenInfo:
             }
         })
 
-        with patch('macf.utils.tokens._compaction_lower_bound_iso', return_value=""):
-            with patch('macf.utils.get_current_session_id', return_value='test'):
-                with patch('macf.utils.get_session_transcript_path', return_value='/fake.jsonl'):
-                    with patch('pathlib.Path.exists', return_value=True):
-                        with patch('builtins.open', create=True) as mock_open:
-                            mock_file = MagicMock()
-                            mock_file.__enter__.return_value = mock_file
-                            mock_file.read.return_value = mock_jsonl.encode('utf-8')
-                            mock_file.seek.return_value = 0
-                            mock_file.__iter__.return_value = [mock_jsonl.encode('utf-8') + b'\n']
-                            mock_open.return_value = mock_file
-
-                            result = get_token_info()
+        result = _info_from_transcript(tmp_path, mock_jsonl)
 
         # tokens_used reflects actual JSONL tokens (no buffer added)
         assert result['tokens_used'] == 80000, "tokens_used should be actual tokens"
@@ -338,7 +323,7 @@ class TestTokenInfoEdgeCases:
         assert result['cl_level'] in [0, 100]
         assert result['tokens_used'] == 0
 
-    def test_near_compaction_tokens(self):
+    def test_near_compaction_tokens(self, tmp_path):
         """Test CLUAC calculation near compaction threshold."""
         # Mock near-compaction scenario (160k tokens used including output)
         mock_jsonl = json.dumps({
@@ -353,19 +338,7 @@ class TestTokenInfoEdgeCases:
             }
         })
 
-        with patch('macf.utils.tokens._compaction_lower_bound_iso', return_value=""):
-            with patch('macf.utils.get_current_session_id', return_value='test'):
-                with patch('macf.utils.get_session_transcript_path', return_value='/fake.jsonl'):
-                    with patch('pathlib.Path.exists', return_value=True):
-                        with patch('builtins.open', create=True) as mock_open:
-                            mock_file = MagicMock()
-                            mock_file.__enter__.return_value = mock_file
-                            mock_file.read.return_value = mock_jsonl.encode('utf-8')
-                            mock_file.seek.return_value = 0
-                            mock_file.__iter__.return_value = [mock_jsonl.encode('utf-8') + b'\n']
-                            mock_open.return_value = mock_file
-
-                            result = get_token_info()
+        result = _info_from_transcript(tmp_path, mock_jsonl)
 
         # 160k actual tokens used (no buffer added)
         from macf.utils.tokens import get_total_context
