@@ -34,6 +34,11 @@ from macf.modes import (
     should_suppress_markov, format_low_context_directive,
 )
 
+# Lines of the DEV_DRV Complete block that change every turn by design; the
+# diff header carries the clock, breadcrumb, CL and this drive's duration.
+STOP_VOLATILE = ("Current Time:", "Breadcrumb:", "Tokens Used:", "CL Level:", "Remaining:",
+                 "- This Drive:", "- Prompt:", "- Total Drives:", "- Total Duration:")
+
 
 def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
     """
@@ -159,6 +164,22 @@ Development Drive Stats:
 {boundary_guidance if boundary_guidance else ""}
 
 {format_macf_footer()}"""
+
+        # Only what changed since the last DEV_DRV Complete (#407), applied to
+        # the summary alone and before anything is appended to it: the focused
+        # role's duty list is injected whole on every Stop (roles policy), the
+        # error nudge is about this stop, and every gate returns its reason in
+        # full. The summary reaches the operator's terminal, not the agent.
+        try:
+            from macf.hooks.emission import emit
+            from macf.utils import get_minimal_timestamp
+            header = (f"{format_macf_brand(indicators=mode_indicator)} | DEV_DRV Complete | "
+                      f"{get_minimal_timestamp()} | {breadcrumb} | CL{token_info['cl_level']} | "
+                      f"drive {duration_str}")
+            message = emit("stop", session_id, message, header, STOP_VOLATILE).operator
+        except (ImportError, OSError, ValueError, KeyError) as e:
+            emit_warning(Warning(source="stop", kind="emission_diff_failed",
+                                 detail=f"sending the full block: {e}"))
 
         # Notify Telegram unconditionally (non-blocking to main return)
         try:

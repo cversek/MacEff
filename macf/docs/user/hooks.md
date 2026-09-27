@@ -77,7 +77,7 @@ These are wrapped in visual boundary boxes:
 - Injects temporal awareness
 - Updates session state
 
-**Key output:** Temporal context injection.
+**Key output:** Temporal context injection: the full block first, then only what changed (see "Changes Only, After the First Block").
 
 ### 3. pre_tool_use
 
@@ -315,6 +315,22 @@ Most hooks inject temporal context as system-reminders:
 - `HH:MM:SS AM/PM` - Current time (12-hour format)
 - `s_SESSION/c_CYCLE/g_HASH/p_PROMPT/t_TIMESTAMP` - Forensic breadcrumb
 - `CLNN` - CL (Context Left) level, the percentage of usable context remaining
+
+### Changes Only, After the First Block
+
+`user_prompt_submit` and the `DEV_DRV Complete` summary from `stop` send their full block once, then only what changed since that hook last spoke. A prompt where nothing moved but the clock arrives as one line:
+
+```
+🏗️ MACF 🤖 | DEV_DRV Started | 11:11:00 PM | s_.../c_529/g_.../p_.../t_... | CL62 · 8 unchanged
+```
+
+A line that changed is sent with a marker: `~` for a `Key: value` line whose value moved, `+` for a new line, `−` for one that went away. The header always carries the clock, the breadcrumb and CL, and the count of lines left out, so nothing important is inferred from absence.
+
+The full block comes back on the first emission of a session, on the first emission after a compaction, when the last one is more than `hooks.full_every_mins` old (30 by default), and always when `hooks.output` is `full` (see `configuration.md`). Every full body is kept in the event log as a `hook_emission` event, which is also what the next emission is compared against.
+
+The copy in your terminal is coloured (green added, dim red removed, yellow changed). A hook's systemMessage never reaches the model, so the colour costs no tokens; the agent's copy is plain. Set `NO_COLOR` to turn the colour off.
+
+Gate messages from `stop` (scope, focus, burn, timer) are never shortened. `pre_tool_use` is a single line already and is unchanged.
 
 ### Compaction Detection (session_start)
 

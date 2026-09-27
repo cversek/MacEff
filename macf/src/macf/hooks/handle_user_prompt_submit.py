@@ -30,6 +30,10 @@ from macf.modes import detect_auto_mode
 from macf.hooks.hook_logging import log_hook_event
 from macf.observability import Warning, emit_warning
 
+# Lines that change on every prompt by design. The diff header carries them
+# (clock, breadcrumb, CL); diffing them would report a change every time.
+UPS_VOLATILE = ("Current Time:", "Breadcrumb:", "Tokens Used:", "CL Level:", "Remaining:")
+
 # EXPERIMENT: Memory injection script path (Cycle 337)
 MEMORY_RECALL_SCRIPT = Path(__file__).parent.parent.parent / "agent/public/experiments/2026-01-15_140000_001_Claude-Mem_Associative_Injection/artifacts/memory-recall.py"
 
@@ -296,6 +300,21 @@ Breadcrumb: {breadcrumb}"""
         ]
         plain_content = chr(10).join([s for s in sections if s])
 
+        # Send only what changed since this hook last spoke (#407). The header
+        # carries the lines that change every prompt; the full block goes out
+        # after compaction, on a new session, and when the last one is stale.
+        agent_content = operator_content = plain_content
+        try:
+            from macf.hooks.emission import emit
+            from macf.utils import get_minimal_timestamp
+            header = (f"{format_macf_brand(indicators=mode_indicator)} | DEV_DRV Started | "
+                      f"{get_minimal_timestamp()} | {breadcrumb} | CL{token_info['cl_level']}")
+            emission = emit("user_prompt_submit", session_id, plain_content, header, UPS_VOLATILE)
+            agent_content, operator_content = emission.agent, emission.operator
+        except (ImportError, OSError, ValueError, KeyError) as e:
+            emit_warning(Warning(source="user_prompt_submit", kind="emission_diff_failed",
+                                 detail=f"sending the full block: {e}"))
+
         # Notify Telegram (non-blocking)
         try:
             from macf.channels.telegram import send_telegram_notification
@@ -309,10 +328,10 @@ Breadcrumb: {breadcrumb}"""
         # Pattern C: top-level systemMessage for user + hookSpecificOutput for agent
         return {
             "continue": True,
-            "systemMessage": plain_content,  # TOP LEVEL - user sees this
+            "systemMessage": operator_content,  # TOP LEVEL - user sees this
             "hookSpecificOutput": {
                 "hookEventName": "UserPromptSubmit",
-                "additionalContext": f"<system-reminder>\n{plain_content}\n</system-reminder>"
+                "additionalContext": f"<system-reminder>\n{agent_content}\n</system-reminder>"
             }
         }
 
