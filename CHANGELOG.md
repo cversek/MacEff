@@ -47,7 +47,11 @@ Gmail, event-log rotation, and commit-message guards. Sprints now survive compac
 
 **Commit-message guards** (`macf_tools githooks`): a `commit-msg` stage in the dispatcher and two portable hooklets, delivered by the installer, that refuse a Claude Code session link and a citation of planning documents the repository does not hold.
 
-**Policies**: reports as dated folders with a provenance sidecar, versioned deliverables and a LaTeX-to-PDF path; mailbox access as a bounded capability; a MISSION is not complete while its code is unshipped; why the shape of the artifact tree is not the agent's to change; the artifact tree is not a git repository; and the calling card as the last line, and only the last line, of a public artifact.
+**Hook output as changes** (`macf.hooks.emission`, #407): `UserPromptSubmit` and the Stop hook's `DEV_DRV Complete` summary send their full block once, then only what changed since that hook last spoke, under a one-line header carrying the clock, breadcrumb and CL. The previous body is read from the event log, so the first block after a compaction and the first of a session are full, and so is every block when `hooks.output` is `full`; the prompt block also comes back whole after `hooks.full_every_mins` (30). The focused role's duty list is never restated (#439): on Stop its unchanged lines are only counted in that one line, and a block reason carries them the first time and after that only the ones that moved. The operator's copy is coloured (`NO_COLOR` turns it off).
+
+**Knowledge-web curation tools** (#392): tasks carry wiki-links in their metadata and join the web; `knowledge link` and `unlink` edit any artifact type in its own shape; `knowledge doctor` reports orphans as one line per type, with `--since`, `--type` and `--all` to list them; `knowledge status` gives every curation metric in one call; `knowledge gaps --reject` records a wrong suggestion with the artifact so it is not suggested again, and `--clusters` proposes concepts from keywords several artifacts declare; `learnings index add` and `verify` keep the learnings index and its consultation trigger true. Linkless task records now count in the doctor's orphan census.
+
+**Policies**: reports as dated folders with a provenance sidecar, versioned deliverables and a LaTeX-to-PDF path; mailbox access as a bounded capability; a MISSION is not complete while its code is unshipped; why the shape of the artifact tree is not the agent's to change; the artifact tree is not a git repository; the calling card as the last line, and only the last line, of a public artifact; and how a learning that a later one corrects is marked, so that the learnings index stops presenting both as true (#436).
 
 ### Fixed
 
@@ -70,6 +74,12 @@ Gmail, event-log rotation, and commit-message guards. Sprints now survive compac
 - **`framework-upgrade`** refuses to start when its last step cannot run, instead of completing three of four steps (#386)
 - **Roles**: the stanza follows the tree's title width; one pointer per stanza; `duty engage` refuses until a role's Boundaries are written
 - **A supervisor test** asserted machine speed rather than supervisor behaviour
+- **The prompt hook no longer reads the whole transcript on every prompt**: the last user prompt is found from the end of the file, using the transcript path the hook is given; on a long-lived session's 664 MB transcript the hook went from about 0.9 s to 0.18 s (#433)
+- **A command group run without a subcommand prints its help** (`macf_tools knowledge`, `task`, `role`, `idea`, `task scope`, ...) instead of raising AttributeError (#432)
+- **A carried mode keeps the cycle it was granted in**: no code that writes a mode change records a cycle, so the carry had stamped the boundary's own cycle as the mode's origin; the record's breadcrumb now dates it (#434)
+- **Hooks read the event log once per invocation** (`shared_event_reads` on every hook's `run()`): the questions a hook asks the log share one parse instead of streaming it from the end each time. On a long-lived deployment PreToolUse went from about 305 ms to 137 ms per tool call and Stop from 262 ms to 133 ms. Readers inside a hook are handed shared event objects and must not modify them; `MACF_EVENTS_MEMO_CHECK` makes an invocation that did fail, and the test suite sets it (#435)
+- **A long line no longer costs its length squared to read backwards** (`iter_lines_reverse`): a line spanning many chunks is joined once. A 39 MB event, logged before values were elided by size, took 4.7 s and 2.7 GB to read past; a walk over a 656 MB log, which the carry makes once after an upgrade, went from 10.8 s to 1.8 s and from 2.7 GB to 174 MB at peak (#435)
+- **Task commands that read the whole store are faster**: task metadata is parsed with libyaml's loader when PyYAML has it, with identical results. On a store of 1,324 tasks, `task get` went from 2.2 s to 0.4 s, `task trace` from 2.3 s to 0.4 s, `task list` from 2.8 s to 1.0 s and `task tree` from 3.5 s to 1.7 s (#437)
 
 ## [0.6.0] - 2026-08-29
 
