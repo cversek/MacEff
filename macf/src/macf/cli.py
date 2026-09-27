@@ -9081,9 +9081,14 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
                 and getattr(t, 'status', None) not in ("completed", "archived")
             ]
             _open_child_ids_in_scope = {str(c["id"]) for c in _open_scoped}
+            # A child paused in scope is accounted for like any paused scoped
+            # task: paused with a justification is the structural exit (see
+            # task/sprint_gate.py), so it must not come back as "not in scope".
+            from .task.scope import get_scope_check as _scope_check
+            _paused_ids = {str(e["id"]) for e in _scope_check().get("paused", [])}
             _open_children_extra = [
                 t for t in _open_children
-                if str(t.id) not in _open_child_ids_in_scope
+                if str(t.id) not in _open_child_ids_in_scope and str(t.id) not in _paused_ids
             ]
 
             _has_incomplete_scope = bool(_open_scoped) or bool(_open_children_extra)

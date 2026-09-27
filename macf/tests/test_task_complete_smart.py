@@ -407,3 +407,47 @@ class TestPlayTimeAutoAggregate:
         assert "Markov gates: 2" in args.report
         assert "3 ideas" in args.report
         assert "2 learnings" in args.report
+
+
+# ---------------------------------------------------------------------------
+# A child paused in scope is accounted for, like any paused scoped task
+# ---------------------------------------------------------------------------
+
+class TestSprintPausedChildIsAccountedFor:
+    """Paused with a justification is the structural exit (task/sprint_gate.py). A child
+    of the sprint that is paused in scope used to be reported 'not in scope' and
+    block the sprint's completion, which the end-of-sprint rule says it must not."""
+
+    @staticmethod
+    def _sprint_with_open_child(tmp_path):
+        sprint = _make_fake_task(60, task_type="SPRINT", custom={
+            "goal": "G",
+            "scoped_progress": {"completed": 1, "total": 2},
+            "ideas_captured": 0,
+            "learnings_curated": 0,
+        })
+        children = [
+            _make_fake_child(30, parent_id=60, status="in_progress"),
+            _make_fake_child(31, parent_id=60, status="completed"),
+        ]
+        for c in children:
+            c.subject = f"Child {c.id}"  # the completion's stack hand-back prints it
+        return _make_reader(sprint, children, tmp_path)
+
+    @staticmethod
+    def _scope(paused_ids):
+        return patch("macf.task.scope.get_scope_check", return_value={
+            "active": [], "inactive": [],
+            "paused": [{"id": tid, "subject": "s", "status": "paused"} for tid in paused_ids],
+            "paused_count": len(paused_ids)})
+
+    def test_completes_when_the_only_open_child_is_paused_in_scope(self, tmp_path, capsys):
+        rc = run_complete(_make_args(60, report="done"), self._sprint_with_open_child(tmp_path),
+                          extra_patches=[self._scope(["30"])])
+        assert rc == 0, capsys.readouterr().out
+
+    def test_an_open_child_outside_the_scope_still_blocks(self, tmp_path, capsys):
+        rc = run_complete(_make_args(60, report="done"), self._sprint_with_open_child(tmp_path),
+                          extra_patches=[self._scope(["99"])])
+        assert rc == 1
+        assert "#30" in capsys.readouterr().out
