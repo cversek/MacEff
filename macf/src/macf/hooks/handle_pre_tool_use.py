@@ -377,7 +377,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 desc_short = description[:60] + ("…" if len(description) > 60 else "")
                 send_telegram_notification(
                     f"{tag}\n{desc_short}",
-                    prefix="\U0001f680 DELEG_DRV Started",
+                    prefix="\U0001f680 DELEG_DRV Started", background=True,
                 )
             except (ImportError, OSError, ConnectionError) as _tg_e:
                 emit_warning(Warning(
@@ -519,7 +519,8 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             send_telegram_notification(
                 f"<b>{_html_escape(display_tool)}</b> {_html_escape(token_context_minimal)}{tg_details}",
                 prefix="\u2699\ufe0f",
-                parse_mode="HTML"
+                parse_mode="HTML",
+                background=True,
             )
         except (ImportError, OSError, ConnectionError) as e:
             emit_warning(Warning(source="pre_tool_use", kind="telegram_send_failed", detail=f"pre-tool-use telegram notification failed (non-blocking): {e}"))

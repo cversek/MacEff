@@ -206,7 +206,7 @@ Development Drive Stats:
                 notify_text = last_msg
             else:
                 notify_text = f"DEV_DRV #{stats['count']} complete ({duration_str})"
-            send_telegram_notification(notify_text, prefix=f"{symbol} Agent stopped")
+            send_telegram_notification(notify_text, prefix=f"{symbol} Agent stopped", background=True)
         except Exception as e:
             emit_warning(Warning(source="stop", kind="telegram_send_failed", detail=f"Stop hook Telegram notification error: {e}"))
 
@@ -448,7 +448,7 @@ Development Drive Stats:
                     from macf.channels.telegram import send_telegram_notification
                     gate_msg = (f"{scope['active_count']} scoped task(s), {timer_remaining}m remaining"
                                 if timer_active else f"{scope['active_count']} scoped task(s) remaining")
-                    send_telegram_notification(gate_msg, prefix="\U0001f6e1\ufe0f\U0001f440 Scope gate")
+                    send_telegram_notification(gate_msg, prefix="\U0001f6e1\ufe0f\U0001f440 Scope gate", background=True)
                 except Exception as e:
                     emit_warning(Warning(source="stop", kind="telegram_send_failed", detail=f"Scope gate Telegram error: {e}"))
 
@@ -522,7 +522,8 @@ Development Drive Stats:
                     from macf.channels.telegram import send_telegram_notification
                     send_telegram_notification(
                         f"Error stop with {scope['active_count']} active task(s)",
-                        prefix="\U0001f525\u26a0\ufe0f Error gate"
+                        prefix="\U0001f525\u26a0\ufe0f Error gate",
+                        background=True,
                     )
                 except Exception as e:
                     emit_warning(Warning(source="stop", kind="telegram_send_failed", detail=f"Error gate Telegram error: {e}"))
@@ -607,7 +608,8 @@ Development Drive Stats:
                             from macf.channels.telegram import send_telegram_notification
                             send_telegram_notification(
                                 f"{remaining_min} min remaining",
-                                prefix="\u23f1\ufe0f\U0001f504 Timer gate"
+                                prefix="\u23f1\ufe0f\U0001f504 Timer gate",
+                                background=True,
                             )
                         except Exception as e:
                             emit_warning(Warning(source="stop", kind="telegram_send_failed", detail=f"Timer gate Telegram error: {e}"))
@@ -678,7 +680,7 @@ Development Drive Stats:
         # Notify Telegram about error (non-blocking)
         try:
             from macf.channels.telegram import send_telegram_notification
-            send_telegram_notification(str(e), prefix="\u274c Stop hook error")
+            send_telegram_notification(str(e), prefix="\u274c Stop hook error", background=True)
         except (ImportError, OSError, ConnectionError) as tg_e:
             emit_warning(Warning(source="stop", kind="telegram_send_failed", detail=f"Telegram error notification also failed: {tg_e}"))
         return {

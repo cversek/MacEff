@@ -70,3 +70,26 @@ def test_a_failure_in_the_child_is_recorded_where_it_can_be_found(isolated_event
     assert telegram._run_background_send() == 1
     failures = [e for e in read_events(reverse=True) if e["event"] == "telegram_send_failed"]
     assert failures and failures[0]["data"]["deferred"] is True
+
+
+def test_every_hook_hands_its_telegram_send_to_the_background():
+    """A hook the client waits on must not wait on the network. Sent from the
+    hook's own process, the per-tool-call notice cost PreToolUse about 330 ms on
+    every call and, now and then, five seconds; background=True hands it to a
+    detached child and costs the hook about a millisecond."""
+    import ast
+    import pathlib
+    import macf.hooks
+    calls, sync = 0, []
+    for path in sorted(pathlib.Path(macf.hooks.__file__).parent.glob("handle_*.py")):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if not isinstance(node, ast.Call):
+                continue
+            name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+            if name != "send_telegram_notification":
+                continue
+            calls += 1
+            if not any(k.arg == "background" and getattr(k.value, "value", None) is True for k in node.keywords):
+                sync.append(f"{path.name}:{node.lineno}")
+    assert calls >= 13, calls          # the walk found the hooks' sends, so an empty result means something
+    assert sync == [], sync
