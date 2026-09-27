@@ -7,7 +7,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 from .paths import find_project_root, get_session_dir, get_session_transcript_path
 from .session import get_current_session_id
 from .json_io import read_json, write_json_safely
@@ -136,6 +136,67 @@ def get_usable_context() -> int:
     autocompact_enabled = get_autocompact_setting()
     buffer = 45000 if autocompact_enabled else 0
     return total - buffer
+
+def _post_compaction_estimate(max_tokens: int) -> Dict[str, Any]:
+    """Token info right after a compaction, before any in-cycle reply exists.
+
+    A conservative estimate scaled to the ACTUAL context window: the fixed 60000
+    was 200K-calibrated, so its hardcoded 30%/CL70 were wrong on 1M (60000 is ~6%
+    there). The bands derive from max_tokens so the CL meter is sane on any
+    window. (cversek/MacEff#118)
+    """
+    est_tokens = min(60000, max_tokens)
+    pct_used = round(est_tokens / max_tokens * 100, 1)
+    return {
+        "tokens_used": est_tokens,
+        "tokens_remaining": max_tokens - est_tokens,
+        "percentage_used": pct_used,
+        "percentage_remaining": round(100 - pct_used, 1),
+        "cl_level": round(100 - pct_used),
+        "last_updated": "post_compaction",
+        "source": "post_compaction_estimate",
+    }
+
+
+def _newest_in_cycle_usage(jsonl_path: str, min_ts_iso: str) -> Optional[Tuple[int, str]]:
+    """(tokens, timestamp) of the newest assistant usage record at or after the
+    compaction lower bound, read backwards from the end of the transcript.
+
+    None when a compaction marker comes first: the cycle has no reply yet. (0, "")
+    when the file has neither. Preserved-segment replays carry their original,
+    older timestamps, so the bound skips them on the way back (#110, #111). A line
+    counts as the marker only if it parses as one; the words alone can appear in
+    any message.
+    """
+    from .streaming import iter_lines_reverse
+    for line in iter_lines_reverse(jsonl_path):
+        if not line:
+            continue
+        if '"compact_boundary"' in line or '"type":"summary"' in line:
+            try:
+                data = json.loads(line)
+            except ValueError:
+                data = {}
+            if data.get("subtype") == "compact_boundary" or data.get("type") == "summary":
+                return None
+            continue
+        if '"usage"' not in line:
+            continue
+        try:
+            data = json.loads(line)
+        except ValueError:
+            continue
+        if data.get("type") != "assistant":
+            continue
+        usage = (data.get("message") or {}).get("usage") or {}
+        # Match TM! algorithm: sum ALL token types for total context
+        total = sum(usage.get(k, 0) for k in ("cache_read_input_tokens", "cache_creation_input_tokens",
+                                               "input_tokens", "output_tokens"))
+        ts = data.get("timestamp", "")
+        if total > 0 and ts >= min_ts_iso:
+            return total, ts
+    return 0, ""
+
 
 def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
     """Get current token usage information from session JSONL or hooks state.
@@ -284,77 +345,21 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
                             last_timestamp = latest["timestamp"]
                         elif last_boundary_idx >= 0:
                             # Compaction detected but no post-boundary in-cycle
-                            # message yet. Return a conservative estimate scaled
-                            # to the ACTUAL context window: the fixed 60000 was
-                            # 200K-calibrated, so its hardcoded 30%/CL70 were
-                            # wrong on 1M (60000 is ~6% there). Derive the bands
-                            # from max_tokens so the CL meter is sane on any
-                            # window. (cversek/MacEff#118)
-                            est_tokens = min(60000, max_tokens)
-                            pct_used = round(est_tokens / max_tokens * 100, 1)
-                            return {
-                                "tokens_used": est_tokens,
-                                "tokens_remaining": max_tokens - est_tokens,
-                                "percentage_used": pct_used,
-                                "percentage_remaining": round(100 - pct_used, 1),
-                                "cl_level": round(100 - pct_used),
-                                "last_updated": "post_compaction",
-                                "source": "post_compaction_estimate",
-                            }
+                            # message yet. (cversek/MacEff#118)
+                            return _post_compaction_estimate(max_tokens)
 
-                    # If tail scan didn't find any data, do a full scan.
-                    # Same timestamp-priority discipline as the tail scan (see
-                    # comment above): pick the assistant message with the
-                    # latest timestamp, not the last seen in file order. The
-                    # full-scan loop keeps O(1) memory by tracking the
-                    # running latest-timestamp winner rather than materializing
-                    # every assistant message. Closes cversek/MacEff#110 in
-                    # the fallback path too.
+                    # Nothing usable in the tail: read BACKWARDS to the newest
+                    # in-cycle reply or the compaction marker, whichever comes
+                    # first. This used to be a forward scan of the whole file,
+                    # and it runs on the first tool call or two after every
+                    # compaction, when the tail holds only the preserved segment
+                    # and the marker sits about 0.7 MB back: about 3 s per call on
+                    # a 660 MB transcript, twice per PreToolUse.
                     if current_tokens == 0:
-                        f.seek(0)
-                        latest_tokens = 0
-                        # Initialize the running-latest timestamp to the
-                        # compaction lower bound (if any). The full-scan
-                        # `>=` test then naturally rejects any message older
-                        # than the bound — same #111 + #110 filter as the
-                        # tail-scan path.
-                        latest_ts = min_ts_iso
-                        for line in f:
-                            try:
-                                line = line.decode("utf-8", errors="ignore").strip()
-                                if not line:
-                                    continue
-                                data = json.loads(line)
-                                if data.get("type") == "assistant":
-                                    message = data.get("message", {})
-                                    usage = message.get("usage", {})
-                                    # Match TM! algorithm: sum ALL token types for total context
-                                    total_tokens = 0
-                                    total_tokens += usage.get(
-                                        "cache_read_input_tokens", 0
-                                    )
-                                    total_tokens += usage.get(
-                                        "cache_creation_input_tokens", 0
-                                    )
-                                    total_tokens += usage.get("input_tokens", 0)
-                                    total_tokens += usage.get("output_tokens", 0)
-                                    if total_tokens > 0:
-                                        ts = data.get("timestamp", "")
-                                        # `>=` (not strict `>`) so later-in-file
-                                        # wins on missing/equal timestamps —
-                                        # preserves legacy behavior for content
-                                        # without timestamps. Only strictly
-                                        # OLDER timestamps lose, which is
-                                        # exactly the preserved-segment-replay
-                                        # case we need to skip.
-                                        if ts >= latest_ts:
-                                            latest_tokens = total_tokens
-                                            latest_ts = ts
-                            except (json.JSONDecodeError, UnicodeDecodeError):
-                                continue
-                        current_tokens = latest_tokens
-                        if latest_ts:
-                            last_timestamp = latest_ts
+                        found = _newest_in_cycle_usage(jsonl_path, min_ts_iso)
+                        if found is None:
+                            return _post_compaction_estimate(max_tokens)
+                        current_tokens, last_timestamp = found
 
                 if current_tokens > 0:
                     # Calculate raw CL from actual token usage
