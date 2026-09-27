@@ -139,6 +139,59 @@ def find_maceff_root() -> Path:
     return Path.cwd()
 
 
+# Variables that change where git looks for a repository. With any of them set,
+# ask git rather than reproduce its discovery.
+_GIT_LOCATION_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR",
+                     "GIT_CEILING_DIRECTORIES", "GIT_DISCOVERY_ACROSS_FILESYSTEM")
+
+
+def git_location_redirected() -> bool:
+    """True when the environment changes where git finds a repository."""
+    return any(os.environ.get(v) for v in _GIT_LOCATION_ENV)
+
+
+def find_git_worktree(start: Path) -> Optional[Path]:
+    """The top of the working tree holding ``start``, found the way git finds it.
+
+    The first directory at or above ``start`` with a ``.git`` entry (a
+    directory, or the file a linked worktree or submodule has), not crossing
+    onto another filesystem, which git by default does not either. None when
+    there is none. A few stat calls where ``git rev-parse --show-toplevel`` is a
+    process; callers check ``git_location_redirected()`` first and ask git when
+    it is true. An OSError from the walk propagates: the caller asks git.
+    """
+    here = start.resolve()
+    device = here.stat().st_dev
+    for directory in (here, *here.parents):
+        if directory.stat().st_dev != device:
+            return None
+        if (directory / ".git").exists():
+            return directory
+    return None
+
+
+def _git_toplevel_from_git(cwd: Path) -> Optional[Path]:
+    try:
+        result = subprocess.run(["git", "rev-parse", "--show-toplevel"],
+                                capture_output=True, text=True, timeout=1, cwd=cwd)
+    except (subprocess.SubprocessError, OSError) as e:
+        print(f"⚠️ MACF: git could not run to find the repository above {cwd}: {e}", file=sys.stderr)
+        return None
+    return Path(result.stdout.strip()) if result.returncode == 0 else None
+
+
+def git_toplevel(cwd: Path) -> Optional[Path]:
+    """The working tree top above ``cwd``: from the filesystem, or from git when the
+    environment redirects git or the filesystem cannot be searched."""
+    if not git_location_redirected():
+        try:
+            return find_git_worktree(cwd)
+        except OSError as e:
+            print(f"⚠️ MACF: could not search above {cwd} for a repository ({e}); asking git",
+                  file=sys.stderr)
+    return _git_toplevel_from_git(cwd)
+
+
 @lru_cache(maxsize=1)
 def find_project_root() -> Path:
     """Find user's project/workspace root.
@@ -160,25 +213,16 @@ def find_project_root() -> Path:
         if project_path.exists() and project_path.is_dir():
             return project_path
 
-    # 2. Try git repository root with Claude markers
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            timeout=1,
-            cwd=Path.cwd(),
-        )
-        if result.returncode == 0:
-            git_root = Path(result.stdout.strip())
-            # Check for Claude project markers
-            if (git_root / ".claude").exists() or (git_root / "CLAUDE.md").exists():
-                return git_root
-    except (subprocess.CalledProcessError, OSError, FileNotFoundError):
-        pass
+    # 2. Git repository root with Claude markers. Outside Claude Code (a
+    # terminal, a tool's shell) this runs for every command, so it is found
+    # from the filesystem unless the environment redirects git.
+    cwd = Path.cwd()
+    git_root = git_toplevel(cwd)
+    if git_root is not None and ((git_root / ".claude").exists() or (git_root / "CLAUDE.md").exists()):
+        return git_root
 
     # 3. Fallback to current working directory
-    return Path.cwd()
+    return cwd
 
 
 @lru_cache(maxsize=1)

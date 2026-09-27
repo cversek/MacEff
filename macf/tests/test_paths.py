@@ -79,22 +79,21 @@ class TestFindProjectRoot:
             assert result == tmp_path
 
     def test_finds_project_via_claude_markers(self, tmp_path, monkeypatch):
-        """Test discovery via .claude/ or CLAUDE.md markers."""
+        """Test discovery via .claude/ or CLAUDE.md markers, from inside the repository."""
         monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
 
-        # Create git repo with Claude markers
+        # Create git repo with Claude markers, and work from a directory below its top
         (tmp_path / ".git").mkdir()
         (tmp_path / ".claude").mkdir()
+        (tmp_path / "src").mkdir()
+        monkeypatch.chdir(tmp_path / "src")
 
-        def mock_run(*args, **kwargs):
-            class Result:
-                returncode = 0
-                stdout = str(tmp_path)
-            return Result()
+        def no_git(*args, **kwargs):
+            raise AssertionError("the repository is found from the filesystem; git must not run")
 
-        with patch("subprocess.run", mock_run):
+        with patch("subprocess.run", no_git):
             result = find_project_root()
-            assert result == tmp_path
+            assert result == tmp_path.resolve()
 
     def test_fallback_to_cwd(self, tmp_path, monkeypatch):
         """Test fallback to current working directory."""
