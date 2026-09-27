@@ -73,6 +73,8 @@ Scholarship policy establishes enhanced citation practices for consciousness art
 - What are wiki-links and how do they differ from citations?
 - What normalization rules apply?
 - When should I add a Wiki-Links section?
+- Which tools build, query and repair the web?
+- How do I record that a suggested concept is wrong for an artifact, so it is not suggested again?
 
 **3.5 Node Classes and Provenance**
 - What kinds of claim can a graph node make, and why does the difference matter for retrieval?
@@ -554,17 +556,33 @@ Common concepts to reuse when applicable (agents may create new concepts freely)
 | `[[knowledge_graph]]` | Graph structure, visualization, queries |
 | `[[breadcrumb]]` | Forensic coordinates, archaeological recovery |
 
-**Creating new concepts**: If no seed concept fits, create a new one. Prefer terms that multiple future artifacts might share. The gap detection tool (`macf_tools idea graph --gaps`) can later identify concept fragmentation.
+**Creating new concepts**: If no seed concept fits, create a new one. Prefer terms that multiple future artifacts might share. Query the web before coining one (`macf_tools knowledge query <concept>`), and `macf_tools knowledge gaps --clusters` lists words that several artifacts share with no concept yet.
 
 #### 3.4.4 Graph Tooling
 
 ```bash
-macf_tools idea graph                # Ideas-only graph (cluster view)
-macf_tools idea graph --cross-ca     # Full cross-CA knowledge graph
-macf_tools idea graph --html [path]  # Interactive HTML visualization
+macf_tools knowledge graph                  # Cross-CA web (idea graph: ideas only)
+macf_tools knowledge query <concept>        # What a concept connects
+macf_tools knowledge link <target> <concept> ...   # Link any artifact type (unlink removes)
+macf_tools knowledge gaps                   # Suggested concepts for weakly connected nodes
+macf_tools knowledge doctor                 # What the web cannot see: orphans, drift, singletons
+macf_tools knowledge status                 # Every curation metric in one call
+macf_tools knowledge viz [path]             # Interactive HTML visualization
 ```
 
-Wiki-links create edges: two artifacts sharing `[[compaction]]` are connected through that concept. The graph reveals clusters, hubs, and isolated artifacts that could benefit from cross-linking.
+Wiki-links create edges: two artifacts sharing `[[compaction]]` are connected through that concept. The graph reveals clusters, hubs, and isolated artifacts that could benefit from cross-linking. Consult each command's `--help` for current flags; this section names what exists, not how it renders.
+
+#### 3.4.5 Declining a Suggested Concept
+
+`knowledge gaps` proposes concepts from keyword overlap, and some of its proposals are wrong every time it runs: a word in a title that means something else here. A curator who has judged a suggestion wrong records that judgement **with the artifact**, beside its links, so no later curation re-judges it:
+
+```bash
+macf_tools knowledge gaps --reject <target> <concept> ...
+```
+
+It is stored in the artifact's own shape: `<!-- not linked: a, b -->` in a markdown artifact (inside its `## Wiki-Links` section when it has one), `links.not_linked` in an idea, `not_linked` in a task's metadata. The markdown form carries no brackets, so it can never be read as a link. `knowledge gaps` then leaves those pairs out, and `--all` shows them, marked.
+
+A rejection is a judgement about one artifact's links, the negative of a wiki-link, so it lives where the links live. It is not state about the tooling, which is why there is no separate file of rejected pairs to drift from the artifacts it describes.
 
 ---
 

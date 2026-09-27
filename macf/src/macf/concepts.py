@@ -22,7 +22,12 @@ from __future__ import annotations
 import re
 from typing import Iterable, List
 
-__all__ = ["normalize_concept", "normalize_concepts", "extract_wiki_concepts"]
+__all__ = ["normalize_concept", "normalize_concepts", "extract_wiki_concepts", "extract_not_linked"]
+
+# A curator's judgement that a suggested concept is wrong for this artifact
+# (scholarship: declining a suggested concept). No brackets, so extraction can
+# never read it as a link.
+_NOT_LINKED = re.compile(r"<!--\s*not linked:\s*(.*?)\s*-->", re.IGNORECASE | re.DOTALL)
 
 
 def normalize_concept(raw: str) -> str:
@@ -110,3 +115,11 @@ def extract_wiki_concepts(content: str) -> List[str]:
 
     inline = re.findall(r"\[\[(.+?)\]\]", rest)
     return normalize_concepts(list(section) + list(inline))
+
+
+def extract_not_linked(content: str) -> List[str]:
+    """Concepts an artifact has declined, from ``<!-- not linked: a, b -->``."""
+    found: List[str] = []
+    for m in _NOT_LINKED.finditer(content):
+        found.extend(m.group(1).split(","))
+    return normalize_concepts(found)

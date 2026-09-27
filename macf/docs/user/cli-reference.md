@@ -2022,16 +2022,60 @@ macf_tools knowledge query "concept or keyword"
 Detect missing wiki-links and suggest connections.
 
 ```bash
-macf_tools knowledge gaps [--min-score SCORE]
+macf_tools knowledge gaps [--json] [--all]
+macf_tools knowledge gaps --reject <target> <concept> [<concept> ...]
+macf_tools knowledge gaps --clusters [--json]
 ```
+
+A suggestion judged wrong is declined with `--reject`, which records it with the artifact (`<!-- not linked: ... -->` in markdown, `not_linked` in an idea or a task's metadata) so it is not suggested again; `--all` shows declined suggestions, marked `✗`. `--clusters` lists keywords that three or more artifacts declare in a `**Keywords**:` line and no concept carries yet, with the artifacts that declare each, which is where a new concept usually comes from.
+
+### knowledge doctor
+
+Report what the web cannot see about itself: orphaned artifacts (no wiki-links), normalization drift in source text, singleton concepts, and nodes without a class.
+
+```bash
+macf_tools knowledge doctor [--json] [--since DATE|Nd] [--type TYPE] [--all]
+```
+
+Orphans are reported as one line per type by default, since the backlog is the same on every run. `--since` also lists each orphan dated on or after a point (the date in its name or its folder's, else its modified time), `--type` lists every orphan of one type for a bulk pass, and `--all` lists every orphan. The chart's orphan count is the whole census in every view.
+
+### knowledge status
+
+Every curation metric in one call: nodes, CAs, ideas, edges, cross-CA edges, concepts, files examined, orphans, acute and chronic findings, and the gap count.
+
+```bash
+macf_tools knowledge status [--json]
+```
+
+### knowledge link / unlink
+
+Add or remove wiki-link concepts on an artifact of any type, in that artifact's own shape: the `## Wiki-Links` section of a markdown artifact, `links.wiki_links` of an idea, or `wiki_links` in a task's metadata. Concepts are normalized as the web normalizes them, and linking a concept that is already present changes nothing. `unlink` edits only the section; a concept still used inline in the prose is reported and left alone.
+
+```bash
+macf_tools knowledge link <target> <concept> [<concept> ...]
+macf_tools knowledge unlink <target> <concept> [<concept> ...]
+```
+
+`<target>` is a markdown path, a node id as `graph` and `gaps` print it (`learnings:2026-...`), `task:N` (or `#N`), or `idea:N`. A bare number is refused, since an idea and a task can share it. Role duties declare their links with `role duty add --wiki-links`.
 
 ### knowledge viz
 
 Generate interactive HTML visualization (d3.js force-directed graph).
 
 ```bash
-macf_tools knowledge viz [--output PATH]
+macf_tools knowledge viz [output]
 ```
+
+### learnings index add / verify
+
+Keep the master learnings index (`agent/private/learnings/INDEX.md`) and its consultation trigger true.
+
+```bash
+macf_tools learnings index add <file> --cluster <name> [--hook "<WHEN ...>"]
+macf_tools learnings index verify [--memory PATH] [--json]
+```
+
+`add` files one learning under its cluster heading, in the shape of the cluster's existing entries, and updates the cluster's `(N)`, the total and the date; a new cluster is created and named in the output as one the trigger must now carry. `verify` is the doctor for this corpus: entries that name no file, learnings no entry names, counts that are wrong, and a trigger that misses a cluster, does not point at the index, or states a stale count. The trigger is looked for at the platform's per-project memory file; `--memory` names another path, and a trigger it cannot find is reported with every path it tried.
 
 ---
 
