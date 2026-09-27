@@ -295,3 +295,37 @@ def test_bare_cd_manual_mode_deny_does_not_halt_turn(mock_dependencies):
 
     _assert_deny_with_continuation(result)
     assert "Bare 'cd'" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+# ---- the breadcrumb bookends each DEV_DRV, not every tool call ------------------------------
+
+def test_the_tool_line_leaves_the_breadcrumb_out_by_default(mock_dependencies, hook_stdin_read_tool, monkeypatch):
+    from macf.hooks import handle_pre_tool_use as h
+    monkeypatch.delenv("MACF_HOOK_PRE_TOOL_USE_BREADCRUMB", raising=False)
+    with patch.object(h, "get_breadcrumb", return_value="s_crumb000/c_1/g_x/p_y/t_1") as crumb:
+        context = h.run(hook_stdin_read_tool)["hookSpecificOutput"]["additionalContext"]
+    assert "11:45:23 PM" in context and "s_crumb000" not in context
+    crumb.assert_not_called()                                   # not even computed
+
+
+def test_the_option_puts_the_breadcrumb_back_on_every_tool_line(mock_dependencies, hook_stdin_read_tool,
+                                                                 monkeypatch):
+    from macf.hooks import handle_pre_tool_use as h
+    monkeypatch.setenv("MACF_HOOK_PRE_TOOL_USE_BREADCRUMB", "on")
+    with patch.object(h, "get_breadcrumb", return_value="s_crumb000/c_1/g_x/p_y/t_1"):
+        context = h.run(hook_stdin_read_tool)["hookSpecificOutput"]["additionalContext"]
+    assert "11:45:23 PM | s_crumb000/c_1/g_x/p_y/t_1" in context
+
+
+def test_the_option_reads_on_and_off_and_refuses_anything_else():
+    from macf.config import as_bool
+    assert as_bool("on") is True and as_bool("1") is True and as_bool(True) is True
+    assert as_bool("off") is False and as_bool("false") is False and as_bool(False) is False
+    with pytest.raises(ValueError):
+        as_bool("sometimes")
+
+
+def test_the_option_is_a_listed_setting_that_defaults_off():
+    from macf.config import RESOLVED_SETTINGS
+    entry = next(s for s in RESOLVED_SETTINGS if s["name"] == "hooks.pre_tool_use_breadcrumb")
+    assert entry["default"] is False and entry["env_var"] == "MACF_HOOK_PRE_TOOL_USE_BREADCRUMB"

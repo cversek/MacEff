@@ -450,6 +450,22 @@ def _dotted_lookup(config: Dict[str, Any], dotted_path: str) -> Any:
     return node
 
 
+def as_bool(value: Any) -> bool:
+    """A yes/no setting: a JSON boolean, or on/off words in an env var.
+
+    Anything else raises ValueError, which resolve_setting reports and falls
+    through, so a typo is visible instead of silently read as off.
+    """
+    if isinstance(value, bool):
+        return value
+    word = str(value).strip().lower()
+    if word in ("1", "true", "yes", "on"):
+        return True
+    if word in ("0", "false", "no", "off"):
+        return False
+    raise ValueError(f"expected on or off, got {value!r}")
+
+
 def resolve_setting(
     env_var: str,
     config_path: str,
@@ -553,7 +569,17 @@ RESOLVED_SETTINGS: List[Dict[str, Any]] = [
         "config_path": "hooks.full_every_mins",
         "default": 30,
         "coerce": int,
-        "description": "Minutes after which a hook sends its full block again instead of a diff",
+        "description": "Minutes after which the prompt hook sends its full block again instead of a diff "
+                       "(the Stop hook never does: its message carries the focused role's duty list)",
+    },
+    {
+        "name": "hooks.pre_tool_use_breadcrumb",
+        "env_var": "MACF_HOOK_PRE_TOOL_USE_BREADCRUMB",
+        "config_path": "hooks.pre_tool_use_breadcrumb",
+        "default": False,
+        "coerce": as_bool,
+        "description": "Put the breadcrumb on every tool call's line too; by default it appears only on the "
+                       "prompt and Stop lines that open and close each DEV_DRV",
     },
     {
         "name": "agent_identity.calling_card",

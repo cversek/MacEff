@@ -223,9 +223,16 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 }
             )
 
-        # Base temporal message with breadcrumb
+        # Base temporal message. The breadcrumb bookends each DEV_DRV (the
+        # prompt and Stop lines carry it), so the per-tool line leaves it out
+        # unless hooks.pre_tool_use_breadcrumb asks for it: on a narrow screen
+        # it is most of the line, repeated on every tool call. Not computed at
+        # all when it is not shown.
         timestamp = get_minimal_timestamp()
-        breadcrumb = get_breadcrumb()
+        from macf.config import as_bool, resolve_setting
+        show_crumb, _ = resolve_setting("MACF_HOOK_PRE_TOOL_USE_BREADCRUMB",
+                                        "hooks.pre_tool_use_breadcrumb", False, coerce=as_bool)
+        crumb = f" | {get_breadcrumb()}" if show_crumb else ""
         # Enrich tool name for Skill invocations (show which skill)
         display_tool = tool_name
         if tool_name == "Skill" and "skill" in tool_input:
@@ -248,7 +255,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             emit_warning(Warning(source="pre_tool_use", kind="mode_detection_failed", detail=f"mode detection failed, falling back: {e}"))
             auto_mode_active, _ = detect_auto_mode(session_id)
             mode_indicator = " 🤖" if auto_mode_active else ""
-        message_parts = [f"{format_macf_brand(indicators=mode_indicator)} | {timestamp} | {breadcrumb}"]
+        message_parts = [f"{format_macf_brand(indicators=mode_indicator)} | {timestamp}{crumb}"]
 
         # Surface any injection errors to user
         if injection_errors:
