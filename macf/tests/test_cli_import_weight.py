@@ -30,3 +30,19 @@ def test_the_roles_package_loads_its_models_on_first_use():
                   "print(json.dumps([before, 'pydantic' in sys.modules, Role.__name__, RoleStore.__name__, "
                   "ICON_SHELF is r.ICON_SHELF]))")
     assert seen == [False, True, "Role", "RoleStore", True], seen
+
+
+def test_argparse_looks_up_its_own_strings_once():
+    """Each gettext lookup stats the locale directories; the parser made ~5,300."""
+    lookups = _fresh(
+        "import gettext, json\n"
+        "n = [0]\n"
+        "real = gettext.gettext\n"
+        "def counting(message):\n"
+        "    n[0] += 1\n"
+        "    return real(message)\n"
+        "gettext.gettext = counting\n"
+        "import macf.cli as c\n"
+        "c._build_parser()\n"
+        "print(json.dumps(n[0]))")
+    assert lookups < 50, lookups
