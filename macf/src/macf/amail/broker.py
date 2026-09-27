@@ -1001,10 +1001,23 @@ class Broker:
         for a box that is not setgid, and it is attempted BEFORE the message
         body is written so a failure leaves a sidecar-only entry (visibly
         interrupted) rather than an unreadable message.
+
+        NEVER OVER AN EXISTING PAIR. Both files are created exclusively. A
+        name already taken is a collision, and it fails as an undelivered
+        recipient. The alternative, replacing the pair, reported delivered
+        to a recipient whose copy was then overwritten by the next one.
         """
         base = box / stem
         side = base.with_suffix(".json")
-        side.write_text(json.dumps(sidecar, indent=1))
+        msg = base.with_suffix(".amsg")
+        try:
+            with open(side, "x") as f:
+                f.write(json.dumps(sidecar, indent=1))
+        except FileExistsError as e:
+            raise DeliveryError(
+                f"a pair named {stem} is already in {box}; refusing to write "
+                f"over it (it may be another recipient's). Nothing was "
+                f"handed off.") from e
         side.chmod(0o640)
         if gid is not None and side.stat().st_gid != gid:
             try:
@@ -1016,8 +1029,15 @@ class Broker:
                     f"broker is not a member of the recipient's group as the "
                     f"kernel sees it, so the recipient could not read what it "
                     f"wrote. Nothing was handed off.") from e
-        msg = base.with_suffix(".amsg")
-        msg.write_bytes(payload)
+        try:
+            with open(msg, "xb") as f:
+                f.write(payload)
+        except FileExistsError as e:
+            # Our sidecar must not stay beside a message we did not write.
+            side.unlink(missing_ok=True)
+            raise DeliveryError(
+                f"a message named {msg.name} is already in {box}; refusing to "
+                f"write over it. Nothing was handed off.") from e
         msg.chmod(0o640)
         if gid is not None and msg.stat().st_gid != gid:
             os.chown(msg, -1, gid)
@@ -1088,7 +1108,13 @@ class Broker:
                 f"{os.geteuid()}): join its group on this side of the mount, "
                 f"or fix the mount. Nothing was handed off.")
         payload = message.serialize().encode("utf-8")
-        stem = f"{int(time.time())}-{message.message_id}"
+        # THE RECIPIENT IS IN THE NAME. The intake is one directory per peer
+        # DOMAIN, so every recipient of one message in that domain lands in
+        # the same place in the same second. Named by time and message id
+        # alone, the second pair replaced the first, and only the last-listed
+        # recipient received the message while all were recorded delivered.
+        safe_local = re.sub(r"[^A-Za-z0-9._-]", "_", local).lower()
+        stem = f"{int(time.time())}-{message.message_id}-{safe_local}"
         sidecar = {
             "kind": "bundle",
             "handed_off_at": _now_iso(),
@@ -1447,7 +1473,16 @@ class Broker:
         self.record_seen(sender, message, "sent", via=f"{_how(sender)}:{sender}")
 
         delivered, failures = [], []
+        # A recipient listed twice (in any case) is one mailbox and is handed
+        # one copy. Pairs are never written over one another, so a second
+        # copy would otherwise report a false failure.
+        seen: set = set()
+        recipients = []
         for r in message.to:
+            if r.casefold() not in seen:
+                seen.add(r.casefold())
+                recipients.append(r)
+        for r in recipients:
             try:
                 outcome = self._deliver_one(r, message)
                 rung, trust, state, detail = (outcome.rung, outcome.trust,
