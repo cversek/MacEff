@@ -13,7 +13,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 from .cadence import parse_cadence
 from .models import Duty, Role
-from .priority import approach_mark, now, occurrences
+from .priority import approach_mark, end_of_day, now, occurrences
 
 DAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
@@ -78,8 +78,10 @@ def events(pairs: Sequence[Tuple[Role, List[Duty]]], start: date, end: date,
                 done = set(d.done_on_dates())
                 for occ in occurrences(d, start, end, role.expires):
                     is_done = occ.date() in done
+                    # Missed once it is late, as the tiers read it: an
+                    # occurrence with no time lasts the whole day.
                     out.append(Event(occ, "occurrence", role, d, cad.duration_minutes,
-                                     done=is_done, missed=(not is_done and occ < at)))
+                                     done=is_done, missed=(not is_done and end_of_day(occ) < at)))
     out.sort(key=lambda e: (e.when, e.role.title, e.title))
     return out
 
