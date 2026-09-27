@@ -165,21 +165,21 @@ Development Drive Stats:
 
 {format_macf_footer()}"""
 
-        # Only what changed since the last DEV_DRV Complete (#407), applied to
-        # the summary alone and before anything is appended to it: the focused
-        # role's duty list is injected whole on every Stop (roles policy), the
-        # error nudge is about this stop, and every gate returns its reason in
-        # full. The summary reaches the operator's terminal, not the agent.
+        # The header that stands in for the summary when only changes are sent
+        # (#407). The diff itself is taken at the final return, over the
+        # summary and the focused role's lines together, so that it records
+        # only a message that was actually shown: a stop a gate blocks never
+        # reaches the operator's terminal.
+        _stop_header = None
         try:
-            from macf.hooks.emission import emit
             from macf.utils import get_minimal_timestamp
-            header = (f"{format_macf_brand(indicators=mode_indicator)} | DEV_DRV Complete | "
-                      f"{get_minimal_timestamp()} | {breadcrumb} | CL{token_info['cl_level']} | "
-                      f"drive {duration_str}")
-            message = emit("stop", session_id, message, header, STOP_VOLATILE).operator
-        except (ImportError, OSError, ValueError, KeyError) as e:
+            _stop_header = (f"{format_macf_brand(indicators=mode_indicator)} | DEV_DRV Complete | "
+                            f"{get_minimal_timestamp()} | {breadcrumb} | CL{token_info['cl_level']} | "
+                            f"drive {duration_str}")
+        except (ImportError, KeyError) as e:
             emit_warning(Warning(source="stop", kind="emission_diff_failed",
                                  detail=f"sending the full block: {e}"))
+        _this_stop = ""   # about this stop alone: added after the diff, always whole
 
         # Notify Telegram unconditionally (non-blocking to main return)
         try:
@@ -258,10 +258,11 @@ Development Drive Stats:
                 f"{format_macf_brand()} | ⏭️ Stop allowed once for the injected "
                 f"/{_bypass['command']}; every gate holds again after it.")}
 
-        # --- Focus gate (roles policy): the focused role's priority list is
-        # injected on every Stop; it BLOCKS only in AUTO_MODE while due-now
-        # duties are unserviced. It composes with the scope gate below by
-        # concatenating reasons, and shares the one idle-stop failsafe.
+        # --- Focus gate (roles policy): the focused role's priority list goes
+        # out with every Stop, cut to what changed since each reader last saw
+        # it; it BLOCKS only in AUTO_MODE while due-now duties are unserviced.
+        # It composes with the scope gate below by concatenating reasons, and
+        # shares the one idle-stop failsafe.
         _focus = {"text": "", "block": False, "unserviced": []}
         try:
             from macf.roles.hooks import focus_gate
@@ -269,14 +270,27 @@ Development Drive Stats:
         except (OSError, ValueError, ImportError, AttributeError) as _e:
             emit_warning(Warning(source="stop", kind="focus_gate_failed", detail=f"focus gate error (non-blocking): {_e}"))
 
+        _focus_sent = {}
+
+        def _focus_for(reader):
+            """The focus text as this reader is sent it: whole the first time,
+            then only lines that moved, and empty when none did. Once per Stop,
+            since rendering it records what the reader was sent."""
+            if reader not in _focus_sent:
+                from macf.roles.hooks import focus_text
+                _focus_sent[reader] = focus_text(_focus, session_id, reader)
+            return _focus_sent[reader]
+
         def _with_focus(result):
             """Append the focus text to a gate result; a block reason concatenates."""
             if not _focus["text"]:
                 return result
             if result.get("decision") == "block":
-                result["reason"] = f"{result.get('reason', '')}\n\n{_focus['text']}"
+                key, text = "reason", _focus_for('agent')
             else:
-                result["systemMessage"] = f"{result.get('systemMessage', '')}\n\n{_focus['text']}"
+                key, text = "systemMessage", _focus_for('operator')
+            if text:
+                result[key] = f"{result.get(key, '')}\n\n{text}"
             return result
 
         # --- Scope gate: block stop if active scoped tasks remain ---
@@ -505,7 +519,7 @@ Development Drive Stats:
                 )
                 # MANUAL_MODE: soft nudge (systemMessage, not decision:block)
                 # Agent CAN stop, but gets a strong hint to investigate first
-                message += (
+                _this_stop += (
                     f"\n\n⚠️ ERROR DETECTED — You stopped after a tool error. "
                     f"Active scoped tasks remain:\n{task_list}\n"
                     f"Investigate the error and fix it before stopping. "
@@ -529,14 +543,14 @@ Development Drive Stats:
                 return {
                     "continue": True,
                     "decision": "block",
-                    "reason": (f"{_focus['text']}\n\n"
-                               f"Stop blocked in AUTO_MODE while due-now duties of the focused role are unserviced "
-                               f"(idle-stop counter: {_remaining} remaining)."),
+                    "reason": "\n\n".join(part for part in (
+                        _focus_for('agent'),
+                        (f"Stop blocked in AUTO_MODE while due-now duties of the focused role are unserviced "
+                         f"(idle-stop counter: {_remaining} remaining)."),
+                    ) if part),
                 }
             except (OSError, ValueError, ImportError, AttributeError) as _e:
                 emit_warning(Warning(source="stop", kind="focus_gate_failed", detail=f"focus-only gate error (non-blocking): {_e}"))
-        elif _focus["text"]:
-            message += f"\n\n{_focus['text']}"
 
         # --- Burn gate (credit_budget policy): with no scope or focus holding the stop, an operator's burn intent
         # holds it while the allowance is below target, the deadline is ahead and open work exists. AUTO_MODE only;
@@ -620,10 +634,25 @@ Development Drive Stats:
         except Exception as e:
             emit_warning(Warning(source="stop", kind="timer_gate_failed", detail=f"Timer gate error (non-blocking): {e}"))
 
+        # One diff for the whole message (#407): the summary and the focused
+        # role's lines share one header, so role lines that did not move add
+        # to its count and are not restated. Not re-sent on a timer, which
+        # would restate them. What is about this stop alone goes whole.
+        if _focus["text"]:
+            message += f"\n\n{_focus['text']}"
+        if _stop_header is not None:
+            try:
+                from macf.hooks.emission import emit
+                message = emit("stop", session_id, message, _stop_header, STOP_VOLATILE,
+                               periodic_full=False).operator
+            except (ImportError, OSError, ValueError) as e:
+                emit_warning(Warning(source="stop", kind="emission_diff_failed",
+                                     detail=f"sending the full block: {e}"))
+
         # Return with systemMessage only (Stop hook doesn't support hookSpecificOutput)
         return {
             "continue": True,
-            "systemMessage": message
+            "systemMessage": message + _this_stop
         }
 
     except Exception as e:
