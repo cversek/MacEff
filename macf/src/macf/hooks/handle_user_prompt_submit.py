@@ -29,6 +29,7 @@ from macf.utils import (
 from macf.modes import detect_auto_mode
 from macf.hooks.hook_logging import log_hook_event
 from macf.observability import Warning, emit_warning
+from macf.agent_events_log import shared_event_reads
 
 # Lines that change on every prompt by design. The diff header carries them
 # (clock, breadcrumb, CL); diffing them would report a change every time.
@@ -119,6 +120,7 @@ def record_user_activity_from_payload(prompt: str) -> bool:
         return False
 
 
+@shared_event_reads
 def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
     """
     Run UserPromptSubmit hook logic.

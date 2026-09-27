@@ -155,6 +155,19 @@ def isolated_events_log(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def shared_read_contract(monkeypatch):
+    """Hold every test to the shared-read contract.
+
+    Inside a hook invocation, readers of the event log are handed the same
+    event objects (agent_events_log.shared_event_reads), so a reader must never
+    modify one. With this set, an invocation in which a reader did raises when
+    it returns, which makes the contract something the suite checks rather than
+    something each module's author has to remember.
+    """
+    monkeypatch.setenv("MACF_EVENTS_MEMO_CHECK", "1")
+
+
+@pytest.fixture(autouse=True)
 def isolated_channel_state(tmp_path, monkeypatch):
     """Isolate the Telegram channel's state directory for EVERY test.
 

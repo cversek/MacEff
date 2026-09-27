@@ -463,17 +463,40 @@ _breadcrumb_cache = {
 
 **Problem**: Large event logs consume memory.
 
-**Solution**: `read_events()` uses generator pattern.
+**Solution**: `read_events()` is a generator over `iter_lines_reverse`, which reads the log
+backwards in fixed-size chunks, so a read that stops at its first match costs only what it
+read. A line longer than a chunk is joined once from its pieces, so memory is bounded by the
+chunk plus the longest line, and a long line costs its length rather than its length squared
+(an old log can hold events of tens of megabytes, from before values were elided by size).
 
 **Implementation**:
 ```python
-def read_events(limit=None, reverse=True):
-    for line in lines:
+def read_events(limit=None, reverse=True, scope="cycle"):
+    for line in iter_lines_reverse(log_path):
         event = json.loads(line)
         yield event
+        if scope == "cycle" and event["event"] == CYCLE_BOUNDARY_EVENT:
+            break
 ```
 
-**Benefit**: Iterate over unlimited events with constant memory.
+**Benefit**: Iterate over any number of events in bounded memory.
+
+### One Parse per Hook Invocation
+
+**Problem**: A hook asks the log many questions in one invocation (the mode, the cycle, the
+budget, the role in focus), and each streamed the log from its end, so one PreToolUse call
+parsed the same events many times over.
+
+**Solution**: every hook's `run()` carries `shared_event_reads`. Inside it, reverse reads of
+either scope share one list of parsed events, extended only as far back as the deepest reader
+has gone and capped at `SHARED_READ_CAP_BYTES` of source text; a reader that needs more reads
+on privately from where the list stops. A change to the file by another process opens a new
+list, and the hook's own appends extend the current one. Outside a hook, reads stream as above.
+
+**The contract**: readers inside a hook are handed shared event objects, so code must never
+modify an event it read; copy it first. With `MACF_EVENTS_MEMO_CHECK` set, a canonical copy of
+every shared event is kept and an invocation that modified one raises when it returns. The test
+suite sets it for every test.
 
 ### Query Optimization
 
