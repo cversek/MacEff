@@ -132,6 +132,28 @@ def _terminal_timer(window: List[dict]) -> Optional[dict]:
     return None
 
 
+def _origin_cycle(source: dict, data: dict, current_cycle: int) -> int:
+    """The cycle a carried grant was originally made in.
+
+    A carried event names it in ``origin_cycle``, inside the event's data; the
+    record's top level has no cycle field. The mode setters write no cycle at
+    all, so for most sources the record's breadcrumb is the witness to when the
+    grant was made. A ``cycle`` in the data outranks it: it is the writer's own
+    statement, and a breadcrumb written at a boundary can still name the cycle
+    before it. The current cycle is the last resort, for a record with no
+    parseable breadcrumb, and it is certainly wrong for anything older than this
+    boundary.
+    """
+    for field in ("origin_cycle", "cycle"):
+        if data.get(field) is not None:
+            return data[field]
+    from .utils.breadcrumbs import parse_breadcrumb
+    parsed = parse_breadcrumb(source.get("breadcrumb") or "")
+    if parsed is not None:
+        return parsed["cycle"]
+    return current_cycle
+
+
 def carry_state_forward(current_cycle: Optional[int] = None) -> List[str]:
     """Re-emit persistent state after the boundary, then mark the carry.
 
@@ -163,12 +185,7 @@ def carry_state_forward(current_cycle: Optional[int] = None) -> List[str]:
         # Preserve the ORIGINAL grant through a chain of carries. Overwriting it
         # each hop would make a hundred-cycle-old authorisation look current,
         # which is the whole failure this field exists to prevent.
-        # Both reads are from the event's DATA, not from the record's top level:
-        # the cycle an event was written in lives inside data, and taking it from
-        # the record silently yields None and dates every carry to the present.
-        data["origin_cycle"] = data.get("origin_cycle", data.get("cycle"))
-        if data["origin_cycle"] is None:
-            data["origin_cycle"] = current_cycle
+        data["origin_cycle"] = _origin_cycle(source, data, current_cycle)
         data["carried"] = True
         data["carried_into_cycle"] = current_cycle
         data["carried_from_timestamp"] = source.get("timestamp")

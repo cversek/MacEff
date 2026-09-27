@@ -147,6 +147,33 @@ class TestCarryForward:
         assert latest["data"]["origin_cycle"] == 1, "the chain reported the last hop"
         assert latest["data"]["carried_into_cycle"] == 3
 
+    def test_a_source_without_a_cycle_field_is_dated_by_its_breadcrumb(self, isolated_events_log):
+        """The mode setters write no cycle into the event's data, so this is the
+        ordinary case, not a legacy one. The record's breadcrumb says when the
+        grant was made; stamping the cycle of the carry instead dates a grant
+        from cycle 7 to cycle 9 and every later carry keeps the wrong date."""
+        grant = _ev("mode_change", 100, mode="AUTO_MODE", enabled=True)
+        grant["breadcrumb"] = "s_abcd1234/c_7/g_abc1234/p_none/t_100"
+        _write(isolated_events_log, [grant, _ev(CYCLE_BOUNDARY_EVENT, 200, cycle=9)])
+
+        carry_state_forward(current_cycle=9)
+
+        latest = next(e for e in read_events(reverse=True) if e["event"] == "mode_change")
+        assert latest["data"]["origin_cycle"] == 7
+
+    def test_a_cycle_field_outranks_the_breadcrumb(self, isolated_events_log):
+        """A cycle in the data is the writer's own statement. A breadcrumb is
+        computed from a cache, and one written at a boundary can still name the
+        cycle before it, so the field wins."""
+        at_boundary = _ev("mode_change", 100, mode="AUTO_MODE", enabled=True, cycle=5)
+        at_boundary["breadcrumb"] = "s_abcd1234/c_4/g_abc1234/p_none/t_100"
+        _write(isolated_events_log, [at_boundary, _ev(CYCLE_BOUNDARY_EVENT, 200, cycle=9)])
+
+        carry_state_forward(current_cycle=9)
+
+        latest = next(e for e in read_events(reverse=True) if e["event"] == "mode_change")
+        assert latest["data"]["origin_cycle"] == 5
+
     def test_the_fold_covers_one_cycle_not_the_whole_log(self, isolated_events_log):
         """Bounded work at the boundary. A mode set two cycles ago and since
         turned off must not be resurrected by reaching further back."""
