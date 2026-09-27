@@ -1527,7 +1527,7 @@ def _sprint_log_skeleton(title: str, goal: str, breadcrumb: str) -> str:
 
 ## Scoped Tasks
 
-<!-- List is populated automatically by `task create sprint` and updated by Stop hook nags. -->
+<!-- Filled in by `task complete` from the sprint's scope at the close; until then, `task scope show`. -->
 
 | # | Title | Status |
 |---|-------|--------|
@@ -1537,13 +1537,13 @@ def _sprint_log_skeleton(title: str, goal: str, breadcrumb: str) -> str:
 
 ## Session Notes
 
-<!-- Add notes as you work. Use `macf_tools task note <id> "..."` to append. -->
+<!-- Notes go on the sprint's task as you work (`macf_tools task note <id> "..."`); summarise here what a reader of this log needs. -->
 
 ---
 
 ## Ideas Captured
 
-<!-- 💡-prefix notes from `task note --idea "..."` accumulate here. -->
+<!-- The close counts the 💡 notes on the sprint and its scope into the Final Synthesis; list here the ones worth promoting with `macf_tools idea create`. -->
 
 ---
 
