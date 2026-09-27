@@ -47,6 +47,7 @@ Use **inline env vars** for ephemeral overrides (one invocation, one test). Use 
 | Calling card | `MACEFF_AGENT_NAME` | `agent_identity.calling_card` | (none) | Display name for the agent |
 | Hook output | `MACF_HOOK_OUTPUT` | `hooks.output` | `diff` | `diff` sends only what changed since a hook's last block; `full` always sends the whole block |
 | Full block interval | `MACF_HOOK_FULL_EVERY_MINS` | `hooks.full_every_mins` | `30` | Minutes after which `user_prompt_submit` sends its full block again; `stop` never does, since its message carries the focused role's duty list |
+| Tool-call breadcrumb | `MACF_HOOK_PRE_TOOL_USE_BREADCRUMB` | `hooks.pre_tool_use_breadcrumb` | `off` | `on` puts the breadcrumb on every tool call's line too; by default it appears only on the prompt and Stop lines that open and close each DEV_DRV |
 
 **Inspect resolution** at any time:
 ```bash
