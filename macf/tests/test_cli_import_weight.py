@@ -24,6 +24,14 @@ def test_the_parser_builds_without_the_heavy_modules():
     assert loaded == [], loaded
 
 
+def test_the_task_package_loads_its_custom_models_on_first_use():
+    # Most task commands read tasks and never build a sprint's custom fields.
+    seen = _fresh("import json, sys, macf.task as t; before = 'pydantic' in sys.modules; "
+                  "from macf.task import SprintCustom, PlayTimeCustom; "
+                  "print(json.dumps([before, 'pydantic' in sys.modules, SprintCustom.__name__, "
+                  "PlayTimeCustom.__name__, t.SprintCustom is SprintCustom]))")
+    assert seen == [False, True, "SprintCustom", "PlayTimeCustom", True], seen
+
 def test_the_roles_package_loads_its_models_on_first_use():
     seen = _fresh("import json, sys, macf.roles as r; before = 'pydantic' in sys.modules; "
                   "from macf.roles import Role, RoleStore; from macf.roles.models import ICON_SHELF; "
