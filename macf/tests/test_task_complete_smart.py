@@ -251,6 +251,43 @@ class TestSprintForceWithJustificationCompletes:
 
 
 # ---------------------------------------------------------------------------
+# Completing the scope's owner releases every member, paused ones included
+# ---------------------------------------------------------------------------
+
+class TestSprintCompletionReleasesPausedMembers:
+
+    def test_paused_member_leaves_the_scope_with_its_sprint(self, tmp_path, capsys):
+        """Completing a member no longer clears paused members away, so the owner's
+        completion is what releases them: nothing is left in a scope whose sprint is done."""
+        import os
+        event_log = tmp_path / ".maceff" / "agent_events_log.jsonl"
+        event_log.parent.mkdir(parents=True)
+        event_log.touch()
+        with patch.dict(os.environ, {"MACEFF_AGENT_HOME_DIR": str(tmp_path)}):
+            from macf.task.scope import set_scope, pause_scoped_tasks, get_scope_state
+            set_scope(["80", "81"])
+            pause_scoped_tasks(["81"], justification="waiting on review")
+            sprint = _make_fake_task(80, task_type="SPRINT", custom={
+                "goal": "G", "scoped_progress": {"completed": 0, "total": 1},
+                "ideas_captured": 0, "learnings_curated": 0,
+            })
+            children = [_make_fake_child(81, parent_id=80, status="pending")]
+            reader = _make_reader(sprint, children, tmp_path)
+            args = _make_args(80, report="done", force=True, justification="the member waits on review")
+            patches = [p for p in _std_patches(reader) if getattr(p, "attribute", "") != "complete_scoped_task"]
+            assert len(patches) == len(_std_patches(reader)) - 1      # the real scope code runs
+
+            with ExitStack() as stack:
+                for p in patches:
+                    stack.enter_context(p)
+                from macf.cli import cmd_task_complete
+                rc = cmd_task_complete(args)
+
+            assert rc == 0
+            assert get_scope_state() == {}
+            assert "released 2 task(s)" in capsys.readouterr().out     # the sprint and its paused member
+
+# ---------------------------------------------------------------------------
 # TC04: SPRINT auto-aggregate appears in completion_report
 # ---------------------------------------------------------------------------
 

@@ -116,24 +116,32 @@ def set_scope(task_ids: List[str], parent_expanded: bool = False,
 def complete_scoped_task(task_id: str, session_id: str = "") -> dict:
     """Mark a scoped task as inactive (completed while scoped).
 
-    Updates MTMD scope_status to "inactive". Auto-clears entire scope
-    when the last active task completes.
+    Nothing happens for a task the scope does not hold: every completion
+    comes through here, scoped or not. Auto-clears the entire scope when the
+    last OPEN member completes. A paused member is still open (it waits on an
+    external blocker and resumes with ``scope unpause``), so it keeps the scope.
 
     Returns:
-        Dict with 'task_id', 'transitioned_to' ('inactive'), 'remaining_active' (int),
-        'auto_cleared' (bool), 'success' (bool).
+        Dict with 'task_id', 'transitioned_to' ('inactive', or None outside the
+        scope), 'remaining_active' (int), 'remaining_paused' (int),
+        'auto_cleared' (bool), 'success' (bool; False outside the scope).
     """
-    # Get current state to compute remaining
     scope = get_scope_state()
-    remaining = sum(1 for tid, s in scope.items() if s == "active" and tid != str(task_id))
+    others = [s for tid, s in scope.items() if tid != str(task_id)]
+    remaining = others.count("active")
+    paused = others.count("paused")
 
     result = {
         "task_id": str(task_id),
         "transitioned_to": "inactive",
         "remaining_active": remaining,
+        "remaining_paused": paused,
         "auto_cleared": False,
         "success": False,
     }
+    if str(task_id) not in scope:
+        result["transitioned_to"] = None
+        return result
 
     # Event for history
     success = append_event(
@@ -150,8 +158,8 @@ def complete_scoped_task(task_id: str, session_id: str = "") -> dict:
         # Update MTMD on this task
         _update_task_scope_status(str(task_id), "inactive")
 
-        # Auto-clear scope when last active task completes
-        if remaining == 0:
+        # Auto-clear scope when the last open member completes
+        if remaining == 0 and paused == 0:
             clear_result = clear_scope(session_id=session_id)
             result["auto_cleared"] = clear_result.get("success", False)
 
@@ -164,16 +172,18 @@ def clear_scope(session_id: str = "") -> dict:
     Sets MTMD scope_status to None on all scoped tasks.
 
     Returns:
-        Dict with 'active_removed' (list of IDs), 'inactive_removed' (list of IDs),
-        'success' (bool).
+        Dict with 'active_removed', 'paused_removed' and 'inactive_removed'
+        (lists of IDs), 'success' (bool).
     """
     scope = get_scope_state()
     active = [tid for tid, s in scope.items() if s == "active"]
+    paused = [tid for tid, s in scope.items() if s == "paused"]
     inactive = [tid for tid, s in scope.items() if s == "inactive"]
     orphans = list(find_orphaned_scope_tasks())
 
     result = {
         "active_removed": active,
+        "paused_removed": paused,
         "inactive_removed": inactive,
         "orphans_swept": orphans,
         "success": False,
@@ -184,6 +194,7 @@ def clear_scope(session_id: str = "") -> dict:
         event="scope_cleared",
         data={
             "active_removed": len(active),
+            "paused_removed": len(paused),
             "inactive_removed": len(inactive),
             "session_id": session_id,
         },
@@ -553,13 +564,15 @@ def is_task_timer_blocked(task_id: str) -> dict:
 
     Only the LAST active scoped task is blocked by the timer. Earlier tasks
     can be completed freely — this clears scope incrementally and feeds the
-    Markov recommender at each gate point via the Stop hook.
+    Markov recommender at each gate point via the Stop hook. A task that is
+    not active in scope (outside it, or paused) is never blocked: completing
+    it ends nothing early.
 
     Returns:
         Dict with 'blocked' (bool), 'remaining_min' (int), 'reason' (str).
     """
     scope = get_scope_state()
-    if str(task_id) not in scope:
+    if scope.get(str(task_id)) != "active":
         return {"blocked": False, "remaining_min": 0, "reason": ""}
 
     timer = get_active_timer()
