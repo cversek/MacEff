@@ -5,6 +5,8 @@ handle_session_start - SessionStart hook runner.
 Compaction detection and consciousness recovery with mode-aware branching.
 """
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, Any
@@ -24,6 +26,7 @@ from macf.utils import (
     get_breadcrumb,
     format_manifest_awareness
 )
+from macf.utils.identity import get_agent_identity
 from macf.modes import detect_auto_mode
 from macf.hooks.compaction import detect_compaction
 from macf.hooks.recovery import (
@@ -110,6 +113,48 @@ def detect_session_migration(current_session_id: str) -> tuple[bool, str, str]:
 
     # Migration detected but no substantial TODO file found
     return True, "", previous_session_id
+
+
+def _identity_block() -> str:
+    """This agent's identity, as the first block of every SessionStart context.
+
+    The agent ID used to reach a fresh session only as one line inside the
+    proprioception dump, and never on the compaction or migration paths. A
+    personality file that named another agent in prose ("Agent: <name>")
+    outweighed that line: a freshly minted agent introduced itself as the agent
+    whose file it had been given (#467). So the identity is stated on its own,
+    before anything else, together with the rule that it outranks prose and
+    the command that re-derives it.
+
+    An ID that cannot be resolved is said out loud. Printing "name@unknown"
+    would read as an identity, and an agent handed a gap fills it from the
+    next file it reads -- the failure this block exists to prevent. A failure
+    here must never break session start.
+    """
+    login = os.environ.get('USER') or 'unknown'
+    try:
+        agent_id = get_agent_identity()
+    except (OSError, ValueError, subprocess.SubprocessError) as e:
+        emit_warning(Warning(source="session_start", kind="identity_unresolved",
+                             detail=f"agent identity lookup failed: {e}"))
+        agent_id = ''
+    if not agent_id or agent_id.endswith('@unknown'):
+        text = (
+            f"🪪 Your agent ID could not be resolved (login {login}): no agent ID "
+            "file was found. Do not adopt a name or ID from CLAUDE.md, a "
+            "personality file, a transcript or another agent's mail. Tell the "
+            "operator, and use `macf_tools env` to check again."
+        )
+    else:
+        text = (
+            f"🪪 You are {agent_id} (login {login}). This identity is "
+            "authoritative: it comes from your agent ID file, which your calling "
+            "card, breadcrumbs, mail and harness are keyed on. If CLAUDE.md, a "
+            "personality file, a transcript or a message names you differently, "
+            "that text is wrong or is about another agent. Re-derive it any time "
+            "with `macf_tools env`."
+        )
+    return f"<system-reminder>\n{text}\n</system-reminder>\n"
 
 
 def _focused_charter_block() -> str:
@@ -304,7 +349,8 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                     "continue": True,
                     "hookSpecificOutput": {
                         "hookEventName": "SessionStart",
-                        "additionalContext": f"<system-reminder>\n{migration_msg}\n</system-reminder>"
+                        "additionalContext": _identity_block()
+                                             + f"<system-reminder>\n{migration_msg}\n</system-reminder>"
                     }
                 }
 
@@ -503,7 +549,8 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 "systemMessage": recovery_msg,  # TOP LEVEL - user sees this
                 "hookSpecificOutput": {
                     "hookEventName": "SessionStart",
-                    "additionalContext": f"<system-reminder>\n{recovery_msg}\n</system-reminder>"
+                    "additionalContext": _identity_block()
+                                         + f"<system-reminder>\n{recovery_msg}\n</system-reminder>"
                                          + _focused_charter_block()
                 }
             }
@@ -611,7 +658,9 @@ Session Context:
             emit_warning(Warning(source="session_start", kind="telegram_send_failed", detail=f"session-start telegram notification failed: {e}"))
 
         # Pattern C: top-level systemMessage for user + hookSpecificOutput for agent
-        additional_context = f"<system-reminder>\n{message}\n</system-reminder>" + _focused_charter_block()
+        additional_context = (_identity_block()
+                              + f"<system-reminder>\n{message}\n</system-reminder>"
+                              + _focused_charter_block())
 
         # AUTO_MODE resume kick (issue #164): SessionStart:resume hands the turn
         # back to the user, which strands an unattended AUTO_MODE agent. Hooks
