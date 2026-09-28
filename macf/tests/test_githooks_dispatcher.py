@@ -245,7 +245,7 @@ class TestCommitMsgStageAndPortableHooklets:
         assert any("10-no-session-url" in a for a in report["actions"])
         # nothing MacEff-specific came along: the style gate needs tools/ that this repo lacks
         assert not (repo / ".githooks" / "pre-commit.d" / "20-style").exists()
-        assert [h["name"] for h in list_hooklets(repo, "commit-msg")] == ["10-no-session-url", "20-no-private-refs"]
+        assert [h["name"] for h in list_hooklets(repo, "commit-msg")] == ["10-no-session-url", "20-no-private-refs", "30-calling-card"]
         # and the second install is a genuine no-op
         assert install_dispatcher(repo)["actions"] == []
 

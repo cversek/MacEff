@@ -13259,6 +13259,19 @@ def _build_parser() -> argparse.ArgumentParser:
     gh_list.add_argument("repo", nargs="?", default=".",
                          help="path to the git repository (default: cwd)")
     gh_list.set_defaults(func=cmd_githooks_list)
+    gh_card = gh_sub.add_parser(
+        "check-card",
+        help="commit-msg check: in an agent session with opsec.public_attribution, the "
+             "message's last line must be this agent's calling card (public_voice §2.1)")
+    gh_card.add_argument("message_file", help="the commit message file git passes to commit-msg")
+    gh_card.set_defaults(func=cmd_githooks_check_card)
+    gh_push = gh_sub.add_parser(
+        "check-push",
+        help="pre-push check: in an agent session with git.forbid_default_branch_push, "
+             "refuse an update of the remote's default branch (reads git's pre-push stdin)")
+    gh_push.add_argument("remote", help="remote name, as git passes it")
+    gh_push.add_argument("url", nargs="?", default="", help="remote URL, as git passes it")
+    gh_push.set_defaults(func=cmd_githooks_check_push)
 
     # ── shell ────────────────────────────────────────────────────────────
     shell_parser = sub.add_parser("shell", help="shell integration (tab completion)")
@@ -13338,6 +13351,29 @@ def cmd_githooks_list(args: argparse.Namespace) -> int:
         print(f"❌ {problems} hooklet(s) present but NOT executable — the dispatcher refuses them; chmod +x to fix")
         return 1
     return 0
+
+def cmd_githooks_check_card(args: argparse.Namespace) -> int:
+    """Refuse a commit message without this agent's calling card (agent sessions only)."""
+    from pathlib import Path
+    from .attribution import check_commit_message
+
+    reason = check_commit_message(Path(args.message_file))
+    if reason:
+        print(f"[hooks] {reason}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_githooks_check_push(args: argparse.Namespace) -> int:
+    """Refuse a push to the remote's default branch (agent sessions only)."""
+    from .attribution import check_push
+
+    reason = check_push(args.remote, sys.stdin.read().splitlines())
+    if reason:
+        print(f"[hooks] {reason}", file=sys.stderr)
+        return 1
+    return 0
+
 
 def cmd_githooks_install(args: argparse.Namespace) -> int:
     """Install the dispatcher, adopting whatever hook was already there."""
