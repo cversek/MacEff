@@ -104,8 +104,11 @@ These settings control which Claude model is used and how responses are formatte
 |-------|------|---------|-------------|--------|
 | `model` | string | - | Override default model for Claude Code | ✅ Official docs |
 | `outputStyle` | string | - | Configure output style adjustment to system prompt | ✅ Official docs |
+| `promptSuggestionEnabled` | boolean | enabled | `false` hides the grey predicted next prompt | ❓ Empirical |
 | `spinnerTipsEnabled` | boolean | - | Enable/disable spinner tips during processing | ❓ Empirical |
 | `statusLine` | object | - | Configure custom status line display | ✅ Official docs |
+
+**MacEff Note** on `promptSuggestionEnabled`: Tab or Right-arrow accepts a suggestion, and typing after an accepted suggestion appends to it. After a MacEff recovery hook, the predictor offers "Do your recovery", so on a seat a person types into, a habitual Tab turns `/exit` into `Do your recovery/exit`. A deployment declares it per agent (or under `defaults`) in `agents.yaml` as `claude_config.settings.promptSuggestionEnabled: false`, which provisioning writes into `~/.claude/settings.json`. Left unset, the client default applies.
 
 #### `outputStyle` Field Values
 
