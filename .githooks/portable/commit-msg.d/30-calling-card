@@ -1,0 +1,18 @@
+#!/bin/bash
+# An agent's commit ends with the agent's calling card (public_voice §2.1).
+#
+# The check itself is `macf_tools githooks check-card`, which passes unless ALL
+# of these hold: the commit is made inside a Claude Code session (CLAUDECODE=1),
+# and that agent's config sets opsec.public_attribution. A person committing
+# from their own terminal is never checked, even on an account an agent shares.
+#
+# Portable: with no macf_tools on PATH there is no agent to check, and the
+# hooklet passes. Bash 3.2 compatible (macOS).
+set -uo pipefail
+
+MSG_FILE="${1:-}"
+[ -n "$MSG_FILE" ] && [ -f "$MSG_FILE" ] || exit 0
+[ "${CLAUDECODE:-}" = "1" ] || exit 0
+command -v macf_tools >/dev/null 2>&1 || exit 0
+
+exec macf_tools githooks check-card "$MSG_FILE"

@@ -75,6 +75,19 @@ if [ -z "$ENTRIES" ]; then
   exit 0
 fi
 
+# STDIN. The loop below reads its own list from a here-document, so a hooklet run
+# inside it would inherit THAT as its stdin: the rest of the list, not what git
+# sent. Git feeds pre-push one line per ref being pushed, and a push guard that
+# read the dispatcher's list instead would pass every push. So git's stdin is
+# captured once and each hooklet gets its own full copy. Only for hooks git
+# actually feeds: reading stdin anywhere else could block on a caller's pipe
+# that never closes, so every other hooklet gets an empty stdin.
+STDIN_COPY=$(mktemp "${TMPDIR:-/tmp}/macf-hook-stdin.XXXXXX") || exit 1
+trap 'rm -f "$STDIN_COPY"' EXIT
+case "$HOOK_NAME" in
+  (pre-push) cat > "$STDIN_COPY" ;;
+esac
+
 FAILED=""
 while IFS="$(printf '\t')" read -r name path; do
   [ -n "$path" ] || continue
@@ -89,7 +102,7 @@ while IFS="$(printf '\t')" read -r name path; do
     continue
   fi
 
-  "$path" "$@"
+  "$path" "$@" < "$STDIN_COPY"
   rc=$?
   if [ $rc -ne 0 ]; then
     echo "[hooks] $name exited $rc" >&2
@@ -102,7 +115,7 @@ EOF
 
 if [ -n "$FAILED" ]; then
   echo "[hooks] $HOOK_NAME BLOCKED by:$FAILED" >&2
-  echo "[hooks] deliberate bypass:  git commit --no-verify   (or MACF_SKIP_HOOKS=1)" >&2
+  echo "[hooks] deliberate bypass:  git $(echo "$HOOK_NAME" | sed "s/^pre-//;s/-msg$//") --no-verify   (or MACF_SKIP_HOOKS=1)" >&2
   exit 1
 fi
 

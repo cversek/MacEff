@@ -49,6 +49,8 @@ referencing `dadttt` should now use `public_voice`.
 - May a public artifact carry my agent identity, and where exactly?
 - What counts as private context, and why must the body be clean even when the
   calling card is permitted?
+- Is the calling card checked, where, and when does a check not apply to me?
+- May I push to a repository's default branch?
 
 **3 Formatting Restraint**
 - How much Markdown is too much?
@@ -118,8 +120,8 @@ wrong, what it cost, what changed. **Never publish who hit it or where.**
 
 There is exactly one exception, and it is a fixed one.
 
-**The calling card goes on the LAST LINE of a pull request body, and nowhere
-else**:
+**The calling card goes on the LAST LINE of a pull request body, a pull request
+comment, or a commit message, and nowhere else**:
 
 ```
 [Moniker@idfrag: task#N s_XXXXXXXX/c_NN/p_ZZZZZZZ/t_TTTTTTTTTT]
@@ -173,6 +175,56 @@ and the provenance sits in one auditable place.
 and take the card where the tooling emits one. Prose published outside a
 repository (documentation, a report, a forum post) takes no card at all; it is the
 operator's artifact, not the agent's.
+
+### 2.2 The card is checked, not remembered
+
+A sign-off an agent must remember is the first thing it drops when a person it
+works for has just told it what to do. So where attribution is on, the card is
+checked at each point where the artifact leaves the agent's hands:
+
+| Artifact | Checked by | What it refuses |
+|---|---|---|
+| A commit message | the `commit-msg` hooklet `30-calling-card` (`macf_tools githooks check-card`) | a message whose last line is not this agent's own card |
+| A PR body or PR comment | the PreToolUse hook, on `gh pr create`, `gh pr edit` and `gh pr comment` | a body without the card as its last line, or a body it cannot read (`--fill`, an editor): use `--body-file` |
+
+**The card must be the agent's OWN**, read from its identity (`macf_tools env`), in
+the form `[Name@id: task#N <breadcrumb>]`, bare or in italics. Another agent's card,
+or a placeholder of the right shape, is not a sign-off by this agent.
+
+**Checked only inside an agent session, and only where the agent opts in.** An
+operator and an agent can share one login, so the account cannot tell them apart.
+Claude Code sets `CLAUDECODE=1` in the shells it runs, and a person's own terminal
+does not. Every check passes outside a session, so none of them ever obstructs a
+human. Inside one, the checks apply when the agent's
+`{agent_home}/.maceff/config.json` sets `opsec.public_attribution: true`, the same
+gate that decides whether the card is emitted at all (see §2.1).
+
+**A refusal names the fix.** Add the card as the last line (`macf_tools breadcrumb`
+gives the breadcrumb) and retry. Bypassing a hook (`--no-verify`,
+`MACF_SKIP_HOOKS=1`) to publish without the card is not a fix; it is the failure
+the check exists to catch.
+
+**Installing the hooklets** into a clone: `macf_tools githooks install <repo>`.
+They are portable, and in a repository or environment without `macf_tools` they
+pass.
+
+### 2.3 The default branch belongs to review
+
+An agent that works for a person who is not the maintainer (a student operating a
+seat, a contributor's assistant) does not push to a repository's default branch.
+Its work reaches `main` through a pull request, and the maintainer merges.
+
+**Two layers, for two different actors.** The control that binds *people* is on
+the server: read-only access with a fork-and-PR workflow, or branch protection.
+The control that binds *the agent* is local: the `pre-push` hooklet
+`10-no-default-branch` (`macf_tools githooks check-push`) refuses an update of the
+remote's default branch (`main`, `master`, or whatever the remote's `HEAD` names)
+when the agent's config sets `git.forbid_default_branch_push: true`. It is checked
+only inside an agent session, like §2.2. The local layer does not replace the
+server one: a person in their own terminal is not checked by it.
+
+**What to do instead**: push a feature branch (to your fork, when access is
+read-only) and open a pull request with the card as its last line.
 
 ## 3 Formatting Restraint
 

@@ -412,6 +412,25 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             # Command tracking (first 40 chars)
             command = tool_input.get("command", "")
             if command:
+                # Calling-card sign-off on `gh pr create|edit|comment` (public_voice
+                # §2.1). Denied in every mode: an agent whose config opts into
+                # attribution publishes a PR only with its card as the last line.
+                # The deny leaves the agent free to add the card and retry.
+                try:
+                    from macf.attribution import check_gh_command
+                    card_reason = check_gh_command(command, cwd=data.get("cwd"))
+                except (ImportError, OSError, ValueError) as e:
+                    print(f"⚠️ MACF: calling-card check skipped: {e}", file=sys.stderr)
+                    card_reason = None
+                if card_reason:
+                    return {
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": f"❌ Calling card required\n\n{card_reason}",
+                        }
+                    }
+
                 # Mode-aware bare cd detection (per autonomous_operation.md policy)
                 # AUTO_MODE: warn but continue (safeguards warn, don't block)
                 # MANUAL_MODE: block violation
