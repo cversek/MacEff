@@ -155,6 +155,16 @@ class ClaudeCodeSettingsConfig(BaseModel):
         default=None,
         description="Permission rules for tool authorization (allow/ask/deny)"
     )
+    # A seat a person types into can want this off. Claude Code shows a grey
+    # predicted next prompt that Tab or Right-arrow accepts, and typing after an
+    # accepted suggestion APPENDS to it. After a MacEff recovery hook the
+    # predictor offers "Do your recovery", so a habitual Tab turned "/exit" into
+    # "Do your recovery/exit". Declared here, it survives a rebuilt home; left
+    # unset, Claude Code's own default applies.
+    promptSuggestionEnabled: Optional[bool] = Field(
+        default=None,
+        description="Show Claude Code's predicted next prompt (false disables it); unset keeps the client default"
+    )
 
 
 class ClaudeCodeConfig(BaseModel):
