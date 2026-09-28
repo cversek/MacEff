@@ -204,7 +204,10 @@ def check_gh_command(command: str, cwd: Optional[str] = None) -> Optional[str]:
                 try:
                     body = p.read_text()
                 except OSError:
-                    unreadable = True
+                    return (f"`gh pr {sub}`: the body file {p} cannot be read. This check runs "
+                            f"BEFORE the command, so a file the same command creates does not "
+                            f"exist yet: write the body file in an earlier step, then run "
+                            f"`gh pr {sub}`. Policy: {POLICY} §2.1.")
         if body is None:
             if sub == "edit" and not unreadable:
                 continue  # a title/label/reviewer edit does not touch the body

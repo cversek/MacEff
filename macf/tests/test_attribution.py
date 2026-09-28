@@ -202,3 +202,10 @@ def test_pretooluse_denies_an_uncarded_pr_and_passes_a_carded_one(agent, tmp_pat
     assert out.get("permissionDecision") == "deny" and CARD in out.get("permissionDecisionReason", "")
     allowed = _pretool("gh pr create --title t --body-file good.md", str(tmp_path))
     assert allowed.get("hookSpecificOutput", {}).get("permissionDecision") != "deny"
+
+
+def test_a_body_file_the_same_command_creates_is_explained(agent, tmp_path):
+    # PreToolUse runs before the command: `printf ... > b.md && gh pr create -F b.md`
+    # finds no file. The refusal must say why, not just "unreadable".
+    reason = A.check_gh_command(f"printf x > {tmp_path}/b.md && gh pr create --body-file {tmp_path}/b.md")
+    assert reason and "BEFORE the command" in reason and "b.md" in reason
