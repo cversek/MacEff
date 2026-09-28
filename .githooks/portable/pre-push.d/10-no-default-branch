@@ -1,0 +1,19 @@
+#!/bin/bash
+# An agent does not push to a remote's default branch (public_voice §2.3): its
+# work reaches main through a pull request, and the operator merges.
+#
+# The check itself is `macf_tools githooks check-push`, which passes unless ALL
+# of these hold: the push is made inside a Claude Code session (CLAUDECODE=1),
+# and that agent's config sets git.forbid_default_branch_push. A person pushing
+# from their own terminal is never checked. Server-side branch protection or
+# read-only access is the control that binds people; this binds the agent.
+#
+# Git passes the remote name and URL as arguments and the refs on stdin.
+# Portable: with no macf_tools on PATH there is no agent to check, and the
+# hooklet passes. Bash 3.2 compatible (macOS).
+set -uo pipefail
+
+[ "${CLAUDECODE:-}" = "1" ] || { cat >/dev/null; exit 0; }
+command -v macf_tools >/dev/null 2>&1 || { cat >/dev/null; exit 0; }
+
+exec macf_tools githooks check-push "${1:-origin}" "${2:-}"

@@ -45,7 +45,7 @@ from typing import Any, Dict, List, Optional
 #: Hooks this installer knows how to dispatch. Extending it means adding a
 #: ``<hook>`` dispatcher alongside the existing one; the dispatcher itself is
 #: hook-agnostic and derives its directory from its own basename.
-DISPATCHED_HOOKS = ("pre-commit", "commit-msg")
+DISPATCHED_HOOKS = ("pre-commit", "commit-msg", "pre-push")
 
 #: Where an adopted or private hooklet lives, relative to the git common dir.
 LOCAL_HOOKLET_DIR = "hooks.local.d"
