@@ -502,6 +502,14 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # Add minimal token context (high-frequency hook = minimal overhead)
         token_context_minimal = format_token_context_minimal(token_info)
 
+        # The week's usage beside CL, so both budgets read at a glance on every call.
+        # weekly_usage() reads only the newest sample (about half a millisecond) and is a
+        # guard: when there is no sample this week it returns None and the field is omitted.
+        from macf.budget import weekly_usage
+        week = weekly_usage()
+        if week:
+            token_context_minimal = f"{token_context_minimal} wk {week}"
+
         # Notify Telegram (non-blocking, descriptive)
         try:
             from macf.channels.telegram import send_telegram_notification, _html_escape
