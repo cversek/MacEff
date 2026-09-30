@@ -65,7 +65,7 @@ Applies to all Primary Agents (PA) and Subagents (SA) capable of extended autono
 - What does a permission dialog do to the rest of the session, including its scheduled prompts?
 - Why can the waiting session not report its own wait, and where must the watch run instead?
 - What does `macf_tools permissions watch` send, when, and when does it stop?
-- What must an agent write so that its allow rules actually match, and which characters defeat them even inside quotes?
+- What did measuring one day of dialogs show about which commands raise them, and why is a rule built from remembered prompts not enough?
 
 **6 Available Skills**
 - What skills support autonomous operation?
@@ -648,21 +648,27 @@ session. A systemd user timer is the reference: a `.service` with
 `OnCalendar=*:0/5`. An agent with no timer gets only the hook's one message, as
 before.
 
-**What the agent must do: write commands its rules can match.** An allow rule
-covers a command only when the whole command text matches it. Two habits turn a
-covered command into a dialog:
+**What the agent can do to meet fewer dialogs: measure, don't guess.** It is
+tempting to build a list of "characters that cause prompts" from the prompts you
+happen to remember. Don't. Measured over one agent's day (541 shell commands, 10
+dialogs, `permission_mode` auto), such a list was fitted to the failures and
+refuted by the passes:
 
-- **Chaining.** `a; b`, `a && b`, a pipeline or a heredoc is no longer the
-  command the rule names, even when both halves are allowed. Run each publishing
-  or state-changing command in its own call, and write file content with a file
-  tool rather than a heredoc.
-- **Shell metacharacters inside quoted text.** A `;`, `>` (as in `->`), `<`,
-  `|`, `&`, `$`, parentheses, `!` or a backtick inside a quoted title, note or
-  message makes the matcher decline the command, quotes or not. Free-text
-  arguments use plain punctuation: commas, periods, colons, hyphens, slashes.
-  Long text goes in a file where the command accepts one (`--body-file`, `-F`).
+- **Commands no allow rule covered never raised a dialog (0 of 73).** Auto mode
+  judged them itself.
+- **Commands an allow rule fully covered sometimes did (6 of 260).**
+  Punctuation inside quotes did not explain it: the client's rule matcher parses
+  quotes properly. The same command shapes also passed.
+- **What held:**
+  - put long free text in a file the command reads (`--body-file`, `-F`) rather than a long quoted argument;
+  - avoid heredocs and bare `VAR=value; command` prefixes, which the client refuses to analyse;
+  - run each publishing command in its own call, so the event log shows exactly which one waited.
 
-The watch makes a missed dialog visible. These habits make fewer dialogs to miss.
+When a dialog surprises you, read the event log before writing a rule. The log
+records the commands that passed as well as the one that waited, and a rule
+that has not been checked against the passes is a guess.
+
+The watch makes a missed dialog visible. Counting the passes keeps the habits honest.
 
 ---
 
