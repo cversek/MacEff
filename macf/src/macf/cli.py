@@ -3750,8 +3750,13 @@ def cmd_mode_set(args: argparse.Namespace) -> int:
             print("📡 USER_REMOTE active. The operator is reachable ONLY via a remote")
             print("   channel (Telegram); the CLI is unattended. Do NOT use tools that")
             print("   block on CLI input — they hang the session until someone returns:")
+            from .channels.telegram import hook_trace_setting
             print("   • AskUserQuestion — does not reach Telegram. Ask via the Telegram")
-            print("     reply tool, or your turn-final message (the Stop hook forwards it).")
+            if hook_trace_setting()[0]:
+                print("     reply tool, or your turn-final message (the Stop hook forwards it).")
+            else:
+                print("     reply tool. The hook trace is off, so your turn-final message")
+                print("     does NOT reach the channel (macf_tools channel telegram hook-trace).")
             print("   • Ask-list commands (git push, gh pr create/merge, gh issue")
             print("     create/close, git reset --hard, rm -r, docker teardown) — each")
             print("     prompts at the empty CLI. Commit locally; HOLD pushes/PRs.")
@@ -11201,6 +11206,48 @@ def _cmd_inject(args):
     return send_slash_to_self(args.command, target=getattr(args, "target", "") or "")
 
 
+_HOOK_TRACE_ON_TEXT = (
+    "   Telegram gets the hooks' step-by-step trace: tool calls, prompt starts, turn ends,\n"
+    "   gate notices, session start and end, delegations, and the transcript mirror.")
+_HOOK_TRACE_OFF_TEXT = (
+    "   The trace is not sent. Alerts still are: compaction imminent, stop-hook errors,\n"
+    "   a permission prompt waiting, supervisor restarts, framework warnings. A turn-final\n"
+    "   message no longer reaches Telegram, so an agent talking there uses the reply tool.")
+
+
+def cmd_channel_telegram_hook_trace(args: argparse.Namespace) -> int:
+    """Show or set whether the hooks' trace is forwarded to Telegram (GH #477).
+
+    With no state: the setting and the layer it comes from. With on or off:
+    written to this agent's .maceff/config.json and recorded in the event log,
+    since it changes what reaches the operator.
+    """
+    from .channels.telegram import HOOK_TRACE_ENV, HOOK_TRACE_SETTING, hook_trace_setting
+    from .config import write_setting
+
+    if args.state is None:
+        enabled, source = hook_trace_setting()
+        print(f"telegram hook-trace: {'on' if enabled else 'off'}  (from {source})")
+        print(_HOOK_TRACE_ON_TEXT if enabled else _HOOK_TRACE_OFF_TEXT)
+        return 0
+
+    enabled = args.state == "on"
+    try:
+        previous, path = write_setting(HOOK_TRACE_SETTING, enabled)
+    except (OSError, ValueError) as e:
+        print(f"❌ {e}", file=sys.stderr)
+        return 1
+    append_event("channel_setting_changed", {
+        "channel": "telegram", "setting": "hook_trace",
+        "value": enabled, "previous": previous,
+    })
+    print(f"✅ telegram hook-trace {args.state}  ({HOOK_TRACE_SETTING} in {path})")
+    print(_HOOK_TRACE_ON_TEXT if enabled else _HOOK_TRACE_OFF_TEXT)
+    if os.environ.get(HOOK_TRACE_ENV):
+        print(f"⚠️  {HOOK_TRACE_ENV} is set here, and wherever it is set it overrides the file.")
+    return 0
+
+
 def cmd_idea_create(args: argparse.Namespace) -> int:
     """Create a new idea."""
     from .ideas import create_idea
@@ -13016,6 +13063,19 @@ def _build_parser() -> argparse.ArgumentParser:
                                help="supervisor name/pid to target directly "
                                     "(default: self-resolve from this session id)")
     inject_parser.set_defaults(func=lambda args: _cmd_inject(args))
+
+    # channel: settings for the channels the operator reads (GH #477)
+    channel_parser = sub.add_parser(
+        "channel", help="operator channel settings (e.g. telegram hook-trace on|off)")
+    channel_sub = channel_parser.add_subparsers(dest="channel_cmd")
+    channel_telegram = channel_sub.add_parser("telegram", help="the Telegram channel")
+    channel_telegram_sub = channel_telegram.add_subparsers(dest="channel_telegram_cmd")
+    hook_trace = channel_telegram_sub.add_parser(
+        "hook-trace",
+        help="forward the hooks' step-by-step trace to Telegram; alerts are sent either way")
+    hook_trace.add_argument("state", nargs="?", choices=["on", "off"],
+                            help="omit to show the setting and where it comes from")
+    hook_trace.set_defaults(func=cmd_channel_telegram_hook_trace)
 
     # auto-restart: process supervisor
     ar_parser = sub.add_parser("auto-restart", help="auto-restarting process supervisor")

@@ -206,7 +206,9 @@ Development Drive Stats:
                 notify_text = last_msg
             else:
                 notify_text = f"DEV_DRV #{stats['count']} complete ({duration_str})"
-            send_telegram_notification(notify_text, prefix=f"{symbol} Agent stopped", background=True)
+            # A turn end is trace; a stop for an error is an alert (GH #477).
+            send_telegram_notification(notify_text, prefix=f"{symbol} Agent stopped",
+                                       background=True, trace=not is_error)
         except Exception as e:
             emit_warning(Warning(source="stop", kind="telegram_send_failed", detail=f"Stop hook Telegram notification error: {e}"))
 
@@ -448,7 +450,8 @@ Development Drive Stats:
                     from macf.channels.telegram import send_telegram_notification
                     gate_msg = (f"{scope['active_count']} scoped task(s), {timer_remaining}m remaining"
                                 if timer_active else f"{scope['active_count']} scoped task(s) remaining")
-                    send_telegram_notification(gate_msg, prefix="\U0001f6e1\ufe0f\U0001f440 Scope gate", background=True)
+                    send_telegram_notification(gate_msg, prefix="\U0001f6e1\ufe0f\U0001f440 Scope gate",
+                                               background=True, trace=True)
                 except Exception as e:
                     emit_warning(Warning(source="stop", kind="telegram_send_failed", detail=f"Scope gate Telegram error: {e}"))
 
@@ -610,6 +613,7 @@ Development Drive Stats:
                                 f"{remaining_min} min remaining",
                                 prefix="\u23f1\ufe0f\U0001f504 Timer gate",
                                 background=True,
+                                trace=True,
                             )
                         except Exception as e:
                             emit_warning(Warning(source="stop", kind="telegram_send_failed", detail=f"Timer gate Telegram error: {e}"))

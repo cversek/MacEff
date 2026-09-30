@@ -3,7 +3,7 @@
 **Type**: Operations Infrastructure
 **Scope**: All agents (PA and SA)
 **Status**: ACTIVE
-**Version**: 2.1
+**Version**: 2.2
 **Methodology**: Policy as Spec — this policy IS the specification. Implementation must match.
 
 ---
@@ -59,6 +59,7 @@ Agent behavior is governed by multiple **simultaneously active** conditions — 
 - What obligations arise from mode combinations?
 - When does closeout responsibility transfer?
 - What does QUIET_MODE suppress?
+- Which Telegram messages can the operator turn off as the hook trace, which never turn off, and what must I do while the trace is off?
 - What is the closeout sequence?
 
 **7 Gate Points and the Recommender**
@@ -160,7 +161,7 @@ Five operational modes, independently triggered, simultaneously active:
 - **Meaning**: The user is *present and responsive*, but the **CLI is unattended**. This is the opposite failure surface from USER_IDLE: the hazard is not that the agent stops, but that it **blocks on a tool needing CLI input nobody is there to give** — a permission prompt, or an `AskUserQuestion` that never renders on the remote channel — and hangs the whole session until the operator physically returns.
 - **Deactivation**: **Automatic, the instant the operator sends a message from the CLI** — a `user_activity_detected` event with `source == "direct"`. A message from Telegram (`source == "channel"`) does **not** clear it: the operator is still remote. The Transcript Monitor already records this direct-vs-channel distinction (`detect_user_activity`), so the discriminator is a read, not a new signal.
 - **Forbidden while active** (each blocks on the absent CLI):
-  - `AskUserQuestion` — its prompt does not propagate to Telegram, so a remote operator can never answer it. Ask in a Telegram `reply`, or in the turn-final message (which the Stop hook forwards to the channel), instead.
+  - `AskUserQuestion` — its prompt does not propagate to Telegram, so a remote operator can never answer it. Ask in a Telegram `reply` instead, or in the turn-final message, which the Stop hook forwards to the channel **only while the hook trace is on** (§6, *The Hook Trace*).
   - Every **Ask-list** command (`git push`, `gh pr create`, `gh pr merge`, `gh issue create/close`, `git reset --hard`, `rm -r`, docker teardown, …) — each raises a CLI permission prompt. Accumulate commits locally and **hold pushes/PRs** until USER_REMOTE clears.
 - **Enforcement (Ask → Deny)**: activation flips those Ask-list entries to **Deny** and adds `AskUserQuestion` to the deny list, so an attempt returns an *immediate denial the agent can route around* rather than a silent hang; deactivation restores them. Permission changes load at CC startup, so full enforcement takes effect on the **next restart** — until then, the switch message and this policy are the binding guidance. Denial-not-prompt is the safety property: a hung session with a remote operator can only be cleared by their physical return.
 - **Allowed**: the Telegram `reply` tool (the operator's live channel — unlike QUIET_MODE, USER_REMOTE does **not** silence Telegram), plus all local work — reads, edits, tests, `git commit`, `macf_tools`.
@@ -170,7 +171,7 @@ Five operational modes, independently triggered, simultaneously active:
 **Switch message** (printed on activation, and the contract an agent must honor):
 
 > 📡 USER_REMOTE active. The operator is reachable ONLY via Telegram; the CLI is unattended. Do NOT use tools that block on CLI input — they will hang the session:
-> • AskUserQuestion (does not reach Telegram) → ask via Telegram reply or your turn-final message.
+> • AskUserQuestion (does not reach Telegram) → ask via Telegram reply, or your turn-final message while the hook trace is on (with the trace off, the message says the turn-final does not reach the channel).
 > • Ask-list commands (git push, gh pr create/merge, gh issue create/close, git reset --hard, rm -r, docker teardown) → hold them; accumulate commits locally.
 > Communicate via the Telegram reply tool. Clears the instant you send a message from the CLI.
 
@@ -372,6 +373,21 @@ Closeout responsibility requires BOTH `AUTO_MODE` AND `USER_IDLE`. Neither alone
 | Tool execution | No | Work continues |
 | File writes / git commits | No | Work continues |
 | CCP / JOTEWR creation | No | Consciousness preservation continues |
+
+### The Hook Trace: a Channel Setting, Not a Mode
+
+The hooks forward a **trace** of an agent's work to Telegram: a message for each tool call, prompt start, turn end ("Agent stopped", carrying the turn's last message), scope and timer gate notice, session start and end, and delegation start, boot and finish, plus the Transcript Monitor's mirror of the conversation while USER_REMOTE is active. The operator can turn the trace off and keep the channel for conversation:
+
+```bash
+macf_tools channel telegram hook-trace off   # or on; bare shows the setting and where it comes from
+```
+
+- **Why it exists.** An operator who follows an agent's progress somewhere else (Claude Code's own remote view, say) still wants Telegram as a quiet place to talk to that agent while it keeps working. A trace the operator does not act on buries the conversation, and a channel that pages for what nobody acts on trains its reader to stop reading, which disarms it for the message that matters (`notification_delivery.md` §4.3).
+- **What never turns off.** **Alerts** go whatever the setting says: compaction imminent, a stop for an error, a Stop hook failure, a permission prompt waiting on the operator, supervisor restarts, and framework warnings. Each needs the operator to act. In code, a send is trace only if its call site marks it `trace=True`, so **a new message is an alert until someone decides otherwise**. Mistaking a trace message for an alert costs some noise; mistaking an alert for trace silences it.
+- **What changes for an agent while the trace is off.** Your turn-final message does not reach Telegram. To tell the operator something there, including an answer or a question under USER_REMOTE, use the channel's `reply` tool. Messages you send with `reply` are yours, not the hooks', and are never affected. The USER_REMOTE switch message says which case applies.
+- **Whose setting it is.** It is the operator's: it decides what reaches them. Do not change it unless the operator asks. A change is recorded as a `channel_setting_changed` event.
+- **Where it lives.** `channels.telegram.hook_trace` in the agent's `.maceff/config.json`, on by default (the behavior before the setting existed). `MACF_TELEGRAM_HOOK_TRACE=on|off` overrides it for one run, and `macf_tools config show` lists it with its source. It is per agent, so each agent a channel serves is set on its own. `MACF_CHANNELS_DISABLED` still turns off every send, alerts included, and is meant for tests, not for quiet.
+- **vs QUIET_MODE.** QUIET_MODE is a *mode*: temporary, about not disturbing the user, and it governs what the agent chooses to send. The hook trace is a standing *preference* about the hooks' automatic messages. Neither silences alerts.
 
 ---
 
