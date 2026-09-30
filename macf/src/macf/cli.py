@@ -597,6 +597,62 @@ def cmd_budget_plan(args: argparse.Namespace) -> int:
     return _budget_run(go)
 
 
+def cmd_permissions_pending(args: argparse.Namespace) -> int:
+    """Sessions of this agent waiting on a permission prompt (autonomous_operation 5.5)."""
+    from macf import permission_watch as pw
+    now = time.time()
+    current = pw.read_waiting()
+    if args.json:
+        print(pw.as_json(current, now))
+        return 0
+    if not current:
+        print("no session of this agent is waiting on a permission prompt")
+        return 0
+    for w in current:
+        started = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(w.since))
+        print(f"WAITING {w.age_minutes(now):.0f} min (since {started})  session {w.session_id[:8]}  {w.tool}: {w.preview[:200]}")
+    return 0
+
+
+def cmd_permissions_watch(args: argparse.Namespace) -> int:
+    """One watch pass; meant for a timer OUTSIDE the watched session.
+
+    Exit 0 whether or not anything waits: a wait is news for the operator, not a
+    failure of this command. Exit 1 only when a message could not be sent.
+    """
+    from macf import permission_watch as pw
+    from macf.utils.identity import get_agent_identity
+    now = time.time()
+    current = pw.read_waiting()
+    path = pw.state_path()
+    state = pw.load_state(path)
+    failed = []
+
+    if args.dry_run:
+        def send(text: str) -> bool:
+            print(text + "\n---")
+            return True
+    else:
+        from macf.channels.telegram import send_telegram_notification
+
+        def send(text: str) -> bool:
+            ok = send_telegram_notification(text).success
+            if not ok:
+                failed.append(text.splitlines()[0])
+            return ok
+
+    new_state = pw.watch(
+        current, now,
+        older_than_min=args.older_than, repeat_min=args.repeat,
+        state=state, send=send, agent=get_agent_identity(),
+    )
+    if not args.dry_run:
+        pw.save_state(path, new_state)
+    for line in failed:
+        print(f"could not send: {line}", file=sys.stderr)
+    return 1 if failed else 0
+
+
 def cmd_budget_log(args: argparse.Namespace) -> int:
     from macf import budget
     def go() -> int:
@@ -11642,6 +11698,23 @@ def _build_parser() -> argparse.ArgumentParser:
     m.add_argument("--scope", metavar="NAME", help="burn: session, week, or a model name as /usage shows it (default week)")
     m.set_defaults(func=cmd_budget_mode_set)
     mode_sub.add_parser("show", help="the current mode").set_defaults(func=cmd_budget_mode_show)
+    perm_p = sub.add_parser(
+        "permissions",
+        help="permission prompts nobody is answering (autonomous_operation 5.5); run `watch` from OUTSIDE the session",
+    )
+    perm_sub = perm_p.add_subparsers(dest="permissions_cmd")
+    pp = perm_sub.add_parser("pending", help="sessions of this agent waiting on a permission prompt now, and since when")
+    pp.add_argument("--json", action="store_true")
+    pp.set_defaults(func=cmd_permissions_pending)
+    pp = perm_sub.add_parser(
+        "watch",
+        help="one pass: remind the operator (Telegram) about each wait past --older-than, "
+             "again every --repeat, and send one all-clear when it is answered; for a timer or cron",
+    )
+    pp.add_argument("--older-than", type=float, default=10.0, metavar="MIN", help="minutes a prompt waits before the first reminder (default 10)")
+    pp.add_argument("--repeat", type=float, default=60.0, metavar="MIN", help="minutes between reminders while it still waits (default 60)")
+    pp.add_argument("--dry-run", action="store_true", help="print the messages instead of sending them; the state file is not written")
+    pp.set_defaults(func=cmd_permissions_watch)
 
     # New consciousness commands
     list_parser = sub.add_parser("list", help="list consciousness artifacts")
