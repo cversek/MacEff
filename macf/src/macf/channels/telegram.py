@@ -135,6 +135,9 @@ class NotifyResult:
     #: means the hand-off happened, not that anything was delivered; delivery
     #: failures are recorded by that process as ``telegram_send_failed`` events.
     deferred: bool = False
+    #: True when the send was a trace message and the operator has the hook
+    #: trace turned off. A choice, not a failure: no warning, no process.
+    suppressed: bool = False
 
     def __bool__(self) -> bool:  # noqa: D401
         return self.success
@@ -188,6 +191,28 @@ def channels_disabled() -> bool:
     """
     v = os.environ.get(CHANNELS_DISABLED_ENV, "").strip().lower()
     return v not in ("", "0", "false", "no")
+
+
+HOOK_TRACE_ENV = "MACF_TELEGRAM_HOOK_TRACE"
+HOOK_TRACE_SETTING = "channels.telegram.hook_trace"
+
+
+def hook_trace_setting() -> Tuple[bool, str]:
+    """Whether the hooks' trace goes to Telegram, and which layer said so.
+
+    The trace is the step-by-step record of an agent at work: tool calls,
+    prompt starts, turn ends, gate notices, session start and end,
+    delegations, and the transcript monitor's mirror of the conversation.
+    Each such send is marked ``trace=True``. An unmarked send is an alert and
+    goes whatever this says, so a new call site reaches the operator unless
+    someone decides it is trace (GH #477).
+
+    Returns ``(enabled, source)``, where source is ``env``, ``config`` or
+    ``default``. The default is on, the behavior before the setting existed.
+    """
+    from ..config import as_bool, resolve_setting
+    value, source = resolve_setting(HOOK_TRACE_ENV, HOOK_TRACE_SETTING, True, coerce=as_bool)
+    return bool(value), source
 
 
 def resolve_telegram_config() -> Optional[Tuple[str, str]]:
@@ -344,7 +369,8 @@ def _send_in_background(text: str, prefix: str, page_size: int,
 def send_telegram_notification(text: str, prefix: str = "",
                                page_size: int = 4000,
                                parse_mode: Optional[str] = None,
-                               background: bool = False) -> NotifyResult:
+                               background: bool = False,
+                               trace: bool = False) -> NotifyResult:
     """Send a message to the configured Telegram chat, paginating if needed.
 
     Long messages are split into multiple pages. When paginated, the prefix
@@ -364,6 +390,9 @@ def send_telegram_notification(text: str, prefix: str = "",
         background: Hand the send to a detached process and return without
             touching the network. For callers on a latency-sensitive path, such
             as a hook the client waits on. The result is then ``deferred``.
+        trace: This message is part of the hooks' step-by-step trace, not an
+            alert. It is not sent while the operator has the trace off
+            (:func:`hook_trace_setting`); the result is then ``suppressed``.
 
     Returns:
         :class:`NotifyResult`. ``result.success`` mirrors the original
@@ -373,6 +402,11 @@ def send_telegram_notification(text: str, prefix: str = "",
         — callers should merge it into their hook return dict via
         ``return {**emit_warning(result.warning), ...}``.
     """
+    if trace and not hook_trace_setting()[0]:
+        # Checked first, so a suppressed trace reads no channel config and
+        # starts no process.
+        return NotifyResult(success=False, suppressed=True)
+
     config = resolve_telegram_config()
     if not config:
         # Not-configured is neither success nor a warning — it's an

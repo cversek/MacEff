@@ -653,6 +653,7 @@ Session Context:
                 f"Compactions: {compaction_count}\nGap: {gap_display}\nCL: {_cl}",
                 prefix="\U0001f680 Session Started",
                 background=True,
+                trace=True,
             )
         except (ImportError, OSError, ConnectionError) as e:
             emit_warning(Warning(source="session_start", kind="telegram_send_failed", detail=f"session-start telegram notification failed: {e}"))

@@ -937,13 +937,16 @@
           "What are the three layers?",
           "What operational modes exist?",
           "What does each operational mode mean?",
-          "What emoji represents each mode?"
+          "What emoji represents each mode?",
+          "Which Telegram messages can the operator turn off, and what never turns off?"
         ],
         "keywords": [
           "mode",
           "AUTO",
           "MANUAL",
-          "work mode"
+          "work mode",
+          "hook trace",
+          "telegram"
         ]
       },
       {

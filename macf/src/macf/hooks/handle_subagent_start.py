@@ -104,7 +104,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             note = "bridged" if bridged else "no matching started (orphan)"
             send_telegram_notification(
                 f"{tag}\n{note}",
-                prefix="\U0001f4dc DELEG_DRV Booted", background=True,
+                prefix="\U0001f4dc DELEG_DRV Booted", background=True, trace=True,
             )
         except (ImportError, OSError, ConnectionError) as e:
             emit_warning(Warning(

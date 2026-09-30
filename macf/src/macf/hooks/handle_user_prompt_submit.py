@@ -333,6 +333,7 @@ Breadcrumb: {breadcrumb}"""
                 f"{token_section}",
                 prefix="\U0001f4ac DEV_DRV Started",
                 background=True,
+                trace=True,
             )
         except (ImportError, OSError, ConnectionError) as e:
             emit_warning(Warning(source="user_prompt_submit", kind="telegram_send_failed", detail=f"DEV_DRV telegram notification failed (non-blocking): {e}"))
