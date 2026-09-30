@@ -1,6 +1,6 @@
 # Autonomous Operation Policy
 
-**Version**: 1.3
+**Version**: 1.4
 **Tier**: CORE
 **Category**: Operations
 **Status**: ACTIVE
@@ -60,6 +60,12 @@ Applies to all Primary Agents (PA) and Subagents (SA) capable of extended autono
 - What safeguards apply in AUTO_MODE?
 - How does warning behavior change?
 - What constraints remain in effect?
+
+**5.5 A Prompt Nobody Is Answering**
+- What does a permission dialog do to the rest of the session, including its scheduled prompts?
+- Why can the waiting session not report its own wait, and where must the watch run instead?
+- What does `macf_tools permissions watch` send, when, and when does it stop?
+- What must an agent write so that its allow rules actually match, and which characters defeat them even inside quotes?
 
 **6 Available Skills**
 - What skills support autonomous operation?
@@ -601,6 +607,62 @@ Wind-down thresholds scale with context window size:
 6. Recovery reads CCP + JOTEWR from disk
 
 Do NOT try to trigger compaction artificially by consuming tokens with filler. Keep working productively. The infrastructure (CCP on disk, commits, task notes) handles compaction recovery.
+
+### 5.5 A Prompt Nobody Is Answering
+
+**What a dialog does.** When Claude Code shows a permission dialog, the whole
+session waits for it. No tool runs. No scheduled prompt fires either, because
+scheduled prompts run only when the session is idle, and a session waiting on a
+person is not idle. An agent that is feeding other agents on a schedule stops
+feeding them too. Nothing errors and nothing logs: a session waiting on someone
+who is not there looks exactly like a session at rest. Measured on one host in
+two days: three waits of 3, 17 and 12 hours, each on a command an allow rule was
+meant to cover.
+
+**Why the watch lives outside.** The PermissionRequest hook tells the operator
+once, when the dialog opens (a Telegram preview of the command, where Telegram
+is configured). If that one message is missed, nothing inside the session can
+say so later: whatever the session would run to report its wait is exactly what
+the wait prevents. So the reminder must come from something the dialog does not
+block: a system timer, a cron job, a supervisor.
+
+**The capability.**
+
+- `macf_tools permissions pending` answers "is any session of this agent waiting
+  on a permission prompt now, and since when?" from the agent's event log. A
+  session is waiting when its newest deciding event is a `permission_requested`.
+  Any sign of progress (a tool starting or finishing, a prompt starting or
+  ending, a session starting or ending, a compaction) means it was answered.
+  Events the dialog itself causes, such as the client's notification, do not
+  count as an answer.
+- `macf_tools permissions watch` is one pass for a timer. It sends a reminder
+  naming the waiting command once a prompt has waited `--older-than` minutes
+  (default 10), and again every `--repeat` minutes (default 60). When a wait it
+  reminded about ends, it sends one all-clear. A reminder that fails to send is
+  tried again on the next pass. `--dry-run` prints instead of sending.
+
+**What a deployment must do.** Run `macf_tools permissions watch` as the
+agent's own user, every few minutes, from a scheduler outside the agent's
+session. A systemd user timer is the reference: a `.service` with
+`ExecStart=<path to macf_tools> permissions watch`, and a `.timer` with
+`OnCalendar=*:0/5`. An agent with no timer gets only the hook's one message, as
+before.
+
+**What the agent must do: write commands its rules can match.** An allow rule
+covers a command only when the whole command text matches it. Two habits turn a
+covered command into a dialog:
+
+- **Chaining.** `a; b`, `a && b`, a pipeline or a heredoc is no longer the
+  command the rule names, even when both halves are allowed. Run each publishing
+  or state-changing command in its own call, and write file content with a file
+  tool rather than a heredoc.
+- **Shell metacharacters inside quoted text.** A `;`, `>` (as in `->`), `<`,
+  `|`, `&`, `$`, parentheses, `!` or a backtick inside a quoted title, note or
+  message makes the matcher decline the command, quotes or not. Free-text
+  arguments use plain punctuation: commas, periods, colons, hyphens, slashes.
+  Long text goes in a file where the command accepts one (`--body-file`, `-F`).
+
+The watch makes a missed dialog visible. These habits make fewer dialogs to miss.
 
 ---
 
