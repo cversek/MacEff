@@ -493,7 +493,7 @@ class TranscriptMonitor:
                 if fwd:
                     prefix, text = fwd
                     from ..channels.telegram import send_telegram_notification
-                    send_telegram_notification(text[:1500], prefix=prefix)
+                    send_telegram_notification(text[:1500], prefix=prefix, trace=True)
         except Exception as e:  # noqa: BLE001 - GUARD, not handler: see coding_standards
             # Mirroring to the channel is best-effort and must never take down
             # the monitor. Nothing here depends on which exception occurred, so

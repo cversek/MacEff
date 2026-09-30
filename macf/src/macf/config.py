@@ -405,6 +405,20 @@ class ConsciousnessConfig:
 # call at the consumer site.
 
 
+def _maceff_config_file() -> Path:
+    """Where ``.maceff/config.json`` lives: under the agent home base, or the
+    working directory when no home can be found. The loader and the writer
+    both resolve it here, so a setting is written where it will be read."""
+    try:
+        from .utils.paths import find_agent_home
+        agent_home = find_agent_home()
+        if agent_home is None:
+            agent_home = Path.cwd()
+    except (ImportError, OSError):
+        agent_home = Path.cwd()
+    return agent_home / '.maceff' / 'config.json'
+
+
 def _load_maceff_config() -> Dict[str, Any]:
     """Load ``.maceff/config.json`` from the agent home base.
 
@@ -413,15 +427,7 @@ def _load_maceff_config() -> Dict[str, Any]:
     triggers a stderr warning and a fallback to ``{}`` — NOT silent, NOT
     crashing the agent. Per-key type validation lives in ``resolve_setting``.
     """
-    try:
-        from .utils.paths import find_agent_home
-        agent_home = find_agent_home()
-        if agent_home is None:
-            agent_home = Path.cwd()
-    except (ImportError, OSError):
-        agent_home = Path.cwd()
-
-    config_file = agent_home / '.maceff' / 'config.json'
+    config_file = _maceff_config_file()
     if not config_file.exists():
         return {}
     try:
@@ -526,6 +532,49 @@ def resolve_setting(
     return (default, "default")
 
 
+def write_setting(config_path: str, value: Any) -> Tuple[Any, Path]:
+    """Set one dotted key in ``.maceff/config.json``, keeping every other key.
+
+    The file holds identity, hook and store settings besides the one being
+    set, so this is read-modify-write, and a file that exists but cannot be
+    read or parsed is refused rather than replaced: a rewrite from nothing
+    would silently drop whatever was in it. The new file replaces the old in
+    one rename, with the old file's mode.
+
+    Returns ``(previous, path)``: the value the key held (``None`` if unset)
+    and the file written. Raises ``ValueError`` for a file it will not
+    overwrite or a path through a non-object, and ``OSError`` if the write
+    fails.
+    """
+    config_file = _maceff_config_file()
+    config: Dict[str, Any] = {}
+    if config_file.exists():
+        try:
+            config = json.loads(config_file.read_text())
+        except (OSError, json.JSONDecodeError) as e:
+            raise ValueError(f"refusing to overwrite unreadable {config_file}: {e}") from e
+        if not isinstance(config, dict):
+            raise ValueError(f"refusing to overwrite {config_file}: its top level is not an object")
+
+    *parents, leaf = config_path.split('.')
+    node = config
+    for segment in parents:
+        child = node.setdefault(segment, {})
+        if not isinstance(child, dict):
+            raise ValueError(f"cannot set {config_path}: {segment!r} is not an object in {config_file}")
+        node = child
+    previous = node.get(leaf)
+    node[leaf] = value
+
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    staged = config_file.with_name(config_file.name + ".tmp")
+    staged.write_text(json.dumps(config, indent=2) + "\n")
+    if config_file.exists():
+        os.chmod(staged, config_file.stat().st_mode & 0o7777)
+    os.replace(staged, config_file)
+    return previous, config_file
+
+
 # Inventory of all settings the unified resolution chain knows about. The
 # ``config show`` CLI iterates this list to render every setting plus the
 # source label resolved for it. Add new settings here when migrating
@@ -580,6 +629,15 @@ RESOLVED_SETTINGS: List[Dict[str, Any]] = [
         "coerce": as_bool,
         "description": "Put the breadcrumb on every tool call's line too; by default it appears only on the "
                        "prompt and Stop lines that open and close each DEV_DRV",
+    },
+    {
+        "name": "channels.telegram.hook_trace",
+        "env_var": "MACF_TELEGRAM_HOOK_TRACE",
+        "config_path": "channels.telegram.hook_trace",
+        "default": True,
+        "coerce": as_bool,
+        "description": "Forward the hooks' step-by-step trace to Telegram; alerts go either way "
+                       "(set with: macf_tools channel telegram hook-trace on|off)",
     },
     {
         "name": "agent_identity.calling_card",
