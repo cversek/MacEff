@@ -1,6 +1,6 @@
 # Autonomous Operation Policy
 
-**Version**: 1.3
+**Version**: 1.4
 **Tier**: CORE
 **Category**: Operations
 **Status**: ACTIVE
@@ -60,6 +60,12 @@ Applies to all Primary Agents (PA) and Subagents (SA) capable of extended autono
 - What safeguards apply in AUTO_MODE?
 - How does warning behavior change?
 - What constraints remain in effect?
+
+**5.5 A Prompt Nobody Is Answering**
+- What does a permission dialog do to the rest of the session, including its scheduled prompts?
+- Why can the waiting session not report its own wait, and where must the watch run instead?
+- What does `macf_tools permissions watch` send, when, and when does it stop?
+- What did measuring one day of dialogs show about which commands raise them, and why is a rule built from remembered prompts not enough?
 
 **6 Available Skills**
 - What skills support autonomous operation?
@@ -601,6 +607,68 @@ Wind-down thresholds scale with context window size:
 6. Recovery reads CCP + JOTEWR from disk
 
 Do NOT try to trigger compaction artificially by consuming tokens with filler. Keep working productively. The infrastructure (CCP on disk, commits, task notes) handles compaction recovery.
+
+### 5.5 A Prompt Nobody Is Answering
+
+**What a dialog does.** When Claude Code shows a permission dialog, the whole
+session waits for it. No tool runs. No scheduled prompt fires either, because
+scheduled prompts run only when the session is idle, and a session waiting on a
+person is not idle. An agent that is feeding other agents on a schedule stops
+feeding them too. Nothing errors and nothing logs: a session waiting on someone
+who is not there looks exactly like a session at rest. Measured on one host in
+two days: three waits of 3, 17 and 12 hours, each on a command an allow rule was
+meant to cover.
+
+**Why the watch lives outside.** The PermissionRequest hook tells the operator
+once, when the dialog opens (a Telegram preview of the command, where Telegram
+is configured). If that one message is missed, nothing inside the session can
+say so later: whatever the session would run to report its wait is exactly what
+the wait prevents. So the reminder must come from something the dialog does not
+block: a system timer, a cron job, a supervisor.
+
+**The capability.**
+
+- `macf_tools permissions pending` answers "is any session of this agent waiting
+  on a permission prompt now, and since when?" from the agent's event log. A
+  session is waiting when its newest deciding event is a `permission_requested`.
+  Any sign of progress (a tool starting or finishing, a prompt starting or
+  ending, a session starting or ending, a compaction) means it was answered.
+  Events the dialog itself causes, such as the client's notification, do not
+  count as an answer.
+- `macf_tools permissions watch` is one pass for a timer. It sends a reminder
+  naming the waiting command once a prompt has waited `--older-than` minutes
+  (default 10), and again every `--repeat` minutes (default 60). When a wait it
+  reminded about ends, it sends one all-clear. A reminder that fails to send is
+  tried again on the next pass. `--dry-run` prints instead of sending.
+
+**What a deployment must do.** Run `macf_tools permissions watch` as the
+agent's own user, every few minutes, from a scheduler outside the agent's
+session. A systemd user timer is the reference: a `.service` with
+`ExecStart=<path to macf_tools> permissions watch`, and a `.timer` with
+`OnCalendar=*:0/5`. An agent with no timer gets only the hook's one message, as
+before.
+
+**What the agent can do to meet fewer dialogs: measure, don't guess.** It is
+tempting to build a list of "characters that cause prompts" from the prompts you
+happen to remember. Don't. Measured over one agent's day (541 shell commands, 10
+dialogs, `permission_mode` auto), such a list was fitted to the failures and
+refuted by the passes:
+
+- **Commands no allow rule covered never raised a dialog (0 of 73).** Auto mode
+  judged them itself.
+- **Commands an allow rule fully covered sometimes did (6 of 260).**
+  Punctuation inside quotes did not explain it: the client's rule matcher parses
+  quotes properly. The same command shapes also passed.
+- **What held:**
+  - put long free text in a file the command reads (`--body-file`, `-F`) rather than a long quoted argument;
+  - avoid heredocs and bare `VAR=value; command` prefixes, which the client refuses to analyse;
+  - run each publishing command in its own call, so the event log shows exactly which one waited.
+
+When a dialog surprises you, read the event log before writing a rule. The log
+records the commands that passed as well as the one that waited, and a rule
+that has not been checked against the passes is a guess.
+
+The watch makes a missed dialog visible. Counting the passes keeps the habits honest.
 
 ---
 
