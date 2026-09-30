@@ -46,6 +46,11 @@ def _configured_home(tmp_path, monkeypatch):
 
     Project-level resolution is pointed at nothing so the user tier is the one
     under test. The values are fakes; nothing here can reach the network.
+
+    Both ways, because a child process sees only the environment: the in-process
+    patch cannot reach it, and a child of a live Claude Code session inherits
+    CLAUDE_PROJECT_DIR, which names the session's real project and its real
+    channel config (GH #481). So the variable names an empty project here.
     """
     home = tmp_path / "home"
     d = home / ".claude" / "channels" / "telegram"
@@ -53,6 +58,9 @@ def _configured_home(tmp_path, monkeypatch):
     (d / ".env").write_text("TELEGRAM_BOT_TOKEN=000000:fake-token-for-the-fixture\n")
     (d / "access.json").write_text('{"allowFrom": ["123456"]}\n')
     monkeypatch.setenv("HOME", str(home))
+    empty_project = tmp_path / "project"
+    empty_project.mkdir()
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(empty_project))
     monkeypatch.setattr("macf.utils.paths.find_project_root", lambda: None, raising=True)
     return home
 
@@ -129,9 +137,18 @@ def test_the_guard_crosses_the_subprocess_boundary(tmp_path, monkeypatch):
     import os
     _configured_home(tmp_path, monkeypatch)
     base = {k: v for k, v in os.environ.items() if k != "MACF_CHANNELS_DISABLED"}
-    assert _resolve_in_a_child(base) == ["000000:fake-token-for-the-fixture", "123456"], (
-        "control failed: a child with configured files and no guard did not resolve"
+    # Each result is compared into a bool before it is asserted. On a failure pytest
+    # prints an assertion's operands, and here an operand is whatever the child
+    # resolved: a real credential, if isolation ever breaks again (GH #481).
+    resolves_the_fixture = _resolve_in_a_child(base) == [
+        "000000:fake-token-for-the-fixture", "123456"]
+    assert resolves_the_fixture, (
+        "control failed: a child with configured files and no guard did not resolve the "
+        "fixture's credentials (what it resolved is withheld, since it may be real)"
     )
-    assert _resolve_in_a_child({**base, "MACF_CHANNELS_DISABLED": "1"}) is None, (
-        "a child inherited MACF_CHANNELS_DISABLED=1 and still resolved credentials"
+    guarded_child_resolves_nothing = _resolve_in_a_child(
+        {**base, "MACF_CHANNELS_DISABLED": "1"}) is None
+    assert guarded_child_resolves_nothing, (
+        "a child inherited MACF_CHANNELS_DISABLED=1 and still resolved credentials "
+        "(withheld)"
     )
