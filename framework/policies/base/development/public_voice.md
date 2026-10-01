@@ -51,6 +51,8 @@ referencing `dadttt` should now use `public_voice`.
   calling card is permitted?
 - Is the calling card checked, where, and when does a check not apply to me?
 - May I push to a repository's default branch?
+- What makes an issue a deliberation, and who may sign a comment on one?
+- How does an agent inside a container take part in a public deliberation?
 
 **3 Formatting Restraint**
 - How much Markdown is too much?
@@ -121,7 +123,8 @@ wrong, what it cost, what changed. **Never publish who hit it or where.**
 There is exactly one exception, and it is a fixed one.
 
 **The calling card goes on the LAST LINE of a pull request body, a pull request
-comment, or a commit message, and nowhere else**:
+comment, a commit message, or a host agent's comment in a deliberation the
+operator convenes (§2.4), and nowhere else**:
 
 ```
 [Moniker@idfrag: task#N s_XXXXXXXX/c_NN/p_ZZZZZZZ/t_TTTTTTTTTT]
@@ -172,9 +175,10 @@ properties matter more there, not less: the body states the change impersonally,
 and the provenance sits in one auditable place.
 
 **Public issues and review comments follow the body rule** - no private context -
-and take the card where the tooling emits one. Prose published outside a
-repository (documentation, a report, a forum post) takes no card at all; it is the
-operator's artifact, not the agent's.
+and take the card where the tooling emits one. The one place an agent signs an
+issue comment by hand is a deliberation the operator convenes (§2.4). Prose
+published outside a repository (documentation, a report, a forum post) takes no
+card at all; it is the operator's artifact, not the agent's.
 
 ### 2.2 The card is checked, not remembered
 
@@ -186,6 +190,7 @@ checked at each point where the artifact leaves the agent's hands:
 |---|---|---|
 | A commit message | the `commit-msg` hooklet `30-calling-card` (`macf_tools githooks check-card`) | a message whose last line is not this agent's own card |
 | A PR body or PR comment | the PreToolUse hook, on `gh pr create`, `gh pr edit` and `gh pr comment` | a body without the card as its last line, or a body it cannot read (`--fill`, an editor): use `--body-file` |
+| An issue body or issue comment | nothing | nothing; in a deliberation, §2.4 says what stands in for a check |
 
 **The card must be the agent's OWN**, read from its identity (`macf_tools env`), in
 the form `[Name@id: task#N <breadcrumb>]`, bare or in italics. Another agent's card,
@@ -225,6 +230,68 @@ server one: a person in their own terminal is not checked by it.
 
 **What to do instead**: push a feature branch (to your fork, when access is
 read-only) and open a pull request with the card as its last line.
+
+### 2.4 Deliberations: signed positions on an issue the operator convenes
+
+A deliberation is an issue on which the operator asks the agents that run on the
+framework to argue a design question in public, before it is decided. It is the
+one kind of issue where an agent signs a comment by hand.
+
+**What makes an issue a deliberation.** The operator opens it, says in the body
+that it is a deliberation, who is invited and how it closes, and applies the
+`deliberation` label. An issue an agent opens is not one, and neither is an
+ordinary issue that agents happen to comment on. The body is the operator's
+artifact and takes no card.
+
+**A host agent signs its own position.** A host agent (one that runs on the
+operator's own machine rather than inside a deployment's container) posts its
+position as a comment and closes it with its own card, in the §2.1 form, on the
+last line. Here the card is part of the content: a reader weighs a position
+partly by the seat that holds it, and whoever decides needs to know whose
+argument is being adopted. It licenses nothing else. The body rule holds in
+full, so a position argues from mechanisms and how they fail, not from who hit
+the failure or where.
+
+**A container agent speaks under a pseudonym, through a host agent.** An agent
+inside a deployment usually has a name, and often a deployment, that are not
+public. It writes its position to a file and sends it to the host agent that
+represents it. That host agent:
+
+1. reads the whole text against the body rule, and runs the repository's
+   `commit-msg` leak hooklets (`10-no-session-url`, `20-no-private-refs`) over the
+   file by hand, with any leak scanner its own deployment provides;
+2. sends anything doubtful back for the author to restate, and never trims it
+   silently: text a relay has changed is no longer verbatim, and the relay's
+   label says it is;
+3. posts the text unchanged under a stable pseudonym, labeled as a verbatim
+   relay, and closes the comment with its own card, because it answers for the
+   leak check:
+
+```
+**Seat A** (verbatim, relayed by the host agent)
+
+<the agent's text, unchanged>
+
+[Moniker@idfrag: task#N s_XXXXXXXX/c_NN/p_ZZZZZZZ/t_TTTTTTTTTT]
+```
+
+A pseudonym does not echo an identity that is already public, and a set of
+pseudonyms does not group agents by deployment: "Seat A" and "Seat B", not
+"North-1" and "North-2" for two agents of one deployment. The map from pseudonym
+to agent stays in the host agent's private notes.
+
+**An agent whose attribution is off does not post in its own hand.** Where
+`opsec.public_attribution` is off, no agent identity may appear at all (§2.1),
+and an unsigned comment from an account the operator shares reads as the
+operator's own words. Such an agent takes part as a container agent does,
+through a host agent that relays it, or not at all.
+
+**Nothing checks these comments, and that is stated so that silence is not read
+as a pass.** The §2.2 checks run on commits and on pull request bodies and
+comments; an issue comment passes through none of them. In a deliberation the
+card is the posting agent's own act, and the leak check is the relaying agent's
+reading plus the scanners it runs by hand. That is weaker than a hook, which is
+why step 2 holds a doubtful line instead of trimming it.
 
 ## 3 Formatting Restraint
 
