@@ -239,8 +239,40 @@ def verify_incarnation(pid: int, declared_start) -> bool:
     return True
 
 
+def published_socket(pid: int) -> Optional[Path]:
+    """The socket path the client published in ``<pid>.json``, or None if it gave none.
+
+    A missing sidecar is not reported here: the caller falls back to the derived
+    path, and ``read_session_info`` is where a bad sidecar is diagnosed.
+    """
+    try:
+        with open(sessions_dir() / f"{pid}.json") as fh:
+            data = json.load(fh)
+    except FileNotFoundError:
+        return None  # noqa: MACEFF003 - no sidecar means nothing was published; the caller derives the path
+    except (OSError, ValueError) as e:
+        print(f"⚠️ MACF: session sidecar unreadable for pid {pid}; deriving its socket path: {e}",
+              file=sys.stderr)
+        return None
+    value = data.get("messagingSocketPath") if isinstance(data, dict) else None
+    return Path(value) if isinstance(value, str) and value else None
+
+
+def socket_path_for(pid: int) -> Path:
+    """Where ``pid``'s socket is: the published path when the client gave one.
+
+    Deriving the path duplicates the client's layout decision in our code, where
+    it drifts, and it has: without ``XDG_RUNTIME_DIR``, sessions of different
+    client versions in one container published both ``/tmp/cc-socks/`` and
+    ``/tmp/cc-socks-<uid>/``, while the derivation looks under
+    ``/run/user/<uid>``, which a container usually lacks. The derived path
+    remains the fallback for a client that publishes none.
+    """
+    return published_socket(pid) or socket_dir() / f"{pid}.sock"
+
+
 def find_socket(pid: int) -> Optional[Path]:
-    path = socket_dir() / f"{pid}.sock"
+    path = socket_path_for(pid)
     if not path.exists():
         print(f"⚠️ MACF: no session socket for pid {pid} (no wake): {path}", file=sys.stderr)
         return None
@@ -442,6 +474,6 @@ def addressable_sessions() -> list:
             pid = int(name.split(".")[0])
         except ValueError:
             continue
-        if (socket_dir() / f"{pid}.sock").exists() and proc_start(pid) is not None:
+        if socket_path_for(pid).exists() and proc_start(pid) is not None:
             found.append(pid)
     return sorted(found)

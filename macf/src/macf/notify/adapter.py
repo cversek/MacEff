@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..agent_events_log import append_event
+from ..utils.paths import user_runtime_dir
 from . import liveness, masking
 from .notice import Notice
 from .session import (
@@ -65,8 +66,7 @@ class DeliveryResult:
 
 
 def dedup_path() -> Path:
-    runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
-    return Path(runtime) / DEDUP_NAME
+    return user_runtime_dir() / DEDUP_NAME
 
 
 def _load_seen() -> list:
