@@ -1,6 +1,5 @@
 # Service Supervision — Who Watches Whom, and Where the Chain Ends
 
-**Breadcrumb**: s_cd1f76a9/c_25/p_62a56ea5/t_1787434910
 **Type**: Infrastructure
 **Scope**: Any MacEff component that runs as a long-lived process, and the deployments that provision them
 **Status**: ACTIVE
