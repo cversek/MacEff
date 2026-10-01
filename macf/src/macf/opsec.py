@@ -158,6 +158,9 @@ def environment_patterns(env: Optional[Dict[str, str]] = None) -> List[List[str]
                 mon = _moniker_from(home)
                 if mon:
                     e.setdefault("moniker", mon)
+                full_id = _agent_uuid_from(home)
+                if full_id:
+                    e.setdefault("agent_uuid", full_id)
         except (ImportError, OSError):
             pass
 
@@ -187,6 +190,13 @@ def environment_patterns(env: Optional[Dict[str, str]] = None) -> List[List[str]
     mon = (e.get("moniker") or "").strip()
     if len(mon) >= 4:
         out.append([_literal(mon), "agent moniker"])
+    # The agent's own full UUID, spelled out, whatever the profile. The default
+    # profile's generic uuid rule also catches it, but a narrower profile may
+    # not, and these environment patterns used to carry it only by accident, as
+    # the misread moniker.
+    full_id = (e.get("agent_uuid") or "").strip()
+    if len(full_id) >= 8:
+        out.append([_literal(full_id), "agent uuid"])
     # The @-suffixed short id, which is the form that actually leaks: it reads
     # as an email-ish token, so it survives the review that would have caught
     # the moniker spelled out.
@@ -194,30 +204,40 @@ def environment_patterns(env: Optional[Dict[str, str]] = None) -> List[List[str]
     return out
 
 
-def _moniker_from(home) -> Optional[str]:
-    """The agent's moniker from its calling card, or None.
-
-    Read rather than configured: the card already names the agent, and a second
-    source of the same fact would drift from it.
-    """
+def _agent_uuid_from(home) -> Optional[str]:
+    """The agent's UUID from its identity file, or None when the home has none."""
     from pathlib import Path as _P
     try:
         text = (_P(home) / ".maceff_primary_agent.id").read_text().strip()
     except FileNotFoundError:
-        # A LEGITIMATE None: no calling card means no moniker to redact, which
-        # is a fact about this home rather than a failure to read it. This is
-        # the case the rule asks to be distinguished, and it IS distinguished
-        # -- from the unreadable case immediately below, which warns.
+        # A LEGITIMATE None: no identity file means no agent identity to redact,
+        # which is a fact about this home rather than a failure to read it. It
+        # IS distinguished from the unreadable case immediately below, which warns.
         return None  # noqa: MACEFF003 - absence is the answer here, not a failure to get one
     except OSError as e:
         # NOT legitimate. The file exists and could not be read, so the scan is
-        # about to run WITHOUT the agent's own moniker in its pattern set --
-        # a quieter gate than the caller asked for. Say so.
-        print(f"⚠️ MACF: could not read the calling card at {home} ({e}); the "
-              f"OPSEC scan will not redact this agent's moniker",
+        # about to run WITHOUT this agent's identity in its pattern set -- a
+        # quieter gate than the caller asked for. Say so.
+        print(f"⚠️ MACF: could not read the agent identity file at {home} ({e}); the "
+              f"OPSEC scan will not redact this agent's moniker or UUID",
               file=sys.stderr, flush=True)
         return None
-    return text.split("@", 1)[0].strip() or None
+    return text or None
+
+
+def _moniker_from(home) -> Optional[str]:
+    """The agent's display moniker, the name half of its calling card, or None.
+
+    The identity file names the agent by UUID only, so the moniker is not in it.
+    It is resolved the way the calling card itself is
+    (``utils.identity.get_agent_identity``), so the two cannot drift. Reading the
+    name out of the file by splitting it at "@" returned the whole UUID on a real
+    file, and the display name never reached the pattern set.
+    """
+    if _agent_uuid_from(home) is None:
+        return None
+    from .utils.identity import get_agent_identity
+    return get_agent_identity().split("@", 1)[0].strip() or None
 
 
 ### The hook body written into <repo>/.git/hooks/. Reads the profile at run
