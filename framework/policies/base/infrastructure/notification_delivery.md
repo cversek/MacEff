@@ -1,6 +1,5 @@
 # Notification Delivery
 
-**Breadcrumb**: s_cd1f76a9/c_26/p_none/t_1787576139
 **Type**: Infrastructure (capability boundary)
 **Scope**: All agents (PA and SA), and any component that delivers to one
 **Status**: ACTIVE
