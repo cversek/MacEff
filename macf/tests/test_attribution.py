@@ -144,8 +144,11 @@ def test_chained_commands_are_each_checked(agent, tmp_path):
 
 
 def test_issues_are_never_checked(agent):
-    # public_voice: the card never goes on issues.
+    # public_voice says nothing checks an issue: a deliberation's signed comments
+    # rest on the posting agent, not on this hook. A check added here has to
+    # change the policy with it.
     assert A.check_gh_command("gh issue create --title t --body 'no card'") is None
+    assert A.check_gh_command("gh issue comment 5 --body 'no card'") is None
 
 
 # ------------------------------------------------------------- end to end
