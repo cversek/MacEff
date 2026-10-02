@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from ..agent_events_log import append_event
+from ..utils.paths import user_runtime_dir
 
 # ============================================================================
 # Configuration
@@ -254,15 +255,20 @@ def extract_forwardable(entry: dict):
 # ============================================================================
 
 def get_pid_file_path() -> Path:
-    """Get path for PID file in runtime directory."""
-    runtime_dir = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
-    return Path(runtime_dir) / PID_FILE_NAME
+    """Get path for PID file in this user's runtime directory.
+
+    Per user, never a shared ``/tmp``: with ``XDG_RUNTIME_DIR`` unset, as in
+    most containers, a bare ``/tmp`` fallback gave every agent account the same
+    pid file. The first account to write it owned it, and every other agent's
+    liveness check read a pid it could not signal, concluded "not running", and
+    forked another monitor at each session start (#490).
+    """
+    return user_runtime_dir() / PID_FILE_NAME
 
 
 def get_log_file_path() -> Path:
-    """Get path for daemon stderr log file in runtime directory."""
-    runtime_dir = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
-    return Path(runtime_dir) / LOG_FILE_NAME
+    """Get path for daemon stderr log file in this user's runtime directory."""
+    return user_runtime_dir() / LOG_FILE_NAME
 
 
 def _detach_standard_streams() -> None:
@@ -346,6 +352,18 @@ def is_running() -> bool:
     try:
         os.kill(pid, 0)  # signal 0 = check if process exists
         return True
+    except PermissionError:
+        # The pid is alive but belongs to another user. The pid file is this
+        # user's own, so this monitor has exited and the kernel has reused its
+        # pid. Say so: silently reading it as "dead" is how duplicates went
+        # unnoticed when the file was shared (#490).
+        print(
+            f"⚠️ MACF: recorded transcript monitor pid {pid} now belongs to "
+            f"another user; treating this user's monitor as NOT RUNNING",
+            file=sys.stderr,
+        )
+        remove_pid_file()
+        return False
     except OSError:
         remove_pid_file()  # stale PID file
         return False
@@ -757,20 +775,30 @@ def stop_daemon() -> int:
 
     try:
         os.kill(pid, signal.SIGTERM)
-        # Wait for process to exit
-        for _ in range(10):
-            try:
-                os.kill(pid, 0)
-                time.sleep(0.5)
-            except OSError:
-                break
+    except PermissionError:
+        # Not ours to stop, and not this user's monitor either (see is_running).
+        print(
+            f"⚠️ Recorded pid {pid} belongs to another user; this user's "
+            f"Transcript Monitor is not running. Nothing was signaled.",
+            file=sys.stderr,
+        )
         remove_pid_file()
-        print(f"📡 Transcript Monitor stopped (was PID {pid})")
         return 0
     except OSError as e:
         print(f"⚠️ Process {pid} not found: {e}", file=sys.stderr)
         remove_pid_file()
         return 0
+
+    # Wait for process to exit
+    for _ in range(10):
+        try:
+            os.kill(pid, 0)
+            time.sleep(0.5)
+        except OSError:
+            break
+    remove_pid_file()
+    print(f"📡 Transcript Monitor stopped (was PID {pid})")
+    return 0
 
 
 def daemon_status() -> int:
