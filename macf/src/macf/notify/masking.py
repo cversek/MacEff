@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Optional
 
+from ..utils.paths import user_runtime_dir
 from .notice import Notice
 
 #: Sources whose notices are about the agent ITSELF. Never maskable.
@@ -44,8 +45,7 @@ DECLARATION_NAME = "macf_notify_mask.json"
 
 
 def _runtime_dir() -> Path:
-    runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
-    return Path(runtime)
+    return user_runtime_dir()
 
 
 def _scoped(stem: str, session_id: Optional[str]) -> Path:

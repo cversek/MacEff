@@ -53,6 +53,48 @@ def encode_cc_project_path(path: str) -> str:
     return re.sub(r'[^a-zA-Z0-9]', '-', path)
 
 
+# The parent of the per-user fallback below. A module constant so that a test
+# can point it at a temporary directory instead of the real /tmp.
+_TMP_ROOT = "/tmp"
+
+
+def user_runtime_dir() -> Path:
+    """This user's private directory for MacEff's own small runtime files.
+
+    ``$XDG_RUNTIME_DIR`` when it is set, which is per-user by construction.
+    Otherwise ``/tmp/macf-<uid>``, created 0700 on first use.
+
+    Two other fallbacks look reasonable and are wrong:
+
+    - A bare ``/tmp`` is shared by every account. The first uid to write a file
+      there owns it, and the next agent on the same host or container can
+      neither replace it nor tell it from its own. The supervisor met this
+      first and keeps its registry under ``/tmp/macf-<uid>`` for that reason.
+    - ``/run/user/<uid>`` exists only where a login manager created it. It does
+      not exist on macOS, nor in a container started without one, so a write
+      there fails.
+
+    The fallback must be this user's private directory. One that another
+    account owns, or that others can write, is refused rather than used,
+    because the files kept here include an agent's own masking declaration.
+
+    Raises:
+        PermissionError: the fallback directory exists and is not this user's
+            private directory.
+    """
+    xdg = os.environ.get("XDG_RUNTIME_DIR")
+    if xdg:
+        return Path(xdg)
+    path = Path(_TMP_ROOT) / f"macf-{os.getuid()}"
+    path.mkdir(mode=0o700, exist_ok=True)
+    st = path.stat()
+    if st.st_uid != os.getuid() or st.st_mode & 0o077:
+        raise PermissionError(
+            f"{path} is not this user's private directory (owner uid {st.st_uid}, "
+            f"mode {st.st_mode & 0o777:o}); refusing to keep runtime files there")
+    return path
+
+
 @lru_cache(maxsize=1)
 def get_macf_package_path() -> Optional[Path]:
     """Get the path to the installed macf package directory.
