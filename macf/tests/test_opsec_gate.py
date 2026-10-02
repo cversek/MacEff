@@ -225,10 +225,18 @@ def test_the_moniker_is_required_where_there_is_one(repo, profile, tmp_path, mon
     import macf.opsec as opsec
     from macf.utils.paths import find_agent_home
     home = tmp_path / "agent_home"
-    home.mkdir()
-    (home / ".maceff_primary_agent.id").write_text("Decoyagent@0f1e2d\n")
+    (home / ".maceff").mkdir(parents=True)
+    # The identity file as it really is: the UUID alone. The display name lives
+    # where the calling card reads it, the agent's config. An earlier version of
+    # this test wrote "Name@id" into the identity file, a format no real file
+    # has, and so passed while the gate never saw a display name.
+    (home / ".maceff_primary_agent.id").write_text("0f1e2d3c-4b5a-4978-8a9b-0c1d2e3f4a5b\n")
+    (home / ".maceff" / "config.json").write_text(
+        json.dumps({"agent_identity": {"calling_card": "Decoyagent"}}))
+    monkeypatch.delenv("MACEFF_AGENT_NAME", raising=False)
     monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(home))
     find_agent_home.cache_clear()
+    assert opsec.self_test_decoys() == ["reviewed and signed by Decoyagent"]
     assert "agent moniker" in install_hook(repo, profile)["self_test"]["fired"]
     # A checker that cannot see the moniker is not reported as installed.
     monkeypatch.setattr(opsec, "HOOK_TEMPLATE",
