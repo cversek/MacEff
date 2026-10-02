@@ -35,6 +35,8 @@ intends for them. This policy says where the numbers come from, what may be kept
 **3 Reading the Budget**
 - What does `budget status` report, and how is a burn rate computed?
 - What is a window, and why are rates never computed across a reset?
+- When do two samples belong to the same window, given that reset times jitter?
+- What is the smoothed burn rate, and what does `wk 38% (2%/hr)` on a hook line mean?
 - How often may the endpoint be asked?
 
 **3.1 Unasked Reminders**
@@ -86,9 +88,21 @@ the one command or paste the numbers.
 ## 3 Reading the Budget
 
 `budget status` shows the latest sample and, for each limit, the burn rate over the last hour and since the window
-opened, and where the limit lands at its reset if that pace holds. A **window** is one limit between two resets; a
+opened, a smoothed rate, and where the limit lands at its reset if that pace holds. A **window** is one limit between two resets; a
 limit's history is read only within its current window, because a percentage that fell to zero at a reset says
 nothing about how fast the new window fills. `budget log` shows the week's samples.
+
+Two samples belong to one window when their reset times agree to within a few minutes. The endpoint's reset time
+jitters by about a second between replies, and an exact match once split every window into single samples, so no
+rate was ever computed and a band reminder repeated with each jitter. Real windows are five hours or a week apart,
+so the tolerance cannot join two of them.
+
+The **smoothed rate** is an exponentially weighted mean of the burn rate over the window, with a time constant of
+two hours (`MACEFF_BUDGET_RATE_TAU_MIN`). It exists because percentages are whole numbers sampled every few
+minutes, so the rate between two neighbouring samples jumps between zero and several percent an hour. Each interval
+between samples counts by how much of it lies in the recent past, so an overnight gap does not outvote the last
+two hours. It is shown only once a window's samples span half an hour, for the reason in §5: one sample is a position, not a
+speed.
 
 Samples are events (`budget_sampled`), so the history is the events log and nothing is stored beside it. Reads stop
 at eight days, one day past the longest window, because nothing older can bear on a current answer.
@@ -109,6 +123,12 @@ to read the next one.
 - **The wall warning** fires once per five-hour window, before a tool call, when the window reaches 90 percent
   (`MACEFF_BUDGET_WALL`). Running out of the window stops work with no hook afterwards, unlike a compaction, so the
   remedy it names is a task note or checkpoint for the work in hand.
+
+**The weekly field** rides on every hook line, beside the context level: `wk 38% (2%/hr)`, the all-models weekly
+cap and its smoothed burn rate. It is not a reminder and carries no remedy; it is an instrument the agent paces
+against. The rate is shown to one significant figure below ten percent an hour and two above (`0.3`, `2`, `12`),
+because a finer figure would claim a precision whole-number samples do not have. A sample over an hour old says so:
+`wk 38% (2%/hr, 3h old)`. For scale, a cap spent evenly over a week burns about 0.6 percent an hour.
 
 The hooks refresh the sample themselves at most every ten minutes (`MACEFF_BUDGET_AUTOSAMPLE_MIN`) with a short
 timeout, and **only for an agent that has sampled in the last week**: an installation that never asked for its budget
