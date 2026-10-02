@@ -4,6 +4,7 @@ Paths utilities.
 
 import os
 import re
+import stat
 import subprocess
 import sys
 from functools import lru_cache
@@ -74,24 +75,39 @@ def user_runtime_dir() -> Path:
       not exist on macOS, nor in a container started without one, so a write
       there fails.
 
-    The fallback must be this user's private directory. One that another
-    account owns, or that others can write, is refused rather than used,
-    because the files kept here include an agent's own masking declaration.
+    The fallback must be this user's private directory, because the files kept
+    here include an agent's own masking declaration:
+
+    - One this user owns that others can only read is tightened to 0700 and
+      used. That is the shape real hosts already have: the supervisor creates
+      this directory as the parent of its registry, and ``mkdir(parents=True)``
+      gives parents the umask default (0755), whatever mode the leaf asks for
+      (#494).
+    - One that others can write is refused, since files may have been planted
+      in it; tightening it now would not remove them.
+    - One another account owns, or anything that is not a real directory (a
+      symlink planted in the shared ``/tmp``), is refused. ``lstat`` is used so
+      a symlink is never followed into a directory this user would then chmod.
 
     Raises:
-        PermissionError: the fallback directory exists and is not this user's
-            private directory.
+        PermissionError: the fallback exists and is not this user's directory,
+            or others can write it.
     """
     xdg = os.environ.get("XDG_RUNTIME_DIR")
     if xdg:
         return Path(xdg)
     path = Path(_TMP_ROOT) / f"macf-{os.getuid()}"
-    path.mkdir(mode=0o700, exist_ok=True)
-    st = path.stat()
-    if st.st_uid != os.getuid() or st.st_mode & 0o077:
+    try:
+        path.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    st = os.lstat(path)
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o022:
         raise PermissionError(
             f"{path} is not this user's private directory (owner uid {st.st_uid}, "
             f"mode {st.st_mode & 0o777:o}); refusing to keep runtime files there")
+    if st.st_mode & 0o077:
+        os.chmod(path, 0o700)
     return path
 
 
