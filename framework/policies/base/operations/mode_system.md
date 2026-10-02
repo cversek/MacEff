@@ -421,10 +421,10 @@ The recommender:
 ```
 /{agent_prefix}-{adjective}-self-motivation
 
-/ctb-exploratory-self-motivation       → DISCOVER 🔍
-/ctb-generative-self-motivation        → BUILD 🔨
-/ctb-curative-self-motivation          → CURATE 📋
-/ctb-consolidative-self-motivation     → CONSOLIDATE ✍️
+/myagent-exploratory-self-motivation   → DISCOVER 🔍
+/myagent-generative-self-motivation    → BUILD 🔨
+/myagent-curative-self-motivation      → CURATE 📋
+/myagent-consolidative-self-motivation → CONSOLIDATE ✍️
 
 Framework defaults (agents without custom skills):
 /maceff-exploratory-self-motivation
@@ -433,7 +433,7 @@ Framework defaults (agents without custom skills):
 /maceff-consolidative-self-motivation
 ```
 
-**Resolution order**: Agent-specific (`/ctb-*`) overrides framework default (`/maceff-*`). Each agent can customize their skill's reflection questions, task creation patterns, and domain preferences.
+**Resolution order**: Agent-specific (`/myagent-*`) overrides framework default (`/maceff-*`). Each agent can customize their skill's reflection questions, task creation patterns, and domain preferences.
 
 **Each skill's job**:
 1. Set the work mode (emit `work_mode_change` event)
@@ -468,14 +468,14 @@ Monte Carlo sample → selected: BUILD 🔨
   ↓
 systemMessage to agent:
   "Recommended transition: DISCOVER → BUILD (p=0.45)
-   Invoke: /ctb-generative-self-motivation
+   Invoke: /maceff-generative-self-motivation
    Full distribution: BUILD 0.45 | CURATE 0.25 | DISCOVER 0.20 | CONSOLIDATE 0.10
    Override requires justification in task notes."
   ↓
 Agent ULTRATHINK: "I've accumulated findings for 90 minutes.
   BUILD is the natural next step — I'll prototype the transcript monitor."
   ↓
-Agent invokes: Skill(skill: "ctb-generative-self-motivation")
+Agent invokes: Skill(skill: "maceff-generative-self-motivation")
   ↓
 Skill executes: sets BUILD 🔨, reflects on what to build, creates tasks
 ```
@@ -582,7 +582,7 @@ Stored in `.maceff/mode_transitions.json` (per-agent, extensible):
 
 Agents select profiles at sprint start or let the recommender use the default.
 
-**Skill map**: Maps work modes to skill name suffixes. The recommender prepends the agent prefix (e.g., `ctb-`) or framework prefix (`maceff-`) to form the full skill name.
+**Skill map**: Maps work modes to skill name suffixes. The recommender prepends the agent prefix (e.g., `myagent-`) or framework prefix (`maceff-`) to form the full skill name.
 
 ---
 
