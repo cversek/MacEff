@@ -62,8 +62,15 @@ def _registry_file(pid: int) -> Path:
 
 
 def _ensure_registry_dir() -> None:
-    """Create the registry dir owner-only, so it can never be hijacked."""
-    REGISTRY_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    """Create the registry dir owner-only, so it can never be hijacked.
+
+    The parent is created first and explicitly 0700: ``mkdir(parents=True)``
+    applies ``mode`` to the leaf only, and gave the parent ``/tmp/macf-<uid>``
+    the umask default (0755). Other MacEff runtime files live in that parent
+    (``utils.paths.user_runtime_dir``), so it must be born private too (#494).
+    """
+    REGISTRY_DIR.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    REGISTRY_DIR.mkdir(exist_ok=True, mode=0o700)
 
 
 def _write_registry(pid: int, data: dict):
