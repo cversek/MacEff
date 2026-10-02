@@ -50,6 +50,47 @@ def test_a_fallback_directory_others_can_write_is_refused(no_xdg):
         paths.user_runtime_dir()
 
 
+def test_the_supervisors_0755_directory_is_tightened_and_used(no_xdg):
+    # The shape real hosts have: the supervisor made this directory as the
+    # parent of its registry, and mkdir(parents=True) left it 0755 (#494).
+    (no_xdg / "auto-restart").mkdir(parents=True, mode=0o700)
+    no_xdg.chmod(0o755)
+    assert paths.user_runtime_dir() == no_xdg
+    assert no_xdg.stat().st_mode & 0o777 == 0o700
+    assert (no_xdg / "auto-restart").is_dir()
+
+
+def test_a_directory_others_can_write_is_refused_even_when_owned(no_xdg):
+    no_xdg.mkdir()
+    no_xdg.chmod(0o775)
+    with pytest.raises(PermissionError, match="not this user's private directory"):
+        paths.user_runtime_dir()
+    assert no_xdg.stat().st_mode & 0o777 == 0o775
+
+
+def test_a_symlink_in_its_place_is_refused_and_its_target_left_alone(no_xdg, tmp_path):
+    target = tmp_path / "somewhere_of_mine"
+    target.mkdir(mode=0o755)
+    target.chmod(0o755)
+    no_xdg.symlink_to(target)
+    with pytest.raises(PermissionError, match="not this user's private directory"):
+        paths.user_runtime_dir()
+    assert target.stat().st_mode & 0o777 == 0o755
+
+
+def test_the_supervisor_creates_the_parent_private(monkeypatch, tmp_path):
+    from macf import supervisor
+    registry = tmp_path / "macf-test" / "auto-restart"
+    monkeypatch.setattr(supervisor, "REGISTRY_DIR", registry)
+    old = os.umask(0o022)
+    try:
+        supervisor._ensure_registry_dir()
+    finally:
+        os.umask(old)
+    assert registry.stat().st_mode & 0o777 == 0o700
+    assert registry.parent.stat().st_mode & 0o777 == 0o700
+
+
 def test_every_notify_record_lives_in_the_fallback_not_in_run_user(no_xdg):
     for path in (adapter.dedup_path(), liveness.record_path(), liveness.gaps_path(),
                  masking._runtime_dir() / masking.DECLARATION_NAME):
