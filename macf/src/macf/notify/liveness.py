@@ -27,6 +27,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from ..utils.paths import user_runtime_dir
+
 RECORD_NAME = "macf_notify_liveness.json"
 DEFAULT_CADENCE_S = 30.0
 STALENESS_MULTIPLIER = 3.0
@@ -38,8 +40,7 @@ UNREADABLE = "UNREADABLE"
 
 
 def record_path() -> Path:
-    runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
-    return Path(runtime) / RECORD_NAME
+    return user_runtime_dir() / RECORD_NAME
 
 
 @dataclass(frozen=True)
@@ -97,8 +98,7 @@ GAPS_RETAIN = 64
 
 
 def gaps_path() -> Path:
-    runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
-    return Path(runtime) / GAPS_NAME
+    return user_runtime_dir() / GAPS_NAME
 
 
 def note_start(cadence_s: float = DEFAULT_CADENCE_S, now: Optional[float] = None) -> Optional[dict]:
