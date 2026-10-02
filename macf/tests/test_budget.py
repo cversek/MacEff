@@ -312,3 +312,107 @@ def test_weekly_usage_is_a_guard(log, monkeypatch, capsys):
         raise OSError("log gone")
     monkeypatch.setattr(budget, "_recent", broken)
     assert budget.weekly_usage() is None and "weekly usage skipped" in capsys.readouterr().err
+
+
+# ── the burn rate, and windows whose reset time jitters (#497) ───────────────
+
+# Real consecutive replies for one weekly window: the endpoint's resets_at moves by about a second.
+JITTERED_RESETS = ["2026-10-07T20:00:00.093697+00:00", "2026-10-07T19:59:59.559592+00:00",
+                   "2026-10-07T19:59:59.777485+00:00", "2026-10-07T20:00:00.253871+00:00"]
+
+
+def jittered(session_pct, week_pct, i):
+    r = reply_at(session_pct, week_pct, 1)
+    r["limits"][1]["resets_at"] = JITTERED_RESETS[i % len(JITTERED_RESETS)]
+    return r
+
+
+def test_status_finds_its_rates_when_the_reset_time_jitters(log, monkeypatch):
+    clock = {"t": T0}
+    monkeypatch.setattr(budget.time, "time", lambda: clock["t"])
+    for i, pct in enumerate((30, 31, 31, 32, 33)):
+        clock["t"] = T0 + i * 1800
+        budget.sample(fetch=lambda: jittered(10, pct, i), fresh=True)
+    week = next(r for r in budget.status()["limits"] if r["label"] == "week")
+    assert week["rate_window"] == pytest.approx(1.5)
+    assert week["rate_ewma"] is not None and 1.0 < week["rate_ewma"] < 2.0
+    assert "%/h smoothed" in budget.format_status(budget.status())
+
+
+def test_band_notice_shows_once_when_the_reset_time_jitters(log, monkeypatch, opus):
+    clock = {"t": T0}
+    monkeypatch.setattr(budget.time, "time", lambda: clock["t"])
+    shown = []
+    for i in range(4):
+        clock["t"] = T0 + i * 600
+        budget.sample(fetch=lambda: jittered(10, 76 + i, i), fresh=True)
+        shown.append(budget.prompt_notice())
+    assert "≥75%" in shown[0]
+    assert shown[1:] == [None, None, None]
+
+
+def test_reset_key_joins_jitter_and_keeps_real_windows_apart():
+    keys = {budget._reset_key(r) for r in JITTERED_RESETS}
+    assert len(keys) == 1
+    assert budget._reset_key("2026-10-07T20:00:00+00:00") != budget._reset_key("2026-10-08T01:00:00+00:00")
+    assert budget._reset_key(None) is None
+
+
+def test_ewma_of_a_steady_rate_is_that_rate():
+    series = [(T0 + i * 600, 50 + i * 0.5) for i in range(13)]  # 3%/h for two hours
+    assert budget.ewma_rate(series, tau_h=2) == pytest.approx(3.0)
+
+
+def test_ewma_gives_recent_hours_the_say_when_an_old_interval_is_long():
+    # Overnight: 6 points in 12 hours (0.5%/h), then 2%/h for the last 2 hours. The long interval is
+    # mostly old; weighting it by its end alone would give about 0.97%/h.
+    h = 3600
+    series = [(T0, 0.0), (T0 + 12 * h, 6.0), (T0 + 14 * h, 10.0)]
+    assert budget.ewma_rate(series, tau_h=2) == pytest.approx(1.45, abs=0.01)
+
+
+def test_ewma_needs_half_an_hour_and_never_burns_negative():
+    assert budget.ewma_rate([(T0, 10.0), (T0 + 600, 11.0)]) is None
+    assert budget.ewma_rate([(T0, 10.0)]) is None
+    series = [(T0, 10.0), (T0 + 1800, 12.0), (T0 + 2400, 3.0)]  # a fall: skipped, not counted
+    assert budget.ewma_rate(series, tau_h=2) == pytest.approx(4.0)
+
+
+def test_ewma_time_constant_from_the_environment(monkeypatch):
+    h = 3600
+    series = [(T0, 0.0), (T0 + 12 * h, 6.0), (T0 + 14 * h, 10.0)]
+    monkeypatch.setenv("MACEFF_BUDGET_RATE_TAU_MIN", "600")  # ten hours: the old interval counts for more
+    slow = budget.ewma_rate(series)
+    monkeypatch.setenv("MACEFF_BUDGET_RATE_TAU_MIN", "120")
+    assert slow < budget.ewma_rate(series)
+
+
+@pytest.mark.parametrize("rate,shown", [
+    (0, "0"), (-1, "0"), (0.046, "0.05"), (0.34, "0.3"), (0.96, "1"), (2.4, "2"),
+    (9.6, "10"), (12.4, "12"), (99.6, "100"), (155, "160"),
+])
+def test_format_rate_one_figure_below_ten_two_at_ten_and_above(rate, shown):
+    assert budget.format_rate(rate) == shown
+
+
+def test_weekly_usage_shows_the_smoothed_rate(log, monkeypatch):
+    clock = {"t": T0}
+    monkeypatch.setattr(budget.time, "time", lambda: clock["t"])
+    for i, pct in enumerate((30, 31, 31, 32, 33)):
+        clock["t"] = T0 + i * 1800
+        budget.sample(fetch=lambda: jittered(10, pct, i), fresh=True)
+    assert budget.weekly_usage() == "33% (2%/hr)"
+    clock["t"] += 3 * 3600
+    assert budget.weekly_usage() == "33% (2%/hr, 3h old)"
+
+
+def test_weekly_usage_rate_starts_over_at_a_reset(log, monkeypatch):
+    clock = {"t": T0}
+    monkeypatch.setattr(budget.time, "time", lambda: clock["t"])
+    old, new = "2026-09-23T15:59:00-04:00", "2026-09-30T15:59:00-04:00"
+    for i, (pct, reset) in enumerate([(96, old), (99, old), (1, new), (1, new), (2, new)]):
+        clock["t"] = T0 + i * 1200
+        r = reply_at(10, pct, 1); r["limits"][1]["resets_at"] = reset
+        budget.sample(fetch=lambda: r, fresh=True)
+    # The new window spans 40 minutes, smoothed to about 1.6%/h; the old window's 99% never enters it.
+    assert budget.weekly_usage() == "2% (2%/hr)"

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import math
 import os
 import re
 import subprocess
@@ -39,6 +40,9 @@ HISTORY = dt.timedelta(days=8)
 MIN_FETCH_INTERVAL = 180  # seconds between endpoint fetches unless --fresh
 MODES = ("conserve", "normal", "burn")
 SHORT = {"session": "session", "weekly_all": "week"}
+RESET_GRAIN = 300  # seconds: reset times are compared rounded to this; see _reset_key
+RATE_TAU_MIN = 120  # minutes: the burn-rate EWMA's time constant (MACEFF_BUDGET_RATE_TAU_MIN)
+MIN_RATE_SPAN = 1800  # seconds of samples in one window before a rate is shown at all
 
 
 class BudgetError(Exception):
@@ -196,6 +200,28 @@ def current_mode(now: Optional[float] = None) -> dict:
 
 # ── status ───────────────────────────────────────────────────────────────────
 
+def _reset_key(iso: Optional[str]) -> Optional[str]:
+    """A limit's reset time as a window identity: rounded to RESET_GRAIN, in UTC.
+
+    The endpoint's ``resets_at`` jitters by about a second from one reply to the next
+    (``19:59:59.56``, ``20:00:00.25`` for the same reset), so an exact match splits one window
+    into as many windows as there are samples (#497). Real windows are five hours or a week
+    apart, so rounding to five minutes cannot merge two of them.
+    """
+    if not iso:
+        return iso
+    try:
+        t = dt.datetime.fromisoformat(iso).timestamp()
+    except ValueError:
+        return iso  # unparseable: fall back to the exact string rather than guess
+    return dt.datetime.fromtimestamp(round(t / RESET_GRAIN) * RESET_GRAIN, dt.timezone.utc).isoformat()
+
+
+def _window(limit: dict) -> str:
+    """One window's identity, for comparison only: the limit, and its reset rounded to RESET_GRAIN."""
+    return f"{limit['kind']}|{limit['scope']}|{_reset_key(limit['resets_at'])}"
+
+
 def _hours_to(iso: Optional[str], now: float) -> Optional[float]:
     if not iso:
         return None
@@ -209,6 +235,51 @@ def _rate(series: list[tuple[float, float]]) -> Optional[float]:
     return (series[-1][1] - series[0][1]) / ((series[-1][0] - series[0][0]) / 3600)
 
 
+def _tau_hours() -> float:
+    tau = _env_float("MACEFF_BUDGET_RATE_TAU_MIN", RATE_TAU_MIN)
+    return (tau if tau > 0 else RATE_TAU_MIN) / 60
+
+
+def ewma_rate(series: list[tuple[float, float]], tau_h: Optional[float] = None) -> Optional[float]:
+    """Smoothed burn rate, percent per hour, of one window's ``[(t, percent)]``, oldest first.
+
+    Percentages arrive as whole numbers from samples about ten minutes apart, so the rate between
+    neighbours jumps between 0 and several percent an hour. Between two samples the rate is taken
+    as constant, and the result is its exponentially weighted mean over time: each interval's rate
+    weighs the integral of ``exp(-age / tau)`` across the interval, age measured from the newest
+    sample. Integrating matters for uneven gaps: an overnight interval is mostly old, and weighting
+    it by its end alone would let one long, stale interval outvote the recent hours. No seed value
+    is needed. None until the window's samples span MIN_RATE_SPAN, because one sample is a
+    position, not a speed.
+    """
+    if len(series) < 2 or series[-1][0] - series[0][0] < MIN_RATE_SPAN:
+        return None
+    tau_s = (tau_h or _tau_hours()) * 3600
+    newest = series[-1][0]
+    num = den = 0.0
+    for (t0, p0), (t1, p1) in zip(series, series[1:]):
+        if t1 <= t0 or p1 < p0:
+            continue  # a fall cannot happen inside one window; never count it as negative burn
+        weight = math.exp(-(newest - t1) / tau_s) - math.exp(-(newest - t0) / tau_s)
+        num += weight * (p1 - p0) / ((t1 - t0) / 3600)
+        den += weight
+    return num / den if den > 0 else None
+
+
+def format_rate(rate: float) -> str:
+    """A burn rate for a one-line display: one significant figure below 10, two at 10 and above.
+
+    So 0.34 shows as 0.3, 2.4 as 2 and 12.4 as 12. Rounding happens first, so 0.96 shows as 1, not
+    1.0. Zero and anything below it show as 0.
+    """
+    if rate <= 0:
+        return "0"
+    def digits(x: float) -> int:  # decimal places that keep this many significant figures
+        return (2 if x >= 10 else 1) - 1 - math.floor(math.log10(x))
+    v = round(rate, digits(rate))
+    return f"{v:.{max(0, digits(v))}f}" if v > 0 else "0"
+
+
 def status(now: Optional[float] = None) -> dict:
     now = now or time.time()
     hist = samples(now=now)
@@ -218,17 +289,18 @@ def status(now: Optional[float] = None) -> dict:
     mode = current_mode(now)
     rows = []
     for l in latest["limits"]:
-        key = (l["kind"], l["scope"], l["resets_at"])  # one window: same limit, same reset
+        key = _window(l)  # one window: same limit, same reset (within RESET_GRAIN; see _reset_key)
         window = [(s["t"], x["percent"]) for s in hist for x in s["limits"]
-                  if (x["kind"], x["scope"], x["resets_at"]) == key and x["percent"] is not None]
+                  if _window(x) == key and x["percent"] is not None]
         hour = [p for p in window if p[0] >= now - 3600]
         left = _hours_to(l["resets_at"], now)
-        r_hour, r_window = _rate(hour), _rate(window)
+        r_hour, r_window, r_ewma = _rate(hour), _rate(window), ewma_rate(window)
         pace = r_hour if r_hour is not None else r_window
         row = {"label": label(l), "kind": l["kind"], "percent": l["percent"], "resets_at": l["resets_at"],
                "hours_left": round(left, 2) if left is not None else None,
                "rate_last_hour": round(r_hour, 2) if r_hour is not None else None,
                "rate_window": round(r_window, 2) if r_window is not None else None,
+               "rate_ewma": round(r_ewma, 3) if r_ewma is not None else None,
                "projected_at_reset": (round(min(100.0, l["percent"] + pace * left), 1)
                                       if pace is not None and left is not None and l["percent"] is not None else None)}
         burn_here = mode["mode"] == "burn" and (mode.get("scope") or "week") in (row["label"], l["scope"])
@@ -267,6 +339,8 @@ def format_status(st: dict, brief: bool = False) -> str:
             bits.append(f"{r['rate_last_hour']:+g}%/h last hour")
         if r["rate_window"] is not None:
             bits.append(f"{r['rate_window']:+g}%/h this window")
+        if r.get("rate_ewma") is not None:
+            bits.append(f"{format_rate(r['rate_ewma'])}%/h smoothed")
         if r["projected_at_reset"] is not None:
             bits.append(f"at this pace {r['projected_at_reset']:g}% at reset")
         if "pace_needed" in r:
@@ -365,7 +439,7 @@ def _last_notices(now: float) -> dict:
 
 
 def _key(row: dict, what: str) -> str:
-    return f"{what}:{row['kind']}:{row['label']}:{row['resets_at']}"
+    return f"{what}:{row['kind']}:{row['label']}:{_reset_key(row['resets_at'])}"
 
 
 def prompt_notice(now: Optional[float] = None) -> Optional[str]:
@@ -430,25 +504,36 @@ def hook_lines(which: str, now: Optional[float] = None) -> Optional[str]:
 
 
 def weekly_usage(now: Optional[float] = None) -> Optional[str]:
-    """The all-models weekly limit, "42%", for the hooks' lines.
+    """The all-models weekly limit and its burn rate, "42% (2%/hr)", for the hooks' lines.
 
-    Read from the newest sample, the same record ``budget status`` reports, and
-    the read stops there, so a hook pays for one short read and not the week's
-    history. A sample more than an hour old says how old it is. None when there
-    is no sample this week, or the newest carries no weekly limit. A GUARD, like
-    hook_lines: the budget must never take a hook down.
+    The percent is the newest sample's, the same record ``budget status`` reports. The rate is
+    ``ewma_rate`` over that window's samples, read back no further than four time constants (eight
+    hours by default; older samples weigh under 2%), so a hook pays a few milliseconds and not the
+    week's history. The rate is left out until the window's samples span half an hour. A sample
+    more than an hour old says how old it is. None when there is no sample this week, or the newest
+    carries no weekly limit. A GUARD, like hook_lines: the budget must never take a hook down.
     """
     try:
         now = now or time.time()
-        newest = next(iter(_recent("budget_sampled", now)), None)
-        if newest is None:
+        floor = now - 4 * _tau_hours() * 3600
+        points = []  # (t, percent, reset key), newest first
+        for e in _recent("budget_sampled", now):
+            w = next((l for l in e["data"].get("limits", []) if l.get("kind") == "weekly_all"), None)
+            if w is not None and w.get("percent") is not None:
+                points.append((e["timestamp"], w["percent"], _reset_key(w.get("resets_at"))))
+            elif not points:
+                return None  # noqa: MACEFF003 - the newest sample has no weekly limit to show
+            if e["timestamp"] < floor:
+                break
+        if not points:
             return None  # noqa: MACEFF003 - no sample this week is the answer, not a failure to get one
-        pct = next((l.get("percent") for l in newest["data"].get("limits", [])
-                    if l.get("kind") == "weekly_all"), None)
-        if pct is None:
-            return None  # noqa: MACEFF003 - a sample without a weekly limit has nothing to show
-        age_h = (now - newest["timestamp"]) / 3600
-        return f"{pct:g}%" + (f" ({age_h:.0f}h old)" if age_h >= 1 else "")
+        t_new, pct, key = points[0]
+        rate = ewma_rate([(t, p) for t, p, k in reversed(points) if k == key])
+        notes = [f"{format_rate(rate)}%/hr"] if rate is not None else []
+        age_h = (now - t_new) / 3600
+        if age_h >= 1:
+            notes.append(f"{age_h:.0f}h old")
+        return f"{pct:g}%" + (f" ({', '.join(notes)})" if notes else "")
     except Exception as e:  # noqa: BLE001 - GUARD, not handler: see coding_standards
         # Deliberately broad: a GUARD, not a handler. The header goes out without it.
         print(f"⚠️ MACF: weekly usage skipped: {type(e).__name__}: {e}", file=sys.stderr)
