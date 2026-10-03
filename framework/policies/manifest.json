@@ -901,6 +901,29 @@
           "host",
           "portable"
         ]
+      },
+      {
+        "name": "mis",
+        "short_name": "MIS",
+        "path": "base/meta/mis.md",
+        "description": "MacEff Improvement Specifications: proposing, deliberating, deciding, landing and proving large changes",
+        "CEP_triggers": [
+          "How do I propose a change to MacEff?",
+          "When does a change need an MIS?",
+          "How is a deliberation decided?",
+          "How do I write a requirement?",
+          "What makes an MIS Final?"
+        ],
+        "keywords": [
+          "mis",
+          "specification",
+          "proposal",
+          "requirement",
+          "deliberation",
+          "ratification",
+          "glossary",
+          "conformance"
+        ]
       }
     ]
   },
@@ -1311,6 +1334,9 @@
     }
   },
   "discovery_index": {
+    "mis": ["mis"],
+    "specification": ["mis"],
+    "ratification": ["mis"],
     "amail": [
       "amail"
     ],

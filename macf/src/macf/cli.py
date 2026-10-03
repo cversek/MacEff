@@ -579,6 +579,25 @@ def cmd_budget_sample(args: argparse.Namespace) -> int:
     return _budget_run(go)
 
 
+def cmd_mis_check(args: argparse.Namespace) -> int:
+    """Check MIS files and the glossary against the decidable requirements of the mis policy (MIS-0001)."""
+    from pathlib import Path
+    from macf import mis
+    paths = [Path(x) for x in (args.paths or ["framework/mis"])]
+    missing = [str(x) for x in paths if not x.exists()]
+    if missing:
+        print(f"❌ not found: {', '.join(missing)}", file=sys.stderr)
+        return 2
+    glossary = Path(args.glossary) if args.glossary else mis.default_glossary(paths)
+    findings = mis.check(paths, glossary)
+    for f in findings:
+        print(f)
+    n = len(mis.mis_files(paths))
+    gl = f", glossary {glossary}" if glossary else ", no glossary found (R20 and R21 not checked)"
+    print(f"{'❌' if findings else '✅'} {n} MIS file(s){gl}: {len(findings)} finding(s)")
+    return 1 if findings else 0
+
+
 def cmd_budget_status(args: argparse.Namespace) -> int:
     from macf import budget
     def go() -> int:
@@ -11718,6 +11737,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     set_title_parser.set_defaults(func=cmd_env_set_term_title)
     sub.add_parser("time", help="print current local time with CCP gap").set_defaults(func=cmd_time)
+    mis_p = sub.add_parser("mis", help="MacEff Improvement Specifications (policy: mis)")
+    mis_sub = mis_p.add_subparsers(dest="mis_cmd", required=True)
+    m = mis_sub.add_parser("check", help="check MIS files and the glossary against the mis policy's decidable requirements")
+    m.add_argument("paths", nargs="*", help="MIS files or directories (default: framework/mis)")
+    m.add_argument("--glossary", metavar="PATH", help="glossary file (default: glossary.md beside the mis directory)")
+    m.set_defaults(func=cmd_mis_check)
     budget_p = sub.add_parser("budget", help="print budget thresholds (JSON); subcommands: the subscription's rate limits")
     budget_p.set_defaults(func=cmd_budget)
     budget_sub = budget_p.add_subparsers(dest="budget_cmd")

@@ -243,6 +243,12 @@ that it is a deliberation, who is invited and how it closes, and applies the
 ordinary issue that agents happen to comment on. The body is the operator's
 artifact and takes no card.
 
+**A deliberation usually decides an MIS.** When the question is a change large enough
+to need a MacEff Improvement Specification, the deliberation is where its positions
+are argued, and the `mis` policy governs the rest: the Secretary's synthesis, the
+final comment period, the operator's ratification, and the proof. This section
+governs only how agents speak in the deliberation.
+
 **A host agent signs its own position.** A host agent (one that runs on the
 operator's own machine rather than inside a deployment's container) posts its
 position as a comment and closes it with its own card, in the §2.1 form, on the
