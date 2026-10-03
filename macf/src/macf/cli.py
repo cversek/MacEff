@@ -11738,7 +11738,7 @@ def _build_parser() -> argparse.ArgumentParser:
     set_title_parser.set_defaults(func=cmd_env_set_term_title)
     sub.add_parser("time", help="print current local time with CCP gap").set_defaults(func=cmd_time)
     mis_p = sub.add_parser("mis", help="MacEff Improvement Specifications (policy: mis)")
-    mis_sub = mis_p.add_subparsers(dest="mis_cmd", required=True)
+    mis_sub = mis_p.add_subparsers(dest="mis_cmd")
     m = mis_sub.add_parser("check", help="check MIS files and the glossary against the mis policy's decidable requirements")
     m.add_argument("paths", nargs="*", help="MIS files or directories (default: framework/mis)")
     m.add_argument("--glossary", metavar="PATH", help="glossary file (default: glossary.md beside the mis directory)")
