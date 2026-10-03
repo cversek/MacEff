@@ -36,7 +36,6 @@ a drifted hook is the kind that is believed while being wrong.
 """
 
 import os
-import shutil
 import stat
 import subprocess
 from pathlib import Path
@@ -164,7 +163,18 @@ def install_dispatcher(
             local_d.mkdir(parents=True, exist_ok=True)
             destination = local_d / ADOPTED_NAME
             if not destination.exists():
-                shutil.move(str(existing), str(destination))
+                # Wrap, never move (#501). A hook that loads a helper from its
+                # own directory (an opsec gate importing a sibling module) breaks
+                # when moved away from it, and then blocks every commit, with the
+                # bypass as the only visible way out. The original stays where it
+                # was, unrun by git once core.hooksPath is set, and the wrapper
+                # runs it from there with the same arguments and stdin.
+                destination.write_text(
+                    "#!/bin/sh\n"
+                    "# Adopted by macf_tools githooks install: runs the hook that was here\n"
+                    "# before, from where it was, so files beside it still resolve.\n"
+                    f'exec "$(dirname "$0")/../../hooks/{hook}" "$@"\n'
+                )
                 _make_executable(destination)
                 adopted.append(f"{hook} -> {LOCAL_HOOKLET_DIR}/{hook}.d/{ADOPTED_NAME}")
                 actions.append(f"adopted the existing {hook} as {ADOPTED_NAME}")

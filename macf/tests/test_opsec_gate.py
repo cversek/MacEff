@@ -98,8 +98,11 @@ def test_foreign_precommit_is_adopted_not_destroyed(repo, profile):
     facts = install_hook(repo, profile)
 
     adopted = repo / ".git" / "hooks.local.d" / "pre-commit.d" / "00-local-preexisting"
-    assert adopted.is_file(), "the developer's hook was destroyed"
-    assert "a hook the developer wrote" in adopted.read_text()
+    assert adopted.is_file(), "the developer's hook was not adopted"
+    # Adopted by wrapping (#501): the developer's hook stays where it was, intact,
+    # and the adopted slot runs it from there.
+    assert "a hook the developer wrote" in hook.read_text(), "the developer's hook was destroyed"
+    assert "../../hooks/pre-commit" in adopted.read_text(), "the adopted slot does not run the original"
     assert facts["adopted"], "adoption happened but was not reported"
 
 
