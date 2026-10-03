@@ -115,6 +115,55 @@ class TestIdempotence:
         assert adopted.read_text() == first
 
 
+class TestAnAdoptedHookKeepsItsHelpers:
+    """#501: a gate that loads a helper from its own directory broke when moved,
+    and then blocked every commit, clean ones too, with the bypass as the only
+    visible way out. Adoption now wraps the original where it stands."""
+
+    def _gate_repo(self, tmp_path):
+        repo = _repo(tmp_path)
+        hooks = repo / ".git" / "hooks"
+        hooks.mkdir(parents=True, exist_ok=True)
+        (hooks / "helper_gate.py").write_text("def check(msg):\n    return 'LEAKWORD' not in msg\n")
+        hook = hooks / "commit-msg"
+        hook.write_text(
+            "#!/usr/bin/env python3\n"
+            "import importlib.util, os, sys\n"
+            "here = os.path.dirname(os.path.abspath(__file__))\n"
+            "spec = importlib.util.spec_from_file_location('gate', os.path.join(here, 'helper_gate.py'))\n"
+            "gate = importlib.util.module_from_spec(spec); spec.loader.exec_module(gate)\n"
+            "sys.exit(0 if gate.check(open(sys.argv[1]).read()) else 1)\n")
+        hook.chmod(hook.stat().st_mode | stat.S_IXUSR)
+        for k, v in (("user.email", "t@example.org"), ("user.name", "t")):
+            subprocess.run(["git", "-C", str(repo), "config", k, v], check=True)
+        (repo / "f").write_text("a")
+        subprocess.run(["git", "-C", str(repo), "add", "f"], check=True)
+        return repo
+
+    def _commit(self, repo, message):
+        env = {k: v for k, v in os.environ.items() if k not in ("MACF_SKIP_HOOKS", "CLAUDECODE")}
+        return subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", message],
+                              capture_output=True, text=True, env=env)
+
+    def test_a_clean_commit_passes_after_adoption(self, tmp_path):
+        repo = self._gate_repo(tmp_path)
+        install_dispatcher(repo)
+        r = self._commit(repo, "clean message")
+        assert r.returncode == 0, r.stdout + r.stderr
+
+    def test_the_adopted_gate_still_refuses_a_leak(self, tmp_path):
+        repo = self._gate_repo(tmp_path)
+        install_dispatcher(repo)
+        r = self._commit(repo, "a LEAKWORD message")
+        assert r.returncode != 0 and "00-local-preexisting" in r.stdout + r.stderr
+
+    def test_the_original_stays_beside_its_helper(self, tmp_path):
+        repo = self._gate_repo(tmp_path)
+        install_dispatcher(repo)
+        assert (repo / ".git" / "hooks" / "commit-msg").is_file()
+        assert (repo / ".git" / "hooks" / "helper_gate.py").is_file()
+
+
 class TestTheChainActuallyRuns:
 
     def test_a_failing_hooklet_blocks_the_commit_and_names_itself(self, tmp_path):
