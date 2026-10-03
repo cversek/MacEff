@@ -253,6 +253,29 @@ MacEff has one ratifier, the operator, as it has one owner. The IETF's real safe
 - **Not fixed by design:** the checker cannot tell whether a named test exists. R32 covers that at Final.
 - **Result:** the main path succeeded cold. Every gap at the edges is fixed or answered in the policy. A second trial on the revised policy is due before this MIS becomes Final (R33).
 
+**Cold-reader trial 2 (2026-10-03, on the policy as revised after trial 1).** The same setup, with two fresh agents on a different model. The scenarios were aimed at the gaps trial 1 found.
+- **The writer** was given a borderline change ("budget pace mode", a recommendation shown in the hook line) and asked first whether it needs an MIS. It answered no, citing the §1.2 test, and wrote one anyway as told. The MIS passed the checker on its first run, with five requirements, eight Terms and honest `planned` states.
+- **The answerer** answered every navigation question and the main path of all eight scenarios. Its scenarios included the Informational path, editorial against substantive changes, Final with judgment requirements, number collisions, a Secretary who is also an author, planned tests, partial replacement, and keywords outside the Specification.
+- **Gaps they found, and how each was fixed:**
+  - who assigns the number (§2.1 and §6.1 disagreed), with no tie-break and no owner before a Secretary exists (policy section 2.1);
+  - where an Informational MIS ends, when Final requires a landed policy (it ends at Accepted; policy section 1.3);
+  - who designates a Secretary for an MIS with no deliberation, and how the operator records a decision to skip one (policy sections 2.3 and 6.1);
+  - what the Deliberation field says before the operator decides (`pending`; policy sections 2.2 and 6.2);
+  - who checks the Final gate, when the Secretary both tracks conformance and sets Final, and whether the Secretary may be the cold reader (a reviewed pull request, and neither the Secretary nor an author may be the cold reader; policy sections 7.2 and 7.3);
+  - how an editorial change to an accepted MIS is merged (policy section 8.1);
+  - an objection to the Secretary's own synthesis, which only the Secretary would record (an objection counts as recorded when posted; policy section 6.2);
+  - whether the final comment period restarts (policy section 6.2);
+  - how a partly replaced MIS shows which requirements no longer hold (policy sections 2.2 and 8.1);
+  - how an accepted MIS that will not land is abandoned (the operator sets it Deferred; policy sections 2.3 and 8.1);
+  - MUST NOT tags and double negatives, which the checker cannot see (policy sections 3.1 and 3.2, and a template example);
+  - whether display or advice counts as "requires" in the §1.2 test (enforcement is the test; policy section 1.2);
+  - who judges a "plain word" under R16 (policy section 3.3);
+  - a Motivation with no evidence (policy section 4);
+  - the "at most five" links cap against R19 (policy section 9);
+  - glossary drift: "Secretary" tied to a deliberation, "final" without the Accepted condition, and "editorial" and "substantive" used in R34 and R35 but not defined. All are corrected or added.
+- **Not fixed by design:** the R-ID order (R37 after R36) follows when each requirement was written, and IDs are never renumbered. The policy now says so.
+- **Result:** the main path succeeded cold again, and every gap is fixed in the policy, the glossary or the template. The trial records are kept with the drafting roadmap. A trial on the landed policy after merge, by a reader who saw neither trial, is the evidence R33 needs at Final.
+
 ## 12 Landing Plan
 
 One pull request to MacEff carries all of this:
@@ -287,6 +310,7 @@ One pull request to MacEff carries all of this:
 
 - 2026-10-02: first version, with the pull request that adopts it.
 - 2026-10-02: after cold-reader trial 1, R24 and R25 reworded for the path without a deliberation, and R37 added (judgment reviews recorded before Final). Made before acceptance, in the same pull request.
+- 2026-10-03: after cold-reader trial 2, sixteen gaps (§11) were fixed in the policy's prose and the glossary, the glossary gained "editorial" and "substantive", and the template gained a MUST NOT example. No requirement's keyword or check changed. Made before acceptance, in the same pull request.
 
 ## Wiki-Links
 

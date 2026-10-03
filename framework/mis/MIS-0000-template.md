@@ -5,7 +5,7 @@
 **Status**: Draft
 **Authors**: the policy authors
 **Secretary**: none
-**Deliberation**: none
+**Deliberation**: pending
 **Created**: 2026-10-02
 **Updates**: none
 **Supersedes**: none
@@ -14,8 +14,12 @@
 
 <!--
 How to use this template:
-- Copy this file to framework/mis/MIS-NNNN-short-slug.md. Take the next unused number;
-  numbers are never reused, also after a rejection or a withdrawal.
+- Copy this file to framework/mis/MIS-NNNN-short-slug.md. Take the next number not used
+  on main; it is provisional until the Secretary (or, before one is designated, the
+  operator) confirms it. Numbers are never reused, also after a rejection or a withdrawal.
+- Header: set Created to today. Deliberation stays `pending` until the operator decides;
+  then the issue link, or `none` with the operator's reason. Lands-in is a comma-separated
+  list of policies, files and commands, or `none (Informational)`.
 - Keep every numbered section and its order. Write "None." in a section that has
   nothing to say, so that a reader can tell empty from forgotten.
 - Run `macf_tools mis check framework/mis/MIS-NNNN-short-slug.md` before each push.
@@ -55,7 +59,7 @@ An author copies the template, fills each section, runs the checker, and opens a
 
 ## 5 Terms
 
-*Every term that the Specification uses and that `framework/glossary.md` does not define yet. One line each, one meaning each. When the MIS is accepted, these lines move into the glossary.*
+*Every term that the Specification uses and that `framework/glossary.md` does not define yet. One line each, one meaning each. By the time the MIS is Accepted, these lines must also be in the glossary (R21 of MIS-0001).*
 
 - **example term**: a word this template defines only to show the form of a Terms entry.
 
@@ -68,6 +72,7 @@ An author copies the template, fills each section, runs the checker, and opens a
 - **R01** [MUST · decidable: macf/tests/test_mis_check.py::test_repo_mis_files_pass] Each MIS file MUST pass `macf_tools mis check` before its pull request merges.
 - **R02** [SHOULD · judgment: the Secretary] When an author adds a requirement, the author SHOULD use an EARS pattern.
 - **R03** [MAY · judgment: the author] An MIS MAY group its requirements under sub-headings.
+- **R04** [MUST NOT · judgment: the Secretary, at review] A requirement sentence MUST NOT hide its keyword inside a double negative.
 
 ## 7 Rationale and Rejected Alternatives
 
@@ -76,6 +81,7 @@ An author copies the template, fills each section, runs the checker, and opens a
 - **R01**: a format that a tool checks stays the same across authors.
 - **R02**: EARS sentences state the trigger and the response, which makes each requirement testable.
 - **R03**: grouping helps a long specification; it is optional because a short one does not need it.
+- **R04**: "no hook must not block" passes the checker and means the opposite of what was intended. A negative requirement names the forbidden act once, positively.
 
 **Rejected**
 - None.
@@ -100,13 +106,14 @@ No new exposure: a template changes nothing at run time.
 
 ## 11 Conformance
 
-*One row for every requirement. A decidable requirement names its test or hook and its state (planned, passing). A judgment requirement names who reviews it and when. Add the cold-reader trial: who read the landed policy cold, what task they did, and the result.*
+*One row for every requirement. A decidable requirement names its test or hook and its state (planned, passing, failing). A judgment requirement names who reviews it and when, and its state (pending, or recorded with who and when). Add the cold-reader trial: who read the landed policy cold, what task they did, and the result; until then, "not yet held". An Informational MIS has no trial.*
 
 | Requirement | Check | How | State |
 |---|---|---|---|
 | R01 | decidable | macf/tests/test_mis_check.py::test_repo_mis_files_pass | passing |
 | R02 | judgment | the Secretary, at review | n/a |
 | R03 | judgment | the author | n/a |
+| R04 | judgment | the Secretary, at review | n/a |
 
 **Cold-reader trial**: not applicable to a template.
 

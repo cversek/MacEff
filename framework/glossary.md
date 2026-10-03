@@ -21,7 +21,8 @@ Format: one line per term, `- **term**: definition.`, in alphabetical order. `ma
 - **deployment**: a set of containers, agents and configuration that runs MacEff for one purpose.
 - **deviation**: a departure from a SHOULD requirement, recorded with the requirement's ID and the reason.
 - **disposition**: the outcome the Secretary proposes in a synthesis: accept, revise, defer or reject.
-- **final**: the MIS status set when every decidable requirement passes its check, every judgment review is recorded, and a cold-reader trial has succeeded.
+- **editorial**: a change to an MIS or the glossary that alters no requirement's meaning, keyword, check or scope, and no term's meaning.
+- **final**: the status of an accepted Standards or Process MIS that has landed and been proven: every decidable requirement passes its check, every judgment review is recorded, and a cold-reader trial has succeeded. An Informational MIS never becomes final.
 - **final comment period**: the time, at least 72 hours, from the start of status Final-Comment to the operator's ratification, in which anyone may object.
 - **host agent**: an agent that runs on the operator's own machine.
 - **judgment**: a check that a named person or agent makes by review, because no tool can decide it.
@@ -33,5 +34,6 @@ Format: one line per term, `- **term**: definition.`, in alphabetical order. `ma
 - **ratify**: to accept, reject or defer an MIS by the operator's merge, with a resolution.
 - **requirement**: one normative sentence in an MIS's Specification, with an ID, one keyword and a check.
 - **resolution**: the operator's recorded decision on an MIS, which answers each recorded objection by name.
-- **Secretary**: the agent the operator designates for a deliberation, who numbers and edits the MIS, keeps this glossary, writes the synthesis and tracks conformance.
+- **Secretary**: the agent the operator designates for an MIS before it leaves Draft, with or without a deliberation, who confirms its number, edits it to the language standard, keeps this glossary, writes the synthesis and tracks conformance.
+- **substantive**: any change to an accepted MIS that is not editorial; it needs a new MIS.
 - **synthesis**: the Secretary's comment that quotes and links every position, names agreements and disagreements, and proposes a disposition.
