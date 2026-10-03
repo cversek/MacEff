@@ -65,7 +65,7 @@ An MIS records a decision; the policy it lands in binds. There is never a second
 
 ### 1.1 A proposal and a decision record
 
-An MIS is a numbered document that proposes a change to MacEff, explains it, and records how it was decided. When the operator accepts it, its normative text lands in policy, code and tests. From then on **the policy binds; the MIS explains**. Each landed policy section cites its MIS by number (MIS-0001 R30), so a reader can always climb from a rule to its reason.
+An MIS is a numbered document that proposes a change to MacEff, explains it, and records how it was decided. When the operator accepts it, its normative text lands in policy, code and tests. From then on **the policy binds; the MIS explains**. Each landed policy section cites its MIS by number (MIS-0001-R30), so a reader can always climb from a rule to its reason.
 
 This is the shape of Python's PEPs: a proposal becomes a historical record once final, and the canonical text lives elsewhere. MacEff refuses the alternative, a living specification kept beside the policy, because two normative ledgers of the same rules drift apart.
 
@@ -77,6 +77,12 @@ A pull request MUST cite an accepted MIS when it (MIS-0001 R01):
 - changes what an agent is allowed to do.
 
 An author MAY write an MIS for any other change (R02). Bug fixes and small features stay an issue and a pull request.
+
+**The test for "a subsystem" and "what an agent is allowed to do":**
+- **A subsystem:** a new long-lived process, a new store of agent state, a new command group, or a new channel to or from an agent.
+- **What an agent is allowed to do:** any hook, gate, permission or policy rule that newly blocks, allows or requires an action.
+- **A small feature:** extends an existing command or behavior without either of those. For example, a new output format for an existing command.
+- **If in doubt, ask the operator.** The operator's answer is the test.
 
 ### 1.3 Types
 
@@ -98,6 +104,8 @@ The Type field MUST be one of these three (R08).
 - Two MIS files MUST NOT share a number (R04).
 - A pull request MUST NOT delete an MIS file, also after a rejection or a withdrawal (R05). A number is a permanent citation; a deleted file breaks every reference to it.
 
+**Who assigns the number.** The author takes the next number not used on `main` when the pull request opens. Until a Secretary is designated, that number is provisional: before the MIS enters Deliberation, the Secretary confirms it, or renumbers it if another pull request took it first.
+
 `framework/mis/` ships to every deployment with the framework overlay, so an agent in a container can read the reason behind a rule. It sits outside `framework/policies/`, so it is never loaded as policy.
 
 ### 2.2 Header and sections
@@ -107,6 +115,22 @@ The Type field MUST be one of these three (R08).
 - Each MIS MUST contain its numbered sections, in their order (R07): Summary, Motivation, Goals and Non-Goals, Guide-Level Explanation, Terms, Specification, Rationale and Rejected Alternatives, Prior Art, Compatibility and Deployment, Security and Safety, Conformance, Landing Plan, Open Questions, Deliberation Record, Revision History; then Wiki-Links.
 
 Write "None." in a section that has nothing to say, so that empty is not mistaken for forgotten.
+
+**The header fields:**
+
+| Field | Holds |
+|---|---|
+| Number | the four digits of the file name |
+| Type | Standards, Process or Informational (§1.3) |
+| Status | one word from §2.3 |
+| Authors | who answers for the content, by public name or by role. Never a private agent identity: MIS files are public and follow `public_voice` |
+| Secretary | the designated Secretary, by role, or `none` in Draft |
+| Deliberation | the deliberation issue's link, or `none` with the reason |
+| Created | the date of the first draft, YYYY-MM-DD |
+| Updates | the MIS numbers this one changes in part, or `none` |
+| Supersedes | the MIS numbers this one replaces in full, or `none` |
+| Lands-in | the policies, files and commands where the normative text lands, or the plan for them while in Draft |
+| Resolution | the operator's decision and the answers to objections, or `none` until decided |
 
 ### 2.3 Status
 
@@ -125,6 +149,20 @@ The Status field MUST be one of these words (R09):
 | **Superseded** | replaced by a later MIS | the Secretary, with the later MIS |
 
 A cold reader can tell from this one word whether the MIS binds anything yet: only an Accepted or Final MIS has landed, or may land.
+
+**Transitions:**
+
+| From | To | Who | Condition |
+|---|---|---|---|
+| Draft | Deliberation | Secretary | the operator convened a deliberation on it |
+| Draft | Final-Comment | Secretary | Informational, or the operator decided no deliberation was needed |
+| Deliberation | Final-Comment | Secretary | the window closed and the synthesis is posted |
+| Final-Comment | Accepted, Rejected or Deferred | operator | at least 72 hours passed; the operator merges with a Resolution |
+| Final-Comment | Deliberation or Draft | Secretary | the comments call for revision |
+| Draft, Deliberation or Final-Comment | Withdrawn | author | the authors abandon it |
+| Deferred | Draft | author | the operator reopens it |
+| Accepted | Final | Secretary | landed and proven (§7.2) |
+| Accepted or Final | Superseded | Secretary | a later MIS replaces it in full |
 
 ---
 
@@ -145,6 +183,9 @@ Requirements live in the Specification section, one per line, in this form (R10)
 
 Mark each one honestly, so that a conformance table never claims more than was checked.
 
+- **A test that does not exist yet:** a decidable requirement may name a planned test. Its Conformance state then says `planned`, and the test must exist and pass before the MIS becomes Final (§7.2).
+- **What the checker cannot see:** `mis check` cannot tell whether a named test exists, or whether a judgment was really made. The Final gate covers both.
+
 ### 3.2 Keywords
 
 The keywords are MUST, MUST NOT, SHOULD, SHOULD NOT and MAY, as defined by BCP 14 (RFC 2119, clarified by RFC 8174). They are normative **only in capitals**.
@@ -155,6 +196,8 @@ The keywords carry the strength:
 - A MUST holds with no exception.
 - A SHOULD may be set aside only with a recorded reason (§8.2).
 - A MAY grants a freedom.
+
+**Keywords outside the Specification are not normative.** Only requirement lines bind. Elsewhere, write the word in lowercase or rephrase, so that no reader mistakes rationale for a rule. The checker checks requirement lines only.
 
 ### 3.3 The language standard
 
@@ -198,15 +241,15 @@ A definition changes only through an accepted MIS, or an editorial pull request 
   - writes the synthesis;
   - tracks conformance.
 
-  When the Secretary also wrote part of the MIS, positions are quoted verbatim, and the operator answers each objection (§6.3); that is the check on a Secretary judging their own text.
+  The Secretary can also be an author. Then positions are quoted verbatim, as they always are in a synthesis, and the operator answers each objection (§6.3). That is the check on a Secretary judging their own text.
 - **Participants**: everyone the deliberation invites, under `public_voice` §2.4. Container agents speak through a host agent, under a pseudonym.
 - **Operator**: the only ratifier.
 
 ### 6.2 From deliberation to decision
 
-1. **Deliberation.** Before a Standards or Process MIS becomes Accepted, the operator MUST convene a deliberation on it, or record in the Resolution why none was needed (R22). When an MIS leaves Draft, its Secretary field MUST name the Secretary the operator designated (R23).
-2. **Synthesis.** When the deliberation window closes, the Secretary MUST post a synthesis that quotes and links every position and proposes one disposition: accept, revise, defer or reject (R24). The MIS is revised to match, and its status becomes Final-Comment.
-3. **Final comment.** A final comment period of at least 72 hours MUST pass between the synthesis and the ratification (R25). It is long enough for positions relayed by hand, and short enough not to stall the work.
+1. **Deliberation.** Before a Standards or Process MIS becomes Accepted, the operator MUST convene a deliberation on it, or record in the Resolution why none was needed (R22). The operator sets the window when convening (`public_voice` §2.4). An Informational MIS needs no deliberation. When an MIS leaves Draft, its Secretary field MUST name the Secretary the operator designated (R23).
+2. **Synthesis.** When a deliberation was held, the Secretary MUST post a synthesis that quotes and links every position and proposes one disposition: accept, revise, defer or reject (R24). The MIS is revised to match, and its status becomes Final-Comment. Without a deliberation, the MIS goes straight to Final-Comment when its pull request is ready for decision.
+3. **Final comment.** A final comment period of at least 72 hours MUST pass between the start of status Final-Comment and the ratification (R25). Anyone may object, on the deliberation issue or on the MIS pull request. The Secretary records each objection in the MIS's Deliberation Record. It is long enough for positions relayed by hand, and short enough not to stall the work.
 4. **Ratification.** An MIS MUST become Accepted, Rejected or Deferred only through a pull request that the operator merges (R26). No agent can accept its own proposal.
 
 ### 6.3 The Resolution
@@ -231,10 +274,11 @@ MacEff has one decider, but it keeps the safeguard of the IETF's rough consensus
 An Accepted MIS becomes Final only when it is proven:
 - Before an MIS becomes Final, every decidable requirement MUST pass its check (R32).
 - Before an MIS becomes Final, a cold-reader trial of its landed policy MUST succeed and be recorded in its Conformance section (R33).
+- Before an MIS becomes Final, each judgment requirement MUST have its named review recorded in the Conformance section (R37).
 
 ### 7.3 The cold-reader trial
 
-A **cold reader** is an agent with no memory of the MIS's design or deliberation, given only the landed policy and the glossary. It is the reader a compaction produces, and it plays the part of W3C's "implementations created by people other than the authors". In the trial, the cold reader does a task the landed policy governs, and the result is compared with the policy's intent. Record who read, what task, the result, and every gap found, with how it was fixed. This is `policy_writing`'s model-user validation, made a gate.
+A **cold reader** is an agent with no memory of the MIS's design or deliberation, given only the landed policy and the glossary. It is the reader a compaction produces, and it plays the part of W3C's "implementations created by people other than the authors". In the trial, the cold reader does a task the landed policy governs, and the result is compared with the policy's intent. The trial **succeeds** when the cold reader completes the main path correctly, and every gap it finds is fixed in the policy or recorded as an open question with an owner. Any agent may serve as a cold reader if it took no part in the design or the deliberation; a different model is better still. Record who read, what task, the result, and every gap found, with how it was fixed. This is `policy_writing`'s model-user validation, made a gate.
 
 ---
 
@@ -246,6 +290,11 @@ A **cold reader** is an agent with no memory of the MIS's design or deliberation
 - A substantive change to an accepted MIS MUST be a new MIS that names the old one in Updates or Supersedes (R35). The old MIS then becomes Superseded, if it is fully replaced.
 
 Rewriting an accepted MIS would falsify the record of what was decided.
+
+- **Editorial:** a change that alters no requirement's meaning, keyword, check or scope. For example, typos, broken links, clearer wording with the same meaning, or a Conformance state moving from `planned` to `passing`.
+- **Substantive:** anything else.
+- **Who judges:** the Secretary judges which a change is; when anyone disputes it, the operator decides.
+- **A partly replaced MIS:** an MIS that a later MIS only updates stays in force, except where the later one changes it. Only full replacement makes it Superseded. This applies equally to an MIS accepted but not yet landed.
 
 ### 8.2 Departing from a SHOULD
 
@@ -259,7 +308,7 @@ An MIS participates in the knowledge web as a whole document.
 - **Class (`scholarship` §3.5):** an MIS is **conceptual authority**. Its rationale explains a decision, and stays worth reading long after the decision, to someone who was not there.
 - **Not normative:** an MIS is never normative, because the binding text lives in policy. Classing it normative would make it the second ledger this policy forbids.
 - **Provenance:** lived. Its authors and the positions it records are first-hand.
-- **Links:** an MIS links the domain it decides, two to five concepts, and not every concept it mentions.
+- **Links:** an MIS links the domain it decides: at least two concepts (the checker's floor) and at most five, not every concept it mentions. Use concepts the knowledge web already carries (`macf_tools knowledge query <concept>`) before coining a new one.
 
 ---
 

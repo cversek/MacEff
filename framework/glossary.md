@@ -21,8 +21,8 @@ Format: one line per term, `- **term**: definition.`, in alphabetical order. `ma
 - **deployment**: a set of containers, agents and configuration that runs MacEff for one purpose.
 - **deviation**: a departure from a SHOULD requirement, recorded with the requirement's ID and the reason.
 - **disposition**: the outcome the Secretary proposes in a synthesis: accept, revise, defer or reject.
-- **final**: the MIS status set when every decidable requirement passes its check and a cold-reader trial has succeeded.
-- **final comment period**: the time, at least 72 hours, between the Secretary's synthesis and the operator's ratification, in which anyone may object.
+- **final**: the MIS status set when every decidable requirement passes its check, every judgment review is recorded, and a cold-reader trial has succeeded.
+- **final comment period**: the time, at least 72 hours, from the start of status Final-Comment to the operator's ratification, in which anyone may object.
 - **host agent**: an agent that runs on the operator's own machine.
 - **judgment**: a check that a named person or agent makes by review, because no tool can decide it.
 - **landing**: putting an accepted MIS's normative text into policy, with its code and tests, in a pull request.

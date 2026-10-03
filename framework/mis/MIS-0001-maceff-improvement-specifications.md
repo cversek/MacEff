@@ -97,8 +97,8 @@ All terms this MIS uses are defined in `framework/glossary.md`, which this MIS c
 
 - **R22** [MUST · judgment: the operator] Before a Standards or Process MIS becomes Accepted, the operator MUST convene a deliberation on it, or record in the Resolution why none was needed.
 - **R23** [MUST · decidable: macf_tools mis check, secretary] When an MIS leaves Draft, its Secretary field MUST name the Secretary that the operator designated.
-- **R24** [MUST · judgment: the operator] The Secretary MUST post a synthesis that quotes and links every position and proposes one disposition.
-- **R25** [MUST · judgment: the operator] A final comment period of at least 72 hours MUST pass between the synthesis and the ratification.
+- **R24** [MUST · judgment: the operator] When a deliberation was held, the Secretary MUST post a synthesis that quotes and links every position and proposes one disposition.
+- **R25** [MUST · judgment: the operator] A final comment period of at least 72 hours MUST pass between the start of status Final-Comment and the ratification.
 - **R26** [MUST · judgment: the operator] An MIS MUST become Accepted, Rejected or Deferred only through a pull request that the operator merges.
 - **R27** [MUST NOT · decidable: macf_tools mis check, resolution] When an MIS is Accepted, Rejected, Deferred, Final or Superseded, its Resolution field MUST NOT be empty or none.
 - **R28** [MUST · judgment: the operator] The Resolution MUST answer each recorded objection by name.
@@ -110,6 +110,7 @@ All terms this MIS uses are defined in `framework/glossary.md`, which this MIS c
 - **R31** [MUST NOT · decidable: macf_tools mis check, lands-in] When an MIS is Final, its Lands-in field MUST NOT be empty or none.
 - **R32** [MUST · judgment: the Secretary, from the test results] Before an MIS becomes Final, every decidable requirement MUST pass its check.
 - **R33** [MUST · judgment: the Secretary] Before an MIS becomes Final, a cold-reader trial of its landed policy MUST succeed and be recorded in its Conformance section.
+- **R37** [MUST · judgment: the Secretary] Before an MIS becomes Final, each judgment requirement MUST have its named review recorded in the Conformance section.
 
 ### 6.8 Change after acceptance, and departures
 
@@ -139,9 +140,9 @@ All terms this MIS uses are defined in `framework/glossary.md`, which this MIS c
 - the IETF's rough consensus, where an objection must be answered, not outvoted;
 - Python's steering council, where one authority decides.
 
-MacEff has one ratifier, the operator, as it has one owner. The IETF's real safeguard is kept: the operator answers each recorded objection by name (R28). A disposition (R24) tells participants what they are commenting on. The 72-hour period (R25) is long enough for container agents, whose positions are relayed by hand, and short enough not to stall the build. R22 lets the operator skip a deliberation, but only with a recorded reason; this MIS uses that exception. R26 holds acceptance to the operator's merge, so no agent can accept its own proposal.
+MacEff has one ratifier, the operator, as it has one owner. The IETF's real safeguard is kept: the operator answers each recorded objection by name (R28). A disposition (R24) tells participants what they are commenting on. An Informational MIS, or one the operator decides without a deliberation, has no synthesis, so R25 counts the final comment period from the start of status Final-Comment, which every path passes through. The 72-hour period is long enough for container agents, whose positions are relayed by hand, and short enough not to stall the build. R22 lets the operator skip a deliberation, but only with a recorded reason; this MIS uses that exception. R26 holds acceptance to the operator's merge, so no agent can accept its own proposal.
 
-**Why proof before Final (R31 to R33).** R32 holds Final to passing tests, so a decidable requirement is never only declared. R31 ensures a Final MIS says where its text landed. TC39 requires two implementations that pass its test suite, and W3C asks for implementations "created by people other than the authors". In MacEff, the reader that matters is an agent with no memory of the design. That is exactly what compaction produces. So a cold-reader trial is the independent implementation, and passing tests are the conformance suite. `policy_writing` already asks for this as model-user validation; R33 makes it a gate.
+**Why proof before Final (R31 to R33, R37).** R32 holds Final to passing tests, so a decidable requirement is never only declared. R37 does the same for judgment requirements: a review that nobody recorded did not happen, as far as the record shows. The first cold-reader trial found that without R37, Final checked only half of the requirements. R31 ensures a Final MIS says where its text landed. TC39 requires two implementations that pass its test suite, and W3C asks for implementations "created by people other than the authors". In MacEff, the reader that matters is an agent with no memory of the design. That is exactly what compaction produces. So a cold-reader trial is the independent implementation, and passing tests are the conformance suite. `policy_writing` already asks for this as model-user validation; R33 makes it a gate.
 
 **Why change only by a new MIS (R34, R35), and why departures are recorded (R36).** An accepted MIS is a record of a decision. Rewriting it would falsify the record. So a substantive change is a new decision, linked by Updates or Supersedes, as RFCs do with "Updates" and "Obsoletes". R36 is MISRA's deviation record in its simplest form: a SHOULD may be set aside, but never silently.
 
@@ -228,10 +229,29 @@ MacEff has one ratifier, the operator, as it has one owner. The IETF's real safe
 | R34 | judgment | the reviewers of each pull request | n/a |
 | R35 | judgment | the Secretary | n/a |
 | R36 | judgment | the reviewers of the change | n/a |
+| R37 | judgment | the Secretary | pending |
 
 **Tests.** `macf/tests/test_mis_check.py` runs the checker over every file in `framework/mis/` and the glossary, and plants one defect for each decidable check to show that the check catches it.
 
-**Cold-reader trial**: pending. Two fresh agents, given only the `mis` policy, the template and the glossary: one writes an MIS for a small real change, and the other answers the policy's navigation questions. The result is recorded here before this MIS becomes Final.
+**Cold-reader trial 1 (2026-10-02, on the policy as first drafted).** Two fresh agents on a different model from the drafter's, with no memory of the design. Neither was allowed to open this MIS, the checker's source or its tests.
+- **The writer** was given only the policy, the template and the glossary, and wrote an MIS for a small real change (a `--json` option for `mis check`). Its MIS passed the checker on the first run, with six requirements, six open questions, and honest "planned" states for tests that did not exist yet.
+- **The answerer** was given only the policy and the glossary. It answered every navigation question and five scenarios correctly on the main path.
+- **Gaps they found, and how each was fixed in the policy before this MIS was accepted:**
+  - the path for an Informational MIS, and for one decided without a deliberation (R24 and R25 reworded; policy section 6.2);
+  - no status-transition table (policy section 2.3);
+  - "editorial" and "substantive" undefined, with no one to judge them (policy section 8.1);
+  - Final checked only the decidable requirements (R37 added);
+  - header fields undefined, including the Authors format (policy section 2.2);
+  - who assigns the number before a Secretary exists, which led the writer to take a number already planned for another MIS (policy section 2.1);
+  - whether a decidable requirement may name a test that is still planned (policy section 3.1);
+  - whether capitalized keywords may appear outside the Specification (policy section 3.2);
+  - who records objections, and who sets the deliberation window (policy section 6.2);
+  - where wiki-link concepts come from (policy section 9);
+  - two citation styles; the Secretary as an author (policy sections 1.1, 6.1);
+  - a partly replaced MIS (policy section 8.1);
+  - the test for "a subsystem" against "a small feature" (policy section 1.2).
+- **Not fixed by design:** the checker cannot tell whether a named test exists. R32 covers that at Final.
+- **Result:** the main path succeeded cold. Every gap at the edges is fixed or answered in the policy. A second trial on the revised policy is due before this MIS becomes Final (R33).
 
 ## 12 Landing Plan
 
@@ -266,6 +286,7 @@ One pull request to MacEff carries all of this:
 ## 15 Revision History
 
 - 2026-10-02: first version, with the pull request that adopts it.
+- 2026-10-02: after cold-reader trial 1, R24 and R25 reworded for the path without a deliberation, and R37 added (judgment reviews recorded before Final). Made before acceptance, in the same pull request.
 
 ## Wiki-Links
 
