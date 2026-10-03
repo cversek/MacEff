@@ -593,7 +593,8 @@ def cmd_mis_check(args: argparse.Namespace) -> int:
     for f in findings:
         print(f)
     n = len(mis.mis_files(paths))
-    gl = f", glossary {glossary}" if glossary else ", no glossary found (R20 and R21 not checked)"
+    gl = f", glossary {glossary}" if glossary else (", no glossary found, so MIS-0001-R20 (glossary_MUST-NOT_repeat_terms) and "
+          "MIS-0001-R21 (terms_MUST_reach_glossary) were not checked")
     print(f"{'❌' if findings else '✅'} {n} MIS file(s){gl}: {len(findings)} finding(s)")
     return 1 if findings else 0
 

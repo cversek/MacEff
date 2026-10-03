@@ -35,5 +35,6 @@ Format: one line per term, `- **term**: definition.`, in alphabetical order. `ma
 - **requirement**: one normative sentence in an MIS's Specification, with an ID, one keyword and a check.
 - **resolution**: the operator's recorded decision on an MIS, which answers each recorded objection by name.
 - **Secretary**: the agent the operator designates for an MIS before it leaves Draft, with or without a deliberation, who confirms its number, edits it to the language standard, keeps this glossary, writes the synthesis and tracks conformance.
+- **semantic slug**: a short name made of ASCII letters, digits, hyphens and underscores, given in parentheses at the end of a requirement line, that states the requirement's subject and strength, for example `req_MUST_have_30_words_max`.
 - **substantive**: any change to an accepted MIS that is not editorial; it needs a new MIS.
 - **synthesis**: the Secretary's comment that quotes and links every position, names agreements and disagreements, and proposes a disposition.

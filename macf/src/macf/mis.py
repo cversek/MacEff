@@ -2,7 +2,8 @@
 
 The policy is `framework/policies/base/meta/mis.md`; its requirements and their
 reasons are in MIS-0001. Each check below names the requirement it decides
-(R03, R04, ...), and every finding carries that ID, so a refusal names its rule.
+(R03, R04, ...), and every finding carries that ID with its semantic slug, so a
+refusal names its rule in words as well as by number (MIS-0001-R43, tool_MUST_report_slug).
 
 Only decidable requirements are checked here. The judgment requirements (who
 may accept an MIS, whether a synthesis quotes every position) are reviewed by
@@ -37,6 +38,35 @@ UPPER_KEYWORD_RE = re.compile(r"\b(MUST NOT|SHOULD NOT|MUST|SHOULD|MAY|SHALL|REQ
 LOWER_KEYWORD_RE = re.compile(r"\b(must|should|shall|may|required)\b")
 TERM_RE = re.compile(r"^- \*\*(.+?)\*\*:")
 WIKI_RE = re.compile(r"\[\[[^\]]+\]\]")
+SLUG_TAIL_RE = re.compile(r"^(.*\S)\s+\(([^()\s]+)\)$")
+SLUG_RE = re.compile(r"^[-_A-Za-z0-9]+$")
+
+# The semantic slug of each MIS-0001 requirement this tool decides, so that every finding names
+# its rule in words (MIS-0001-R43, tool_MUST_report_slug). A test keeps this table equal to the
+# slugs written in MIS-0001 itself.
+RULE_SLUGS = {
+    "R03": "MIS_MUST_be_named_by_number",
+    "R04": "MIS_numbers_MUST-NOT_repeat",
+    "R06": "MIS_MUST_carry_header_fields",
+    "R07": "MIS_MUST_contain_sections",
+    "R08": "type_MUST_be_listed",
+    "R09": "status_MUST_be_listed",
+    "R10": "req_MUST_use_line_form",
+    "R11": "req_IDs_MUST-NOT_repeat",
+    "R12": "req_MUST_hold_one_keyword",
+    "R13": "req_MUST-NOT_use_lowercase_keyword",
+    "R14": "req_MUST_have_30_words_max",
+    "R17": "rationale_MUST_name_every_req",
+    "R18": "conformance_MUST_list_every_req",
+    "R19": "MIS_MUST_end_with_wiki-links",
+    "R20": "glossary_MUST-NOT_repeat_terms",
+    "R21": "terms_MUST_reach_glossary",
+    "R23": "secretary_MUST_be_named",
+    "R27": "resolution_MUST-NOT_be_empty",
+    "R31": "final_lands-in_MUST-NOT_be_empty",
+    "R38": "req_MUST_end_with_slug",
+    "R39": "req_slugs_MUST-NOT_repeat",
+}
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -47,8 +77,14 @@ class Finding:
     rule: str
     message: str
 
+    @property
+    def slug(self) -> str:
+        """The semantic slug of the MIS-0001 requirement this finding enforces."""
+        return RULE_SLUGS.get(self.rule, "")
+
     def __str__(self) -> str:
-        return f"{self.path}:{self.line}: {self.rule}: {self.message}"
+        label = f"{self.rule} ({self.slug})" if self.slug else self.rule
+        return f"{self.path}:{self.line}: MIS-0001-{label}: {self.message}"
 
 
 def _absent(value: Optional[str]) -> bool:
@@ -151,6 +187,8 @@ def check_file(path: Path, glossary_terms: Optional[dict] = None) -> list[Findin
     spec_part = _body(lines, numbered, "Specification")
     spec_start, spec = spec_part["start"], spec_part["lines"]
     ids: dict = {}
+    slugs: dict = {}
+    labels: dict = {}
     for offset, line in enumerate(spec, start=1):
         n = spec_start + offset
         if not LOOKS_LIKE_REQ.match(line):
@@ -160,26 +198,40 @@ def check_file(path: Path, glossary_terms: Optional[dict] = None) -> list[Findin
             add(n, "R10", "requirement line is not '- **Rnn** [KEYWORD · decidable|judgment: <check>] <sentence>'")
             continue
         rid, keyword, text = f"R{rm.group(1)}", rm.group(2), rm.group(4)
+        sm = SLUG_TAIL_RE.match(text)
+        slug = ""
+        if sm and SLUG_RE.match(sm.group(2)):
+            text, slug = sm.group(1), sm.group(2)
+        else:
+            add(n, "R38", f"{rid} has no semantic slug at the end of its line: write '(subject_KEYWORD_action)',"
+                " with ASCII letters, digits, hyphens and underscores only")
+        label = f"{rid} ({slug})" if slug else rid
         if rid in ids:
-            add(n, "R11", f"{rid} is already used on line {ids[rid]}")
+            add(n, "R11", f"{label}: {rid} is already used on line {ids[rid]}")
             continue
         ids[rid] = n
+        labels[rid] = label
+        if slug:
+            if slug in slugs:
+                add(n, "R39", f"{label}: the slug is already used on line {slugs[slug]}")
+            else:
+                slugs[slug] = n
         found = UPPER_KEYWORD_RE.findall(text)
         if found != [keyword]:
-            add(n, "R12", f"{rid}: the sentence must contain '{keyword}' once and no other capitalized keyword; found {found}")
+            add(n, "R12", f"{label}: the sentence must contain '{keyword}' once and no other capitalized keyword; found {found}")
         low = LOWER_KEYWORD_RE.findall(text)
         if low:
-            add(n, "R13", f"{rid}: keyword in lowercase: {sorted(set(low))}")
+            add(n, "R13", f"{label}: keyword in lowercase: {sorted(set(low))}")
         words = len(text.split())
         if words > MAX_WORDS:
-            add(n, "R14", f"{rid}: {words} words; the limit is {MAX_WORDS}")
+            add(n, "R14", f"{label}: {words} words; the limit is {MAX_WORDS}")
 
     for title, rule in (("Rationale and Rejected Alternatives", "R17"), ("Conformance", "R18")):
         part = _body(lines, numbered, title)
         start, text = part["start"], "\n".join(part["lines"])
         for rid, n in ids.items():
             if not re.search(rf"\b{rid}\b", text):
-                add(start or n, rule, f"{rid} is not named in section '{title}'")
+                add(start or n, rule, f"{labels.get(rid, rid)} is not named in section '{title}'")
 
     if secs["wiki"] is None:
         add(len(lines), "R19", "no Wiki-Links section")

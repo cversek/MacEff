@@ -55,68 +55,72 @@ Suppose the operator asks for one persistent layer to run every long-lived MacEf
 
 All terms this MIS uses are defined in `framework/glossary.md`, which this MIS creates.
 
+- **semantic slug**: a short name made of ASCII letters, digits, hyphens and underscores, given in parentheses at the end of a requirement line, that states the requirement's subject and strength, for example `req_MUST_have_30_words_max`.
+
 ## 6 Specification
 
 ### 6.1 When an MIS is required
 
-- **R01** [MUST · judgment: the operator, at merge] A pull request that adds a subsystem, changes architecture across components, or changes what an agent is allowed to do MUST cite an accepted MIS.
-- **R02** [MAY · judgment: the author] An author MAY write an MIS for any other change.
-
+- **R01** [MUST · judgment: the operator, at merge] A pull request that adds a subsystem, changes architecture across components, or changes what an agent is allowed to do MUST cite an accepted MIS. (PR_MUST_cite_accepted_MIS)
+- **R02** [MAY · judgment: the author] An author MAY write an MIS for any other change. (author_MAY_write_MIS_for_any_change)
 ### 6.2 The document
 
-- **R03** [MUST · decidable: macf_tools mis check, path] Each MIS MUST be a file named framework/mis/MIS-NNNN-slug.md whose Number field equals NNNN.
-- **R04** [MUST NOT · decidable: macf_tools mis check, numbers] Two MIS files MUST NOT share a number.
-- **R05** [MUST NOT · judgment: the reviewers of each pull request] A pull request MUST NOT delete an MIS file, also after a rejection or a withdrawal.
-- **R06** [MUST · decidable: macf_tools mis check, header] Each MIS MUST carry the header fields of MIS-0000, in their order.
-- **R07** [MUST · decidable: macf_tools mis check, sections] Each MIS MUST contain the numbered sections of MIS-0000, in their order.
-- **R08** [MUST · decidable: macf_tools mis check, type] The Type field MUST be Standards, Process or Informational.
-- **R09** [MUST · decidable: macf_tools mis check, status] The Status field MUST be Draft, Deliberation, Final-Comment, Accepted, Rejected, Withdrawn, Deferred, Final or Superseded.
-
+- **R03** [MUST · decidable: macf_tools mis check, path] Each MIS MUST be a file named framework/mis/MIS-NNNN-slug.md whose Number field equals NNNN. (MIS_MUST_be_named_by_number)
+- **R04** [MUST NOT · decidable: macf_tools mis check, numbers] Two MIS files MUST NOT share a number. (MIS_numbers_MUST-NOT_repeat)
+- **R05** [MUST NOT · judgment: the reviewers of each pull request] A pull request MUST NOT delete an MIS file, also after a rejection or a withdrawal. (PR_MUST-NOT_delete_MIS)
+- **R06** [MUST · decidable: macf_tools mis check, header] Each MIS MUST carry the header fields of MIS-0000, in their order. (MIS_MUST_carry_header_fields)
+- **R07** [MUST · decidable: macf_tools mis check, sections] Each MIS MUST contain the numbered sections of MIS-0000, in their order. (MIS_MUST_contain_sections)
+- **R08** [MUST · decidable: macf_tools mis check, type] The Type field MUST be Standards, Process or Informational. (type_MUST_be_listed)
+- **R09** [MUST · decidable: macf_tools mis check, status] The Status field MUST be Draft, Deliberation, Final-Comment, Accepted, Rejected, Withdrawn, Deferred, Final or Superseded. (status_MUST_be_listed)
 ### 6.3 Requirements
 
-- **R10** [MUST · decidable: macf_tools mis check, requirement form] Each requirement MUST use the line form that MIS-0000 section 6 shows, with an ID, one keyword and a check.
-- **R11** [MUST NOT · decidable: macf_tools mis check, IDs] Two requirements in one MIS MUST NOT share an ID.
-- **R12** [MUST · decidable: macf_tools mis check, keyword] Each requirement sentence MUST contain its tag's keyword in capitals, and no other capitalized keyword.
-- **R13** [MUST NOT · decidable: macf_tools mis check, lowercase] A requirement sentence MUST NOT use a keyword in lowercase letters.
-- **R14** [MUST · decidable: macf_tools mis check, length] Each requirement sentence MUST have 30 words or fewer.
-- **R15** [SHOULD · judgment: the Secretary] Each requirement SHOULD use the active voice and an EARS pattern.
-- **R16** [MUST · judgment: the Secretary] Each requirement MUST use only glossary terms, terms from its MIS's Terms section, and plain words with one meaning.
-
+- **R10** [MUST · decidable: macf_tools mis check, requirement form] Each requirement MUST use the line form that MIS-0000 section 6 shows, with an ID, one keyword and a check. (req_MUST_use_line_form)
+- **R11** [MUST NOT · decidable: macf_tools mis check, IDs] Two requirements in one MIS MUST NOT share an ID. (req_IDs_MUST-NOT_repeat)
+- **R12** [MUST · decidable: macf_tools mis check, keyword] Each requirement sentence MUST contain its tag's keyword in capitals, and no other capitalized keyword. (req_MUST_hold_one_keyword)
+- **R13** [MUST NOT · decidable: macf_tools mis check, lowercase] A requirement sentence MUST NOT use a keyword in lowercase letters. (req_MUST-NOT_use_lowercase_keyword)
+- **R14** [MUST · decidable: macf_tools mis check, length] Each requirement sentence MUST have 30 words or fewer. (req_MUST_have_30_words_max)
+- **R15** [SHOULD · judgment: the Secretary] Each requirement SHOULD use the active voice and an EARS pattern. (req_SHOULD_use_active_EARS)
+- **R16** [MUST · judgment: the Secretary] Each requirement MUST use only glossary terms, terms from its MIS's Terms section, and plain words with one meaning. (req_MUST_use_defined_words)
 ### 6.4 Rationale, conformance and links
 
-- **R17** [MUST · decidable: macf_tools mis check, rationale] The Rationale section MUST name every requirement ID.
-- **R18** [MUST · decidable: macf_tools mis check, conformance] The Conformance section MUST list every requirement ID with its check.
-- **R19** [MUST · decidable: macf_tools mis check, wiki-links] Each MIS MUST end with a Wiki-Links section that names at least two concepts.
-
+- **R17** [MUST · decidable: macf_tools mis check, rationale] The Rationale section MUST name every requirement ID. (rationale_MUST_name_every_req)
+- **R18** [MUST · decidable: macf_tools mis check, conformance] The Conformance section MUST list every requirement ID with its check. (conformance_MUST_list_every_req)
+- **R19** [MUST · decidable: macf_tools mis check, wiki-links] Each MIS MUST end with a Wiki-Links section that names at least two concepts. (MIS_MUST_end_with_wiki-links)
 ### 6.5 Terms and the glossary
 
-- **R20** [MUST NOT · decidable: macf_tools mis check, glossary] The glossary MUST NOT define one term twice.
-- **R21** [MUST · decidable: macf_tools mis check, terms] When an MIS is Accepted or Final, each term in its Terms section MUST appear in the glossary.
-
+- **R20** [MUST NOT · decidable: macf_tools mis check, glossary] The glossary MUST NOT define one term twice. (glossary_MUST-NOT_repeat_terms)
+- **R21** [MUST · decidable: macf_tools mis check, terms] When an MIS is Accepted or Final, each term in its Terms section MUST appear in the glossary. (terms_MUST_reach_glossary)
 ### 6.6 Deciding
 
-- **R22** [MUST · judgment: the operator] Before a Standards or Process MIS becomes Accepted, the operator MUST convene a deliberation on it, or record in the Resolution why none was needed.
-- **R23** [MUST · decidable: macf_tools mis check, secretary] When an MIS leaves Draft, its Secretary field MUST name the Secretary that the operator designated.
-- **R24** [MUST · judgment: the operator] When a deliberation was held, the Secretary MUST post a synthesis that quotes and links every position and proposes one disposition.
-- **R25** [MUST · judgment: the operator] A final comment period of at least 72 hours MUST pass between the start of status Final-Comment and the ratification.
-- **R26** [MUST · judgment: the operator] An MIS MUST become Accepted, Rejected or Deferred only through a pull request that the operator merges.
-- **R27** [MUST NOT · decidable: macf_tools mis check, resolution] When an MIS is Accepted, Rejected, Deferred, Final or Superseded, its Resolution field MUST NOT be empty or none.
-- **R28** [MUST · judgment: the operator] The Resolution MUST answer each recorded objection by name.
-
+- **R22** [MUST · judgment: the operator] Before a Standards or Process MIS becomes Accepted, the operator MUST convene a deliberation on it, or record in the Resolution why none was needed. (operator_MUST_convene_or_explain)
+- **R23** [MUST · decidable: macf_tools mis check, secretary] When an MIS leaves Draft, its Secretary field MUST name the Secretary that the operator designated. (secretary_MUST_be_named)
+- **R24** [MUST · judgment: the operator] When a deliberation was held, the Secretary MUST post a synthesis that quotes and links every position and proposes one disposition. (secretary_MUST_post_synthesis)
+- **R25** [MUST · judgment: the operator] A final comment period of at least 72 hours MUST pass between the start of status Final-Comment and the ratification. (final-comment_MUST_last_72h)
+- **R26** [MUST · judgment: the operator] An MIS MUST become Accepted, Rejected or Deferred only through a pull request that the operator merges. (decision_MUST_be_operator_merge)
+- **R27** [MUST NOT · decidable: macf_tools mis check, resolution] When an MIS is Accepted, Rejected, Deferred, Final or Superseded, its Resolution field MUST NOT be empty or none. (resolution_MUST-NOT_be_empty)
+- **R28** [MUST · judgment: the operator] The Resolution MUST answer each recorded objection by name. (resolution_MUST_answer_objections)
 ### 6.7 Landing and proof
 
-- **R29** [MUST · judgment: the reviewers of the landing pull request] A landing pull request MUST carry the normative text and the capability that it governs together.
-- **R30** [MUST · judgment: the reviewers of the landing pull request] Each landed policy section MUST cite its MIS by number for its rationale.
-- **R31** [MUST NOT · decidable: macf_tools mis check, lands-in] When an MIS is Final, its Lands-in field MUST NOT be empty or none.
-- **R32** [MUST · judgment: the Secretary, from the test results] Before an MIS becomes Final, every decidable requirement MUST pass its check.
-- **R33** [MUST · judgment: the Secretary] Before an MIS becomes Final, a cold-reader trial of its landed policy MUST succeed and be recorded in its Conformance section.
-- **R37** [MUST · judgment: the Secretary] Before an MIS becomes Final, each judgment requirement MUST have its named review recorded in the Conformance section.
-
+- **R29** [MUST · judgment: the reviewers of the landing pull request] A landing pull request MUST carry the normative text and the capability that it governs together. (landing_MUST_ship_text_with_capability)
+- **R30** [MUST · judgment: the reviewers of the landing pull request] Each landed policy section MUST cite its MIS by number for its rationale. (policy_MUST_cite_its_MIS)
+- **R31** [MUST NOT · decidable: macf_tools mis check, lands-in] When an MIS is Final, its Lands-in field MUST NOT be empty or none. (final_lands-in_MUST-NOT_be_empty)
+- **R32** [MUST · judgment: the Secretary, from the test results] Before an MIS becomes Final, every decidable requirement MUST pass its check. (final_MUST_pass_decidable_checks)
+- **R33** [MUST · judgment: the Secretary] Before an MIS becomes Final, a cold-reader trial of its landed policy MUST succeed and be recorded in its Conformance section. (final_MUST_pass_cold-reader_trial)
+- **R37** [MUST · judgment: the Secretary] Before an MIS becomes Final, each judgment requirement MUST have its named review recorded in the Conformance section. (final_MUST_record_judgments)
 ### 6.8 Change after acceptance, and departures
 
-- **R34** [MUST · judgment: the reviewers of each pull request] After an MIS is Accepted, each change to it MUST be editorial and recorded in its Revision History.
-- **R35** [MUST · judgment: the Secretary] A substantive change to an accepted MIS MUST be a new MIS that names the old one in Updates or Supersedes.
-- **R36** [MUST · judgment: the reviewers of the change] When an agent departs from a requirement that permits departure, the agent MUST record the requirement ID and the reason where the departure is made.
+- **R34** [MUST · judgment: the reviewers of each pull request] After an MIS is Accepted, each change to it MUST be editorial and recorded in its Revision History. (accepted_MIS_MUST_change_editorially)
+- **R35** [MUST · judgment: the Secretary] A substantive change to an accepted MIS MUST be a new MIS that names the old one in Updates or Supersedes. (substantive_change_MUST_be_new_MIS)
+- **R36** [MUST · judgment: the reviewers of the change] When an agent departs from a requirement that permits departure, the agent MUST record the requirement ID and the reason where the departure is made. (departure_MUST_be_recorded)
+### 6.9 Semantic slugs
+
+- **R38** [MUST · decidable: macf_tools mis check, slug] Each requirement line MUST end with its semantic slug in parentheses, made only of ASCII letters, digits, hyphens and underscores. (req_MUST_end_with_slug)
+- **R39** [MUST NOT · decidable: macf_tools mis check, slug uniqueness] Two requirements in one MIS MUST NOT share a semantic slug. (req_slugs_MUST-NOT_repeat)
+- **R40** [MUST · judgment: the Secretary] When a participant first names a requirement in a deliberation, the participant MUST give its ID and its semantic slug together. (first_mention_MUST_give_slug)
+- **R41** [MAY · judgment: the participant] A participant MAY give a requirement's semantic slug at any later mention. (mention_MAY_give_slug)
+- **R42** [SHOULD · judgment: the Secretary] When a discussion turns on a requirement's meaning, the participant SHOULD restate the requirement's full sentence. (meaning_SHOULD_restate_req)
+- **R43** [MUST · decidable: macf/tests/test_mis_check.py::test_findings_name_their_slugs] Each finding that a tool reports about a requirement MUST name the requirement's semantic slug beside its ID. (tool_MUST_report_slug)
+- **R44** [SHOULD · judgment: the reviewers of each pull request] A reference to a requirement from outside its MIS SHOULD give the MIS number, the requirement ID and the semantic slug. (xref_SHOULD_give_MIS_ID_slug)
 
 ## 7 Rationale and Rejected Alternatives
 
@@ -145,6 +149,13 @@ MacEff has one ratifier, the operator, as it has one owner. The IETF's real safe
 **Why proof before Final (R31 to R33, R37).** R32 holds Final to passing tests, so a decidable requirement is never only declared. R37 does the same for judgment requirements: a review that nobody recorded did not happen, as far as the record shows. The first cold-reader trial found that without R37, Final checked only half of the requirements. R31 ensures a Final MIS says where its text landed. TC39 requires two implementations that pass its test suite, and W3C asks for implementations "created by people other than the authors". In MacEff, the reader that matters is an agent with no memory of the design. That is exactly what compaction produces. So a cold-reader trial is the independent implementation, and passing tests are the conformance suite. `policy_writing` already asks for this as model-user validation; R33 makes it a gate.
 
 **Why change only by a new MIS (R34, R35), and why departures are recorded (R36).** An accepted MIS is a record of a decision. Rewriting it would falsify the record. So a substantive change is a new decision, linked by Updates or Supersedes, as RFCs do with "Updates" and "Obsoletes". R36 is MISRA's deviation record in its simplest form: a SHOULD may be set aside, but never silently.
+
+**Why semantic slugs (R38 to R44).** The operator asked for them on this MIS's pull request on 2026-10-03, quoted in the Deliberation Record. A bare number asks every reader to hold a table in their head. "R14" means nothing to someone who did not write the MIS, and it costs a person's memory and attention even when they did. A slug such as `req_MUST_have_30_words_max` carries the rule's subject and its strength into every place the number goes: a discussion, a refusal from a tool, a citation from another document. So a reader can follow the conversation without opening the file, and an outsider can tell what is being argued.
+- **R38 and R39** make the slug part of the line form, and unique, so that a tool can find it, check it and print it. The character set is the operator's: ASCII letters, digits, hyphens and underscores, with no whitespace, so that a slug survives any medium.
+- **R40, R41 and R42** are the conversational rules: the slug on first mention (a MUST), at any later mention (a MAY), and the full sentence restated when the meaning is in dispute (a SHOULD). The first mention is where a reader without the table is lost; later mentions can rely on it.
+- **R43** holds tools to the same courtesy. A refusal that names only "R14" sends the reader to look it up.
+- **R44** extends the rule across documents. A policy citing this MIS writes `MIS-0001-R14 (req_MUST_have_30_words_max)`, so the citation still reads when it is quoted out of context.
+- **The pattern** in the operator's examples is the subject, then the keyword in capitals (MUST-NOT hyphenated), then the action. It is a convention, not a rule: a slug is checked for its characters and its uniqueness, not for its grammar.
 
 **Rejected**
 - **The MIS as a living normative spec** (the amail-spec model). Rejected: it creates a second normative source next to policy.
@@ -230,6 +241,13 @@ MacEff has one ratifier, the operator, as it has one owner. The IETF's real safe
 | R35 | judgment | the Secretary | n/a |
 | R36 | judgment | the reviewers of the change | n/a |
 | R37 | judgment | the Secretary | pending |
+| R38 | decidable | mis check: slug at the end of each requirement line | passing |
+| R39 | decidable | mis check: unique slugs | passing |
+| R40 | judgment | the Secretary, in each deliberation | n/a |
+| R41 | judgment | the participant | n/a |
+| R42 | judgment | the Secretary, in each deliberation | n/a |
+| R43 | decidable | macf/tests/test_mis_check.py::test_findings_name_their_slugs | passing |
+| R44 | judgment | the reviewers of each pull request | n/a |
 
 **Tests.** `macf/tests/test_mis_check.py` runs the checker over every file in `framework/mis/` and the glossary, and plants one defect for each decidable check to show that the check catches it.
 
@@ -304,6 +322,7 @@ One pull request to MacEff carries all of this:
   - the decision runs synthesis, then a final comment period, then ratification;
   - files live under `framework/mis/`, with one framework glossary and a checker in CI.
 - **The operator's proposal** that a deliberation's outcome be written in "80% ASD-STE100" was made on issue #493 on 2026-10-02, and the Secretary's reply on that issue set out the scope this MIS adopts.
+- **Semantic slugs.** The operator, on this MIS's pull request, 2026-10-03, quoted in full: "Requirements or any numbered item should be assigned a semantic slug at the end of the line that defines it [...] Upon first invocation, deliberators MUST use the semantic slugs in addition to the req# when discussing specific requirements. And they MAY use it at any time for clarity. They SHOULD restate the full definition when it helps with clarity like when discussing its semantics. Any tooling MUST use the semantic slug in error messages in addition to the number. This is to ease the burden on the human memory and attention and help outsiders understand conversational references. Outside or cross-MIS scope should also refer to the MIS # as a prefix before the req # and include the semantic slug. Naked number references are off-putting by most standards showing lack of concern to accommodate multiple audiences. Semantic slugs MUST be free of whitespace, limited to ASCII subset [-_A-Za-z0-9]." R38 to R44 carry it. Two readings by the Secretary, open for the operator to correct: the lowercase "should" for assigning slugs became a MUST (R38), because the tooling rule (R43) depends on every requirement having one; and the lowercase "should" for cross-document references stayed a SHOULD (R44). "Any numbered item" is applied to requirements only, the numbered items that are cited by number; the numbered sections are not.
 - **Objections recorded**: none.
 
 ## 15 Revision History
@@ -311,6 +330,7 @@ One pull request to MacEff carries all of this:
 - 2026-10-02: first version, with the pull request that adopts it.
 - 2026-10-02: after cold-reader trial 1, R24 and R25 reworded for the path without a deliberation, and R37 added (judgment reviews recorded before Final). Made before acceptance, in the same pull request.
 - 2026-10-03: after cold-reader trial 2, sixteen gaps (§11) were fixed in the policy's prose and the glossary, the glossary gained "editorial" and "substantive", and the template gained a MUST NOT example. No requirement's keyword or check changed. Made before acceptance, in the same pull request.
+- 2026-10-03: at the operator's request on the pull request, every requirement gained a semantic slug, and R38 to R44 were added (slugs in the line form, unique, used in discussion, in tool findings and in cross-document references). Made before acceptance, in the same pull request.
 
 ## Wiki-Links
 

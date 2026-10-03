@@ -66,13 +66,14 @@ An author copies the template, fills each section, runs the checker, and opens a
 ## 6 Specification
 
 *The normative part. One requirement per line, in this exact form:*
-*`- **Rnn** [KEYWORD · decidable: <test or hook>] <sentence>` or `- **Rnn** [KEYWORD · judgment: <who reviews>] <sentence>`.*
+*`- **Rnn** [KEYWORD · decidable: <test or hook>] <sentence> (semantic_slug)` or `- **Rnn** [KEYWORD · judgment: <who reviews>] <sentence> (semantic_slug)`.*
+*The semantic slug names the requirement in words: ASCII letters, digits, hyphens and underscores, no spaces, unique in the MIS. The usual pattern is the subject, the keyword in capitals (MUST-NOT hyphenated), then the action. Cite a requirement by its ID and slug together the first time you name it, and from outside this MIS as `MIS-NNNN-Rnn (slug)`.*
 *KEYWORD is MUST, MUST NOT, SHOULD, SHOULD NOT or MAY, in capitals (BCP 14 as clarified by RFC 8174: these words are normative only in capitals). Each sentence holds one requirement, uses that keyword once, has 30 words or fewer, and is in the active voice. Prefer the EARS patterns: "When <trigger>, the <system> MUST ...", "While <state>, ...", "If <unwanted event>, then ...", "Where <feature is present>, ...". Use only glossary terms and the terms in section 5. Sub-headings (### 6.1) may group requirements.*
 
-- **R01** [MUST · decidable: macf/tests/test_mis_check.py::test_repo_mis_files_pass] Each MIS file MUST pass `macf_tools mis check` before its pull request merges.
-- **R02** [SHOULD · judgment: the Secretary] When an author adds a requirement, the author SHOULD use an EARS pattern.
-- **R03** [MAY · judgment: the author] An MIS MAY group its requirements under sub-headings.
-- **R04** [MUST NOT · judgment: the Secretary, at review] A requirement sentence MUST NOT hide its keyword inside a double negative.
+- **R01** [MUST · decidable: macf/tests/test_mis_check.py::test_repo_mis_files_pass] Each MIS file MUST pass `macf_tools mis check` before its pull request merges. (MIS_MUST_pass_check)
+- **R02** [SHOULD · judgment: the Secretary] When an author adds a requirement, the author SHOULD use an EARS pattern. (req_add_SHOULD_use_EARS)
+- **R03** [MAY · judgment: the author] An MIS MAY group its requirements under sub-headings. (MIS_MAY_use_sub_reqs)
+- **R04** [MUST NOT · judgment: the Secretary, at review] A requirement sentence MUST NOT hide its keyword inside a double negative. (req_MUST-NOT_use_double-neg)
 
 ## 7 Rationale and Rejected Alternatives
 

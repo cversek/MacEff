@@ -165,3 +165,36 @@ def test_findings_name_their_rule_and_line(plant, tmp_path):
     plant(sub("**Type**: Process", "**Type**: Feature"))
     f = next(x for x in mis.check([tmp_path / "framework" / "mis"]) if x.rule == "R08")
     assert f.line == 4 and "Feature" in str(f) and str(f).startswith(str(tmp_path))
+
+
+def test_r38_requirement_without_slug(plant):
+    assert "R38" in plant(sub("for any other change. (author_MAY_write_MIS_for_any_change)",
+                              "for any other change."))
+
+
+def test_r38_slug_with_forbidden_characters(plant):
+    assert "R38" in plant(sub("(author_MAY_write_MIS_for_any_change)",
+                              "(author MAY write MIS)"))
+    assert "R38" in plant(sub("(author_MAY_write_MIS_for_any_change)",
+                              "(author_MAY_écrire)"))
+
+
+def test_r39_duplicate_slug(plant):
+    assert "R39" in plant(sub("(author_MAY_write_MIS_for_any_change)", "(PR_MUST_cite_accepted_MIS)"))
+
+
+def test_findings_name_their_slugs(plant, tmp_path):
+    """MIS-0001 R43: a finding names its own rule's slug, and the requirement's slug it concerns."""
+    long = "An author MAY write an MIS for any other change " + "and then " * 12 + "rest."
+    plant(sub("An author MAY write an MIS for any other change.", long))
+    f = next(x for x in mis.check([tmp_path / "framework" / "mis"]) if x.rule == "R14")
+    text = str(f)
+    assert "MIS-0001-R14 (req_MUST_have_30_words_max)" in text
+    assert "R02 (author_MAY_write_MIS_for_any_change)" in text
+
+
+def test_rule_slugs_match_mis_0001():
+    """The checker's slug table is the one written in MIS-0001, so the two cannot drift apart."""
+    written = dict(re.findall(r"^- \*\*(R\d+)\*\* \[.*\((\S+)\)$", MIS1.read_text(), flags=re.M))
+    for rule, slug in mis.RULE_SLUGS.items():
+        assert written.get(rule) == slug, (rule, slug, written.get(rule))
