@@ -103,6 +103,11 @@ def _type_roots(agent_home: Path) -> List[Tuple[str, Path]]:
         pol = get_framework_policies_path()
         if pol and pol.exists():
             roots.append(("policies", pol))
+            # MIS records sit beside the policies they explain (mis policy §9): an MIS is a
+            # whole-document node, and its Wiki-Links must reach the web it promises.
+            mis_dir = pol.parent / "mis"
+            if mis_dir.is_dir():
+                roots.append(("mis", mis_dir))
     except (OSError, ImportError):
         pass
     # The task store participates wherever it is configured to live. It sits
