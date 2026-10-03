@@ -51,6 +51,15 @@ def sub(old, new):
     return edit
 
 
+def field(name, value):
+    """Set a header field, whatever MIS-0001 currently holds there (its Status moves as it is decided)."""
+    def edit(text):
+        pattern = rf"^\*\*{name}\*\*: .*$"
+        assert re.search(pattern, text, flags=re.M), name
+        return re.sub(pattern, lambda _: f"**{name}**: {value}", text, count=1, flags=re.M)
+    return edit
+
+
 def test_the_unedited_copy_passes(plant):
     assert plant() == set()
 
@@ -82,7 +91,7 @@ def test_r08_type(plant):
 
 
 def test_r09_status(plant):
-    assert "R09" in plant(sub("**Status**: Final-Comment", "**Status**: Approved"))
+    assert "R09" in plant(field("Status", "Approved"))
 
 
 def test_r10_requirement_form(plant):
@@ -135,14 +144,14 @@ def test_r20_glossary_duplicate(plant):
 
 
 def test_r21_accepted_term_missing_from_glossary(plant):
-    edit = lambda t: sub("**Status**: Final-Comment", "**Status**: Accepted")(
-        sub("**Resolution**: none", "**Resolution**: accepted")(
+    edit = lambda t: field("Status", "Accepted")(
+        field("Resolution", "accepted")(
             sub("## 5 Terms\n", "## 5 Terms\n\n- **unlisted word**: a term no glossary defines.\n")(t)))
     assert "R21" in plant(edit)
 
 
 def test_r21_draft_may_carry_new_terms(plant):
-    edit = lambda t: sub("**Status**: Final-Comment", "**Status**: Draft")(
+    edit = lambda t: field("Status", "Draft")(
         sub("## 5 Terms\n", "## 5 Terms\n\n- **unlisted word**: a term no glossary defines.\n")(t))
     assert "R21" not in plant(edit)
 
@@ -152,17 +161,11 @@ def test_r23_secretary_after_draft(plant):
 
 
 def test_r27_decided_without_resolution(plant):
-    def edit(text):
-        text = text.replace("**Status**: Final-Comment", "**Status**: Accepted", 1)
-        return re.sub(r"^\*\*Resolution\*\*: .*$", "**Resolution**: none", text, count=1, flags=re.M)
-    assert "R27" in plant(edit)
+    assert "R27" in plant(lambda t: field("Status", "Accepted")(field("Resolution", "none")(t)))
 
 
 def test_r31_final_without_lands_in(plant):
-    def edit(text):
-        text = text.replace("**Status**: Final-Comment", "**Status**: Final", 1)
-        return re.sub(r"^\*\*Lands-in\*\*: .*$", "**Lands-in**: none", text, count=1, flags=re.M)
-    assert "R31" in plant(edit)
+    assert "R31" in plant(lambda t: field("Status", "Final")(field("Lands-in", "none")(t)))
 
 
 def test_findings_name_their_rule_and_line(plant, tmp_path):

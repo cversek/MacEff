@@ -2,7 +2,7 @@
 
 **Number**: 0001
 **Type**: Process
-**Status**: Final-Comment
+**Status**: Accepted
 **Authors**: the operator; drafted by the Secretary of deliberation #493
 **Secretary**: the Secretary of deliberation #493
 **Deliberation**: none (designed with the operator in three rounds of questions; see section 14)
@@ -10,7 +10,7 @@
 **Updates**: none
 **Supersedes**: none
 **Lands-in**: framework/policies/base/meta/mis.md, framework/glossary.md, framework/mis/MIS-0000-template.md, macf_tools mis check
-**Resolution**: none
+**Resolution**: Accepted by the operator's merge. The operator's decision comment names three maintainers by their calling cards on the pull request: the head maintainer, the container-management specialist, and the generalist for host-side needs and operator liaison. It decides, quoted with the one name replaced by its role: "Quorum has been reach and pending minor revisions by [the Secretary], I will merge." https://github.com/cversek/MacEff/pull/500#issuecomment-5971935869. No deliberation was convened (R22): the operator commissioned this process and settled its design directly (P01). O01 (fixed_72h_period_too_slow), the operator's own objection, is answered in the operator's words by the quorum ruling (P06), which R25 and R48 carry; the operator merged with the proposed slug in place. Neither of the other two maintainers raised a critical objection (P07, P08).
 
 ---
 
@@ -55,10 +55,13 @@ Suppose the operator asks for one persistent layer to run every long-lived MacEf
 
 All terms this MIS uses are defined in `framework/glossary.md`, which this MIS creates.
 
+- **architecture across components**: how MacEff's responsibilities are divided among its components and how the components talk to each other; a change moves a responsibility, or changes a file format, a protocol or a shared store between two components.
+- **critical objection**: an objection that the maintainer raising it declares critical; it keeps an MIS's discussion open, and the operator answers it before the merge.
 - **initiator**: whoever convenes a deliberation, usually the operator; the initiator sets its final comment period.
 - **maintainer**: an agent that the operator has designated to maintain MacEff.
 
 - **semantic slug**: a short name made of ASCII letters, digits, hyphens and underscores, given in parentheses at the end of a requirement line, that states the requirement's subject and strength, for example `req_MUST_have_30_words_max`.
+- **subsystem**: a long-lived process, a store of agent state, a command group, or a channel to or from an agent.
 
 ## 6 Specification
 
@@ -171,8 +174,8 @@ MacEff has one ratifier, the operator, as it has one owner. The IETF's real safe
 - **R44** extends the rule across documents. A policy citing this MIS writes `MIS-0001-R14 (req_MUST_have_30_words_max)`, so the citation still reads when it is quoted out of context.
 - **The pattern** in the operator's examples is the subject, then the keyword in capitals (MUST-NOT hyphenated), then the action. It is a convention, not a rule: a slug is checked for its characters and its uniqueness, not for its grammar.
 
-**Why the review of 2026-10-03 changed the procedure (R25, R30, R36, R37, R40, R41, R46 to R51).** Two maintainers reviewed this MIS on its pull request, and the operator ruled on the comment period. Their words are in the Deliberation Record (P04 to P06, O01).
-- **R25 and R48: the operator's ruling.** A fixed 72 hours protected positions relayed by hand, but all the voices today are agents on the repository owner's own machines, and the delay bought nothing. So each deliberation's initiator sets its final comment period, and it starts only when every maintainer has posted a first comment, so no maintainer is outrun. R48 is the operator's standing quorum rule: after every maintainer has commented and the MIS has been revised once in answer, the discussion closes, unless a maintainer raises a critical objection.
+**Why the review of 2026-10-03 changed the procedure (R25, R30, R36, R37, R40, R41, R46 to R51).** The operator named three maintainers: the head maintainer, the container-management maintainer (who is this MIS's Secretary), and the host-side maintainer and operator liaison. The other two reviewed this MIS on its pull request, and the operator ruled on the comment period. Their words are in the Deliberation Record (P04 to P09, O01).
+- **R25 and R48: the operator's ruling.** A fixed 72 hours protected positions relayed by hand, but all the voices today are agents on the repository owner's own machines, and the delay bought nothing. So each deliberation's initiator sets its final comment period, and it starts only when every maintainer has posted a first comment, so no maintainer is outrun. R48 is the operator's standing quorum rule: after every maintainer has commented and the MIS has been revised once in answer, the discussion closes, unless a maintainer raises a critical objection. Both reviewers proposed that the maintainer who raises an objection says whether it is critical, and that the operator answers it before the merge; the glossary and the policy now say so. Closing ends revision, not recording, so an objection posted before the merge is still answered under R28.
 - **R30 and R36: a landed rule cites its requirement.** An agent departs from the landed policy, not from the MIS, and R36 asks it to name the requirement it departed from. A section that cited only "MIS-0002" would leave it to guess which requirement a sentence came from. So each landed rule cites its requirement by number, ID and slug, as the `mis` policy already does.
 - **R37: one-time and standing reviews.** Most judgment requirements are duties that recur on every pull request or deliberation, and can never be recorded once. Final then needs a recorded review for the one-time requirements, and a named reviewer for the standing ones. The Conformance states say which is which.
 - **R40 and R41: the slug duty on the synthesis.** Some participants are relayed by hand, and one is the operator typing between other things. A MUST on their form would give the Secretary a ground to discount a position for its form. So the synthesis gives the slug beside every ID it quotes, and participants give slugs as a courtesy (R41).
@@ -252,10 +255,10 @@ MacEff has one ratifier, the operator, as it has one owner. The IETF's real safe
 | R22 | judgment | the operator | recorded: no deliberation, by the operator's commission of 2026-10-02 (P01) |
 | R23 | decidable | mis check: Secretary named outside Draft | passing |
 | R24 | judgment | the operator | n/a: no deliberation was held for this MIS |
-| R25 | judgment | the operator | pending: started 2026-10-03 when the last maintainer commented; closes under R48 |
+| R25 | judgment | the operator | recorded: started 2026-10-03 at 17:05 UTC, when the head maintainer's review was the third maintainer's first comment; the operator closed the discussion under R48 at 18:01 UTC |
 | R26 | judgment | the operator | pending: the operator's merge |
 | R27 | decidable | mis check: Resolution present once decided | passing |
-| R28 | judgment | the operator | pending: the Resolution answers O01 at the merge |
+| R28 | judgment | the operator | recorded: the Resolution answers O01 |
 | R29 | judgment | the reviewers of the landing pull request | pending: this pull request carries both |
 | R30 | judgment | the reviewers of the landing pull request | recorded: a maintainer checked all 60 citations in this pull request, 2026-10-03 |
 | R31 | decidable | mis check: Lands-in present once Final | passing |
@@ -274,8 +277,8 @@ MacEff has one ratifier, the operator, as it has one owner. The IETF's real safe
 | R44 | judgment | the reviewers of each pull request | standing |
 | R45 | decidable | mis check: IDs and slugs on open questions, positions and objections | passing |
 | R46 | judgment | the operator, on each Deliberation Record | standing |
-| R47 | judgment | the operator | pending: Q01 to Q03 block no requirement |
-| R48 | judgment | the operator | pending: this revision answers the maintainers |
+| R47 | judgment | the operator | recorded: Q01 and Q02 block no requirement; the operator answered Q03 for this MIS by naming the maintainers (P09) |
+| R48 | judgment | the operator | recorded: revised once (P04 to P06 answered), no critical objection (P07, P08), closed by the operator (P09) |
 | R49 | decidable | mis check: citations resolve to their MIS slug | passing |
 | R50 | judgment | the operator, on each glossary change | standing |
 | R51 | judgment | the operator, on each synthesis | standing |
@@ -339,7 +342,7 @@ One pull request to MacEff carries all of this:
 
 - **Q01** Should `mis check` also lint policy files for the language rules? Not now: policies adopt the rules as they are changed. The operator decides later, from experience with MIS-0002. (lint_policies_too)
 - **Q02** Should small MIS be decided by a delegate of the operator, as a PEP-Delegate decides some PEPs? Not now. The operator decides when the volume makes it worthwhile. (delegate_small_decisions)
-- **Q03** Where is the list of maintainers kept, so that R25 and R48 can tell when every maintainer has commented? Today the operator names them on the pull request. The operator decides before MIS-0002's final comment. (where_maintainers_are_listed)
+- **Q03** Where is the list of maintainers kept, so that R25 and R48 can tell when every maintainer has commented? For this MIS the operator named them on the pull request (P09), and until a standing list is kept the policy says the operator names them that way. Where a standing list lives stays open; it blocks no requirement. (where_maintainers_are_listed)
 
 ## 14 Deliberation Record
 
@@ -355,12 +358,15 @@ One pull request to MacEff carries all of this:
   - files live under `framework/mis/`, with one framework glossary and a checker in CI.
 - **P02** The operator proposed, on issue #493 on 2026-10-02, that a deliberation's outcome be written in "80% ASD-STE100". The Secretary's reply on that issue set out the scope this MIS adopts. (operator_proposed_80pct_STE)
 - **P03** Semantic slugs. The operator, on this MIS's pull request, 2026-10-03, quoted in full: "Requirements or any numbered item should be assigned a semantic slug at the end of the line that defines it [...] Upon first invocation, deliberators MUST use the semantic slugs in addition to the req# when discussing specific requirements. And they MAY use it at any time for clarity. They SHOULD restate the full definition when it helps with clarity like when discussing its semantics. Any tooling MUST use the semantic slug in error messages in addition to the number. This is to ease the burden on the human memory and attention and help outsiders understand conversational references. Outside or cross-MIS scope should also refer to the MIS # as a prefix before the req # and include the semantic slug. Naked number references are off-putting by most standards showing lack of concern to accommodate multiple audiences. Semantic slugs MUST be free of whitespace, limited to ASCII subset [-_A-Za-z0-9]." R38 to R45 carry it. The Secretary's readings, put to the operator the same day in multiple-choice questions: the lowercase "should" for assigning slugs became a MUST (R38), which the operator confirmed; "any numbered item" means requirements, open questions, positions and objections (R45), as the operator chose, and not the numbered sections; the lowercase "should" for cross-document references stays a SHOULD (R44), not yet confirmed. (operator_asked_for_slugs)
-- **P04** A participant in the persistent-layer deliberation reviewed this MIS on its pull request, 2026-10-03: three defects (the Status claimed a decision not yet made, a malformed glossary line escaped the duplicate check, retired words had no place) and five opinions on binding the Secretary. All are answered in this revision. https://github.com/cversek/MacEff/pull/500 (participant_review_secretary_limits)
-- **P05** The peer maintainer reviewed this MIS on its pull request, 2026-10-03, with a run on macOS and arm64: seven defects (judgment rows that could never be recorded, slugs renameable as editorial, landed rules citing only a number, a rule living only in the template, a locale-dependent checker, an MIS absent from the knowledge web, one-way integration) and five opinions, merging once the first four were settled. All are answered in this revision. https://github.com/cversek/MacEff/pull/500 (maintainer_review_macos_run)
-- **P06** The operator ruled, 2026-10-03, quoted in full: "I would primarily object to the 72-hr comment period considering that all the voices at the moment are of agents within only the MacEff repo owner's infrastructure. We can go a lot faster and the adjudication of the refractory period should be decided for each deliberation by the initiator and should kick in after all maintainers have made their first comments. This discussion should end after one more iteration unless a maintainer voices a critical objection. Consider this a standing maintainer quorum ruling. We will keep the Oct. 9 synthesis deadline for the persistence layer debate." R25 and R48 carry it. (operator_quorum_ruling)
+- **P04** The host-side maintainer, who is also a participant in the persistent-layer deliberation, reviewed this MIS on its pull request, 2026-10-03: three defects (the Status claimed a decision not yet made, a malformed glossary line escaped the duplicate check, retired words had no place) and five opinions on binding the Secretary. All are answered in this revision. https://github.com/cversek/MacEff/pull/500#issuecomment-5971230845 (participant_review_secretary_limits)
+- **P05** The head maintainer reviewed this MIS on its pull request, 2026-10-03, with a run on macOS and arm64: seven defects (judgment rows that could never be recorded, slugs renameable as editorial, landed rules citing only a number, a rule living only in the template, a locale-dependent checker, an MIS absent from the knowledge web, one-way integration) and five opinions, merging once the first four were settled. All are answered in this revision. https://github.com/cversek/MacEff/pull/500#issuecomment-5971413100 (maintainer_review_macos_run)
+- **P06** The operator ruled, 2026-10-03, quoted in full: "I would primarily object to the 72-hr comment period considering that all the voices at the moment are of agents within only the MacEff repo owner's infrastructure. We can go a lot faster and the adjudication of the refractory period should be decided for each deliberation by the initiator and should kick in after all maintainers have made their first comments. This discussion should end after one more iteration unless a maintainer voices a critical objection. Consider this a standing maintainer quorum ruling. We will keep the Oct. 9 synthesis deadline for the persistence layer debate." R25 and R48 carry it. https://github.com/cversek/MacEff/pull/500#issuecomment-5971630349 (operator_quorum_ruling)
+- **P07** The host-side maintainer checked the revision, 2026-10-03: all eight items answered, and four wording points (who the maintainers are, who judges a critical objection, which of R25 and R48 governs and whether closing stops recording, and exact links for P04 and P05). "If I am counted as a maintainer, none of this is a critical objection." All four are answered in the final revision. https://github.com/cversek/MacEff/pull/500#issuecomment-5971798527 (host_maintainer_rereview)
+- **P08** The head maintainer re-ran the checker and the full suite at the revision on macOS and arm64, 2026-10-03, found every defect fixed, agreed with P07's four points, and asked that "subsystem" and "architecture across components" join the glossary: "I have no critical objection [...] I would merge it." Both terms are added in the final revision. Three follow-ups (a traceback on a file that is not UTF-8, two tests that fail under a Latin-1 locale, and emoji in the summary line there) go to an ordinary pull request later. https://github.com/cversek/MacEff/pull/500#issuecomment-5971827296 (head_maintainer_rerun)
+- **P09** The operator named the three maintainers and closed the discussion, 2026-10-03; quoted in the Resolution. https://github.com/cversek/MacEff/pull/500#issuecomment-5971935869 (operator_names_maintainers)
 
 Objections recorded:
-- **O01** The operator: the fixed 72-hour comment period is too slow while every voice is an agent on the repository owner's own machines. Answered by R25 and R48 in this revision. The slug is the Secretary's proposal, awaiting the operator's confirmation under R46. https://github.com/cversek/MacEff/pull/500 (fixed_72h_period_too_slow)
+- **O01** The operator: the fixed 72-hour comment period is too slow while every voice is an agent on the repository owner's own machines. Answered by R25 and R48. The slug was the Secretary's proposal under R46; the operator did not replace it, and merged with it in place. https://github.com/cversek/MacEff/pull/500#issuecomment-5971630349 (fixed_72h_period_too_slow)
 
 ## 15 Revision History
 
@@ -370,6 +376,7 @@ Objections recorded:
 - 2026-10-03: at the operator's request on the pull request, every requirement gained a semantic slug, and R38 to R44 were added (slugs in the line form, unique, used in discussion, in tool findings and in cross-document references). Made before acceptance, in the same pull request.
 - 2026-10-03: at the operator's choice, open questions, positions and objections gained IDs and slugs too (R45), R39 now covers every numbered item, and R28 answers objections by ID and slug. Made before acceptance, in the same pull request.
 - 2026-10-03: the final comment period began when the last maintainer commented; the Status moved back to Final-Comment and the Resolution to none, so that the merge records a decision actually reached. After two maintainers' reviews and the operator's ruling: R25 rewritten (the initiator sets the period, starting after every maintainer's first comment), R30, R36, R37, R40 and R41 amended, R46 to R51 added, and O01 recorded. Made before acceptance, in the same pull request.
+- 2026-10-03: the operator named the maintainers and closed the discussion under R48 (P09). Final revision, from P07 and P08: "critical objection", "subsystem" and "architecture across components" defined; the stale "at least 72 hours" corrected in the glossary and in the policy's status table; policy §6.2 says who judges a critical objection, that closing ends revision but not recording, and who the maintainers are; P04 and P05 link their reviews exactly; Q03 answered for this MIS. No requirement changed. The Status moved to Accepted with the Resolution, as the last commit before the merge.
 
 ## Wiki-Links
 
