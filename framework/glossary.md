@@ -1,6 +1,6 @@
 # MacEff Glossary
 
-One term, one meaning, MacEff-wide. A MacEff Improvement Specification (MIS) uses these terms in its requirements, and lists any term it adds in its own Terms section; the new terms move here when the MIS is accepted. Change a definition only through an accepted MIS, or an editorial pull request that does not change its meaning. The `mis` policy governs this file.
+One term, one meaning, MacEff-wide, for the terms MIS requirements use. A MacEff Improvement Specification (MIS) uses these terms in its requirements, and lists any term it adds in its own Terms section; the new terms move here when the MIS is accepted. Change a definition only through an accepted MIS, or an editorial pull request that does not change its meaning. The `mis` policy governs this file.
 
 Format: one line per term, `- **term**: definition.`, in alphabetical order. `macf_tools mis check` refuses a term defined twice.
 
@@ -13,7 +13,7 @@ Format: one line per term, `- **term**: definition.`, in alphabetical order. `ma
 - **check**: the means by which a requirement is verified: a named test or hook (decidable), or a named reviewer (judgment).
 - **cold reader**: an agent with no memory of an MIS's design or deliberation, who is given only the landed policy and this glossary.
 - **cold-reader trial**: a test in which a cold reader does a task that the landed policy governs, and the result is compared with the policy's intent.
-- **compaction**: the loss of most of an agent's working context when its context window fills; the agent continues from a summary and its own artifacts.
+- **compaction**: the loss of most of an agent's working context when its context window fills, or when the operator or the agent asks for it earlier; the agent continues from a summary and its own artifacts.
 - **conformance**: the record, for each requirement, of its check and whether the check passes.
 - **container agent**: an agent that runs inside a deployment's container rather than on the operator's own machine.
 - **decidable**: a check that a tool can always run without human judgment, such as a test or a hook.
@@ -21,12 +21,14 @@ Format: one line per term, `- **term**: definition.`, in alphabetical order. `ma
 - **deployment**: a set of containers, agents and configuration that runs MacEff for one purpose.
 - **deviation**: a departure from a SHOULD requirement, recorded with the requirement's ID and the reason.
 - **disposition**: the outcome the Secretary proposes in a synthesis: accept, revise, defer or reject.
-- **editorial**: a change to an MIS or the glossary that alters no requirement's meaning, keyword, check or scope, and no term's meaning.
+- **editorial**: a change to an MIS or the glossary that alters no requirement's meaning, keyword, check, scope, ID or slug, and no term's meaning.
 - **final**: the status of an accepted Standards or Process MIS that has landed and been proven: every decidable requirement passes its check, every judgment review is recorded, and a cold-reader trial has succeeded. An Informational MIS never becomes final.
 - **final comment period**: the time, at least 72 hours, from the start of status Final-Comment to the operator's ratification, in which anyone may object.
 - **host agent**: an agent that runs on the operator's own machine.
+- **initiator**: whoever convenes a deliberation, usually the operator; the initiator sets its final comment period.
 - **judgment**: a check that a named person or agent makes by review, because no tool can decide it.
 - **landing**: putting an accepted MIS's normative text into policy, with its code and tests, in a pull request.
+- **maintainer**: an agent that the operator has designated to maintain MacEff.
 - **MIS**: MacEff Improvement Specification: a numbered proposal and decision record for a change to MacEff, kept in `framework/mis/`.
 - **operator**: the human who owns a MacEff installation and holds final authority over merges, keys, money and permissions.
 - **policy**: a document under `framework/policies/` that states what agents must do and why; MacEff's normative source.
@@ -38,3 +40,9 @@ Format: one line per term, `- **term**: definition.`, in alphabetical order. `ma
 - **semantic slug**: a short name made of ASCII letters, digits, hyphens and underscores, given in parentheses at the end of a requirement line, that states the requirement's subject and strength, for example `req_MUST_have_30_words_max`.
 - **substantive**: any change to an accepted MIS that is not editorial; it needs a new MIS.
 - **synthesis**: the Secretary's comment that quotes and links every position, names agreements and disagreements, and proposes a disposition.
+
+## Retired
+
+Words that an accepted MIS replaced, in the term form, so that quoted positions stay readable and the word cannot be defined again: `- **word**: retired by MIS-NNNN; use <term>.`
+
+None yet.

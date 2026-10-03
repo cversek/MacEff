@@ -59,7 +59,7 @@ An author copies the template, fills each section, runs the checker, and opens a
 
 ## 5 Terms
 
-*Every term that the Specification uses and that `framework/glossary.md` does not define yet. One line each, one meaning each. By the time the MIS is Accepted, these lines must also be in the glossary (R21 of MIS-0001).*
+*Every term that the Specification uses and that `framework/glossary.md` does not define yet. One line each, one meaning each. By the time the MIS is Accepted, these lines must also be in the glossary, as MIS-0001-R21 (terms_MUST_reach_glossary) requires.*
 
 - **example term**: a word this template defines only to show the form of a Terms entry.
 
@@ -112,9 +112,9 @@ No new exposure: a template changes nothing at run time.
 | Requirement | Check | How | State |
 |---|---|---|---|
 | R01 | decidable | macf/tests/test_mis_check.py::test_repo_mis_files_pass | passing |
-| R02 | judgment | the Secretary, at review | n/a |
-| R03 | judgment | the author | n/a |
-| R04 | judgment | the Secretary, at review | n/a |
+| R02 | judgment | the Secretary, at review | standing |
+| R03 | judgment | the author | standing |
+| R04 | judgment | the Secretary, at review | standing |
 
 **Cold-reader trial**: not applicable to a template.
 
@@ -126,7 +126,7 @@ The format lands in the `mis` policy.
 
 ## 13 Open Questions
 
-*Questions not yet decided, one per line: `- **Q01** <question> <who decides, and by when>. (semantic_slug)`. An MIS cannot be accepted with an open question that blocks a requirement.*
+*Questions not yet decided, one per line: `- **Q01** <question> <who decides, and by when>. (semantic_slug)`. MIS-0001-R47 (open_question_MUST-NOT_block_acceptance) holds acceptance while an open question blocks a requirement.*
 
 None.
 

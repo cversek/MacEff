@@ -82,7 +82,7 @@ def test_r08_type(plant):
 
 
 def test_r09_status(plant):
-    assert "R09" in plant(sub("**Status**: Accepted", "**Status**: Approved"))
+    assert "R09" in plant(sub("**Status**: Final-Comment", "**Status**: Approved"))
 
 
 def test_r10_requirement_form(plant):
@@ -122,7 +122,7 @@ def test_r17_requirement_without_rationale(plant):
 
 
 def test_r18_requirement_without_conformance(plant):
-    assert "R18" in plant(sub("| R02 | judgment | the author | n/a |\n", ""))
+    assert "R18" in plant(sub("| R02 | judgment | the author | standing |\n", ""))
 
 
 def test_r19_too_few_links(plant):
@@ -135,11 +135,14 @@ def test_r20_glossary_duplicate(plant):
 
 
 def test_r21_accepted_term_missing_from_glossary(plant):
-    assert "R21" in plant(sub("## 5 Terms\n", "## 5 Terms\n\n- **unlisted word**: a term no glossary defines.\n"))
+    edit = lambda t: sub("**Status**: Final-Comment", "**Status**: Accepted")(
+        sub("**Resolution**: none", "**Resolution**: accepted")(
+            sub("## 5 Terms\n", "## 5 Terms\n\n- **unlisted word**: a term no glossary defines.\n")(t)))
+    assert "R21" in plant(edit)
 
 
 def test_r21_draft_may_carry_new_terms(plant):
-    edit = lambda t: sub("**Status**: Accepted", "**Status**: Draft")(
+    edit = lambda t: sub("**Status**: Final-Comment", "**Status**: Draft")(
         sub("## 5 Terms\n", "## 5 Terms\n\n- **unlisted word**: a term no glossary defines.\n")(t))
     assert "R21" not in plant(edit)
 
@@ -150,13 +153,14 @@ def test_r23_secretary_after_draft(plant):
 
 def test_r27_decided_without_resolution(plant):
     def edit(text):
+        text = text.replace("**Status**: Final-Comment", "**Status**: Accepted", 1)
         return re.sub(r"^\*\*Resolution\*\*: .*$", "**Resolution**: none", text, count=1, flags=re.M)
     assert "R27" in plant(edit)
 
 
 def test_r31_final_without_lands_in(plant):
     def edit(text):
-        text = text.replace("**Status**: Accepted", "**Status**: Final", 1)
+        text = text.replace("**Status**: Final-Comment", "**Status**: Final", 1)
         return re.sub(r"^\*\*Lands-in\*\*: .*$", "**Lands-in**: none", text, count=1, flags=re.M)
     assert "R31" in plant(edit)
 
@@ -214,3 +218,45 @@ def test_r45_position_without_slug(plant):
 
 def test_r39_slug_shared_by_a_question_and_a_requirement(plant):
     assert "R39" in plant(sub("(lint_policies_too)", "(PR_MUST_cite_accepted_MIS)"))
+
+
+def test_r20_malformed_glossary_line_is_reported(plant):
+    """A second definition with a space before the colon must not slip past the duplicate check."""
+    assert "R20" in plant(glossary_edit=lambda g: g.replace("## Retired", "- **accepted** : another meaning.\n\n## Retired"))
+
+
+def _with_policy(text):
+    def extra(d):
+        pol = d.parent / "policies" / "base" / "meta"
+        pol.mkdir(parents=True, exist_ok=True)
+        (pol / "example.md").write_text(text, encoding="utf-8")
+    return extra
+
+
+def test_r49_citation_with_a_stale_slug(plant):
+    assert "R49" in plant(extra=_with_policy("A rule (MIS-0001-R14 (req_MUST_be_short)).\n"))
+
+
+def test_r49_citation_of_a_missing_requirement(plant):
+    assert "R49" in plant(extra=_with_policy("A rule (MIS-0001-R99 (no_such_req)).\n"))
+
+
+def test_r49_a_correct_citation_passes(plant):
+    assert "R49" not in plant(extra=_with_policy("A rule [MIS-0001-R14 (req_MUST_have_30_words_max)].\n"))
+
+
+def test_reads_are_utf8_whatever_the_locale():
+    """The tag's middle dot decodes wrongly under a Latin-1 locale unless every read names UTF-8."""
+    src = Path(mis.__file__).read_text(encoding="utf-8")
+    assert "read_text()" not in src and src.count('read_text(encoding="utf-8")') >= 4
+
+
+def test_mis_files_are_a_knowledge_web_root(tmp_path, monkeypatch):
+    from macf import knowledge_web
+    from macf.utils import manifest
+    pol = tmp_path / "framework" / "policies"
+    (tmp_path / "framework" / "mis").mkdir(parents=True)
+    pol.mkdir(parents=True)
+    monkeypatch.setattr(manifest, "get_framework_policies_path", lambda: pol)
+    roots = knowledge_web._type_roots(tmp_path / "home")
+    assert ("mis", tmp_path / "framework" / "mis") in roots

@@ -32,6 +32,7 @@ An MIS records a decision; the policy it lands in binds. There is never a second
 - Which keywords are normative, and in what case?
 - How long may a requirement be, and what style should it use?
 - What is a semantic slug, and where must it be used?
+- How must a citation of a requirement be written, and what checks it?
 
 **4 Rationale, Conformance and Links**
 - Where does each requirement's reason go?
@@ -66,22 +67,23 @@ An MIS records a decision; the policy it lands in binds. There is never a second
 
 ### 1.1 A proposal and a decision record
 
-An MIS is a numbered document that proposes a change to MacEff, explains it, and records how it was decided. When the operator accepts it, its normative text lands in policy, code and tests. From then on **the policy binds; the MIS explains**. Each landed policy section cites its MIS by number (MIS-0001-R30 policy_MUST_cite_its_MIS), so a reader can always climb from a rule to its reason.
+An MIS is a numbered document that proposes a change to MacEff, explains it, and records how it was decided. When the operator accepts it, its normative text lands in policy, code and tests. From then on **the policy binds; the MIS explains**. Each landed policy rule cites its MIS requirement by number, ID and slug [MIS-0001-R30 (policy_rule_MUST_cite_requirement)], so a reader can always climb from a rule to its reason.
 
 This is the shape of Python's PEPs: a proposal becomes a historical record once final, and the canonical text lives elsewhere. MacEff refuses the alternative, a living specification kept beside the policy, because two normative ledgers of the same rules drift apart.
 
 ### 1.2 When an MIS is required
 
-A pull request MUST cite an accepted MIS when it (MIS-0001-R01 PR_MUST_cite_accepted_MIS):
+A pull request MUST cite an accepted MIS when it [MIS-0001-R01 (PR_MUST_cite_accepted_MIS)]:
 - adds a subsystem;
 - changes architecture across components; or
 - changes what an agent is allowed to do.
 
-An author MAY write an MIS for any other change (MIS-0001-R02 author_MAY_write_MIS_for_any_change). Bug fixes and small features stay an issue and a pull request. A pull request that needs an MIS may be opened as a draft while the MIS is decided, but it does not merge until the MIS is Accepted.
+An author MAY write an MIS for any other change [MIS-0001-R02 (author_MAY_write_MIS_for_any_change)]. Bug fixes and small features stay an issue and a pull request. A pull request that needs an MIS may be opened as a draft while the MIS is decided, but it does not merge until the MIS is Accepted.
 
 **The test for "a subsystem" and "what an agent is allowed to do":**
 - **A subsystem:** a new long-lived process, a new store of agent state, a new command group, or a new channel to or from an agent.
-- **What an agent is allowed to do:** any hook, gate, permission or policy rule that newly blocks, allows or requires an action. Enforcement is the test: a display or a recommendation that an agent may ignore requires nothing, even when its words sound like advice to act.
+- **What an agent is allowed to do:** any hook, gate, permission or policy rule that newly blocks, allows or requires an action. Enforcement is the test, and policy text enforces too: a MUST or MUST NOT added to policy counts whether or not a hook backs it. A SHOULD, a clarification, a reordering, or a display or recommendation that an agent may ignore requires nothing.
+- **Changes architecture across components:** moves a responsibility from one component to another, or changes how two components talk to each other (a file format, a protocol, a shared store).
 - **A small feature:** extends an existing command or behavior without either of those. For example, a new output format for an existing command, or a new value shown in an existing hook line.
 - **If in doubt, ask the operator.** The operator's answer is the test.
 
@@ -93,7 +95,7 @@ An author MAY write an MIS for any other change (MIS-0001-R02 author_MAY_write_M
 | **Process** | how MacEff decides or works |
 | **Informational** | guidance that binds nothing |
 
-The Type field MUST be one of these three (MIS-0001-R08 type_MUST_be_listed).
+The Type field MUST be one of these three [MIS-0001-R08 (type_MUST_be_listed)].
 
 **An Informational MIS ends at Accepted.** It binds nothing, so it lands nothing: its Lands-in field is `none (Informational)`, and Final, landing and the cold-reader trial (§7) do not apply to it. If guidance later needs to bind, that is a new Standards or Process MIS.
 
@@ -103,9 +105,9 @@ The Type field MUST be one of these three (MIS-0001-R08 type_MUST_be_listed).
 
 ### 2.1 Location and number
 
-- Each MIS MUST be a file named `framework/mis/MIS-NNNN-slug.md` whose Number field equals NNNN (MIS-0001-R03 MIS_MUST_be_named_by_number).
-- Two MIS files MUST NOT share a number (MIS-0001-R04 MIS_numbers_MUST-NOT_repeat).
-- A pull request MUST NOT delete an MIS file, also after a rejection or a withdrawal (MIS-0001-R05 PR_MUST-NOT_delete_MIS). A number is a permanent citation; a deleted file breaks every reference to it.
+- Each MIS MUST be a file named `framework/mis/MIS-NNNN-slug.md` whose Number field equals NNNN [MIS-0001-R03 (MIS_MUST_be_named_by_number)].
+- Two MIS files MUST NOT share a number [MIS-0001-R04 (MIS_numbers_MUST-NOT_repeat)].
+- A pull request MUST NOT delete an MIS file, also after a rejection or a withdrawal [MIS-0001-R05 (PR_MUST-NOT_delete_MIS)]. A number is a permanent citation; a deleted file breaks every reference to it.
 
 **Who assigns the number.** The author takes the next number not used on `main` when the pull request opens, and that number is provisional. Before the MIS leaves Draft, the Secretary confirms it; when no Secretary is designated yet, the operator does. If two open pull requests took the same number, the one opened later renumbers. An author who cannot see `main` writes `NNNN` and asks in the pull request.
 
@@ -114,8 +116,8 @@ The Type field MUST be one of these three (MIS-0001-R08 type_MUST_be_listed).
 ### 2.2 Header and sections
 
 `MIS-0000-template.md` is the template, and itself a valid MIS. Copy it.
-- Each MIS MUST carry its header fields, in their order (MIS-0001-R06 MIS_MUST_carry_header_fields): Number, Type, Status, Authors, Secretary, Deliberation, Created, Updates, Supersedes, Lands-in, Resolution.
-- Each MIS MUST contain its numbered sections, in their order (MIS-0001-R07 MIS_MUST_contain_sections): Summary, Motivation, Goals and Non-Goals, Guide-Level Explanation, Terms, Specification, Rationale and Rejected Alternatives, Prior Art, Compatibility and Deployment, Security and Safety, Conformance, Landing Plan, Open Questions, Deliberation Record, Revision History; then Wiki-Links.
+- Each MIS MUST carry its header fields, in their order [MIS-0001-R06 (MIS_MUST_carry_header_fields)]: Number, Type, Status, Authors, Secretary, Deliberation, Created, Updates, Supersedes, Lands-in, Resolution.
+- Each MIS MUST contain its numbered sections, in their order [MIS-0001-R07 (MIS_MUST_contain_sections)]: Summary, Motivation, Goals and Non-Goals, Guide-Level Explanation, Terms, Specification, Rationale and Rejected Alternatives, Prior Art, Compatibility and Deployment, Security and Safety, Conformance, Landing Plan, Open Questions, Deliberation Record, Revision History; then Wiki-Links.
 
 Write "None." in a section that has nothing to say, so that empty is not mistaken for forgotten.
 
@@ -137,7 +139,7 @@ Write "None." in a section that has nothing to say, so that empty is not mistake
 
 ### 2.3 Status
 
-The Status field MUST be one of these words (MIS-0001-R09 status_MUST_be_listed):
+The Status field MUST be one of these words [MIS-0001-R09 (status_MUST_be_listed)]:
 
 | Status | Means | Who sets it |
 |---|---|---|
@@ -176,14 +178,14 @@ The operator's decisions in this table, to convene, to skip a deliberation or to
 
 ### 3.1 The line form
 
-Requirements live in the Specification section, one per line, in this form (MIS-0001-R10 req_MUST_use_line_form):
+Requirements live in the Specification section, one per line, in this form [MIS-0001-R10 (req_MUST_use_line_form)]:
 
 ```
 - **R07** [MUST · decidable: <test or hook>] <one sentence> (semantic_slug)
 - **R08** [SHOULD · judgment: <who reviews>] <one sentence> (semantic_slug)
 ```
 
-- Two requirements in one MIS MUST NOT share an ID (MIS-0001-R11 req_IDs_MUST-NOT_repeat). Elsewhere, cite a requirement as `MIS-NNNN-Rnn`.
+- Two requirements in one MIS MUST NOT share an ID [MIS-0001-R11 (req_IDs_MUST-NOT_repeat)]. Elsewhere, cite a requirement as `MIS-NNNN-Rnn`.
 - **decidable** means a tool can always check it; name the test or hook.
 - **judgment** means no tool can; name who reviews it, and when.
 
@@ -195,8 +197,8 @@ Mark each one honestly, so that a conformance table never claims more than was c
 ### 3.2 Keywords
 
 The keywords are MUST, MUST NOT, SHOULD, SHOULD NOT and MAY, as defined by BCP 14 (RFC 2119, clarified by RFC 8174). They are normative **only in capitals**.
-- Each requirement sentence MUST contain its tag's keyword in capitals, and no other capitalized keyword (MIS-0001-R12 req_MUST_hold_one_keyword).
-- A requirement sentence MUST NOT use a keyword in lowercase letters (MIS-0001-R13 req_MUST-NOT_use_lowercase_keyword).
+- Each requirement sentence MUST contain its tag's keyword in capitals, and no other capitalized keyword [MIS-0001-R12 (req_MUST_hold_one_keyword)].
+- A requirement sentence MUST NOT use a keyword in lowercase letters [MIS-0001-R13 (req_MUST-NOT_use_lowercase_keyword)].
 
 The keywords carry the strength:
 - A MUST holds with no exception.
@@ -210,9 +212,9 @@ The keywords carry the strength:
 ### 3.3 The language standard
 
 Requirements follow a softened Simplified Technical English (ASD-STE100):
-- Each requirement sentence MUST have 30 words or fewer (MIS-0001-R14 req_MUST_have_30_words_max).
-- Each requirement SHOULD use the active voice and an EARS pattern (MIS-0001-R15 req_SHOULD_use_active_EARS): "When <trigger>, the <system> MUST ...", "While <state>, ...", "If <unwanted event>, then ...", "Where <feature is present>, ...".
-- Each requirement MUST use only glossary terms, terms from its MIS's Terms section, and plain words with one meaning (MIS-0001-R16 req_MUST_use_defined_words). Whether a word is plain is a judgment, made by the Secretary at review: when two positions in the deliberation used a word differently, it is not plain, and it goes into Terms.
+- Each requirement sentence MUST have 30 words or fewer [MIS-0001-R14 (req_MUST_have_30_words_max)].
+- Each requirement SHOULD use the active voice and an EARS pattern [MIS-0001-R15 (req_SHOULD_use_active_EARS)]: "When <trigger>, the <system> MUST ...", "While <state>, ...", "If <unwanted event>, then ...", "Where <feature is present>, ...".
+- Each requirement MUST use only glossary terms, terms from its MIS's Terms section, and plain words with one meaning [MIS-0001-R16 (req_MUST_use_defined_words)]. Whether a word is plain is a judgment, made by the Secretary at review: when two positions in the deliberation used a word differently, it is not plain, and it goes into Terms.
 
 **The rest of an MIS is plain English.** Rationale needs "because", conditions and nuance, which strict STE removes. Write it in short sentences with glossary terms, but do not compress it. In MacEff the reason is part of the control: an agent that cannot find why a rule exists tends to route around it.
 
@@ -220,15 +222,17 @@ Requirements follow a softened Simplified Technical English (ASD-STE100):
 ### 3.4 Semantic slugs
 
 Every requirement carries a **semantic slug**: a short name in words, in parentheses at the end of its line. A bare `R14` asks the reader to remember a table; `req_MUST_have_30_words_max` tells them what is meant.
-- Each requirement line MUST end with its semantic slug in parentheses, made only of ASCII letters, digits, hyphens and underscores (MIS-0001-R38 req_MUST_end_with_slug). No spaces.
-- Two numbered items in one MIS MUST NOT share a semantic slug (MIS-0001-R39 item_slugs_MUST-NOT_repeat).
-- **Open questions, positions and objections** are numbered items too. Each MUST begin with its ID (`Q01`, `P01`, `O01`) and end with its slug (MIS-0001-R45 item_MUST_carry_ID_and_slug). For example:
+- Each requirement line MUST end with its semantic slug in parentheses, made only of ASCII letters, digits, hyphens and underscores [MIS-0001-R38 (req_MUST_end_with_slug)]. No spaces.
+- Two numbered items in one MIS MUST NOT share a semantic slug [MIS-0001-R39 (item_slugs_MUST-NOT_repeat)].
+- **Open questions, positions and objections** are numbered items too. Each MUST begin with its ID (`Q01`, `P01`, `O01`) and end with its slug [MIS-0001-R45 (item_MUST_carry_ID_and_slug)]. For example:
   - `- **Q01** Should the checker also lint policies? The operator decides after MIS-0002. (lint_policies_too)`
   - `- **O01** Seat B: a 72-hour period is too short for relayed positions, <link>. (window_too_short_for_relays)`
-  The Resolution then answers each objection by its ID and slug (MIS-0001-R28 resolution_MUST_answer_objections), so an objector can find the answer to their own words.
-- **In discussion:** the first time a participant names a requirement in a deliberation, they MUST give its ID and its slug together (MIS-0001-R40 first_mention_MUST_give_slug). They MAY give the slug at any later mention (MIS-0001-R41 mention_MAY_give_slug). When the discussion turns on what a requirement means, they SHOULD restate its full sentence (MIS-0001-R42 meaning_SHOULD_restate_req).
-- **In tools:** each finding a tool reports about a requirement MUST name the slug beside the ID (MIS-0001-R43 tool_MUST_report_slug). `mis check` prints `MIS-0001-R14 (req_MUST_have_30_words_max)`, and names the slug of the requirement it found the fault in.
-- **Across documents:** a reference from outside the MIS SHOULD give the MIS number, the ID and the slug (MIS-0001-R44 xref_SHOULD_give_MIS_ID_slug), as in `MIS-0001-R14 (req_MUST_have_30_words_max)`. This policy cites its own requirements that way.
+  The Resolution then answers each objection by its ID and slug [MIS-0001-R28 (resolution_MUST_answer_objections)], so an objector can find the answer to their own words.
+- **In discussion:** when a synthesis quotes a position that names a requirement, the synthesis MUST give the slug beside the ID [MIS-0001-R40 (synthesis_MUST_give_slug)]. Participants MAY give the slug at any mention, as a courtesy, and no position fails for leaving it out [MIS-0001-R41 (mention_MAY_give_slug)]. When the discussion turns on what a requirement means, they SHOULD restate its full sentence [MIS-0001-R42 (meaning_SHOULD_restate_req)].
+- **In tools:** each finding a tool reports about a requirement MUST name the slug beside the ID [MIS-0001-R43 (tool_MUST_report_slug)]. `mis check` prints `MIS-0001-R14 (req_MUST_have_30_words_max)`, and names the slug of the requirement it found the fault in.
+- **Across documents:** a reference from outside the MIS SHOULD give the MIS number, the ID and the slug [MIS-0001-R44 (xref_SHOULD_give_MIS_ID_slug)], as in `MIS-0001-R14 (req_MUST_have_30_words_max)`. This policy cites its own requirements that way.
+
+**One citation form, checked.** A requirement is cited as `MIS-0001-R14 (req_MUST_have_30_words_max)`: the MIS number, the ID, and the slug in parentheses; inside a sentence's own parentheses, in square brackets. `mis check` resolves every citation in framework text against its MIS and refuses one whose ID does not exist or whose slug does not match [MIS-0001-R49 (citation_MUST_match_slug)]. A slug is therefore as permanent as its ID: renaming one is not editorial (§8.1).
 
 **The pattern** is the subject, then the keyword in capitals, then the action: `PR_MUST-NOT_delete_MIS`, `req_SHOULD_use_active_EARS`, `author_MAY_write_MIS_for_any_change`. MUST NOT and SHOULD NOT are hyphenated. The pattern is a convention, not a rule: the checker checks a slug's characters and uniqueness, not its grammar.
 
@@ -238,9 +242,9 @@ Naked numbers shut out every reader who does not hold the table. Slugs are a cou
 
 ## 4 Rationale, Conformance and Links
 
-- The Rationale section MUST name every requirement ID (MIS-0001-R17 rationale_MUST_name_every_req). Naming the ID is what the checker sees; what a reader needs is the reason for that requirement, beside its ID. The section also lists the rejected alternatives with their reasons, so that a later reader does not propose them again without new evidence.
-- The Conformance section MUST list every requirement ID with its check (MIS-0001-R18 conformance_MUST_list_every_req), in a table: requirement, check type, how, state. The states are `planned`, `passing`, `failing`, `pending` (a judgment not yet made), `recorded` (a judgment made, with who and when) and `n/a`. It also records the cold-reader trial (§7.3), or "not yet held".
-- Each MIS MUST end with a Wiki-Links section that names at least two concepts (MIS-0001-R19 MIS_MUST_end_with_wiki-links).
+- The Rationale section MUST name every requirement ID [MIS-0001-R17 (rationale_MUST_name_every_req)]. Naming the ID is what the checker sees; what a reader needs is the reason for that requirement, beside its ID. The section also lists the rejected alternatives with their reasons, so that a later reader does not propose them again without new evidence.
+- The Conformance section MUST list every requirement ID with its check [MIS-0001-R18 (conformance_MUST_list_every_req)], in a table: requirement, check type, how, state. The states are, for a decidable requirement, `planned`, `passing` or `failing`; for a one-time judgment, `pending` or `recorded` (with who and when); for a standing judgment, a duty that recurs on every pull request or deliberation, `standing`, with the reviewer named in the How column; and `n/a` only when the requirement's condition never arose for this MIS, with the reason. It also records the cold-reader trial (§7.3), or "not yet held".
+- Each MIS MUST end with a Wiki-Links section that names at least two concepts [MIS-0001-R19 (MIS_MUST_end_with_wiki-links)].
 
 **Motivation cites evidence with its tier** (`empiricism`). A proposal with no lived failure behind it may still be written: say so ("reasoning only"), and the operator weighs it accordingly.
 
@@ -250,11 +254,13 @@ Naked numbers shut out every reader who does not hold the table. Slugs are a cou
 
 ## 5 The Glossary
 
-`framework/glossary.md` is MacEff's one dictionary: one term, one meaning.
-- The glossary MUST NOT define one term twice (MIS-0001-R20 glossary_MUST-NOT_repeat_terms).
-- An MIS lists the terms it adds in its Terms section. When an MIS is Accepted or Final, each term in its Terms section MUST appear in the glossary (MIS-0001-R21 terms_MUST_reach_glossary).
+`framework/glossary.md` is MacEff's dictionary for the terms MIS requirements use: one term, one meaning. A policy may still define a word for its own use, as §1.2 defines "a subsystem"; when an MIS requirement relies on such a word, the word goes into the glossary.
+- The glossary MUST NOT define one term twice [MIS-0001-R20 (glossary_MUST-NOT_repeat_terms)].
+- An MIS lists the terms it adds in its Terms section. When an MIS is Accepted or Final, each term in its Terms section MUST appear in the glossary [MIS-0001-R21 (terms_MUST_reach_glossary)].
 
 A definition changes only through an accepted MIS, or an editorial pull request that keeps its meaning.
+
+**Retired words.** A word an accepted MIS replaces moves to the glossary's `## Retired` section, in the term form: `- **hypervisor**: retired by MIS-0002; use manager of record.` A quoted position that used the old word stays readable, and since a retired line is a term line, the checker refuses to define the word again. When a glossary change retires a word a position used, the Secretary names who used it and quotes the use, and the retirement is open to objection like the synthesis [MIS-0001-R50 (retirement_MUST_quote_users)].
 
 ---
 
@@ -275,15 +281,15 @@ A definition changes only through an accepted MIS, or an editorial pull request 
 
 ### 6.2 From deliberation to decision
 
-1. **Deliberation.** Before a Standards or Process MIS becomes Accepted, the operator MUST convene a deliberation on it, or record in the Resolution why none was needed (MIS-0001-R22 operator_MUST_convene_or_explain). The operator decides this on the MIS's pull request. Until then its Deliberation field says `pending`; afterwards it carries the issue's link, or `none` with the operator's reason, which the Resolution repeats. The operator sets the window when convening (`public_voice` §2.4). An Informational MIS needs no deliberation. When an MIS leaves Draft, its Secretary field MUST name the Secretary the operator designated (MIS-0001-R23 secretary_MUST_be_named).
-2. **Synthesis.** When a deliberation was held, the Secretary MUST post a synthesis that quotes and links every position and proposes one disposition: accept, revise, defer or reject (MIS-0001-R24 secretary_MUST_post_synthesis). The MIS is revised to match, and its status becomes Final-Comment. Without a deliberation, the Secretary moves the MIS to Final-Comment when its author says the draft is complete and `mis check` is clean.
-3. **Final comment.** A final comment period of at least 72 hours MUST pass between the start of status Final-Comment and the ratification (MIS-0001-R25 final-comment_MUST_last_72h). The period starts again whenever the MIS returns to Final-Comment, and whenever a requirement changes during it; editorial edits do not restart it. Anyone may object, on the deliberation issue or on the MIS pull request. **An objection counts as recorded when it is posted there**, whether or not anyone has copied it yet. The Secretary copies each one into the MIS's Deliberation Record, including an objection to the Secretary's own synthesis, and the operator answers every posted objection (§6.3). The period is long enough for positions relayed by hand, and short enough not to stall the work.
-4. **Ratification.** An MIS MUST become Accepted, Rejected or Deferred only through a pull request that the operator merges (MIS-0001-R26 decision_MUST_be_operator_merge). No agent can accept its own proposal.
+1. **Deliberation.** Before a Standards or Process MIS becomes Accepted, the operator MUST convene a deliberation on it, or record in the Resolution why none was needed [MIS-0001-R22 (operator_MUST_convene_or_explain)]. The operator decides this on the MIS's pull request. Until then its Deliberation field says `pending`; afterwards it carries the issue's link, or `none` with the operator's reason, which the Resolution repeats. The operator sets the window when convening (`public_voice` §2.4). An Informational MIS needs no deliberation. When an MIS leaves Draft, its Secretary field MUST name the Secretary the operator designated [MIS-0001-R23 (secretary_MUST_be_named)].
+2. **Synthesis.** When a deliberation was held, the Secretary MUST post a synthesis that quotes and links every position and proposes one disposition: accept, revise, defer or reject [MIS-0001-R24 (secretary_MUST_post_synthesis)]. Each option the synthesis puts to the operator quotes the text it rests on, the source as well as the positions [MIS-0001-R51 (option_MUST_quote_its_source)]. The MIS is revised to match, and its status becomes Final-Comment. Without a deliberation, the Secretary moves the MIS to Final-Comment when its author says the draft is complete and `mis check` is clean.
+3. **Final comment.** The final comment period lasts as long as its initiator set it, and starts when every maintainer has posted a first comment [MIS-0001-R25 (final-comment_MUST_follow_maintainers)]. When every maintainer has commented and the MIS has been revised once in answer, the discussion closes, unless a maintainer raises a critical objection [MIS-0001-R48 (discussion_MUST_close_after_one_revision)]. The period starts again whenever the MIS returns to Final-Comment, and whenever a requirement changes during it; editorial edits do not restart it. Anyone may object, on the deliberation issue or on the MIS pull request. **An objection counts as recorded when it is posted there**, whether or not anyone has copied it yet. The Secretary copies each one into the MIS's Deliberation Record, including an objection to the Secretary's own synthesis, using the slug its objector gave or confirmed [MIS-0001-R46 (objection_slug_MUST_come_from_objector)], and the operator answers every posted objection (§6.3).
+4. **Ratification.** An MIS MUST become Accepted, Rejected or Deferred only through a pull request that the operator merges [MIS-0001-R26 (decision_MUST_be_operator_merge)]. No agent can accept its own proposal. An MIS MUST NOT become Accepted while an open question blocks one of its requirements [MIS-0001-R47 (open_question_MUST-NOT_block_acceptance)]. A merge carries only what was committed, so the Secretary makes the last commit before it: the decided status, and a Resolution that quotes the operator's decision comment on the pull request and links it, so the answers to objections are the operator's words, not the Secretary's. An MIS's decision and its landing may share one pull request, as MIS-0001's did; the final comment then covers both.
 
 ### 6.3 The Resolution
 
-- When an MIS is Accepted, Rejected, Deferred, Final or Superseded, its Resolution field MUST NOT be empty or none (MIS-0001-R27 resolution_MUST-NOT_be_empty).
-- The Resolution MUST answer each recorded objection by its ID and semantic slug (MIS-0001-R28 resolution_MUST_answer_objections).
+- When an MIS is Accepted, Rejected, Deferred, Final or Superseded, its Resolution field MUST NOT be empty or none [MIS-0001-R27 (resolution_MUST-NOT_be_empty)].
+- The Resolution MUST answer each recorded objection by its ID and semantic slug [MIS-0001-R28 (resolution_MUST_answer_objections)].
 
 MacEff has one decider, but it keeps the safeguard of the IETF's rough consensus: an objection is answered, never just outvoted.
 
@@ -293,16 +299,16 @@ MacEff has one decider, but it keeps the safeguard of the IETF's rough consensus
 
 ### 7.1 Landing
 
-- A landing pull request MUST carry the normative text and the capability that it governs together (MIS-0001-R29 landing_MUST_ship_text_with_capability). This is `core_principles`: policy ships with its capability, in one change.
-- Each landed policy section MUST cite its MIS by number for its rationale (MIS-0001-R30 policy_MUST_cite_its_MIS).
-- When an MIS is Final, its Lands-in field MUST NOT be empty or none (MIS-0001-R31 final_lands-in_MUST-NOT_be_empty).
+- A landing pull request MUST carry the normative text and the capability that it governs together [MIS-0001-R29 (landing_MUST_ship_text_with_capability)]. This is `core_principles`: policy ships with its capability, in one change.
+- Each landed policy rule MUST cite its MIS requirement by MIS number, requirement ID and semantic slug [MIS-0001-R30 (policy_rule_MUST_cite_requirement)], as this policy does. An agent departs from the landed text, and must be able to name the requirement it departed from.
+- When an MIS is Final, its Lands-in field MUST NOT be empty or none [MIS-0001-R31 (final_lands-in_MUST-NOT_be_empty)].
 
 ### 7.2 Final
 
 An Accepted Standards or Process MIS becomes Final only when it is proven:
-- Before an MIS becomes Final, every decidable requirement MUST pass its check (MIS-0001-R32 final_MUST_pass_decidable_checks).
-- Before an MIS becomes Final, a cold-reader trial of its landed policy MUST succeed and be recorded in its Conformance section (MIS-0001-R33 final_MUST_pass_cold-reader_trial).
-- Before an MIS becomes Final, each judgment requirement MUST have its named review recorded in the Conformance section (MIS-0001-R37 final_MUST_record_judgments).
+- Before an MIS becomes Final, every decidable requirement MUST pass its check [MIS-0001-R32 (final_MUST_pass_decidable_checks)].
+- Before an MIS becomes Final, a cold-reader trial of its landed policy MUST succeed and be recorded in its Conformance section [MIS-0001-R33 (final_MUST_pass_cold-reader_trial)].
+- Before an MIS becomes Final, its Conformance section MUST record each one-time judgment review and name the reviewer of each standing one [MIS-0001-R37 (final_MUST_record_judgments)] (the Conformance states, §4).
 
 (MIS-0001-R37 (final_MUST_record_judgments) was added after MIS-0001-R33 (final_MUST_pass_cold-reader_trial) and MIS-0001-R34 (accepted_MIS_MUST_change_editorially) to MIS-0001-R36 (departure_MUST_be_recorded), from the first cold-reader trial. IDs are never reused or renumbered, so they follow the order in which they were written.)
 
@@ -318,12 +324,12 @@ A **cold reader** is an agent with no memory of the MIS's design or deliberation
 
 ### 8.1 An accepted MIS is a record
 
-- After an MIS is Accepted, each change to it MUST be editorial and recorded in its Revision History (MIS-0001-R34 accepted_MIS_MUST_change_editorially).
-- A substantive change to an accepted MIS MUST be a new MIS that names the old one in Updates or Supersedes (MIS-0001-R35 substantive_change_MUST_be_new_MIS). The old MIS then becomes Superseded, if it is fully replaced.
+- After an MIS is Accepted, each change to it MUST be editorial and recorded in its Revision History [MIS-0001-R34 (accepted_MIS_MUST_change_editorially)].
+- A substantive change to an accepted MIS MUST be a new MIS that names the old one in Updates or Supersedes [MIS-0001-R35 (substantive_change_MUST_be_new_MIS)]. The old MIS then becomes Superseded, if it is fully replaced.
 
 Rewriting an accepted MIS would falsify the record of what was decided.
 
-- **Editorial:** a change that alters no requirement's meaning, keyword, check or scope. For example, typos, broken links, clearer wording with the same meaning, or a Conformance state moving from `planned` to `passing`.
+- **Editorial:** a change that alters no requirement's meaning, keyword, check, scope, ID or slug. For example, typos, broken links, clearer wording with the same meaning, or a Conformance state moving from `planned` to `passing`.
 - **Substantive:** anything else.
 - **Who judges:** the Secretary judges which a change is; when anyone disputes it, the operator decides.
 - **How an editorial change goes:** by pull request, reviewed and merged like any other. It needs no new final comment period. When it moves a Conformance state toward Final, the Final rules (§7.2) apply to that pull request.
@@ -332,7 +338,7 @@ Rewriting an accepted MIS would falsify the record of what was decided.
 
 ### 8.2 Departing from a SHOULD
 
-When an agent departs from a requirement that permits departure (a SHOULD), the agent MUST record the requirement ID and the reason where the departure is made (MIS-0001-R36 departure_MUST_be_recorded): in the pull request, the commit, or the task note. The glossary calls such a recorded departure a **deviation**. A SHOULD may be set aside; never silently.
+When an agent departs from a requirement that permits departure (a SHOULD), the agent MUST record the requirement ID, its slug and the reason where the departure is made [MIS-0001-R36 (departure_MUST_be_recorded)]: in the pull request, the commit, or the task note. The glossary calls such a recorded departure a **deviation**. A SHOULD may be set aside; never silently.
 
 ---
 

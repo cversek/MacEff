@@ -223,7 +223,8 @@ should carry rather than a judgement.**
    section answering what the unit of a node is, which class it belongs to, what
    provenance it defaults to, and what its Wiki-Links must contain. Raise it with
    the operator. Types added this way are added once, for everyone, with their
-   obligations attached.
+   obligations attached. The proposal takes the form of a MacEff Improvement
+   Specification (the `mis` policy), as MIS-0001 did for the MIS record itself.
 
 **What NOT to do:** do not route around it. A parallel tree in a writable
 location, a "temporary" directory that becomes permanent, or artifacts filed

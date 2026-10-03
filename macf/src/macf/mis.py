@@ -3,7 +3,7 @@
 The policy is `framework/policies/base/meta/mis.md`; its requirements and their
 reasons are in MIS-0001. Each check below names the requirement it decides
 (R03, R04, ...), and every finding carries that ID with its semantic slug, so a
-refusal names its rule in words as well as by number (MIS-0001-R43, tool_MUST_report_slug).
+refusal names its rule in words as well as by number, as MIS-0001-R43 (tool_MUST_report_slug) asks.
 
 Only decidable requirements are checked here. The judgment requirements (who
 may accept an MIS, whether a synthesis quotes every position) are reviewed by
@@ -42,7 +42,7 @@ SLUG_TAIL_RE = re.compile(r"^(.*\S)\s+\(([^()\s]+)\)$")
 SLUG_RE = re.compile(r"^[-_A-Za-z0-9]+$")
 
 # The semantic slug of each MIS-0001 requirement this tool decides, so that every finding names
-# its rule in words (MIS-0001-R43, tool_MUST_report_slug). A test keeps this table equal to the
+# its rule in words, as MIS-0001-R43 (tool_MUST_report_slug) asks. A test keeps this table equal to the
 # slugs written in MIS-0001 itself.
 RULE_SLUGS = {
     "R03": "MIS_MUST_be_named_by_number",
@@ -67,7 +67,12 @@ RULE_SLUGS = {
     "R38": "req_MUST_end_with_slug",
     "R39": "item_slugs_MUST-NOT_repeat",
     "R45": "item_MUST_carry_ID_and_slug",
+    "R49": "citation_MUST_match_slug",
 }
+# A citation of a requirement in framework text: MIS-0001-R14 (req_MUST_have_30_words_max).
+CITATION_RE = re.compile(r"\bMIS-(\d{4})-(R\d{2,}) \(([-_A-Za-z0-9]+)\)")
+# A requirement line's ID and trailing slug, for resolving citations.
+REQ_SLUG_RE = re.compile(r"^- \*\*(R\d{2,})\*\* \[.*\(([-_A-Za-z0-9]+)\)\s*$", re.M)
 # Open questions (Qnn), positions (Pnn) and objections (Onn): numbered items with slugs (R45).
 ITEM_RE = re.compile(r"^- \*\*([QPO])(\d{2,})\*\* (\S.*)$")
 
@@ -134,9 +139,13 @@ def read_glossary(path: Path) -> dict:
     """Glossary terms, lowercased, with their line numbers, and any duplicates: {"terms": {...}, "findings": [...]}."""
     terms: dict = {}
     findings = []
-    for n, line in enumerate(path.read_text().splitlines(), start=1):
+    for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         m = TERM_RE.match(line)
         if not m:
+            if line.startswith("- **"):
+                findings.append(Finding(path=str(path), line=n, rule="R20",
+                                        message="a bold line that is not a term line '- **term**: definition'; "
+                                                "a malformed line escapes the duplicate check"))
             continue
         key = m.group(1).strip().lower()
         if key in terms:
@@ -149,7 +158,7 @@ def read_glossary(path: Path) -> dict:
 
 def check_file(path: Path, glossary_terms: Optional[dict] = None) -> list[Finding]:
     """Every decidable check that concerns one MIS file."""
-    lines = path.read_text().splitlines()
+    lines = path.read_text(encoding="utf-8").splitlines()
     p = str(path)
     out: list[Finding] = []
 
@@ -312,11 +321,45 @@ def check(paths: Iterable[Path], glossary: Optional[Path] = None) -> list[Findin
     seen: dict = {}
     for f in files:
         out.extend(check_file(f, terms))
-        num = read_header(f.read_text().splitlines()).get("Number", ("", 1))[0].strip()
+        num = read_header(f.read_text(encoding="utf-8").splitlines()).get("Number", ("", 1))[0].strip()
         if num and num in seen:
             out.append(Finding(path=str(f), line=1, rule="R04", message=f"number {num} is also used by {seen[num]}"))
         elif num:
             seen[num] = f.name
+    out.extend(check_citations(files, glossary))
+    return out
+
+
+def check_citations(files: list, glossary: Optional[Path] = None) -> list:
+    """R49: each `MIS-NNNN-Rnn (slug)` in framework text names a requirement and slug that exist.
+
+    The MIS files checked define what can be cited. The texts searched are those files, the
+    glossary, and every policy under framework/policies beside the MIS directory.
+    """
+    defined: dict = {}
+    for f in files:
+        text = f.read_text(encoding="utf-8")
+        num = read_header(text.splitlines()).get("Number", ("", 1))[0].strip()
+        if num:
+            defined[num] = dict(REQ_SLUG_RE.findall(text))
+    texts = list(files) + ([glossary] if glossary else [])
+    for f in files[:1]:
+        pol = f.parent.parent / "policies"  # noqa: MACEFF002 - MIS-0001-R03 fixes framework/mis beside framework/policies
+        if pol.is_dir():
+            texts.extend(sorted(pol.rglob("*.md")))
+    out = []
+    for path in texts:
+        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            for num, rid, slug in CITATION_RE.findall(line):
+                if num not in defined:
+                    continue
+                want = defined[num].get(rid)
+                if want is None:
+                    out.append(Finding(path=str(path), line=n, rule="R49",
+                                       message=f"cites MIS-{num}-{rid} ({slug}), but MIS-{num} has no {rid}"))
+                elif want != slug:
+                    out.append(Finding(path=str(path), line=n, rule="R49",
+                                       message=f"cites MIS-{num}-{rid} ({slug}); MIS-{num} names it ({want})"))
     return out
 
 

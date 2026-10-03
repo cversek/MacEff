@@ -512,6 +512,8 @@ Before committing new or updated policy:
 - Refine based on agent feedback
 - Deprecate when superseded
 
+**A large change needs an MIS first.** A change that adds a subsystem, changes architecture across components, or changes what an agent may do (including a new MUST or MUST NOT in policy text) is proposed as a MacEff Improvement Specification before it lands; the threshold and the process are in the `mis` policy (§1.2).
+
 **Commit Discipline**:
 ```bash
 git commit -m "policy(policy_writing): [type of change]
