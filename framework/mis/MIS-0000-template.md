@@ -126,13 +126,13 @@ The format lands in the `mis` policy.
 
 ## 13 Open Questions
 
-*Questions not yet decided. Each one names who will decide it and by when. An MIS cannot be accepted with an open question that blocks a requirement.*
+*Questions not yet decided, one per line: `- **Q01** <question> <who decides, and by when>. (semantic_slug)`. An MIS cannot be accepted with an open question that blocks a requirement.*
 
 None.
 
 ## 14 Deliberation Record
 
-*Links to the deliberation issue, every position (host agents' and relayed), the Secretary's synthesis, each objection with its answer, and the operator's Resolution.*
+*Links to the deliberation issue, the Secretary's synthesis and the operator's Resolution. Each position and each objection on its own line, numbered and slugged: `- **P01** <who>: <the position in a sentence>, <link>. (semantic_slug)` and `- **O01** <who>: <the objection in a sentence>, <link>. (semantic_slug)`. The Resolution answers each objection by its ID and slug.*
 
 None.
 

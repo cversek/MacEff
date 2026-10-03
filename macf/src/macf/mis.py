@@ -65,8 +65,11 @@ RULE_SLUGS = {
     "R27": "resolution_MUST-NOT_be_empty",
     "R31": "final_lands-in_MUST-NOT_be_empty",
     "R38": "req_MUST_end_with_slug",
-    "R39": "req_slugs_MUST-NOT_repeat",
+    "R39": "item_slugs_MUST-NOT_repeat",
+    "R45": "item_MUST_carry_ID_and_slug",
 }
+# Open questions (Qnn), positions (Pnn) and objections (Onn): numbered items with slugs (R45).
+ITEM_RE = re.compile(r"^- \*\*([QPO])(\d{2,})\*\* (\S.*)$")
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -225,6 +228,35 @@ def check_file(path: Path, glossary_terms: Optional[dict] = None) -> list[Findin
         words = len(text.split())
         if words > MAX_WORDS:
             add(n, "R14", f"{label}: {words} words; the limit is {MAX_WORDS}")
+
+    # R45: every open question is a Qnn item; positions and objections that are numbered
+    # (Pnn, Onn) carry a slug. Their slugs share one namespace with the requirements' (R39).
+    items: dict = {}
+    for title, kinds, every_bullet in (("Open Questions", "Q", True), ("Deliberation Record", "PO", False)):
+        part = _body(lines, numbered, title)
+        for offset, line in enumerate(part["lines"], start=1):
+            n = part["start"] + offset
+            im = ITEM_RE.match(line)
+            if not im or im.group(1) not in kinds:
+                if every_bullet and line.startswith("- "):
+                    add(n, "R45", f"an open question must be '- **Qnn** <question> (semantic_slug)': {line[:60]}")
+                elif re.match(r"^- \*\*[PO]\d", line) and not every_bullet:
+                    add(n, "R45", f"a numbered position or objection must be '- **Pnn**/**Onn** <text> (semantic_slug)': {line[:60]}")
+                continue
+            iid = f"{im.group(1)}{im.group(2)}"
+            sm = SLUG_TAIL_RE.match(im.group(3))
+            if not (sm and SLUG_RE.match(sm.group(2))):
+                add(n, "R45", f"{iid} has no semantic slug at the end of its line")
+                continue
+            slug = sm.group(2)
+            if iid in items:
+                add(n, "R45", f"{iid} ({slug}): {iid} is already used on line {items[iid]}")
+                continue
+            items[iid] = n
+            if slug in slugs:
+                add(n, "R39", f"{iid} ({slug}): the slug is already used on line {slugs[slug]}")
+            else:
+                slugs[slug] = n
 
     for title, rule in (("Rationale and Rejected Alternatives", "R17"), ("Conformance", "R18")):
         part = _body(lines, numbered, title)

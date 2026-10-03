@@ -98,7 +98,7 @@ All terms this MIS uses are defined in `framework/glossary.md`, which this MIS c
 - **R25** [MUST · judgment: the operator] A final comment period of at least 72 hours MUST pass between the start of status Final-Comment and the ratification. (final-comment_MUST_last_72h)
 - **R26** [MUST · judgment: the operator] An MIS MUST become Accepted, Rejected or Deferred only through a pull request that the operator merges. (decision_MUST_be_operator_merge)
 - **R27** [MUST NOT · decidable: macf_tools mis check, resolution] When an MIS is Accepted, Rejected, Deferred, Final or Superseded, its Resolution field MUST NOT be empty or none. (resolution_MUST-NOT_be_empty)
-- **R28** [MUST · judgment: the operator] The Resolution MUST answer each recorded objection by name. (resolution_MUST_answer_objections)
+- **R28** [MUST · judgment: the operator] The Resolution MUST answer each recorded objection by its ID and semantic slug. (resolution_MUST_answer_objections)
 ### 6.7 Landing and proof
 
 - **R29** [MUST · judgment: the reviewers of the landing pull request] A landing pull request MUST carry the normative text and the capability that it governs together. (landing_MUST_ship_text_with_capability)
@@ -115,12 +115,13 @@ All terms this MIS uses are defined in `framework/glossary.md`, which this MIS c
 ### 6.9 Semantic slugs
 
 - **R38** [MUST · decidable: macf_tools mis check, slug] Each requirement line MUST end with its semantic slug in parentheses, made only of ASCII letters, digits, hyphens and underscores. (req_MUST_end_with_slug)
-- **R39** [MUST NOT · decidable: macf_tools mis check, slug uniqueness] Two requirements in one MIS MUST NOT share a semantic slug. (req_slugs_MUST-NOT_repeat)
+- **R39** [MUST NOT · decidable: macf_tools mis check, slug uniqueness] Two numbered items in one MIS MUST NOT share a semantic slug. (item_slugs_MUST-NOT_repeat)
 - **R40** [MUST · judgment: the Secretary] When a participant first names a requirement in a deliberation, the participant MUST give its ID and its semantic slug together. (first_mention_MUST_give_slug)
 - **R41** [MAY · judgment: the participant] A participant MAY give a requirement's semantic slug at any later mention. (mention_MAY_give_slug)
 - **R42** [SHOULD · judgment: the Secretary] When a discussion turns on a requirement's meaning, the participant SHOULD restate the requirement's full sentence. (meaning_SHOULD_restate_req)
 - **R43** [MUST · decidable: macf/tests/test_mis_check.py::test_findings_name_their_slugs] Each finding that a tool reports about a requirement MUST name the requirement's semantic slug beside its ID. (tool_MUST_report_slug)
 - **R44** [SHOULD · judgment: the reviewers of each pull request] A reference to a requirement from outside its MIS SHOULD give the MIS number, the requirement ID and the semantic slug. (xref_SHOULD_give_MIS_ID_slug)
+- **R45** [MUST · decidable: macf_tools mis check, numbered items] Each open question, position and objection MUST begin with its ID (Qnn, Pnn or Onn) and end with its semantic slug. (item_MUST_carry_ID_and_slug)
 
 ## 7 Rationale and Rejected Alternatives
 
@@ -153,6 +154,7 @@ MacEff has one ratifier, the operator, as it has one owner. The IETF's real safe
 **Why semantic slugs (R38 to R44).** The operator asked for them on this MIS's pull request on 2026-10-03, quoted in the Deliberation Record. A bare number asks every reader to hold a table in their head. "R14" means nothing to someone who did not write the MIS, and it costs a person's memory and attention even when they did. A slug such as `req_MUST_have_30_words_max` carries the rule's subject and its strength into every place the number goes: a discussion, a refusal from a tool, a citation from another document. So a reader can follow the conversation without opening the file, and an outsider can tell what is being argued.
 - **R38 and R39** make the slug part of the line form, and unique, so that a tool can find it, check it and print it. The character set is the operator's: ASCII letters, digits, hyphens and underscores, with no whitespace, so that a slug survives any medium.
 - **R40, R41 and R42** are the conversational rules: the slug on first mention (a MUST), at any later mention (a MAY), and the full sentence restated when the meaning is in dispute (a SHOULD). The first mention is where a reader without the table is lost; later mentions can rely on it.
+- **R45** extends IDs and slugs to the other items a deliberation cites: open questions (`Q01`), positions (`P01`) and objections (`O01`). The operator chose them on 2026-10-03. R28 then has the Resolution answer each objection by its ID and slug, so an objector can find the answer to their own words, and an outsider can follow which objection was answered how.
 - **R43** holds tools to the same courtesy. A refusal that names only "R14" sends the reader to look it up.
 - **R44** extends the rule across documents. A policy citing this MIS writes `MIS-0001-R14 (req_MUST_have_30_words_max)`, so the citation still reads when it is quoted out of context.
 - **The pattern** in the operator's examples is the subject, then the keyword in capitals (MUST-NOT hyphenated), then the action. It is a convention, not a rule: a slug is checked for its characters and its uniqueness, not for its grammar.
@@ -248,6 +250,7 @@ MacEff has one ratifier, the operator, as it has one owner. The IETF's real safe
 | R42 | judgment | the Secretary, in each deliberation | n/a |
 | R43 | decidable | macf/tests/test_mis_check.py::test_findings_name_their_slugs | passing |
 | R44 | judgment | the reviewers of each pull request | n/a |
+| R45 | decidable | mis check: IDs and slugs on open questions, positions and objections | passing |
 
 **Tests.** `macf/tests/test_mis_check.py` runs the checker over every file in `framework/mis/` and the glossary, and plants one defect for each decidable check to show that the check catches it.
 
@@ -306,12 +309,12 @@ One pull request to MacEff carries all of this:
 
 ## 13 Open Questions
 
-- **Should `mis check` also lint policy files for the language rules?** Not now. Policies adopt the rules as they are changed. Decided later by the operator, from experience with MIS-0002.
-- **Should small MIS be decided by a delegate of the operator, as a PEP-Delegate decides some PEPs?** Not now. The operator decides when the volume makes it worthwhile.
+- **Q01** Should `mis check` also lint policy files for the language rules? Not now: policies adopt the rules as they are changed. The operator decides later, from experience with MIS-0002. (lint_policies_too)
+- **Q02** Should small MIS be decided by a delegate of the operator, as a PEP-Delegate decides some PEPs? Not now. The operator decides when the volume makes it worthwhile. (delegate_small_decisions)
 
 ## 14 Deliberation Record
 
-- **No public deliberation was convened** (R22). The operator commissioned this process on 2026-10-02 and settled its design with the drafting Secretary in three rounds of multiple-choice questions. The decisions were:
+- **P01** No public deliberation was convened (R22): the operator commissioned this process on 2026-10-02 and settled its design with the drafting Secretary in three rounds of multiple-choice questions, deciding as follows. (operator_commissioned_process)
   - an MIS is a proposal and record, and policy binds;
   - an MIS is required for a new subsystem, cross-component architecture, or a change to what an agent may do;
   - the venue is a numbered file changed by pull request, with debate on a linked issue;
@@ -321,9 +324,9 @@ One pull request to MacEff carries all of this:
   - this MIS bootstraps the process;
   - the decision runs synthesis, then a final comment period, then ratification;
   - files live under `framework/mis/`, with one framework glossary and a checker in CI.
-- **The operator's proposal** that a deliberation's outcome be written in "80% ASD-STE100" was made on issue #493 on 2026-10-02, and the Secretary's reply on that issue set out the scope this MIS adopts.
-- **Semantic slugs.** The operator, on this MIS's pull request, 2026-10-03, quoted in full: "Requirements or any numbered item should be assigned a semantic slug at the end of the line that defines it [...] Upon first invocation, deliberators MUST use the semantic slugs in addition to the req# when discussing specific requirements. And they MAY use it at any time for clarity. They SHOULD restate the full definition when it helps with clarity like when discussing its semantics. Any tooling MUST use the semantic slug in error messages in addition to the number. This is to ease the burden on the human memory and attention and help outsiders understand conversational references. Outside or cross-MIS scope should also refer to the MIS # as a prefix before the req # and include the semantic slug. Naked number references are off-putting by most standards showing lack of concern to accommodate multiple audiences. Semantic slugs MUST be free of whitespace, limited to ASCII subset [-_A-Za-z0-9]." R38 to R44 carry it. Two readings by the Secretary, open for the operator to correct: the lowercase "should" for assigning slugs became a MUST (R38), because the tooling rule (R43) depends on every requirement having one; and the lowercase "should" for cross-document references stayed a SHOULD (R44). "Any numbered item" is applied to requirements only, the numbered items that are cited by number; the numbered sections are not.
-- **Objections recorded**: none.
+- **P02** The operator proposed, on issue #493 on 2026-10-02, that a deliberation's outcome be written in "80% ASD-STE100". The Secretary's reply on that issue set out the scope this MIS adopts. (operator_proposed_80pct_STE)
+- **P03** Semantic slugs. The operator, on this MIS's pull request, 2026-10-03, quoted in full: "Requirements or any numbered item should be assigned a semantic slug at the end of the line that defines it [...] Upon first invocation, deliberators MUST use the semantic slugs in addition to the req# when discussing specific requirements. And they MAY use it at any time for clarity. They SHOULD restate the full definition when it helps with clarity like when discussing its semantics. Any tooling MUST use the semantic slug in error messages in addition to the number. This is to ease the burden on the human memory and attention and help outsiders understand conversational references. Outside or cross-MIS scope should also refer to the MIS # as a prefix before the req # and include the semantic slug. Naked number references are off-putting by most standards showing lack of concern to accommodate multiple audiences. Semantic slugs MUST be free of whitespace, limited to ASCII subset [-_A-Za-z0-9]." R38 to R45 carry it. The Secretary's readings, put to the operator the same day in multiple-choice questions: the lowercase "should" for assigning slugs became a MUST (R38), which the operator confirmed; "any numbered item" means requirements, open questions, positions and objections (R45), as the operator chose, and not the numbered sections; the lowercase "should" for cross-document references stays a SHOULD (R44), not yet confirmed. (operator_asked_for_slugs)
+Objections recorded: none.
 
 ## 15 Revision History
 
@@ -331,6 +334,7 @@ One pull request to MacEff carries all of this:
 - 2026-10-02: after cold-reader trial 1, R24 and R25 reworded for the path without a deliberation, and R37 added (judgment reviews recorded before Final). Made before acceptance, in the same pull request.
 - 2026-10-03: after cold-reader trial 2, sixteen gaps (§11) were fixed in the policy's prose and the glossary, the glossary gained "editorial" and "substantive", and the template gained a MUST NOT example. No requirement's keyword or check changed. Made before acceptance, in the same pull request.
 - 2026-10-03: at the operator's request on the pull request, every requirement gained a semantic slug, and R38 to R44 were added (slugs in the line form, unique, used in discussion, in tool findings and in cross-document references). Made before acceptance, in the same pull request.
+- 2026-10-03: at the operator's choice, open questions, positions and objections gained IDs and slugs too (R45), R39 now covers every numbered item, and R28 answers objections by ID and slug. Made before acceptance, in the same pull request.
 
 ## Wiki-Links
 

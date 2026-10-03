@@ -198,3 +198,19 @@ def test_rule_slugs_match_mis_0001():
     written = dict(re.findall(r"^- \*\*(R\d+)\*\* \[.*\((\S+)\)$", MIS1.read_text(), flags=re.M))
     for rule, slug in mis.RULE_SLUGS.items():
         assert written.get(rule) == slug, (rule, slug, written.get(rule))
+
+
+def test_r45_open_question_without_id(plant):
+    assert "R45" in plant(sub("- **Q01** Should", "- Should"))
+
+
+def test_r45_open_question_without_slug(plant):
+    assert "R45" in plant(sub(" (lint_policies_too)", ""))
+
+
+def test_r45_position_without_slug(plant):
+    assert "R45" in plant(sub(" (operator_proposed_80pct_STE)", ""))
+
+
+def test_r39_slug_shared_by_a_question_and_a_requirement(plant):
+    assert "R39" in plant(sub("(lint_policies_too)", "(PR_MUST_cite_accepted_MIS)"))

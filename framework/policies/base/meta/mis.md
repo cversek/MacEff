@@ -221,7 +221,11 @@ Requirements follow a softened Simplified Technical English (ASD-STE100):
 
 Every requirement carries a **semantic slug**: a short name in words, in parentheses at the end of its line. A bare `R14` asks the reader to remember a table; `req_MUST_have_30_words_max` tells them what is meant.
 - Each requirement line MUST end with its semantic slug in parentheses, made only of ASCII letters, digits, hyphens and underscores (MIS-0001-R38 req_MUST_end_with_slug). No spaces.
-- Two requirements in one MIS MUST NOT share a semantic slug (MIS-0001-R39 req_slugs_MUST-NOT_repeat).
+- Two numbered items in one MIS MUST NOT share a semantic slug (MIS-0001-R39 item_slugs_MUST-NOT_repeat).
+- **Open questions, positions and objections** are numbered items too. Each MUST begin with its ID (`Q01`, `P01`, `O01`) and end with its slug (MIS-0001-R45 item_MUST_carry_ID_and_slug). For example:
+  - `- **Q01** Should the checker also lint policies? The operator decides after MIS-0002. (lint_policies_too)`
+  - `- **O01** Seat B: a 72-hour period is too short for relayed positions, <link>. (window_too_short_for_relays)`
+  The Resolution then answers each objection by its ID and slug (MIS-0001-R28 resolution_MUST_answer_objections), so an objector can find the answer to their own words.
 - **In discussion:** the first time a participant names a requirement in a deliberation, they MUST give its ID and its slug together (MIS-0001-R40 first_mention_MUST_give_slug). They MAY give the slug at any later mention (MIS-0001-R41 mention_MAY_give_slug). When the discussion turns on what a requirement means, they SHOULD restate its full sentence (MIS-0001-R42 meaning_SHOULD_restate_req).
 - **In tools:** each finding a tool reports about a requirement MUST name the slug beside the ID (MIS-0001-R43 tool_MUST_report_slug). `mis check` prints `MIS-0001-R14 (req_MUST_have_30_words_max)`, and names the slug of the requirement it found the fault in.
 - **Across documents:** a reference from outside the MIS SHOULD give the MIS number, the ID and the slug (MIS-0001-R44 xref_SHOULD_give_MIS_ID_slug), as in `MIS-0001-R14 (req_MUST_have_30_words_max)`. This policy cites its own requirements that way.
@@ -279,7 +283,7 @@ A definition changes only through an accepted MIS, or an editorial pull request 
 ### 6.3 The Resolution
 
 - When an MIS is Accepted, Rejected, Deferred, Final or Superseded, its Resolution field MUST NOT be empty or none (MIS-0001-R27 resolution_MUST-NOT_be_empty).
-- The Resolution MUST answer each recorded objection by name (MIS-0001-R28 resolution_MUST_answer_objections).
+- The Resolution MUST answer each recorded objection by its ID and semantic slug (MIS-0001-R28 resolution_MUST_answer_objections).
 
 MacEff has one decider, but it keeps the safeguard of the IETF's rough consensus: an objection is answered, never just outvoted.
 
