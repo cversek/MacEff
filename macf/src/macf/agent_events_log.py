@@ -251,6 +251,32 @@ MEMO_CHECK_ENV = "MACF_EVENTS_MEMO_CHECK"
 _shared = threading.local()
 
 
+def _leave_shared_reads_in_child() -> None:
+    """In a forked child, leave any shared-read context the parent was in.
+
+    A process forked from inside ``shared_event_reads`` copies ``_shared`` and
+    never returns through the wrapper that would clear it. The transcript
+    monitor is forked this way from the SessionStart hook: it stayed inside the
+    context for its whole life, opened a new window at every read after another
+    process wrote to the log, and kept every one, with its parsed events and
+    often an open reverse reader. One monitor reached 5 GB resident and about
+    800 descriptors on the log in three days (#492).
+
+    The child closes the readers it inherited, which releases its copies of
+    their descriptors (the parent's are its own and stay open), and drops the
+    windows. The parent is unaffected and stays in its context.
+    """
+    for window in getattr(_shared, "windows", None) or []:
+        try:
+            window.source.close()
+        except Exception:  # noqa: BLE001 - GUARD, not handler: a reader that will not close must not stop the child
+            pass
+    _shared.active, _shared.window, _shared.windows = False, None, []
+
+
+os.register_at_fork(after_in_child=_leave_shared_reads_in_child)
+
+
 def _reverse_source(log_path: Path, end: int) -> Generator[Optional[str], None, None]:
     """The live log as it was at ``end`` bytes, newest first; then ``None``; then
     the archives, newest first.
