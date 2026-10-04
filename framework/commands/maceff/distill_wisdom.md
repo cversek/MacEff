@@ -8,8 +8,8 @@ Distill wisdom nuggets from uncataloged consciousness artifacts into agent defin
 **Arguments**:
 - No argument OR `PA`: Distill PA's own CAs → `~/CLAUDE.md`
 - `SA:role`: Delegate to specified SA to distill their CAs → `{FRAMEWORK_ROOT}/subagents/{role}.md`
-  - Example: `/maceff:distil_wisdom SA:policy-writer`
-  - Example: `/maceff:distil_wisdom SA:devops-eng`
+  - Example: `/maceff:distill_wisdom SA:policy-writer`
+  - Example: `/maceff:distill_wisdom SA:devops-eng`
 
 ---
 
