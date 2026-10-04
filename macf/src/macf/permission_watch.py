@@ -114,6 +114,208 @@ def read_waiting() -> List[Waiting]:
     return waiting(read_events(reverse=True, scope="cycle", only=PROGRESS | {REQUEST}))
 
 
+# ---- history: the dialogs this agent met, read from the log alone ---------------------------
+#
+# The operator, 2026-10-04: every prompt should be countable, so that permissions can be loosened
+# from evidence; and the record is the event log, not another state file. A dialog is answered at
+# the first PROGRESS event after it in its session (the same reading `waiting` uses). It RAN when a
+# tool_call_completed for the same tool and the same command or path follows before the turn ends,
+# and is NOT RUN when the turn ends first. The rule that asked is not in the event (the hook input
+# carries the tool, its input, the cwd and the mode), so it is matched at report time against the
+# ask rules of today's settings.
+
+TURN_ENDS = frozenset({"dev_drv_started", "dev_drv_ended", "session_started", "session_ended",
+                       "compaction_detected"})
+QUESTIONS = frozenset({"AskUserQuestion", "ExitPlanMode"})  # dialogs that ask, not permissions
+
+
+@dataclass
+class Dialog:
+    """One permission dialog: when it opened, what it asked to run, and how it ended."""
+    session_id: str
+    opened: float
+    tool: str
+    command: str
+    cwd: str
+    outcome: str = "waiting"  # "ran", "not run", "answered" (turn not over yet) or "waiting"
+    resolved: Optional[float] = None
+    rule: Optional[str] = None
+
+    @property
+    def waited_minutes(self) -> Optional[float]:
+        return None if self.resolved is None else (self.resolved - self.opened) / 60.0
+
+
+def _identity(tool_input) -> str:
+    """What a dialog asked to run: the command, the path or the skill."""
+    if not isinstance(tool_input, dict):
+        return ""
+    return str(tool_input.get("command") or tool_input.get("file_path") or tool_input.get("skill") or "")
+
+
+def history(events_oldest_first: Iterable[dict], *, include_questions: bool = False) -> List[Dialog]:
+    """The permission dialogs in ``events_oldest_first``, each paired with how it ended."""
+    unanswered: Dict[str, List[Dialog]] = {}
+    unrun: Dict[str, List[Dialog]] = {}
+    dialogs: List[Dialog] = []
+    for event in events_oldest_first:
+        name = event.get("event")
+        if name != REQUEST and name not in PROGRESS:
+            continue
+        sid = _session_of(event)
+        if not sid:
+            continue
+        hook_input = event.get("hook_input") or {}
+        when = float((event.get("data") or {}).get("timestamp") or event.get("timestamp") or 0.0)
+        if name == REQUEST:
+            tool = str(hook_input.get("tool_name") or (event.get("data") or {}).get("tool_name") or "unknown")
+            if tool in QUESTIONS and not include_questions:
+                continue
+            d = Dialog(session_id=sid, opened=when, tool=tool,
+                       command=_identity(hook_input.get("tool_input")) or _preview(event),
+                       cwd=str(hook_input.get("cwd") or ""))
+            dialogs.append(d)
+            unanswered.setdefault(sid, []).append(d)
+            unrun.setdefault(sid, []).append(d)
+            continue
+        for d in unanswered.pop(sid, []):
+            d.resolved, d.outcome = when, "answered"
+        if name == "tool_call_completed":
+            key = (str(hook_input.get("tool_name") or ""), _identity(hook_input.get("tool_input")))
+            pending = unrun.get(sid, [])
+            match = next((d for d in pending if (d.tool, d.command) == key), None)
+            if match is not None:
+                match.outcome = "ran"
+                pending.remove(match)
+        elif name in TURN_ENDS:
+            for d in unrun.pop(sid, []):
+                d.outcome = "not run"
+    return sorted(dialogs, key=lambda d: d.opened)
+
+
+def _segments(command: str) -> List[str]:
+    """The simple commands of a chain or pipe, leading VAR=value words dropped."""
+    import shlex
+    lex = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lex.whitespace_split = True
+    segments, current = [], []
+    try:
+        for tok in lex:
+            if tok and set(tok) <= set(";&|"):
+                segments.append(current)
+                current = []
+            else:
+                current.append(tok)
+    except ValueError:  # unbalanced quotes: judge the text as one command
+        return [command.strip()]
+    segments.append(current)
+    out = []
+    for seg in segments:
+        while seg and "=" in seg[0] and not seg[0].startswith("="):
+            seg = seg[1:]
+        if seg:
+            out.append(" ".join(seg))
+    return out
+
+
+def matching_rule(tool: str, tool_input, rules: Iterable[str]) -> Optional[str]:
+    """The first rule in ``rules`` that matches the call, with the client's meaning.
+
+    ``Tool`` alone matches any call of that tool. ``Bash(prefix:*)`` matches a command any of
+    whose simple commands starts with that prefix, as a whole word; ``Bash(text)`` matches one
+    that is exactly that text. Specifiers of other tools are not evaluated.
+    """
+    import re
+    command = _identity(tool_input)
+    for rule in rules:
+        m = re.fullmatch(r"([A-Za-z_]\w*)(?:\((.*)\))?", rule.strip())
+        if not m or m.group(1) != tool:
+            continue
+        spec = m.group(2)
+        if spec is None:
+            return rule
+        if tool != "Bash":
+            continue
+        prefix, wild = (spec[:-2], True) if spec.endswith(":*") else (spec, False)
+        for seg in _segments(command):
+            if seg == prefix or (wild and seg.startswith(prefix + " ")):
+                return rule
+    return None
+
+
+def ask_rules(cwd: str, home: Path) -> List[str]:
+    """The ask rules in force for a call made in ``cwd``: home settings, then each directory's
+    ``.claude/settings*.json`` from ``cwd`` up to ``home``. Order kept, duplicates dropped."""
+    files = [home / ".claude" / "settings.json", home / ".claude" / "settings.local.json"]
+    if cwd:
+        p = Path(cwd)
+        chain = []
+        while True:
+            chain.append(p)
+            if p == home or p.parent == p:
+                break
+            p = p.parent
+        for d in reversed(chain):
+            files += [d / ".claude" / "settings.json", d / ".claude" / "settings.local.json"]
+    rules: List[str] = []
+    for f in files:
+        try:
+            ask = (json.loads(f.read_text(encoding="utf-8")).get("permissions") or {}).get("ask") or []
+        except (OSError, ValueError, AttributeError):
+            continue
+        rules += [r for r in ask if isinstance(r, str) and r not in rules]
+    return rules
+
+
+def read_history(days: float, *, include_questions: bool = False, home: Optional[Path] = None) -> List[Dialog]:
+    """``history`` over the last ``days`` of this agent's log, each dialog given the ask rule
+    of today's settings that matches it. Bounded by time: the newest-first read stops at the
+    first event older than the cutoff (agent_events_log: bound by meaning)."""
+    from macf.agent_events_log import read_events
+    cutoff = time.time() - days * 86400.0
+    window = []
+    for event in read_events(reverse=True, scope="all", only=PROGRESS | {REQUEST}):
+        if float(event.get("timestamp") or 0.0) < cutoff:
+            break
+        window.append(event)
+    window.reverse()
+    dialogs = history(window, include_questions=include_questions)
+    home = home or Path.home()
+    cache: Dict[str, List[str]] = {}
+    for d in dialogs:
+        if d.cwd not in cache:
+            cache[d.cwd] = ask_rules(d.cwd, home)
+        d.rule = matching_rule(d.tool, {"command": d.command, "file_path": d.command}, cache[d.cwd])
+    return dialogs
+
+
+def history_text(dialogs: List[Dialog], *, by_rule: bool) -> str:
+    if not dialogs:
+        return "no permission dialogs in this window"
+    if by_rule:
+        groups: Dict[str, List[Dialog]] = {}
+        for d in dialogs:
+            groups.setdefault(d.rule or "no ask rule matched (a hook or auto mode asked)", []).append(d)
+        lines = ["dialogs  waited  longest  rule (ask rules of today's settings)"]
+        for rule, ds in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+            waits = [d.waited_minutes for d in ds if d.waited_minutes is not None]
+            lines.append(f"{len(ds):7d}  {_fmt_age(sum(waits)):>6}  {_fmt_age(max(waits, default=0)):>7}  {rule}")
+        return "\n".join(lines)
+    lines = []
+    for d in dialogs:
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(d.opened))
+        waited = "-" if d.waited_minutes is None else _fmt_age(d.waited_minutes)
+        command = " ".join(d.command.split())
+        lines.append(f"{when}  waited {waited:>7}  {d.outcome:<8}  {d.tool:<5}  "
+                     f"{d.rule or '(no ask rule matched)'}  | {command[:160]}")
+    return "\n".join(lines)
+
+
+def history_json(dialogs: List[Dialog]) -> str:
+    return json.dumps([dict(asdict(d), waited_minutes=None if d.waited_minutes is None
+                            else round(d.waited_minutes, 2)) for d in dialogs], indent=2)
+
+
 def state_path() -> Path:
     from macf.agent_events_log import get_log_path
     return get_log_path().parent / STATE_NAME

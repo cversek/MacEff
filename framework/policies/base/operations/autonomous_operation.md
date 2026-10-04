@@ -1,10 +1,10 @@
 # Autonomous Operation Policy
 
-**Version**: 1.5
+**Version**: 1.6
 **Tier**: CORE
 **Category**: Operations
 **Status**: ACTIVE
-**Updated**: 2026-10-02
+**Updated**: 2026-10-04
 
 ---
 
@@ -75,6 +75,7 @@ Applies to all Primary Agents (PA) and Subagents (SA) capable of extended autono
 - What does a permission dialog do to the rest of the session, including its scheduled prompts?
 - Why can the waiting session not report its own wait, and where must the watch run instead?
 - What does `macf_tools permissions watch` send, when, and when does it stop?
+- Which dialogs has this agent met, how long did each wait, and which ask rule matches it?
 - What did measuring one day of dialogs show about which commands raise them, and why is a rule built from remembered prompts not enough?
 
 **6 Available Skills**
@@ -677,6 +678,17 @@ block: a system timer, a cron job, a supervisor.
   (default 10), and again every `--repeat` minutes (default 60). When a wait it
   reminded about ends, it sends one all-clear. A reminder that fails to send is
   tried again on the next pass. `--dry-run` prints instead of sending.
+- `macf_tools permissions history` answers "which dialogs has this agent met?"
+  over the last `--days` (default 7), from the same event log and nothing else:
+  when each opened, how long it waited, whether the command then ran, and the
+  ask rule of today's settings that matches it (`--by-rule` totals dialogs and
+  waits per rule; `--json` for tools). A wait runs until the session moved on,
+  so an approved command adds its own run time. The rule is matched at report
+  time, because the event does not record which rule asked: "no ask rule
+  matched" means a hook or auto mode asked. Questions to the operator
+  (AskUserQuestion, ExitPlanMode) are dialogs but not permissions, and are left
+  out unless `--include-questions`. It keeps no state of its own, by design: a
+  second record of the same events would drift from the log it copies.
 
 **What a deployment must do.** Run `macf_tools permissions watch` as the
 agent's own user, every few minutes, from a scheduler outside the agent's
@@ -703,7 +715,9 @@ refuted by the passes:
 
 When a dialog surprises you, read the event log before writing a rule. The log
 records the commands that passed as well as the one that waited, and a rule
-that has not been checked against the passes is a guess.
+that has not been checked against the passes is a guess. The same holds for
+loosening one: `permissions history --by-rule` counts which rules actually
+stop the agent, and that count, not memory, is the case for relaxing a rule.
 
 The watch makes a missed dialog visible. Counting the passes keeps the habits honest.
 
