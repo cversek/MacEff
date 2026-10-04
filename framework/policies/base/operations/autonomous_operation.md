@@ -1,10 +1,10 @@
 # Autonomous Operation Policy
 
-**Version**: 1.4
+**Version**: 1.5
 **Tier**: CORE
 **Category**: Operations
 **Status**: ACTIVE
-**Updated**: 2026-08-09
+**Updated**: 2026-10-02
 
 ---
 
@@ -60,6 +60,16 @@ Applies to all Primary Agents (PA) and Subagents (SA) capable of extended autono
 - What safeguards apply in AUTO_MODE?
 - How does warning behavior change?
 - What constraints remain in effect?
+
+**5.4 Wind-Down Protocol**
+- When does the wind-down begin, and who starts it?
+- What steps does the sequence run, which skill performs each, and why does each come where it does?
+- Which steps are conditional or sized by the context window, and when is each condition evaluated?
+- What reading does each step owe its policies, and what gives way when context is short?
+- Which gates print and continue, and which wait for the operator?
+- Where is a skipped or shortened step recorded?
+- What must be re-queried before the checkpoint, and what is committed together?
+- How does the sequence end, and which compaction route applies?
 
 **5.5 A Prompt Nobody Is Answering**
 - What does a permission dialog do to the rest of the session, including its scheduled prompts?
@@ -266,7 +276,7 @@ The auth token is stored in `.maceff/settings.json`:
 
 **Actual enforcement relies on**:
 1. **Policy compliance** - Agents are trained via CLAUDE.md and policies to only activate when user explicitly authorizes
-2. **Skill design** - The `maceff-enter-auto-mode` skill instructs agents to request authorization without hinting at the phrase
+2. **Skill design** - The `maceff-auto-mode` skill instructs agents to request authorization without hinting at the phrase
 3. **Audit logging** - Mode changes are logged to agent events for forensic review
 4. **Human oversight** - User can review logs and revoke autonomy
 
@@ -596,17 +606,42 @@ Wind-down thresholds scale with context window size:
 | Window | Wind-down begins | CCP | JOTEWR |
 |--------|-----------------|-----|--------|
 | 200K   | CL20 (~31K left) | CL5 | CL2 |
-| 1M     | CL4 (~38K left)  | CL1 | CL0 |
+| 1M     | CL10 (~95K left) | CL1 | CL0 |
 
-**AUTO_MODE wind-down sequence**:
-1. At threshold: curate learnings (`/maceff:learnings:curate`)
-2. Create CCP (`/maceff:ccp`) - commit and push
-3. Create JOTEWR (`/maceff:jotewr`) - commit and push
-4. **Resume productive work** on next scope items
-5. Auto-compact triggers naturally during sustained work
-6. Recovery reads CCP + JOTEWR from disk
+The 1M start is measured: the sequence below, with step 3 skipped, took about nine CL points on a 1M window with policies read by section, so a later start leaves the reflection to auto-compaction. A deployment that compacts before CL0 (an auto-compact override) starts earlier by the difference. The 200K row predates that measurement.
 
-Do NOT try to trigger compaction artificially by consuming tokens with filler. Keep working productively. The infrastructure (CCP on disk, commits, task notes) handles compaction recovery.
+**Who starts it.** In AUTO_MODE the agent starts the wind-down at the threshold. In MANUAL_MODE the operator starts it, and starting the whole sequence authorizes every step in it.
+
+**The sequence.** Each step is its own skill or command, and `maceff-full-wind-down` dispatches them in this order:
+
+| Step | Skill | Why it comes here |
+|------|-------|-------------------|
+| 1 | `/maceff:learnings:curate` | First, while the cycle's incidents are fresh; later steps cite what it writes. |
+| 2 | `/maceff-ideas-curate` | After the learnings, so an idea can be the mechanism that would prevent a failure a learning has just named. |
+| 3 | `/maceff-knowledge-web-curate` | Optional: run it only if the context left when this step is reached is above CL15. It links what steps 1 and 2 wrote, so skipping it costs least when they carry their own wiki-links. |
+| 4 | `/maceff:ccp` | After curation, so the checkpoint can point at what curation produced. |
+| 5 | `/maceff:jotewr` | Last, with the whole cycle in view: 5k tokens on a 1M window, 2k on 200K. |
+
+The CL15 condition and the reflection sizes are operator settings (2026-10). The condition protects steps 4 and 5, which on one measured 1M deployment took about five CL points between them with policies read by section.
+
+**Dispatching it within the context available.** Where a dispatched skill asks for more than these rules allow, the rules govern the dispatch; a skill invoked on its own keeps its own instructions.
+
+- **Evaluate a step's condition when the step is reached**, not when the sequence starts. Earlier steps spend context: a run that began at CL15 reached step 3 at CL11.
+- **Read each policy once.** Several steps engage the same policies, scholarship among them. Read each at the first step that needs it, and let later steps rely on that reading.
+- **A gate that asks for answers before writing is output, not a stop.** Print the answers and continue. Stop only where a step hands a decision to the operator, or where something is genuinely unclear. An operator who wants to comment on each step invokes the steps' skills one at a time instead.
+- **When context is short, give way in this order**, saying so in the step's output: skip step 3; read a policy's navigation guide and the sections that answer the skill's questions instead of the whole policy; keep steps 1 and 2 to what the cycle cannot afford to lose; size the reflection to what is left. Write the checkpoint whole, because recovery depends on it. These are the sanctioned exceptions, not shortcuts.
+- **When something else intervenes**: an operator interrupt is serviced first, and the sequence resumes at the first step not done; a step whose skill cannot run is recorded, and the sequence continues.
+- **Record every exception**, with its reason and the context level, as a note on the task the work is filed under (`macf_tools task trace` names the active frame). The checkpoint carries the same record for the steps before it.
+- **Re-query before the checkpoint.** Re-read the state of every PR, issue and task it will name, since the agent's last look may be hours old. The checkpoint says which of its items a successor must re-check before acting and which are done, so finished work is not done twice.
+- **Commit the checkpoint and reflection together** after step 5, where the agent's artifact tree is versioned. Pushing follows §5.3.
+
+**After the sequence**, compaction comes by whichever route exists, and the closing output says which one applies:
+
+1. `macf_tools inject compact`, where a supervisor owns the session's pane;
+2. the operator's `/compact`, when the operator is present;
+3. otherwise auto-compaction, which AUTO_MODE turns on: keep working productively until it fires.
+
+Do NOT try to trigger compaction artificially by consuming tokens with filler. Recovery reads the checkpoint and reflection from disk, and the task notes carry the rest.
 
 ### 5.5 A Prompt Nobody Is Answering
 
@@ -677,13 +712,13 @@ The watch makes a missed dialog visible. Counting the passes keeps the habits ho
 Autonomous agents should leverage framework skills:
 
 ### Consciousness Preservation Skills
-- `maceff-todo-restoration` - Recover orphaned TODOs after session migration
 - `maceff-tree-awareness` - Refresh structural awareness after compaction
-- `maceff-todo-hygiene` - Ensure TODO modifications follow policy
+- `maceff-task-management` - Task operations through the task CLI, with the policy as reference
 
 ### Operational Skills
 - `maceff-delegation` - Read delegation policies before spawning subagents
 - `maceff-auto-mode` - Full AUTO_MODE lifecycle: authorization, activation, scope, wind-down, de-escalation
+- `maceff-full-wind-down` - Dispatch the wind-down sequence (§5.4) through each step's own skill
 - `maceff-agent-backup` - Backup creation guidance
 
 ### Autonomous Work Sub-Policies

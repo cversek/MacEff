@@ -159,7 +159,7 @@ macf_tools hooks logs        # Hook execution events with timestamps
 - **CL0** (100% used): Imminent compaction
 
 **1M Context Recalibration**: On 1M, the same percentages leave 5x more absolute tokens. CL5 on 1M = ~47k remaining (a whole 200k-era conversation). Practical thresholds shift:
-- Wind-down: CL20 (200k) → **CL4** (1M)
+- Wind-down: CL20 (200k) → **CL10** (1M); the wind-down sequence measured about nine CL points on 1M without its optional step (see autonomous_operation's wind-down protocol)
 - CCP trigger: CL5 (200k) → **CL1** (1M)
 - JOTEWR: CL2 (200k) → **CL0** (1M)
 - Use a session resume (Ctrl-D + `claude -c`) to extend cycles without compaction

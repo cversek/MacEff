@@ -1550,12 +1550,12 @@ Experiment → MISSION conversion complete.
 **Phases**: [Count] phases designed from experiment insights
 **Evidence Base**: Validated experiment with X/Y success criteria met
 
-**TODO Structure Created**:
+**Task Structure Created**:
 - MISSION pinned with roadmap path
-- [N] phase items expanded
-- Ready for /maceff:todos:start when you authorize
+- [N] phase tasks expanded
+- Ready for /maceff:task:start when you authorize
 
-**Next Step**: Review roadmap, then authorize start with `/maceff:todos:start [MISSION]`
+**Next Step**: Review roadmap, then authorize start with `/maceff:task:start [MISSION]`
 
 **Important**: Do NOT begin implementation until you explicitly authorize. Roadmap drafted, awaiting your strategic approval.
 ```
