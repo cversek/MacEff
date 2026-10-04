@@ -91,8 +91,29 @@ class Finding:
         return RULE_SLUGS.get(self.rule, "")
 
     def __str__(self) -> str:
+        if self.rule == UNREADABLE:  # about the file, not a requirement
+            return f"{self.path}:{self.line}: {self.message}"
         label = f"{self.rule} ({self.slug})" if self.slug else self.rule
         return f"{self.path}:{self.line}: MIS-0001-{label}: {self.message}"
+
+
+UNREADABLE = "UTF-8"
+
+
+def read_utf8(path: Path) -> tuple[Optional[str], Optional[Finding]]:
+    """A file's text, or the finding that says it cannot be read as UTF-8.
+
+    Every read names UTF-8, so the checker reads alike in every locale. A file in another
+    encoding is reported, not raised: one Latin-1 byte in a copy of the template used to stop
+    the whole run with a traceback, so no file after it was checked either.
+    """
+    raw = path.read_bytes()
+    try:
+        return raw.decode("utf-8"), None
+    except UnicodeDecodeError as e:
+        line = raw.count(b"\n", 0, e.start) + 1
+        return None, Finding(path=str(path), line=line, rule=UNREADABLE,
+                             message=f"not UTF-8 (byte 0x{raw[e.start]:02x}); no check could read this file")
 
 
 def _absent(value: Optional[str]) -> bool:
@@ -139,7 +160,10 @@ def read_glossary(path: Path) -> dict:
     """Glossary terms, lowercased, with their line numbers, and any duplicates: {"terms": {...}, "findings": [...]}."""
     terms: dict = {}
     findings = []
-    for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    text, unreadable = read_utf8(path)
+    if unreadable:  # terms None: the R21 check is skipped, not failed for every term
+        return {"terms": None, "findings": [unreadable]}
+    for n, line in enumerate(text.splitlines(), start=1):
         m = TERM_RE.match(line)
         if not m:
             if line.startswith("- **"):
@@ -158,7 +182,10 @@ def read_glossary(path: Path) -> dict:
 
 def check_file(path: Path, glossary_terms: Optional[dict] = None) -> list[Finding]:
     """Every decidable check that concerns one MIS file."""
-    lines = path.read_text(encoding="utf-8").splitlines()
+    text, unreadable = read_utf8(path)
+    if unreadable:
+        return [unreadable]
+    lines = text.splitlines()
     p = str(path)
     out: list[Finding] = []
 
@@ -321,7 +348,10 @@ def check(paths: Iterable[Path], glossary: Optional[Path] = None) -> list[Findin
     seen: dict = {}
     for f in files:
         out.extend(check_file(f, terms))
-        num = read_header(f.read_text(encoding="utf-8").splitlines()).get("Number", ("", 1))[0].strip()
+        text, unreadable = read_utf8(f)
+        if unreadable:  # check_file reported it
+            continue
+        num = read_header(text.splitlines()).get("Number", ("", 1))[0].strip()
         if num and num in seen:
             out.append(Finding(path=str(f), line=1, rule="R04", message=f"number {num} is also used by {seen[num]}"))
         elif num:
@@ -338,10 +368,13 @@ def check_citations(files: list, glossary: Optional[Path] = None) -> list:
     """
     defined: dict = {}
     for f in files:
-        text = f.read_text(encoding="utf-8")
+        text, unreadable = read_utf8(f)
+        if unreadable:  # reported by check_file
+            continue
         num = read_header(text.splitlines()).get("Number", ("", 1))[0].strip()
         if num:
             defined[num] = dict(REQ_SLUG_RE.findall(text))
+    reported = set(files) | ({glossary} if glossary else set())
     texts = list(files) + ([glossary] if glossary else [])
     for f in files[:1]:
         pol = f.parent.parent / "policies"  # noqa: MACEFF002 - MIS-0001-R03 fixes framework/mis beside framework/policies
@@ -349,7 +382,12 @@ def check_citations(files: list, glossary: Optional[Path] = None) -> list:
             texts.extend(sorted(pol.rglob("*.md")))
     out = []
     for path in texts:
-        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        text, unreadable = read_utf8(path)
+        if unreadable:
+            if path not in reported:  # a policy: only this check reads it
+                out.append(unreadable)
+            continue
+        for n, line in enumerate(text.splitlines(), start=1):
             for num, rid, slug in CITATION_RE.findall(line):
                 if num not in defined:
                     continue
