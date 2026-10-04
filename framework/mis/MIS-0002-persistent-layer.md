@@ -9,7 +9,7 @@
 **Created**: 2026-10-04
 **Updates**: none
 **Supersedes**: none
-**Lands-in**: a new policy, framework/policies/base/operations/persistent_layer.md (planned); framework/glossary.md; a primal daemon package and its platform renderings (planned); cross-references in service_supervision and notification_delivery; the mail system's deploy configuration (the `hypervisor` value)
+**Lands-in**: a new policy, framework/policies/base/infrastructure/persistent_layer.md (planned); framework/glossary.md; a primal daemon package and its platform renderings (planned); cross-references in service_supervision and notification_delivery; the mail system's deploy configuration (the `hypervisor` value)
 **Resolution**: none
 
 ---
@@ -120,6 +120,7 @@ stateDiagram-v2
 - **R05** [MUST · decidable: macf/tests/test_pd_render.py::test_launchd_is_launchagent (planned)] Where the host runs macOS, the platform adapter MUST render each primal daemon as a per-user LaunchAgent. (macos_MUST_render_LaunchAgent)
 - **R06** [MUST · decidable: macf/tests/test_pd_render.py::test_identifier (planned)] Each process name, unit name, launchd label and socket of a primal daemon MUST use the identifier `maceff_pd`. (pd_identifiers_MUST_use_maceff_pd)
 - **R07** [MUST NOT · decidable: macf/tests/test_primal_daemon.py::test_no_cross_agent_control (planned)] A primal daemon MUST NOT start, stop or signal a managed unit of another agent. (pd_MUST-NOT_control_other_agents)
+- **R80** [MUST NOT · decidable: macf/tests/test_primal_daemon.py::test_no_network_listener (planned)] A primal daemon MUST NOT listen on a network port. (pd_MUST-NOT_listen_on_network)
 
 ### 6.2 Declarations
 
@@ -145,6 +146,8 @@ stateDiagram-v2
 - **R21** [MUST · decidable: macf/tests/test_pd_harness.py::test_waiting_reported (planned)] When a managed unit is blocked on a prompt that only a person can answer, the primal daemon MUST report the state waiting on a person. (pd_MUST_report_waiting_on_person)
 - **R22** [MUST NOT · decidable: macf/tests/test_primal_daemon.py::test_no_restart_while_waiting (planned)] The persistent layer MUST NOT restart a unit because the unit is waiting on a person. (layer_MUST-NOT_restart_waiting_unit)
 - **R23** [MUST NOT · judgment: the head maintainer, at review of each harness adapter] The persistent layer MUST NOT answer a permission prompt, or approve any act on an agent's behalf. (layer_MUST-NOT_answer_prompts)
+- **R78** [MUST NOT · judgment: the operator, at review of each declaration] The persistent layer MUST NOT widen an agent's permissions. (layer_MUST-NOT_widen_permissions)
+- **R79** [MUST NOT · judgment: the head maintainer, at review of each landing pull request] The persistent layer MUST NOT copy file content from an agent's home into its events or logs. (layer_MUST-NOT_copy_home_content)
 
 ### 6.5 Schedules
 
@@ -173,6 +176,7 @@ stateDiagram-v2
 - **R43** [MUST · decidable: macf/tests/test_pd_notice.py::test_wake_through_notifier (planned)] Each wake MUST go through the notifier. (wake_MUST_use_notifier)
 - **R44** [MUST NOT · judgment: the head maintainer, at review of each harness adapter] Where a harness offers a session socket or an API, its harness adapter MUST NOT wake the session by keystrokes. (adapter_MUST-NOT_type_given_api)
 - **R45** [MUST · decidable: macf/tests/test_pd_harness.py::test_keystrokes_only_into_empty_idle_box (planned)] If a wake uses keystrokes, then the sender MUST type only into an empty input box of an idle session. (keystroke_wake_MUST_need_empty_idle_box)
+- **R77** [MUST · decidable: macf/tests/test_pd_harness.py::test_wake_text_fixed (planned)] Each wake MUST carry only the persistent layer's own fixed words and message identifiers, never text that a sender chose. (wake_MUST_carry_fixed_words_only)
 - **R46** [MUST NOT · judgment: the Secretary, at review of each notice source] The persistent layer MUST NOT spend an agent's context to report that nothing changed. (layer_MUST-NOT_report_no_change)
 - **R47** [MUST · decidable: macf/tests/test_pd_notice.py::test_after_restart_notice (planned)] After each restart, recreate or compaction, the primal daemon MUST deliver one notice that states what was carried, what changed and what was lost. (pd_MUST_report_carried_changed_lost)
 
@@ -227,17 +231,17 @@ stateDiagram-v2
 
 The positions are cited by their IDs in section 14.
 
-**Tiers and identity.** One primal daemon per agent, under a thin outer tier, is the convergence of the deliberation (P06, P07, P10; P09 accepted it). **R01** matches the code that exists: one session supervisor per calling card, with a guard against a second (P07). **R02** answers an incident: a shell variable naming a different agent became the default identity of a client started from a subshell (P05). **R03** and **R04** keep the outer tier thin and agent-agnostic: it keeps each primal daemon alive and holds no agent's configuration, so no single process controls every agent (P05, P07). **R05** prevents a builder who reads "daemon" from installing a LaunchDaemon, a root process without the user's keychain token or privacy grants, whose failure looks like an ordinary network or authentication error (P14). **R06** keeps "MPD" for prose, because `mpd` is the Music Player Daemon's binary and would collide in process and service listings (P14). **R07** is the isolation reason for choosing per agent over per host (P05).
+**Tiers and identity.** One primal daemon per agent, under a thin outer tier, is the convergence of the deliberation (P06, P07, P10; P09 accepted it). **R01** matches the code that exists: one session supervisor per calling card, with a guard against a second (P07). **R02** answers an incident: a shell variable naming a different agent became the default identity of a client started from a subshell (P05). **R03** and **R04** keep the outer tier thin and agent-agnostic: it keeps each primal daemon alive and holds no agent's configuration, so no single process controls every agent (P05, P07). **R05** prevents a builder who reads "daemon" from installing a LaunchDaemon, a root process without the user's keychain token or privacy grants, whose failure looks like an ordinary network or authentication error (P14). **R06** keeps "MPD" for prose, because `mpd` is the Music Player Daemon's binary and would collide in process and service listings (P14). **R07** is the isolation reason for choosing per agent over per host (P05). **R80** refuses the field's open network binds (the issue body): a local model server bound to all interfaces without authentication let a webpage poison it, and a primal daemon needs only a local socket.
 
 **Declarations.** A host is audited by reading its declarations (the issue body's principle 3). **R08** and **R09** make the declaration complete enough to audit. **R10** and **R11** answer the class of failure P07 named "declared, with nothing that calls it": a liveness record designed and never written, a timer a policy names and nothing generates, duty notices with code and no host. A CI check finds that class without waiting for someone to look. **R12** answers the monitor that was forked from a hook and kept the hook's read context for days (P07): a long-lived process born inside a short-lived one keeps its parent's assumptions. **R13** answers a persistent home that carried a shell profile export forward and silently overrode a rebuilt image's configuration (P07).
 
 **Liveness, runs and health.** **R14** and **R15** key liveness by identity and confirm it by probe, because a record that does not say whose it is gets read as yours (P07). **R16** settles D4 toward events: a separate store is a second ledger that drifts, which the issue body already refuses and the head maintainer asked the spec to rule out (P07, P15). **R17** and **R18** state the deliberation's one shared meaning of health (convergence 2): every scheduler failure the issue body lists from the field happened while health checks stayed green. A green process with an overdue run is red (P02). **R19** answers the expired login of 2026-10-04 and P05's credentials incidents: "cannot authenticate" must never read as idle.
 
-**Unit states.** **R20** puts "waiting on a person" in the state machine, because every position described a prompt that waited unseen for hours (P09). **R21** defines it on units, the session included, as the head maintainer proposed (P15). **R22** and **R23** are convergence 3: a waiting prompt is not a hang, and nothing in the layer answers one (P02, P04, P05).
+**Unit states.** **R20** puts "waiting on a person" in the state machine, because every position described a prompt that waited unseen for hours (P09). **R21** defines it on units, the session included, as the head maintainer proposed (P15). **R22** and **R23** are convergence 3: a waiting prompt is not a hang, and nothing in the layer answers one (P02, P04, P05). **R78** names the other way out that P05 forbids, to "widen permissions to get unstuck": permissions stay the operator's. **R79** is Seat C's "copy anything from my home into its logs or state (some files there are read once, then deleted)" (P04).
 
 **Schedules.** **R24** and **R25** let each schedule choose its missed-run policy, including Seat C's "never catch up" (skip) and "only inside a window" (P04); D6 is about the default, which Q04 carries. **R26** copies the field's guard against a crash firing a run twice; **R27** refuses the catch-up that replayed restart jobs into an eight-minute restart loop across 52 agents; **R28** refuses leases that survive a restart (the issue body). **R29** and **R30** make joining the live session a declared choice, isolated by default, as the field does and as P02 asked (D5). **R31** and **R32** refuse the field's recurring failure of unattended runs stalling on consent prompts (the issue body). **R33** copies the guard that a job cannot schedule more jobs. **R34** answers P03, P05 and P11: a late act must say it is late. **R35** refuses the third-party skill that made heartbeats fetch and follow instructions from the internet (the issue body). **R36** refuses inactivity-only timeouts, which a busy loop never trips (the issue body). **R37** answers P10: a mechanical push fired a full model turn every twenty minutes and spent about an eighth of a context window to report that nothing changed.
 
-**Notices and wakes.** **R38** and **R40** are convergence 4 (P03, P04). **R39** carries Seat D's read time and the Secretary's sent and received times: an alert correct in every word arrived five hours after the event, and only the receiver's time showed the failure (P11, P12). **R41** and **R42** are the laptop host agent's shape: notices held while the session is down, and routed to the agent, the operator, both, or held until the operator is present, because for an assistant the hard question is who has to hear (P05). **R43** keeps delivery in the notifier, which already handles masking, de-duplication and a budget (P02). **R44** and **R45** propose a disposition for D2: where a harness offers a socket or an API, no keystrokes; where only keystrokes exist, only into an empty input box of an idle session. On 2026-10-04 a mail clock that typed into panes misread its agent's screen both ways: it took the echo of a submitted wake for a wake still waiting, and it could not see a running turn on a newer client, so it would have typed into a permission dialog, where a digit selects an option. **R46** answers P10's "Spend my context to report that nothing changed." **R47** is Seat D's one notice after every restart, recreate or compaction (P11).
+**Notices and wakes.** **R38** and **R40** are convergence 4 (P03, P04). **R39** carries Seat D's read time and the Secretary's sent and received times: an alert correct in every word arrived five hours after the event, and only the receiver's time showed the failure (P11, P12). **R41** and **R42** are the laptop host agent's shape: notices held while the session is down, and routed to the agent, the operator, both, or held until the operator is present, because for an assistant the hard question is who has to hear (P05). **R43** keeps delivery in the notifier, which already handles masking, de-duplication and a budget (P02). **R44** and **R45** propose a disposition for D2: where a harness offers a socket or an API, no keystrokes; where only keystrokes exist, only into an empty input box of an idle session. On 2026-10-04 a mail clock that typed into panes misread its agent's screen both ways: it took the echo of a submitted wake for a wake still waiting, and it could not see a running turn on a newer client, so it would have typed into a permission dialog, where a digit selects an option. **R77** keeps a wake the layer's own words: a sender can make an agent look, never choose what it reads as an instruction. That is P03's "Speak inside my session in anyone else's voice", and the rule today's mail clocks already follow by listing only identifiers in the broker's own format. **R46** answers P10's "Spend my context to report that nothing changed." **R47** is Seat D's one notice after every restart, recreate or compaction (P11).
 
 **Outside control.** **R48** answers P03 and P05: a gate that loops can hold a session no one can reclaim. **R49** answers P02's rebuild that checked for live sessions, not for work in flight, and ended a run that had gone for hours; P04 asks the same (drain, and wait for idle). **R50** is Seat A's quiet window (P03). **R51** proposes a disposition for D3: the layer never compacts on its own initiative (P04); a compaction a person or the agent asks for is a control act under **R52**, which names who asked, as P07, P10 and P15 require.
 
@@ -263,11 +267,43 @@ The issue body surveys Claude Code's own supervisor and scheduling tiers, OpenCl
 
 ## 9 Compatibility and Deployment
 
-To be completed before the final comment period. Planned: each existing mechanism in the issue body's inventory becomes a declared unit or schedule; session cron jobs move to schedules one at a time; the session supervisor becomes a managed unit; deployments render their units from declarations instead of hand-written loops. The landing starts small (section 12).
+**What changes for existing agents.** Each mechanism in the issue body's inventory gets one home:
+
+| Today | Under this MIS |
+|---|---|
+| Session supervisor, started by a generated unit on a host and by hand or a script in a container | A managed unit of the agent's primal daemon |
+| Transcript monitor, forked from the session-start hook | A managed unit, started by the primal daemon from a clean parent (R12); the duplicate-fork class (#490) cannot arise |
+| Mail broker and watchers, unsupervised on hosts and not restarted in containers | Managed units (R53) |
+| Mail clocks and wake loops, deployment scripts in tmux windows | Schedules (R54) |
+| Session cron for check-ins, reports and one-shot jobs | Schedules, moved one job at a time; session cron stays available for work that dies with its session by intent |
+| Permission watch, a systemd timer a deployment may install | A schedule |
+| Duty notices, code with no host | Schedules of the agent's primal daemon |
+| Liveness PID files in shared directories | Liveness events in the agent's own event log (R14) |
+
+**Data.** No new store. The event log gains liveness, run and control events; health is derived when read (R16, R17).
+
+**What a deployment must do**, in order:
+1. Write each agent's declaration. A container generates them from the agent list it already provisions from.
+2. Install the outer tier: a systemd user unit with linger on Linux, a per-user LaunchAgent on macOS, or the container's init.
+3. Install the outside watch, with an alert credential independent of every agent's channel (R75).
+4. Move session cron jobs to schedules, one at a time, each with its missed-run policy.
+
+**Compatibility.** The `hypervisor` value in the mail system's deploy configuration keeps working (R76). A deployment's hand-written units keep running until their declarations replace them; no flag day.
+
+**Platform labels**, honest as the field's best practice asks (the issue body): Linux host, tested at landing; macOS host, limited until the LaunchAgent rendering is verified on a host; Linux containers, limited; containers under Docker on macOS, experimental until Q05 is answered.
 
 ## 10 Security and Safety
 
-To be completed before the final comment period. Recorded so far: the layer never answers a prompt (R23), never presents a notice as consent (R40), never types into a session where an API exists and never into a busy one (R44, R45), never fetches instructions (R35), and never lets one agent control another's units (R07). It is not a security boundary (section 3). It must not copy content from an agent's home into its logs or state (P04).
+The persistent layer is not a security boundary (section 3); only operating-system isolation is one. What it must not become is a new way in.
+
+- **Prompt injection.** A notice names its source and is never presented as a person's instruction (R38, R40). A wake carries only the layer's own words and message identifiers (R77), so mail can make an agent look, never choose what it reads as an instruction. A schedule never fetches its instructions from the network (R35), and a run cannot create schedules (R33), so one compromised run cannot plant recurring work.
+- **Permission escalation.** The layer never answers a prompt (R23), never widens an agent's permissions (R78), and never restarts a session to get past a waiting prompt (R22). A schedule's permissions are settled when it is created, as the operator's act, and a run that meets a prompt fails loudly (R31, R32).
+- **Typing into a session.** A keystroke that lands on a permission dialog can approve it. Where a harness offers a socket or an API, no keystrokes (R44); otherwise only into an empty input box of an idle session (R45), and an Enter only while the wake is still in that box. The 2026-10-04 clock defect is the evidence.
+- **One agent reaching another.** No primal daemon controls another agent's units (R07); a shared container gives read-only views (R62); the tray asks each agent's own primal daemon and holds no control itself (R70).
+- **Leaks of private context.** The layer copies no file content from an agent's home into its events or logs (R79). Events carry states, times and identities, never the content of an agent's work.
+- **Network exposure.** No primal daemon listens on a network port (R80). Container-to-host reporting goes through a mounted local socket; Q05 tests it under Docker on macOS.
+- **Loss of memory or work.** A restart checks for work in flight (R49), respects quiet windows (R50), and the layer never compacts on its own initiative (R51). Every control act is an event naming who asked (R52), so a lost hour of work can be traced to a decision.
+- **Credentials.** Credentials stay on the host. The outside watch alerts through its own credential (R75), so an expired agent login cannot also silence the alarm about it.
 
 ## 11 Conformance
 
@@ -351,12 +387,29 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R74 | decidable | macf/tests/test_pd_render.py::test_outside_watch_rendered | planned |
 | R75 | judgment | the operator, at review of each deployment's alert path | standing |
 | R76 | decidable | macf/tests/test_amail_deploy_config.py::test_hypervisor_value_accepted | planned |
+| R77 | decidable | macf/tests/test_pd_harness.py::test_wake_text_fixed | planned |
+| R78 | judgment | the operator, at review of each declaration | standing |
+| R79 | judgment | the head maintainer, at review of each landing pull request | standing |
+| R80 | decidable | macf/tests/test_primal_daemon.py::test_no_network_listener | planned |
 
 **Cold-reader trial**: not yet held.
 
 ## 12 Landing Plan
 
-To be completed before the final comment period. Planned, following the strawman's "start small" (P02): first the mail brokers and watchers, one recurring duty moved off session cron, and the duty notices, measured for a week; then the remaining units and the platform renderings; the tray last. Each step ships its policy text with its code (`core_principles`).
+The normative text lands in a new policy, `framework/policies/base/infrastructure/persistent_layer.md`, beside `service_supervision` and `notification_delivery`, which gain cross-references. Each landing pull request carries its policy text and its code together (MIS-0001-R29 (landing_MUST_ship_text_with_capability)), and each landed rule cites its requirement here (MIS-0001-R30 (policy_rule_MUST_cite_requirement)). The terms in section 5 enter `framework/glossary.md` with the decision, and the retired words move to its `## Retired` section, each with its users quoted (MIS-0001-R50 (retirement_MUST_quote_users)).
+
+The build starts small, as the strawman asked (P02), and a landing roadmap plans it after acceptance (`roadmaps_drafting`):
+
+| Step | Lands | Requirements |
+|---|---|---|
+| 1 | The primal daemon, declarations, events, health and outside control on Linux; the mail brokers and watchers as its first units; the outside watch | R01 to R04, R06 to R23, R48 to R53, R74, R75, R78 to R80 |
+| 2 | Schedules and notices; one recurring duty moved off session cron; the duty notices; measured for a week before step 3 | R24 to R47, R77 |
+| 3 | Containers: start order, limits, the shared view; mail clocks as schedules | R54 to R62 |
+| 4 | macOS: the LaunchAgent rendering, privacy grants, adopting the harness's own supervisor | R05, R63 to R66 |
+| 5 | The tray | R67 to R73 |
+| 6 | The code rename of `hypervisor`, with the glossary | R76 |
+
+MIS-0002 becomes Final only when every step has landed, every decidable requirement passes, every judgment is recorded, and a cold reader succeeds with the landed policy (MIS-0001-R33 (final_MUST_pass_cold-reader_trial)).
 
 ## 13 Open Questions
 
