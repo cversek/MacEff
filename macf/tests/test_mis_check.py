@@ -31,13 +31,13 @@ def plant(tmp_path):
     def run(edit=None, name=MIS1.name, glossary_edit=None, extra=None):
         d = tmp_path / "framework" / "mis"
         d.mkdir(parents=True, exist_ok=True)
-        text = MIS1.read_text()
+        text = MIS1.read_text(encoding="utf-8")
         if edit:
             text = edit(text)
-        (d / name).write_text(text)
+        (d / name).write_text(text, encoding="utf-8")
         g = tmp_path / "framework" / "glossary.md"
-        gtext = GLOSSARY.read_text()
-        g.write_text(glossary_edit(gtext) if glossary_edit else gtext)
+        gtext = GLOSSARY.read_text(encoding="utf-8")
+        g.write_text(glossary_edit(gtext) if glossary_edit else gtext, encoding="utf-8")
         if extra:
             extra(d)
         return {f.rule for f in mis.check([d], g)}
@@ -74,7 +74,7 @@ def test_r03_number_matches_name(plant):
 
 def test_r04_two_files_one_number(plant):
     def twin(d):
-        (d / "MIS-0001-another.md").write_text((d / MIS1.name).read_text())
+        (d / "MIS-0001-another.md").write_text((d / MIS1.name).read_text(encoding="utf-8"), encoding="utf-8")
     assert "R04" in plant(extra=twin)
 
 
@@ -202,7 +202,7 @@ def test_findings_name_their_slugs(plant, tmp_path):
 
 def test_rule_slugs_match_mis_0001():
     """The checker's slug table is the one written in MIS-0001, so the two cannot drift apart."""
-    written = dict(re.findall(r"^- \*\*(R\d+)\*\* \[.*\((\S+)\)$", MIS1.read_text(), flags=re.M))
+    written = dict(re.findall(r"^- \*\*(R\d+)\*\* \[.*\((\S+)\)$", MIS1.read_text(encoding="utf-8"), flags=re.M))
     for rule, slug in mis.RULE_SLUGS.items():
         assert written.get(rule) == slug, (rule, slug, written.get(rule))
 
@@ -249,9 +249,13 @@ def test_r49_a_correct_citation_passes(plant):
 
 
 def test_reads_are_utf8_whatever_the_locale():
-    """The tag's middle dot decodes wrongly under a Latin-1 locale unless every read names UTF-8."""
+    """The tag's middle dot decodes wrongly under a Latin-1 locale unless every read is UTF-8.
+
+    Every read goes through read_utf8, which decodes the bytes as UTF-8 itself, so no read can
+    fall back to the locale's encoding."""
     src = Path(mis.__file__).read_text(encoding="utf-8")
-    assert "read_text()" not in src and src.count('read_text(encoding="utf-8")') >= 4
+    assert "read_text(" not in src
+    assert 'raw.decode("utf-8")' in src
 
 
 def test_mis_files_are_a_knowledge_web_root(tmp_path, monkeypatch):
@@ -263,3 +267,53 @@ def test_mis_files_are_a_knowledge_web_root(tmp_path, monkeypatch):
     monkeypatch.setattr(manifest, "get_framework_policies_path", lambda: pol)
     roots = knowledge_web._type_roots(tmp_path / "home")
     assert ("mis", tmp_path / "framework" / "mis") in roots
+
+
+# ---- files that are not UTF-8 ---------------------------------------------------------------
+
+
+def _with_latin1_line(src: Path, dst: Path) -> int:
+    """Copy src to dst with one Latin-1 line appended; return the line holding the bad byte."""
+    raw = src.read_bytes()
+    dst.write_bytes(raw + "a café line\n".encode("latin-1"))
+    return raw.count(b"\n") + 1
+
+
+def _framework(tmp_path):
+    d = tmp_path / "framework" / "mis"
+    d.mkdir(parents=True)
+    (d / MIS1.name).write_bytes(MIS1.read_bytes())
+    return d
+
+
+def test_a_file_that_is_not_utf8_is_a_finding_not_a_traceback(tmp_path):
+    # One Latin-1 byte in a copy of the template used to stop the run with a traceback,
+    # so no other file was checked. Now it is one finding, and the other file is still checked.
+    d = _framework(tmp_path)
+    template = MIS_DIR / "MIS-0000-template.md"
+    line = _with_latin1_line(template, d / template.name)
+    findings = mis.check([d], GLOSSARY)
+    assert [(f.rule, Path(f.path).name, f.line) for f in findings] == [
+        (mis.UNREADABLE, template.name, line)]
+    assert str(findings[0]).endswith("not UTF-8 (byte 0xe9); no check could read this file")
+
+
+def test_a_glossary_that_is_not_utf8_is_one_finding_and_skips_the_term_check(tmp_path):
+    # MIS-0001 is Accepted, so R21 checks its Terms against the glossary. An unreadable glossary
+    # must not turn into one R21 finding per term.
+    d = _framework(tmp_path)
+    g = tmp_path / "framework" / "glossary.md"
+    line = _with_latin1_line(GLOSSARY, g)
+    findings = mis.check([d], g)
+    assert [(f.rule, Path(f.path).name, f.line) for f in findings] == [
+        (mis.UNREADABLE, "glossary.md", line)]
+
+
+def test_a_policy_that_is_not_utf8_is_reported_by_the_citation_check(tmp_path):
+    # Only the citation check reads policies, so it reports an unreadable one, once.
+    d = _framework(tmp_path)
+    pol = tmp_path / "framework" / "policies"
+    pol.mkdir()
+    (pol / "bad.md").write_bytes("café\n".encode("latin-1"))
+    findings = mis.check([d], GLOSSARY)
+    assert [(f.rule, Path(f.path).name) for f in findings] == [(mis.UNREADABLE, "bad.md")]
