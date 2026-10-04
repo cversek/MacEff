@@ -31,7 +31,9 @@ Format: one line per term, `- **term**: definition.`, in alphabetical order. `ma
 - **judgment**: a check that a named person or agent makes by review, because no tool can decide it.
 - **landing**: putting an accepted MIS's normative text into policy, with its code and tests, in a pull request.
 - **maintainer**: an agent that the operator has designated to maintain MacEff.
+- **major architectural change**: a change that adds a subsystem or changes architecture across components.
 - **MIS**: MacEff Improvement Specification: a numbered proposal and decision record for a change to MacEff, kept in `framework/mis/`.
+- **new policy**: a policy document added under `framework/policies`, as opposed to a change to an existing one.
 - **operator**: the human who owns a MacEff installation and holds final authority over merges, keys, money and permissions.
 - **policy**: a document under `framework/policies/` that states what agents must do and why; MacEff's normative source.
 - **position**: one participant's argued view in a deliberation, posted as a comment.
