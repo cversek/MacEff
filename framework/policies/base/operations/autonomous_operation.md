@@ -683,9 +683,18 @@ block: a system timer, a cron job, a supervisor.
   when each opened, how long it waited, whether the command then ran, and the
   ask rule of today's settings that matches it (`--by-rule` totals dialogs and
   waits per rule; `--json` for tools). A wait runs until the session moved on,
-  so an approved command adds its own run time. The rule is matched at report
-  time, because the event does not record which rule asked: "no ask rule
-  matched" means a hook or auto mode asked. Questions to the operator
+  so an approved command adds its own run time, and a sibling call running in
+  parallel can end it early, so waits are lower bounds. The rule is matched at
+  report time, because the event does not record which rule asked. Matching
+  follows the client's documented rule language (any `*`, the `:*` and trailing
+  ` *` forms, wrappers, chained commands, substitutions and loop bodies) against
+  the settings the client reads for that session: the user file, the shared file
+  of the directory the session started in, and the local file at its repository
+  root. A dialog no ask rule matches is grouped by what would allow it: the
+  wildcard rule the dialog offered, or the command's first words. That covers a
+  missing allow rule as well as a hook, auto mode or a built-in check, and the
+  report shows the permission mode each group opened in. A dialog whose session
+  was killed ends as "session ended" when the next session starts. Questions to the operator
   (AskUserQuestion, ExitPlanMode) are dialogs but not permissions, and are left
   out unless `--include-questions`. It keeps no state of its own, by design: a
   second record of the same events would drift from the log it copies.

@@ -9,7 +9,6 @@ import json
 import os
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -90,15 +89,104 @@ def test_a_bare_tool_rule_matches_the_tool():
     assert pw.matching_rule("WebFetch", {"url": "https://x"}, ["Bash(ls:*)", "WebFetch"]) == "WebFetch"
 
 
-def test_ask_rules_come_from_home_and_the_project_the_dialog_ran_in(tmp_path):
+def _write(f, ask):
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps({"permissions": {"ask": ask, "deny": ["Bash(rm -rf:*)"]}}))
+
+
+def test_settings_are_read_where_the_client_reads_them(tmp_path):
+    """User file, the project's shared file, the repo root's local file; nothing in between."""
     home = tmp_path / "home"
-    project = home / "work" / "repo"
-    (home / ".claude").mkdir(parents=True)
-    (project / ".claude").mkdir(parents=True)
-    (home / ".claude" / "settings.local.json").write_text(json.dumps({"permissions": {"ask": ["Bash(git push:*)"]}}))
-    (project / ".claude" / "settings.local.json").write_text(json.dumps(
-        {"permissions": {"ask": ["Bash(git reset --hard:*)", "Bash(git push:*)"], "deny": ["Bash(git push -f:*)"]}}))
-    assert pw.ask_rules(str(project / "sub"), home) == ["Bash(git push:*)", "Bash(git reset --hard:*)"]
+    repo = home / "work" / "repo"
+    (repo / ".git").mkdir(parents=True)
+    _write(home / ".claude" / "settings.json", ["Bash(git push *)"])
+    _write(home / ".claude" / "settings.local.json", ["Bash(never-read-a)"])      # not a user file
+    _write(home / "work" / ".claude" / "settings.json", ["Bash(never-read-b)"])   # between project and home
+    _write(repo / "pkg" / ".claude" / "settings.json", ["Bash(git reset --hard:*)"])
+    _write(repo / ".claude" / "settings.local.json", ["Bash(git clean:*)", "Bash(git push *)"])
+    assert pw.ask_rules(str(repo / "pkg"), home, environ={}) == \
+        ["Bash(git push *)", "Bash(git reset --hard:*)", "Bash(git clean:*)"]
+
+
+def test_claude_config_dir_moves_the_user_settings(tmp_path):
+    home, conf = tmp_path / "home", tmp_path / "conf"
+    _write(home / ".claude" / "settings.json", ["Bash(from-home)"])
+    _write(conf / "settings.json", ["Bash(from-config-dir)"])
+    assert pw.ask_rules("", home, environ={"CLAUDE_CONFIG_DIR": str(conf)}) == ["Bash(from-config-dir)"]
+
+
+@pytest.mark.parametrize("rule,command", [
+    ("Bash(git push *)", "git push -u origin b"),
+    ("Bash(git push *)", "git push"),
+    ("Bash(git * main)", "git push origin main"),
+    ("Bash(* --version)", "node --version"),
+    ("Bash(git clean:*)", "timeout 30 git clean -fd"),
+    ("Bash(git clean:*)", "nice git clean -fd"),
+    ("Bash(git clean:*)", "nohup git clean -fd"),
+    ("Bash(git clean:*)", "cd /tmp\ngit clean -fd"),
+    ("Bash(git clean:*)", "echo $(git clean -n)"),
+    ("Bash(git clean:*)", "for d in a b; do git clean -fd; done"),
+    ("Bash(git clean:*)", "FORCE=1 git clean -fd"),
+    ("Bash(git status)", "git status"),
+])
+def test_rules_match_with_the_documented_syntax(rule, command):
+    assert pw.matching_rule("Bash", {"command": command}, [rule]) == rule
+
+
+@pytest.mark.parametrize("rule,command", [
+    ("Bash(git push *)", "git pushx"),
+    ("Bash(git clean:*)", "echo git clean -fd"),
+    ("Bash(git status)", "git status -s"),
+    ("Bash(git * main)", "git push origin dev"),
+])
+def test_rules_do_not_match_what_the_client_would_not(rule, command):
+    assert pw.matching_rule("Bash", {"command": command}, [rule]) is None
+
+
+def test_a_subagent_call_does_not_answer_the_primary_dialog():
+    sub = completed(130, SID_A, command="ls")
+    sub["hook_input"]["agent_id"] = "agent-1"
+    events = [request(100, SID_A), sub, completed(200, SID_A), plain("dev_drv_ended", 300, SID_A)]
+    (d,) = pw.history(events)
+    assert (d.outcome, d.waited_minutes) == ("ran", pytest.approx(100 / 60))
+
+
+def test_a_dialog_left_by_a_killed_session_ends_when_the_next_session_starts():
+    events = [request(100, SID_A), plain("session_started", 500, SID_B)]
+    (d,) = pw.history(events)
+    assert (d.outcome, d.waited_minutes) == ("session ended", None)
+
+
+def test_a_dialog_no_rule_explains_is_grouped_by_what_to_allow():
+    def offering(t, command, rule):
+        e = request(t, SID_A, command=command)
+        e["hook_input"]["permission_suggestions"] = [
+            {"type": "addRules", "rules": [{"toolName": "Bash", "ruleContent": rule}],
+             "behavior": "allow", "destination": "localSettings"}]
+        return e
+    dialogs = pw.history([offering(100, "ruff check src", "ruff check *"),
+                          offering(150, "macf_tools --version", "macf_tools --version"),  # exact: one command
+                          request(200, SID_A, command="FOO=1 timeout 9 docker exec box ls")])
+    text = pw.history_text(dialogs, by_rule=True)
+    assert "the dialog offered Bash(ruff check *)" in text
+    assert "no ask rule matched; Bash: macf_tools --version" in text
+    assert "no ask rule matched; Bash: docker exec" in text  # past the assignment and the wrapper
+    assert "a hook or auto mode asked)" not in text
+
+
+def test_rules_come_from_the_session_start_not_a_later_cd(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    proj, other = home / "proj", home / "other"
+    (proj / ".git").mkdir(parents=True)
+    (other / ".git").mkdir(parents=True)
+    _write(proj / ".claude" / "settings.json", ["Bash(git push *)"])
+    _write(other / ".claude" / "settings.json", ["Bash(git push:*)"])
+    start = plain("session_started", 50, SID_A)
+    start["hook_input"] = {"session_id": SID_A, "cwd": str(proj)}
+    (d,) = pw.history([start, request(100, SID_A, cwd=str(other))])
+    assert d.project_dir == str(proj)
+    assert pw.matching_rule(d.tool, {"command": d.command}, pw.ask_rules(d.project_dir, home, environ={})) \
+        == "Bash(git push *)"
 
 
 def test_the_cli_reads_only_the_log_and_writes_nothing(tmp_path):
