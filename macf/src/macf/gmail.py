@@ -566,9 +566,9 @@ def fetch_thread(thread_id: str) -> Dict[str, Any]:
     return rec
 
 
-def read_thread(thread_id: str) -> Tuple[Dict[str, Any], bool]:
-    """Return (record, from_cache)."""
-    rec = cache_get(thread_id)
+def read_thread(thread_id: str, fresh: bool = False) -> Tuple[Dict[str, Any], bool]:
+    """Return (record, from_cache); fresh fetches the thread again even when a cached copy exists."""
+    rec = None if fresh else cache_get(thread_id)
     if rec is not None:
         audit("read", "read", "allowed", {"id": thread_id, "source": "cache"})
         return rec, True
@@ -576,15 +576,27 @@ def read_thread(thread_id: str) -> Tuple[Dict[str, Any], bool]:
 
 
 def sync(query: str, limit: int = 50) -> Dict[str, Any]:
+    """Fetch matching threads new to the cache, and fetch again any cached thread whose message count changed.
+
+    A reply lands on a thread the cache already holds, so a sync that fetched only unknown
+    threads left every reply unread (#515). The listing already carries each thread's
+    message count; a row whose count is 0 (its metadata could not be read) is left alone.
+    """
     rows = list_threads(query, limit)
     idx = _index()
-    new = 0
+    new = refreshed = 0
     for r in rows:
-        if r["thread_id"] not in idx:
+        known = idx.get(r["thread_id"])
+        if known is None:
             fetch_thread(r["thread_id"])
             new += 1
-    audit("sync", "read", "allowed", {"q": query, "matched": len(rows), "fetched": new})
-    return {"matched": len(rows), "fetched": new, "cached_threads": len(_index())}
+        elif r["messages"] and known.get("messages") != r["messages"]:
+            fetch_thread(r["thread_id"])
+            refreshed += 1
+    audit("sync", "read", "allowed", {"q": query, "matched": len(rows), "fetched": new + refreshed,
+                                       "refreshed": refreshed})
+    return {"matched": len(rows), "fetched": new + refreshed, "new": new, "refreshed": refreshed,
+            "cached_threads": len(_index())}
 
 
 def scan_outbound(parts: Dict[str, Any]) -> Dict[str, Any]:

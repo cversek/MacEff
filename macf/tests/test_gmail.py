@@ -147,6 +147,46 @@ class TestCliSurface:
         out = capsys.readouterr().out
         assert "(cache" in out and "hello" in out and len(calls) == 1
 
+    @staticmethod
+    def _thread_of(state):
+        """A thread whose length is state["n"], so a test can make a reply arrive."""
+        import base64
+        def msg(i):
+            return {"id": f"M{i}", "payload": {"mimeType": "text/plain",
+                    "headers": [{"name": "From", "value": f"p{i}@x"}, {"name": "Subject", "value": "s"},
+                                {"name": "Date", "value": f"d{i}"}],
+                    "body": {"data": base64.urlsafe_b64encode(f"body {i}".encode()).decode()}}}
+        return lambda params, payload: {"messages": [msg(i) for i in range(1, state["n"] + 1)]}
+
+    def test_sync_refetches_a_cached_thread_that_gained_a_reply(self, home, monkeypatch, capsys):
+        from macf import cli
+        _fake_grant(home)
+        state = {"n": 1}
+        self._stub_api(monkeypatch, [("/threads/T1", self._thread_of(state)),
+                                     ("/threads", {"threads": [{"id": "T1", "snippet": ""}]})])
+        first = gmail.sync("q", 5)
+        assert first["new"] == 1 and first["refreshed"] == 0
+        state["n"] = 2  # a reply arrives on the thread already in the cache
+        second = gmail.sync("q", 5)
+        assert second["new"] == 0 and second["refreshed"] == 1 and second["fetched"] == 1
+        assert cli.cmd_gmail_read(Namespace(thread_id="T1", json=False)) == 0
+        out = capsys.readouterr().out
+        assert "body 2" in out and "2 message(s)" in out
+        assert gmail.sync("q", 5)["fetched"] == 0  # an unchanged thread is not fetched again
+
+    def test_read_fresh_refetches_a_cached_thread(self, home, monkeypatch, capsys):
+        from macf import cli
+        _fake_grant(home)
+        state = {"n": 1}
+        self._stub_api(monkeypatch, [("/threads/T1", self._thread_of(state))])
+        assert cli.cmd_gmail_read(Namespace(thread_id="T1", json=False)) == 0
+        state["n"] = 2
+        assert cli.cmd_gmail_read(Namespace(thread_id="T1", json=False)) == 0
+        assert "body 2" not in capsys.readouterr().out  # the cached copy, as before
+        assert cli.cmd_gmail_read(Namespace(thread_id="T1", json=False, fresh=True)) == 0
+        out = capsys.readouterr().out
+        assert "fetched" in out and "body 2" in out
+
     def test_draft_with_attachment_builds_multipart_and_refusal_is_reported(self, home, tmp_path, monkeypatch, capsys):
         from macf import cli
         _fake_grant(home, profile="draft")
