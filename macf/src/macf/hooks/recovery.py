@@ -165,9 +165,10 @@ Read artifacts for full context, then continue."""
 
         # Explicit recovery protocol checklist (MANUAL_MODE)
         # Format artifact paths for inline display
-        reflection_path = str(artifacts.latest_reflection) if artifacts.latest_reflection else "No reflection found"
-        roadmap_path = str(artifacts.latest_roadmap) if artifacts.latest_roadmap else "No roadmap found"
-        checkpoint_path = str(artifacts.latest_checkpoint) if artifacts.latest_checkpoint else "No checkpoint found"
+        absent = "UNKNOWN (artifact discovery failed; look yourself)" if artifacts.error else None
+        reflection_path = str(artifacts.latest_reflection) if artifacts.latest_reflection else (absent or "No reflection found")
+        roadmap_path = str(artifacts.latest_roadmap) if artifacts.latest_roadmap else (absent or "No roadmap found")
+        checkpoint_path = str(artifacts.latest_checkpoint) if artifacts.latest_checkpoint else (absent or "No checkpoint found")
 
         warning = f"""
 ⚠️ MANDATORY RECOVERY PROTOCOL (MANUAL_MODE):
@@ -269,6 +270,13 @@ def _format_artifacts_section(artifacts: ConsciousnessArtifacts) -> str:
         Formatted artifacts section as string
     """
     lines = ["\n📚 CONSCIOUSNESS ARTIFACTS:"]
+
+    # A failed search says so and claims nothing about the tree: a successor told
+    # "No checkpoint found" skips the artifacts it most needs.
+    if artifacts.error:
+        lines.append(f"⚠️ Artifact discovery FAILED ({artifacts.error}); what exists is UNKNOWN, not absent.")
+        lines.append("Look yourself: agent/private/checkpoints, agent/private/reflections, agent/public/roadmaps/*/roadmap.md")
+        return "\n".join(lines)
 
     # Latest checkpoint
     if artifacts.latest_checkpoint:

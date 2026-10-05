@@ -18,6 +18,10 @@ class ConsciousnessArtifacts:
     reflections: List[Path] = field(default_factory=list)
     checkpoints: List[Path] = field(default_factory=list)
     roadmaps: List[Path] = field(default_factory=list)
+    # Set when discovery itself failed. An empty result and a failed search must not
+    # read the same: the recovery message once told a successor its predecessor left
+    # nothing to read, which is a claim about the tree only if the search ran.
+    error: Optional[str] = None
 
     @property
     def latest_reflection(self) -> Optional[Path]:
@@ -72,7 +76,7 @@ def get_latest_consciousness_artifacts(
             except Exception as e:
                 # Log error to stderr for debugging (hooks can see this)
                 print(f"⚠️ artifact discovery: ConsciousnessConfig failed: {type(e).__name__}: {e}", file=sys.stderr)
-                return ConsciousnessArtifacts()
+                return ConsciousnessArtifacts(error=f"ConsciousnessConfig failed: {type(e).__name__}: {e}")
 
         # Ensure agent_root is a Path
         agent_root = Path(agent_root)
@@ -111,7 +115,9 @@ def get_latest_consciousness_artifacts(
         roadmaps = []
         if roadmaps_dir and roadmaps_dir.exists():
             roadmaps = sorted(
-                [p for p in roadmaps_dir.glob("*.md") if p.is_file()],
+                # A roadmap is a folder holding roadmap.md (roadmaps_drafting); a
+                # top-level *.md glob matched nothing on any real agent tree.
+                [p for p in roadmaps_dir.glob("*/roadmap.md") if p.is_file()],
                 key=lambda p: p.stat().st_mtime,
                 reverse=True
             )[:limit]
@@ -124,5 +130,5 @@ def get_latest_consciousness_artifacts(
     except Exception as e:
         # NEVER crash - return empty artifacts, but log the error
         print(f"⚠️ artifact discovery: unexpected error: {type(e).__name__}: {e}", file=sys.stderr)
-        return ConsciousnessArtifacts()
+        return ConsciousnessArtifacts(error=f"{type(e).__name__}: {e}")
 
