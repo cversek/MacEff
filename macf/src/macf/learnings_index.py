@@ -36,12 +36,23 @@ _HEADING = re.compile(r"^(#{2,3})\s+(.+?)(?:\s+\((\d+)\))?\s*$")
 # An entry names its file either as `name.md` (what `add` writes) or as a markdown
 # link [title](name.md), the form hand-curated indexes use. The policy prescribes
 # neither, and reading only the first reported every linked entry as unindexed.
-# A link with a scheme (https://...) points elsewhere and is not an entry.
-_ENTRY_FILE = re.compile(r"`([^`]+\.md)`|\]\((?![a-z][a-z0-9+.-]*:)([^)\s]+\.md)\)")
+# Only the line's OWN entry counts: hooks link other files ("see also" a learning,
+# a checkpoint), and counting those miscounts the index in the other direction.
+# So: the backticked name, or else the first link to a bare file name (an anchor
+# allowed). A path part excludes checkpoints and web links alike.
+_TICK = re.compile(r"`([^`]+\.md)`")
+_LINK = re.compile(r"\]\((?:\./)?([^)/\s#]+\.md)(?:#[^)]*)?\)")
+_ENTRY_FILE = re.compile(_TICK.pattern + "|" + _LINK.pattern)  # an entry line, for placing new ones
 
 
 def _entry_files(line: str) -> List[str]:
-    return [tick or link for tick, link in _ENTRY_FILE.findall(line)]
+    ticks = _TICK.findall(line)
+    if ticks:
+        return ticks
+    first = _LINK.search(line)
+    return [first.group(1)] if first else []
+
+
 _TOTAL = re.compile(r"(\*\*Total Learnings\*\*:\s*)(\d+)")
 _UPDATED = re.compile(r"(\*\*Last Updated\*\*:\s*)(.+)")
 _NOT_LEARNINGS = {"INDEX.md", "CLAUDE.md", "README.md"}

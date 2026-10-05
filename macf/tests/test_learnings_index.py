@@ -120,3 +120,37 @@ def test_a_linked_entry_to_a_missing_file_is_dangling(home):
         "`2026-01-02_b_learning.md`", "[gone](2026-01-09_gone_learning.md)"))
     checks = _checks(verify(home.home, memory_file=home.mem))
     assert ("dangling entries", "2026-01-09_gone_learning.md") in checks
+
+
+# The four shapes from the review of #514: hooks link other files, and only a
+# line's own entry may count.
+def _with_hook(home, hook):
+    (home.ldir / "INDEX.md").write_text(INDEX.replace(
+        "- **Hook output is proprioception** -- `2026-01-01_a_learning.md`",
+        "- [Hook output is proprioception](2026-01-01_a_learning.md) -- " + hook))
+
+
+def test_a_see_also_link_in_a_hook_does_not_count_its_target_twice(home):
+    _with_hook(home, "see also [the checker](2026-01-02_b_learning.md)")
+    dx = verify(home.home, memory_file=home.mem)
+    assert dx.findings == [] and dx.chart.vitals["indexed"] == 2
+
+
+def test_a_learning_only_mentioned_in_a_hook_is_still_unindexed(home):
+    (home.ldir / "2026-01-03_c_learning.md").write_text("# Learning: c\n")
+    _with_hook(home, "see also [c](2026-01-03_c_learning.md)")
+    checks = _checks(verify(home.home, memory_file=home.mem))
+    assert ("unindexed learnings", "2026-01-03_c_learning.md") in checks
+
+
+def test_a_hook_citing_a_checkpoint_is_not_a_dangling_entry(home):
+    _with_hook(home, "from [the CCP](../checkpoints/2026-01-01_x_CCP.md)")
+    assert not any(c == "dangling entries" for c, _ in _checks(verify(home.home, memory_file=home.mem)))
+
+
+def test_an_entry_linking_a_section_is_read(home):
+    (home.ldir / "INDEX.md").write_text(INDEX.replace(
+        "- **Prove the checker fires** -- `2026-01-02_b_learning.md`",
+        "- [Prove the checker fires](2026-01-02_b_learning.md#pattern) -- before a gate"))
+    dx = verify(home.home, memory_file=home.mem)
+    assert dx.findings == [] and dx.chart.vitals["indexed"] == 2
