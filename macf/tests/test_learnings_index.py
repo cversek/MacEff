@@ -91,3 +91,32 @@ def test_a_missing_trigger_names_where_it_looked(home, tmp_path):
     gone = tmp_path / "nowhere" / "MEMORY.md"
     f = next(f for f in verify(home.home, memory_file=gone).findings if f.check == "consultation trigger")
     assert str(gone) in f.detail
+
+
+def test_an_entry_written_as_a_markdown_link_counts_as_indexed(home):
+    """The policy prescribes no entry form, and hand-curated indexes link the file.
+
+    A checker that read only backticked names reported every linked entry as a
+    learning the consult step cannot find: 54 false findings on one live index.
+    """
+    (home.ldir / "INDEX.md").write_text(INDEX.replace(
+        "- **Prove the checker fires** -- `2026-01-02_b_learning.md`",
+        "- [Prove the checker fires](2026-01-02_b_learning.md) — before trusting a gate"))
+    dx = verify(home.home, memory_file=home.mem)
+    assert dx.findings == [] and dx.chart.vitals["indexed"] == 2
+
+
+def test_a_web_link_is_not_an_entry(home):
+    (home.ldir / "INDEX.md").write_text(INDEX.replace(
+        "`2026-01-02_b_learning.md`", "[see](https://example.org/2026-01-02_b_learning.md)"))
+    checks = _checks(verify(home.home, memory_file=home.mem))
+    assert ("unindexed learnings", "2026-01-02_b_learning.md") in checks
+    assert not any(c == "dangling entries" for c, _ in checks), \
+        "a web link is no entry at all, so it cannot dangle either"
+
+
+def test_a_linked_entry_to_a_missing_file_is_dangling(home):
+    (home.ldir / "INDEX.md").write_text(INDEX.replace(
+        "`2026-01-02_b_learning.md`", "[gone](2026-01-09_gone_learning.md)"))
+    checks = _checks(verify(home.home, memory_file=home.mem))
+    assert ("dangling entries", "2026-01-09_gone_learning.md") in checks

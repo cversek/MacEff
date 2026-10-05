@@ -33,7 +33,15 @@ from .diagnostics import Chart, Diagnosis, Finding, Severity
 __all__ = ["learnings_dir", "memory_file_candidates", "parse_index", "add_entry", "verify"]
 
 _HEADING = re.compile(r"^(#{2,3})\s+(.+?)(?:\s+\((\d+)\))?\s*$")
-_ENTRY_FILE = re.compile(r"`([^`]+\.md)`")
+# An entry names its file either as `name.md` (what `add` writes) or as a markdown
+# link [title](name.md), the form hand-curated indexes use. The policy prescribes
+# neither, and reading only the first reported every linked entry as unindexed.
+# A link with a scheme (https://...) points elsewhere and is not an entry.
+_ENTRY_FILE = re.compile(r"`([^`]+\.md)`|\]\((?![a-z][a-z0-9+.-]*:)([^)\s]+\.md)\)")
+
+
+def _entry_files(line: str) -> List[str]:
+    return [tick or link for tick, link in _ENTRY_FILE.findall(line)]
 _TOTAL = re.compile(r"(\*\*Total Learnings\*\*:\s*)(\d+)")
 _UPDATED = re.compile(r"(\*\*Last Updated\*\*:\s*)(.+)")
 _NOT_LEARNINGS = {"INDEX.md", "CLAUDE.md", "README.md"}
@@ -76,7 +84,7 @@ def parse_index(text: str) -> Dict[str, Dict]:
             clusters[current] = {"count": int(m.group(3)) if m.group(3) else None, "files": [], "line": i}
             continue
         if current:
-            clusters[current]["files"].extend(_ENTRY_FILE.findall(line))
+            clusters[current]["files"].extend(_entry_files(line))
     return {k: v for k, v in clusters.items() if v["files"] or v["count"] is not None}
 
 
