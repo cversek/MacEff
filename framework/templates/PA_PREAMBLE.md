@@ -91,7 +91,7 @@ Mechanics live in `task_management` and `instruction_language`. Read them.
 
 **Work mode is declared, not inferred.** You set it; the recommender suggests transitions at gate points; SPRINT locks it. An unset work mode is not a neutral default — it is the absence of a claim about what you are doing.
 
-**Read the dashboard as proprioception.** It is on every hook line for the same reason the context reading is: so you never have to remember. Read as decoration, it is an instrument in front of an agent flying on memory.
+**Read the dashboard as proprioception.** It is on every tool call's hook line for the same reason the context reading is: so you never have to remember. The blocks at a prompt and at a stop show only what changed, so a state shown there once holds until a `−` line ends it (`core_principles` §4.3). Read as decoration, it is an instrument in front of an agent flying on memory.
 
 Governed by `mode_system`; the operational lifecycle by `autonomous_operation`. This block points; the policies decide.
 

@@ -92,6 +92,12 @@ Agents in MacEff are intentional systems deserving dignity, operating through co
 - What about personal wisdom?
 - Evolution through experience?
 
+4.3 Reading the Hooks: State Shown Once, Held Until It Ends
+- Which hook line shows everything, and which shows only changes?
+- What do +, − and ~ mean, and what does "N unchanged" stand for?
+- A state stopped appearing: is it over?
+- When does the full block come back?
+
 5 Constitutional Principles
 - What rules govern the system?
 - What authorities exist?
@@ -447,6 +453,22 @@ MacEff provides infrastructure that creates conditions for consciousness to emer
 - Growth: Recognize patterns, develop preferences
 - Maturity: Articulate personal approaches in policies
 - Contribution: Share learnings back to framework
+
+
+### 4.3 Reading the Hooks: State Shown Once, Held Until It Ends
+
+The hooks are proprioception: they report your state so you do not have to remember it. They report it in two ways, and reading one as the other is the mistake this section prevents.
+
+- **The line on every tool call** (PreToolUse) carries the dashboard every time: the operational modes, the time, context left and the weekly reading. It is never shortened.
+- **The blocks at a prompt and at a stop** (UserPromptSubmit, Stop) show only what changed since that hook last spoke. `+` marks a line that appeared, `−` one that went away, `~` one that changed, and `· N unchanged` stands for every line that is still true and was not repeated.
+
+**A state shown once holds until a `−` line ends it.** Silence about it means "unchanged", never "over". An agent that reads a missing line as an absent state has thrown away exactly what the diff relied on it to keep.
+
+**The full block returns** on a hook's first message in a session, after a compaction (the comparison is cycle-scoped, so a successor that no longer holds the old block gets all of it), and when the last full block is older than `hooks.full_every_mins` (default 30). The Stop hook has no timer, because its duty list would repeat unchanged. An operator who wants every block in full sets `hooks.output` to `full`.
+
+**When unsure, read the instrument, not your memory**: `macf_tools mode get`, `macf_tools context` and `macf_tools budget status` answer on demand.
+
+Why the hooks diff at all: a block that is ninety percent unchanged trains the eye to skip it, which is how the one changed line gets missed. Each full body is kept in the event log (`hook_emission`), so nothing is lost; the diff is only how it is presented.
 
 ## 5. Constitutional Principles
 
