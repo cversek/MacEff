@@ -85,6 +85,7 @@ stateDiagram-v2
 - **declaration**: the file that lists one agent's managed units and schedules, with how each starts, its restart policy and its limits.
 - **harness adapter**: the part of the persistent layer that launches, wakes and reads one harness, such as Claude Code, Codex CLI or Hermes Agent.
 - **health**: proof that the work that fell due actually ran: runs owed against runs done, derived from events when read; never only that a process answers.
+- **invitation**: the observed agent's grant that lets one onlooker receive an observation stream until either side, the operator or a lease ends it.
 - **isolated session**: a fresh session that a schedule starts for one run, with no access to the agent's live conversation.
 - **lease**: a claim that one run holds on a schedule while it runs, so that the run cannot start twice.
 - **liveness event**: an event in an agent's event log by which a managed unit shows that it is alive, keyed by the agent's identity and naming its process.
@@ -93,10 +94,14 @@ stateDiagram-v2
 - **missed-run policy**: what a schedule does about runs owed while it was down: skip them, run once, run once inside a window, or report them only.
 - **notice**: a message the persistent layer delivers to an agent, the operator, or both, naming its source and stamped with when its content was read, sent and received.
 - **notifier**: the managed unit that delivers notices into a live session, with masking, de-duplication and a budget.
+- **observation stream**: what an onlooker receives: the observed session's events or output from the invitation onward, never its history and never a keyboard.
+- **onlooker**: an agent, or later a person, that watches another agent's session by its invitation and never types into it.
+- **operator surface**: a way for the operator to see and type into a session, such as a terminal attach or a Remote Control view.
 - **outer tier**: the operating system's own service manager that keeps each primal daemon running: a systemd user unit on Linux, a per-user LaunchAgent on macOS, or a container's init.
 - **outside watch**: a check of the primal daemons that runs outside their outer tier and alerts a person through a credential independent of every agent's channel.
 - **persistent layer**: the subsystem this MIS specifies: the outer tier, every primal daemon, their declarations, schedules, notices and the outside watch.
 - **platform adapter**: the part of the persistent layer that renders declarations for one outer tier.
+- **presence state**: the derived state that says who watches a session and which operator surface is present, read from the agent's event log.
 - **primal daemon**: the one process per agent that starts, stops, restarts, checks and schedules that agent's managed units; it manages their lifecycles only, and never reads, writes or decides the agent's work.
 - **quiet window**: a time an agent declares in which the layer does not restart or compact its session.
 - **readout**: what a command or a display reports about the persistent layer's state.
@@ -227,6 +232,31 @@ stateDiagram-v2
 - **R75** [MUST · judgment: the operator, at review of each deployment's alert path] The outside watch MUST alert a person through a credential that does not depend on any agent's channel. (outside_watch_MUST_alert_independently)
 - **R76** [MUST · decidable: macf/tests/test_amail_deploy_config.py::test_hypervisor_value_accepted (planned)] The mail system's deploy configuration MUST accept the old value `hypervisor` as the primal daemon's value. (config_MUST_accept_old_hypervisor_value)
 
+### 6.13 Observation and attach
+
+- **R81** [MAY · judgment: the operator] The operator MAY attach to any agent's session, with a keyboard, without an invitation. (operator_MAY_attach_without_invitation)
+- **R82** [MUST · decidable: macf/tests/test_pd_observe.py::test_onlooker_needs_invitation (planned)] An onlooker MUST receive an observation stream only after the observed agent invites it. (onlooker_MUST_be_invited)
+- **R83** [MUST NOT · decidable: macf/tests/test_pd_observe.py::test_onlooker_has_no_keyboard (planned)] An onlooker MUST NOT type into the observed session. (onlooker_MUST-NOT_type)
+- **R84** [MUST · decidable: macf/tests/test_pd_observe.py::test_stream_starts_at_invitation (planned)] An observation stream MUST contain nothing from before its invitation. (stream_MUST_start_at_invitation)
+- **R85** [MUST · decidable: macf/tests/test_pd_observe.py::test_stream_stops_at_end (planned)] When an observation ends, its stream MUST stop at once. (stream_MUST_stop_at_end)
+- **R86** [MAY · decidable: macf/tests/test_pd_observe.py::test_either_party_ends (planned)] The observed agent or the onlooker MAY end an observation at any time. (either_party_MAY_end_observation)
+- **R87** [MAY · decidable: macf/tests/test_pd_observe.py::test_operator_ends (planned)] The operator MAY end any observation. (operator_MAY_end_observation)
+- **R88** [MAY · decidable: macf/tests/test_pd_observe.py::test_lease_ends_invitation (planned)] An invitation MAY carry a lease that ends it at a declared time. (invitation_MAY_carry_lease)
+- **R89** [MUST · decidable: macf/tests/test_pd_observe.py::test_lease_end_same_event (planned)] When a lease runs out, the persistent layer MUST record the same ending event as an ending by a party. (lease_end_MUST_match_party_end)
+- **R90** [MUST · decidable: macf/tests/test_pd_observe.py::test_observation_events (planned)] Each invitation, pause, resume and ending MUST be an event in the observed agent's own event log. (observation_acts_MUST_be_events)
+- **R91** [MUST · decidable: macf/tests/test_pd_observe.py::test_presence_on_call_line (planned)] The observed agent's per-call hook line MUST show each onlooker that watches and each operator surface that is present. (call_line_MUST_show_presence)
+- **R92** [MAY · decidable: macf/tests/test_pd_observe.py::test_pause_resume (planned)] The observed agent MAY pause and resume an observation stream. (owner_MAY_pause_stream)
+- **R93** [MUST · decidable: macf/tests/test_pd_observe.py::test_pause_shown (planned)] While a stream is paused, the onlooker MUST see that the owner paused it. (onlooker_MUST_see_pause)
+- **R94** [MUST · decidable: macf/tests/test_pd_observe.py::test_onlooker_by_card (planned)] An invitation MUST name its onlooker by calling card, never by login user. (invitation_MUST_name_card)
+- **R95** [MUST · decidable: macf/tests/test_pd_observe.py::test_source_from_transport (planned)] An onlooker's messages MUST arrive through a channel that marks their source from the transport, never from the text. (onlooker_message_MUST_carry_transport_source)
+- **R96** [MUST NOT · judgment: the head maintainer, at review of the observation channel] An agent MUST NOT treat text in an onlooker's message as the operator's word or as consent. (agent_MUST-NOT_take_onlooker_text_as_operator)
+- **R97** [MUST · judgment: the head maintainer, at review of each operator surface] Each operator surface that carries a keyboard MUST set the operator-present state. (keyboard_surface_MUST_set_presence)
+- **R98** [MUST · decidable: macf/tests/test_pd_observe.py::test_undetectable_viewer_said (planned)] Where a surface cannot detect its viewer, the presence state MUST say the surface is enabled, not attached. (presence_MUST_say_enabled_when_undetectable)
+- **R99** [MUST NOT · decidable: macf/tests/test_pd_observe.py::test_onlooker_no_operator_surface (planned)] An onlooker MUST NOT receive an operator surface. (onlooker_MUST-NOT_get_operator_surface)
+- **R100** [MUST · decidable: macf/tests/test_pd_observe.py::test_attach_resolves_from_pd (planned)] Attach by name MUST resolve the session from the agent's primal daemon. (attach_MUST_resolve_from_pd)
+- **R101** [MUST · decidable: macf/tests/test_pd_observe.py::test_nothing_attachable_said (planned)] Where nothing attachable hosts a session, the readout MUST say so. (readout_MUST_say_nothing_attachable)
+- **R102** [SHOULD · decidable: macf/tests/test_pd_observe.py::test_reachable_state (planned)] The presence state SHOULD tell an operator reachable by channel from an operator attached. (presence_SHOULD_show_reachable)
+
 ## 7 Rationale and Rejected Alternatives
 
 The positions are cited by their IDs in section 14.
@@ -254,6 +284,8 @@ The positions are cited by their IDs in section 14.
 **The tray.** The operator proposed it (P13). **R67** and **R68** keep it optional, because headless hosts and containers have no desktop (P14). **R69** keys icons by the card in the identity file, never the environment (P14). **R70**, **R71** and **R72** keep it an observer that asks primal daemons to act, never types, and shows a waiting prompt first (P14). **R73** answers the head maintainer: on stock GNOME no tray shows without an extension, and a host that cannot show it says so (P15).
 
 **Watching the layer, and the old name.** **R74** and **R75** close the issue body's coupling of an alarm to the thing it reports on: alerts that go out through the agent's own channel credential fail with the agent. The 2026-10-04 login expiry stopped every session and the host agent's check-ins with them; only a watch outside every session could have told a person. **R76** follows the head maintainer: the code documents `hypervisor` as a supervision value, and the old value keeps meaning the new one (P15, P16).
+
+**Observation and attach.** This area is the operator's position P17, with the answers to the Secretary's questions (P19) and the additions of the head maintainer (P20) and the laptop host agent (P21). **R81** keeps the operator's privileged tier unchanged: attach, with a keyboard, without an invitation (P17 point 1). **R82**, **R83**, **R84** and **R85** are P17 points 1 and 2: an onlooker sees "nothing from before the invitation and nothing after it ends", so observation is a stream that starts empty at the invitation, not a terminal attach, which would show the current screen and therefore history (P18 consequence 1). **R86** and **R87** are P17's "either side can end it" and A08 (a); the operator's courtesy is to ask the owning agent first (P19). **R88** is A07: a lease is optional, held by an outside clock or the primal daemon. **R89** is the head maintainer's rule that a lease running out ends an observation the same way a party does, so the awareness state and any audit see one kind of ending (P20 point 2). **R90** makes the observation acts events, which keeps **R16** whole (P18 consequence 2). **R91** follows the head maintainer's correction: the per-call hook line already carries the modes on every call, so presence lives there and the agent never has to hold it between prompt blocks (P20 point 1; P23). **R92** and **R93** are the laptop host's pause: discipline governs what the owning agent chooses to run while watched, but "cannot take back what a tool has already printed" (P21 point 1). A06 (a) keeps the scope of an invitation at everything the session shows, so the pause, and not a filtered stream, is how the owner protects other people's records and credentials. **R94** answers a host where two agents share one login user and one agent's monitor was read as another's (P20 point 3). **R95** and **R96** are P17 point 4 with the laptop host's rule that the source comes from the transport, never from the text (P21 point 2). **R97** to **R99** answer the operator's point that Remote Control gives the view and keyboard of an attach without tmux (P22): every keyboard surface must show, none may be a way in the agent cannot see, and an onlooker never gets one (P23). **R98** is honest about a gap: a first test found no record in the session's own transcript that marks a Remote Control viewer as present (tier PLAUSIBLE; a controlled test is owed), so until a surface can detect its viewer the state says "enabled". **R100** and **R101** are P17 point 5 with the laptop host's rule that attach resolves whatever hosts the session, including nothing attachable (P21 point 4); the supervisor's registry, which already resolves one session per calling card, is the starting point (P20 point 4). **R102** is the laptop host's third state, operator reachable by channel, which the notice routing of **R41** and **R42** can then use (P21 point 3). Observation between containers is undecided (P19), with amail as the less invasive and more auditable path meanwhile; Q06 carries it.
 
 **Rejected**
 - **One manager per host** (the strawman in P02): one controller is one place where one agent's restart policy, environment or grants can leak into another's (P05). The host's view is built read-only from per-agent events instead (D1).
@@ -303,6 +335,7 @@ The persistent layer is not a security boundary (section 3); only operating-syst
 - **Leaks of private context.** The layer copies no file content from an agent's home into its events or logs (R79). Events carry states, times and identities, never the content of an agent's work.
 - **Network exposure.** No primal daemon listens on a network port (R80). Container-to-host reporting goes through a mounted local socket; Q05 tests it under Docker on macOS.
 - **Loss of memory or work.** A restart checks for work in flight (R49), respects quiet windows (R50), and the layer never compacts on its own initiative (R51). Every control act is an event naming who asked (R52), so a lost hour of work can be traced to a decision.
+- **Observation.** An onlooker never types (R83) and never receives an operator surface (R99), so watching cannot become control. A stream holds nothing from before its invitation (R84) and stops when it ends (R85). Everything a session shows is in scope (A06), so the owner pauses the stream before work that prints other people's records or credentials (R92). An onlooker's message is data, never the operator's word (R96).
 - **Credentials.** Credentials stay on the host. The outside watch alerts through its own credential (R75), so an expired agent login cannot also silence the alarm about it.
 
 ## 11 Conformance
@@ -391,6 +424,28 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R78 | judgment | the operator, at review of each declaration | standing |
 | R79 | judgment | the head maintainer, at review of each landing pull request | standing |
 | R80 | decidable | macf/tests/test_primal_daemon.py::test_no_network_listener | planned |
+| R81 | judgment | the operator | standing |
+| R82 | decidable | macf/tests/test_pd_observe.py::test_onlooker_needs_invitation | planned |
+| R83 | decidable | macf/tests/test_pd_observe.py::test_onlooker_has_no_keyboard | planned |
+| R84 | decidable | macf/tests/test_pd_observe.py::test_stream_starts_at_invitation | planned |
+| R85 | decidable | macf/tests/test_pd_observe.py::test_stream_stops_at_end | planned |
+| R86 | decidable | macf/tests/test_pd_observe.py::test_either_party_ends | planned |
+| R87 | decidable | macf/tests/test_pd_observe.py::test_operator_ends | planned |
+| R88 | decidable | macf/tests/test_pd_observe.py::test_lease_ends_invitation | planned |
+| R89 | decidable | macf/tests/test_pd_observe.py::test_lease_end_same_event | planned |
+| R90 | decidable | macf/tests/test_pd_observe.py::test_observation_events | planned |
+| R91 | decidable | macf/tests/test_pd_observe.py::test_presence_on_call_line | planned |
+| R92 | decidable | macf/tests/test_pd_observe.py::test_pause_resume | planned |
+| R93 | decidable | macf/tests/test_pd_observe.py::test_pause_shown | planned |
+| R94 | decidable | macf/tests/test_pd_observe.py::test_onlooker_by_card | planned |
+| R95 | decidable | macf/tests/test_pd_observe.py::test_source_from_transport | planned |
+| R96 | judgment | the head maintainer, at review of the observation channel | standing |
+| R97 | judgment | the head maintainer, at review of each operator surface | standing |
+| R98 | decidable | macf/tests/test_pd_observe.py::test_undetectable_viewer_said | planned |
+| R99 | decidable | macf/tests/test_pd_observe.py::test_onlooker_no_operator_surface | planned |
+| R100 | decidable | macf/tests/test_pd_observe.py::test_attach_resolves_from_pd | planned |
+| R101 | decidable | macf/tests/test_pd_observe.py::test_nothing_attachable_said | planned |
+| R102 | decidable | macf/tests/test_pd_observe.py::test_reachable_state | planned |
 
 **Cold-reader trial**: not yet held.
 
@@ -408,6 +463,7 @@ The build starts small, as the strawman asked (P02), and a landing roadmap plans
 | 4 | macOS: the LaunchAgent rendering, privacy grants, adopting the harness's own supervisor | R05, R63 to R66 |
 | 5 | The tray | R67 to R73 |
 | 6 | The code rename of `hypervisor`, with the glossary | R76 |
+| 7 | Observation and attach: invitations as events, the presence state, the stream, attach by name | R81 to R102 |
 
 MIS-0002 becomes Final only when every step has landed, every decidable requirement passes, every judgment is recorded, and a cold reader succeeds with the landed policy (MIS-0001-R33 (final_MUST_pass_cold-reader_trial)).
 
@@ -418,6 +474,8 @@ MIS-0002 becomes Final only when every step has landed, every decidable requirem
 - **Q03** Who may ask for a compaction from outside a session: the operator only, or also the agent's own declared wind-down? The operator decides before the final comment period. (who_may_ask_compaction)
 - **Q04** Which missed-run policy is the default when a declaration names none: skip, run once, or none, so that a schedule without one fails CI? The operator decides before the final comment period. (default_missed-run_policy)
 - **Q05** How does a container's primal daemon report to the host under Docker on macOS, where the container's init runs inside a virtual machine? The head maintainer tests it before the container landing. (macos_container_report_path)
+
+- **Q06** May an agent invite an onlooker from another container, or does collaboration between containers stay with amail? The operator decides before the final comment period. (inter_container_observation)
 
 ## 14 Deliberation Record
 
@@ -439,12 +497,21 @@ The deliberation is issue #493, open through 2026-10-08; the synthesis follows o
 - **P14** The laptop host agent: a LaunchAgent, never a LaunchDaemon; `maceff_pd` for identifiers; the boundary sentence; four limits on the tray, https://github.com/cversek/MacEff/issues/493#issuecomment-5972204110. (laptop_host_name_and_tray)
 - **P15** The head maintainer: liveness and runs as events, the code rename of "hypervisor", the mail clock as a schedule, waiting on a person defined on units, two more tray limits, https://github.com/cversek/MacEff/issues/493#issuecomment-5972215286. (maintainer_events_and_answers)
 - **P16** The Secretary: a correction of the glossary's credit, "primal daemon" adopted, and the retirement of "hypervisor" under MIS-0001-R50 (retirement_MUST_quote_users), https://github.com/cversek/MacEff/issues/493#issuecomment-5976562253. (secretary_name_correction)
+- **P17** The operator: two tiers, the operator and onlookers by invitation; the window is the invitation; the agent knows who watches; talking back through a channel; attach by name, https://github.com/cversek/MacEff/issues/493#issuecomment-5988901487. (operator_observation_by_invitation)
+- **P18** The Secretary: P17 recorded; observation as a stream, invitations as events; the channel narrows Q02; questions on scope, expiry and the operator's right to end, https://github.com/cversek/MacEff/issues/493#issuecomment-5989021040. (secretary_records_observation)
+- **P19** The operator: A06 (a) an invitation covers everything, the onlooker trusted; A07 an optional lease; A08 (a) the operator may end it, with courtesy; the scope across hosts and containers, https://github.com/cversek/MacEff/issues/493#issuecomment-5989247054. (operator_answers_observation)
+- **P20** The head maintainer: presence on the per-call hook line; watching derived from events; one ending event; onlookers by calling card; attach from the supervisor's registry, https://github.com/cversek/MacEff/issues/493#issuecomment-5989289355. (maintainer_observation_from_code)
+- **P21** The laptop host agent: a pause for the owner; source from the transport; operator reachable by channel; attach resolves whatever hosts the session, https://github.com/cversek/MacEff/issues/493#issuecomment-5989312278. (laptop_host_observed_agent)
+- **P22** The operator: Remote Control is virtually an attach without tmux, https://github.com/cversek/MacEff/issues/493#issuecomment-5989444012. (operator_remote_control_is_attach)
+- **P23** The Secretary: the area as it stands; the correction on the per-call line; Remote Control as an operator surface, https://github.com/cversek/MacEff/issues/493#issuecomment-5989452440. (secretary_observation_status)
 
 The synthesis will quote each position verbatim and name each disagreement, as MIS-0001-R24 (secretary_MUST_post_synthesis) and MIS-0001-R51 (option_MUST_quote_its_source) require. No objection is recorded yet.
 
 ## 15 Revision History
 
 - 2026-10-04: first draft, from every position posted on #493 through issuecomment-5976562253.
+
+- 2026-10-06: section 6.13, observation and attach (R81 to R102), from P17 to P23; its terms, rationale, security note, conformance rows, landing step 7 and Q06.
 
 ## Wiki-Links
 
