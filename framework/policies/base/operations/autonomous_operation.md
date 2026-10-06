@@ -700,6 +700,19 @@ block: a system timer, a cron job, a supervisor.
   (AskUserQuestion, ExitPlanMode) are dialogs but not permissions, and are left
   out unless `--include-questions`. It keeps no state of its own, by design: a
   second record of the same events would drift from the log it copies.
+- **A change to the permission rules is an event.** The ConfigChange hook runs
+  when a settings file changes during a session. Claude Code tells it which file
+  changed, never what changed, so the hook compares the file's `allow`, `ask` and
+  `deny` rules and its `defaultMode` with the copy it last saw, and records a
+  `permission_rules_changed` event naming each rule added or removed and the
+  file it came from. A file seen for the first time is recorded as a
+  `permission_rules_baseline`. Session start compares the user, project and
+  local settings files too: it baselines a file never seen, so the first change
+  in a session is a diff, and it records a change made while no session ran with
+  the source `between_sessions`. A file that cannot be read is skipped, never
+  recorded as every rule removed. The copy is a cache for comparing; the events
+  are the record. Query them with `macf_tools events query --event
+  permission_rules_changed`.
 
 **What a deployment must do.** Run `macf_tools permissions watch` as the
 agent's own user, every few minutes, from a scheduler outside the agent's
