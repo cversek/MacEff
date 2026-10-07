@@ -328,12 +328,18 @@ def read_pid_file() -> Optional[int]:
         return None
 
 
-def remove_pid_file() -> None:
-    """Remove the pid file. Warns to stderr if it could not be removed.
+def remove_pid_file(pid: int) -> None:
+    """Remove the pid file if it names ``pid``. Warns to stderr if it could not be removed.
 
     A pid file left behind makes the next liveness check report this daemon as
-    running after it has exited.
+    running after it has exited. But only the monitor the file names may remove
+    it: a duplicate that removed the record of the monitor meant to stay made the
+    next session start fork another, and monitors accumulated.
     """
+    recorded = read_pid_file()
+    if recorded is not None and recorded != pid:
+        print(f"MACF: pid file names monitor {recorded}, not {pid}; leaving it", file=sys.stderr)
+        return
     try:
         get_pid_file_path().unlink(missing_ok=True)
     except OSError as e:
@@ -362,10 +368,10 @@ def is_running() -> bool:
             f"another user; treating this user's monitor as NOT RUNNING",
             file=sys.stderr,
         )
-        remove_pid_file()
+        remove_pid_file(pid)
         return False
     except OSError:
-        remove_pid_file()  # stale PID file
+        remove_pid_file(pid)  # stale PID file
         return False
 
 
@@ -712,7 +718,7 @@ def start_daemon(foreground: bool = False, poll_interval: float = DEFAULT_POLL_I
         try:
             monitor.run(start_from_end=True)
         finally:
-            remove_pid_file()
+            remove_pid_file(os.getpid())
         return 0
 
     # Daemonize: fork to background
@@ -761,7 +767,7 @@ def start_daemon(foreground: bool = False, poll_interval: float = DEFAULT_POLL_I
     try:
         monitor.run(start_from_end=True)
     finally:
-        remove_pid_file()
+        remove_pid_file(os.getpid())
 
     os._exit(0)
 
@@ -782,11 +788,11 @@ def stop_daemon() -> int:
             f"Transcript Monitor is not running. Nothing was signaled.",
             file=sys.stderr,
         )
-        remove_pid_file()
+        remove_pid_file(pid)
         return 0
     except OSError as e:
         print(f"⚠️ Process {pid} not found: {e}", file=sys.stderr)
-        remove_pid_file()
+        remove_pid_file(pid)
         return 0
 
     # Wait for process to exit
@@ -796,7 +802,7 @@ def stop_daemon() -> int:
             time.sleep(0.5)
         except OSError:
             break
-    remove_pid_file()
+    remove_pid_file(pid)
     print(f"📡 Transcript Monitor stopped (was PID {pid})")
     return 0
 
