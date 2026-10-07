@@ -11581,7 +11581,8 @@ def cmd_learnings_index_add(args: argparse.Namespace) -> int:
     """File a learning under its cluster in the master index."""
     from .learnings_index import add_entry
     try:
-        ok, msg = add_entry(args.file, args.cluster, hook=args.hook or "")
+        ok, msg = add_entry(args.file, args.cluster, hook=args.hook or "",
+                            new_cluster=getattr(args, "new_cluster", False))
     except OSError as e:
         print(f"❌ could not update the index: {e}")
         return 1
@@ -13370,6 +13371,8 @@ def _build_parser() -> argparse.ArgumentParser:
     li_add.add_argument("file", help="the learning's file name (or path) in agent/private/learnings")
     li_add.add_argument("--cluster", required=True, help="the cluster heading to file it under")
     li_add.add_argument("--hook", default="", help='when to consult it, e.g. "WHEN a bug resists the first hypothesis"')
+    li_add.add_argument("--new-cluster", dest="new_cluster", action="store_true",
+                        help="create the cluster if no heading matches; without it an unknown name is refused")
     li_add.set_defaults(func=cmd_learnings_index_add)
     li_verify = li_sub.add_parser("verify", help="check entries, counts and the consultation trigger")
     li_verify.add_argument("--memory", help="path to the auto-loaded memory file, if not the platform default")

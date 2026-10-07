@@ -81,7 +81,7 @@ def test_add_files_the_entry_and_keeps_every_count_true(home):
 
 def test_a_new_cluster_is_created_and_the_trigger_reminder_given(home):
     (home.ldir / "2026-01-03_c_learning.md").write_text("# Learning: new domain\n")
-    ok, msg = add_entry("2026-01-03_c_learning.md", "Embedded Debug", agent_home=home.home)
+    ok, msg = add_entry("2026-01-03_c_learning.md", "Embedded Debug", agent_home=home.home, new_cluster=True)
     assert ok and "consultation trigger" in msg
     assert "## Embedded Debug (1)" in (home.ldir / "INDEX.md").read_text()
     assert ("consultation trigger", "Embedded Debug") in _checks(verify(home.home, memory_file=home.mem))
@@ -154,3 +154,58 @@ def test_an_entry_linking_a_section_is_read(home):
         "- [Prove the checker fires](2026-01-02_b_learning.md#pattern) -- before a gate"))
     dx = verify(home.home, memory_file=home.mem)
     assert dx.findings == [] and dx.chart.vitals["indexed"] == 2
+
+
+LINK_INDEX = """# Agent Learnings Index
+
+**Total Learnings**: 2
+
+## Hooks (1)
+
+- [Hook output is proprioception](2026-01-01_a_learning.md) -- WHEN a hook line reads like advice
+- [The reflection behind it](../reflections/2026-01-01_jotewr.md) -- background, not an entry
+
+## Testing (1)
+
+- [Prove the checker fires](2026-01-02_b_learning.md) -- WHEN a check passes; see also [the hook one](2026-01-01_a_learning.md)
+
+**Keywords**: hooks, testing
+"""
+
+
+def test_add_writes_a_new_entry_in_the_shape_of_the_clusters_own(home):
+    """An index curated by hand in link form stays in link form."""
+    (home.ldir / "INDEX.md").write_text(LINK_INDEX)
+    (home.ldir / "2026-01-03_c_learning.md").write_text("# Learning: Structure beats memory\n")
+    ok, msg = add_entry("2026-01-03_c_learning.md", "Testing", hook="WHEN a lesson recurs", agent_home=home.home)
+    assert ok, msg
+    text = (home.ldir / "INDEX.md").read_text()
+    assert "- [Structure beats memory](2026-01-03_c_learning.md) -- WHEN a lesson recurs" in text
+    assert "## Testing (2)" in text and "**Total Learnings**: 3" in text
+
+
+def test_an_unknown_cluster_is_refused_and_the_near_names_offered(home):
+    """A near-miss must not quietly become a one-entry cluster."""
+    (home.ldir / "2026-01-03_c_learning.md").write_text("# Learning: new\n")
+    before = (home.ldir / "INDEX.md").read_text()
+    ok, msg = add_entry("2026-01-03_c_learning.md", "Test", agent_home=home.home)
+    assert not ok and "Testing" in msg and "--new-cluster" in msg
+    assert (home.ldir / "INDEX.md").read_text() == before
+
+
+def test_a_new_cluster_goes_after_the_last_cluster_not_after_trailing_text(home):
+    (home.ldir / "INDEX.md").write_text(LINK_INDEX)
+    (home.ldir / "2026-01-03_c_learning.md").write_text("# Learning: new domain\n")
+    ok, _ = add_entry("2026-01-03_c_learning.md", "Embedded Debug", agent_home=home.home, new_cluster=True)
+    text = (home.ldir / "INDEX.md").read_text()
+    assert ok and text.index("## Embedded Debug (1)") < text.index("**Keywords**")
+
+
+def test_a_cluster_named_only_in_a_linked_memory_file_is_reported_as_such(home):
+    """The taxonomy must be in the auto-loaded file itself; a file it links loads
+    only when something recalls it."""
+    (home.mem.parent / "learnings_trigger.md").write_text("Clusters: Hooks · Testing\n")
+    home.mem.write_text("Index (2 learnings): agent/private/learnings/INDEX.md\nClusters: Hooks\n"
+                        "- [Learnings trigger](learnings_trigger.md)\n")
+    f = next(f for f in verify(home.home, memory_file=home.mem).findings if f.subject == "Testing")
+    assert "learnings_trigger.md" in f.detail and "recalled" in f.detail
