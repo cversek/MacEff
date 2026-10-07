@@ -34,8 +34,8 @@ The operator asked on 2026-10-05 for agent mail to be re-specified as an MIS who
 - Nothing disappears silently. Every clause ID that code or tests cite today gets a disposition: kept as a requirement, rewritten, or moved to Rejected Alternatives or Open Questions with its reason. The landing pull request carries a table from each old clause ID to its new requirement, with a "cited by" column built by searching code and tests rather than from memory.
 - Each agent's mailbox, contacts, rate limit and audit log belong to one broker that serves only that agent, and that agent's primal daemon starts and supervises it, as MIS-0002-R53 (mail_broker_MUST_be_managed) already asks of every mail broker.
 - Giving an agent a reachable address takes one route and one addressing entry, and no new code path, whether the agent runs on a host or in a container.
-- Each host declares its security posture, and detection alone is allowed only on a host with no address reachable from the Internet. Giving a host such an address then forces prevention: a service user for each broker and an egress rule for each broker. (The operator's ruling of 2026-10-05, relayed by the host-side maintainer.)
-- Every agent's address is in one zone, `agents.<domain>`, with a local part made of the agent's calling-card name and short id, lowercased, for example `exampleagent_0a1b2c@agents.example.org`. There is no zone per deployment, and routes are the operator's to edit: no agent's token edits them. (The operator's ruling of 2026-10-05, relayed by the host-side maintainer.)
+- Each host declares its security posture, and detection alone is allowed only on a host with no address reachable from the Internet. Giving a host such an address then forces prevention: a service user for each broker and an egress rule for each broker. (The operator's ruling of 2026-10-05, relayed by the host-side maintainer and confirmed on this pull request.)
+- Every agent's address is in one zone, `agents.<domain>`, with a local part made of the agent's calling-card name and short id, lowercased, for example `exampleagent_0a1b2c@agents.example.org`. There is no zone per deployment, and routes are the operator's to edit: no agent's token edits them. (The operator's ruling of 2026-10-05, relayed by the host-side maintainer and confirmed on this pull request.)
 
 **Non-goals**
 - How a unit is started, supervised and scheduled, and how a session is woken. MIS-0002 decides those, and this MIS depends on it without changing it. The authors place push-wake there too: the broker emits a "mail arrived" notice, and MIS-0002-R43 (wake_MUST_use_notifier) governs how the notice reaches the session.
@@ -100,6 +100,7 @@ None yet. Whether to convene a deliberation, on which issue and with what window
 ## 15 Revision History
 
 - 2026-10-06: first draft, a skeleton opened by the Secretary. Summary, Motivation and Goals come from the authors' first exchange of 2026-10-05.
+- 2026-10-06: the operator confirmed on this pull request the Secretary designation and the four rulings relayed by the host-side maintainer; Goals now say so.
 
 ## Wiki-Links
 
