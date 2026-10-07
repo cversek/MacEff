@@ -196,6 +196,37 @@ def isolated_channel_state(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_transcript_monitor_started(monkeypatch):
+    """No test starts a transcript monitor by running code that starts one.
+
+    The SessionStart hook, AUTO_MODE entry and sprint creation start a monitor
+    when none serves the current transcript, and a test that runs them resolves
+    the developer's own transcript: Claude Code's project directory and session
+    are in the environment the suite inherits. Until #529 only a live pid file
+    stood between such a test and a real monitor tailing the developer's session
+    into a temporary event log; nothing would now. The daemon starts monitors
+    through exactly two names, both replaced here, and the list this fixture
+    yields holds what would have been started.
+
+    The one test that runs a real monitor starts it in a subprocess, on a
+    temporary transcript, for an owner process the test controls.
+    """
+    from macf.transcript_monitor import daemon
+
+    started = []
+
+    class _NotStarted:
+        pid = 0
+
+        def __init__(self, argv, **kwargs):
+            started.append((list(argv), kwargs))
+
+    monkeypatch.setattr(daemon, "Popen", _NotStarted)
+    monkeypatch.setattr(daemon, "_execv", lambda path, argv: started.append((list(argv), {"exec": path})))
+    yield started
+
+
+@pytest.fixture(autouse=True)
 def isolated_agent_home(tmp_path, monkeypatch):
     """
     Isolate the agent home so tests can never write into the live agent's
