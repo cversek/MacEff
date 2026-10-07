@@ -671,8 +671,8 @@ Define:
 - QUIET_MODE: suppresses Telegram notification
 
 ### CLI Commands
-- `macf_tools mode show` — active modes with emojis and trigger sources
-- `macf_tools mode list` — all defined modes with current status
+- `macf_tools mode show` — every defined mode with its current status and emoji, and the behavioral triggers
+- `macf_tools mode get` — the operational mode and where it was read from
 - `macf_tools mode set` — existing AUTO_MODE/MANUAL_MODE toggle
 - `macf_tools recommender show` — current distribution for active mode-set
 - `macf_tools recommender sample` — trigger Monte Carlo sample, display TOP-5
