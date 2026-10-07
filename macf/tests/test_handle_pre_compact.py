@@ -61,34 +61,78 @@ class TestPreCompactHook:
                             assert last_event['data']['tokens_used'] == 145000
                             assert last_event['data']['cl_level'] == 2
 
-    def test_captures_compaction_source_from_stdin(self, isolated_events_log):
-        """Captures source field (auto/manual) from stdin."""
-        stdin_data = json.dumps({"source": "manual"})
+    # Claude Code's PreCompact input, key for key as a recorded event carries it
+    # (values made generic). It has no `source`: that field belongs to SessionStart.
+    PRECOMPACT_INPUT = {
+        "session_id": "test-session",
+        "transcript_path": "/tmp/test-transcript.jsonl",
+        "cwd": "/tmp",
+        "scratchpad_dir": "/tmp/scratchpad",
+        "prompt_id": "test-prompt",
+        "hook_event_name": "PreCompact",
+        "trigger": "manual",
+        "custom_instructions": None,
+    }
+
+    def test_records_the_trigger_claude_code_sends(self, isolated_events_log):
+        """Records `trigger` from the hook input: "manual" covers a /compact and
+        any compaction not driven by context size."""
+        stdin_data = json.dumps(self.PRECOMPACT_INPUT)
 
         with patch('macf.hooks.handle_pre_compact.get_current_session_id', return_value="test-session"):
             with patch('macf.hooks.handle_pre_compact.get_cycle_number_from_events', return_value=1):
                 with patch('macf.hooks.handle_pre_compact.get_breadcrumb', return_value='s_abc/c_1/g_def/p_ghi/t_123'):
                     with patch('macf.hooks.handle_pre_compact.get_token_info', return_value={}):
                         with patch('macf.hooks.handle_pre_compact.get_temporal_context', return_value={'timestamp_formatted': '2025-10-08 12:00 PM'}):
-                            result = run(stdin_data)
+                            run(stdin_data)
 
-                            # Verify source captured in event
                             events = isolated_events_log.read_text().strip().split('\n')
                             last_event = json.loads(events[-1])
-                            assert last_event['data']['source'] == 'manual'
+                            assert last_event['data']['trigger'] == 'manual'
 
-    def test_defaults_to_auto_source_when_missing(self, isolated_events_log):
-        """Defaults source to 'auto' when not provided."""
+    def test_records_an_auto_trigger(self, isolated_events_log):
+        """Records "auto" for a compaction driven by context size."""
+        stdin_data = json.dumps(dict(self.PRECOMPACT_INPUT, trigger="auto"))
+
         with patch('macf.hooks.handle_pre_compact.get_current_session_id', return_value="test-session"):
             with patch('macf.hooks.handle_pre_compact.get_cycle_number_from_events', return_value=1):
                 with patch('macf.hooks.handle_pre_compact.get_breadcrumb', return_value='s_abc/c_1/g_def/p_ghi/t_123'):
                     with patch('macf.hooks.handle_pre_compact.get_token_info', return_value={}):
                         with patch('macf.hooks.handle_pre_compact.get_temporal_context', return_value={'timestamp_formatted': '2025-10-08 12:00 PM'}):
-                            result = run("")
+                            run(stdin_data)
 
                             events = isolated_events_log.read_text().strip().split('\n')
                             last_event = json.loads(events[-1])
-                            assert last_event['data']['source'] == 'auto'
+                            assert last_event['data']['trigger'] == 'auto'
+
+    def test_missing_trigger_is_recorded_as_unknown(self, isolated_events_log):
+        """A missing trigger is recorded as "unknown", never as one of its real values."""
+        with patch('macf.hooks.handle_pre_compact.get_current_session_id', return_value="test-session"):
+            with patch('macf.hooks.handle_pre_compact.get_cycle_number_from_events', return_value=1):
+                with patch('macf.hooks.handle_pre_compact.get_breadcrumb', return_value='s_abc/c_1/g_def/p_ghi/t_123'):
+                    with patch('macf.hooks.handle_pre_compact.get_token_info', return_value={}):
+                        with patch('macf.hooks.handle_pre_compact.get_temporal_context', return_value={'timestamp_formatted': '2025-10-08 12:00 PM'}):
+                            run("")
+
+                            events = isolated_events_log.read_text().strip().split('\n')
+                            last_event = json.loads(events[-1])
+                            assert last_event['data']['trigger'] == 'unknown'
+
+    def test_notice_names_the_trigger(self, isolated_events_log):
+        """The COMPACTION IMMINENT notice carries the trigger the hook received."""
+        stdin_data = json.dumps(self.PRECOMPACT_INPUT)
+
+        with patch('macf.hooks.handle_pre_compact.get_current_session_id', return_value="test-session"):
+            with patch('macf.hooks.handle_pre_compact.get_cycle_number_from_events', return_value=1):
+                with patch('macf.hooks.handle_pre_compact.get_breadcrumb', return_value='s_abc/c_1/g_def/p_ghi/t_123'):
+                    with patch('macf.hooks.handle_pre_compact.get_token_info', return_value={}):
+                        with patch('macf.hooks.handle_pre_compact.get_temporal_context', return_value={'timestamp_formatted': '2025-10-08 12:00 PM'}):
+                            with patch('macf.channels.telegram.send_telegram_notification') as notify:
+                                run(stdin_data)
+
+                                text = notify.call_args.args[0]
+                                assert 'Trigger: manual' in text
+                                assert 'Source:' not in text
 
     def test_handles_errors_gracefully(self, isolated_events_log):
         """Returns error message when exception occurs."""

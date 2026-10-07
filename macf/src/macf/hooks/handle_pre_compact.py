@@ -55,6 +55,11 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # Get temporal context
         temporal_ctx = get_temporal_context()
 
+        # Claude Code sends "auto" for a compaction driven by context size and
+        # "manual" for any other (a /compact, a plugin's, an idle one). An input
+        # without it records "unknown": a default must not pass for a reading.
+        trigger = data.get("trigger") or "unknown"
+
         # Append pre_compact event for forensic reconstruction
         import time
         append_event(
@@ -66,7 +71,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 "timestamp": time.time(),
                 "tokens_used": token_info.get('tokens_used', 0),
                 "cl_level": token_info.get('cl_level', 0),
-                "source": data.get("source", "auto")  # "auto" or "manual"
+                "trigger": trigger,
             },
             hook_input=data
         )
@@ -84,7 +89,7 @@ CL: {token_info.get('cl_level', 'N/A')}
         try:
             from macf.channels.telegram import send_telegram_notification
             send_telegram_notification(
-                f"Cycle: {cycle_number}\nCL: {token_info.get('cl_level', 'N/A')}\nTokens: {token_info.get('tokens_used', '?')} / {token_info.get('context_window', '?')}\nSource: {data.get('source', 'auto')}",
+                f"Cycle: {cycle_number}\nCL: {token_info.get('cl_level', 'N/A')}\nTokens: {token_info.get('tokens_used', '?')} / {token_info.get('context_window', '?')}\nTrigger: {trigger}",
                 prefix="\U0001f6a8 COMPACTION IMMINENT",
                 background=True,
             )
