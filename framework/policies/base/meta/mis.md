@@ -213,7 +213,7 @@ The keywords carry the strength:
 
 Requirements follow a softened Simplified Technical English (ASD-STE100):
 - Each requirement sentence MUST have 30 words or fewer [MIS-0001-R14 (req_MUST_have_30_words_max)].
-- Each requirement SHOULD use the active voice and an EARS pattern [MIS-0001-R15 (req_SHOULD_use_active_EARS)]: "When <trigger>, the <system> MUST ...", "While <state>, ...", "If <unwanted event>, then ...", "Where <feature is present>, ...".
+- Each requirement SHOULD use the active voice and an EARS pattern (Easy Approach to Requirements Syntax) [MIS-0001-R15 (req_SHOULD_use_active_EARS)]: "When <trigger>, the <system> MUST ...", "While <state>, ...", "If <unwanted event>, then ...", "Where <feature is present>, ...".
 - Each requirement MUST use only glossary terms, terms from its MIS's Terms section, and plain words with one meaning [MIS-0001-R16 (req_MUST_use_defined_words)]. Whether a word is plain is a judgment, made by the Secretary at review: when two positions in the deliberation used a word differently, it is not plain, and it goes into Terms.
 
 **The rest of an MIS is plain English.** Rationale needs "because", conditions and nuance, which strict STE removes. Write it in short sentences with glossary terms, but do not compress it. In MacEff the reason is part of the control: an agent that cannot find why a rule exists tends to route around it.
