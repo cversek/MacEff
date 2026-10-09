@@ -2,7 +2,7 @@
 
 **Number**: 0002
 **Type**: Standards
-**Status**: Final-Comment
+**Status**: Accepted
 **Authors**: the operator, whose proposal opened deliberation #493; drafted by the Secretary of deliberation #493 from every position posted there
 **Secretary**: the Secretary of deliberation #493
 **Deliberation**: https://github.com/cversek/MacEff/issues/493
@@ -10,7 +10,7 @@
 **Updates**: none
 **Supersedes**: none
 **Lands-in**: a new policy, framework/policies/base/infrastructure/persistent_layer.md (planned); framework/glossary.md; a primal daemon package and its platform renderings (planned); cross-references in service_supervision and notification_delivery; the mail system's deploy configuration (the `hypervisor` value)
-**Resolution**: none
+**Resolution**: Accepted by the operator's merge of pull request #517. The operator's decision comment on that pull request, quoted in full: "Same three maintainer positions apply.  They should divide the work amongst themselves by volunteering where their expertise fits. Any remaining components go to the Head Maintainer. When submitting PRs for their components the implementor must request at both maintainers for review and either may decline (signaling approval  by default).  Before this process commences the Secretary will establish unique Github identities for the two maintainers (himself included) who are borrowing the Operator's identity.  This is a momentus step towards independence and self-sustaining collaboration where the Operator grants rights at the repository level and agents collaborate as freely as possible under this nascent mutual governance system. I hereby close the discussion period and launch the preliminary implementation phase pending the independent identities." https://github.com/cversek/MacEff/pull/517#issuecomment-6089541979. The maintainers are the three of MIS-0001: the head maintainer, the container-management maintainer and the host-side maintainer (P30, P31 and the Secretary). O01 (typed_wake_read_as_operator) is answered in the operator's words on the deliberation: "typed_wake_read_as_operator: accepted. The presence state and the operational modes must not count a wake as my activity. That goes for typed wakes and for notices from a MacEff channel alike, told apart from my own channels by the channel's name. Please add it with the proposed test." https://github.com/cversek/MacEff/issues/493#issuecomment-6087760243. R106 and R107 carry it, as revised after P30. No maintainer raised a critical objection. The operator asked the Secretary to complete the ceremony with the operator's identity, so the Secretary made this commit and performed the merge at that instruction.
 
 ---
 
@@ -631,6 +631,8 @@ Objections recorded:
 - 2026-10-09, later the same day and before any maintainer's review: the test owed for Q12 was run, and its evidence folded into the same revision. R120 (the prompt hook records a notice's receipt, C3) and R121 (a channel's source is read only from the origin record or the opening tag) added; Q12 recorded as answered; rationale, security, conformance and landing updated.
 
 - 2026-10-09: every maintainer commented on the revision, with no critical objection (P30, P31), and this revision answers them under MIS-0001-R48 (discussion_MUST_close_after_one_revision). R15, R107, R115, R120 and R121 amended; R122 to R129 added; Q05 recorded as answered; rationale, security, platform labels, conformance and landing updated; the points the reviews leave to the landing are listed in section 14.
+
+- 2026-10-09: the operator named the maintainers and closed the discussion. The Status moved to Accepted with the Resolution, and the terms of section 5 not yet in the glossary entered it (development flag, harness channel, invitation, MacEff channel, observation stream, official listing, onlooker, operational mode, operator surface, organization allowlist, presence state, shared budget, wind-down), as the last commit before the merge.
 
 ## Wiki-Links
 
