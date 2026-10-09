@@ -360,7 +360,7 @@ def authorize(cfg: InboundConfig, recipient_agent: str, raw: bytes) -> Tuple[str
                                   f"granted but push-wake is disabled "
                                   f"(mechanism not yet built)")
         history_denial = push_denied_by_history(
-            AuditLog(cfg.broker_config.audit_path)
+            AuditLog(cfg.broker_config.audit_path, tier=cfg.broker_config.tier)
             if cfg.broker_config.audit_path else None, sender)
         if history_denial is None:
             return DELIVER_PUSH_WAKE, f"contact of '{recipient_agent}', push granted"
@@ -487,14 +487,14 @@ def process_entry(cfg: InboundConfig, eml: Path, sidecar: Path) -> Dict[str, Any
     audit-shaped summary; raises nothing in the normal course — every
     anticipated failure is a QUARANTINED disposition with its reason, and
     an unanticipated one propagates loudly rather than becoming a guess."""
-    audit = (AuditLog(cfg.broker_config.audit_path)
+    audit = (AuditLog(cfg.broker_config.audit_path, tier=cfg.broker_config.tier)
              if cfg.broker_config.audit_path else None)
     raw = eml.read_bytes()
     sha = hashlib.sha256(raw).hexdigest()
 
     def terminal(decision: str, reason: str, recipient: str = "") -> Dict[str, Any]:
         if audit is not None:
-            audit.inbound(sender=summary.get("sender", "unknown"),
+            audit.inbound(rung="internet", sender=summary.get("sender", "unknown"),
                           recipient=recipient or summary.get("recipient", "unknown"),
                           message_id=sha, decision=decision, reason=reason)
         summary.update({"disposition": decision, "reason": reason})
@@ -502,7 +502,7 @@ def process_entry(cfg: InboundConfig, eml: Path, sidecar: Path) -> Dict[str, Any
 
     summary: Dict[str, Any] = {"sha256": sha, "entry": eml.name}
     if audit is not None:
-        audit.inbound(sender="unknown", recipient="unknown", message_id=sha,
+        audit.inbound(rung="internet", sender="unknown", recipient="unknown", message_id=sha,
                       decision=SEEN, reason=f"spool entry {eml.name}")
 
     # Corruption check — NOT a forgery check; the spool's single-writer
@@ -621,7 +621,7 @@ def sweep_aged(cfg: InboundConfig, now: Optional[float] = None,
     report: Dict[str, Any] = {
         "swept_at": time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(now)),
         "aged_spool": [], "aged_pickup": [], "alerts": 0, "findings": []}
-    audit = (AuditLog(cfg.broker_config.audit_path)
+    audit = (AuditLog(cfg.broker_config.audit_path, tier=cfg.broker_config.tier)
              if cfg.broker_config.audit_path else None)
 
     if cfg.spool_dir.is_dir():
@@ -649,7 +649,7 @@ def sweep_aged(cfg: InboundConfig, now: Optional[float] = None,
             print(f"⚠️ MACF: {reason} -- {eml.name} moved to quarantine",
                   file=sys.stderr)
             if audit:
-                audit.inbound(sender="unknown", recipient="unknown",
+                audit.inbound(rung="internet", sender="unknown", recipient="unknown",
                               message_id=eml.stem, decision=QUARANTINED,
                               reason=reason)
             report["aged_spool"].append(eml.name)
@@ -715,7 +715,7 @@ def reconcile(cfg: InboundConfig) -> Dict[str, Any]:
     The report never lies by omission: an unreadable audit log is an ERROR
     result, not an empty-and-balanced one.
     """
-    audit = (AuditLog(cfg.broker_config.audit_path)
+    audit = (AuditLog(cfg.broker_config.audit_path, tier=cfg.broker_config.tier)
              if cfg.broker_config.audit_path else None)
     if audit is None:
         return {"balanced": False,
