@@ -25,6 +25,11 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from ..agent_events_log import append_event
+from ..utils.input_origin import (
+    HARNESS_ORIGIN_KINDS,
+    opening_channel_source,
+    opens_with_harness_notice,
+)
 from ..utils.paths import user_runtime_dir
 
 # ============================================================================
@@ -68,7 +73,13 @@ Detector = Callable[[dict], Optional[Detection]]
 # ============================================================================
 
 def detect_user_activity(entry: dict) -> Optional[Detection]:
-    """Detect real user messages (not tool results, not meta)."""
+    """Detect a message the operator typed or sent through a channel.
+
+    Not tool results, meta entries or compaction summaries, and not input the
+    client delivers by itself: a background task's completion notice, or a
+    message from another session. The origin record names those; an entry
+    written without one is read by how its text opens.
+    """
     if entry.get("type") != "user":
         return None
     if "toolUseResult" in entry:
@@ -78,11 +89,19 @@ def detect_user_activity(entry: dict) -> Optional[Detection]:
     if entry.get("isCompactSummary"):
         return None
 
-    # Check for channel message (Telegram etc.)
     origin = entry.get("origin")
+    kind = origin.get("kind") if isinstance(origin, dict) else None
+    if kind in HARNESS_ORIGIN_KINDS:
+        return None
+    if kind is None:
+        message = entry.get("message")
+        content = message.get("content", "") if isinstance(message, dict) else ""
+        if opens_with_harness_notice(_entry_text(content)):
+            return None
+
     source = "direct"
     channel_server = ""
-    if isinstance(origin, dict) and origin.get("kind") == "channel":
+    if kind == "channel":
         source = "channel"
         channel_server = origin.get("server", "")
 
@@ -130,19 +149,62 @@ def detect_permission_denial(entry: dict) -> Optional[Detection]:
     })
 
 
+def detect_dialog_answer(entry: dict) -> Optional[Detection]:
+    """Detect the user answering a question the agent asked in a dialog.
+
+    The answer arrives as a tool result, which `detect_user_activity` drops, so
+    a user answering a question was read as idle the moment they had answered.
+    An answered question is a `user` entry whose `toolUseResult` holds the
+    `questions` asked and the `answers` given. Only a person writes `answers`,
+    so, unlike an approval, it is unambiguous, and it is recorded the way a
+    rejection is (`detect_permission_denial`): as direct activity. Like a
+    rejection, it cannot tell the terminal from a Remote Control view.
+    """
+    if entry.get("type") != "user":
+        return None
+    result = entry.get("toolUseResult")
+    if not isinstance(result, dict) or not result.get("answers"):
+        return None
+
+    return Detection("user_activity_detected", {
+        "source": "direct",
+        "timestamp": entry.get("timestamp", ""),
+        "detector": "transcript_monitor_dialog_answer",
+    })
+
+
 def detect_mid_turn_enqueue(entry: dict) -> Optional[Detection]:
-    """Detect mid-turn user message (queue-operation enqueue)."""
+    """Detect a message the session queued (queue-operation enqueue).
+
+    A typed message queued while a turn runs is the operator at the CLI.
+    A channel message is not, and it comes through here too: the client
+    queues every channel message before delivering it, idle or not, and a
+    queue entry carries no origin record. So a queued message whose text
+    opens with a channel tag is recorded as ``channel``, with the server
+    named by that tag, the way ``detect_user_activity`` records one from its
+    origin. Recorded as ``mid_turn_enqueue`` it would end USER_REMOTE on
+    every message from the operator's phone. A notice the client queues for
+    itself, a background task's or another session's, is not activity at all.
+    """
     if entry.get("type") != "queue-operation":
         return None
     if entry.get("operation") != "enqueue":
         return None
 
-    return Detection("user_activity_detected", {
+    content = entry.get("content", "")
+    if isinstance(content, str) and opens_with_harness_notice(content):
+        return None
+    data = {
         "source": "mid_turn_enqueue",
         "timestamp": entry.get("timestamp", ""),
-        "content_preview": str(entry.get("content", ""))[:50],
+        "content_preview": str(content)[:50],
         "detector": "transcript_monitor",
-    })
+    }
+    channel_server = opening_channel_source(content) if isinstance(content, str) else None
+    if channel_server is not None:
+        data["source"] = "channel"
+        data["channel_server"] = channel_server
+    return Detection("user_activity_detected", data)
 
 
 def detect_compact_boundary(entry: dict) -> Optional[Detection]:
@@ -193,6 +255,7 @@ def detect_context_collapse(entry: dict) -> Optional[Detection]:
 DEFAULT_DETECTORS: List[Detector] = [
     detect_user_activity,
     detect_permission_denial,
+    detect_dialog_answer,
     detect_mid_turn_enqueue,
     detect_compact_boundary,
     detect_api_error,

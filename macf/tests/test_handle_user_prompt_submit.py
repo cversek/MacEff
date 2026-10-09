@@ -214,6 +214,19 @@ class TestUserActivityFromPayload:
 
         assert self._activity_events(isolated_events_log) == []
 
+    def test_a_notice_the_client_delivers_records_nothing(self, mock_dependencies, isolated_events_log):
+        """A background task's completion notice and another session's message
+        arrive as prompts with text, and neither is the user."""
+        import json
+        from macf.hooks.handle_user_prompt_submit import run
+
+        run(json.dumps({"session_id": "s1", "prompt":
+                        "<task-notification>\n<task-id>b1</task-id>\n</task-notification>"}))
+        run(json.dumps({"session_id": "s1", "prompt":
+                        "Another Claude session sent a message:\n<cross-session-message from=\"x\">hi"}))
+
+        assert self._activity_events(isolated_events_log) == []
+
     def test_submit_is_not_idle_despite_stale_monitor_event(self, mock_dependencies, isolated_events_log):
         """The regression: a long-stale TM event must not survive a fresh submit."""
         import json
