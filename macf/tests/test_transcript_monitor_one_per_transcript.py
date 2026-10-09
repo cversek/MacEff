@@ -40,6 +40,14 @@ def _ended_pid():
     return p.pid
 
 
+def _born(pid):
+    """When *pid* started, from the process table. A monitor that serves it
+    started later, so fixtures give monitors start times after this one."""
+    started = daemon._process_started(pid)
+    assert started is not None, f"the process table does not say when {pid} started"
+    return started
+
+
 PS_OUTPUT = """\
   101 Mon Sep 21 18:18:25 2026     /usr/bin/python3 -m macf.transcript_monitor --interval 1.0 --owner 4001 --transcript /home/u/.claude/projects/-home-u-agent-a/s1.jsonl
   102 Tue Oct  6 21:47:27 2026     /opt/py/bin/python3.10 -m macf.transcript_monitor --interval 0.5 --owner 0 --transcript /home/u/.claude/projects/-home-u-agent b/my session.jsonl
@@ -89,12 +97,13 @@ def test_a_monitor_counts_only_for_its_own_transcript(monkeypatch):
     """The #529 case: another agent's monitor, or one on an older session of
     this agent, does not stand for this session's."""
     alive = os.getpid()
-    monitors = [_m(301, 1, alive, B / "s9.jsonl"),   # another agent, same account
-                _m(302, 2, alive, A / "s0.jsonl")]   # this agent, an earlier session
+    t0 = _born(alive)
+    monitors = [_m(301, t0 + 1, alive, B / "s9.jsonl"),   # another agent, same account
+                _m(302, t0 + 2, alive, A / "s0.jsonl")]   # this agent, an earlier session
     monkeypatch.setattr(daemon, "find_monitors", lambda: monitors)
     assert daemon.is_running(A / "s1.jsonl") is False
 
-    monitors.append(_m(303, 3, alive, A / "s1.jsonl"))
+    monitors.append(_m(303, t0 + 3, alive, A / "s1.jsonl"))
     assert daemon.is_running(A / "s1.jsonl") is True
     assert daemon.is_running(B / "s9.jsonl") is True
 
@@ -131,20 +140,58 @@ def test_a_pid_that_another_user_now_holds_is_not_the_owner():
 
 def test_a_second_monitor_on_a_transcript_gives_way_to_the_first():
     alive, gone = os.getpid(), _ended_pid()
+    t0 = _born(alive)
     t = A / "s1.jsonl"
-    first, second = _m(501, 10, alive, t), _m(502, 20, alive, t)
+    first, second = _m(501, t0 + 10, alive, t), _m(502, t0 + 20, alive, t)
     assert daemon._duplicate_of(502, t, [first, second]) == first
     assert daemon._duplicate_of(501, t, [first, second]) is None
 
     # Started in the same second: the pid decides, the same way from both sides.
-    a, b = _m(503, 30, alive, t), _m(504, 30, alive, t)
+    a, b = _m(503, t0 + 30, alive, t), _m(504, t0 + 30, alive, t)
     assert daemon._duplicate_of(504, t, [a, b]) == a
     assert daemon._duplicate_of(503, t, [a, b]) is None
 
     # An older monitor that no longer serves, or that watches another
     # transcript, is no reason to give way.
-    assert daemon._duplicate_of(502, t, [_m(501, 10, gone, t), second]) is None
-    assert daemon._duplicate_of(502, t, [_m(501, 10, alive, A / "s0.jsonl"), second]) is None
+    assert daemon._duplicate_of(502, t, [_m(501, t0 + 10, gone, t), second]) is None
+    assert daemon._duplicate_of(502, t, [_m(501, t0 + 10, alive, A / "s0.jsonl"), second]) is None
+
+
+def test_a_younger_process_under_the_owners_pid_is_not_the_owner(monkeypatch):
+    """The kernel reuses pids, also for the same user, whom `kill(pid, 0)`
+    cannot tell apart. The owner started its monitor, so a process under the
+    owner's pid that started after the monitor took the number later."""
+    heir = subprocess.Popen(["sleep", "30"])  # stands in for the process that took the number
+    try:
+        born = _born(heir.pid)
+        stuck = _m(601, born - 5, heir.pid, A / "s1.jsonl")   # started before its "owner"
+        assert daemon._serving(stuck) is False
+        monkeypatch.setattr(daemon, "find_monitors", lambda: [stuck])
+        assert daemon.is_running(A / "s1.jsonl") is False, "a monitor counted for a stranger"
+
+        assert daemon._serving(_m(602, born + 5, heir.pid, A / "s1.jsonl")) is True
+    finally:
+        heir.kill()
+        heir.wait()
+
+
+def test_without_a_start_time_the_pid_alone_decides(monkeypatch):
+    """A process table that cannot say when the owner started must not stop a
+    monitor that serves: unknown is not 'reused'."""
+    monkeypatch.setattr(daemon, "_process_started", lambda pid: None)
+    assert daemon._serving(_m(701, 1, os.getpid(), A / "s1.jsonl")) is True
+    assert daemon._serving(_m(702, 1, _ended_pid(), A / "s1.jsonl")) is False
+
+
+def test_the_process_table_says_when_a_process_started():
+    """In order, from the real table on this platform; nothing for an ended one."""
+    later = subprocess.Popen(["sleep", "30"])
+    try:
+        assert _born(later.pid) >= _born(os.getpid())
+    finally:
+        later.kill()
+        later.wait()
+    assert daemon._process_started(_ended_pid()) is None
 
 
 def test_start_runs_a_fresh_interpreter_named_as_a_monitor(

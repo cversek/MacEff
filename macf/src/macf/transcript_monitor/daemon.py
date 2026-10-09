@@ -294,9 +294,25 @@ def _monitor_from_argv(pid: int, started: float, argv: List[str]) -> Optional[Mo
     return MonitorProcess(pid, started, int(owner), Path(transcript))
 
 
+def _stat_started(stat: str) -> float:
+    """The start time in a Linux ``/proc/<pid>/stat`` line, in seconds since boot.
+
+    Field 22, counted after the parenthesised command name, which may itself
+    contain spaces and parentheses.
+    """
+    return int(stat.rsplit(")", 1)[1].split()[19]) / os.sysconf("SC_CLK_TCK")
+
+
+def _parse_lstart(text: str) -> float:
+    """A start time as ``ps -o lstart`` prints it in the C locale.
+
+    Raises ValueError when *text* is not one.
+    """
+    return time.mktime(time.strptime(" ".join(text.split()), "%a %b %d %H:%M:%S %Y"))
+
+
 def _monitors_from_proc(proc: Path) -> List[MonitorProcess]:
     """Monitors in a Linux ``/proc`` tree, with their exact arguments."""
-    ticks = os.sysconf("SC_CLK_TCK")
     found = []
     for entry in proc.iterdir():
         if not entry.name.isdigit():
@@ -306,9 +322,7 @@ def _monitors_from_proc(proc: Path) -> List[MonitorProcess]:
                     for a in (entry / "cmdline").read_bytes().split(b"\0") if a]
             if MONITOR_MODULE not in argv:
                 continue
-            # Field 22, counted after the parenthesised command name, which may
-            # itself contain spaces and parentheses.
-            started = int((entry / "stat").read_text().rsplit(")", 1)[1].split()[19]) / ticks
+            started = _stat_started((entry / "stat").read_text())
         except (OSError, ValueError, IndexError):
             continue  # it ended while we looked, or is not ours to read
         monitor = _monitor_from_argv(int(entry.name), started, argv)
@@ -333,7 +347,7 @@ def _parse_ps(output: str) -> List[MonitorProcess]:
         if not sep:
             continue
         try:
-            started = time.mktime(time.strptime(" ".join(fields[1:6]), "%a %b %d %H:%M:%S %Y"))
+            started = _parse_lstart(" ".join(fields[1:6]))
         except ValueError:
             continue
         monitor = _monitor_from_argv(int(fields[0]), started,
@@ -392,10 +406,59 @@ def _alive(pid: int) -> bool:
     return True
 
 
+def _process_started(pid: int) -> Optional[float]:
+    """When process *pid* started, in the units of ``MonitorProcess.started``.
+
+    None when the process table does not say: there is no such process, or its
+    answer could not be read, which is warned on stderr.
+    """
+    if pid <= 0:
+        return None
+    stat = Path("/proc") / str(pid) / "stat"
+    if Path("/proc/self/cmdline").exists():
+        if not stat.exists():
+            return None
+        try:
+            return _stat_started(stat.read_text())
+        except (OSError, ValueError, IndexError) as e:
+            print(f"⚠️ MACF: cannot read when process {pid} started: {e}", file=sys.stderr)
+            return None
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)],
+            capture_output=True, text=True, timeout=10,
+            env={**os.environ, "LC_ALL": "C"},
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"⚠️ MACF: cannot read when process {pid} started: {e}", file=sys.stderr)
+        return None
+    if result.returncode != 0:
+        return None  # ps exits non-zero when there is no such process
+    try:
+        return _parse_lstart(result.stdout)
+    except ValueError as e:
+        print(f"⚠️ MACF: cannot read when process {pid} started: {e}", file=sys.stderr)
+        return None
+
+
 def _serving(monitor: MonitorProcess) -> bool:
     """A monitor serves while its Claude Code process lives, or, when it was
-    started outside one, until it is stopped."""
-    return monitor.owner == 0 or _alive(monitor.owner)
+    started outside one, until it is stopped.
+
+    The owner started the monitor, so the owner is the older of the two. A
+    process under the owner's pid that started after the monitor took the
+    number once the owner had ended; another user's is caught by ``_alive``,
+    this user's only by its start time. A monitor that saw its owner end would
+    have stopped within a poll, so this guards the judgment made from outside:
+    of a monitor that is stopped or stuck, long after its owner ended. When the
+    start time cannot be read, the pid alone decides, as before.
+    """
+    if monitor.owner == 0:
+        return True
+    if not _alive(monitor.owner):
+        return False
+    owner_started = _process_started(monitor.owner)
+    return owner_started is None or owner_started <= monitor.started
 
 
 def _session_owner() -> int:
