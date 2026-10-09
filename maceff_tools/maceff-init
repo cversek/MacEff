@@ -88,6 +88,14 @@ normalize_policies_layout() {
 # already has: a bind mount follows a directory's inode, so a directory removed
 # and recreated is invisible to it. rsync does this; where it is missing, the
 # same in three passes.
+#
+# Only content moves. An entry DST already has keeps its group and its mode:
+# a container's start-up gives the policies tree its own group and the setgid
+# bit, and copying the build tree's over them removed that edit boundary until
+# the next start, with nothing to say so. So no -o, -g or -p: an updated file
+# keeps its mode, and is still replaced whole (a reader never sees half of it).
+# New entries take the defaults of the directory they land in, so a setgid
+# directory's group reaches them, updated files included.
 sync_in_place() {
     local src="$1" dst="$2" rel
     # Two existing directories or nothing: every removal below is "$dst/<path>".
@@ -96,7 +104,7 @@ sync_in_place() {
         return 1
     fi
     if command -v rsync >/dev/null 2>&1; then
-        rsync -a --delete "$src/" "$dst/"
+        rsync -rlt --executability --delete --no-perms "$src/" "$dst/"
         return
     fi
     # 1. clear what cp cannot overwrite: a changed type, or a symlink
@@ -109,8 +117,9 @@ sync_in_place() {
             rm -f "$dst/$rel"
         fi
     done < <(cd "$src" && find . -mindepth 1 -print0)
-    # 2. copy over, merging into the directories that are already there
-    cp -pPR "$src/." "$dst/"
+    # 2. copy over, merging into the directories that are already there; no -p,
+    #    so an existing entry keeps its group and mode (see above)
+    cp -PR "$src/." "$dst/"
     # 3. remove what the new overlay no longer has, deepest first
     while IFS= read -r -d '' rel; do
         if [[ ! -e "$src/$rel" && ! -L "$src/$rel" ]]; then rm -rf "$dst/$rel"; fi
