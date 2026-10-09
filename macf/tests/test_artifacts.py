@@ -109,7 +109,11 @@ def test_artifact_discovery_with_real_files(tmp_path):
     # Create test files
     (reflections_dir / "ref1.md").write_text("Reflection 1")
     (checkpoints_dir / "ckp1.md").write_text("Checkpoint 1")
-    (roadmaps_dir / "rdm1.md").write_text("Roadmap 1")
+    # A roadmap is a folder holding roadmap.md (roadmaps_drafting), never a
+    # loose file: this test once built a loose rdm1.md, which is how discovery
+    # could miss every real roadmap while its own test passed.
+    (roadmaps_dir / "2026-01-01_Some_Mission").mkdir()
+    (roadmaps_dir / "2026-01-01_Some_Mission" / "roadmap.md").write_text("Roadmap 1")
 
     # Discover artifacts
     artifacts = get_latest_consciousness_artifacts(agent_root=agent_root, limit=5)
@@ -120,3 +124,76 @@ def test_artifact_discovery_with_real_files(tmp_path):
     assert artifacts.latest_reflection is not None
     assert artifacts.latest_checkpoint is not None
     assert artifacts.latest_roadmap is not None
+
+
+def _agent_root(tmp_path):
+    root = tmp_path / "agent"
+    for d in ("private/reflections", "private/checkpoints", "public/roadmaps"):
+        (root / d).mkdir(parents=True)
+    return root
+
+
+def test_roadmap_folder_is_discovered_as_its_roadmap_md(tmp_path):
+    """A roadmap on disk is found, and the path given is the readable roadmap.md."""
+    root = _agent_root(tmp_path)
+    folder = root / "public" / "roadmaps" / "2026-10-02_A_Mission"
+    folder.mkdir()
+    (folder / "roadmap.md").write_text("# Roadmap")
+    (folder / "research").mkdir()
+    (folder / "research" / "notes.md").write_text("not the roadmap")
+
+    artifacts = get_latest_consciousness_artifacts(agent_root=root)
+
+    assert artifacts.latest_roadmap == folder / "roadmap.md"
+    assert artifacts.roadmaps == [folder / "roadmap.md"]
+
+
+def test_latest_roadmap_is_the_most_recently_changed(tmp_path):
+    import os
+    root = _agent_root(tmp_path)
+    paths = []
+    for i, name in enumerate(["2026-09-01_Old", "2026-10-01_New"]):
+        f = root / "public" / "roadmaps" / name
+        f.mkdir()
+        (f / "roadmap.md").write_text(name)
+        os.utime(f / "roadmap.md", (1_000_000 + i, 1_000_000 + i))
+        paths.append(f / "roadmap.md")
+
+    assert get_latest_consciousness_artifacts(agent_root=root).latest_roadmap == paths[1]
+
+
+def test_a_failed_discovery_says_it_failed(tmp_path, monkeypatch):
+    """An exception is not an empty tree: the result carries the error."""
+    root = _agent_root(tmp_path)
+    (root / "private" / "checkpoints" / "c.md").write_text("checkpoint")
+
+    def boom(self, pattern):
+        raise PermissionError("denied")
+    monkeypatch.setattr(Path, "glob", boom)
+
+    artifacts = get_latest_consciousness_artifacts(agent_root=root)
+
+    assert not artifacts
+    assert artifacts.error and "PermissionError" in artifacts.error
+
+
+def test_an_empty_tree_is_not_an_error(tmp_path):
+    assert get_latest_consciousness_artifacts(agent_root=_agent_root(tmp_path)).error is None
+
+
+def test_recovery_text_never_claims_absence_after_a_failed_search():
+    from macf.hooks.recovery import _format_artifacts_section
+
+    text = _format_artifacts_section(ConsciousnessArtifacts(error="PermissionError: denied"))
+
+    assert "No roadmap found" not in text and "No checkpoint found" not in text
+    assert "discovery failed" in text.lower()
+    assert "PermissionError: denied" in text
+
+
+def test_recovery_text_still_reports_a_real_absence():
+    from macf.hooks.recovery import _format_artifacts_section
+
+    text = _format_artifacts_section(ConsciousnessArtifacts())
+
+    assert "No roadmap found" in text
