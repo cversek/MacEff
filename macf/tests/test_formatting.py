@@ -10,11 +10,17 @@ contained the substring 'claude' — including our own hooks under
 
 import io
 import builtins
+import os
+import platform
+import sys
 from unittest.mock import patch, Mock
 
 import pytest
 
+from macf.utils import formatting
 from macf.utils.formatting import get_claude_code_version
+
+REAL_SYSTEM = platform.system
 
 
 FAKE_PPID = 999999
@@ -38,11 +44,58 @@ def _isolate(monkeypatch):
     """Clear the lru_cache and neutralize non-Strategy-1 detection paths."""
     get_claude_code_version.cache_clear()
     monkeypatch.delenv("MACF_CC_VERSION", raising=False)
+    monkeypatch.delenv("CLAUDE_PID", raising=False)
     monkeypatch.setattr("platform.system", lambda: "Linux")
     monkeypatch.setattr("os.getppid", lambda: FAKE_PPID)
     monkeypatch.setattr("shutil.which", lambda _: None)
     yield
     get_claude_code_version.cache_clear()
+
+
+class TestRunningSessionVersion:
+    """The version of the session that is running, not of the launcher.
+
+    An auto-update moves the launcher on PATH to a new version while a session
+    keeps running the old one, and readouts then printed the new version for
+    the old process.
+    """
+
+    def _launcher(self, monkeypatch, tmp_path, version):
+        launcher = tmp_path / "launcher" / "claude"
+        launcher.parent.mkdir()
+        launcher.write_text(f'blah "{version} (Claude Code)" blah')
+        monkeypatch.setattr("shutil.which", lambda _: str(launcher))
+
+    def test_the_running_binary_wins_over_the_launcher(self, monkeypatch, tmp_path):
+        self._launcher(monkeypatch, tmp_path, "2.1.290")
+        monkeypatch.setenv("CLAUDE_PID", "4242")
+        asked = []
+        monkeypatch.setattr(formatting, "_running_executable",
+                            lambda pid: asked.append(pid) or "/h/.local/share/claude/versions/2.1.281")
+        assert get_claude_code_version() == "2.1.281"
+        assert asked == [4242]
+
+    def test_a_binary_without_a_version_in_its_name_is_read(self, monkeypatch, tmp_path):
+        self._launcher(monkeypatch, tmp_path, "2.1.290")
+        running = tmp_path / "claude"
+        running.write_text('blah "2.1.200 (Claude Code)" blah')
+        monkeypatch.setenv("CLAUDE_PID", "4242")
+        monkeypatch.setattr(formatting, "_running_executable", lambda pid: str(running))
+        assert get_claude_code_version() == "2.1.200"
+
+    def test_without_a_running_session_the_launcher_answers(self, monkeypatch, tmp_path):
+        self._launcher(monkeypatch, tmp_path, "2.1.290")
+        assert get_claude_code_version() == "2.1.290"
+        get_claude_code_version.cache_clear()
+        monkeypatch.setenv("CLAUDE_PID", "4242")
+        monkeypatch.setattr(formatting, "_running_executable", lambda pid: "")
+        assert get_claude_code_version() == "2.1.290"
+
+    @pytest.mark.skipif(REAL_SYSTEM() not in ("Darwin", "Linux"), reason="macOS and Linux only")
+    def test_the_system_names_this_processs_own_binary(self, monkeypatch):
+        monkeypatch.setattr("platform.system", REAL_SYSTEM)
+        named = formatting._running_executable(os.getpid())
+        assert os.path.realpath(named) == os.path.realpath(sys.executable)
 
 
 class TestStrategy1HookRecursionRegression:
