@@ -66,7 +66,7 @@ JSON, validated closed: an unknown key is refused, because a key the daemon igno
   - `{"command", "wake_when": "exit_code" | "stdout"}`, work that needs no judgment, which wakes the agent only when its condition holds [MIS-0002-R37 (no-judgment_work_SHOULD_skip_model_turn)].
 
 **The agent-level fields:**
-- `operator_channels`: the channel names whose events count as the operator's activity; every other name counts as not the operator [MIS-0002-R107 (hooks_MUST_tell_channels_apart_by_name)].
+- `operator_channels`: the channel names whose events count as the operator's activity; every other name counts as not the operator [MIS-0002-R107 (hooks_MUST_tell_channels_apart_by_name)]. Absent means not yet declared, and an empty list declares that no channel is the operator's, so a declaration written for its units never decides by default whether the operator's phone counts.
 - `notice_routes`: per notice source, `agent`, `operator`, `both` or `held_until_present` [MIS-0002-R42 (notice_source_MUST_be_routed)].
 - `quiet_windows`: when the layer neither restarts nor compacts [MIS-0002-R50 (layer_MUST-NOT_act_in_quiet_window)].
 - `keep_harness_idle_compaction`: `false` by default, so the harness's own idle compaction is turned off [MIS-0002-R126 (adapter_MUST_turn_off_harness_idle_compaction)].

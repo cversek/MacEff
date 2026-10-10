@@ -264,3 +264,12 @@ def test_a_daemon_start_carries_its_record_and_nothing_else():
     assert set(start.model_dump()) == set(pdi.DaemonRecord.model_fields) | {"agent"}
     with pytest.raises(ValidationError):
         pdi.DaemonStart(agent=CARD, pid=4242, proc_start="1", units=["session"])
+
+
+def test_operator_channels_absent_is_not_the_same_as_none_declared():
+    """R107: a declaration written for its units says nothing about channels, and must not
+    decide by default that the operator's phone stops counting."""
+    assert pdi.Declaration.model_validate(_declaration()).operator_channels is None
+    assert pdi.Declaration.model_validate(_declaration(operator_channels=[])).operator_channels == []
+    named = pdi.Declaration.model_validate(_declaration(operator_channels=["plugin:telegram:telegram"]))
+    assert named.operator_channels == ["plugin:telegram:telegram"]

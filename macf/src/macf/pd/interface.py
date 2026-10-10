@@ -312,7 +312,9 @@ class Declaration(_Closed):
 
     - ``operator_channels``: the channel names whose events count as the operator's
       activity; every other name counts as not the operator
-      (MIS-0002-R107 (hooks_MUST_tell_channels_apart_by_name)).
+      (MIS-0002-R107 (hooks_MUST_tell_channels_apart_by_name)). Absent means not yet
+      declared, and an empty list declares that no channel is the operator's: a default
+      here would decide for a deployment whether its operator's phone counts.
     - ``notice_routes``: per notice source, who must hear it
       (MIS-0002-R42 (notice_source_MUST_be_routed)).
     - ``keep_harness_idle_compaction``: the harness's own idle compaction stays off unless
@@ -327,7 +329,7 @@ class Declaration(_Closed):
     agent: str = Field(min_length=1)
     units: List[Unit] = Field(default_factory=list)
     schedules: List[Schedule] = Field(default_factory=list)
-    operator_channels: List[str] = Field(default_factory=list)
+    operator_channels: Optional[List[str]] = None
     notice_routes: Dict[str, NoticeRoute] = Field(default_factory=dict)
     quiet_windows: List[Window] = Field(default_factory=list)
     keep_harness_idle_compaction: bool = False
