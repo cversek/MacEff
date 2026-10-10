@@ -20,6 +20,7 @@ misleading, because a reader cannot discount a guess they cannot see.
 from __future__ import annotations
 
 import os
+import sys
 import subprocess
 from typing import Any, Dict, Optional
 
@@ -104,6 +105,16 @@ def context_window_integrity() -> Dict[str, Any]:
                    f"NOT set — the long-context window is silently reduced while "
                    f"every surface still reports the full size"),
     }
+
+
+def _hosted_sessions() -> list:
+    try:
+        from ..notify.session import harness_hosted_sessions
+        return [{"pid": h.pid, "session": h.session_id[:8], "channels": h.channels}
+                for h in harness_hosted_sessions()]
+    except (OSError, ValueError) as e:
+        print(f"⚠️ MACF: could not list the client daemon's sessions: {e}", file=sys.stderr)
+        return []
 
 
 def diagnose(agent: Optional[str] = None) -> Dict[str, Any]:
@@ -203,6 +214,13 @@ def diagnose(agent: Optional[str] = None) -> Dict[str, Any]:
             # is describing the supervised session.
             "matches_expected": (current == expected) if (current and expected) else None,
         },
+        # Claude Code's own background daemon is a supervisor too (MIS-0002-R66
+        # (pd_MUST_adopt_harness_supervisor)); without this the readout reported
+        # "no supervisor" for every session it hosts.
+        "client_daemon": {
+            "hosts_this_session": os.environ.get("CLAUDE_CODE_SESSION_KIND") == "bg",
+            "hosted_sessions": _hosted_sessions(),
+        },
         "context_window": context_window_integrity(),
         "artifacts": {"missing": drift, "unchecked": unchecked},
     }
@@ -221,6 +239,12 @@ def format_diagnosis(d: Dict[str, Any]) -> str:
     else:
         lines.append(f"  Agent:        {a['identifier']}  ({a['calling_card']}, via {a['resolved_from']})")
 
+    cd = d.get("client_daemon") or {}
+    if cd.get("hosts_this_session"):
+        lines.append("  Supervisor:   Claude Code's daemon hosts this session (a background session)")
+    for h in cd.get("hosted_sessions") or []:
+        ch = "unknown" if h["channels"] is None else (", ".join(h["channels"]) or "none")
+        lines.append(f"  Hosted:       pid {h['pid']}, session {h['session']}, channels {ch} (Claude Code's daemon)")
     if s["supervised"]:
         how = f", found by {s['resolved_by']}" if s.get("resolved_by") else ""
         for sup in s["supervisors"]:

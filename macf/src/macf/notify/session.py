@@ -39,6 +39,11 @@ def sessions_dir() -> Path:
     return Path(os.path.expanduser("~")) / SESSIONS_DIRNAME
 
 
+def jobs_dir() -> Path:
+    """Where the client's background daemon keeps one ``<short>/state.json`` per job."""
+    return Path(os.path.expanduser("~")) / ".claude" / "jobs"
+
+
 def socket_dir() -> Path:
     """Where the client puts ``<pid>.sock``. ``$XDG_RUNTIME_DIR/cc-socks`` when the
     variable is set; otherwise ``/run/user/<uid>`` on Linux and ``/tmp`` on macOS,
@@ -357,6 +362,73 @@ def read_session_info(pid: int) -> Optional[SessionInfo]:
         updated_at=float(data.get("updatedAt") or 0) / 1000.0,
         tmux=data.get("tmux"),
     )
+
+
+@dataclass
+class HostedSession:
+    """A live session hosted by Claude Code's own background daemon.
+
+    MEASURED on 2.1.296: a worker started cold carries its flags in argv, but a
+    respawned one runs in a pre-started spare whose argv is generic, so the job
+    record is the one place the launch flags always are. ``channels`` is None
+    when that record is missing or unreadable: unknown, never "none".
+    """
+    pid: int
+    session_id: str
+    status: str
+    cwd: str
+    channels: Optional[list]
+
+
+def _respawn_flags(session_id: str) -> Optional[list]:
+    path = jobs_dir() / session_id[:8] / "state.json"
+    try:
+        with open(path) as fh:
+            flags = json.load(fh).get("respawnFlags")
+    except (FileNotFoundError, PermissionError, OSError, json.JSONDecodeError, UnicodeDecodeError) as e:
+        print(f"⚠️ MACF: job record unreadable for session {session_id[:8]}: {e}", file=sys.stderr)
+        return None
+    return flags if isinstance(flags, list) else None
+
+
+def _channels_from_flags(flags: list) -> list:
+    """The channel entries in a job's launch flags.
+
+    MEASURED on 2.1.296: ``--channels=X`` is kept as one token, and ``--channels`` takes
+    every value up to the next flag.
+    """
+    channels = []
+    taking = False
+    for f in flags:
+        if not isinstance(f, str):
+            taking = False
+        elif f.startswith("--channels="):
+            channels.append(f.split("=", 1)[1])
+            taking = False
+        elif f == "--channels":
+            taking = True
+        elif f.startswith("-"):
+            taking = False
+        elif taking:
+            channels.append(f)
+    return channels
+
+
+def harness_hosted_sessions() -> list:
+    """Live sessions the client's background daemon hosts, with their channels.
+
+    The first thing MIS-0002-R66 (pd_MUST_adopt_harness_supervisor) needs: a readout
+    that sees what the harness's own supervisor runs instead of reporting nothing.
+    """
+    hosted = []
+    for info in live_sessions():
+        if info.kind != "bg":
+            continue
+        flags = _respawn_flags(info.session_id)
+        channels = None if flags is None else _channels_from_flags(flags)
+        hosted.append(HostedSession(pid=info.pid, session_id=info.session_id,
+                                    status=info.status, cwd=info.cwd, channels=channels))
+    return hosted
 
 
 def live_sessions() -> list:
