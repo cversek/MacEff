@@ -330,9 +330,9 @@ def all_checks(profile):
     return checks
 
 
-def staged_added_lines():
+def _added_lines(*against):
     out = subprocess.run(
-        ["git", "diff", "--cached", "--unified=0", "--no-color"],
+        ["git", "diff", "--cached", "--unified=0", "--no-color"] + list(against),
         capture_output=True, text=True,
     ).stdout
     fname = None
@@ -341,6 +341,28 @@ def staged_added_lines():
             fname = line[6:]
         elif line.startswith("+") and not line.startswith("+++"):
             yield fname, line[1:]
+
+
+def merging():
+    """While a merge is being committed, MERGE_HEAD names the incoming side."""
+    return subprocess.run(["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"],
+                          capture_output=True).returncode == 0
+
+
+def staged_added_lines():
+    """The lines this commit adds. In a merge, only those neither parent has:
+    what the incoming side brings was scanned when it was committed there, under
+    the profile of whoever committed it. A squash or a cherry-pick has no
+    MERGE_HEAD and is scanned whole."""
+    added = list(_added_lines())
+    if not merging():
+        return added
+    new_to_both = set(_added_lines("MERGE_HEAD"))
+    kept = [pair for pair in added if pair in new_to_both]
+    print("pre-commit gate: merge commit: scanned only what the merge adds beyond "
+          "both parents (%d of %d added lines); the incoming side was scanned when "
+          "it was committed there" % (len(kept), len(added)), file=sys.stderr)
+    return kept
 
 
 def main():

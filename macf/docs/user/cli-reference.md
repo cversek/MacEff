@@ -2426,6 +2426,8 @@ macf_tools opsec install-hook [--profile PROFILE] [--source-root DIR] <repo>
 
 The hook runs the Python interpreter that performed the install, which is also the one its self-test certifies; the self-test is run a second time through the installed hook, and the agent's moniker is required among the categories it refuses wherever the agent has a calling card. If that interpreter later cannot import macf, the hook refuses every commit rather than check without the moniker: reinstall, or set `MACF_OPSEC_STDLIB_ONLY=1` for a commit to accept the reduced gate. Nothing is written until the dispatcher source and the profile have been found.
 
+While a merge is being committed (`MERGE_HEAD` exists), the hook scans only the lines the merge adds beyond both parents, such as conflict resolutions, and says so: what the incoming side brings was scanned when it was committed there. A squash merge or a cherry-pick has no `MERGE_HEAD` and is scanned whole.
+
 **Related:** `githooks install`
 
 ---
