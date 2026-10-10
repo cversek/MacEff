@@ -14,8 +14,14 @@ import plistlib
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
-from macf.pd.interface import PD_IDENTIFIER, launchd_label
+from macf.pd.interface import launchd_label
+from macf.utils.atomic import write_text_atomic
+
 _VERBS = ("bootstrap", "bootout", "kickstart", "print")
+
+#: launchctl's exit status for a boot-out of a service the domain does not have, measured on
+#: macOS 15 as "Boot-out failed: 3: No such process". Removal's goal is met, so it goes on.
+BOOTOUT_NOT_LOADED = 3
 
 
 def pd_label(card: str) -> str:
@@ -28,6 +34,7 @@ def pd_label(card: str) -> str:
     if not card or "@" not in card or "/" in card:
         raise ValueError(f"not a calling card: {card!r} (expected Name@hexid)")
     return launchd_label(card)
+
 
 def render_pd_launch_agent(card: str, program_argv: List[str], home: str,
                            log_dir: str) -> Tuple[str, bytes]:
@@ -84,12 +91,17 @@ def launchctl_argv(verb: str, label: str, uid: int, plist_path: Optional[str] = 
 
 @dataclass(frozen=True)
 class Step:
-    """One thing an install or removal does: write or remove a file, or run launchctl."""
+    """One thing an install or removal does: write or remove a file, or run launchctl.
+
+    ``not_loaded_ok`` marks a boot-out whose service may already be gone: launchd's
+    not-loaded answer then counts as done instead of stopping the plan.
+    """
 
     what: str
     path: Optional[str] = None
     content: Optional[bytes] = None
     argv: Optional[List[str]] = None
+    not_loaded_ok: bool = False
 
     def describe(self) -> str:
         if self.what == "launchctl":
@@ -103,6 +115,7 @@ def check_socket_path(path: str) -> None:
     from macf.pd.interface import check_socket_path as _check
     from pathlib import Path
     _check(Path(path))
+
 
 def install_plan(card: str, program_argv: List[str], home: str, log_dir: str, uid: int,
                  socket_paths: List[str]) -> List[Step]:
@@ -119,9 +132,13 @@ def install_plan(card: str, program_argv: List[str], home: str, log_dir: str, ui
 
 
 def uninstall_plan(card: str, home: str, uid: int) -> List[Step]:
-    """What removing one agent's primal daemon does: boot it out, then remove its plist."""
+    """What removing one agent's primal daemon does: boot it out, then remove its plist.
+
+    The boot-out may find nothing loaded: after an install whose bootstrap failed, after a
+    reboot outside the GUI session, or on a second removal. The plist goes either way.
+    """
     label = pd_label(card)
-    return [Step("launchctl", argv=launchctl_argv("bootout", label, uid)),
+    return [Step("launchctl", argv=launchctl_argv("bootout", label, uid), not_loaded_ok=True),
             Step("remove", path=f"{home}/Library/LaunchAgents/{label}.plist")]
 
 
@@ -129,7 +146,8 @@ def apply_plan(steps: List[Step], run=None, force: bool = False) -> List[str]:
     """Carry out a plan. A plist that exists and differs is not overwritten without ``force``.
 
     Returns one line per step. Stops at the first launchctl failure and raises with its
-    output, so a half-done install is said, not hidden.
+    output, so a half-done install is said, not hidden. A boot-out marked ``not_loaded_ok``
+    that finds nothing loaded is not a failure.
     """
     import os
     import subprocess
@@ -144,13 +162,16 @@ def apply_plan(steps: List[Step], run=None, force: bool = False) -> List[str]:
     for s in steps:
         if s.what == "write":
             os.makedirs(os.path.dirname(s.path), exist_ok=True)
-            with open(s.path, "wb") as fh:
-                fh.write(s.content)
+            # Whole or not at all: a full disk must not leave a half-written plist.
+            write_text_atomic(s.path, s.content.decode("utf-8"))
         elif s.what == "remove":
             if os.path.exists(s.path):
                 os.unlink(s.path)
         elif s.what == "launchctl":
             r = run(s.argv)
+            if r.returncode == BOOTOUT_NOT_LOADED and s.not_loaded_ok:
+                done.append(f"{s.describe()} (not loaded)")
+                continue
             if r.returncode != 0:
                 raise RuntimeError(f"{s.describe()} failed ({r.returncode}): {(r.stderr or r.stdout).strip()}")
         done.append(s.describe())

@@ -116,6 +116,20 @@ class TestMacOSInstall:
         with pytest.raises(RuntimeError, match="Input/output error"):
             apply_plan(uninstall_plan(CARD, str(tmp_path), 501), run=lambda argv: bad)
 
+    def test_removing_a_daemon_that_is_not_loaded_still_removes_its_plist(self, tmp_path):
+        """launchd answers a boot-out of a service it does not have with exit 3, "No such
+        process" (measured on macOS 15). That happens after an install whose bootstrap
+        failed, after a reboot outside the GUI session, and on a second removal, and the
+        plist must go in each case."""
+        from macf.platform.launchd import apply_plan, install_plan, uninstall_plan
+        ok = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})
+        apply_plan(install_plan(CARD, ARGV, str(tmp_path), str(tmp_path), 501, self.SOCKETS), run=lambda argv: ok)
+        plist = tmp_path / "Library" / "LaunchAgents" / (pd_label(CARD) + ".plist")
+        assert plist.exists()
+        not_loaded = type("R", (), {"returncode": 3, "stdout": "", "stderr": "Boot-out failed: 3: No such process"})
+        done = apply_plan(uninstall_plan(CARD, str(tmp_path), 501), run=lambda argv: not_loaded)
+        assert not plist.exists() and done[0].endswith("(not loaded)")
+
     def test_status_reads_launchctl_print(self):
         """Shapes measured on macOS: running with a pid, loaded but stopped, and absent."""
         from macf.platform.launchd import parse_print
