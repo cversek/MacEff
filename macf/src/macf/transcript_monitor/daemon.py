@@ -36,6 +36,8 @@ from ..utils.input_origin import (
     opening_channel_source,
     opens_with_harness_notice,
     opens_with_wake,
+    typed_by_framework,
+    typed_text,
 )
 from ..utils.paths import user_runtime_dir
 
@@ -93,7 +95,8 @@ def detect_user_activity(entry: dict) -> Optional[Detection]:
     message from another session. The origin record names those; an entry
     written without one is read by how its text opens. A wake is not the
     operator either (MIS-0002-R106): its keys are recorded as typed, so its
-    opening is read before the origin record.
+    opening is read before the origin record. Nor are keys the framework typed,
+    which their sender recorded in the event log before sending them.
     """
     if entry.get("type") != "user":
         return None
@@ -114,6 +117,8 @@ def detect_user_activity(entry: dict) -> Optional[Detection]:
     if kind in HARNESS_ORIGIN_KINDS:
         return None
     if kind is None and opens_with_harness_notice(entry_text(content)):
+        return None
+    if kind != "channel" and typed_by_framework(typed_text(content)):
         return None
 
     source = "direct"
@@ -210,7 +215,8 @@ def detect_mid_turn_enqueue(entry: dict) -> Optional[Detection]:
         return None
 
     content = entry.get("content", "")
-    if isinstance(content, str) and (opens_with_harness_notice(content) or opens_with_wake(content)):
+    if isinstance(content, str) and (opens_with_harness_notice(content) or opens_with_wake(content)
+                                     or typed_by_framework(content)):
         return None
     data = {
         "source": "mid_turn_enqueue",

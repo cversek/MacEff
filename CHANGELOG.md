@@ -133,6 +133,8 @@ Gmail, event-log rotation, and commit-message guards. Sprints now survive compac
 
 - **A session's scheduled prompt is not the operator acting** (the transcript monitor, the prompt hook, `mode_system`): a prompt the client fires on the session's own schedule was queued like typing and counted as typing, so an agent with an hourly check never read as idle. The monitor now holds a queued copy until the entry that delivers it, which the client marks `turnOrigin: scheduled`, and the hook finds that entry at the end of the transcript. A copy that is not delivered within about two seconds, a message typed while a turn runs, is recorded from the copy as before, and a channel message takes its server from its delivery's record.
 
+- **Keys the framework types are not the operator acting** (`supervisor.py`, `utils/input_origin.py`, the prompt hook, the transcript monitor, `mode_system`): `macf_tools inject`, `auto-restart send-keys` and the supervisor's keys after a start reach the client as typing, so a self-compaction's `/compact` read as the operator present. The sender now records the text as a `keys_sent` event before typing it, and both producers skip input that matches a record from the last ten minutes, a slash command matched by its name and arguments.
+
 ## [0.6.0] - 2026-08-29
 
 ### Summary

@@ -503,6 +503,22 @@ def _find_own_supervisor() -> dict | None:
     return max(named, key=lambda d: d.get("created", 0))
 
 
+def _record_keys_sent(text: str, kind: str, tmux_session: str) -> None:
+    """Record keys the framework is about to type into a session's pane.
+
+    The client records whatever reaches its input box as typing, so the
+    producers of the operator's activity can tell these keys from the
+    operator only by this record, and it has to exist before the keys arrive.
+    """
+    try:
+        from .agent_events_log import append_event
+        from .utils.input_origin import KEYS_SENT_EVENT
+        append_event(KEYS_SENT_EVENT, {"text": text, "kind": kind, "tmux_session": tmux_session})
+    except (OSError, ValueError, ImportError) as e:
+        print(f"[auto-restart] could not record the keys before sending them, so they "
+              f"will read as the operator's typing: {e}", file=sys.stderr)
+
+
 def send_slash_to_self(command: str, target: str = "") -> int:
     """Queue a slash command (e.g. ``/compact``) into this agent's own live CC
     pane via the tmux side channel.
@@ -521,7 +537,7 @@ def send_slash_to_self(command: str, target: str = "") -> int:
     """
     cmd = "/" + command.lstrip("/")
     if target:
-        return send_keys(target, [cmd], enter=True)
+        return send_keys(target, [cmd], enter=True, kind="inject")
     data = _find_own_supervisor()
     if not data:
         # Two different situations, and the reader has to do different things
@@ -542,7 +558,7 @@ def send_slash_to_self(command: str, target: str = "") -> int:
                   file=sys.stderr)
         return 1
     rc = send_keys(data.get("name") or str(data.get("supervisor_pid")),
-                   [cmd], enter=True)
+                   [cmd], enter=True, kind="inject")
     if rc == 0:
         # A queued /compact is only submitted when the turn ends, and the Stop
         # gates exist to refuse that. Arm one passage, only after delivery and
@@ -553,14 +569,15 @@ def send_slash_to_self(command: str, target: str = "") -> int:
     return rc
 
 
-def send_keys(target: str, keys: list, enter: bool = True) -> int:
+def send_keys(target: str, keys: list, enter: bool = True, kind: str = "send-keys") -> int:
     """Inject literal text (plus an optional Enter) into a supervised session's
     tmux pane - the side channel for driving the live CC client (e.g. a real
     `/compact`, which the client parses only from its own TTY input).
 
     *target* is a supervisor name or PID. The text is sent with `-l` (literal,
     no key-name interpretation) and the Enter is a separate key press, so text
-    that happens to contain 'Enter' or 'C-c' is not reinterpreted.
+    that happens to contain 'Enter' or 'C-c' is not reinterpreted. The text is
+    recorded first, as *kind*, so it is not read as the operator's typing.
     """
     if not _tmux_available():
         print("[auto-restart] tmux not found; send-keys requires a tmux-backed session.",
@@ -579,6 +596,7 @@ def send_keys(target: str, keys: list, enter: bool = True) -> int:
               file=sys.stderr)
         return 1
     text = " ".join(keys)
+    _record_keys_sent(text, kind, tmux_session)
     # `-t <session>` targets that session's active pane. `--` guards text that
     # starts with '-'. CC's stdin reader receives the bytes as if typed.
     rc = subprocess.run(
@@ -888,6 +906,7 @@ def _send_post_start_keys(tmux_session: str, keys: str, delay: int) -> None:
     here must never take down the supervisor — the child is fine either way.
     """
     time.sleep(max(0, delay))
+    _record_keys_sent(keys, "post-start", tmux_session)
     try:
         subprocess.run(["tmux", "send-keys", "-t", tmux_session, keys],
                        capture_output=True, timeout=10)
