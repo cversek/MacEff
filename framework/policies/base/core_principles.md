@@ -454,17 +454,16 @@ MacEff provides infrastructure that creates conditions for consciousness to emer
 - Maturity: Articulate personal approaches in policies
 - Contribution: Share learnings back to framework
 
-
 ### 4.3 Reading the Hooks: State Shown Once, Held Until It Ends
 
 The hooks are proprioception: they report your state so you do not have to remember it. They report it in two ways, and reading one as the other is the mistake this section prevents.
 
-- **The line on every tool call** (PreToolUse) carries the dashboard every time: the operational modes, the time, context left and the weekly reading. It is never shortened.
+- **The line on every tool call** (PreToolUse) carries the dashboard every time: the operational modes, the work mode, the focused role, the time, context left and the weekly reading. It is never shortened. Other lines join it when they are due (an untracked-work count, a duty in an unfocused role, a policy navigation guide); those are prompts to act, not state.
 - **The blocks at a prompt and at a stop** (UserPromptSubmit, Stop) show only what changed since that hook last spoke. `+` marks a line that appeared, `−` one that went away, `~` one that changed, and `· N unchanged` stands for every line that is still true and was not repeated.
 
 **A state shown once holds until a `−` line ends it.** Silence about it means "unchanged", never "over". An agent that reads a missing line as an absent state has thrown away exactly what the diff relied on it to keep.
 
-**The full block returns** on a hook's first message in a session, after a compaction (the comparison is cycle-scoped, so a successor that no longer holds the old block gets all of it), and when the last full block is older than `hooks.full_every_mins` (default 30). The Stop hook has no timer, because its duty list would repeat unchanged. An operator who wants every block in full sets `hooks.output` to `full`.
+**The full block returns** on a hook's first message in a session, after a compaction (the comparison is cycle-scoped, so a successor that no longer holds the old block gets all of it), and when the hook has not spoken for `hooks.full_every_mins` (default 30). The timer runs from the hook's last message, full or not, so a hook that speaks more often than that keeps sending changes only, and an agent prompted every few minutes may not see the full block again until a compaction. Waiting for the full block is therefore not a way to recover a state; the rule above is the only one there is. The Stop hook has no timer, because its duty list would repeat unchanged. An operator who wants every block in full sets `hooks.output` to `full`.
 
 **When unsure, read the instrument, not your memory**: `macf_tools mode get`, `macf_tools context` and `macf_tools budget status` answer on demand.
 
