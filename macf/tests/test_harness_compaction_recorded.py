@@ -60,3 +60,14 @@ def test_inject_compact_records_a_wind_down_ask(isolated_events_log):
     asks = [e for e in events if e["event"] == "compaction_asked"]
     assert asks and asks[-1]["data"]["asker"] == "wind_down"
     assert asks[-1]["data"]["via"] == "macf_tools inject"
+
+
+def test_a_compact_the_framework_typed_is_not_the_operators(isolated_events_log, monkeypatch):
+    """inject compact types /compact into the pane; the row it produces is not an operator's ask."""
+    from macf import supervisor
+    monkeypatch.setattr(supervisor, "_tmux_available", lambda: True)
+    monkeypatch.setattr(supervisor, "_find_supervisor", lambda target: {"name": "n", "tmux_session": "s"})
+    monkeypatch.setattr(supervisor.subprocess, "run", lambda argv, **kw: type("Done", (), {"returncode": 0})())
+    assert detect_compaction_ask(TYPED_COMPACT_ROW).data["asker"] == "operator"
+    assert supervisor.send_keys("n", ["/compact"], enter=True, kind="inject") == 0
+    assert detect_compaction_ask(TYPED_COMPACT_ROW) is None
