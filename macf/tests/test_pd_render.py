@@ -37,7 +37,7 @@ class TestMacOSLaunchAgent:
         calling card, so two agents on one login never share a label. It is the form
         the primal daemon's interface gives ``launchd_label``."""
         assert pd_label(CARD) == "maceff_pd.IraMacEff_ee9a78"
-        assert pd_label("ClaudeTheBuilder@6c888f") != pd_label(CARD)
+        assert pd_label("OtherAgent@0a1b2c") != pd_label(CARD)
         with pytest.raises(ValueError):
             pd_label("bad card/with slash")
 
