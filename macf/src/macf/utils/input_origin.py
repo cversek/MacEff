@@ -1,4 +1,4 @@
-"""Where a piece of input came from: the operator, a channel, the harness, or a wake.
+"""Where a piece of input came from: the operator, a channel, the harness, a wake, or the framework.
 
 Two producers record the operator's activity, the prompt hook and the
 transcript monitor, and both read input the client delivers on its own as
@@ -9,9 +9,13 @@ instead: a channel tag, or one of its notice forms.
 
 Only openings the client writes are read, and the one the persistent layer
 writes on a wake. The content of a channel event or a notice can carry
-anything, including a forged tag of its own.
+anything, including a forged tag of its own. Keys the framework types carry
+no opening at all, since a slash command has to open with "/", so the
+framework records them as it sends them, and that record is read instead.
 """
 
+import re
+import time
 from typing import Optional
 
 CHANNEL_TAG_OPENING = "<channel "
@@ -40,6 +44,28 @@ HARNESS_NOTICE_OPENINGS = (
 # toward the agent being more careful.
 WAKE_OPENING = "[maceff:wake]"
 
+# The event a keystroke the framework sends is recorded as, before it is sent.
+KEYS_SENT_EVENT = "keys_sent"
+
+# How long a record names what arrives: long enough for keys typed during a
+# turn to be delivered when the turn ends. Someone who types the same text
+# themselves within it reads as away, which errs toward the agent being more
+# careful.
+KEYS_SENT_WINDOW_SECONDS = 10 * 60
+
+_COMMAND = re.compile(r"<command-name>(.*?)</command-name>.*?<command-args>(.*?)</command-args>", re.S)
+
+
+def entry_text(content) -> str:
+    """Best-effort plain text from a transcript message's ``content`` (a string or blocks)."""
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = [b.get("text", "") for b in content
+                 if isinstance(b, dict) and b.get("type") == "text"]
+        return "\n".join(p for p in parts if p).strip()
+    return ""
+
 
 def opening_channel_source(text: str) -> Optional[str]:
     """The source named by the channel tag that opens ``text``, or None.
@@ -66,3 +92,36 @@ def opens_with_harness_notice(text: str) -> bool:
 def opens_with_wake(text: str) -> bool:
     """True when ``text`` opens with the persistent layer's wake words (MIS-0002-R106)."""
     return text.lstrip().startswith(WAKE_OPENING)
+
+
+def typed_text(content) -> str:
+    """An entry's text as it was typed: a slash command's name and arguments, else its text."""
+    text = entry_text(content)
+    command = _COMMAND.match(text)
+    if command:
+        return f"{command.group(1).strip()} {command.group(2).strip()}".strip()
+    return text
+
+
+def typed_by_framework(text: str, now: Optional[float] = None) -> Optional[str]:
+    """The kind of keystroke the framework recorded for ``text`` within the window, or None.
+
+    The client records whatever reaches its input box as typing, so a
+    framework keystroke is known only by the record its sender made first.
+    The event log is read newest first, stopping at the window's edge.
+    """
+    wanted = text.strip()
+    if not wanted:
+        return None
+    from macf.agent_events_log import read_events
+    cutoff = (time.time() if now is None else now) - KEYS_SENT_WINDOW_SECONDS
+    for event in read_events(limit=None, reverse=True):
+        stamp = event.get("timestamp")
+        if isinstance(stamp, (int, float)) and stamp < cutoff:
+            return None
+        if event.get("event") != KEYS_SENT_EVENT:
+            continue
+        data = event.get("data") or {}
+        if str(data.get("text", "")).strip() == wanted:
+            return str(data.get("kind") or "keys")
+    return None
