@@ -50,7 +50,21 @@ MacEff's long-lived machinery grew one piece at a time, and most of it died with
 - How does an observation end, and who may end it?
 - How does the agent know who is watching?
 
-**6 Not Yet Landed**
+**6 Linux**
+- How does a primal daemon run on Linux, and under what name?
+- What happens to the units a daemon manages when the daemon exits?
+- Who turns on linger, and what happens without it?
+
+**7 The Outside Watch**
+- What checks a primal daemon from outside the agents, and what does it read?
+- What verdicts can it give, and how does it alert?
+- Why does a failed alert get sent again?
+
+**8 What a Shared Container Shows You**
+- What can I see of the other agents in a shared container, and what can't I change?
+- Where does the container's budget come from, and who sets it?
+
+**9 Not Yet Landed**
 - Which parts of the persistent layer are specified but not yet in this policy?
 
 === CEP_NAV_BOUNDARY ===
@@ -239,12 +253,51 @@ The operator may attach to any session without an invitation [MIS-0002-R81 (oper
 
 ---
 
-## 6 Not Yet Landed
+## 6 Linux
+
+### 6.1 The daemon as a systemd user unit
+
+**On Linux each primal daemon runs as a systemd user unit** [MIS-0002-R03 (outer_tier_MUST_restart_pd)], named by the step 1 interface: `maceff_pd-<id>.service`, where `<id>` is the calling card with `@` written as `_` [MIS-0002-R06 (pd_identifiers_MUST_use_maceff_pd)].
+
+- **The user's systemd is the outer tier.** `Restart=always` restarts the daemon on every exit, a clean one included. `StartLimitIntervalSec=0` sits in `[Unit]`, where current systemd reads it; in `[Service]` it is ignored, and the daemon would stay down after its fifth quick crash.
+- **The unit holds nothing of the agent's** [MIS-0002-R04 (outer_tier_MUST-NOT_hold_agent_config)]: no environment, no declaration, no credential. Its program is `python -m macf.pd <agent home>`, and the daemon reads everything from that home.
+- **The units outlive the daemon.** The daemon is the parent of every unit it manages, so they share its cgroup. With `KillMode=process` only the daemon is signalled when it exits; under systemd's default, a daemon crash would stop the session and every other unit with no drain and no regard for a quiet window. macOS renders the same with `AbandonProcessGroup` (3.1).
+- **Linger is the operator's switch.** Without it the user's systemd, and the daemon with it, stops at the user's last logout. `linger_enabled` reports it, and says why when it cannot tell. Turning it on (`loginctl enable-linger`) is the operator's decision on the host, never the tool's.
+
+---
+
+## 7 The Outside Watch
+
+### 7.1 A watch that does not share the daemon's fate
+
+**Every primal daemon is checked from outside the agents** [MIS-0002-R74 (pd_MUST_have_outside_watch)], by its own process on its own timer, reading only what the agents wrote. A supervisor that shares a fate with its subject is not a supervisor.
+
+- **What it reads, per agent home:** the declaration; the daemon's record, probed by pid and start time through the interface's `verify_incarnation`; and each declared unit's last `pd_unit_alive`, aged against the cadence the unit itself published. It keeps no bound of its own [MIS-0002-R16 (layer_MUST-NOT_keep_second_ledger)].
+- **Verdicts:** ALIVE, STALE (stamped, then stopped), GONE (the stamping process no longer exists), ABSENT (never stamped within the lookback), UNREADABLE (present but unparseable). Per home: UNREACHABLE when the home cannot be read, CHECK-FAILED when the watch cannot tell what to check. **Unknown is never healthy.**
+- **It alerts independently** [MIS-0002-R75 (outside_watch_MUST_alert_independently)], through a command that holds its own credential, never an agent's channel, once per stretch.
+- **Its one record is the alert log.** Each line carries its transitions and whether the push was delivered, and the open stretches are read back from the delivered lines. So a push that failed is sent again on the next pass, never lost, and there is no second file to disagree with the log.
+
+---
+
+## 8 What a Shared Container Shows You
+
+In a container several agents share, you can see every agent's units and the container's budget, and change neither [MIS-0002-R62 (agent_MUST_see_shared_container)]. `python -m macf.pd.shared_view` lists them.
+
+- **Your own units appear** because your primal daemon publishes a summary of them into your `agent/public/pd/units.json`: names, kinds, memory limits, restart rules, whether optional. Never your commands or environment. Only you write your public tree, and a reader refuses a summary owned by another account.
+- **The summary is declaration facts only.** A unit's state written into a published file would be a second store of liveness, stale the moment its writer dies. When you need a peer's state, it comes from where it is live.
+- **The budget** is the container's memory and processor limits, read from its cgroup: `memory.max`, `cpu.max`, and what the kernel cannot reclaim (anonymous and kernel memory, not the page cache). **Only the operator sets it**, in the deployment's compose files [MIS-0002-R103 (shared_budget_MUST_change_only_by_operator)], and no agent's declaration can carry it.
+- **Unknown is never empty.** A home that published nothing is UNPUBLISHED, one whose summary does not parse is UNREADABLE, and a budget file that cannot be read is unknown.
+
+If the container is near its limit and a peer's unit holds most of it, tell the operator. Don't touch the peer's unit [MIS-0002-R07 (pd_MUST-NOT_control_other_agents)].
+
+---
+
+## 9 Not Yet Landed
 
 Specified in MIS-0002 and arriving with their landing steps, each in the pull request that enforces it:
-- **The primal daemon itself:** declarations, liveness events, health derived from runs, outside control and the outside watch (MIS-0002 §6.1 to §6.4, §6.7, §6.12).
+- **The primal daemon itself:** declarations, liveness events, health derived from runs, and outside control (MIS-0002 §6.1 to §6.4, §6.7).
 - **Schedules and the notifier,** including the keystroke fallback, the dark-channel event, and every producer of the operator's activity (MIS-0002 §6.5, §6.6, the rest of §6.14).
-- **Mail, containers and the tray** (MIS-0002 §6.8, §6.9, §6.11).
+- **Mail, the rest of containers, and the tray** (MIS-0002 §6.8, §6.9, §6.11).
 
 Until a section lands, the rules in force are the existing policies: `service_supervision`, `notification_delivery` and `amail`.
 
