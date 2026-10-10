@@ -64,7 +64,13 @@ MacEff's long-lived machinery grew one piece at a time, and most of it died with
 - What can I see of the other agents in a shared container, and what can't I change?
 - Where does the container's budget come from, and who sets it?
 
-**9 Not Yet Landed**
+**9 The Tray**
+- What does the tray show, and for whom?
+- How does one icon stand for several agents?
+- What may the tray do, and what must it ask a primal daemon to do instead?
+- How does the tray know an answer came from the agent's own daemon?
+
+**10 Not Yet Landed**
 - Which parts of the persistent layer are specified but not yet in this policy?
 
 === CEP_NAV_BOUNDARY ===
@@ -292,12 +298,46 @@ If the container is near its limit and a peer's unit holds most of it, tell the 
 
 ---
 
-## 9 Not Yet Landed
+## 9 The Tray
+
+### 9.1 What it is
+
+**The tray is optional** [MIS-0002-R67 (operator_MAY_run_tray)]. It is a menu-bar app the operator may run where the host has a desktop. The outer tier and every primal daemon run the same without it, and no part of the layer imports it [MIS-0002-R68 (layer_MUST-NOT_depend_on_tray)]. It is installed as the `tray` extra and run with `python -m macf.tray`. Where a host cannot show it, as on stock GNOME without an extension, the readout is to say so once it lands [MIS-0002-R73 (readout_MUST_say_tray_unavailable)]; until then nothing does.
+
+### 9.2 One icon for every agent
+
+**One icon stands for all the agents installed on the host**, with a menu entry per agent [MIS-0002-R69 (tray_MUST_show_icon_per_agent), as amended]. The agents are the ones the outer tier starts, found from their LaunchAgents (`maceff_pd.*`). Each is keyed by the calling card in its home's identity file, never by a label, a socket name or the environment.
+
+**The icon shows the most urgent state among the agents**, and the menu names the agents that caused it [MIS-0002-R72 (tray_MUST_flag_waiting_on_person), as amended]. The order is:
+1. failed;
+2. unreachable (the agent's daemon did not answer, or its answer could not be trusted);
+3. waiting on a person;
+4. starting;
+5. running and stopped.
+
+The first three alert. A session that starts waiting on a person changes its own entry and, through the union, the icon.
+
+**Glyphs.** There is one glyph per state, all drawn from one mark. They are monochrome template images at menu-bar size, black and transparency only, so the system tints them for light and dark bars. There are no letters or numbers, and the shape changes with the state, so color is never the only signal. Each agent's entry shows that agent's own logo beside its card.
+
+### 9.3 What the tray may do
+
+**The tray observes and asks; it never acts itself.**
+- Each start, stop or restart goes to that agent's own primal daemon, as a control request that names the operator as the asker [MIS-0002-R70 (tray_MUST_act_through_pd)].
+- It offers no compaction, which only the operator's own command or the declared wind-down may ask for.
+- **It never types into a session** [MIS-0002-R71 (tray_MUST-NOT_type_into_session)].
+
+**The operator asker is a claim.** On a shared login a socket's peer credentials cannot tell the operator's tray from another agent's process, so the control socket must establish the operator by its own means, never from the field alone. How it does is still to be decided, and comes with the primal daemon.
+
+**An answer counts only from the agent's own daemon.** The tray accepts an answer only from the socket peer that the daemon's record names, matched by pid and start time [MIS-0002-R123 (channel_MUST_check_its_peer_is_its_pd), applied to the control socket]. A peer that cannot be checked makes the agent unreachable, never trusted.
+
+---
+
+## 10 Not Yet Landed
 
 Specified in MIS-0002 and arriving with their landing steps, each in the pull request that enforces it:
 - **The primal daemon itself:** declarations, liveness events, health derived from runs, and outside control (MIS-0002 §6.1 to §6.4, §6.7).
 - **Schedules and the notifier,** including the keystroke fallback, the dark-channel event, and every producer of the operator's activity (MIS-0002 §6.5, §6.6, the rest of §6.14).
-- **Mail, the rest of containers, and the tray** (MIS-0002 §6.8, §6.9, §6.11).
+- **Mail and the rest of containers** (MIS-0002 §6.8, §6.9).
 
 Until a section lands, the rules in force are the existing policies: `service_supervision`, `notification_delivery` and `amail`.
 
