@@ -92,3 +92,101 @@ def test_every_union_state_has_a_template_glyph():
             head = (glyphs / name).read_bytes()[:24]
             assert head[:8] == b"\x89PNG\r\n\x1a\n", name
             assert struct.unpack(">II", head[16:24]) == (side, side), name
+
+
+# ---------------------------------------------------------------------------
+# The controller: discovery from the outer tier, requests to each agent's own daemon
+# ---------------------------------------------------------------------------
+
+class _FakeSock:
+    """Records what was sent; answers with one canned line."""
+
+    def __init__(self, answer):
+        self.sent = b""
+        self._answer = (json.dumps(answer) + "\n").encode() if answer is not None else b""
+
+    def sendall(self, data):
+        self.sent += data
+
+    def recv(self, n):
+        out, self._answer = self._answer, b""
+        return out
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _controller(answers, homes=None, peer_ok=True, paths_missing=False, sockets=None):
+    from pathlib import Path
+    from macf.tray.controller import Controller, Resolvers
+    homes = homes if homes is not None else [Path(f"/agents/{c}") for c in answers]
+
+    def paths():
+        if paths_missing:
+            raise ImportError("no interface")
+        def card(home):
+            if home.name.startswith("broken"):
+                raise ValueError("names no agent")
+            return home.name
+        return Resolvers(card_of=card, control_socket=lambda c: Path(f"/run/{c}.control.sock"),
+                         record_path=lambda c: Path(f"/run/{c}.json"))
+
+    sockets = sockets if sockets is not None else {}
+
+    def connect(path):
+        card = path.name.split(".control")[0]
+        if answers.get(card, "absent") == "absent":
+            raise ConnectionRefusedError("nothing listening")
+        sockets[card] = _FakeSock(answers[card])
+        return sockets[card]
+
+    return Controller(homes=lambda: homes, paths=paths,
+                      peer_check=lambda s, rec: None if peer_ok else "the socket's peer is not the daemon",
+                      connect=connect), sockets
+
+
+def test_poll_asks_each_daemon_and_unions_their_answers():
+    ctl, socks = _controller({"A@1": _resp(("session", "running")),
+                              "B@2": _resp(("session", "waiting_on_a_person"))})
+    st = ctl.poll()
+    assert st.icon == "waiting_on_a_person" and st.caused_by == ["B@2"]
+    assert json.loads(socks["A@1"].sent) == {"op": "status"}
+
+
+def test_a_daemon_that_is_down_or_unverified_is_unreachable():
+    ctl, _ = _controller({"A@1": "absent"})
+    assert ctl.poll().entries[0].status == "unreachable"
+    ctl, _ = _controller({"A@1": _resp(("session", "running"))}, peer_ok=False)
+    e = ctl.poll().entries[0]
+    assert e.status == "unreachable" and "peer" in e.error
+
+
+def test_an_act_goes_only_to_that_agents_daemon():
+    ctl, socks = _controller({"A@1": {"ok": True}, "B@2": {"ok": True}})
+    ctl.discover()
+    assert ctl.act("A@1", "restart", "session") == {"ok": True}
+    assert json.loads(socks["A@1"].sent)["op"] == "restart" and "B@2" not in socks
+    assert ctl.act("Z@9", "stop", "session")["ok"] is False
+
+
+def test_discovery_problems_are_said_not_guessed():
+    from pathlib import Path
+    ctl, _ = _controller({}, homes=[Path("/agents/broken_home")])
+    assert ctl.poll().entries == [] and "names no agent" in ctl.errors[0]
+    ctl, _ = _controller({}, paths_missing=True)
+    ctl.poll()
+    assert ctl.errors == ["the primal daemon's interface is not installed"]
+
+
+def test_installed_homes_come_from_the_launch_agents(tmp_path):
+    import plistlib
+    from macf.tray.controller import installed_homes
+    (tmp_path / "maceff_pd.IraMacEff_ee9a78.plist").write_bytes(plistlib.dumps(
+        {"Label": "maceff_pd.IraMacEff_ee9a78",
+         "ProgramArguments": ["/usr/bin/python3", "-m", "macf.pd", "--agent-home", "/Users/x/IRA"]}))
+    (tmp_path / "maceff_pd.Odd_000000.plist").write_bytes(plistlib.dumps({"ProgramArguments": ["x"]}))
+    (tmp_path / "com.other.plist").write_bytes(plistlib.dumps({"ProgramArguments": ["--agent-home", "/no"]}))
+    assert [str(h) for h in installed_homes(tmp_path)] == ["/Users/x/IRA"]
