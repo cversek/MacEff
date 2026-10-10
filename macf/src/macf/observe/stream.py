@@ -33,6 +33,8 @@ from .acts import ENDED, Observation, admit, lapsed
 
 #: The handshake is one short line; anything longer is refused unread.
 MAX_HANDSHAKE = 4096
+#: Seconds a new connection has to send that line before it is refused.
+HANDSHAKE_TIMEOUT = 5.0
 
 _CHANNEL_TAG = re.compile(r'^<channel\s+source="([^"]+)"[^>]*>(.*)</channel>\s*$', re.S)
 
@@ -182,18 +184,36 @@ def serve(send: Callable[[dict], None], admitted: Observation, read_state: Calla
     return "rounds"
 
 
+def _read_handshake(sock) -> bytes:
+    """The one line a new connection sends, read within ``HANDSHAKE_TIMEOUT`` seconds.
+
+    Raises OSError if none comes in time. A peer that connects and stays silent would
+    otherwise hold its connection open.
+    """
+    data = b""
+    sock.settimeout(HANDSHAKE_TIMEOUT)
+    try:
+        while not data.endswith(b"\n") and len(data) <= MAX_HANDSHAKE:
+            chunk = sock.recv(512)
+            if not chunk:
+                break
+            data += chunk
+    finally:
+        sock.settimeout(None)
+    return data.strip()
+
+
 def serve_connection(sock, state_reader, rows, clock, wait, poll_rounds=None) -> str:
     """One onlooker on one socket: read the handshake line, then only write.
 
     The socket is never read again after the handshake (R83). Refusals say why and close.
     """
-    data = b""
-    while not data.endswith(b"\n") and len(data) <= MAX_HANDSHAKE:
-        chunk = sock.recv(512)
-        if not chunk:
-            break
-        data += chunk
-    o, why = handshake(data.strip(), state_reader(), clock())
+    try:
+        line = _read_handshake(sock)
+    except OSError:
+        o, why = None, "no handshake in time"
+    else:
+        o, why = handshake(line, state_reader(), clock())
     if o is None:
         sock.sendall(json.dumps({"kind": "refused", "reason": why}).encode() + b"\n")
         return why

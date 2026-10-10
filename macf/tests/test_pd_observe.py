@@ -4,6 +4,7 @@ Attach: R100 (attach_MUST_resolve_from_pd) and R101 (readout_MUST_say_nothing_at
 Observation acts: R82, R86-R90, R92, R94 and R111. The stream: R83, R84, R85 and R93.
 """
 import json as _json
+import socket
 from dataclasses import dataclass
 
 import pytest
@@ -359,6 +360,10 @@ class _Sock:
         self._incoming = [first_line]
         self.recv_calls = 0
         self.out = b""
+        self.timeouts = []
+
+    def settimeout(self, t):
+        self.timeouts.append(t)
 
     def recv(self, n):
         self.recv_calls += 1
@@ -387,6 +392,24 @@ def test_a_wrong_secret_is_refused_and_told(tmp_path):
     why = stream.serve_connection(sock, lambda: acts.fold([inv.event]), lambda off: stream.rows_from(path, off),
                                   _Clock(), lambda: None, poll_rounds=1)
     assert why == "not admitted" and b"refused" in sock.out and b"please run" not in sock.out
+
+
+class _SilentSock(_Sock):
+    def recv(self, n):
+        self.recv_calls += 1
+        raise socket.timeout("timed out")
+
+
+def test_a_connection_that_never_sends_its_handshake_is_refused(tmp_path):
+    """A peer that connects and stays silent is refused when the handshake's time runs out,
+    instead of holding its connection open."""
+    path = _transcript(tmp_path, AFTER)
+    inv = acts.invite(ME, THEM, 0, {}, container_of=_host)
+    sock = _SilentSock(None)
+    why = stream.serve_connection(sock, lambda: acts.fold([inv.event]), lambda off: stream.rows_from(path, off),
+                                  _Clock(), lambda: None, poll_rounds=1)
+    assert why == "no handshake in time" and b"refused" in sock.out and b"please run" not in sock.out
+    assert sock.timeouts == [stream.HANDSHAKE_TIMEOUT, None]
 
 
 def test_a_half_written_row_waits(tmp_path):
