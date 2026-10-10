@@ -128,3 +128,36 @@ def test_the_recovery_prompt_is_never_the_operators_activity(isolated_events_log
     assert record_user_activity_from_payload(cf.DEFAULT_TEXT) is False
     # and an operator's own prompt still counts
     assert record_user_activity_from_payload("check the indexer") is True
+
+
+def test_remote_mode_holds_through_the_recovery_prompt_and_a_channel_message(isolated_events_log, monkeypatch):
+    """Review of this PR: the prompt hook lifted USER_REMOTE's deny on every prompt. A prompt
+    the framework typed, or a channel message, is not the operator back at the keyboard."""
+    import subprocess
+    from macf import supervisor
+    from macf.hooks import handle_user_prompt_submit as hook
+    restores = []
+    monkeypatch.setattr("macf.utils.claude_settings.restore_user_remote_deny_if_active",
+                        lambda: restores.append(1) or {"restored": False})
+    done = subprocess.CompletedProcess([], 0, "", "")
+    with patch.object(supervisor, "_tmux_available", return_value=True), \
+         patch.object(supervisor, "_find_supervisor", return_value={"tmux_session": "seat", "name": "s"}), \
+         patch.object(supervisor.subprocess, "run", return_value=done):
+        supervisor.send_keys("s", [cf.DEFAULT_TEXT], enter=True, kind="compact-followup")
+    follower = cf.DEFAULT_TEXT
+    channel = '<channel source="plugin:telegram:telegram" chat_id="1">back soon</channel>'
+    typed = "check the indexer"
+    for prompt, expect in ((follower, False), (channel, False), (typed, True)):
+        recorded = hook.record_user_activity_from_payload(prompt)
+        assert hook.maybe_restore_user_remote(prompt, recorded) is expect, prompt[:20]
+    assert len(restores) == 1          # only the typed prompt asked
+
+
+def test_a_targeted_inject_starts_no_follower_and_says_so(capsys):
+    with patch("macf.supervisor.send_keys", return_value=0) as send, \
+         patch("macf.supervisor._start_compact_followup") as follower:
+        from macf import supervisor
+        assert supervisor.send_slash_to_self("compact", target="other", then="recover") == 0
+    follower.assert_not_called()
+    send.assert_called_once()
+    assert "no recovery prompt follows" in capsys.readouterr().err

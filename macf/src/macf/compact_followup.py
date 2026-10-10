@@ -66,7 +66,7 @@ def follow(target: str, since: float, text: str = DEFAULT_TEXT, *,
     """Wait for the compaction, then send, skip, or give up. Returns which, for the log."""
     if send is None:
         from .supervisor import send_keys
-        send = lambda t, keys: send_keys(t, keys, enter=True)   # noqa: E731
+        send = lambda t, keys: send_keys(t, keys, enter=True, kind="compact-followup")   # noqa: E731
     deadline = clock() + timeout
     while clock() < deadline:
         verdict = decide(read(since), since, clock())

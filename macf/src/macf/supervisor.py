@@ -538,6 +538,10 @@ def send_slash_to_self(command: str, target: str = "", then: Optional[str] = Non
     """
     cmd = "/" + command.lstrip("/")
     if target:
+        if then:
+            # The follower reads THIS agent's event log, so it can only follow its own pane.
+            print("[inject] --target names another session, so no recovery prompt follows "
+                  "(--then applies only to this agent's own pane).", file=sys.stderr)
         return send_keys(target, [cmd], enter=True, kind="inject")
     data = _find_own_supervisor()
     if not data:
