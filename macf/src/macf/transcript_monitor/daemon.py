@@ -20,6 +20,7 @@ time it is asked, never from a file (#529).
 """
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -49,8 +50,21 @@ CHUNK_SIZE = 65536  # 64KB read chunks
 #: ``find_monitors`` tells a monitor from every other process.
 MONITOR_MODULE = "macf.transcript_monitor"
 
+#: Where the code before this one recorded its monitor. That monitor was forked
+#: from the session-start hook without exec, so its command line is the hook's
+#: and ``find_monitors`` cannot see it; it also never exits on its own.
+LEGACY_PID_FILE_NAME = "macf_transcript_monitor.pid"
+LEGACY_HOOK_SCRIPT = "session_start.py"
+#: A session-start hook finishes within its timeout (60 s by default), so a
+#: process with the hook's command line that has run longer is a monitor.
+LEGACY_MIN_AGE_S = 120
+
 #: Replaced in the test suite, so that no test starts a real monitor.
 _execv = os.execv
+
+#: Set to "1" and ``start_daemon`` starts nothing. The test suite sets it for every
+#: test, so that it reaches the hooks a test runs as subprocesses.
+DISABLE_ENV = "MACF_TRANSCRIPT_MONITOR_DISABLED"
 
 #: Consecutive stat-failure counts at which the loop reports. A condition that
 #: persists must not produce one message per poll; these points give the first
@@ -473,6 +487,81 @@ def _alive(pid: int) -> bool:
     except OSError:
         return False
     return True
+
+
+_ETIME = re.compile(r"^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$")
+
+
+def _parse_etime(text: str) -> Optional[int]:
+    """Seconds from ``ps -o etime``'s ``[[dd-]hh:]mm:ss``, or None if it is not one."""
+    match = _ETIME.match(text.strip())
+    if match is None:
+        return None
+    days, hours, minutes, seconds = (int(g) if g else 0 for g in match.groups())
+    return ((days * 24 + hours) * 60 + minutes) * 60 + seconds
+
+
+def legacy_monitor() -> Optional[int]:
+    """The pid of a monitor started by the code before this one, if one still runs.
+
+    Three facts identify it, because a pid alone is not proof: the pid in the
+    file that code wrote is alive, its command line names the session-start hook,
+    and it has run longer than any hook does. A pid that fails any of them is left
+    alone.
+    """
+    path = user_runtime_dir() / LEGACY_PID_FILE_NAME
+    if not path.exists():
+        return None  # the normal case: no monitor from before the upgrade
+    try:
+        pid = int(path.read_text().strip())
+    except (OSError, ValueError) as e:
+        print(f"⚠️ MACF: cannot read {path}: {e}", file=sys.stderr)
+        return None
+    if not _alive(pid):
+        return None
+    try:
+        out = subprocess.run(["ps", "-ww", "-o", "etime=", "-o", "args=", "-p", str(pid)],
+                             capture_output=True, text=True, timeout=10,
+                             env={**os.environ, "LC_ALL": "C"}).stdout.strip()
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"⚠️ MACF: cannot read process {pid} from ps: {e}", file=sys.stderr)
+        return None
+    fields = out.split(None, 1)
+    if len(fields) != 2:
+        return None  # ps printed no such process
+    etime, args = fields
+    age = _parse_etime(etime)
+    if age is None or age < LEGACY_MIN_AGE_S or LEGACY_HOOK_SCRIPT not in args:
+        return None
+    return pid
+
+
+def stop_legacy_monitor() -> Optional[int]:
+    """Stop a monitor the code before this one started, and remove its pid file.
+
+    Returns the pid it stopped, or None when there was none or it did not exit.
+    """
+    pid = legacy_monitor()
+    if pid is None:
+        return None
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError as e:
+        print(f"⚠️ Could not signal the old-form monitor {pid}: {e}", file=sys.stderr)
+        return None
+    for _ in range(10):
+        if not _alive(pid):
+            break
+        time.sleep(0.5)
+    if _alive(pid):
+        print(f"⚠️ The old-form monitor {pid} is still running after 5s", file=sys.stderr)
+        return None
+    try:
+        (user_runtime_dir() / LEGACY_PID_FILE_NAME).unlink()
+    except OSError as e:
+        print(f"⚠️ MACF: could not remove the old monitor's pid file: {e}", file=sys.stderr)
+    print(f"📡 Stopped a transcript monitor started before the upgrade (PID {pid})", file=sys.stderr)
+    return pid
 
 
 def _process_started(pid: int) -> Optional[float]:
@@ -934,6 +1023,16 @@ def start_daemon(foreground: bool = False, poll_interval: float = DEFAULT_POLL_I
     Returns:
         0 on success, 1 on error
     """
+    if os.environ.get(DISABLE_ENV) == "1":
+        # A test suite sets this so that a hook it runs as a subprocess, which
+        # resolves the developer's own transcript from the inherited environment,
+        # cannot start a real monitor there. The environment is the one thing
+        # that crosses into the hook's process; a patched name does not.
+        print(f"📡 Transcript Monitor not started: {DISABLE_ENV}=1", file=sys.stderr)
+        return 0
+    # A monitor the code before this one started is invisible to find_monitors,
+    # so it would serve beside the new one and outlive it.
+    stop_legacy_monitor()
     if is_running():
         # stderr, not stdout: start_daemon is called from the SessionStart hook,
         # whose stdout must be parseable JSON. See the note on the started-banner
@@ -1033,7 +1132,8 @@ def _agent_monitors(monitors: List[MonitorProcess]) -> List[MonitorProcess]:
 
 
 def stop_daemon() -> int:
-    """Stop every monitor of this agent."""
+    """Stop every monitor of this agent, including one the code before this one started."""
+    stop_legacy_monitor()
     monitors = find_monitors()
     if monitors is None:
         print("⚠️ Which monitors run is unknown; nothing was signaled.", file=sys.stderr)
@@ -1066,6 +1166,10 @@ def stop_daemon() -> int:
 
 def daemon_status() -> int:
     """Print this agent's monitors, one line each."""
+    legacy = legacy_monitor()
+    if legacy is not None:
+        print(f"⚠️ A transcript monitor started before the upgrade is running (PID {legacy}); "
+              f"'macf_tools transcript-monitor start' or 'stop' stops it")
     monitors = find_monitors()
     if monitors is None:
         print("❓ Transcript Monitor state unknown: the process table cannot be read")

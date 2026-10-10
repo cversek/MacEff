@@ -196,6 +196,7 @@ def test_the_process_table_says_when_a_process_started():
 
 def test_start_runs_a_fresh_interpreter_named_as_a_monitor(
         monkeypatch, tmp_path, capsys, no_transcript_monitor_started):
+    monkeypatch.delenv(daemon.DISABLE_ENV)  # this test is about the real start path
     transcript = tmp_path / "s1.jsonl"
     transcript.write_text("")
     monkeypatch.setattr(daemon, "find_current_transcript", lambda: transcript)
@@ -239,3 +240,27 @@ def test_every_event_a_monitor_writes_names_it(monkeypatch, tmp_path):
         {"type": "system", "subtype": "compact_boundary", "compactMetadata": {"trigger": "manual"}}))
     assert [(name, data["monitor_pid"]) for name, data in emitted] == [
         ("compact_boundary_detected", me)]
+
+
+def test_the_switch_starts_nothing_even_with_a_transcript_and_no_monitor(
+        monkeypatch, tmp_path, no_transcript_monitor_started):
+    """MACF_TRANSCRIPT_MONITOR_DISABLED=1 returns before anything is looked up or spawned.
+
+    The integration test that runs the SessionStart hook as a subprocess resolved
+    the developer's live transcript and started a real monitor on it: patched names
+    stay in the test process, and only the environment crosses into the hook's.
+    """
+    transcript = tmp_path / "s1.jsonl"
+    transcript.write_text("")
+    monkeypatch.setattr(daemon, "find_current_transcript", lambda: transcript)
+    monkeypatch.setattr(daemon, "find_monitors", lambda: [])
+    monkeypatch.setenv(daemon.DISABLE_ENV, "1")
+    assert daemon.start_daemon() == 0
+    assert no_transcript_monitor_started == []
+
+
+def test_the_suite_sets_the_switch_where_a_subprocess_inherits_it():
+    """Every test runs with the switch in os.environ, so a hook a test runs as a
+    subprocess inherits it, whichever file starts that subprocess."""
+    import os
+    assert os.environ.get(daemon.DISABLE_ENV) == "1"
