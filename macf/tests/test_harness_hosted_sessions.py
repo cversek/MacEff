@@ -40,6 +40,16 @@ def test_background_session_is_listed_with_its_channels(claude_home):
     assert hosted[0].channels == ["plugin:fakechat@claude-plugins-official"]
 
 
+def test_channels_written_with_equals_or_several_values_are_read(claude_home):
+    """MEASURED 2.1.296: ``--channels=X`` is kept as one token, and ``--channels`` takes several values."""
+    _sidecar(claude_home, os.getpid(), "bg", "32149023-da95-480f-bb4a-866d6bc083a0")
+    _job(claude_home, "32149023", ["--settings", "/tmp/s.json", "--channels=plugin:fakechat@claude-plugins-official"])
+    assert session.harness_hosted_sessions()[0].channels == ["plugin:fakechat@claude-plugins-official"]
+    _job_flags = ["--channels", "plugin:a@x", "plugin:b@x", "--settings", "/tmp/s.json"]
+    (claude_home / "jobs" / "32149023" / "state.json").write_text(json.dumps({"respawnFlags": _job_flags}))
+    assert session.harness_hosted_sessions()[0].channels == ["plugin:a@x", "plugin:b@x"]
+
+
 def test_interactive_sessions_are_not_hosted_by_the_daemon(claude_home):
     _sidecar(claude_home, os.getpid(), "interactive", "89f47c46-71a2-4d9b-873a-72f4c44f3788")
     assert session.harness_hosted_sessions() == []

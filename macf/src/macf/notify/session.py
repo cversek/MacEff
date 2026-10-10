@@ -345,8 +345,9 @@ def read_session_info(pid: int) -> Optional[SessionInfo]:
 class HostedSession:
     """A live session hosted by Claude Code's own background daemon.
 
-    MEASURED on 2.1.296: the worker runs in a pre-started spare whose argv is
-    generic, so its launch flags exist only in the job record. ``channels`` is None
+    MEASURED on 2.1.296: a worker started cold carries its flags in argv, but a
+    respawned one runs in a pre-started spare whose argv is generic, so the job
+    record is the one place the launch flags always are. ``channels`` is None
     when that record is missing or unreadable: unknown, never "none".
     """
     pid: int
@@ -367,6 +368,29 @@ def _respawn_flags(session_id: str) -> Optional[list]:
     return flags if isinstance(flags, list) else None
 
 
+def _channels_from_flags(flags: list) -> list:
+    """The channel entries in a job's launch flags.
+
+    MEASURED on 2.1.296: ``--channels=X`` is kept as one token, and ``--channels`` takes
+    every value up to the next flag.
+    """
+    channels = []
+    taking = False
+    for f in flags:
+        if not isinstance(f, str):
+            taking = False
+        elif f.startswith("--channels="):
+            channels.append(f.split("=", 1)[1])
+            taking = False
+        elif f == "--channels":
+            taking = True
+        elif f.startswith("-"):
+            taking = False
+        elif taking:
+            channels.append(f)
+    return channels
+
+
 def harness_hosted_sessions() -> list:
     """Live sessions the client's background daemon hosts, with their channels.
 
@@ -378,9 +402,7 @@ def harness_hosted_sessions() -> list:
         if info.kind != "bg":
             continue
         flags = _respawn_flags(info.session_id)
-        channels = None
-        if flags is not None:
-            channels = [flags[i + 1] for i, f in enumerate(flags[:-1]) if f == "--channels"]
+        channels = None if flags is None else _channels_from_flags(flags)
         hosted.append(HostedSession(pid=info.pid, session_id=info.session_id,
                                     status=info.status, cwd=info.cwd, channels=channels))
     return hosted
