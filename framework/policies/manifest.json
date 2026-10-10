@@ -1335,6 +1335,9 @@
   },
   "discovery_index": {
     "mis": ["mis"],
+    "persistent_layer": ["base/infrastructure/persistent_layer"],
+    "primal_daemon": ["base/infrastructure/persistent_layer"],
+    "maceff_channel": ["base/infrastructure/persistent_layer"],
     "specification": ["mis"],
     "ratification": ["mis"],
     "amail": [
@@ -1867,6 +1870,28 @@
           "knowledge_doctor",
           "curation",
           "screening"
+        ]
+      },
+      {
+        "name": "persistent_layer",
+        "short_name": "PLAYER",
+        "path": "base/infrastructure/persistent_layer.md",
+        "CEP_triggers": [
+          "How does a notice reach my live session, and why not by keystrokes?",
+          "What may a channel event carry, and what must it never be taken as?",
+          "How does the channel know it is talking to my primal daemon?",
+          "How do I tell a MacEff notice from the operator's own channel?",
+          "How is a notice's receipt recorded?"
+        ],
+        "keywords": [
+          "persistent layer",
+          "primal daemon",
+          "maceff_pd",
+          "channel",
+          "maceff channel",
+          "notice",
+          "wake",
+          "receipt"
         ]
       }
     ]
