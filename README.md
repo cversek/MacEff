@@ -122,9 +122,10 @@ the policy corpus is far larger than any context window that could hold it.
 macf_tools hooks install --local
 ```
 
-Installs eleven lifecycle hooks into `.claude/settings.json`. They fire on
+Installs twelve lifecycle hooks into `.claude/settings.json`. They fire on
 session start, prompt submit, before and after each tool call, on stop, on
-subagent start and stop, before compaction, and on session end.
+subagent start and stop, before compaction, on session end, on a permission
+prompt, on a notification, and when a settings file changes.
 
 What they do, in one line: inject the agent's own current state into its context
 — time, context remaining, active modes, recent policy guidance — and record what
