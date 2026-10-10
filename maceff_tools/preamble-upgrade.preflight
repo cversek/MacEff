@@ -14,21 +14,35 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=common.sh
 source "${SCRIPT_DIR}/common.sh"
 
-PA_USER="${PA:-}"
 CONTAINER="${CONTAINER_NAME:-maceff-sandbox}"
 rc=0
 
+# framework-upgrade runs preamble-upgrade for every agent the deployment declares (#388), so
+# what it needs is: the container, a readable declaration with at least one MacEff agent, and
+# each such agent's account in the container.
+ENUM_PY='
+import yaml
+from macf.models.agent_spec import AgentsConfig
+c = AgentsConfig.model_validate(yaml.safe_load(open("/etc/maceff/agents.yaml")))
+print("\n".join(s.username for s in c.agents.values() if not s.is_vanilla))
+'
 if ! docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null | grep -q '^true$'; then
   echo "preamble-upgrade: container '${CONTAINER}' is not running." >&2
   echo "                  set CONTAINER_NAME=<name> for this deployment, or start it." >&2
   rc=1
-elif [[ -z "$PA_USER" ]]; then
-  echo "preamble-upgrade: no PA user resolved. Set PA=<username>." >&2
+elif ! users="$(docker exec "$CONTAINER" /opt/maceff-venv/bin/python -c "$ENUM_PY" 2>/dev/null)"; then
+  echo "preamble-upgrade: cannot read the agents from /etc/maceff/agents.yaml in '${CONTAINER}'." >&2
   rc=1
-elif ! docker exec "$CONTAINER" id "$PA_USER" >/dev/null 2>&1; then
-  echo "preamble-upgrade: PA user '${PA_USER}' does not exist in container '${CONTAINER}'." >&2
-  echo "                  set PA=<username> to a PA of this deployment." >&2
+elif [[ -z "$users" ]]; then
+  echo "preamble-upgrade: '${CONTAINER}' declares no MacEff agent; there is nothing to upgrade." >&2
   rc=1
+else
+  while IFS= read -r u; do
+    if ! docker exec "$CONTAINER" id "$u" >/dev/null 2>&1; then
+      echo "preamble-upgrade: declared agent '${u}' has no account in '${CONTAINER}'." >&2
+      rc=1
+    fi
+  done <<< "$users"
 fi
 
 exit "$rc"

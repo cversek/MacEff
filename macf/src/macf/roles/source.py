@@ -3,7 +3,7 @@
 The in-session half (``roles.hooks.conscientiousness_nag``) reads the tiers
 on every tool call. This reads the same tiers from outside the session --
 polled by whatever long-lived process hosts it (today the transcript
-monitor's ``add_source``; tomorrow the hypervisor's notifier) -- and reports
+monitor's ``add_source``; tomorrow the primal daemon's notifier) -- and reports
 a crossing into DUE_SOON or OVERDUE as one Detection, edge-triggered on
 (duty id, tier, entry time), so a duty that stays overdue is one event, not
 one per poll. Names only: a Detection carries the duty's id and tier, never

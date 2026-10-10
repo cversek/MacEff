@@ -478,7 +478,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R73 | decidable | macf/tests/test_pd_readout.py::test_tray_unavailable_said | planned |
 | R74 | decidable | macf/tests/test_pd_render.py::test_outside_watch_rendered | planned |
 | R75 | judgment | the operator, at review of each deployment's alert path | standing |
-| R76 | decidable | macf/tests/test_amail_deploy_config.py::test_hypervisor_value_accepted | planned |
+| R76 | decidable | macf/tests/test_amail_deploy_config.py::test_hypervisor_value_accepted | passing |
 | R77 | decidable | macf/tests/test_pd_harness.py::test_wake_text_fixed | planned |
 | R78 | judgment | the operator, at review of each declaration | standing |
 | R79 | judgment | the head maintainer, at review of each landing pull request | standing |
@@ -636,6 +636,8 @@ Objections recorded:
 
 - 2026-10-10: conformance, from the pull request for R106's wakes: R121 and R128 passing. R106's test passes for a wake that opens with the wake words, and R106 stays planned for two reasons: nothing in the framework writes those words until the notifier lands, in step 2, and a MacEff channel notice, also a wake, is told apart by its channel's name only once that channel lands, which the door audit in the same test file holds as a known gap. No requirement changed.
 - 2026-10-10: conformance, from the pull request for the shared view (landing step 3): R103 passing. R62 is built (each agent publishes a summary of its units, with no command or environment, in its own public tree, and the view reads every one and the container's cgroup, read-only) and waits on its judgment at the container landing. No requirement changed.
+
+- 2026-10-10: conformance, from the pull request for landing step 6 (the code rename of `hypervisor`): R76 passing. The deploy configuration documents `primal-daemon` and reads the retired value as it. No requirement changed.
 
 ## Wiki-Links
 

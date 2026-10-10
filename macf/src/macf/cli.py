@@ -634,6 +634,14 @@ def cmd_permissions_pending(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_permissions_history(args: argparse.Namespace) -> int:
+    """Past permission dialogs of this agent, from the event log alone (autonomous_operation 5.5)."""
+    from macf import permission_watch as pw
+    dialogs = pw.read_history(args.days, include_questions=args.include_questions)
+    print(pw.history_json(dialogs) if args.json else pw.history_text(dialogs, by_rule=args.by_rule))
+    return 0
+
+
 def cmd_permissions_watch(args: argparse.Namespace) -> int:
     """One watch pass; meant for a timer OUTSIDE the watched session.
 
@@ -777,7 +785,7 @@ def _update_settings_file(settings_path: Path, hooks_prefix: str) -> bool:
         if "hooks" not in settings:
             settings["hooks"] = {}
 
-        # 11 lifecycle hooks with their script names. SubagentStart joins
+        # 12 lifecycle hooks with their script names. SubagentStart joins
         # SubagentStop as the boot-boundary marker, used by MACF to bridge
         # the parent's tool_use_id to the subagent's agent_id (CC doesn't
         # supply a direct join key between the two surfaces).
@@ -793,6 +801,7 @@ def _update_settings_file(settings_path: Path, hooks_prefix: str) -> bool:
             ("PreCompact", "pre_compact.py"),
             ("PermissionRequest", "permission_request.py"),
             ("Notification", "notification.py"),
+            ("ConfigChange", "config_change.py"),
         ]
 
         # Register all hooks
@@ -918,6 +927,7 @@ def _hooks_to_install_list():
         ("pre_compact.py", "handle_pre_compact"),
         ("permission_request.py", "handle_permission_request"),
         ("notification.py", "handle_notification"),
+        ("config_change.py", "handle_config_change"),
     ]
 
 
@@ -1009,7 +1019,7 @@ def cmd_hook_install(args: argparse.Namespace) -> int:
         # Create hooks directory
         hooks_dir.mkdir(parents=True, exist_ok=True)
 
-        # 11 lifecycle hooks with their handler module names.
+        # 12 lifecycle hooks with their handler module names.
         # subagent_start.py was added alongside subagent_stop.py to act
         # as the parent→child join-key bridge for delegation events
         # (CC's SubagentStop hook input carries agent_id but not the
@@ -8376,11 +8386,17 @@ def cmd_task_scope_set(args: argparse.Namespace) -> int:
             expanded.append(_sid)
             _readded.append(_sid)
 
+    from .task.scope import get_scope_state
+    _kept_paused = [t for t, st in get_scope_state().items() if st == "paused" and t in expanded]
+
     result = set_scope(expanded, parent_expanded=len(expanded) > len(raw_ids),
                        expanded_from=raw_ids[0] if len(raw_ids) == 1 else None)
 
     if result["success"]:
         print(f"✅ Scoped {len(expanded)} task(s):")
+        for _pid in _kept_paused:
+            # Re-listing a paused task does not answer what it waits on; unpause is explicit.
+            print(f"   ⏸️  #{_pid} stays paused (macf_tools task scope unpause {_pid} to resume it)")
         for _sid in _readded:
             # Reported, never silent: the caller did not ask for this task and
             # should see that the sprint mode-lock is what put it back.
@@ -11228,8 +11244,10 @@ def _cmd_inject(args):
     mid-turn). The canonical use is an operator, away from the keyboard,
     directing the agent to compact itself.
     """
+    from .compact_followup import DEFAULT_TEXT
     from .supervisor import send_slash_to_self
-    return send_slash_to_self(args.command, target=getattr(args, "target", "") or "")
+    then = None if getattr(args, "no_then", False) else (getattr(args, "then", None) or DEFAULT_TEXT)
+    return send_slash_to_self(args.command, target=getattr(args, "target", "") or "", then=then)
 
 
 _HOOK_TRACE_ON_TEXT = (
@@ -11795,6 +11813,17 @@ def _build_parser() -> argparse.ArgumentParser:
     pp.add_argument("--repeat", type=float, default=60.0, metavar="MIN", help="minutes between reminders while it still waits (default 60)")
     pp.add_argument("--dry-run", action="store_true", help="print the messages instead of sending them; the state file is not written")
     pp.set_defaults(func=cmd_permissions_watch)
+    pp = perm_sub.add_parser(
+        "history",
+        help="the permission dialogs this agent met, read from its event log: when, how long each waited "
+             "(until the session moved on; an approved command adds its run time), whether it then ran, "
+             "and the ask rule of today's settings that matches it",
+    )
+    pp.add_argument("--days", type=float, default=7.0, metavar="N", help="how far back to read (default 7)")
+    pp.add_argument("--by-rule", action="store_true", help="one line per matching ask rule: dialogs, total and longest wait")
+    pp.add_argument("--include-questions", action="store_true", help="also list question dialogs (AskUserQuestion, ExitPlanMode)")
+    pp.add_argument("--json", action="store_true")
+    pp.set_defaults(func=cmd_permissions_history)
 
     # New consciousness commands
     list_parser = sub.add_parser("list", help="list consciousness artifacts")
@@ -13097,6 +13126,11 @@ def _build_parser() -> argparse.ArgumentParser:
     inject_parser.add_argument("--target", default="",
                                help="supervisor name/pid to target directly "
                                     "(default: self-resolve from this session id)")
+    inject_parser.add_argument("--then", default=None, metavar="TEXT",
+                               help="for compact: the prompt typed into this pane once the "
+                                    "compaction has finished (default: a short recovery prompt)")
+    inject_parser.add_argument("--no-then", action="store_true",
+                               help="for compact: type nothing after the compaction")
     inject_parser.set_defaults(func=lambda args: _cmd_inject(args))
 
     # channel: settings for the channels the operator reads (GH #477)
