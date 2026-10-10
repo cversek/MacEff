@@ -12,7 +12,7 @@ import pytest
 from macf.platform.launchd import launchctl_argv, pd_label, render_pd_launch_agent
 
 CARD = "IraMacEff@ee9a78"
-ARGV = ["/usr/bin/python3", "-m", "macf.pd", "--agent-home", "/Users/someone/agent"]
+ARGV = ["/usr/bin/python3", "-m", "macf.pd", "/Users/someone/agent"]
 
 
 def _plist(**overrides):
