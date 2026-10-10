@@ -144,6 +144,17 @@ Until the primal daemon lands, the transcript monitor makes these records. The d
 
 **Check the socket path at install** [MIS-0002-R129 (adapter_MUST_check_socket_path_length)]. A Unix socket path longer than the platform allows fails at bind with a bare error. On macOS the limit is 103 bytes (Linux: 107), and a long home path or runtime directory reaches it. The install refuses with the path and the limit.
 
+### 3.2 Claude Code's own supervisor
+
+Claude Code can run a session in the background under its own daemon (`claude --bg`, `/background`). **Where it already runs the agent's session, the primal daemon adopts that session** instead of starting a second supervisor over it [MIS-0002-R66 (pd_MUST_adopt_harness_supervisor)].
+
+- **Recognise a hosted session by its sidecar's `kind: "bg"`, never by argv.** A respawned worker runs in a pre-started spare whose argv is generic, so the session's launch flags, its channels among them, are read from the client's job record (`respawnFlags`).
+- **Adopt only when it is unambiguous.** Exactly one hosted session in the agent's home is adopted. Two or more are refused with their ids named, because picking by recency is a guess. With none, the daemon starts the session itself.
+- **Act only through the client's own verbs.** Start and restart are `claude respawn <id>`, which brings back the same session id, with its channels. Stop is `claude stop <id>`, which keeps the conversation. **Never a signal:** a signalled worker ends as "done" and nothing brings it back.
+- **The client's daemon is transient.** It starts on demand and exits when its last client goes, so its absence says nothing about whether a hosted session lives. Workers it leaves behind keep their sidecars and are found the same way.
+- **The readout shows the hosted sessions** under Claude Code's daemon, with their channels, or `unknown` where the job record cannot be read, never "none".
+- A sidecar's `status` is turn state, stamped at transitions. It never says a person is awaited; that inference is the readout's [MIS-0002-R21 (pd_MUST_report_waiting_on_person)].
+
 ---
 
 ## 4 Not Yet Landed
