@@ -1,4 +1,5 @@
-"""The shared view of a container and its budget (MIS-0002-R62, MIS-0002-R103).
+"""The declaration's checks: the shared view of a container and its budget (MIS-0002-R62,
+MIS-0002-R103), and the outer tier's boundary, one adapter per supported platform (MIS-0002-R10).
 
 The cgroup numbers are a live shared container's, Oct 10: a 64 GiB limit, 24 CPUs, 44.2 GB
 of process memory and 1 GB of kernel memory held, 13.7 GB of page cache besides.
@@ -9,6 +10,7 @@ import os
 import pytest
 from pydantic import ValidationError
 
+from macf.pd import adapter as adapters
 from macf.pd import interface, shared_view as sv
 
 GIB = 2 ** 30
@@ -126,3 +128,45 @@ def test_every_agent_gets_its_publishing_point_at_init():
     calls = [n.func.id for n in ast.walk(ast.parse(src))
              if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)]
     assert "create_pd_view_dir" in calls
+
+
+class _Fake:
+    def __init__(self, platform):
+        self.platform = platform
+
+    def render(self, card, agent_home):
+        return f"run python -m macf.pd {agent_home}"
+
+    def install(self, card, agent_home):
+        return Path("/nonexistent")
+
+    def uninstall(self, card):
+        return None
+
+    def status(self, card):
+        return "inactive"
+
+
+@pytest.fixture
+def registry(monkeypatch):
+    monkeypatch.setattr(adapters, "_ADAPTERS", {})
+    return adapters
+
+
+def test_one_adapter_per_platform(registry):
+    registry.register(_Fake("linux"))
+    with pytest.raises(ValueError, match="already registered"):
+        registry.register(_Fake("linux"))
+    with pytest.raises(ValueError, match="not a supported platform"):
+        registry.register(_Fake("plan9"))
+    with pytest.raises(TypeError):
+        registry.register(object())
+    assert registry.adapter_for("linux").platform == "linux"
+    assert registry.missing_renderings() == ["darwin"]
+
+
+@pytest.mark.xfail(strict=True, reason="planned: the systemd unit and the LaunchAgent (#549) are not registered yet")
+def test_renderings_exist():
+    """Every supported platform has an outer tier (R10). Planned, never skipped: it fails
+    until both renderings are registered, and passing unexpectedly fails it too."""
+    assert adapters.missing_renderings() == []
