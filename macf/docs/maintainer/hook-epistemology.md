@@ -1,7 +1,7 @@
 # Claude Code Hook Epistemology
 
-**Version**: 1.0.0
-**Last Updated**: 2025-12-09
+**Version**: 1.2.0
+**Last Updated**: 2026-10-10
 **Claude Code Version**: As of v2.0.x (check revision history for version-specific notes)
 **Status**: ACTIVE
 
@@ -205,14 +205,23 @@ Stop fires when Claude finishes responding to a user message. Unlike most hooks,
 
 ### SubagentStop
 
-SubagentStop fires when a subagent spawned via the Task tool completes its work. Like Stop, it supports prompt-based hooks. Use this for delegation tracking, result validation, or coordinating multi-agent workflows.
+SubagentStop fires when a subagent completes its work. Like Stop, it supports prompt-based hooks. Use this for delegation tracking, result validation, or coordinating multi-agent workflows.
 
-**Trigger**: When a subagent (Task tool) completes
+**Trigger**: When a subagent spawned via the Task tool completes, and also when an agent the client runs on its own finishes (see below)
 
 | Field | Type | Description | Source |
 |-------|------|-------------|--------|
-| `session_id` | string | Session identifier | ✅ Official docs |
-| `subagent_id` | string | Subagent identifier | ❓ Unverified |
+| `session_id` | string | The parent session's identifier | ✅ Official docs |
+| `transcript_path` | string | The parent session's transcript | ✅ Empirical |
+| `agent_id` | string | The finished agent's identifier | ✅ Empirical |
+| `agent_type` | string | The subagent type, such as `Explore`. Empty for the client's own agents, and absent from older clients' payloads | ✅ Empirical |
+| `agent_transcript_path` | string | Where the agent's transcript is kept. For the client's own agents no file exists there | ✅ Empirical |
+| `last_assistant_message` | string | The agent's final reply (newer clients) | ✅ Empirical |
+| `stop_hook_active`, `cwd`, `permission_mode` | | As for Stop | ✅ Empirical |
+
+Newer clients also send `prompt_id`, `effort`, `background_tasks` and `session_crons`. The `subagent_id` field this table used to list does not appear in any recorded payload.
+
+**Not only delegations** (✅ Empirical, recorded hook payloads, Claude Code 2.1.296). SubagentStop also fires for agents the client runs on its own, which no Task tool call started and for which SubagentStart never fires. Two kinds were recorded: a one-line progress summary of a running background subagent, about every 30 seconds while it works, and the summary written at each compaction. Their `agent_type` is empty. A handler that counts delegations has to tell them apart: `handle_subagent_stop` treats a stop with an empty `agent_type` and no SubagentStart before it as one of these, and records `undelegated_agent_stopped` instead of a delegation.
 
 **Note**: Supports `type: "prompt"` for prompt-based hooks | ✅ Official docs
 
@@ -554,6 +563,7 @@ Notification hook uses `notification_type` field, not `type`. This field name di
 |------|---------|---------|-----------|
 | 2025-12-09 | 1.0.0 | Initial comprehensive documentation with field values | [MacEff g_55e0aca] |
 | 2025-12-09 | 1.1.0 | Added orienting paragraphs under all major sections | [MacEff g_c5aa41f] |
+| 2026-10-10 | 1.2.0 | SubagentStop: the fields recorded payloads carry, and that it also fires for agents the client runs on its own | `hooks/handle_subagent_stop.py` |
 
 ---
 
