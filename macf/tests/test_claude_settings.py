@@ -396,3 +396,28 @@ class TestToggleAutoModeAskPermissionsShadowFix:
         assert "Bash(gh issue create:*)" in on_disk["permissions"]["ask"]
         # ls was NOT shadowing anything → still in allow
         assert "Bash(ls:*)" in on_disk["permissions"]["allow"]
+
+
+class TestAnAgentCanAlwaysCompactItself:
+    """GH #479: under the client's auto mode, `macf_tools inject compact` was refused
+    as an agent typing into its own terminal, and nothing else could end a turn held
+    by a play-time timer. The injected /compact passes every Stop gate once, so the
+    command itself is the one thing to allow: exactly it, nothing wider."""
+
+    def test_the_exact_inject_compact_command_is_allowed(self, tmp_path):
+        from macf.utils.claude_settings import ensure_mode_safety_permissions
+        (tmp_path / ".claude").mkdir()
+
+        ensure_mode_safety_permissions(project_root=tmp_path)
+
+        allow = json.loads((tmp_path / ".claude" / "settings.local.json").read_text())["permissions"]["allow"]
+        assert "Bash(macf_tools inject compact)" in allow
+
+    def test_no_wider_inject_grant_is_installed(self, tmp_path):
+        from macf.utils.claude_settings import ensure_mode_safety_permissions
+        (tmp_path / ".claude").mkdir()
+
+        ensure_mode_safety_permissions(project_root=tmp_path)
+
+        allow = json.loads((tmp_path / ".claude" / "settings.local.json").read_text())["permissions"]["allow"]
+        assert not [e for e in allow if e.startswith("Bash(macf_tools inject") and e != "Bash(macf_tools inject compact)"]
