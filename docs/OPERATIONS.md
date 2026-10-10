@@ -131,12 +131,17 @@ maceff_tools/preamble-upgrade --all-agents --confirm-all-agents
 maceff_tools/preamble-upgrade
 ```
 
+**Scope**: a container's agents, as `/etc/maceff/agents.yaml` declares them. A host with no
+container declares its agents nowhere this tool reads, so `--all-agents` cannot reach them;
+upgrade each host agent's preamble with `macf_tools agent init` from that agent's home.
+
 **What it does**:
 1. Syncs latest templates (ensures PA_PREAMBLE.md is current)
 2. Runs `macf_tools agent init` inside the container as each chosen agent, and prints one
    verdict per agent (upgraded, FAILED, or skipped for a vanilla account) and a summary. A
    failure on one agent does not stop the rest, and the exit status is non-zero if any
-   failed. A vanilla account receives no MacEff footprint and is never upgraded.
+   failed, with the last lines of that agent's output under its FAILED line. A vanilla
+   account receives no MacEff footprint and is never upgraded.
    `framework-upgrade` runs it with `--all-agents --confirm-all-agents`.
 3. Replaces framework content below upgrade boundary
 4. **Preserves user content above boundary marker**

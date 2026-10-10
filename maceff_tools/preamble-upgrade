@@ -18,6 +18,8 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=common.sh
 source "${SCRIPT_DIR}/common.sh"
+# common.sh turns -e on; a failure on one agent must not end the run for the rest.
+set +e
 CONTAINER="${CONTAINER_NAME:-maceff-sandbox}"
 
 ALL=0; CONFIRMED=0; ONE=""
@@ -36,19 +38,22 @@ if ! docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null | grep -q '
   exit 1
 fi
 
-# username<TAB>maceff|vanilla, one line per declared agent, in declaration order
+# username<TAB>maceff|vanilla, one line per declared agent, in declaration order. Single-quoted,
+# so Python receives it byte for byte: no backslashes or nested quotes (a test compiles it).
 ENUM_PY='
 import yaml
 from macf.models.agent_spec import AgentsConfig
 c = AgentsConfig.model_validate(yaml.safe_load(open("/etc/maceff/agents.yaml")))
 for name, spec in c.agents.items():
-    print(f"{spec.username}\t{\"vanilla\" if spec.is_vanilla else \"maceff\"}")
+    print(spec.username, "vanilla" if spec.is_vanilla else "maceff", sep="\t")
 '
 if ! declared="$(docker exec "$CONTAINER" /opt/maceff-venv/bin/python -c "$ENUM_PY" 2>&1)"; then
   echo "preamble-upgrade: cannot read the deployment's agents from /etc/maceff/agents.yaml:" >&2
   echo "$declared" | sed 's/^/  /' >&2
   exit 1
 fi
+# Arrays that may be empty expand as ${a[@]+"${a[@]}"}: bash before 4.4 (/bin/bash on macOS is
+# 3.2) treats an empty "${a[@]}" as unbound under set -u.
 maceff=(); vanilla=()
 while IFS=$'\t' read -r user flavor; do
   [[ -z "$user" ]] && continue
@@ -60,17 +65,17 @@ if [[ "$ALL" == 1 && -n "$ONE" ]]; then
 fi
 if [[ "$ALL" == 0 && -z "$ONE" ]]; then
   echo "preamble-upgrade: name the agent, or pass --all-agents. Declared agents:" >&2
-  for u in "${maceff[@]}"; do echo "  $u" >&2; done
-  for u in "${vanilla[@]}"; do echo "  $u (vanilla: never upgraded)" >&2; done
+  for u in ${maceff[@]+"${maceff[@]}"}; do echo "  $u" >&2; done
+  for u in ${vanilla[@]+"${vanilla[@]}"}; do echo "  $u (vanilla: never upgraded)" >&2; done
   exit 2
 fi
 
 targets=()
 if [[ -n "$ONE" ]]; then
-  for u in "${vanilla[@]}"; do
+  for u in ${vanilla[@]+"${vanilla[@]}"}; do
     [[ "$u" == "$ONE" ]] && { echo "preamble-upgrade: $ONE is a vanilla account; it receives no MacEff footprint" >&2; exit 2; }
   done
-  found=0; for u in "${maceff[@]}"; do [[ "$u" == "$ONE" ]] && found=1; done
+  found=0; for u in ${maceff[@]+"${maceff[@]}"}; do [[ "$u" == "$ONE" ]] && found=1; done
   if [[ "$found" == 0 ]]; then
     echo "preamble-upgrade: $ONE is not an agent this deployment declares. Declared: ${maceff[*]:-none}" >&2
     exit 2
@@ -90,7 +95,7 @@ else
       exit 2
     fi
   fi
-  targets=("${maceff[@]}")
+  targets=(${maceff[@]+"${maceff[@]}"})
 fi
 
 echo "[1/2] Syncing templates..."
@@ -99,13 +104,18 @@ echo "[1/2] Syncing templates..."
 echo "[2/2] Running agent init for ${#targets[@]} agent(s) (preserves user content above the boundary)..."
 ok=(); failed=()
 for u in "${targets[@]}"; do
-  if docker exec -u "$u" "$CONTAINER" bash -lc 'set -e; macf_tools agent init --yes' >/dev/null 2>&1; then
+  if out="$(docker exec -u "$u" "$CONTAINER" bash -lc 'set -e; macf_tools agent init --yes' 2>&1)"; then
     echo "  upgraded: $u"; ok+=("$u")
   else
     echo "  FAILED:   $u (rerun: maceff_tools/preamble-upgrade $u)"; failed+=("$u")
+    # the reason, so the operator need not rerun to learn it
+    printf '%s\n' "$out" | tail -n 5 | sed 's/^/      /'
   fi
 done
-[[ "$ALL" == 1 ]] && for u in "${vanilla[@]}"; do echo "  skipped:  $u (vanilla)"; done
-
-echo "Preambles: ${#ok[@]} upgraded, ${#failed[@]} failed, ${#vanilla[@]} vanilla skipped."
+if [[ "$ALL" == 1 ]]; then
+  for u in ${vanilla[@]+"${vanilla[@]}"}; do echo "  skipped:  $u (vanilla)"; done
+  echo "Preambles: ${#ok[@]} upgraded, ${#failed[@]} failed, ${#vanilla[@]} vanilla skipped."
+else
+  echo "Preambles: ${#ok[@]} upgraded, ${#failed[@]} failed."
+fi
 [[ "${#failed[@]}" == 0 ]]

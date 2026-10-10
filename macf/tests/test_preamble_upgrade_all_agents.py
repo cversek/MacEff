@@ -6,8 +6,10 @@ against a stand-in `docker` that answers from a declared agent list and records 
 `agent init`, and a stand-in `template-sync`.
 """
 import os
+import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -21,7 +23,7 @@ case "$1" in
     shift
     if [ "$1" = "-u" ]; then
       user="$2"; echo "$user" >> "$INIT_LOG"
-      [ "$user" = "${FAIL_USER:-}" ] && exit 1
+      [ "$user" = "${FAIL_USER:-}" ] && { echo "agent init: no writable home for $user" >&2; exit 1; }
       exit 0
     fi
     shift   # the container
@@ -75,6 +77,7 @@ def test_one_failure_does_not_stop_the_rest_and_is_named(tools):
     assert r.returncode != 0
     assert inits == ["manny", "manny2"]
     assert "FAILED:   manny" in r.stdout and "upgraded: manny2" in r.stdout
+    assert "      agent init: no writable home for manny\n" in r.stdout   # the reason, under its verdict
 
 
 def test_the_breadth_needs_confirming_when_nobody_is_at_a_terminal(tools):
@@ -86,6 +89,8 @@ def test_the_breadth_needs_confirming_when_nobody_is_at_a_terminal(tools):
 def test_one_named_agent_needs_no_confirmation(tools):
     r, inits = tools("manny2")
     assert r.returncode == 0 and inits == ["manny2"]
+    # vanilla accounts were never in scope of a single-agent call, so the summary does not count them
+    assert "Preambles: 1 upgraded, 0 failed.\n" in r.stdout and "vanilla" not in r.stdout
 
 
 def test_no_agent_is_assumed(tools):
@@ -109,3 +114,56 @@ def test_framework_upgrade_upgrades_every_agent(tools):
 def test_the_preflight_refuses_a_declaration_with_no_maceff_agent(tools):
     r, _ = tools(script="preamble-upgrade.preflight", AGENTS="visitor\\tvanilla\\n")
     assert r.returncode == 1 and "declares no MacEff agent" in r.stderr
+
+
+NO_VANILLA = "manny\\tmaceff\\nmanny2\\tmaceff\\n"
+
+
+@pytest.mark.parametrize("args", [("--all-agents", "--confirm-all-agents"), ("manny",)])
+def test_a_deployment_with_no_vanilla_account(tools, args):
+    """The common case. Empty arrays must expand to nothing on every bash (see the next test)."""
+    r, inits = tools(*args, AGENTS=NO_VANILLA)
+    assert r.returncode == 0, r.stderr
+    assert inits == (["manny", "manny2"] if len(args) == 2 else ["manny"])
+
+
+def test_a_declaration_with_only_a_vanilla_account_lists_it(tools):
+    r, inits = tools(AGENTS="visitor\\tvanilla\\n")
+    assert r.returncode == 2 and "visitor (vanilla: never upgraded)" in r.stderr and inits == []
+
+
+def test_arrays_that_may_be_empty_are_guarded_for_old_bash():
+    """bash before 4.4 (macOS /bin/bash is 3.2) stops on an empty "${a[@]}" under set -u.
+
+    Linux CI runs bash 5, where the unguarded form works, so the guard is checked in the text.
+    """
+    text = (TOOLS / "preamble-upgrade").read_text()
+    for name in ("maceff", "vanilla"):
+        bare = [m.start() for m in re.finditer(r'(?<!\+)"\$\{%s\[@\]\}"' % name, text)]
+        assert not bare, f"unguarded \"${{{name}[@]}}\" in preamble-upgrade"
+
+
+def _assigned(script, var):
+    """The value bash assigns to a single-quoted VAR='...' in the script, exactly."""
+    out = subprocess.run(["bash", "-c", f'eval "$(sed -n "/^{var}=\'/,/^\'/p" "$1")"; printf %s "${var}"',
+                          "_", str(TOOLS / script)], capture_output=True, text=True, check=True)
+    return out.stdout
+
+
+@pytest.mark.parametrize("script", ["preamble-upgrade", "preamble-upgrade.preflight"])
+def test_the_enumeration_runs_under_python_as_bash_hands_it_over(tmp_path, script):
+    """The stand-in docker answers from a list, so only running the real code shows it compiles."""
+    pytest.importorskip("yaml")
+    code = _assigned(script, "ENUM_PY")
+    assert "AgentsConfig" in code
+    decl = tmp_path / "agents.yaml"
+    decl.write_text("agents:\n  manny:\n    username: pa_manny\n    personality: p.md\n"
+                    "  visitor:\n    username: visitor\n    flavor: vanilla\nsubagents: {}\n")
+    code = code.replace("/etc/maceff/agents.yaml", str(decl))
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    lines = r.stdout.splitlines()
+    if script == "preamble-upgrade":
+        assert any(l.endswith("\tmaceff") for l in lines) and any(l.endswith("\tvanilla") for l in lines)
+    else:
+        assert len(lines) == 1
