@@ -75,7 +75,7 @@ def is_excluded_from_backup(path: Path) -> bool:
     if path.name in EXCLUDED_NAMES:
         return True
     parts = Path(path).parts
-    if any(a == ".maceff" and b in EXCLUDED_MACEFF_DIRS for a, b in zip(parts, parts[1:])):
+    if any(a == ".maceff" and b in EXCLUDED_MACEFF_DIRS for a, b in zip(parts, parts[1:], strict=False)):
         return True
     try:
         if path.stat().st_size <= SENTINEL_SCAN_MAX_BYTES:
