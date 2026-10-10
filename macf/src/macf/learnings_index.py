@@ -15,16 +15,20 @@ resolves, every learning is indexed, the counts are true, and the trigger names
 every cluster and points at the index.
 
 The index format is the deployment's. Clusters are ``##`` or ``###`` headings,
-optionally ending in a count ``(N)``; an entry is any line under a heading that
-names a learning file in backticks. ``add`` writes a new entry in the shape of
-the cluster's existing ones when it has any.
+optionally ending in a count ``(N)``. An entry is a line under a heading that
+names its learning file in backticks, or else by its first link to the bare file
+name; any other link on the line is a cross-reference. ``add`` writes a new entry
+in the shape of the cluster's existing ones (of the index's, for a new cluster),
+and refuses a cluster name that matches no heading unless asked to create it.
 """
 
 from __future__ import annotations
 
 import datetime as _dt
+import difflib
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -42,7 +46,6 @@ _HEADING = re.compile(r"^(#{2,3})\s+(.+?)(?:\s+\((\d+)\))?\s*$")
 # allowed). A path part excludes checkpoints and web links alike.
 _TICK = re.compile(r"`([^`]+\.md)`")
 _LINK = re.compile(r"\]\((?:\./)?([^)/\s#]+\.md)(?:#[^)]*)?\)")
-_ENTRY_FILE = re.compile(_TICK.pattern + "|" + _LINK.pattern)  # an entry line, for placing new ones
 
 
 def _entry_files(line: str) -> List[str]:
@@ -55,6 +58,8 @@ def _entry_files(line: str) -> List[str]:
 
 _TOTAL = re.compile(r"(\*\*Total Learnings\*\*:\s*)(\d+)")
 _UPDATED = re.compile(r"(\*\*Last Updated\*\*:\s*)(.+)")
+# A file the auto-loaded memory file links to: it loads on recall, not at session start.
+_MEMORY_LINK = re.compile(r"\]\(([^)\s]+\.md)\)")
 _NOT_LEARNINGS = {"INDEX.md", "CLAUDE.md", "README.md"}
 # Headings that organize the index rather than name a cluster.
 _STRUCTURAL = {"cep navigation guide", "by topic", "by date", "by application context",
@@ -110,12 +115,44 @@ def _learning_title(path: Path) -> str:
     return m.group(1).strip() if m else path.stem
 
 
+def _near_names(cluster: str, names: List[str]) -> List[str]:
+    """Existing cluster names a mistyped or shortened one most likely meant."""
+    low = cluster.lower()
+    contains = [n for n in names if low in n.lower()]
+    close = difflib.get_close_matches(cluster, names, n=3, cutoff=0.5)
+    return list(dict.fromkeys(contains + close))[:3]
+
+
+def _section_end(lines: List[str], heading_line: int) -> int:
+    end = heading_line + 1
+    while end < len(lines) and not _HEADING.match(lines[end]):
+        end += 1
+    return end
+
+
+def _last_entry_line(lines: List[str], heading_line: int) -> int:
+    end = _section_end(lines, heading_line)
+    return max((i for i in range(heading_line + 1, end) if _entry_files(lines[i])), default=heading_line)
+
+
+def _entry_shape(lines: List[str], clusters: Dict[str, Dict], cluster: str) -> str:
+    """'link' when the cluster's first entry (the index's, for a new cluster) is a link."""
+    pool = [clusters[cluster]] if cluster in clusters else list(clusters.values())
+    for info in pool:
+        for i in range(info["line"] + 1, _section_end(lines, info["line"])):
+            if _entry_files(lines[i]):
+                return "backtick" if _TICK.search(lines[i]) else "link"
+    return "backtick"
+
+
 def add_entry(file_name: str, cluster: str, hook: str = "",
-              agent_home: Optional[Path] = None) -> Tuple[bool, str]:
+              agent_home: Optional[Path] = None, new_cluster: bool = False) -> Tuple[bool, str]:
     """Add one learning to its cluster; returns (added, message).
 
-    Creates the cluster heading when it is new, and says so, because a new
-    cluster must also be named in the consultation trigger.
+    A cluster name that matches no heading is refused unless ``new_cluster`` is
+    set, with the nearest existing names, so a near-miss cannot quietly become a
+    one-entry cluster. A new cluster goes after the last one, and the message
+    says to name it in the consultation trigger.
     """
     ldir = learnings_dir(agent_home)
     target = ldir / Path(file_name).name
@@ -127,20 +164,27 @@ def add_entry(file_name: str, cluster: str, hook: str = "",
     if any(target.name in c["files"] for c in clusters.values()):
         return False, f"{target.name} is already indexed"
 
-    entry = f"- **{_learning_title(target)}** -- `{target.name}`" + (f" -- {hook}" if hook else "")
     lines = text.splitlines()
-    new_cluster = cluster not in clusters
-    if new_cluster:
-        level = "##" if not clusters else re.match(r"#+", lines[next(iter(clusters.values()))["line"]]).group(0)
-        lines += ["", f"{level} {cluster} (1)", "", entry]
+    creating = cluster not in clusters
+    if creating and not new_cluster:
+        near = _near_names(cluster, list(clusters))
+        return False, (f"no cluster named '{cluster}'"
+                       + (f"; did you mean: {'; '.join(near)}" if near else "")
+                       + "; pass --new-cluster to create it")
+    title = _learning_title(target)
+    entry = (f"- [{title}]({target.name})" if _entry_shape(lines, clusters, cluster) == "link"
+             else f"- **{title}** -- `{target.name}`") + (f" -- {hook}" if hook else "")
+    if creating:
+        if not clusters:
+            lines += ["", f"## {cluster} (1)", "", entry]
+        else:
+            first, last = next(iter(clusters.values())), max(clusters.values(), key=lambda c: c["line"])
+            level = re.match(r"#+", lines[first["line"]]).group(0)
+            at = _last_entry_line(lines, last["line"]) + 1
+            lines[at:at] = ["", f"{level} {cluster} (1)", "", entry]
     else:
         info = clusters[cluster]
-        end = info["line"] + 1
-        while end < len(lines) and not _HEADING.match(lines[end]):
-            end += 1
-        last_entry = max((i for i in range(info["line"] + 1, end) if _ENTRY_FILE.search(lines[i])),
-                         default=info["line"])
-        lines.insert(last_entry + 1, entry)
+        lines.insert(_last_entry_line(lines, info["line"]) + 1, entry)
         if info["count"] is not None:
             m = _HEADING.match(lines[info["line"]])
             lines[info["line"]] = f"{m.group(1)} {m.group(2).strip()} ({info['count'] + 1})"
@@ -150,7 +194,7 @@ def add_entry(file_name: str, cluster: str, hook: str = "",
     out = _UPDATED.sub(lambda m: f"{m.group(1)}{_dt.date.today().isoformat()}", out, count=1)
     index.write_text(out)
     note = (f"; {cluster} is a new cluster, so add its name to the consultation trigger"
-            if new_cluster else "")
+            if creating else "")
     return True, f"indexed {target.name} under {cluster}{note}"
 
 
@@ -198,8 +242,24 @@ def verify(agent_home: Optional[Path] = None, memory_file: Optional[Path] = None
         if "INDEX.md" not in mem:
             findings.append(Finding("consultation trigger", Severity.ACUTE, str(trigger),
                                     "does not point at INDEX.md", "add the path to the trigger"))
+        linked = {}
+        for target in _MEMORY_LINK.findall(mem):
+            path = trigger.parent / target
+            try:
+                linked[target] = path.read_text() if path.is_file() else ""
+            except OSError as e:
+                print(f"Warning: could not read linked memory file {path}: {e}", file=sys.stderr)
         for name in clusters:
-            if name not in mem:
+            if name in mem:
+                continue
+            where = next((t for t, body in linked.items() if name in body), None)
+            if where:
+                # The taxonomy is the reflex layer, so it must be in the file loaded at
+                # session start; a file the index links loads only when recalled.
+                findings.append(Finding("consultation trigger", Severity.CHRONIC, name,
+                                        f"named only in {where}, which loads when recalled, not at session start",
+                                        f"move the cluster names into {trigger.name} itself"))
+            else:
                 findings.append(Finding("consultation trigger", Severity.CHRONIC, name,
                                         "a cluster the trigger does not name, so it cannot fire a consult",
                                         "add the cluster name to the trigger in the memory file"))
