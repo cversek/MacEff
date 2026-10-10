@@ -1425,19 +1425,40 @@ def cmd_claude_config_init(args: argparse.Namespace) -> int:
         return 1
 
 
+def _claude_launcher() -> tuple:
+    """The client the next start will run: the ``claude`` on PATH, its real file, and its version.
+
+    The next start is what reads the setting, so this is the version that matters for it.
+    A session already running may map an older version (a launcher can update under it),
+    and it keeps the setting it started with until it restarts.
+    """
+    found = shutil.which("claude")
+    if not found:
+        raise OSError("no `claude` on PATH, so the client version cannot be checked")
+    version = subprocess.run([found, "--version"], capture_output=True, text=True, timeout=15).stdout.strip()
+    return os.path.realpath(found), version
+
+
 def cmd_claude_config_idle_compaction(args: argparse.Namespace) -> int:
     """Report or set the client's idle compaction for this agent (MIS-0002-R126)."""
     from .utils.claude_settings import idle_compaction_status, set_idle_compaction
     if args.action == "status":
         status = idle_compaction_status()
         print(f"idle compaction: {status['state']} ({status['settings_path']})")
+        try:
+            path, version = _claude_launcher()
+            print(f"   client the next start runs: {path} ({version or 'version unknown'})")
+        except (OSError, subprocess.SubprocessError) as e:
+            print(f"   client: {e}")
+        print("   a session already running keeps the setting it started with")
         return 0
     try:
-        version = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=15).stdout
+        path, version = _claude_launcher()
         result = set_idle_compaction(args.action == "on", client_version=version)
     except (OSError, subprocess.SubprocessError, ValueError) as e:
         print(f"❌ {e}", file=sys.stderr)
         return 1
+    print(f"   client checked: {path} ({version})")
     if result["changed"]:
         from .agent_events_log import append_event
         append_event("harness_setting_changed", {"setting": "idleCompaction",
