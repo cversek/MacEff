@@ -54,6 +54,12 @@ def render_pd_launch_agent(card: str, program_argv: List[str], home: str,
         "KeepAlive": True,
         "ThrottleInterval": 10,
         "LimitLoadToSessionType": "Aqua",
+        # The managed units outlive the daemon's exit (the operator's decision, 2026-10-10):
+        # launchd would otherwise kill the job's process group when the daemon dies, taking
+        # the session with it. The daemon stops its units itself, in order, on SIGTERM, and
+        # a restarted daemon re-adopts the ones still running. Linux renders the same with
+        # KillMode=process.
+        "AbandonProcessGroup": True,
         "ProcessType": "Background",
         "StandardOutPath": f"{log_dir}/{label}.out.log",
         "StandardErrorPath": f"{log_dir}/{label}.err.log",

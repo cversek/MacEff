@@ -48,6 +48,12 @@ class TestMacOSLaunchAgent:
         assert plist["KeepAlive"] is True and plist["RunAtLoad"] is True
         assert plist["ProgramArguments"] == ARGV
 
+    def test_units_outlive_the_daemons_exit(self):
+        """launchd leaves the daemon's process group alone when the daemon dies, so its units,
+        the session among them, keep running for the restarted daemon to re-adopt."""
+        _, plist = _plist()
+        assert plist["AbandonProcessGroup"] is True
+
     def test_identity_never_travels_in_the_environment(self):
         """R02: the daemon reads its identity from the identity file, so the unit sets none."""
         _, plist = _plist()
