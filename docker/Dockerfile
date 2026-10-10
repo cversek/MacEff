@@ -112,6 +112,15 @@ RUN chmod 0755 /usr/local/bin/sa-exec
 COPY docker/start.sh /usr/local/bin/start.sh
 RUN chmod +x /usr/local/bin/start.sh
 
+# An agent's own GitHub App identity (git_discipline, section 4): the three tools, shared and
+# read-only, run by /opt/maceff-venv's python, where PyJWT and cryptography are installed and
+# `python -I` still sees them. Each agent's key, facts and token cache stay in its own
+# ~/.maceff/ghapp/<name>/. Before this, each agent copied the tools into its home and needed a
+# writable ~/agent/private and a user-site PyJWT, which `-I` cannot see.
+COPY docker/ghapp/ /opt/maceff-ghapp/
+RUN chmod 0755 /opt/maceff-ghapp /opt/maceff-ghapp/ghapp.py /opt/maceff-ghapp/git-credential-ghapp \
+        /opt/maceff-ghapp/gh-app-identity
+
 # NOTE: start.py moved to derived images (volatile file in volatile layer)
 # Each deployment's Dockerfile should COPY start.py after this base layer
 # This optimization prevents base image rebuilds when start.py changes
