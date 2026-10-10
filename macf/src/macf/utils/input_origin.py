@@ -1,4 +1,4 @@
-"""Where a piece of input came from: the operator, a channel, or the harness.
+"""Where a piece of input came from: the operator, a channel, the harness, or a wake.
 
 Two producers record the operator's activity, the prompt hook and the
 transcript monitor, and both read input the client delivers on its own as
@@ -7,8 +7,9 @@ which on a delivered entry. A queued entry has no origin record, and the
 prompt hook sees only the text, so they read the opening the client writes
 instead: a channel tag, or one of its notice forms.
 
-Only openings the client writes are read. The content of a channel event or
-a notice can carry anything, including a forged tag of its own.
+Only openings the client writes are read, and the one the persistent layer
+writes on a wake. The content of a channel event or a notice can carry
+anything, including a forged tag of its own.
 """
 
 from typing import Optional
@@ -31,6 +32,15 @@ HARNESS_NOTICE_OPENINGS = (
 )
 
 
+# A wake carries only the persistent layer's own words and message identifiers
+# (MIS-0002-R77), and it opens with these. Keys typed into the session's input
+# box are recorded as typing whoever typed them, so the opening is what tells a
+# wake from the operator (MIS-0002-R106), and it is read before any origin
+# record. Someone who types the words themselves reads as away, which errs
+# toward the agent being more careful.
+WAKE_OPENING = "[maceff:wake]"
+
+
 def opening_channel_source(text: str) -> Optional[str]:
     """The source named by the channel tag that opens ``text``, or None.
 
@@ -51,3 +61,8 @@ def opening_channel_source(text: str) -> Optional[str]:
 def opens_with_harness_notice(text: str) -> bool:
     """True when ``text`` opens the way the client opens input it delivers itself."""
     return text.lstrip().startswith(HARNESS_NOTICE_OPENINGS)
+
+
+def opens_with_wake(text: str) -> bool:
+    """True when ``text`` opens with the persistent layer's wake words (MIS-0002-R106)."""
+    return text.lstrip().startswith(WAKE_OPENING)
