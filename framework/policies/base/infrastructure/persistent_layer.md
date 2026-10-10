@@ -28,7 +28,13 @@ MacEff's long-lived machinery grew one piece at a time, and most of it died with
 - Why does the channel offer no tools and relay no permission prompts?
 - How is the channel installed and loaded?
 
-**2 Not Yet Landed**
+**2 macOS**
+- How does a primal daemon run on macOS, and under what name?
+- Which privacy grants can a unit declare, and how is a denied grant told from a network fault?
+- What happens to a session that Claude Code's own background daemon already runs?
+- Why must a socket path be checked at install?
+
+**3 Not Yet Landed**
 - Which parts of the persistent layer are specified but not yet in this policy?
 
 === CEP_NAV_BOUNDARY ===
@@ -85,12 +91,26 @@ A channel not on Claude Code's allowlist loads only under the development flag, 
 
 ---
 
-## 2 Not Yet Landed
+## 2 macOS
+
+### 2.1 Privacy grants
+
+macOS attaches a privacy grant to the **responsible process**. A unit started by launchd does not hold what the terminal held, and its denial looks like an ordinary error. For example, the Local Network grant refuses a LAN connection with `EHOSTUNREACH` at once, while ping, which the grant does not cover, still answers.
+
+- **Each unit declares the grants it needs** [MIS-0002-R63 (unit_MUST_declare_privacy_grants)], from a closed list: `local_network`, `accessibility`, `full_disk_access`, `keychain`, and `automation:<bundle id>` per target app. A misspelt grant fails at declaration, not as a silent missing grant at run time.
+- **The adapter tests the declared grants at install** [MIS-0002-R64 (adapter_MUST_test_grants_at_install)], from the launchd context, because a test from the terminal proves the terminal's grant.
+- **A denied grant raises a notice that names it** [MIS-0002-R65 (denied_grant_MUST_raise_notice)]. An instant `EHOSTUNREACH` while ping answers is read as `local_network` denied. A timeout, a refusal or a slow unreachable host stays the network failure it is, never reported as a grant.
+
+**Probes can raise permission dialogs.** Run them only when a person is at the machine, and say so first.
+
+---
+
+## 3 Not Yet Landed
 
 Specified in MIS-0002 and arriving with their landing steps, each in the pull request that enforces it:
 - **The primal daemon itself:** declarations, liveness events, health derived from runs, outside control and the outside watch (MIS-0002 §6.1 to §6.4, §6.7, §6.12).
 - **Schedules and the notifier,** including the keystroke fallback, the dark-channel event, and every producer of the operator's activity (MIS-0002 §6.5, §6.6, the rest of §6.14).
-- **Mail, containers, macOS, the tray, observation and attach** (MIS-0002 §6.8 to §6.11, §6.13).
+- **Mail, containers, the tray, observation and attach** (MIS-0002 §6.8, §6.9, §6.11, §6.13).
 
 Until a section lands, the rules in force are the existing policies: `service_supervision`, `notification_delivery` and `amail`.
 
