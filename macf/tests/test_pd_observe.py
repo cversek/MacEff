@@ -255,7 +255,7 @@ AFTER = [
     _row(type="attachment", attachment={"type": "hook_additional_context", "content": "hook text"}),
     _row(type="user", isMeta=True, message={"content": "Base directory for this skill: ..."}),
     _row(type="user", isMeta=True, origin={"kind": "channel"},
-         message={"content": '<channel source="plugin:telegram:telegram" chat_id="8660107588" message_id="9">'
+         message={"content": '<channel source="plugin:telegram:telegram" chat_id="1234567890" message_id="9">'
                              'are you done?</channel>'}),
 ]
 
@@ -308,7 +308,7 @@ def test_what_a_person_would_see_and_no_more(tmp_path):
     kinds = [f["kind"] for f in _serve_once(path, [inv.event])]
     assert kinds == ["prompt", "agent", "tool", "result", "channel"]
     text = str(_serve_once(path, [inv.event]))
-    for withheld in ("private reasoning", "token=abc123", "hook text", "Base directory", "8660107588"):
+    for withheld in ("private reasoning", "token=abc123", "hook text", "Base directory", "1234567890"):
         assert withheld not in text
     assert "Run the tests" in text and "plugin:telegram:telegram" in text and "are you done?" in text
 
@@ -409,7 +409,23 @@ def test_a_connection_that_never_sends_its_handshake_is_refused(tmp_path):
     why = stream.serve_connection(sock, lambda: acts.fold([inv.event]), lambda off: stream.rows_from(path, off),
                                   _Clock(), lambda: None, poll_rounds=1)
     assert why == "no handshake in time" and b"refused" in sock.out and b"please run" not in sock.out
-    assert sock.timeouts == [stream.HANDSHAKE_TIMEOUT, None]
+    assert 0 < sock.timeouts[0] <= stream.HANDSHAKE_TIMEOUT and sock.timeouts[-1] is None
+
+
+def test_a_peer_that_trickles_its_handshake_is_cut_off_at_the_deadline(tmp_path, monkeypatch):
+    """The deadline covers the whole line: a byte every two seconds does not keep it open."""
+    clock = {"t": 0.0}
+    monkeypatch.setattr(stream.time, "monotonic", lambda: clock["t"])
+
+    class _Trickle(_Sock):
+        def recv(self, n):
+            self.recv_calls += 1
+            clock["t"] += 2.0
+            return b"{"
+    sock = _Trickle(None)
+    why = stream.serve_connection(sock, dict, lambda off: iter(()), _Clock(), lambda: None, poll_rounds=1)
+    assert why == "no handshake in time" and sock.recv_calls == 3
+    assert sock.timeouts == [5.0, 3.0, 1.0, None]
 
 
 def test_a_half_written_row_waits(tmp_path):

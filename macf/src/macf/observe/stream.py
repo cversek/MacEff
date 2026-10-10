@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import json
 import re
+import socket
+import time
 from typing import Callable, Dict, Iterator, Optional, Tuple
 
 from .acts import ENDED, Observation, admit, lapsed
@@ -187,13 +189,18 @@ def serve(send: Callable[[dict], None], admitted: Observation, read_state: Calla
 def _read_handshake(sock) -> bytes:
     """The one line a new connection sends, read within ``HANDSHAKE_TIMEOUT`` seconds.
 
-    Raises OSError if none comes in time. A peer that connects and stays silent would
-    otherwise hold its connection open.
+    Raises OSError if none comes in time. The deadline covers the whole line, not each
+    read, so a peer that sends a byte every few seconds is cut off as well as one that
+    connects and stays silent; either would otherwise hold its connection open.
     """
+    deadline = time.monotonic() + HANDSHAKE_TIMEOUT
     data = b""
-    sock.settimeout(HANDSHAKE_TIMEOUT)
     try:
         while not data.endswith(b"\n") and len(data) <= MAX_HANDSHAKE:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise socket.timeout("no handshake line before the deadline")
+            sock.settimeout(left)
             chunk = sock.recv(512)
             if not chunk:
                 break
