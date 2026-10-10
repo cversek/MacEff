@@ -65,6 +65,8 @@ class Observation:
     lease_until: Optional[float] = None
     ended_by: Optional[str] = None
     history: tuple = field(default_factory=tuple)
+    #: What the pauses withhold: ``(from, to)`` transcript offsets, ``to`` None while one holds.
+    pauses: tuple = field(default_factory=tuple)
 
 
 def _digest(secret: str) -> str:
@@ -90,9 +92,12 @@ def fold(events: Iterable[dict]) -> Dict[str, Observation]:
         elif who in state and state[who].status != ENDED:
             o = state[who]
             if kind == EVENT_PAUSE and o.status == ACTIVE:
-                state[who] = replace(o, status=PAUSED, history=o.history + (kind,))
+                state[who] = replace(o, status=PAUSED, history=o.history + (kind,),
+                                     pauses=o.pauses + ((int(data["at"]), None),))
             elif kind == EVENT_RESUME and o.status == PAUSED:
-                state[who] = replace(o, status=ACTIVE, history=o.history + (kind,))
+                began = o.pauses[-1][0]
+                state[who] = replace(o, status=ACTIVE, history=o.history + (kind,),
+                                     pauses=o.pauses[:-1] + ((began, int(data["at"])),))
             elif kind == EVENT_END:
                 state[who] = replace(o, status=ENDED, ended_by=data.get("ended_by"), history=o.history + (kind,))
     return state
@@ -133,19 +138,32 @@ def invite(observed: str, onlooker: str, stream_from: int, state: Dict[str, Obse
     return Invitation(event={"event": EVENT_INVITE, "data": data}, secret=secret)
 
 
-def pause(onlooker: str, state: Dict[str, Observation]) -> dict:
-    """The observed agent pauses a stream (MIS-0002-R92 (owner_MAY_pause_stream))."""
+def pause(onlooker: str, state: Dict[str, Observation], *, at: int) -> dict:
+    """The observed agent pauses a stream (MIS-0002-R92 (owner_MAY_pause_stream)).
+
+    ``at`` is the transcript offset when the pause is taken, as ``stream_from`` is for the
+    invitation. What is written from there until the resume is withheld from the stream,
+    wherever the stream's reads happen to fall.
+    """
     o = _live(onlooker, state)
     if o.status != ACTIVE:
         raise ActRefused(f"{onlooker}'s observation is {o.status}, not active")
-    return {"event": EVENT_PAUSE, "data": {"onlooker": onlooker, "by": "observed"}}
+    _check_offset(at, o)
+    return {"event": EVENT_PAUSE, "data": {"onlooker": onlooker, "by": "observed", "at": at}}
 
 
-def resume(onlooker: str, state: Dict[str, Observation]) -> dict:
+def resume(onlooker: str, state: Dict[str, Observation], *, at: int) -> dict:
+    """The observed agent resumes a paused stream; ``at`` is the transcript offset when it does.
+
+    Take ``at`` after the paused work's output is in the transcript. A resume run beside
+    the tool that prints, in the same turn, is too early: whatever that tool writes after
+    the offset is read falls outside the pause and goes out.
+    """
     o = _live(onlooker, state)
     if o.status != PAUSED:
         raise ActRefused(f"{onlooker}'s observation is {o.status}, not paused")
-    return {"event": EVENT_RESUME, "data": {"onlooker": onlooker, "by": "observed"}}
+    _check_offset(at, o)
+    return {"event": EVENT_RESUME, "data": {"onlooker": onlooker, "by": "observed", "at": at}}
 
 
 def end(onlooker: str, ended_by: str, state: Dict[str, Observation]) -> dict:
@@ -192,3 +210,13 @@ def _live(onlooker: str, state: Dict[str, Observation]) -> Observation:
     if o.status == ENDED:
         raise ActRefused(f"{onlooker}'s observation has ended")
     return o
+
+
+def _check_offset(at: int, o: Observation) -> None:
+    """The transcript only grows, so an act is never taken at an offset earlier than the last
+    one the observation recorded. A resume before its own pause would withhold nothing."""
+    if not isinstance(at, int) or at < 0:
+        raise ActRefused("a pause or a resume is taken at a transcript offset, a non-negative integer")
+    last = max([o.stream_from] + [x for pair in o.pauses for x in pair if x is not None])
+    if at < last:
+        raise ActRefused(f"offset {at} is earlier than {last}, the last one this observation recorded")
