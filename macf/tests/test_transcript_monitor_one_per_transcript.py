@@ -30,7 +30,7 @@ B = PROJECTS / "-home-u-agent-b"
 
 
 def _m(pid, started, owner, transcript):
-    return MonitorProcess(pid, float(started), owner, Path(transcript))
+    return MonitorProcess(pid, int(started), owner, Path(transcript))
 
 
 def _ended_pid():
@@ -90,7 +90,7 @@ def test_proc_gives_each_monitor_its_exact_arguments_and_start(tmp_path):
     _proc_entry(proc, 203, argv)  # ended while being read: no stat left
 
     assert daemon._monitors_from_proc(proc) == [
-        MonitorProcess(201, 5.0, 7, Path("/p/with space/t.jsonl"))]
+        MonitorProcess(201, 5 * ticks, 7, Path("/p/with space/t.jsonl"))]  # ticks, as proc_start_key
 
 
 def test_a_monitor_counts_only_for_its_own_transcript(monkeypatch):
@@ -214,6 +214,29 @@ def test_start_runs_a_fresh_interpreter_named_as_a_monitor(
     out = capsys.readouterr()
     assert out.out == "", "the SessionStart hook's stdout must stay JSON"
     assert "Transcript Monitor started" in out.err
+
+
+def test_a_start_time_is_the_key_the_wake_path_records():
+    """One start-time form: what the monitor reads for a process equals the key
+    notify.session stores, so a recorded start confirms the same incarnation either way."""
+    from macf.notify.session import proc_start, proc_start_key
+    me = os.getpid()
+    assert daemon._process_started(me) == proc_start_key(proc_start(me))
+    assert isinstance(daemon._process_started(me), int)
+
+
+def test_a_monitors_start_event_records_its_start(monkeypatch, tmp_path):
+    """With the start beside the pid, a readout can tell this monitor from a later process under its pid."""
+    emitted = []
+    monkeypatch.setattr(daemon, "append_event", lambda name, data: emitted.append((name, data)))
+    transcript = tmp_path / "s1.jsonl"
+    transcript.write_text("")
+    me = os.getpid()
+    monkeypatch.setattr(daemon, "find_monitors",
+                        lambda: [_m(11, 1, 0, transcript), _m(me, 2, 0, transcript)])
+    daemon.run_monitor(transcript, owner=_ended_pid())
+    started = next(data for name, data in emitted if name == "transcript_monitor_started")
+    assert started["started"] == daemon._process_started(me)
 
 
 def test_every_event_a_monitor_writes_names_it(monkeypatch, tmp_path):
