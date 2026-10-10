@@ -398,6 +398,15 @@ create supervisors, does not target another agent's pane without an explicit
 `--target`, and has no privileged path — it is a wrapper over a send-keys side
 channel that already existed.
 
+**After a compaction it types once more, and only its own words.** A compaction
+opens no turn, so `inject compact` also starts a follower that types one recovery
+prompt into the same pane once the compaction is in the agent's event log
+(`autonomous_operation` §5.4). The follower runs only on the self-resolved path,
+never with `--target`, because it reads this agent's log and must type into this
+agent's pane. It types the framework's fixed text or the agent's own `--then`
+text, never text from a message or a file, and nothing at all if a prompt already
+started after the compaction. `--no-then` turns it off.
+
 **Sent mid-turn, it QUEUES and fires when the turn yields.** So an agent invoking
 it is scheduling its own discontinuity, not triggering one mid-thought. Anything
 that must survive should be durable before the call, for the same reason a frame
