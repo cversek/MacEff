@@ -2524,12 +2524,29 @@ def main() -> int:
                             f"Check that framework/subagents/{sa_name}.md exists.")
 
         # Enforce egress policy the moment every agent uid exists and BEFORE any
-        # code runs as one. initialize_agents() below invokes `su - <agent>`, and
-        # sshd starts later still; both are points at which an unrestricted agent
-        # could act. Raising here aborts startup, which is the intended behaviour:
-        # a container that cannot enforce a declared restriction must not offer
-        # accounts that believe they are restricted.
+        # code runs as one. sshd starts right after this, and initialize_agents()
+        # below invokes `su - <agent>`; both are points at which an unrestricted
+        # agent could act. Raising here aborts startup, which is the intended
+        # behaviour: a container that cannot enforce a declared restriction must
+        # not offer accounts that believe they are restricted.
         apply_egress_policy(agents_config)
+
+        # The access path starts before anything slow (MIS-0002-R57
+        # (container_MUST_start_access_first)). It used to start after the MACF
+        # install (2-3 min when its fingerprint changes) and agent initialization,
+        # so after a rebuild nobody could log in to see why a slow start was slow.
+        # What a login needs comes first: the deployment environment (fanned out to
+        # /etc/environment, profile.d and the BASH_ENV wrapper; agents.yaml only, no
+        # install needed) and the admin key.
+        propagate_container_env(agents_config)
+        admin_keys = None
+        if agents_config.defaults:
+            admin_keys = getattr(agents_config.defaults, 'admin_ssh_keys', None)
+        install_ssh_key('admin', admin_keys)
+        log("Starting sshd (background)...")
+        import subprocess as _sp
+        sshd_proc = _sp.Popen(['/usr/sbin/sshd', '-D'])
+        log(f"sshd started (pid {sshd_proc.pid})")
 
         # Create project workspaces
         if projects_config:
@@ -2548,26 +2565,9 @@ def main() -> int:
         # Initialize agents with macf_tools
         initialize_agents(agents_config)
 
-        # Install SSH keys for admin (declared in agents.yaml defaults, or legacy file)
-        admin_keys = None
-        if agents_config.defaults:
-            admin_keys = getattr(agents_config.defaults, 'admin_ssh_keys', None)
-        install_ssh_key('admin', admin_keys)
-
         # Setup policies
         setup_policies()
         setup_policy_editors()
-
-        # Propagate environment (passes agents_config so deployment env from
-        # agents.yaml.defaults.container_env is fanned out to /etc/environment +
-        # /etc/profile.d/maceff-deployment-env.sh + sourced by BASH_ENV wrapper)
-        propagate_container_env(agents_config)
-
-        # Start sshd EARLY so SSH access is available during slow init steps
-        log("Starting sshd (background)...")
-        import subprocess as _sp
-        sshd_proc = _sp.Popen(['/usr/sbin/sshd', '-D'])
-        log(f"sshd started (pid {sshd_proc.pid})")
 
         # Place declared secrets, then start amail. Order matters: the broker
         # refuses to start on a configured-and-absent credential, so placement
