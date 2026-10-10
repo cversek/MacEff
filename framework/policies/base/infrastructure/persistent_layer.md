@@ -28,7 +28,13 @@ MacEff's long-lived machinery grew one piece at a time, and most of it died with
 - Why does the channel offer no tools and relay no permission prompts?
 - How is the channel installed and loaded?
 
-**2 Not Yet Landed**
+**2 macOS**
+- How does a primal daemon run on macOS, and under what name?
+- Which privacy grants can a unit declare, and how is a denied grant told from a network fault?
+- What happens to a session that Claude Code's own background daemon already runs?
+- Why must a socket path be checked at install?
+
+**3 Not Yet Landed**
 - Which parts of the persistent layer are specified but not yet in this policy?
 
 === CEP_NAV_BOUNDARY ===
@@ -85,12 +91,27 @@ A channel not on Claude Code's allowlist loads only under the development flag, 
 
 ---
 
-## 2 Not Yet Landed
+## 2 macOS
+
+### 2.1 Claude Code's own supervisor
+
+Claude Code can run a session in the background under its own daemon (`claude --bg`, `/background`). **Where it already runs the agent's session, the primal daemon adopts that session** instead of starting a second supervisor over it [MIS-0002-R66 (pd_MUST_adopt_harness_supervisor)].
+
+- **Recognise a hosted session by its sidecar's `kind: "bg"`, never by argv.** A respawned worker runs in a pre-started spare whose argv is generic, so the session's launch flags, its channels among them, are read from the client's job record (`respawnFlags`).
+- **Adopt only when it is unambiguous.** Exactly one hosted session in the agent's home is adopted. Two or more are refused with their ids named, because picking by recency is a guess. With none, the daemon starts the session itself.
+- **Act only through the client's own verbs.** Start and restart are `claude respawn <id>`, which brings back the same session id, with its channels. Stop is `claude stop <id>`, which keeps the conversation. **Never a signal:** a signalled worker ends as "done" and nothing brings it back.
+- **The client's daemon is transient.** It starts on demand and exits when its last client goes, so its absence says nothing about whether a hosted session lives. Workers it leaves behind keep their sidecars and are found the same way.
+- **The readout shows the hosted sessions** under Claude Code's daemon, with their channels, or `unknown` where the job record cannot be read, never "none".
+- A sidecar's `status` is turn state, stamped at transitions. It never says a person is awaited; that inference is the readout's [MIS-0002-R21 (pd_MUST_report_waiting_on_person)].
+
+---
+
+## 3 Not Yet Landed
 
 Specified in MIS-0002 and arriving with their landing steps, each in the pull request that enforces it:
 - **The primal daemon itself:** declarations, liveness events, health derived from runs, outside control and the outside watch (MIS-0002 §6.1 to §6.4, §6.7, §6.12).
 - **Schedules and the notifier,** including the keystroke fallback, the dark-channel event, and every producer of the operator's activity (MIS-0002 §6.5, §6.6, the rest of §6.14).
-- **Mail, containers, macOS, the tray, observation and attach** (MIS-0002 §6.8 to §6.11, §6.13).
+- **Mail, containers, the tray, observation and attach** (MIS-0002 §6.8, §6.9, §6.11, §6.13).
 
 Until a section lands, the rules in force are the existing policies: `service_supervision`, `notification_delivery` and `amail`.
 
