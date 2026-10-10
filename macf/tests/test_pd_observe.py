@@ -359,3 +359,30 @@ def test_a_half_written_row_waits(tmp_path):
     p.write_text(AFTER[0] + '{"type": "user", "mess')
     rows = list(stream.rows_from(p, 0))
     assert len(rows) == 1 and rows[0][0] == len(AFTER[0].encode())
+
+
+def test_what_is_written_during_a_pause_is_never_sent(tmp_path):
+    """R92: the pause protects what is printed while it holds; resuming must not replay it."""
+    path = tmp_path / "session.jsonl"
+    path.write_text(_row(type="assistant", message={"content": [{"type": "text", "text": "before the pause"}]}))
+    inv = acts.invite(ME, THEM, 0, {}, container_of=_host)
+    log = [inv.event]
+    sent, rounds = [], {"n": 0}
+
+    def wait():
+        rounds["n"] += 1
+        if rounds["n"] == 1:      # after the first frame: the owner pauses, then prints a secret
+            log.append(acts.pause(THEM, acts.fold(log)))
+            with open(path, "a") as fh:
+                fh.write(_row(type="assistant", message={"content": [{"type": "text", "text": "SECRET printed while paused"}]}))
+        elif rounds["n"] == 3:    # the owner resumes, then work goes on
+            log.append(acts.resume(THEM, acts.fold(log)))
+        elif rounds["n"] == 4:
+            with open(path, "a") as fh:
+                fh.write(_row(type="assistant", message={"content": [{"type": "text", "text": "after the resume"}]}))
+
+    stream.serve(sent.append, THEM, lambda: acts.fold(log), lambda off: stream.rows_from(path, off),
+                 _Clock(), wait, 0, rounds=6)
+    texts = [f.get("text") or f["kind"] for f in sent]
+    assert texts == ["before the pause", "paused", "resumed", "after the resume"]
+    assert "SECRET" not in str(sent)

@@ -6,7 +6,8 @@ byte offset recorded with the invitation, so nothing from before it can appear.
 MIS-0002-R85 (stream_MUST_stop_at_end): the observation's state is read before every
 send, so an ending, or a lease that runs out, stops the stream before the next frame.
 MIS-0002-R93 (onlooker_MUST_see_pause): while paused, the onlooker gets one frame saying
-the owner paused it, and nothing else until the owner resumes.
+the owner paused it, and nothing else until the owner resumes. What was written during
+the pause is never sent: the stream resumes from the transcript's end (R92).
 MIS-0002-R83 (onlooker_MUST-NOT_type): after the one line that admits it, the stream
 never reads from the onlooker again. There is no input path to close.
 
@@ -136,6 +137,13 @@ def serve(send: Callable[[dict], None], onlooker: str, read_state: Callable[[], 
             wait()
             continue
         if paused_said:
+            # Nothing written while the stream was paused is ever sent: the pause is the
+            # owner's protection for other people's records and credentials (R92), so the
+            # stream resumes from the transcript's end, not from where it stopped. Rows
+            # from just before the pause that had not gone out yet are skipped too, which
+            # errs toward privacy.
+            for nxt, _row in read_rows(offset):
+                offset = nxt
             send({"kind": "resumed"})
             paused_said = False
         for nxt, row in read_rows(offset):
