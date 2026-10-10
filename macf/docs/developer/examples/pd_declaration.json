@@ -1,0 +1,88 @@
+{
+  "version": 1,
+  "agent": "ExampleAgent@abc123",
+  "units": [
+    {
+      "name": "session",
+      "command": [
+        "maceff_harness_start_ExampleAgent_abc123"
+      ],
+      "account": "example",
+      "restart": "on-failure",
+      "liveness_interval_s": 60,
+      "memory_limit_mb": 4096
+    },
+    {
+      "name": "transcript-monitor",
+      "command": [
+        "macf_tools",
+        "transcript-monitor",
+        "start"
+      ],
+      "account": "example",
+      "restart": "always",
+      "liveness_interval_s": 30,
+      "memory_limit_mb": 256
+    },
+    {
+      "name": "amail-broker",
+      "command": [
+        "python3",
+        "-m",
+        "macf.amail.daemons.broker"
+      ],
+      "account": "example",
+      "restart": "always",
+      "exit_codes": {
+        "success": [
+          0
+        ],
+        "no_restart": [
+          78
+        ]
+      },
+      "liveness_interval_s": 60,
+      "memory_limit_mb": 256,
+      "environment": {
+        "PYTHONUNBUFFERED": "1"
+      }
+    },
+    {
+      "name": "amail-receiver",
+      "command": [
+        "python3",
+        "-m",
+        "macf.amail.daemons.receiver"
+      ],
+      "account": "example",
+      "restart": "on-failure",
+      "liveness_interval_s": 120,
+      "memory_limit_mb": 128,
+      "optional": true
+    }
+  ],
+  "schedules": [
+    {
+      "name": "morning-sweep",
+      "cron": "45 6 * * *",
+      "missed_run": {
+        "kind": "run_once_in_window",
+        "window": {
+          "start": "06:45",
+          "end": "09:00"
+        }
+      },
+      "target": "isolated",
+      "prompt_file": "agent/private/schedules/morning-sweep.md"
+    }
+  ],
+  "operator_channels": [
+    "plugin:telegram:telegram"
+  ],
+  "quiet_windows": [
+    {
+      "start": "23:00",
+      "end": "06:30"
+    }
+  ]
+}
