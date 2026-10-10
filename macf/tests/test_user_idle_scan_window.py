@@ -94,3 +94,51 @@ class TestPermissionDenialCountsAsPresence:
         from macf.transcript_monitor.daemon import detect_permission_denial
         assert detect_permission_denial(
             {"type": "user", "toolUseResult": "ok", "timestamp": "x"}) is None
+
+
+def _answered(answers):
+    """A question the user answered, as the transcript records it."""
+    return {
+        "type": "user",
+        "message": {"role": "user", "content": [{
+            "type": "tool_result", "tool_use_id": "toolu_1",
+            "content": "Your questions have been answered: ..."}]},
+        "toolUseResult": {
+            "questions": [{"question": "Post it?", "header": "Post",
+                           "options": [{"label": "Yes"}, {"label": "No"}], "multiSelect": False}],
+            "answers": answers},
+        "timestamp": "2026-10-09T11:57:24.898Z",
+    }
+
+
+class TestAnsweringAQuestionCountsAsPresence:
+    def test_an_answered_question_is_user_activity(self):
+        """The user answered seconds ago; idle must not come on."""
+        from macf.transcript_monitor.daemon import detect_dialog_answer
+        det = detect_dialog_answer(_answered({"Post it?": "Yes"}))
+        assert det is not None
+        assert det.event_name == "user_activity_detected"
+        assert det.data["source"] == "direct"
+        assert det.data["detector"] == "transcript_monitor_dialog_answer"
+
+    def test_a_result_without_answers_is_not(self):
+        """The agent's own tool results, and a question nobody answered."""
+        from macf.transcript_monitor.daemon import detect_dialog_answer
+        assert detect_dialog_answer(
+            {"type": "user", "toolUseResult": {"stdout": "ok", "stderr": ""}, "timestamp": "x"}) is None
+        assert detect_dialog_answer(
+            {"type": "user", "toolUseResult": "User rejected tool use", "timestamp": "x"}) is None
+        assert detect_dialog_answer(_answered({})) is None
+        assert detect_dialog_answer({**_answered({"Post it?": "Yes"}), "type": "assistant"}) is None
+
+    def test_a_running_monitor_records_it(self, monkeypatch, tmp_path):
+        """Through the monitor's own line handling, so the detector is installed,
+        not only written."""
+        import json
+        from macf.transcript_monitor import daemon
+        emitted = []
+        monkeypatch.setattr(daemon, "append_event", lambda name, data: emitted.append((name, data)))
+        monitor = daemon.TranscriptMonitor(tmp_path / "s.jsonl")
+        monitor._process_line(json.dumps(_answered({"Post it?": "Yes"})))
+        assert [(n, d.get("detector")) for n, d in emitted] == [
+            ("user_activity_detected", "transcript_monitor_dialog_answer")]
