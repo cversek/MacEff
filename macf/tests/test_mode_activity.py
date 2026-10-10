@@ -318,3 +318,15 @@ def test_a_recorded_keystroke_pairs_with_one_arrival(isolated_events_log):
         append_event(KEYS_SENT_EVENT, {"text": "/maceff:resume", "kind": "post-start", "tmux_session": "s"})
     assert [_hook_records(isolated_events_log, "/maceff:resume") for _ in range(3)] == [[], [], ["direct"]]
 
+
+def test_an_operators_compact_after_an_injected_one_is_their_ask(isolated_events_log):
+    """#1533 with the compaction-ask detector: after macf_tools inject compact, the operator's
+    own /compact inside the window is recorded as the operator's ask, and the activity
+    detector, reading the same rows, still counts it as the operator too."""
+    from macf.transcript_monitor.daemon import detect_compaction_ask
+    append_event(KEYS_SENT_EVENT, {"text": "/compact", "kind": "inject", "tmux_session": "s"})
+    row = _user(COMPACT_ENTRY, {"kind": "human"})
+    asks = [detect_compaction_ask(row) for _ in range(2)]
+    assert asks[0] is None and asks[1].data["asker"] == "operator"
+    assert _monitor_records(row)[0] == [] and _monitor_records(row)[0] == ["direct"]
+

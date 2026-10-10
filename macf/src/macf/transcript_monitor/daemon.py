@@ -329,7 +329,8 @@ def detect_compaction_ask(entry: dict) -> Optional[Detection]:
     content = message.get("content") if isinstance(message, dict) else None
     if not isinstance(content, str) or not content.lstrip().startswith(_TYPED_COMPACT):
         return None
-    if typed_by_framework(typed_text(content)):
+    # Its own tally: the activity detector reads the same row and takes its own arrival.
+    if typed_by_framework(typed_text(content), consumer=_keys_consumer() + ":compaction_ask"):
         return None
     return Detection("compaction_asked", {
         "asker": "operator",
