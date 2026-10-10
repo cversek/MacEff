@@ -32,16 +32,18 @@ class TestMacOSLaunchAgent:
         assert "UserName" not in plist          # a LaunchDaemon key: root running as someone
         assert plist["LimitLoadToSessionType"] == "Aqua"
 
-    def test_label_uses_maceff_pd_and_the_card(self):
-        """R06's identifier, made unique per agent from the calling card, so two agents on
-        one login never share a label."""
+    def test_identifier(self):
+        """R06's conformance test on macOS: the identifier, made unique per agent from the
+        calling card, so two agents on one login never share a label. It is the form
+        the primal daemon's interface gives ``launchd_label``."""
         assert pd_label(CARD) == "maceff_pd.IraMacEff_ee9a78"
         assert pd_label("ClaudeTheBuilder@6c888f") != pd_label(CARD)
         with pytest.raises(ValueError):
             pd_label("bad card/with slash")
 
-    def test_launchd_restarts_the_daemon_whenever_it_exits(self):
-        """On macOS launchd is the outer tier, so R03 is KeepAlive plus RunAtLoad."""
+    def test_outer_tier_restarts_pd(self):
+        """R03 on macOS: launchd is the outer tier, so it is KeepAlive plus RunAtLoad. The
+        conformance row names this test; the Linux rendering adds its own half."""
         _, plist = _plist()
         assert plist["KeepAlive"] is True and plist["RunAtLoad"] is True
         assert plist["ProgramArguments"] == ARGV
