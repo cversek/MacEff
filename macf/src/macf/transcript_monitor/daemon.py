@@ -8,20 +8,25 @@ Architecture:
     JSONL file (CC appends) → daemon polls (1s) → detectors classify → event log
 
 Usage:
-    macf_tools transcript-monitor start       # daemonize
-    macf_tools transcript-monitor start -f    # foreground
+    macf_tools transcript-monitor start       # in the background
+    macf_tools transcript-monitor start -f    # in this terminal
     macf_tools transcript-monitor stop
     macf_tools transcript-monitor status
 
-Pattern follows search_service/daemon.py: PID file lifecycle, signal handling,
-daemonize fork, CLI integration.
+A monitor is a process of its own, ``python -m macf.transcript_monitor``,
+started for one transcript on behalf of one Claude Code process, and it stops
+when that process ends. Which monitors run is read from the process table each
+time it is asked, never from a file (#529).
 """
 import json
 import os
 import signal
+import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
+from subprocess import DEVNULL, Popen
 from typing import Callable, Dict, List, Optional
 
 from ..agent_events_log import append_event
@@ -33,7 +38,13 @@ from ..utils.paths import user_runtime_dir
 
 DEFAULT_POLL_INTERVAL = 1.0  # 1 second — negligible CPU, responsive detection
 CHUNK_SIZE = 65536  # 64KB read chunks
-PID_FILE_NAME = "macf_transcript_monitor.pid"
+
+#: The module a monitor runs as. It is the monitor's name in ``ps``, and how
+#: ``find_monitors`` tells a monitor from every other process.
+MONITOR_MODULE = "macf.transcript_monitor"
+
+#: Replaced in the test suite, so that no test starts a real monitor.
+_execv = os.execv
 
 #: Consecutive stat-failure counts at which the loop reports. A condition that
 #: persists must not produce one message per poll; these points give the first
@@ -251,122 +262,254 @@ def extract_forwardable(entry: dict):
 
 
 # ============================================================================
-# PID File Management
+# Which Monitors Run
 # ============================================================================
 
-def get_pid_file_path() -> Path:
-    """Get path for PID file in this user's runtime directory.
-
-    Per user, never a shared ``/tmp``: with ``XDG_RUNTIME_DIR`` unset, as in
-    most containers, a bare ``/tmp`` fallback gave every agent account the same
-    pid file. The first account to write it owned it, and every other agent's
-    liveness check read a pid it could not signal, concluded "not running", and
-    forked another monitor at each session start (#490).
-    """
-    return user_runtime_dir() / PID_FILE_NAME
-
-
 def get_log_file_path() -> Path:
-    """Get path for daemon stderr log file in this user's runtime directory."""
+    """Get path for the monitors' stderr log file in this user's runtime directory."""
     return user_runtime_dir() / LOG_FILE_NAME
 
 
-def _detach_standard_streams() -> None:
-    """Fully detach the child's standard streams from the parent's environment.
+@dataclass(frozen=True)
+class MonitorProcess:
+    """A live monitor, as the process table shows it."""
 
-    Redirects stdin/stdout to /dev/null and stderr to a log file. This is the
-    textbook daemon-detach: without redirecting fd 2, the child inherits
-    whatever stderr the parent had — and if the parent's stderr was part of a
-    shell pipeline (e.g. `macf_tools mode set-work X 2>&1 | tail -50`), the
-    pipe's read-end stays held open by the daemon's fd 2 and the downstream
-    `tail` hangs until the daemon exits (issue #54).
-
-    dup2 implicitly closes the target fd first, so the parent pipe's
-    write-end is released even though Python still has an fd 2.
-    """
-    devnull = os.open(os.devnull, os.O_RDWR)
-    os.dup2(devnull, 0)  # stdin
-    os.dup2(devnull, 1)  # stdout
-    try:
-        log_fd = os.open(
-            str(get_log_file_path()),
-            os.O_WRONLY | os.O_CREAT | os.O_APPEND,
-            0o644,
-        )
-        os.dup2(log_fd, 2)  # stderr → daemon log file
-        os.close(log_fd)
-    except OSError:
-        # Fall back to /dev/null rather than keeping the inherited stderr open.
-        os.dup2(devnull, 2)
-    os.close(devnull)
+    pid: int
+    #: When it started. Comparable between processes on one host, nothing more.
+    started: float
+    #: The Claude Code process it serves; 0 when it was started outside one.
+    owner: int
+    transcript: Path
 
 
-def write_pid_file(pid: int) -> None:
-    """Write PID to file for service management."""
-    get_pid_file_path().write_text(str(pid))
+def _monitor_from_argv(pid: int, started: float, argv: List[str]) -> Optional[MonitorProcess]:
+    """The monitor these arguments start, or None when they start something else."""
+    def after(flag: str) -> Optional[str]:
+        i = argv.index(flag) + 1 if flag in argv else len(argv)
+        return argv[i] if i < len(argv) else None
 
-
-def read_pid_file() -> Optional[int]:
-    """Return the recorded daemon pid, or None when there is no usable one.
-
-    None covers two cases the return type cannot separate: the pid file is
-    absent, or it is present and unreadable. The unreadable case warns to
-    stderr. Callers that treat None as "not running" are correct for the first
-    case and wrong for the second.
-    """
-    pid_file = get_pid_file_path()
-    if not pid_file.exists():
+    transcript, owner = after("--transcript"), after("--owner") or "0"
+    if after("-m") != MONITOR_MODULE or transcript is None or not owner.isdigit():
         return None
-    try:
-        return int(pid_file.read_text().strip())
-    except (ValueError, OSError) as e:
-        print(
-            f"⚠️ MACF: pid file unreadable, daemon state UNKNOWN and will report "
-            f"as NOT RUNNING ({pid_file}): {e}",
-            file=sys.stderr,
-        )
-        return None
+    return MonitorProcess(pid, started, int(owner), Path(transcript))
 
 
-def remove_pid_file() -> None:
-    """Remove the pid file. Warns to stderr if it could not be removed.
+def _stat_started(stat: str) -> float:
+    """The start time in a Linux ``/proc/<pid>/stat`` line, in seconds since boot.
 
-    A pid file left behind makes the next liveness check report this daemon as
-    running after it has exited.
+    Field 22, counted after the parenthesised command name, which may itself
+    contain spaces and parentheses.
     """
+    return int(stat.rsplit(")", 1)[1].split()[19]) / os.sysconf("SC_CLK_TCK")
+
+
+def _parse_lstart(text: str) -> float:
+    """A start time as ``ps -o lstart`` prints it in the C locale.
+
+    Raises ValueError when *text* is not one.
+    """
+    return time.mktime(time.strptime(" ".join(text.split()), "%a %b %d %H:%M:%S %Y"))
+
+
+def _monitors_from_proc(proc: Path) -> List[MonitorProcess]:
+    """Monitors in a Linux ``/proc`` tree, with their exact arguments."""
+    found = []
+    for entry in proc.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            argv = [a.decode(errors="replace")
+                    for a in (entry / "cmdline").read_bytes().split(b"\0") if a]
+            if MONITOR_MODULE not in argv:
+                continue
+            started = _stat_started((entry / "stat").read_text())
+        except (OSError, ValueError, IndexError):
+            continue  # it ended while we looked, or is not ours to read
+        monitor = _monitor_from_argv(int(entry.name), started, argv)
+        if monitor is not None:
+            found.append(monitor)
+    return found
+
+
+def _parse_ps(output: str) -> List[MonitorProcess]:
+    """Monitors in the output of ``ps -axww -o pid=,lstart=,args=`` in the C locale.
+
+    ``ps`` joins the arguments with spaces. The transcript is the last argument
+    a monitor is given, so everything after ``--transcript`` is its path, spaces
+    and all.
+    """
+    found = []
+    for line in output.splitlines():
+        fields = line.split(None, 6)
+        if len(fields) < 7 or not fields[0].isdigit():
+            continue
+        head, sep, transcript = fields[6].partition(" --transcript ")
+        if not sep:
+            continue
+        try:
+            started = _parse_lstart(" ".join(fields[1:6]))
+        except ValueError:
+            continue
+        monitor = _monitor_from_argv(int(fields[0]), started,
+                                     head.split() + ["--transcript", transcript.rstrip()])
+        if monitor is not None:
+            found.append(monitor)
+    return found
+
+
+def _monitors_from_ps() -> Optional[List[MonitorProcess]]:
     try:
-        get_pid_file_path().unlink(missing_ok=True)
-    except OSError as e:
-        print(
-            f"⚠️ MACF: could not remove pid file, a dead daemon may report as "
-            f"RUNNING on the next check: {e}",
-            file=sys.stderr,
+        result = subprocess.run(
+            ["ps", "-axww", "-o", "pid=,lstart=,args="],
+            capture_output=True, text=True, timeout=10,
+            env={**os.environ, "LC_ALL": "C"},
         )
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"⚠️ MACF: cannot read the process table, so which transcript "
+              f"monitors run is UNKNOWN: {e}", file=sys.stderr)
+        return None
+    if result.returncode != 0:
+        print(f"⚠️ MACF: ps failed ({result.returncode}), so which transcript "
+              f"monitors run is UNKNOWN: {result.stderr.strip()}", file=sys.stderr)
+        return None
+    return _parse_ps(result.stdout)
 
 
-def is_running() -> bool:
-    """Check if the transcript monitor daemon is running."""
-    pid = read_pid_file()
-    if pid is None:
+def find_monitors() -> Optional[List[MonitorProcess]]:
+    """Every live transcript monitor on this host, or None when that cannot be read.
+
+    Read from the process table each time, because what runs is a measurement,
+    not a record. A pid file stood in for it until #529 and was wrong three ways
+    at once: one file per account named one monitor for every agent on that
+    account, every monitor that exited deleted the file whichever monitor it
+    named, and a forked monitor kept its parent's command line, so nothing could
+    find the ones the file had lost.
+    """
+    proc = Path("/proc")
+    if (proc / "self" / "cmdline").exists():
+        return _monitors_from_proc(proc)
+    return _monitors_from_ps()
+
+
+def _alive(pid: int) -> bool:
+    """Whether *pid* is a live process of this user.
+
+    A pid that answers with PermissionError belongs to another user now, so the
+    process that held it has ended and the kernel has reused the number.
+    """
+    if pid <= 0:
         return False
     try:
-        os.kill(pid, 0)  # signal 0 = check if process exists
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _process_started(pid: int) -> Optional[float]:
+    """When process *pid* started, in the units of ``MonitorProcess.started``.
+
+    None when the process table does not say: there is no such process, or its
+    answer could not be read, which is warned on stderr.
+    """
+    if pid <= 0:
+        return None
+    stat = Path("/proc") / str(pid) / "stat"
+    if Path("/proc/self/cmdline").exists():
+        if not stat.exists():
+            return None
+        try:
+            return _stat_started(stat.read_text())
+        except (OSError, ValueError, IndexError) as e:
+            print(f"⚠️ MACF: cannot read when process {pid} started: {e}", file=sys.stderr)
+            return None
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)],
+            capture_output=True, text=True, timeout=10,
+            env={**os.environ, "LC_ALL": "C"},
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"⚠️ MACF: cannot read when process {pid} started: {e}", file=sys.stderr)
+        return None
+    if result.returncode != 0:
+        return None  # ps exits non-zero when there is no such process
+    try:
+        return _parse_lstart(result.stdout)
+    except ValueError as e:
+        print(f"⚠️ MACF: cannot read when process {pid} started: {e}", file=sys.stderr)
+        return None
+
+
+def _serving(monitor: MonitorProcess) -> bool:
+    """A monitor serves while its Claude Code process lives, or, when it was
+    started outside one, until it is stopped.
+
+    The owner started the monitor, so the owner is the older of the two. A
+    process under the owner's pid that started after the monitor took the
+    number once the owner had ended; another user's is caught by ``_alive``,
+    this user's only by its start time. A monitor that saw its owner end would
+    have stopped within a poll, so this guards the judgment made from outside:
+    of a monitor that is stopped or stuck, long after its owner ended. When the
+    start time cannot be read, the pid alone decides, as before.
+    """
+    if monitor.owner == 0:
         return True
-    except PermissionError:
-        # The pid is alive but belongs to another user. The pid file is this
-        # user's own, so this monitor has exited and the kernel has reused its
-        # pid. Say so: silently reading it as "dead" is how duplicates went
-        # unnoticed when the file was shared (#490).
-        print(
-            f"⚠️ MACF: recorded transcript monitor pid {pid} now belongs to "
-            f"another user; treating this user's monitor as NOT RUNNING",
-            file=sys.stderr,
-        )
-        remove_pid_file()
+    if not _alive(monitor.owner):
         return False
-    except OSError:
-        remove_pid_file()  # stale PID file
+    owner_started = _process_started(monitor.owner)
+    return owner_started is None or owner_started <= monitor.started
+
+
+def _session_owner() -> int:
+    """The Claude Code process the caller runs under, or 0 outside one.
+
+    Claude Code gives its hooks and tool commands its own pid as ``CLAUDE_PID``.
+    """
+    try:
+        return int(os.environ.get("CLAUDE_PID") or 0)
+    except ValueError:
+        return 0
+
+
+def _duplicate_of(pid: int, transcript: Path, monitors: List[MonitorProcess]) -> Optional[MonitorProcess]:
+    """The older monitor that already serves *transcript*, if monitor *pid* is a second one.
+
+    Two monitors on one transcript write every event twice. The older one keeps
+    its place in the transcript and the newer one gives way, which every monitor
+    decides the same way, so exactly one of any pair stays.
+    """
+    me = next((m for m in monitors if m.pid == pid), None)
+    if me is None:
+        return None
+    older = [m for m in monitors
+             if m.pid != pid and m.transcript == transcript and _serving(m)
+             and (m.started, m.pid) < (me.started, me.pid)]
+    return min(older, key=lambda m: (m.started, m.pid), default=None)
+
+
+def _serving_on(transcript: Path, monitors: List[MonitorProcess]) -> Optional[MonitorProcess]:
+    """The oldest monitor that serves *transcript*, or None."""
+    serving = [m for m in monitors if m.transcript == transcript and _serving(m)]
+    return min(serving, key=lambda m: (m.started, m.pid), default=None)
+
+
+def is_running(transcript: Optional[Path] = None) -> bool:
+    """Whether a monitor serves this session's transcript.
+
+    Per transcript, and so per agent: agents that share an account have their
+    own transcripts and never count each other's monitor (#529). When the
+    process table cannot be read the answer is unknown, and it is given as
+    running, so that no caller starts a monitor blind: a missing monitor is
+    announced (above, on stderr) and a duplicate is silent.
+    """
+    transcript = transcript or find_current_transcript()
+    if transcript is None:
         return False
+    monitors = find_monitors()
+    if monitors is None:
+        return True
+    return _serving_on(transcript, monitors) is not None
 
 
 # ============================================================================
@@ -387,6 +530,7 @@ class TranscriptMonitor:
         jsonl_path: Path,
         poll_interval: float = DEFAULT_POLL_INTERVAL,
         detectors: Optional[List[Detector]] = None,
+        owner: int = 0,
     ):
         self.jsonl_path = jsonl_path
         self.poll_interval = poll_interval
@@ -394,6 +538,10 @@ class TranscriptMonitor:
         self.sources = []
         self.sinks = []
         self.running = False
+        # The Claude Code process this monitor serves (0: none, run until stopped)
+        # and, once the loop has ended, why it ended.
+        self.owner = owner
+        self.stop_reason: Optional[str] = None
 
         # Stats
         self.entries_processed = 0
@@ -440,6 +588,15 @@ class TranscriptMonitor:
         self.sinks.append(validate_sink(sink))
         return self
 
+    def _emit(self, event_name: str, data: dict) -> None:
+        """Record an event, naming the monitor that wrote it.
+
+        With the writer's pid in every event, a duplicate shows up as two pids
+        for one boundary instead of as copies nobody can tell apart (#529).
+        """
+        append_event(event_name, {**data, "monitor_pid": os.getpid()})
+        self.events_emitted += 1
+
     def _poll_sources(self) -> None:
         """Ask every source what is new, emit it, and offer it to every sink."""
         cycle = []
@@ -453,8 +610,7 @@ class TranscriptMonitor:
                 print(f"⚠️ MACF: source poll failed (monitor continues): {e}", file=sys.stderr)
                 continue
             for detection in detections or ():
-                append_event(detection.event_name, detection.data)
-                self.events_emitted += 1
+                self._emit(detection.event_name, detection.data)
                 cycle.append(detection)
 
         # THE FLOOR IS APPLIED HERE, ACROSS SOURCES, AND ONLY TO THE SINK PATH.
@@ -496,8 +652,7 @@ class TranscriptMonitor:
             try:
                 detection = detector(entry)
                 if detection is not None:
-                    append_event(detection.event_name, detection.data)
-                    self.events_emitted += 1
+                    self._emit(detection.event_name, detection.data)
             except (OSError, ValueError, TypeError) as e:
                 print(f"⚠️ TM: detector error: {e}", file=sys.stderr)
 
@@ -550,13 +705,12 @@ class TranscriptMonitor:
     def _detect_rewind(self, current_size: int) -> None:
         """Check if JSONL was truncated (context rewind)."""
         if self.last_file_size > 0 and current_size < self.last_file_size:
-            append_event("context_rewind_detected", {
+            self._emit("context_rewind_detected", {
                 "previous_size": self.last_file_size,
                 "current_size": current_size,
                 "bytes_lost": self.last_file_size - current_size,
                 "detector": "transcript_monitor",
             })
-            self.events_emitted += 1
         self.last_file_size = current_size
 
     def run(self, start_from_end: bool = True) -> None:
@@ -595,10 +749,12 @@ class TranscriptMonitor:
                             current_size = self.jsonl_path.stat().st_size
                             self._detect_rewind(current_size)
 
-                            # If file was truncated, reopen from start
+                            # A truncated file ends this monitor; nothing starts
+                            # another before the next session start.
                             if current_size < f.tell():
-                                print("📡 TM: file truncated, reopening", file=sys.stderr)
-                                break  # exit inner loop, outer caller can restart
+                                print("📡 TM: file truncated, stopping", file=sys.stderr)
+                                self.stop("the transcript was truncated")
+                                break
                         except OSError as e:
                             self.stat_failures += 1
                             if self.stat_failures in _STAT_FAILURE_REPORT_AT:
@@ -616,6 +772,13 @@ class TranscriptMonitor:
                         # behind a directory listing.
                         self._poll_sources()
 
+                        # A monitor serves one Claude Code process. When that
+                        # process ends, so does the monitor's job; the next
+                        # session starts its own (#529).
+                        if self.owner and not _alive(self.owner):
+                            self.stop(f"its Claude Code process {self.owner} ended")
+                            break
+
                         time.sleep(self.poll_interval)
 
         except KeyboardInterrupt:
@@ -630,8 +793,9 @@ class TranscriptMonitor:
                 file=sys.stderr,
             )
 
-    def stop(self) -> None:
-        """Signal the daemon to stop."""
+    def stop(self, reason: str = "stopped") -> None:
+        """Signal the loop to end. The first reason given is the one kept."""
+        self.stop_reason = self.stop_reason or reason
         self.running = False
 
     def get_stats(self) -> dict:
@@ -656,18 +820,18 @@ class TranscriptMonitor:
 # Daemon Lifecycle (start/stop/status)
 # ============================================================================
 
+def _transcripts_dir() -> Path:
+    """This agent's Claude Code transcript directory: one per project root."""
+    from ..utils.paths import find_project_root, encode_cc_project_path
+    return Path.home() / ".claude" / "projects" / encode_cc_project_path(str(find_project_root()))
+
+
 def find_current_transcript() -> Optional[Path]:
     """Find the current session's JSONL transcript file."""
     try:
         from ..utils.session import get_current_session_id
-        from ..utils.paths import find_project_root, encode_cc_project_path
 
-        session_id = get_current_session_id()
-        project_root = find_project_root()
-        cc_home = Path.home() / ".claude"
-        encoded = encode_cc_project_path(str(project_root))
-        jsonl_path = cc_home / "projects" / encoded / f"{session_id}.jsonl"
-
+        jsonl_path = _transcripts_dir() / f"{get_current_session_id()}.jsonl"
         if jsonl_path.exists():
             return jsonl_path
     except (OSError, ImportError, ValueError) as e:
@@ -675,22 +839,37 @@ def find_current_transcript() -> Optional[Path]:
     return None
 
 
+def _monitor_argv(transcript: Path, poll_interval: float, owner: int) -> List[str]:
+    """The command that runs one monitor.
+
+    The transcript goes last: it is the one argument that may contain spaces,
+    and ``ps`` shows the arguments joined with them.
+    """
+    return [sys.executable, "-m", MONITOR_MODULE,
+            "--interval", str(poll_interval), "--owner", str(owner),
+            "--transcript", str(transcript)]
+
+
 def start_daemon(foreground: bool = False, poll_interval: float = DEFAULT_POLL_INTERVAL) -> int:
-    """Start the transcript monitor daemon.
+    """Start a monitor for this session's transcript, unless one already serves it.
+
+    The monitor is a fresh interpreter, not a fork of the caller. A fork kept
+    the caller's command line, so ``ps`` showed a monitor as the hook or command
+    that started it, it ran that caller's code for as long as it lived, and it
+    inherited whatever context the caller had open (#492, #529).
 
     Args:
-        foreground: Run in foreground (don't daemonize)
+        foreground: Become the monitor in this process instead
         poll_interval: Seconds between polls (default 1.0)
 
     Returns:
         0 on success, 1 on error
     """
     if is_running():
-        pid = read_pid_file()
         # stderr, not stdout: start_daemon is called from the SessionStart hook,
         # whose stdout must be parseable JSON. See the note on the started-banner
-        # below — this branch has the same defect and is merely harder to reach.
-        print(f"📡 Transcript Monitor already running (PID {pid})", file=sys.stderr)
+        # below.
+        print("📡 Transcript Monitor already running on this transcript", file=sys.stderr)
         return 0
 
     jsonl_path = find_current_transcript()
@@ -698,117 +877,144 @@ def start_daemon(foreground: bool = False, poll_interval: float = DEFAULT_POLL_I
         print("❌ Cannot find session transcript JSONL", file=sys.stderr)
         return 1
 
-    if foreground:
-        # Run in foreground
-        write_pid_file(os.getpid())
-        monitor = TranscriptMonitor(jsonl_path, poll_interval=poll_interval)
+    argv = _monitor_argv(jsonl_path, poll_interval, _session_owner())
 
+    if foreground:
+        # The same command a background start runs, so a monitor run in a
+        # terminal is found and counted like any other.
+        try:
+            _execv(argv[0], argv)  # replaces this process; returns only on failure
+        except OSError as e:
+            print(f"❌ Could not run the Transcript Monitor: {e}", file=sys.stderr)
+        return 1
+
+    # The monitor's stderr goes to the log, and it holds nothing else of the
+    # caller's: with an inherited pipe as stderr, a caller's pipeline (`... 2>&1
+    # | tail`) stayed open until the monitor died (#54).
+    try:
+        log_fd = os.open(str(get_log_file_path()), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    except OSError as e:
+        print(f"⚠️ TM: no monitor log ({e}); its stderr is discarded", file=sys.stderr)
+        log_fd = DEVNULL
+    try:
+        proc = Popen(argv, stdin=DEVNULL, stdout=DEVNULL, stderr=log_fd,
+                     start_new_session=True, close_fds=True)
+    except OSError as e:
+        print(f"❌ Could not start the Transcript Monitor: {e}", file=sys.stderr)
+        return 1
+    finally:
+        if log_fd != DEVNULL:
+            os.close(log_fd)
+
+    # stderr, ALL THREE. The SessionStart hook calls this when the monitor is
+    # down, and the hook's stdout must parse as JSON. Three lines here made
+    # json.loads fail at char 0, so Claude Code never extracted
+    # systemMessage and the compaction-recovery banner was silently dropped
+    # — the operator saw nothing at all on a compaction restart, while the
+    # agent still received the content as unparsed context. A one-directional
+    # failure with no error, no warning, and no partial output: it looks
+    # exactly like a session where nothing needed saying.
+    print(f"📡 Transcript Monitor started (PID {proc.pid})", file=sys.stderr)
+    print(f"   Watching: {jsonl_path}", file=sys.stderr)
+    print(f"   Poll interval: {poll_interval}s", file=sys.stderr)
+    return 0
+
+
+def run_monitor(transcript: Path, poll_interval: float = DEFAULT_POLL_INTERVAL, owner: int = 0) -> int:
+    """Be one monitor on *transcript*, in this process, until there is a reason to stop.
+
+    The reasons: a signal, the end of the Claude Code process *owner*, a
+    truncated transcript, or, at the start, an older monitor that already serves
+    the transcript. The start and the end are events, so the event log records
+    which monitors ran, for how long, and why each ended.
+    """
+    me = os.getpid()
+    monitors = find_monitors()
+    older = _duplicate_of(me, transcript, monitors) if monitors else None
+    identity = {"pid": me, "owner": owner, "transcript": str(transcript)}
+    append_event("transcript_monitor_started", identity)
+
+    monitor = TranscriptMonitor(transcript, poll_interval=poll_interval, owner=owner)
+    if older is not None:
+        monitor.stop(f"monitor {older.pid} already serves this transcript")
+    else:
         def handle_signal(signum, frame):
-            monitor.stop()
+            monitor.stop(f"signal {signum}")
 
         signal.signal(signal.SIGTERM, handle_signal)
         signal.signal(signal.SIGINT, handle_signal)
-
-        try:
+    try:
+        if older is None:
             monitor.run(start_from_end=True)
-        finally:
-            remove_pid_file()
-        return 0
-
-    # Daemonize: fork to background
-    try:
-        pid = os.fork()
-    except OSError as e:
-        print(f"❌ Fork failed: {e}", file=sys.stderr)
-        return 1
-
-    if pid > 0:
-        # Parent: report and exit
-        write_pid_file(pid)
-        # stderr, ALL THREE. The SessionStart hook calls this when the monitor is
-        # down, and the hook's stdout must parse as JSON. Three lines here made
-        # json.loads fail at char 0, so Claude Code never extracted
-        # systemMessage and the compaction-recovery banner was silently dropped
-        # — the operator saw nothing at all on a compaction restart, while the
-        # agent still received the content as unparsed context. A one-directional
-        # failure with no error, no warning, and no partial output: it looks
-        # exactly like a session where nothing needed saying.
-        #
-        # Latent because the guard only calls this when the daemon is DOWN, and
-        # the daemon persists across sessions. The bug needed a session start
-        # coinciding with a dead monitor, which is why it read as intermittent.
-        print(f"📡 Transcript Monitor started (PID {pid})", file=sys.stderr)
-        print(f"   Watching: {jsonl_path}", file=sys.stderr)
-        print(f"   Poll interval: {poll_interval}s", file=sys.stderr)
-        return 0
-
-    # Child: become daemon
-    os.setsid()
-
-    # Fully detach standard streams — including stderr — so a parent bash
-    # pipeline (e.g. `... 2>&1 | tail -50`) doesn't stay held open via the
-    # daemon's inherited fd 2 (issue #54).
-    _detach_standard_streams()
-
-    monitor = TranscriptMonitor(jsonl_path, poll_interval=poll_interval)
-
-    def handle_signal(signum, frame):
-        monitor.stop()
-
-    signal.signal(signal.SIGTERM, handle_signal)
-    signal.signal(signal.SIGINT, handle_signal)
-
-    try:
-        monitor.run(start_from_end=True)
     finally:
-        remove_pid_file()
+        append_event("transcript_monitor_stopped", {
+            **identity,
+            "reason": monitor.stop_reason or "ended without a reason (see the monitor log)",
+            "entries_processed": monitor.entries_processed,
+            "events_emitted": monitor.events_emitted,
+        })
+    return 0
 
-    os._exit(0)
+
+def _agent_monitors(monitors: List[MonitorProcess]) -> List[MonitorProcess]:
+    """This agent's monitors: those on a transcript in its project's directory."""
+    directory = _transcripts_dir()
+    return sorted((m for m in monitors if m.transcript.parent == directory),
+                  key=lambda m: (m.started, m.pid))
 
 
 def stop_daemon() -> int:
-    """Stop the running transcript monitor daemon."""
-    pid = read_pid_file()
-    if pid is None:
+    """Stop every monitor of this agent."""
+    monitors = find_monitors()
+    if monitors is None:
+        print("⚠️ Which monitors run is unknown; nothing was signaled.", file=sys.stderr)
+        return 1
+    mine = _agent_monitors(monitors)
+    if not mine:
         print("📡 Transcript Monitor is not running")
         return 0
 
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except PermissionError:
-        # Not ours to stop, and not this user's monitor either (see is_running).
-        print(
-            f"⚠️ Recorded pid {pid} belongs to another user; this user's "
-            f"Transcript Monitor is not running. Nothing was signaled.",
-            file=sys.stderr,
-        )
-        remove_pid_file()
-        return 0
-    except OSError as e:
-        print(f"⚠️ Process {pid} not found: {e}", file=sys.stderr)
-        remove_pid_file()
-        return 0
-
-    # Wait for process to exit
-    for _ in range(10):
+    for m in mine:
         try:
-            os.kill(pid, 0)
-            time.sleep(0.5)
-        except OSError:
+            os.kill(m.pid, signal.SIGTERM)
+        except OSError as e:
+            print(f"⚠️ Could not signal monitor {m.pid}: {e}", file=sys.stderr)
+
+    # Wait for them to exit
+    for _ in range(10):
+        if not any(_alive(m.pid) for m in mine):
             break
-    remove_pid_file()
-    print(f"📡 Transcript Monitor stopped (was PID {pid})")
+        time.sleep(0.5)
+    still = [m.pid for m in mine if _alive(m.pid)]
+    stopped = [m.pid for m in mine if m.pid not in still]
+    if stopped:
+        print(f"📡 Transcript Monitor stopped (was PID {', '.join(map(str, stopped))})")
+    if still:
+        print(f"⚠️ Still running after 5s: PID {', '.join(map(str, still))}", file=sys.stderr)
+        return 1
     return 0
 
 
 def daemon_status() -> int:
-    """Print transcript monitor daemon status."""
-    pid = read_pid_file()
-    if pid is None or not is_running():
+    """Print this agent's monitors, one line each."""
+    monitors = find_monitors()
+    if monitors is None:
+        print("❓ Transcript Monitor state unknown: the process table cannot be read")
+        return 1
+    mine = _agent_monitors(monitors)
+    if not mine:
         print("⏹️  Transcript Monitor not running")
         return 0
 
-    print(f"✅ Transcript Monitor running (PID {pid})")
+    current = find_current_transcript()
+    for m in mine:
+        notes = []
+        if m.transcript != current:
+            notes.append("not this session's transcript")
+        if not _serving(m):
+            notes.append(f"its Claude Code process {m.owner} has ended")
+        suffix = f" ({'; '.join(notes)})" if notes else ""
+        print(f"✅ Transcript Monitor running (PID {m.pid}) on {m.transcript.name}{suffix}")
     return 0
 
 

@@ -2188,17 +2188,21 @@ macf_tools auto-restart kill <name>
 
 JSONL transcript monitoring daemon for idle detection and event processing.
 
+A monitor watches one transcript for one Claude Code process, as a process of its own that `ps` shows as `python -m macf.transcript_monitor ... --transcript <path>`. It stops when that Claude Code process ends; the next session start, AUTO_MODE entry or sprint creation starts another. Which monitors run is read from the process table each time, so agents that share a login never count each other's. A second monitor on a transcript gives way to the first. Every event a monitor writes carries its `monitor_pid`, and its start and end are events too (`transcript_monitor_started`, `transcript_monitor_stopped` with a `reason`). Its stderr goes to `macf_transcript_monitor.log` in this user's runtime directory.
+
 ### transcript-monitor start
 
-Start the transcript monitor daemon.
+Start a monitor for this session's transcript, unless one already serves it.
 
 ```bash
-macf_tools transcript-monitor start [--daemon]
+macf_tools transcript-monitor start [-f] [--interval SECONDS]
 ```
+
+`-f` runs the monitor in this terminal instead of in the background.
 
 ### transcript-monitor stop
 
-Stop the transcript monitor daemon.
+Stop this agent's monitors.
 
 ```bash
 macf_tools transcript-monitor stop
@@ -2206,7 +2210,7 @@ macf_tools transcript-monitor stop
 
 ### transcript-monitor status
 
-Show transcript monitor status.
+List this agent's monitors, one line each, noting any that watch another session's transcript or whose Claude Code process has ended.
 
 ```bash
 macf_tools transcript-monitor status
