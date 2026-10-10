@@ -260,7 +260,7 @@ Naked numbers shut out every reader who does not hold the table. Slugs are a cou
 
 A definition changes only through an accepted MIS, or an editorial pull request that keeps its meaning.
 
-**Retired words.** A word an accepted MIS replaces moves to the glossary's `## Retired` section, in the term form: `- **hypervisor**: retired by MIS-0002; use manager of record.` A quoted position that used the old word stays readable, and since a retired line is a term line, the checker refuses to define the word again. When a glossary change retires a word a position used, the Secretary names who used it and quotes the use, and the retirement is open to objection like the synthesis [MIS-0001-R50 (retirement_MUST_quote_users)].
+**Retired words.** A word an accepted MIS replaces moves to the glossary's `## Retired` section, in the term form: `- **hypervisor**: retired by MIS-0002; use primal daemon.` A quoted position that used the old word stays readable, and since a retired line is a term line, the checker refuses to define the word again. When a glossary change retires a word a position used, the Secretary names who used it and quotes the use, and the retirement is open to objection like the synthesis [MIS-0001-R50 (retirement_MUST_quote_users)].
 
 ---
 
