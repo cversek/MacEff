@@ -483,7 +483,8 @@ class Broker:
     def __init__(self, config: BrokerConfig):
         self.config = config
         self.contacts = ContactBook(config.contacts_path) if config.contacts_path else None
-        self.audit = AuditLog(config.audit_path) if config.audit_path else None
+        self.audit = (AuditLog(config.audit_path, tier=config.tier)
+                      if config.audit_path else None)
         self._warned_peers: set = set()
 
     # ---------------------------------------------------------------- enforcement
@@ -1632,7 +1633,10 @@ class Broker:
         return TrustClass.DOMAIN_AUTH if domain_authenticated else TrustClass.UNVERIFIED
 
     def accept_inbound(self, message: Message, recipient: str,
-                       via: str = "") -> Dict[str, Any]:
+                       via: str = "", *, rung: str = "shared") -> Dict[str, Any]:
+        # `rung` goes into the audit record (amail.md §3.3). Its one production
+        # caller is the shared-rung intake, hence the default; a new inbound path
+        # must pass its own.
         """Deliver inbound mail, or quarantine it when the sender is unlisted.
 
         An allowlisted sender is an AUTHORIZATION fact, not an authenticity or
@@ -1735,7 +1739,7 @@ class Broker:
             if self.audit:
                 self.audit.inbound(sender=message.sender, recipient=recipient,
                                    message_id=message.message_id,
-                                   decision="quarantined",
+                                   decision="quarantined", rung=rung,
                                    reason=(f"{reason}; via {via}" if via else reason),
                                    trust=message.trust)
             return {"ok": True, "decision": "quarantined", "reason": reason}
@@ -1781,7 +1785,7 @@ class Broker:
         if self.audit:
             self.audit.inbound(sender=message.sender, recipient=recipient,
                                message_id=message.message_id, decision="delivered",
-                               trust=message.trust,
+                               rung=rung, trust=message.trust,
                                # So an investigator can tell "the sender lied"
                                # apart from "we edited it and the signature
                                # stopped covering what we stored".
@@ -1893,7 +1897,7 @@ class Broker:
                           f"speak for its own domain")
         try:
             outcome = self.accept_inbound(message, recipient,
-                                         via=f"shared hand-off from {dom}")
+                                         via=f"shared hand-off from {dom}", rung="shared")
         except Exception as e:  # noqa: BLE001 - the pair must not vanish on an unexpected error
             return reject(f"{type(e).__name__}: {e}")
         try:
@@ -2461,7 +2465,11 @@ class _Server(socketserver.ThreadingUnixStreamServer):
     def _audit_overload(self, uid: Optional[int]) -> None:
         now = time.monotonic()
         with self._meter_lock:
-            if now - self._overload_audited.get(uid, 0.0) < OVERLOAD_AUDIT_INTERVAL:
+            # A uid never audited has no entry. Defaulting it to 0.0 would read as
+            # "audited at boot", because monotonic() counts from boot: on a machine
+            # up for less than the interval, the first refusal went unrecorded.
+            last = self._overload_audited.get(uid)
+            if last is not None and now - last < OVERLOAD_AUDIT_INTERVAL:
                 return
             self._overload_audited[uid] = now
             depth = len(self._inflight)

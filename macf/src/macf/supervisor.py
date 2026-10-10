@@ -26,6 +26,7 @@ import shlex
 import shutil
 import signal
 import subprocess
+from typing import Optional
 import sys
 import threading
 import time
@@ -503,7 +504,23 @@ def _find_own_supervisor() -> dict | None:
     return max(named, key=lambda d: d.get("created", 0))
 
 
-def send_slash_to_self(command: str, target: str = "") -> int:
+def _record_keys_sent(text: str, kind: str, tmux_session: str) -> None:
+    """Record keys the framework is about to type into a session's pane.
+
+    The client records whatever reaches its input box as typing, so the
+    producers of the operator's activity can tell these keys from the
+    operator only by this record, and it has to exist before the keys arrive.
+    """
+    try:
+        from .agent_events_log import append_event
+        from .utils.input_origin import KEYS_SENT_EVENT
+        append_event(KEYS_SENT_EVENT, {"text": text, "kind": kind, "tmux_session": tmux_session})
+    except (OSError, ValueError, ImportError) as e:
+        print(f"[auto-restart] could not record the keys before sending them, so they "
+              f"will read as the operator's typing: {e}", file=sys.stderr)
+
+
+def send_slash_to_self(command: str, target: str = "", then: Optional[str] = None) -> int:
     """Queue a slash command (e.g. ``/compact``) into this agent's own live CC
     pane via the tmux side channel.
 
@@ -521,7 +538,11 @@ def send_slash_to_self(command: str, target: str = "") -> int:
     """
     cmd = "/" + command.lstrip("/")
     if target:
-        return send_keys(target, [cmd], enter=True)
+        if then:
+            # The follower reads THIS agent's event log, so it can only follow its own pane.
+            print("[inject] --target names another session, so no recovery prompt follows "
+                  "(--then applies only to this agent's own pane).", file=sys.stderr)
+        return send_keys(target, [cmd], enter=True, kind="inject")
     data = _find_own_supervisor()
     if not data:
         # Two different situations, and the reader has to do different things
@@ -542,7 +563,7 @@ def send_slash_to_self(command: str, target: str = "") -> int:
                   file=sys.stderr)
         return 1
     rc = send_keys(data.get("name") or str(data.get("supervisor_pid")),
-                   [cmd], enter=True)
+                   [cmd], enter=True, kind="inject")
     if rc == 0:
         # A queued /compact is only submitted when the turn ends, and the Stop
         # gates exist to refuse that. Arm one passage, only after delivery and
@@ -550,17 +571,49 @@ def send_slash_to_self(command: str, target: str = "") -> int:
         # another session, and this log's gates are this session's.
         from .stop_bypass import arm
         arm(command)
+        if then and command.lstrip("/") == "compact":
+            _start_compact_followup(data.get("name") or str(data.get("supervisor_pid")), then)
     return rc
 
 
-def send_keys(target: str, keys: list, enter: bool = True) -> int:
+def _start_compact_followup(target: str, text: str) -> None:
+    """Start the detached follower that types *text* once the compaction has finished.
+
+    Self-resolved path only, like the Stop passage above: the follower reads THIS agent's
+    event log, so it must type into this agent's pane. It outlives the turn that started
+    it (start_new_session), because the /compact it waits for runs only after that turn.
+    """
+    import time as _time
+    argv = [sys.executable, "-m", "macf.compact_followup", target, repr(_time.time()),
+            "--text", text]
+    # Its stderr goes to the transcript monitor's log in the user's runtime directory, so a
+    # follower that dies before recording its outcome still leaves a traceback somewhere.
+    log = subprocess.DEVNULL
+    try:
+        from .transcript_monitor.daemon import get_log_file_path
+        log = os.open(str(get_log_file_path()), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    except (OSError, ImportError) as e:
+        print(f"[inject] No log for the recovery follow-up ({e}); its errors are discarded.",
+              file=sys.stderr)
+    try:
+        subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=log, start_new_session=True)
+        print("[inject] After the compaction, a recovery prompt will be typed into this pane "
+              "(skipped if something else wakes the session first).")
+    except OSError as e:
+        print(f"[inject] Could not start the recovery follow-up ({e}); after the compaction, "
+              f"this session waits until something wakes it.", file=sys.stderr)
+
+
+def send_keys(target: str, keys: list, enter: bool = True, kind: str = "send-keys") -> int:
     """Inject literal text (plus an optional Enter) into a supervised session's
     tmux pane - the side channel for driving the live CC client (e.g. a real
     `/compact`, which the client parses only from its own TTY input).
 
     *target* is a supervisor name or PID. The text is sent with `-l` (literal,
     no key-name interpretation) and the Enter is a separate key press, so text
-    that happens to contain 'Enter' or 'C-c' is not reinterpreted.
+    that happens to contain 'Enter' or 'C-c' is not reinterpreted. The text is
+    recorded first, as *kind*, so it is not read as the operator's typing.
     """
     if not _tmux_available():
         print("[auto-restart] tmux not found; send-keys requires a tmux-backed session.",
@@ -579,6 +632,7 @@ def send_keys(target: str, keys: list, enter: bool = True) -> int:
               file=sys.stderr)
         return 1
     text = " ".join(keys)
+    _record_keys_sent(text, kind, tmux_session)
     # `-t <session>` targets that session's active pane. `--` guards text that
     # starts with '-'. CC's stdin reader receives the bytes as if typed.
     rc = subprocess.run(
@@ -888,6 +942,7 @@ def _send_post_start_keys(tmux_session: str, keys: str, delay: int) -> None:
     here must never take down the supervisor — the child is fine either way.
     """
     time.sleep(max(0, delay))
+    _record_keys_sent(keys, "post-start", tmux_session)
     try:
         subprocess.run(["tmux", "send-keys", "-t", tmux_session, keys],
                        capture_output=True, timeout=10)

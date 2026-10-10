@@ -148,7 +148,7 @@ def test_roadmap_folder_is_discovered_as_its_roadmap_md(tmp_path):
     assert artifacts.roadmaps == [folder / "roadmap.md"]
 
 
-def test_latest_roadmap_is_the_most_recently_changed(tmp_path):
+def test_latest_roadmap_is_the_newest_by_its_date(tmp_path):
     import os
     root = _agent_root(tmp_path)
     paths = []
@@ -197,3 +197,89 @@ def test_recovery_text_still_reports_a_real_absence():
     text = _format_artifacts_section(ConsciousnessArtifacts())
 
     assert "No roadmap found" in text
+
+
+def test_an_older_loose_roadmap_still_counts_below_a_folder_one(tmp_path):
+    """Roadmaps are folders now (roadmaps_drafting), but agents that predate the
+    folder form keep loose files. They still count, and rank by their dates."""
+    import os
+    root = _agent_root(tmp_path)
+    loose = root / "public/roadmaps/2025-12-10_Old_DRAFT_ROADMAP.md"
+    loose.write_text("old")
+    os.utime(loose, (2_000_000, 2_000_000))  # edited after the current one
+    folder = root / "public/roadmaps/2026-08-28_Current"
+    folder.mkdir()
+    (folder / "roadmap.md").write_text("current")
+    (folder / "notes.md").write_text("a working note, not the roadmap")
+    os.utime(folder / "roadmap.md", (1_000_000, 1_000_000))
+
+    artifacts = get_latest_consciousness_artifacts(agent_root=root, limit=5)
+
+    assert artifacts.latest_roadmap == folder / "roadmap.md"
+    assert loose in artifacts.roadmaps
+    assert folder / "notes.md" not in artifacts.roadmaps
+
+
+def test_a_tool_file_in_an_artifact_directory_is_not_an_artifact(tmp_path):
+    """A memory tool can write CLAUDE.md into any directory; touched last, it
+    would be named as the checkpoint or reflection to read first."""
+    import os
+    root = _agent_root(tmp_path)
+    for kind in ("checkpoints", "reflections"):
+        real = root / f"private/{kind}/2026-10-03_real.md"
+        real.write_text("real")
+        os.utime(real, (1_000_000, 1_000_000))
+        (root / f"private/{kind}/CLAUDE.md").write_text("tool context")
+
+    artifacts = get_latest_consciousness_artifacts(agent_root=root, limit=5)
+
+    assert artifacts.latest_checkpoint.name == "2026-10-03_real.md"
+    assert artifacts.latest_reflection.name == "2026-10-03_real.md"
+    assert not [p for p in artifacts.all_paths() if p.name == "CLAUDE.md"]
+
+
+def test_latest_follows_the_date_in_the_name_not_the_last_edit(tmp_path):
+    """A curation pass that edits old artifacts in place (knowledge link adds
+    wiki-links) moves their mtimes past the newest one. The date and time an
+    artifact is named for do not move."""
+    import os
+    root = _agent_root(tmp_path)
+    ckp = root / "private/checkpoints"
+    newest = ckp / "2026-10-03_123758_Closing_CCP.md"
+    morning = ckp / "2026-10-03_090000_Morning_CCP.md"
+    old = ckp / "2026-04-13_090000_Old_CCP.md"
+    for i, f in enumerate((newest, morning, old)):
+        f.write_text(f.name)
+        os.utime(f, (1_000_000 + i, 1_000_000 + i))  # the oldest name has the newest mtime
+    current = root / "public/roadmaps/2026-08-28_Current"
+    stale = root / "public/roadmaps/2026-04-13_Stale"
+    for i, d in enumerate((current, stale)):
+        d.mkdir()
+        (d / "roadmap.md").write_text(d.name)
+        os.utime(d / "roadmap.md", (1_000_000 + i, 1_000_000 + i))
+
+    artifacts = get_latest_consciousness_artifacts(agent_root=root, limit=5)
+
+    assert artifacts.latest_checkpoint == newest
+    assert artifacts.checkpoints == [newest, morning, old]
+    assert artifacts.latest_roadmap == current / "roadmap.md"
+
+
+def test_a_missing_agent_directory_is_a_failed_search(tmp_path):
+    """A root that does not exist cannot say the predecessor left nothing."""
+    artifacts = get_latest_consciousness_artifacts(agent_root=tmp_path / "nowhere")
+
+    assert not artifacts
+    assert artifacts.error and "nowhere" in artifacts.error
+
+
+def test_a_directory_without_public_or_private_is_a_failed_search(tmp_path):
+    """Pointed at the repository root instead of agent/, discovery finds neither
+    subtree; that is a wrong root, not an agent with no artifacts."""
+    (tmp_path / "agent" / "private" / "checkpoints").mkdir(parents=True)
+    (tmp_path / "agent" / "private" / "checkpoints" / "2026-10-03_c.md").write_text("checkpoint")
+
+    artifacts = get_latest_consciousness_artifacts(agent_root=tmp_path)
+
+    assert not artifacts
+    assert artifacts.error and "public" in artifacts.error and "private" in artifacts.error

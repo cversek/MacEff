@@ -131,6 +131,9 @@ class TestHostToContainer:
         recs = [json.loads(l) for l in (host.config.audit_path).read_text().splitlines()]
         allowed = [r for r in recs if r.get("decision") == "allowed"]
         assert allowed and allowed[-1]["rung"] == "shared"
+        # amail.md §3.3: every record says the tier it was written under. Absent is
+        # not a way to say "container": a reader cannot tell it from "not recorded".
+        assert all(r.get("tier") == "container" for r in recs), recs
 
     def test_the_peer_broker_sweeps_it_into_the_agents_box_and_the_agent_ingests(self, tmp_path):
         host, box = _pair(tmp_path)
@@ -150,6 +153,8 @@ class TestHostToContainer:
         inbound = [r for r in recs if r.get("direction") == "inbound"]
         assert inbound and inbound[-1]["decision"] == "delivered"
         assert "shared hand-off from host.local" in (inbound[-1].get("reason") or "")
+        # amail.md §3.3: the inbound record carries the rung it arrived by and the tier.
+        assert inbound[-1].get("rung") == "shared" and inbound[-1].get("tier") == "container"
         # And the agent ingests as itself, unchanged.
         got = ingest(box.config.agent_homes["manny"], box.config.inbound_handoff / "manny",
                      box.config.contacts_path, "manny")

@@ -289,3 +289,36 @@ def test_a_notice_is_audited_OUTBOUND_even_when_inbound_uses_its_own_log(tmp_pat
     assert str(ic.outbound_audit_path).endswith("audit.jsonl"), \
         "outbound traffic would be filed where the outbound balance never looks"
     assert ic.outbound_audit_path != ic.broker_config.audit_path
+
+
+def test_hypervisor_value_accepted(tmp_path, monkeypatch):
+    """MIS-0002-R76 (config_MUST_accept_old_hypervisor_value): the old name for the
+    primal daemon is read as the current one, so a rename of the value cannot
+    strand a deployment that still writes it."""
+    import macf.amail.deploy_config as dc
+    from macf.amail.deploy_config import AddressingConfig
+    from test_amail_host_tier import addressing
+
+    monkeypatch.setattr(dc, "CONTAINER_MARKER", tmp_path / "no-dockerenv")
+    cfg = AddressingConfig.model_validate(addressing("host", "hypervisor"))
+    assert cfg.supervision == "primal-daemon"
+
+
+def test_primal_daemon_value_passes_unchanged():
+    """The current name is not a retired value, so the validator leaves it alone."""
+    from macf.amail.deploy_config import AddressingConfig
+    from test_amail_host_tier import addressing
+
+    cfg = AddressingConfig.model_validate(
+        addressing(supervision="primal-daemon", uids=(1002, 1003), shared=(False, False)))
+    assert cfg.supervision == "primal-daemon"
+
+
+def test_a_retired_value_is_matched_regardless_of_case_and_spaces():
+    """MIS-0002-R76: the match is forgiving the way the existing `none` check is."""
+    from macf.amail.deploy_config import AddressingConfig
+    from test_amail_host_tier import addressing
+
+    cfg = AddressingConfig.model_validate(
+        addressing(supervision=" Hypervisor ", uids=(1002, 1003), shared=(False, False)))
+    assert cfg.supervision == "primal-daemon"

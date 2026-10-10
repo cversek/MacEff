@@ -330,9 +330,9 @@ def all_checks(profile):
     return checks
 
 
-def staged_added_lines():
+def _added_lines(*against):
     out = subprocess.run(
-        ["git", "diff", "--cached", "--unified=0", "--no-color"],
+        ["git", "diff", "--cached", "--unified=0", "--no-color"] + list(against),
         capture_output=True, text=True,
     ).stdout
     fname = None
@@ -341,6 +341,44 @@ def staged_added_lines():
             fname = line[6:]
         elif line.startswith("+") and not line.startswith("+++"):
             yield fname, line[1:]
+
+
+def merging():
+    """While a merge is being committed, MERGE_HEAD names the incoming side."""
+    return subprocess.run(["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"],
+                          capture_output=True).returncode == 0
+
+
+def incoming_published():
+    """Whether the incoming side of a merge is already on a remote-tracking branch.
+
+    The narrowing below rests on the incoming side having been scanned and
+    published before. A local branch committed past the gate, made before the
+    hook was installed, or never pushed would otherwise reach a remote for the
+    first time through this merge, unscanned. A remote-tracking ref can be
+    written by hand: like the gate itself, this guards accidents."""
+    r = subprocess.run(["git", "branch", "-r", "--contains", "MERGE_HEAD"],
+                       capture_output=True, text=True)
+    return r.returncode == 0 and bool(r.stdout.strip())
+
+
+def staged_added_lines():
+    """The lines this commit adds. In a merge whose incoming side is already on a
+    remote, only those neither parent has: that side was scanned and published
+    before. Any other merge, a squash and a cherry-pick are scanned whole."""
+    added = list(_added_lines())
+    if not merging():
+        return added
+    if not incoming_published():
+        print("pre-commit gate: merge commit: the incoming side is not on any remote, "
+              "so it is scanned whole", file=sys.stderr)
+        return added
+    new_to_both = set(_added_lines("MERGE_HEAD"))
+    kept = [pair for pair in added if pair in new_to_both]
+    print("pre-commit gate: merge commit: scanned only what the merge adds beyond "
+          "both parents (%d of %d added lines); the incoming side was scanned when "
+          "it was committed there" % (len(kept), len(added)), file=sys.stderr)
+    return kept
 
 
 def main():

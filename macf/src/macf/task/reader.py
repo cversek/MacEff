@@ -7,15 +7,18 @@ Completed tasks may be dot-prefixed (.{id}.json) to hide them from CC's native
 scanner while remaining fully accessible to MACF CLI commands.
 """
 
+import fcntl
 import json
+from contextlib import contextmanager
 import os
 import stat
 import sys
 from pathlib import Path
-from typing import List, Optional, Dict, Any, Union, Set
+from typing import List, Optional, Dict, Any, Union, Set, Iterator
 
 from .models import MacfTask
 from ..utils.paths import find_project_root
+from ..utils.atomic import write_json_atomic
 
 
 class TaskReader:
@@ -441,13 +444,48 @@ def update_task_file(task_id: str, updates: Dict[str, Any], session_uuid: Option
                 continue  # ID is immutable
             data[key] = value
 
-        # Write back
-        with open(task_file, "w") as f:
-            json.dump(data, f, indent=2)
+        # Write back, whole or not at all, lifting a protected store for the rename
+        with writable_store(Path(task_file).parent):
+            write_json_atomic(task_file, data)
 
         return True
     except (json.JSONDecodeError, IOError):
         return False
+
+
+@contextmanager
+def writable_store(dir_path: Path) -> Iterator[None]:
+    """Lift a protected (555) task store to 755 for one write, then restore exactly the
+    mode found.
+
+    A store is born 555 so the client cannot purge it. Replacing a file atomically renames
+    a temporary file into the directory, which needs write permission on the directory, not
+    on the file, so an update in a protected store needs the same brief window creation and
+    hiding already take. A store the operator made writable is left as it was.
+    """
+    try:
+        fd = os.open(str(dir_path), os.O_RDONLY)
+    except FileNotFoundError:
+        yield
+        return
+    try:
+        # One writer at a time holds the lift: otherwise writer A restores 555 while
+        # writer B, which found the store already writable, is between its temporary
+        # file and its rename, and B's update (and its cleanup) fails. A directory can be
+        # opened read-only and locked, so a 555 store needs no lock file it couldn't create.
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        mode = os.fstat(fd).st_mode
+        protected = not (mode & stat.S_IWUSR)
+        if protected:
+            os.chmod(dir_path, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+        try:
+            yield
+        finally:
+            if protected:
+                os.chmod(dir_path, stat.S_IMODE(mode))
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
 
 def add_task_note(

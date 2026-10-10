@@ -232,7 +232,7 @@ Every requirement carries a **semantic slug**: a short name in words, in parenth
 - **In tools:** each finding a tool reports about a requirement MUST name the slug beside the ID [MIS-0001-R43 (tool_MUST_report_slug)]. `mis check` prints `MIS-0001-R14 (req_MUST_have_30_words_max)`, and names the slug of the requirement it found the fault in.
 - **Across documents:** a reference from outside the MIS SHOULD give the MIS number, the ID and the slug [MIS-0001-R44 (xref_SHOULD_give_MIS_ID_slug)], as in `MIS-0001-R14 (req_MUST_have_30_words_max)`. This policy cites its own requirements that way.
 
-**One citation form, checked.** A requirement is cited as `MIS-0001-R14 (req_MUST_have_30_words_max)`: the MIS number, the ID, and the slug in parentheses; inside a sentence's own parentheses, in square brackets. `mis check` resolves every citation in framework text against its MIS and refuses one whose ID does not exist or whose slug does not match [MIS-0001-R49 (citation_MUST_match_slug)]. A slug is therefore as permanent as its ID: renaming one is not editorial (§8.1).
+**One citation form, checked.** A requirement is cited as `MIS-0001-R14 (req_MUST_have_30_words_max)`: the MIS number, the ID, and the slug in parentheses; inside a sentence's own parentheses, in square brackets. `mis check` resolves every citation in framework text against its MIS and refuses one whose MIS or ID does not exist or whose slug does not match [MIS-0001-R49 (citation_MUST_match_slug)]. A slug is therefore as permanent as its ID: renaming one is not editorial (§8.1).
 
 **The pattern** is the subject, then the keyword in capitals, then the action: `PR_MUST-NOT_delete_MIS`, `req_SHOULD_use_active_EARS`, `author_MAY_write_MIS_for_any_change`. MUST NOT and SHOULD NOT are hyphenated. The pattern is a convention, not a rule: the checker checks a slug's characters and uniqueness, not its grammar.
 
@@ -248,7 +248,7 @@ Naked numbers shut out every reader who does not hold the table. Slugs are a cou
 
 **Motivation cites evidence with its tier** (`empiricism`). A proposal with no lived failure behind it may still be written: say so ("reasoning only"), and the operator weighs it accordingly.
 
-`macf_tools mis check <files>` checks every decidable requirement of this policy. CI runs it over `framework/mis/` and the glossary. Run it before each push.
+`macf_tools mis check <files>` checks every decidable requirement of this policy. Given one MIS, it resolves that file's citations against every MIS beside it, and leaves the policies' citations of the others to a run over the directory. CI runs it over `framework/mis/` and the glossary. Run it before each push.
 
 ---
 
@@ -260,7 +260,7 @@ Naked numbers shut out every reader who does not hold the table. Slugs are a cou
 
 A definition changes only through an accepted MIS, or an editorial pull request that keeps its meaning.
 
-**Retired words.** A word an accepted MIS replaces moves to the glossary's `## Retired` section, in the term form: `- **hypervisor**: retired by MIS-0002; use manager of record.` A quoted position that used the old word stays readable, and since a retired line is a term line, the checker refuses to define the word again. When a glossary change retires a word a position used, the Secretary names who used it and quotes the use, and the retirement is open to objection like the synthesis [MIS-0001-R50 (retirement_MUST_quote_users)].
+**Retired words.** A word an accepted MIS replaces moves to the glossary's `## Retired` section, in the term form: `- **hypervisor**: retired by MIS-0002; use primal daemon.` A quoted position that used the old word stays readable, and since a retired line is a term line, the checker refuses to define the word again. When a glossary change retires a word a position used, the Secretary names who used it and quotes the use, and the retirement is open to objection like the synthesis [MIS-0001-R50 (retirement_MUST_quote_users)].
 
 ---
 

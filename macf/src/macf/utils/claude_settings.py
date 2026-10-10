@@ -257,9 +257,14 @@ _PERMANENT_ASK = [
     "Bash(macf_tools mode set AUTO_MODE:*)",
 ]
 
-# Permissions that must always be in 'allow' (agent can always de-escalate)
+# Permissions that must always be in 'allow': the agent can always de-escalate,
+# and can always compact itself. The injected /compact passes every Stop gate
+# once (stop_bypass), so under the client's auto mode the only thing that could
+# stop it is a refusal of the command itself (GH #479). Exact, not a wildcard:
+# `inject` takes any slash command.
 _PERMANENT_ALLOW = [
     "Bash(macf_tools mode set MANUAL_MODE:*)",
+    "Bash(macf_tools inject compact)",
 ]
 
 # Operations that are NEVER legitimate in normal development (permanent deny)
@@ -391,7 +396,23 @@ def _find_shadowing_allow_entries(ask_entry: str, allow_list: list) -> list:
     return shadows
 
 
-def toggle_auto_mode_ask_permissions(enable_auto: bool, project_root: Optional[Path] = None) -> dict:
+def _auto_ask_exclude() -> list:
+    """The AUTO_MODE ask rules this deployment manages itself: ``modes.auto.ask_exclude``
+    in ``{agent_home}/.maceff/config.json``. The mode switch neither adds nor removes them."""
+    try:
+        from .paths import find_agent_home
+        config_file = find_agent_home() / ".maceff" / "config.json"
+        if config_file.exists():
+            data = json.loads(config_file.read_text())
+            excl = ((data.get("modes") or {}).get("auto") or {}).get("ask_exclude") or []
+            return [e for e in excl if isinstance(e, str)]
+    except (OSError, ValueError, AttributeError) as e:
+        print(f"⚠️ MACF: could not read modes.auto.ask_exclude, excluding nothing: {e}", file=sys.stderr)
+    return []
+
+
+def toggle_auto_mode_ask_permissions(enable_auto: bool, project_root: Optional[Path] = None,
+                                     exclude: Optional[list] = None) -> dict:
     """
     Toggle AUTO_MODE-specific ask permissions.
 
@@ -402,7 +423,14 @@ def toggle_auto_mode_ask_permissions(enable_auto: bool, project_root: Optional[P
             tuples for shadows moved out of allow during enable; empty during
             disable
           - 'shadows_restored': list of allow entries restored on disable
+          - 'excluded': the AUTO_MODE asks this deployment manages itself, left untouched
         Returns None on error.
+
+    A deployment that decides some of these operations another way (a hook that
+    allows them for its own repository, say) lists them in ``modes.auto.ask_exclude``,
+    or passes ``exclude``: an ask rule always beats an allow, so re-adding one would
+    undo the deployment's choice. Every change is recorded as a
+    ``mode_permissions_changed`` event, so a watcher can see what a switch did.
 
     Design (closes GH issue #67):
         On enable, for every ask entry being installed, scan the allow list
@@ -426,9 +454,12 @@ def toggle_auto_mode_ask_permissions(enable_auto: bool, project_root: Optional[P
         changed = []
         shadows_relocated = []
         shadows_restored = []
+        excluded_set = set(exclude if exclude is not None else _auto_ask_exclude())
+        excluded = [e for e in _AUTO_MODE_ASK if e in excluded_set]
+        managed = [e for e in _AUTO_MODE_ASK if e not in excluded_set]
 
         if enable_auto:
-            for entry in _AUTO_MODE_ASK:
+            for entry in managed:
                 if entry not in ask_list:
                     ask_list.append(entry)
                     changed.append(entry)
@@ -451,7 +482,7 @@ def toggle_auto_mode_ask_permissions(enable_auto: bool, project_root: Optional[P
                         file=sys.stderr,
                     )
         else:
-            for entry in _AUTO_MODE_ASK:
+            for entry in managed:
                 if entry in ask_list:
                     ask_list.remove(entry)
                     changed.append(entry)
@@ -468,10 +499,20 @@ def toggle_auto_mode_ask_permissions(enable_auto: bool, project_root: Optional[P
 
         if changed or shadows_relocated or shadows_restored:
             _write_settings(settings, settings_path)
+            from ..agent_events_log import append_event
+            append_event("mode_permissions_changed", {
+                "mode": "AUTO_MODE" if enable_auto else "MANUAL_MODE",
+                "ask_added": changed if enable_auto else [],
+                "ask_removed": [] if enable_auto else changed,
+                "allow_relocated": [s for _, ss in shadows_relocated for s in ss],
+                "allow_restored": shadows_restored,
+                "excluded": excluded,
+            })
         return {
             'changed': changed,
             'shadows_relocated': shadows_relocated,
             'shadows_restored': shadows_restored,
+            'excluded': excluded,
         }
     except (OSError, json.JSONDecodeError, TypeError, KeyError) as e:
         print(f"⚠️ MACF: Settings write failed (toggle_auto_ask): {e}", file=sys.stderr)

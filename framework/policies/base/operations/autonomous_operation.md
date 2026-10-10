@@ -1,10 +1,10 @@
 # Autonomous Operation Policy
 
-**Version**: 1.5
+**Version**: 1.6
 **Tier**: CORE
 **Category**: Operations
 **Status**: ACTIVE
-**Updated**: 2026-10-02
+**Updated**: 2026-10-04
 
 ---
 
@@ -75,6 +75,7 @@ Applies to all Primary Agents (PA) and Subagents (SA) capable of extended autono
 - What does a permission dialog do to the rest of the session, including its scheduled prompts?
 - Why can the waiting session not report its own wait, and where must the watch run instead?
 - What does `macf_tools permissions watch` send, when, and when does it stop?
+- Which dialogs has this agent met, how long did each wait, and which ask rule matches it?
 - What did measuring one day of dialogs show about which commands raise them, and why is a rule built from remembered prompts not enough?
 
 **6 Available Skills**
@@ -303,7 +304,7 @@ This command performs all settings changes atomically:
 - `permissions.defaultMode` set to the configured AUTO_MODE permission mode
   (default `auto`)
 - `Write` removed from the `ask` permission list
-- Asymmetric safety permissions installed (AUTO_MODE in ask, MANUAL_MODE in allow)
+- Asymmetric safety permissions installed: AUTO_MODE in ask; MANUAL_MODE and exactly `macf_tools inject compact` in allow, so an agent can always de-escalate and always compact itself (see `play_time` 5.4 for compacting under a timer)
 - Permanent deny list installed (destructive operations)
 - AUTO_MODE-specific ask list installed (public-facing operations)
 
@@ -603,12 +604,14 @@ AUTO_MODE work is LOCAL ONLY. All operations visible to others are deferred to M
 
 Wind-down thresholds scale with context window size:
 
-| Window | Wind-down begins | CCP | JOTEWR |
+| Window | Wind-down begins | CCP no later than | JOTEWR no later than |
 |--------|-----------------|-----|--------|
 | 200K   | CL20 (~31K left) | CL5 | CL2 |
 | 1M     | CL10 (~95K left) | CL1 | CL0 |
 
 The 1M start is measured: the sequence below, with step 3 skipped, took about nine CL points on a 1M window with policies read by section, so a later start leaves the reflection to auto-compaction. A deployment that compacts before CL0 (an auto-compact override) starts earlier by the difference. The 200K row predates that measurement.
+
+The checkpoint and the reflection are written wherever steps 1 to 3 end; the last two columns are the latest points for each. The cost depends on how much of the policy the cycle has already read: on another 1M deployment, steps 4 and 5 took about two CL points where they had taken five on the first measured deployment, because some of their policies had been read earlier in the cycle. CL10 stays a safe start, and nine points is not the sequence's fixed cost.
 
 **Who starts it.** In AUTO_MODE the agent starts the wind-down at the threshold. In MANUAL_MODE the operator starts it, and starting the whole sequence authorizes every step in it.
 
@@ -622,7 +625,7 @@ The 1M start is measured: the sequence below, with step 3 skipped, took about ni
 | 4 | `/maceff:ccp` | After curation, so the checkpoint can point at what curation produced. |
 | 5 | `/maceff:jotewr` | Last, with the whole cycle in view: 5k tokens on a 1M window, 2k on 200K. |
 
-The CL15 condition and the reflection sizes are operator settings (2026-10). The condition protects steps 4 and 5, which on one measured 1M deployment took about five CL points between them with policies read by section.
+The CL15 condition and the reflection sizes (5k tokens on a 1M window, 2k on 200K) are operator settings, set in 2026-10 and confirmed by the operator, as quoted on the pull request that added this sentence. The condition protects steps 4 and 5, which on one measured 1M deployment took about five CL points between them with policies read by section. An automatic wind-down on a 1M window starts at CL10, so step 3 runs only when the operator starts the sequence earlier.
 
 **Dispatching it within the context available.** Where a dispatched skill asks for more than these rules allow, the rules govern the dispatch; a skill invoked on its own keeps its own instructions.
 
@@ -640,6 +643,8 @@ The CL15 condition and the reflection sizes are operator settings (2026-10). The
 1. `macf_tools inject compact`, where a supervisor owns the session's pane;
 2. the operator's `/compact`, when the operator is present;
 3. otherwise auto-compaction, which AUTO_MODE turns on: keep working productively until it fires.
+
+**A compaction opens no turn.** Nothing a SessionStart hook returns can start one, so an agent whose last act was `inject compact` would sit at an empty input box after the compaction, its recovery unread, until something else woke it. `inject compact` therefore starts a follower that types one short recovery prompt into the same pane, in the framework's voice, once the compaction is in the agent's event log and the session has settled. It types nothing if a prompt has already started after the compaction (a mail clock, a schedule or the operator got there first), and gives up after half an hour if no compaction comes. Its outcome is a `compact_followup` event, and its errors go to the transcript monitor's log. Like every framework keystroke it is recorded before it is typed (`keys_sent`), so it never reads as the operator's activity. One narrow race remains: another sender (a mail clock) can arrive in the moment between the follower's check and its keys, and two senders typing at once interleave in the input box. It is rare, and the agent then sees one garbled prompt rather than none. `--then TEXT` replaces the prompt; `--no-then` turns it off, for an operator who will be at the keyboard when the compaction ends.
 
 Do NOT try to trigger compaction artificially by consuming tokens with filler. Recovery reads the checkpoint and reflection from disk, and the task notes carry the rest.
 
@@ -675,6 +680,53 @@ block: a system timer, a cron job, a supervisor.
   (default 10), and again every `--repeat` minutes (default 60). When a wait it
   reminded about ends, it sends one all-clear. A reminder that fails to send is
   tried again on the next pass. `--dry-run` prints instead of sending.
+- `macf_tools permissions history` answers "which dialogs has this agent met?"
+  over the last `--days` (default 7), from the same event log and nothing else:
+  when each opened, how long it waited, whether the command then ran, and the
+  ask rule of today's settings that matches it (`--by-rule` totals dialogs and
+  waits per rule; `--json` for tools). A wait runs until the session moved on,
+  so an approved command adds its own run time, and a sibling call running in
+  parallel can end it early, so waits are lower bounds. The rule is matched at
+  report time, because the event does not record which rule asked. Matching
+  follows the client's documented rule language (any `*`, the `:*` and trailing
+  ` *` forms, wrappers, chained commands, substitutions and loop bodies) against
+  the settings the client reads for that session: the user file, the shared file
+  of the directory the session started in, and the local file at its repository
+  root. A dialog no ask rule matches is grouped by what would allow it: the
+  wildcard rule the dialog offered, or the command's first words. That covers a
+  missing allow rule as well as a hook, auto mode or a built-in check, and the
+  report shows the permission mode each group opened in. A dialog whose session
+  was killed ends as "session ended" when the next session starts. Questions to the operator
+  (AskUserQuestion, ExitPlanMode) are dialogs but not permissions, and are left
+  out unless `--include-questions`. It keeps no state of its own, by design: a
+  second record of the same events would drift from the log it copies.
+- **A change to the permission rules is an event.** The ConfigChange hook runs
+  when a settings file changes during a session. Claude Code tells it which file
+  changed, never what changed, so the hook compares the file's `allow`, `ask` and
+  `deny` rules and its `defaultMode` with the copy it last saw, and records a
+  `permission_rules_changed` event naming each rule added or removed and the
+  file it came from. A file seen for the first time is recorded as a
+  `permission_rules_baseline` naming every rule it holds. Session start compares
+  the user, project and local settings files too: it baselines a file never
+  seen, so the first change in a session is a diff, and it records a difference
+  it finds with the source `found_at_session_start`: when it was found, not when
+  it was made. **The client does not fire ConfigChange for its own writes**, so a
+  rule it adds itself (a permission dialog's "always allow", or an in-session
+  permission edit) is not recorded when it happens. It shows up at the next
+  session start, or folded into the next outside edit of the same file. A
+  dialog's "allow for this session" lives in memory and reaches no file, so no
+  event shows it. The client also ignores changes for a few seconds after its
+  own write, so an outside edit landing in that window can be recorded later,
+  as part of something else. A file that cannot be
+  read is skipped, never recorded as every rule removed. The events are the
+  record: the rules a file last held are its latest baseline plus the diffs
+  after it, so a copy kept beside the log only saves reading it back, and when
+  that copy is lost (a home restored without `.maceff/`, a recreated volume) the
+  log answers and a rule added afterwards is still named. A mode switch records
+  both `mode_permissions_changed` (what the switch did, and why) and
+  `permission_rules_changed` (what the file now holds); count changes from one
+  of them, not both. Query them with `macf_tools events query --event
+  permission_rules_changed`.
 
 **What a deployment must do.** Run `macf_tools permissions watch` as the
 agent's own user, every few minutes, from a scheduler outside the agent's
@@ -701,7 +753,9 @@ refuted by the passes:
 
 When a dialog surprises you, read the event log before writing a rule. The log
 records the commands that passed as well as the one that waited, and a rule
-that has not been checked against the passes is a guess.
+that has not been checked against the passes is a guess. The same holds for
+loosening one: `permissions history --by-rule` counts which rules actually
+stop the agent, and that count, not memory, is the case for relaxing a rule.
 
 The watch makes a missed dialog visible. Counting the passes keeps the habits honest.
 
