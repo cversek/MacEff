@@ -8,11 +8,12 @@ scanner while remaining fully accessible to MACF CLI commands.
 """
 
 import json
+from contextlib import contextmanager
 import os
 import stat
 import sys
 from pathlib import Path
-from typing import List, Optional, Dict, Any, Union, Set
+from typing import List, Optional, Dict, Any, Union, Set, Iterator
 
 from .models import MacfTask
 from ..utils.paths import find_project_root
@@ -442,12 +443,38 @@ def update_task_file(task_id: str, updates: Dict[str, Any], session_uuid: Option
                 continue  # ID is immutable
             data[key] = value
 
-        # Write back
-        write_json_atomic(task_file, data)
+        # Write back, whole or not at all, lifting a protected store for the rename
+        with writable_store(Path(task_file).parent):
+            write_json_atomic(task_file, data)
 
         return True
     except (json.JSONDecodeError, IOError):
         return False
+
+
+@contextmanager
+def writable_store(dir_path: Path) -> Iterator[None]:
+    """Lift a protected (555) task store to 755 for one write, then restore exactly the
+    mode found.
+
+    A store is born 555 so the client cannot purge it. Replacing a file atomically renames
+    a temporary file into the directory, which needs write permission on the directory, not
+    on the file, so an update in a protected store needs the same brief window creation and
+    hiding already take. A store the operator made writable is left as it was.
+    """
+    try:
+        mode = dir_path.stat().st_mode
+    except FileNotFoundError:
+        yield
+        return
+    protected = not (mode & stat.S_IWUSR)
+    if protected:
+        os.chmod(dir_path, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+    try:
+        yield
+    finally:
+        if protected:
+            os.chmod(dir_path, stat.S_IMODE(mode))
 
 
 def add_task_note(

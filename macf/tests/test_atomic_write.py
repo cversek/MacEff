@@ -70,3 +70,35 @@ def test_a_read_only_file_is_refused_as_open_for_writing_refused_it(tmp_path):
         atomic.write_json_atomic(path, {"new": True})
     assert json.loads(path.read_text()) == {"old": True}
     assert [p.name for p in store.iterdir()] == ["sentinel.json"]
+
+
+def test_an_update_in_a_protected_store_lands_and_the_store_stays_protected(tmp_path, monkeypatch):
+    """Review of this PR: a store is born 555, and a rename needs write permission on the
+    directory. Before the fix the update returned False and the change was lost."""
+    monkeypatch.delenv("MACF_TASKS_DIR", raising=False)
+    store = tmp_path / "store"
+    store.mkdir()
+    monkeypatch.setenv("MACF_TASK_STORE_DIR", str(store))
+    task = {"id": "481", "subject": "Phase 3", "description": "", "status": "pending",
+            "blocks": [], "blockedBy": []}
+    (store / "481.json").write_text(json.dumps(task))
+    store.chmod(0o555)
+    try:
+        assert task_reader.update_task_file("481", {"status": "in_progress"}) is True
+        assert json.loads((store / "481.json").read_text())["status"] == "in_progress"
+        assert stat.S_IMODE(store.stat().st_mode) == 0o555
+        assert [p.name for p in store.iterdir()] == ["481.json"]
+    finally:
+        store.chmod(0o755)
+
+
+def test_a_new_file_gets_the_mode_open_would_give(tmp_path):
+    import os
+    store = tmp_path / "store"
+    store.mkdir()
+    old = os.umask(0o022)
+    try:
+        atomic.write_text_atomic(store / "new.json", "{}")
+    finally:
+        os.umask(old)
+    assert stat.S_IMODE((store / "new.json").stat().st_mode) == 0o644
