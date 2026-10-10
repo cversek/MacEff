@@ -110,17 +110,58 @@ A compaction ends the agent's working memory. The persistent layer compacts a se
 
 **Check the version the session runs, not the one installed.** The launcher can move to a new version while a running session still maps the old one. A key that needs 2.1.290 protects only a session that runs it.
 
+### 2.2 Recording who asked
+
+**When the harness compacts a session that nobody asked to compact, the compaction is recorded with the harness as the asker** [MIS-0002-R127 (harness_compaction_MUST_be_recorded)]. The PreCompact hook's `trigger` cannot say this alone: under 2.1.289 an idle compaction reports `manual`, and under 2.1.290 it reports `auto`. The reliable mark is the client's own row after the boundary, a system row that begins "Compacted while idle".
+
+- **The asks are recorded where they happen.**
+  - An operator's typed `/compact` appears in the transcript as a command row, and is recorded as `compaction_asked` with the asker `operator`.
+  - A compaction asked through `macf_tools inject compact` is recorded with the asker `wind_down`.
+- **The client's idle row** is recorded as `harness_compaction_detected` with the asker `harness`.
+- **The hook records `trigger` as the client sent it**, and `unknown` when the field is absent, never a guess.
+- No event carries the content of the work, only who asked, how and when.
+
+Until the primal daemon lands, the transcript monitor makes these records. The daemon's control record for a harness compaction then names the harness in its `asked_by` (`Asker.kind == "harness"`), with no peer, because nobody requested it.
+
 ---
 
 ## 3 macOS
 
-### 3.1 Privacy grants
+### 3.1 The daemon as a LaunchAgent
+
+**On macOS each primal daemon runs as a per-user LaunchAgent** [MIS-0002-R05 (macos_MUST_render_LaunchAgent)], in the user's GUI session (`LimitLoadToSessionType: Aqua`), never as a LaunchDaemon that runs as root on someone's behalf.
+
+- **Its label is `maceff_pd.<id>`** [MIS-0002-R06 (pd_identifiers_MUST_use_maceff_pd)], where `<id>` is the calling card with `@` written as `_`: `IraMacEff@ee9a78` becomes `maceff_pd.IraMacEff_ee9a78`. Several agents can share one login, so every name carries the agent.
+- **launchd is the outer tier here.** `KeepAlive` and `RunAtLoad` restart the daemon whenever it exits.
+- **The identity never travels in the environment.** The program is `python -m macf.pd <agent home>`, and the daemon reads its card from the identity file in that home.
+- **Install, remove and restart go through `launchctl bootstrap`, `bootout` and `kickstart`** against `gui/<uid>`. The legacy `load` and `unload` are not offered.
+- **Removal finishes even when nothing is loaded.** A boot-out of a service launchd does not have exits 3 ("No such process"), which happens after a failed bootstrap, after a reboot outside the GUI session, or on a second removal. The removal counts that as done and removes the plist.
+- **The units outlive the daemon.** `AbandonProcessGroup` keeps launchd from killing the daemon's process group when the daemon exits, so the session keeps running for the restarted daemon to find. Linux renders the same with `KillMode=process`.
+
+**The daemon runs only while its user is logged in to the GUI.** That is the price of the grants: a unit outside the GUI session holds none of the user's. A Mac reached only over SSH, or sitting at the login window after a reboot, runs no daemon and none of the agent's units. On Linux the user unit starts at boot and outlives a logout, so an operator moving between the two should expect the difference.
+
+**launchd does not rotate `StandardOutPath` or `StandardErrorPath`.** They are for what the daemon cannot log itself, such as a crash. A daemon that wrote a line per poll there would grow them without bound.
+
+**Check the socket path at install** [MIS-0002-R129 (adapter_MUST_check_socket_path_length)]. A Unix socket path longer than the platform allows fails at bind with a bare error. On macOS the limit is 103 bytes (Linux: 107), and a long home path or runtime directory reaches it. The install refuses with the path and the limit.
+
+### 3.2 Privacy grants
 
 macOS attaches a privacy grant to the **responsible process**. A unit started by launchd does not hold what the terminal held, and its denial looks like an ordinary error. For example, the Local Network grant refuses a LAN connection with `EHOSTUNREACH` at once, while ping, which the grant does not cover, still answers.
 
 - **Each unit declares the grants it needs** [MIS-0002-R63 (unit_MUST_declare_privacy_grants)], from a closed list: `local_network`, `accessibility`, `full_disk_access`, `keychain`, and `automation:<bundle id>` per target app. A misspelt grant fails at declaration, not as a silent missing grant at run time.
 - **A denial is read as the grant it is.** An instant `EHOSTUNREACH` while ping answers is read as `local_network` denied. A timeout, a refusal or a slow unreachable host stays the network failure it is, never reported as a grant.
 - **Still to come.** The install-time probe [MIS-0002-R64 (adapter_MUST_test_grants_at_install)] arrives with the installer. It will run from the launchd context, because a test from the terminal proves the terminal's grant, and since its runs can raise permission dialogs, only when a person is at the machine. The notice that names a denied grant [MIS-0002-R65 (denied_grant_MUST_raise_notice)] arrives with the notifier. Until then a denial is read, not announced.
+
+### 3.3 Claude Code's own supervisor
+
+Claude Code can run a session in the background under its own daemon (`claude --bg`, `/background`). **Where it already runs the agent's session, the primal daemon adopts that session** instead of starting a second supervisor over it [MIS-0002-R66 (pd_MUST_adopt_harness_supervisor)].
+
+- **Recognise a hosted session by its sidecar's `kind: "bg"`, never by argv.** A respawned worker runs in a pre-started spare whose argv is generic, so the session's launch flags, its channels among them, are read from the client's job record (`respawnFlags`).
+- **Adopt only when it is unambiguous.** Exactly one hosted session in the agent's home is adopted. Two or more are refused with their ids named, because picking by recency is a guess. With none, the daemon starts the session itself.
+- **Act only through the client's own verbs.** Start and restart are `claude respawn <id>`, which brings back the same session id, with its channels. Stop is `claude stop <id>`, which keeps the conversation. **Never a signal:** a signalled worker ends as "done" and nothing brings it back.
+- **The client's daemon is transient.** It starts on demand and exits when its last client goes, so its absence says nothing about whether a hosted session lives. Workers it leaves behind keep their sidecars and are found the same way.
+- **The readout shows the hosted sessions** under Claude Code's daemon, with their channels, or `unknown` where the job record cannot be read, never "none".
+- A sidecar's `status` is turn state, stamped at transitions. It never says a person is awaited; that inference is the readout's [MIS-0002-R21 (pd_MUST_report_waiting_on_person)].
 
 ---
 
