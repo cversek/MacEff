@@ -64,9 +64,18 @@ SECRET_SENTINEL = b"MACEFF-SECRET-SENTINEL"
 SENTINEL_SCAN_MAX_BYTES = 65536
 
 
+#: Directories under .maceff/ whose whole contents never leave the host: an agent's GitHub
+#: App state (its private key, which mints tokens until the operator revokes it, and its
+#: cached tokens). By path, so keys written before the sentinel existed are covered too.
+EXCLUDED_MACEFF_DIRS = {"ghapp"}
+
+
 def is_excluded_from_backup(path: Path) -> bool:
     """True for credential files that must not be archived."""
     if path.name in EXCLUDED_NAMES:
+        return True
+    parts = Path(path).parts
+    if any(a == ".maceff" and b in EXCLUDED_MACEFF_DIRS for a, b in zip(parts, parts[1:])):
         return True
     try:
         if path.stat().st_size <= SENTINEL_SCAN_MAX_BYTES:

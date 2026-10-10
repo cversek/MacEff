@@ -2,7 +2,8 @@
 """gh, as this agent's GitHub App where the app is installed; as the operator elsewhere.
 
 Link it as `gh` earlier on PATH than the real one (ln -s /opt/maceff-ghapp/gh-app-identity
-~/.local/bin/gh), or call it directly. GH_AS_OPERATOR=1 forces the operator's login for one
+~/.local/bin/gh) only where the agent's home is its own; on a login shared with the operator
+or other agents, call it by its full path instead (git_discipline, section 4). GH_AS_OPERATOR=1 forces the operator's login for one
 command; GH_REAL names the real gh (default /usr/bin/gh). Policy: git_discipline, section 4.
 
 The target repository comes from -R/--repo, from repos/<owner>/<repo> in gh api, or from the

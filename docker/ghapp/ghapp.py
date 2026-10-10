@@ -36,6 +36,9 @@ import os
 import sys
 import tempfile
 import time
+import re
+import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -48,15 +51,31 @@ API = "https://api.github.com"
 ROOT = Path(os.environ.get("MACEFF_AGENT_HOME_DIR") or os.path.expanduser("~")) / ".maceff" / "ghapp"
 
 
+#: A GitHub App slug's characters. The name becomes a path, so anything else (``..``, a
+#: slash, an absolute path) is refused before any directory is touched.
+_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,33}$")
+
+#: Marks every secret this tool writes, so a backup that meets a copy under another name
+#: still refuses it (macf.backup.paths); the path exclusion covers keys written before.
+SENTINEL = "MACEFF-SECRET-SENTINEL"
+
+
 class NoApp(Exception):
     pass
+
+
+def _checked(name: str) -> str:
+    if not _NAME.match(name or ""):
+        raise NoApp(f"{name!r} is not an app name (lower-case letters, digits and hyphens, as a "
+                    f"GitHub App slug); nothing was touched")
+    return name
 
 
 def resolve_name(given):
     """The app's state directory name: given, else $GHAPP_NAME, else the only app here."""
     name = given or os.environ.get("GHAPP_NAME")
     if name:
-        return name
+        return _checked(name)
     apps = sorted(p.name for p in ROOT.glob("*") if (p / "app.json").is_file()) if ROOT.is_dir() else []
     if len(apps) == 1:
         return apps[0]
@@ -68,7 +87,7 @@ def resolve_name(given):
 def state_dir(name: str, create: bool = False) -> Path:
     """The app's state directory. Only ``convert`` creates one; any other command naming an
     app that does not exist is told so in a sentence, not left with an empty directory."""
-    d = ROOT / name
+    d = ROOT / _checked(name)
     if not create and not (d / "app.json").is_file():
         raise NoApp(f"no app named {name!r} under {ROOT} (run convert first, or check --name / GHAPP_NAME)")
     d.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -128,15 +147,19 @@ def cmd_convert(args) -> int:
     if not args.name:
         print("convert needs --name: the state directory this app will live in", file=sys.stderr)
         return 2
+    _checked(args.name)
+    # "-" reads the one-hour, single-use code from stdin, so `ps` never shows it.
+    code = sys.stdin.readline().strip() if args.code == "-" else args.code
     d = state_dir(args.name, create=True)
     if (d / "private-key.pem").exists() and not args.force:
         print(f"refusing: {d}/private-key.pem exists (use --force to replace)", file=sys.stderr)
         return 1
-    resp = call("POST", f"/app-manifests/{args.code}/conversions")
-    write_secret(d / "private-key.pem", resp["pem"])
+    resp = call("POST", f"/app-manifests/{urllib.parse.quote(code, safe='')}/conversions")
+    # A PEM may carry text before its BEGIN line (RFC 7468); the sentinel goes there.
+    write_secret(d / "private-key.pem", f"{SENTINEL} (an app key: never copy it off this host)\n" + resp["pem"])
     facts = {k: resp.get(k) for k in ("id", "slug", "client_id", "html_url", "name")}
     facts["owner"] = (resp.get("owner") or {}).get("login")
-    (d / "app.json").write_text(json.dumps(facts, indent=1) + "\n")
+    write_secret(d / "app.json", json.dumps(facts, indent=1) + "\n")   # not secret; 0600 like its neighbours
     # webhook_secret and client_secret are not needed (no webhook, no user OAuth); not kept.
     print(f"app {facts['slug']} id {facts['id']} owner {facts['owner']} -> {d} (key stored 0600, not shown)")
     return 0
@@ -169,7 +192,10 @@ def cmd_token(args) -> int:
     want = (args.repo or "").lower()
     if want:
         owner = want.split("/")[0]
-    cache = d / f"token-{owner}.json"
+    # A token for one repository is scoped to it, so a token that leaks reaches that
+    # repository alone, never the whole installation; it is cached per repository.
+    repo_name = want.split("/", 1)[1] if want else ""
+    cache = d / (f"token-{owner}-{repo_name}.json" if want else f"token-{owner}.json")
 
     def emit(c) -> int:
         # A token reaches only the repositories the app is installed on; say no rather
@@ -194,10 +220,17 @@ def cmd_token(args) -> int:
     if not inst:
         print(f"no installation of {facts['slug']} on '{owner}': install the app there first", file=sys.stderr)
         return 3
-    tok = call("POST", f"/app/installations/{inst[0]['id']}/access_tokens", bearer_jwt=j)
+    try:
+        tok = call("POST", f"/app/installations/{inst[0]['id']}/access_tokens", bearer_jwt=j,
+                   body={"repositories": [repo_name]} if want else None)
+    except urllib.error.HTTPError as e:
+        if want and e.code in (404, 422):   # the installation does not reach that repository
+            return 3
+        raise
     exp = calendar.timegm(time.strptime(tok["expires_at"], "%Y-%m-%dT%H:%M:%SZ"))  # UTC
     repos = _installed_repos(tok["token"])
-    c = {"token": tok["token"], "expires_epoch": exp, "installation": inst[0]["id"], "repos": repos}
+    c = {"token": tok["token"], "expires_epoch": exp, "installation": inst[0]["id"], "repos": repos,
+         "sentinel": SENTINEL}
     write_secret(cache, json.dumps(c))
     return emit(c)
 
@@ -217,7 +250,8 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--name", help="state directory name (default: $GHAPP_NAME, else the only app)")
     sub = p.add_subparsers(dest="cmd", required=True)
-    c = sub.add_parser("convert"); c.add_argument("code"); c.add_argument("--force", action="store_true")
+    c = sub.add_parser("convert"); c.add_argument("code", help="the manifest code, or - to read it from stdin")
+    c.add_argument("--force", action="store_true")
     t = sub.add_parser("token"); t.add_argument("--owner"); t.add_argument("--repo", help="owner/name; exit 3 if not installed there")
     t.add_argument("--expiry", action="store_true", help="also print the token's expiry (epoch seconds) on a second line")
     sub.add_parser("whoami")

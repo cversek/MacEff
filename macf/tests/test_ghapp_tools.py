@@ -59,7 +59,7 @@ def test_several_apps_and_no_name_is_refused_not_guessed(ghapp):
 def test_an_empty_token_cache_is_minted_anew(ghapp, monkeypatch, capsys):
     """A full disk left the cache at 0 bytes; the call must mint, not crash on parsing."""
     d = _app(ghapp, "manny2")
-    (d / "token-acme.json").write_text("")
+    (d / "token-acme-x.json").write_text("")
     later = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 3600))
 
     def call(method, path, token="", bearer_jwt="", body=None):
@@ -71,7 +71,7 @@ def test_an_empty_token_cache_is_minted_anew(ghapp, monkeypatch, capsys):
     monkeypatch.setattr(ghapp, "call", call)
     assert ghapp.main(["token", "--repo", "acme/x"]) == 0
     assert capsys.readouterr().out == "fresh"
-    assert json.loads((d / "token-acme.json").read_text())["token"] == "fresh"
+    assert json.loads((d / "token-acme-x.json").read_text())["token"] == "fresh"
 
 
 def test_a_secret_write_cut_short_leaves_the_old_file(ghapp, monkeypatch, tmp_path):
@@ -169,3 +169,40 @@ def test_the_wrapper_mints_for_the_repository_the_command_names(tmp_path, args, 
                        env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin", "GH_REAL": "/bin/true"},
                        capture_output=True, text=True, cwd=tmp_path, timeout=60)
     assert f"app token unavailable for {expected} " in r.stderr
+
+
+@pytest.mark.parametrize("name", ["../trav", "/etc", "Bad_Name", "a/b"])
+def test_a_name_that_is_not_an_app_slug_touches_nothing(ghapp, tmp_path, name, capsys):
+    """OPSEC review: the name becomes a path; convert used to mkdir and chmod it first."""
+    before = sorted(p for p in tmp_path.rglob("*"))
+    assert ghapp.main(["--name", name, "convert", "code"]) == 2
+    assert "is not an app name" in capsys.readouterr().err
+    assert sorted(p for p in tmp_path.rglob("*")) == before
+
+
+def test_a_token_is_scoped_to_its_one_repository_and_marked(ghapp, monkeypatch, capsys):
+    """OPSEC review: an unscoped token reached the whole installation."""
+    d = _app(ghapp, "manny2")
+    bodies = []
+    base = _api(_later(), [["acme/x"]], [])
+
+    def call(method, path, token="", bearer_jwt="", body=None):
+        if path.endswith("/access_tokens"):
+            bodies.append(body)
+        return base(method, path, token, bearer_jwt, body)
+    monkeypatch.setattr(ghapp, "call", call)
+    assert ghapp.main(["token", "--repo", "acme/x"]) == 0
+    assert bodies == [{"repositories": ["x"]}]
+    cache = json.loads((d / "token-acme-x.json").read_text())
+    assert cache["sentinel"] == "MACEFF-SECRET-SENTINEL"
+
+
+def test_the_backup_never_archives_an_app_key(tmp_path):
+    """OPSEC review: macf.backup walked .maceff/ and took the key and the tokens."""
+    from macf.backup.paths import iter_backup_files
+    maceff = tmp_path / ".maceff"
+    (maceff / "ghapp" / "manny2").mkdir(parents=True)
+    for n in ("app.json", "private-key.pem", "token-acme-x.json"):
+        (maceff / "ghapp" / "manny2" / n).write_text("x")
+    (maceff / "keep.json").write_text("{}")
+    assert [p.name for p in iter_backup_files(maceff)] == ["keep.json"]

@@ -265,8 +265,8 @@ git push origin main
 
 | Tool | What it does |
 |------|--------------|
-| `ghapp.py` | `convert CODE --name <n>` stores the app's key from the App Manifest flow (never printed); `token --repo OWNER/NAME` prints a token, exit 3 when the app is not installed there; `whoami` lists installations |
-| `git-credential-ghapp` | git credential helper: answers with a token minted for exactly the repository git asks about, nothing where the app is not installed |
+| `ghapp.py` | `convert - --name <n>` stores the app's key from the App Manifest flow, reading the one-hour code from stdin so `ps` never shows it (the key is never printed); `token --repo OWNER/NAME` prints a token scoped to that one repository, exit 3 when the app is not installed there; `whoami` lists installations |
+| `git-credential-ghapp` | git credential helper: answers with a token minted for, and scoped to, exactly the repository git asks about; nothing where the app is not installed |
 | `gh-app-identity` | `gh` as the app where it is installed, as the operator elsewhere |
 
 **What stays the agent's own.** The key, the app's facts and the token cache live in `<agent home>/.maceff/ghapp/<name>/` (mode 0700, key 0600), where the agent home is `$MACEFF_AGENT_HOME_DIR`, else `~`. The tools pick the app from `--name`, else `$GHAPP_NAME`, else the one app in that directory, and refuse to guess between several. A token is a live credential: run `ghapp.py token` only inside a command substitution (`GH_TOKEN="$(…)"`), never where its output is captured. An agent's tool output is a transcript.
@@ -284,6 +284,8 @@ ln -s /opt/maceff-ghapp/gh-app-identity ~/.local/bin/gh   # ahead of /usr/bin/gh
 - set the same four values in the agent's own clone (`git -C <clone> config ...`), never `--global`;
 - call the wrapper by its full path, or from a bin directory only the agent's own sessions put on PATH;
 - set `MACEFF_AGENT_HOME_DIR` for the agent's sessions, so its app's state is under its own home and never another agent's.
+
+**What a shared login does not separate.** 0700 and 0600 keep other *users* out, not other processes of the same user. On a login several agents share, every agent and everything else running as that login can read every app's key and cached tokens there, and a running `gh`'s `GH_TOKEN` (through `/proc/<pid>/environ`, or `ps eww`). A key does not expire: whoever reads it holds the installation's reach until the operator revokes it. So on a shared login an agent's app is only as separate as the login. Real separation comes from a container or an account of the agent's own, or from limiting which repositories the app is installed on. Two more consequences: every process `gh` starts inherits `GH_TOKEN`, gh extensions included, so agent images install no gh extensions; and the app's state directory never leaves the host in a MacEff backup (`macf.backup` excludes `.maceff/ghapp/`, and every secret the tools write carries the `MACEFF-SECRET-SENTINEL` marker).
 
 **Falling back is visible, never silent.** Where the app is not installed, the operator's login is used as before, and that is expected. Where the app should have answered and could not (no key, a broken install), both wrappers say so on stderr, because the command then acts in the operator's name. `GH_AS_OPERATOR=1` is the deliberate way to act as the operator for one command.
 
