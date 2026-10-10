@@ -1,7 +1,7 @@
 """Observation and attach (MIS-0002 R81-R102, R111).
 
 Attach: R100 (attach_MUST_resolve_from_pd) and R101 (readout_MUST_say_nothing_attachable).
-Observation acts: R82, R86-R90, R92, R94 and R111. The stream: R83, R84, R85 and R93.
+Observation acts: R82, R86-R90, R92, R94 and R111. The stream: R83, R84, R85 and R93. Presence: R91, R98 and R102.
 """
 import json as _json
 import socket
@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from macf.observe import acts, stream
+from macf.observe import acts, presence, stream
 from macf.utils.attach import CLIENT, NONE, TMUX, plan_attach, readout_line
 
 
@@ -496,3 +496,46 @@ def test_an_end_and_a_new_invitation_the_stream_never_saw_still_end_it(tmp_path)
             _write(path, _said("for the new invitation"))
     sent = _serve_once(path, log, rounds=3, wait=end_and_invite_again)
     assert sent == [{"t": "", "kind": "agent", "text": "before the end"}, {"kind": "ended"}]
+
+
+# ---------------------------------------------------------------------------
+# Presence (R91, R98, R102): one record the call line reads
+# ---------------------------------------------------------------------------
+
+def test_presence_on_call_line():
+    """R91: the line shows each onlooker watching (paused ones marked) and each surface present,
+    derived from the agent's own log at read time."""
+    inv, log = _invited()
+    log.append(acts.pause(THEM, acts.fold(log), at=1300))
+    other = acts.invite(ME, "SecondOnlooker@cd34ef", 0, acts.fold(log), container_of=_host)
+    log.append(other.event)
+    log.append(presence.surface_event(presence.Surface("terminal", keyboard=True, viewer_seen=True)))
+    line = presence.call_line(presence.from_events(log, daemon_alive=True))
+    assert line == "onlookers: OnlookerAgent@ab12cd (paused), SecondOnlooker@cd34ef \u00b7 operator: terminal attached"
+    log.append(acts.end(THEM, "observed", acts.fold(log)))
+    log.append(presence.surface_event(presence.Surface("terminal", keyboard=True, viewer_seen=False)))
+    assert presence.call_line(presence.from_events(log, daemon_alive=True)) == "onlookers: SecondOnlooker@cd34ef"
+
+
+def test_undetectable_viewer_said():
+    """R98: a keyboard surface that cannot see its viewer says enabled, never attached."""
+    rc = presence.Surface("remote-control", keyboard=True, detects_viewer=False, viewer_seen=True)
+    assert presence.surface_state(rc) == presence.ENABLED
+    term_idle = presence.Surface("terminal", keyboard=True, detects_viewer=True, viewer_seen=False)
+    assert presence.surface_state(term_idle) is None
+    assert presence.call_line(presence.build([rc, term_idle], {})) == "operator: remote-control enabled"
+
+
+def test_reachable_state():
+    """R102: a channel the operator answers on is reachable, told apart from attached."""
+    tg = presence.Surface("telegram", keyboard=False)
+    term = presence.Surface("terminal", keyboard=True, viewer_seen=True)
+    assert presence.call_line(presence.build([term, tg], {})) == "operator: terminal attached, telegram reachable"
+
+
+def test_presence_is_unknown_when_the_daemon_is_not_alive():
+    """Nothing outlives its writer: with no live daemon the line says unknown, never a stale
+    'watching' and never 'nobody'; an empty log with a live daemon is nobody."""
+    inv, log = _invited()
+    assert presence.call_line(presence.from_events(log, daemon_alive=False)) == "presence: unknown"
+    assert presence.call_line(presence.from_events([], daemon_alive=True)) == ""
