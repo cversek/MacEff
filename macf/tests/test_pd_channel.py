@@ -17,9 +17,10 @@ import pytest
 
 from macf.channels import channel_tag
 from macf.channels.maceff_channel import (
-    Channel, DaemonRecord, NoticeRecord, build_event, parse_record, record_path,
-    socket_path, verify_peer,
+    Channel, DaemonRecord, NoticeRecord, build_event, parse_record, verify_peer,
 )
+from macf.pd import interface
+from macf.pd.interface import channel_socket, record_path
 from macf.hooks import handle_user_prompt_submit as hook
 from macf.notify.notice import amail_notice
 from macf.notify.session import descends_from, proc_start
@@ -38,12 +39,15 @@ class StubDaemon:
     sends the given lines to the first connection, then closes it."""
 
     def __init__(self, base, lines, record=None):
-        self.path = socket_path(CARD, base)
+        self.path = channel_socket(CARD, base)
         self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.server.bind(str(self.path))
         self.server.listen(1)
-        rec = record if record is not None else {"pid": os.getpid(), "proc_start": proc_start(os.getpid())}
-        record_path(CARD, base).write_text(json.dumps(rec))
+        if record is None:   # the record exactly as a daemon built on the interface writes it
+            text = interface.DaemonRecord(pid=os.getpid(), proc_start=proc_start(os.getpid())).model_dump_json()
+        else:
+            text = json.dumps(record)
+        record_path(CARD, base).write_text(text)
         self.lines = lines
         self.thread = threading.Thread(target=self._serve, daemon=True)
         self.thread.start()
@@ -103,6 +107,19 @@ def test_verify_peer_needs_a_published_record_that_matches(sock_dir):
         good = DaemonRecord(pid=os.getpid(), proc_start=proc_start(os.getpid()))
         assert verify_peer(a, good) is True
         assert verify_peer(a, DaemonRecord(pid=os.getpid() + 1, proc_start=good.proc_start)) is False
+
+
+def test_the_channel_looks_where_the_interface_says_the_daemon_is(tmp_path):
+    """One definition for the daemon and the channel: the socket and the record the channel
+    reads are the interface's, and so is the record's shape, version field included. A copy
+    kept in the channel looked for ``<card>.sock`` while the daemon binds
+    ``<pd_id>.channel.sock``, and refused the daemon's record for its ``version``."""
+    ch = Channel(CARD, base=tmp_path, out=io.StringIO())
+    assert ch.sock_path == interface.channel_socket(CARD, tmp_path)
+    assert ch.rec_path == interface.record_path(CARD, tmp_path)
+    assert DaemonRecord is interface.DaemonRecord
+    written = interface.DaemonRecord(pid=os.getpid(), proc_start="x").model_dump_json()
+    assert DaemonRecord.model_validate_json(written).version == 1
 
 
 # ---- R114: each notice is one event carrying its identifier, source and times -----

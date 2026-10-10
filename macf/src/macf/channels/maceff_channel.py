@@ -32,7 +32,6 @@ Run:  python -m macf.channels.maceff_channel
 """
 import json
 import os
-import re
 import socket
 import sys
 import threading
@@ -45,12 +44,13 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from macf.channels.channel_tag import SERVER_NAME
 from macf.notify.notice import Notice, amail_notice
 from macf.notify.session import verify_incarnation
+# The socket, the record, the runtime directory and the path check are the step-1
+# interface's, one definition for the daemon and every client: a name kept here as well
+# would let the channel look for a socket and a record the daemon never made, and R123's
+# check would then refuse the real daemon.
+from macf.pd.interface import DaemonRecord, channel_socket, check_socket_path, record_path
 from macf.utils.identity import get_agent_identity
-from macf.utils.peercred import SUN_PATH_MAX, peer_credentials
-
-#: The identifier MIS-0002-R06 (pd_identifiers_MUST_use_maceff_pd) gives every socket
-#: and runtime name of a primal daemon.
-PD_IDENTIFIER = "maceff_pd"
+from macf.utils.peercred import peer_credentials
 
 #: Reconnect back-off bounds, in seconds. A daemon that is down is retried for the life
 #: of the session: the channel lives and dies with its session, and the daemon holds
@@ -84,47 +84,6 @@ class NoticeRecord(BaseModel):
     count: Optional[int] = Field(default=None, ge=0)
     read_at: float
     sent_at: float
-
-
-class DaemonRecord(BaseModel):
-    """What the primal daemon publishes about itself beside its socket, so a peer can
-    tell this incarnation of the daemon from anything else that binds the same path."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    pid: int = Field(gt=1)
-    proc_start: str
-
-
-def runtime_dir() -> Path:
-    """The primal daemon's runtime directory: per user, never shared."""
-    base = os.environ.get("XDG_RUNTIME_DIR")
-    if base:
-        return Path(base) / PD_IDENTIFIER
-    return Path(f"/tmp/{PD_IDENTIFIER}-{os.getuid()}")
-
-
-def agent_key(card: str) -> str:
-    """A filesystem-safe name for an agent, from its calling card."""
-    key = re.sub(r"[^A-Za-z0-9@._-]", "_", card)
-    if not key:
-        raise ValueError("empty calling card")
-    return key
-
-
-def socket_path(card: str, base: Optional[Path] = None) -> Path:
-    return (base or runtime_dir()) / f"{agent_key(card)}.sock"
-
-
-def record_path(card: str, base: Optional[Path] = None) -> Path:
-    return (base or runtime_dir()) / f"{agent_key(card)}.json"
-
-
-def check_socket_path(path: Path) -> None:
-    """Refuse a path the kernel would refuse, with a message that says why
-    (MIS-0002-R129 (adapter_MUST_check_socket_path_length) on the daemon side)."""
-    if len(str(path).encode()) > SUN_PATH_MAX:
-        raise OSError(f"socket path {path} is longer than {SUN_PATH_MAX} bytes; use a shorter runtime directory")
 
 
 def build_event(record: NoticeRecord) -> dict:
@@ -182,7 +141,7 @@ class Channel:
     """The server: MCP over stdin and stdout, the daemon over a Unix socket."""
 
     def __init__(self, card: str, base: Optional[Path] = None, out=None):
-        self.sock_path = socket_path(card, base)
+        self.sock_path = channel_socket(card, base)
         self.rec_path = record_path(card, base)
         self.out = out or sys.stdout
         self._out_lock = threading.Lock()
