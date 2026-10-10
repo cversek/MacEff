@@ -26,6 +26,7 @@ import shlex
 import shutil
 import signal
 import subprocess
+from typing import Optional
 import sys
 import threading
 import time
@@ -519,7 +520,7 @@ def _record_keys_sent(text: str, kind: str, tmux_session: str) -> None:
               f"will read as the operator's typing: {e}", file=sys.stderr)
 
 
-def send_slash_to_self(command: str, target: str = "") -> int:
+def send_slash_to_self(command: str, target: str = "", then: Optional[str] = None) -> int:
     """Queue a slash command (e.g. ``/compact``) into this agent's own live CC
     pane via the tmux side channel.
 
@@ -566,7 +567,29 @@ def send_slash_to_self(command: str, target: str = "") -> int:
         # another session, and this log's gates are this session's.
         from .stop_bypass import arm
         arm(command)
+        if then and command.lstrip("/") == "compact":
+            _start_compact_followup(data.get("name") or str(data.get("supervisor_pid")), then)
     return rc
+
+
+def _start_compact_followup(target: str, text: str) -> None:
+    """Start the detached follower that types *text* once the compaction has finished.
+
+    Self-resolved path only, like the Stop passage above: the follower reads THIS agent's
+    event log, so it must type into this agent's pane. It outlives the turn that started
+    it (start_new_session), because the /compact it waits for runs only after that turn.
+    """
+    import time as _time
+    argv = [sys.executable, "-m", "macf.compact_followup", target, repr(_time.time()),
+            "--text", text]
+    try:
+        subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+        print("[inject] After the compaction, a recovery prompt will be typed into this pane "
+              "(skipped if something else wakes the session first).")
+    except OSError as e:
+        print(f"[inject] Could not start the recovery follow-up ({e}); after the compaction, "
+              f"this session waits until something wakes it.", file=sys.stderr)
 
 
 def send_keys(target: str, keys: list, enter: bool = True, kind: str = "send-keys") -> int:

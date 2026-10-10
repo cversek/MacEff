@@ -643,6 +643,8 @@ The CL15 condition and the reflection sizes (5k tokens on a 1M window, 2k on 200
 2. the operator's `/compact`, when the operator is present;
 3. otherwise auto-compaction, which AUTO_MODE turns on: keep working productively until it fires.
 
+**A compaction opens no turn.** Nothing a SessionStart hook returns can start one, so an agent whose last act was `inject compact` would sit at an empty input box after the compaction, its recovery unread, until something else woke it. `inject compact` therefore starts a follower that types one short recovery prompt into the same pane, in the framework's voice, once the compaction is in the agent's event log and the session has settled. It types nothing if a prompt has already started after the compaction (a mail clock, a schedule or the operator got there first), and gives up after half an hour if no compaction comes. Its outcome is a `compact_followup` event. `--then TEXT` replaces the prompt; `--no-then` turns it off, for an operator who will be at the keyboard when the compaction ends.
+
 Do NOT try to trigger compaction artificially by consuming tokens with filler. Recovery reads the checkpoint and reflection from disk, and the task notes carry the rest.
 
 ### 5.5 A Prompt Nobody Is Answering
