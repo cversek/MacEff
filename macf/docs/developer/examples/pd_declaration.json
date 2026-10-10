@@ -10,7 +10,9 @@
       "account": "example",
       "restart": "on-failure",
       "liveness_interval_s": 60,
-      "memory_limit_mb": 4096
+      "memory_limit_mb": 4096,
+      "kind": "session",
+      "stop_grace_s": 30
     },
     {
       "name": "transcript-monitor",
@@ -44,8 +46,10 @@
       "liveness_interval_s": 60,
       "memory_limit_mb": 256,
       "environment": {
-        "PYTHONUNBUFFERED": "1"
-      }
+        "PYTHONUNBUFFERED": "1",
+        "MACEFF_AGENT_HOME_DIR": "{agent_home}"
+      },
+      "stop_grace_s": 60
     },
     {
       "name": "amail-receiver",
@@ -73,7 +77,30 @@
         }
       },
       "target": "isolated",
-      "prompt_file": "agent/private/schedules/morning-sweep.md"
+      "run": {
+        "prompt_file": "agent/private/schedules/morning-sweep.md",
+        "allowed_tools": [
+          "Bash(gh pr list:*)",
+          "Bash(gh pr view:*)"
+        ]
+      },
+      "timeout_s": 1800
+    },
+    {
+      "name": "hourly-pr-check",
+      "cron": "17 * * * *",
+      "missed_run": {
+        "kind": "skip"
+      },
+      "target": "isolated",
+      "run": {
+        "command": [
+          "python3",
+          "{agent_home}/agent/private/tools/new_prs.py"
+        ],
+        "wake_when": "stdout"
+      },
+      "timeout_s": 120
     }
   ],
   "operator_channels": [
@@ -84,5 +111,14 @@
       "start": "23:00",
       "end": "06:30"
     }
-  ]
+  ],
+  "notice_routes": {
+    "amail": "agent",
+    "fleet_watch": "operator",
+    "login_expired": "both"
+  },
+  "keep_harness_idle_compaction": false,
+  "wind_down": {
+    "skill": "maceff-full-wind-down"
+  }
 }
