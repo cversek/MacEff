@@ -184,7 +184,8 @@ def record_user_activity_from_payload(prompt: str, transcript_path: Optional[str
         return False
     if scheduled_prompt(prompt, transcript_path):
         return False
-    if typed_by_framework(prompt):
+    # One keystroke record per arrival, with this session's hook as the consumer.
+    if typed_by_framework(prompt, consumer=f"prompt_hook:{transcript_path or ''}"):
         return False
 
     channel_source = opening_channel_source(prompt)

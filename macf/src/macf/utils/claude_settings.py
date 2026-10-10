@@ -670,3 +670,59 @@ def toggle_write_ask_for_auto_mode(enable_auto: bool, project_root: Optional[Pat
     except (OSError, json.JSONDecodeError, TypeError, KeyError) as e:
         print(f"⚠️ MACF: Settings write failed (toggle_write_ask): {e}", file=sys.stderr)
         return False
+
+
+# Claude Code compacts an idle session on its own, about 54 minutes after the last
+# request once the context passes its threshold. From 2.1.290 the settings key
+# ``idleCompaction`` set to false stops that alone; compaction at the context limit
+# stays on. Setting the key true does not turn the feature on, so "on" means no key.
+# MIS-0002-R126 (adapter_MUST_turn_off_harness_idle_compaction).
+IDLE_COMPACTION_KEY = "idleCompaction"
+IDLE_COMPACTION_MIN_VERSION = (2, 1, 290)
+
+
+def _version_tuple(version: str) -> tuple:
+    """'2.1.296 (Claude Code)' -> (2, 1, 296)."""
+    head = version.strip().split()[0] if version.strip() else ""
+    try:
+        return tuple(int(part) for part in head.split("."))
+    except ValueError:
+        raise ValueError(f"cannot read a Claude Code version from {version!r}")
+
+
+def idle_compaction_status(project_root: Optional[Path] = None) -> dict:
+    """The agent's idle-compaction setting: off, or the client default."""
+    settings, settings_path = _read_settings(project_root)
+    value = settings.get(IDLE_COMPACTION_KEY)
+    return {
+        "state": "off" if value is False else "client default",
+        "settings_path": str(settings_path),
+    }
+
+
+def set_idle_compaction(enabled: bool, client_version: str,
+                        project_root: Optional[Path] = None, keep: bool = False) -> dict:
+    """Turn the client's idle compaction off, or back to its default.
+
+    Refuses on a client older than 2.1.290, which ignores the key: writing it there
+    would claim a protection the session does not have. With *keep* (the agent's
+    declaration keeps idle compaction) nothing is written.
+    """
+    if _version_tuple(client_version) < IDLE_COMPACTION_MIN_VERSION:
+        raise ValueError(
+            f"Claude Code {client_version.split()[0]} has no idleCompaction setting; "
+            f"it needs {'.'.join(map(str, IDLE_COMPACTION_MIN_VERSION))} or later")
+    settings, settings_path = _read_settings(project_root)
+    before = settings.get(IDLE_COMPACTION_KEY)
+    if keep:
+        return {"changed": False, "settings_path": str(settings_path), "reason": "kept by declaration"}
+    if enabled:
+        settings.pop(IDLE_COMPACTION_KEY, None)
+    else:
+        settings[IDLE_COMPACTION_KEY] = False
+    after = settings.get(IDLE_COMPACTION_KEY)
+    if after != before or (IDLE_COMPACTION_KEY in settings) != (before is not None):
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_settings(settings, settings_path)
+        return {"changed": True, "settings_path": str(settings_path)}
+    return {"changed": False, "settings_path": str(settings_path)}
