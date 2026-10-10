@@ -91,12 +91,12 @@ def _invited(lease_until=None, now=None):
 
 def test_onlooker_needs_invitation():
     """R82: nothing is admitted before the invitation, and only with its own secret after."""
-    assert acts.admit(THEM, "anything", acts.fold([])) is None
+    assert acts.admit(THEM, "anything", acts.fold([]), now=1500.0) is None
     inv, log = _invited()
     state = acts.fold(log)
-    assert acts.admit(THEM, inv.secret, state).stream_from == 1200
-    assert acts.admit(THEM, "a guess", state) is None
-    assert acts.admit("SomeoneElse@abcdef", inv.secret, state) is None
+    assert acts.admit(THEM, inv.secret, state, now=1500.0).stream_from == 1200
+    assert acts.admit(THEM, "a guess", state, now=1500.0) is None
+    assert acts.admit("SomeoneElse@abcdef", inv.secret, state, now=1500.0) is None
 
 
 def test_observation_events():
@@ -119,7 +119,7 @@ def test_pause_resume():
     inv, log = _invited()
     log.append(acts.pause(THEM, acts.fold(log)))
     state = acts.fold(log)
-    assert state[THEM].status == acts.PAUSED and acts.admit(THEM, inv.secret, state) is not None
+    assert state[THEM].status == acts.PAUSED and acts.admit(THEM, inv.secret, state, now=1500.0) is not None
     with pytest.raises(acts.ActRefused):
         acts.pause(THEM, state)
     log.append(acts.resume(THEM, state))
@@ -132,7 +132,7 @@ def test_either_party_ends():
         inv, log = _invited()
         log.append(acts.end(THEM, who, acts.fold(log)))
         state = acts.fold(log)
-        assert state[THEM].ended_by == who and acts.admit(THEM, inv.secret, state) is None
+        assert state[THEM].ended_by == who and acts.admit(THEM, inv.secret, state, now=1500.0) is None
 
 
 def test_operator_ends():
@@ -151,7 +151,7 @@ def test_lease_ends_invitation():
     owed = acts.expired(acts.fold(log), now=2000.0)
     log.extend(owed)
     state = acts.fold(log)
-    assert state[THEM].status == acts.ENDED and acts.admit(THEM, inv.secret, state) is None
+    assert state[THEM].status == acts.ENDED and acts.admit(THEM, inv.secret, state, now=1500.0) is None
     with pytest.raises(acts.ActRefused):
         acts.invite(ME, THEM, 0, {}, container_of=_host, lease_until=5.0, now=10.0)
 
@@ -198,3 +198,12 @@ def test_a_live_observation_is_not_invited_twice():
     again = acts.invite(ME, THEM, 5, acts.fold(log), container_of=_host)
     log.append(again.event)
     assert acts.fold(log)[THEM].status == acts.ACTIVE and acts.fold(log)[THEM].stream_from == 5
+
+
+def test_a_lapsed_lease_is_not_admitted_before_its_end_is_logged():
+    """R88: the lease ends the invitation at its time, not at the next sweep."""
+    inv, log = _invited(lease_until=2000.0, now=1000.0)
+    state = acts.fold(log)
+    assert state[THEM].status == acts.ACTIVE  # no end event yet
+    assert acts.admit(THEM, inv.secret, state, now=1999.0) is not None
+    assert acts.admit(THEM, inv.secret, state, now=2000.0) is None

@@ -6,6 +6,11 @@ anywhere else, so it is whatever the log says. Each function here checks one act
 returns the event to append; ``fold`` reads a log back. Nothing here appends, opens a
 socket or reads the clock: the caller passes ``now``.
 
+Who is asking is the caller's to establish. ``end`` takes ``ended_by`` as given, and the
+caller derives it from the transport the act arrived on: the observed agent's own control
+socket, the onlooker presenting its secret, the operator's surface. Never from a field in
+the request, or an onlooker could end an observation as the operator.
+
 Binding an onlooker. On a shared login every agent has the same uid, so a socket peer's
 credentials cannot say which agent is reading a stream. Each invitation therefore
 carries a secret, delivered to the onlooker through its own channel; the stream admits
@@ -158,14 +163,22 @@ def expired(state: Dict[str, Observation], now: float) -> list:
             if o.status != ENDED and o.lease_until is not None and o.lease_until <= now]
 
 
-def admit(onlooker: str, presented: str, state: Dict[str, Observation]) -> Optional[Observation]:
+def lapsed(o: Observation, now: float) -> bool:
+    """True once the observation's lease has run out, whether or not its end is logged yet."""
+    return o.lease_until is not None and o.lease_until <= now
+
+
+def admit(onlooker: str, presented: str, state: Dict[str, Observation], *, now: float) -> Optional[Observation]:
     """The observation a stream may serve to whoever presents ``presented`` for ``onlooker``.
 
-    None unless the onlooker was invited, the observation has not ended, and the secret
-    matches. A paused observation is admitted, so the onlooker sees that it is paused (R93).
+    None unless the onlooker was invited, the observation has not ended, its lease has not
+    run out at ``now``, and the secret matches. The lease is checked here, not only when a
+    sweep logs its end, because the lease ends the invitation itself (R88). A stream checks
+    the same before every send. A paused observation is admitted, so the onlooker sees that
+    it is paused (R93).
     """
     o = state.get(onlooker)
-    if o is None or o.status == ENDED or not isinstance(presented, str):
+    if o is None or o.status == ENDED or not isinstance(presented, str) or lapsed(o, now):
         return None
     if not hmac.compare_digest(_digest(presented), o.secret_sha256):
         return None
