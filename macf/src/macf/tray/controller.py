@@ -2,7 +2,7 @@
 what the operator asks of them. No desktop code here; ``app`` draws what this returns.
 
 Installed means rendered for the outer tier. On macOS that is a per-user LaunchAgent
-labelled ``maceff_pd.<id>``, whose program names the agent's home with ``--agent-home``.
+labelled ``maceff_pd.<id>``, whose program is ``python -m macf.pd <agent home>``.
 The card comes from the identity file in that home, never from the label, a socket name
 or the environment (MIS-0002-R69). Every request goes to that agent's own control socket
 (R70), and an answer counts only from the process the daemon's record names (R123); a
@@ -45,11 +45,20 @@ def installed_homes(agents_dir: Optional[Path] = None) -> List[Path]:
         except (OSError, plistlib.InvalidFileException, ValueError) as e:
             print(f"⚠️ MACF tray: unreadable LaunchAgent {plist.name}: {e}", file=sys.stderr)
             continue
-        if "--agent-home" in argv[:-1]:
-            homes.append(Path(argv[argv.index("--agent-home") + 1]))
+        home = _agent_home_arg(argv)
+        if home:
+            homes.append(Path(home))
         else:
-            print(f"⚠️ MACF tray: {plist.name} names no --agent-home; skipped", file=sys.stderr)
+            print(f"⚠️ MACF tray: {plist.name} runs no 'macf.pd <agent home>'; skipped", file=sys.stderr)
     return homes
+
+
+def _agent_home_arg(argv: List[str]) -> Optional[str]:
+    """The agent home in ``... -m macf.pd <agent home>``, the interface's command line."""
+    for i in range(len(argv) - 2):
+        if argv[i] == "-m" and argv[i + 1] == "macf.pd" and not argv[i + 2].startswith("-"):
+            return argv[i + 2]
+    return None
 
 
 @dataclass(frozen=True)

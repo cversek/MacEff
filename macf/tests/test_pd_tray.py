@@ -190,9 +190,9 @@ def test_installed_homes_come_from_the_launch_agents(tmp_path):
     from macf.tray.controller import installed_homes
     (tmp_path / "maceff_pd.IraMacEff_ee9a78.plist").write_bytes(plistlib.dumps(
         {"Label": "maceff_pd.IraMacEff_ee9a78",
-         "ProgramArguments": ["/usr/bin/python3", "-m", "macf.pd", "--agent-home", "/Users/x/IRA"]}))
+         "ProgramArguments": ["/usr/bin/python3", "-m", "macf.pd", "/Users/x/IRA"]}))
     (tmp_path / "maceff_pd.Odd_000000.plist").write_bytes(plistlib.dumps({"ProgramArguments": ["x"]}))
-    (tmp_path / "com.other.plist").write_bytes(plistlib.dumps({"ProgramArguments": ["--agent-home", "/no"]}))
+    (tmp_path / "com.other.plist").write_bytes(plistlib.dumps({"ProgramArguments": ["/usr/bin/python3", "-m", "macf.pd", "/no"]}))
     assert [str(h) for h in installed_homes(tmp_path)] == ["/Users/x/IRA"]
 
 
