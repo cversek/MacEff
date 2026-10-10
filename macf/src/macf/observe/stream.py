@@ -5,9 +5,14 @@ MIS-0002-R84 (stream_MUST_start_at_invitation): the stream reads the transcript 
 byte offset recorded with the invitation, so nothing from before it can appear.
 MIS-0002-R85 (stream_MUST_stop_at_end): the observation's state is read before every
 send, so an ending, or a lease that runs out, stops the stream before the next frame.
-MIS-0002-R93 (onlooker_MUST_see_pause): while paused, the onlooker gets one frame saying
-the owner paused it, and nothing else until the owner resumes. What was written during
-the pause is never sent: the stream resumes from the transcript's end (R92).
+MIS-0002-R93 (onlooker_MUST_see_pause): a pause records the transcript offset where it
+began, and the resume where it ended. A row that starts inside that range is never sent
+(R92), however the stream's reads fall around the pause. When the stream reaches a pause
+it sends one frame saying the owner paused it, and one saying so when it passes the end.
+A pause covers what is written from its offset on; it cannot take back what was printed
+before it, which the onlooker may already have.
+MIS-0002-R85 also binds the stream to its own invitation: an end and a new invitation for
+the same onlooker, both between two reads, still end it, because the secret differs.
 MIS-0002-R83 (onlooker_MUST-NOT_type): after the one line that admits it, the stream
 never reads from the onlooker again. There is no input path to close.
 
@@ -24,7 +29,7 @@ import json
 import re
 from typing import Callable, Dict, Iterator, Optional, Tuple
 
-from .acts import ACTIVE, ENDED, PAUSED, Observation, admit, lapsed
+from .acts import ENDED, Observation, admit, lapsed
 
 #: The handshake is one short line; anything longer is refused unread.
 MAX_HANDSHAKE = 4096
@@ -113,46 +118,66 @@ def handshake(line: bytes, state: Dict[str, Observation], now: float) -> Tuple[O
     return (o, "") if o is not None else (None, "not admitted")
 
 
-def serve(send: Callable[[dict], None], onlooker: str, read_state: Callable[[], Dict[str, Observation]],
+def withheld(pos: int, o: Observation) -> Optional[Tuple[int, Optional[int]]]:
+    """The pause that withholds the transcript row starting at byte ``pos``, or None."""
+    for began, ended in o.pauses:
+        if began <= pos and (ended is None or pos < ended):
+            return began, ended
+    return None
+
+
+def _over(o: Optional[Observation], admitted: Observation, now: float) -> bool:
+    """Whether the observation this stream was admitted to has ended, by any route.
+
+    A new invitation for the same onlooker is another observation with its own secret, so
+    a stream that missed an end because a re-invitation followed it still stops.
+    """
+    return (o is None or o.status == ENDED or lapsed(o, now)
+            or o.secret_sha256 != admitted.secret_sha256)
+
+
+def _mark(send: Callable[[dict], None], hold: Optional[Tuple[int, Optional[int]]], paused_said: bool) -> bool:
+    """Tell the onlooker when the stream reaches a pause and when it passes one (R93)."""
+    if hold is not None and not paused_said:
+        send({"kind": "paused", "by": "the observed agent"})
+    elif hold is None and paused_said:
+        send({"kind": "resumed"})
+    return hold is not None
+
+
+def serve(send: Callable[[dict], None], admitted: Observation, read_state: Callable[[], Dict[str, Observation]],
           read_rows: Callable[[int], Iterator[Tuple[int, dict]]], now: Callable[[], float],
-          wait: Callable[[], None], start: int, rounds: Optional[int] = None) -> str:
+          wait: Callable[[], None], rounds: Optional[int] = None) -> str:
     """Send frames to one admitted onlooker until its observation ends. Returns why it stopped.
 
     Takes no input from the onlooker: ``send`` is its only contact. The state is read
-    again before every frame, so an end or a lapsed lease stops the stream at once.
+    again before every frame, so an end or a lapsed lease stops the stream at once. A row
+    goes out only if no pause withholds the offset it starts at, so nothing written during
+    a pause is sent, whether or not the stream ever read the observation as paused (R92).
     """
-    offset = start
+    onlooker, offset = admitted.onlooker, admitted.stream_from
     paused_said = False
     n = 0
     while rounds is None or n < rounds:
         n += 1
         o = read_state().get(onlooker)
-        if o is None or o.status == ENDED or lapsed(o, now()):
+        if _over(o, admitted, now()):
             send({"kind": "ended"})
             return "ended"
-        if o.status == PAUSED:
-            if not paused_said:
-                send({"kind": "paused", "by": "the observed agent"})
-                paused_said = True
-            wait()
-            continue
-        if paused_said:
-            # Nothing written while the stream was paused is ever sent: the pause is the
-            # owner's protection for other people's records and credentials (R92), so the
-            # stream resumes from the transcript's end, not from where it stopped. Rows
-            # from just before the pause that had not gone out yet are skipped too, which
-            # errs toward privacy.
-            for nxt, _row in read_rows(offset):
-                offset = nxt
-            send({"kind": "resumed"})
-            paused_said = False
+        paused_said = _mark(send, withheld(offset, o), paused_said)
         for nxt, row in read_rows(offset):
             o = read_state().get(onlooker)
-            if o is None or o.status != ACTIVE or lapsed(o, now()):
-                break
-            for frame in visible(row):
-                send(frame)
-            offset = nxt
+            if _over(o, admitted, now()):
+                send({"kind": "ended"})
+                return "ended"
+            hold = withheld(offset, o)
+            paused_said = _mark(send, hold, paused_said)
+            if hold is None:
+                for frame in visible(row):
+                    send(frame)
+            elif hold[1] is None:
+                break                # a pause still holds here: wait for its resume
+            offset = nxt             # sent, or written during a pause and passed over
         wait()
     return "rounds"
 
@@ -176,4 +201,4 @@ def serve_connection(sock, state_reader, rows, clock, wait, poll_rounds=None) ->
     def send(frame):
         sock.sendall(json.dumps(frame).encode() + b"\n")
 
-    return serve(send, o.onlooker, state_reader, rows, clock, wait, o.stream_from, poll_rounds)
+    return serve(send, o, state_reader, rows, clock, wait, poll_rounds)
