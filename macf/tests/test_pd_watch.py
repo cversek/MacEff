@@ -222,5 +222,9 @@ def test_the_default_probe_compares_starts_as_the_interface_says(tmp_path):
     me = os.getpid()
     _record(tmp_path / "run", pid=me, start=proc_start(me))
     assert watch.check_daemon(CARD, tmp_path / "run", watch.verify_incarnation).verdict == "ALIVE"
-    _record(tmp_path / "run", pid=me, start=str(int(proc_start(me)) + 1))
+    # A wrong start in the platform's own form: pid 1's, real on Linux and macOS and far
+    # older than this process (adding 1 to ours only works for Linux's clock ticks).
+    wrong = proc_start(1)
+    assert wrong and wrong != proc_start(me)
+    _record(tmp_path / "run", pid=me, start=wrong)
     assert watch.check_daemon(CARD, tmp_path / "run", watch.verify_incarnation).verdict == "GONE"
