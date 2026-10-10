@@ -255,12 +255,16 @@ def replay_scope_events(events) -> Dict[str, str]:
         if event_type == "scope_cleared":
             state.clear()
         elif event_type == "scope_activated":
-            # Replace semantics: scope_activated also resets prior set
-            # (current behavior — set_scope is replace-style via scope set CLI)
-            # We do NOT clear here because scope set's clear is separate; the
-            # CLI orchestrates clear+activate. So scope_activated is purely additive.
+            # Additive: scope set's clear is a separate event. A task already
+            # PAUSED stays paused: a pause carries a justification (it waits on
+            # something outside the agent), and re-listing the task to add others
+            # beside it is not an answer to that wait. Before this, every
+            # `scope set` silently un-paused, so an agent re-paused by hand after
+            # each one or the stop gate nagged it about work it could not do.
+            # Un-pausing stays an explicit act: scope_unpaused.
             for tid in data.get("task_ids", []):
-                state[str(tid)] = "active"
+                if state.get(str(tid)) != "paused":
+                    state[str(tid)] = "active"
         elif event_type == "scope_added":
             for tid in data.get("task_ids", []):
                 # Only add if not already present (don't reset paused→active)
