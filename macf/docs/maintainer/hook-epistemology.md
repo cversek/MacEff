@@ -229,7 +229,7 @@ Newer clients also send `prompt_id`, `effort`, `background_tasks` and `session_c
 
 ### PreCompact
 
-PreCompact fires just before context compaction occurs, giving you a last chance to preserve state or notify the user. The `trigger` field indicates whether compaction was user-initiated (`/compact`) or automatic (context window full). Note that PreCompact output renders verbatim, not as formatted markdown.
+PreCompact fires just before context compaction occurs, giving you a last chance to preserve state or notify the user. The `trigger` field says whether the compaction is driven by context size (`"auto"`) or not (`"manual"`). A `/compact` sends `"manual"`, but it is not the only source: on 2.1.289 the client's own idle compaction arrives as `"manual"` too, and later clients may label it differently. So `"manual"` does not prove that a person asked. The sign of an idle compaction is the notice the client writes into the transcript after it, "Compacted while idle, before the prompt cache expired". A PreCompact is also not a promise that a compaction follows. Note that PreCompact output renders verbatim, not as formatted markdown.
 
 **Trigger**: Before automatic or manual compaction
 
@@ -238,13 +238,16 @@ PreCompact fires just before context compaction occurs, giving you a last chance
 | `session_id` | string | Session identifier | ✅ Official docs |
 | `transcript_path` | string | Path to transcript | ✅ Official docs |
 | `trigger` | string | How compaction was triggered (see values below) | ✅ Official docs |
+| `custom_instructions` | string or null | Instructions given to the compaction; `null` when none | ✅ Empirical |
+
+There is no `source` field on this event (that one belongs to SessionStart).
 
 #### `trigger` Field Values
 
 | Value | Description | Source |
 |-------|-------------|--------|
-| `"manual"` | User invoked `/compact` command | ✅ Official docs |
-| `"auto"` | Auto-compact due to full context window | ✅ Official docs |
+| `"manual"` | Not driven by context size: a `/compact`, and on 2.1.289 the client's own idle compaction | ✅ Official docs (`/compact`); ✅ Empirical (idle, 2.1.289) |
+| `"auto"` | Driven by context size (the context window is full or nearly so) | ✅ Official docs |
 
 ---
 

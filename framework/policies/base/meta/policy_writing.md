@@ -229,12 +229,12 @@ Treat policies as stable interfaces with evolving implementation:
 
 **Examples**:
 
-**Skills** (maceff-todo-restoration, maceff-delegation):
+**Skills** (maceff-sprint, maceff-delegation):
 ```markdown
-✅ "What backup protocol does the policy specify?"
-✅ "What recovery steps does the policy document?"
-✅ "Where does the policy specify backup location?"
-❌ "What does §9 say about backups?"
+✅ "What does the policy require a sprint's scope to include?"
+✅ "How does the policy say incomplete scope crosses a compaction?"
+✅ "Which pause justifications does the policy accept?"
+❌ "What does §3.3 say about compaction?"
 ```
 
 **Agent Definitions** (PolicyWriter, DevOpsEng):
