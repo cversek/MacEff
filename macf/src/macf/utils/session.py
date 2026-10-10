@@ -7,7 +7,7 @@ import os
 import sys
 from pathlib import Path
 from typing import Optional
-from .paths import find_project_root
+from .paths import cc_project_dir, find_project_root
 # Events are sole source of truth - state file reads removed
 
 # The missing-session_started notice is said once per process. A long-running
@@ -82,36 +82,28 @@ def _get_session_id_from_mtime() -> str:
     not depend on glob / iterdir ordering (which is filesystem-dependent and
     was a source of flaky behaviour).
 
-    Only this project's transcripts are candidates. Another project's newest
-    transcript belongs to another conversation, and where agents share a login,
-    possibly to another agent. A process with no session of its own (a daemon,
-    a scheduled command, a test) would otherwise put that session's id on
-    everything it records. "unknown" is the honest answer.
+    Only this project's transcripts are candidates: the one directory Claude
+    Code keeps for this project root, not every directory whose name contains
+    the project's name, which for an agent home is each repository under it.
+    Another project's newest transcript belongs to another conversation, and
+    where agents share a login, possibly to another agent. A process with no
+    session of its own (a daemon, a scheduled command, a test) would otherwise
+    put that session's id on everything it records. "unknown" is the honest
+    answer.
 
     Returns:
         Session ID string or "unknown" if not found
     """
-    projects_dir = Path.home() / ".claude" / "projects"
-
-    if not projects_dir.exists():
+    project_dir = cc_project_dir(find_project_root())
+    if not project_dir.is_dir():
         return "unknown"
-
-    def _newest_stem(dirs) -> Optional[str]:
-        candidates = []
-        for project_dir in dirs:
-            if project_dir.is_dir():
-                candidates.extend(project_dir.glob("*.jsonl"))
-        if not candidates:
-            return None
-        # Global newest by mtime; filename tiebreaks equal mtimes so the
-        # result is deterministic regardless of iteration order.
-        newest = max(candidates, key=lambda p: (p.stat().st_mtime, p.name))
-        return newest.stem
-
-    # Project directories whose name contains this project's name; never all
-    # projects (see the docstring).
-    project_name = find_project_root().name
-    return _newest_stem(projects_dir.glob(f"*{project_name}*")) or "unknown"
+    candidates = list(project_dir.glob("*.jsonl"))
+    if not candidates:
+        return "unknown"
+    # Newest by mtime; the filename tiebreaks equal mtimes so the result is
+    # deterministic regardless of iteration order.
+    newest = max(candidates, key=lambda p: (p.stat().st_mtime, p.name))
+    return newest.stem
 
 def get_last_user_prompt_uuid(session_id: Optional[str] = None,
                               transcript_path: Optional[str] = None) -> Optional[str]:
