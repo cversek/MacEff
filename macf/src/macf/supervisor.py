@@ -576,7 +576,7 @@ def send_slash_to_self(command: str, target: str = "", then: Optional[str] = Non
             # (MIS-0002-R127 (harness_compaction_MUST_be_recorded)).
             try:
                 from .agent_events_log import append_event
-                append_event("compaction_asked", {"asker": "agent", "via": "macf_tools inject"})
+                append_event("compaction_asked", {"asker": "wind_down", "via": "macf_tools inject"})
             except (OSError, ValueError) as e:
                 print(f"⚠️ MACF: could not record the compaction ask: {e}", file=sys.stderr)
         if then and command.lstrip("/") == "compact":

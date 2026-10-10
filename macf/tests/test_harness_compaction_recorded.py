@@ -50,7 +50,7 @@ def test_both_detectors_run_by_default():
     assert detect_compaction_ask in daemon.DEFAULT_DETECTORS
 
 
-def test_inject_compact_records_the_agents_ask(isolated_events_log):
+def test_inject_compact_records_a_wind_down_ask(isolated_events_log):
     from macf import supervisor
     with patch.object(supervisor, "_find_own_supervisor", return_value={"name": "agent-x"}), \
          patch.object(supervisor, "send_keys", return_value=0), \
@@ -58,5 +58,5 @@ def test_inject_compact_records_the_agents_ask(isolated_events_log):
         assert supervisor.send_slash_to_self("compact") == 0
     events = [json.loads(line) for line in isolated_events_log.read_text().splitlines()]
     asks = [e for e in events if e["event"] == "compaction_asked"]
-    assert asks and asks[-1]["data"]["asker"] == "agent"
+    assert asks and asks[-1]["data"]["asker"] == "wind_down"
     assert asks[-1]["data"]["via"] == "macf_tools inject"
