@@ -354,8 +354,9 @@ def isolated_task_store(tmp_path, monkeypatch):
 class LiveStoreTouched(UserWarning):
     """The real task store changed while the suite ran.
 
-    Its own category so it can be filtered to an error (`-W error::...`) by
-    anyone who wants the CI behaviour locally.
+    Its own category, so the warnings summary names it. A `-W` filter cannot
+    reach it: pytest parses `-W` before this conftest is imported, and fails
+    with "No module named 'conftest'". Set `CI` to get the CI behaviour locally.
     """
 
 
@@ -458,6 +459,90 @@ def live_task_store_is_left_alone():
         LiveStoreTouched,
         stacklevel=1,
     )
+
+
+class LiveEventLogTouched(UserWarning):
+    """A test module changed the event log of the environment the suite runs in.
+
+    Its own category, like LiveStoreTouched, so the warnings summary names it.
+    Set `CI` to make it an error locally, as it is in CI.
+    """
+
+
+def _suite_event_log():
+    """The event log named by the environment the suite runs in, or None if unresolved."""
+    try:
+        from macf.agent_events_log import get_log_path
+        return get_log_path()
+    except (OSError, ValueError, ImportError) as e:
+        print(f"⚠️ MACF: live event log guard could not resolve the log: {e}",
+              file=sys.stderr)
+        return None
+
+
+# Resolved at import, before any fixture has run, so this is the environment's own
+# log and not the isolated one each test gets from isolated_events_log.
+_SUITE_EVENT_LOG = _suite_event_log()
+
+# Inside a live client session the client's own hooks and status line append to
+# that same log all through the run, so a change in it says nothing about the
+# tests. The guard is off there. Run the suite isolated (agent home and project
+# directory at a scratch git repository, no CLAUDE_* session variables) to have
+# it on.
+_LIVE_CLIENT = bool(os.environ.get("CLAUDE_PID"))
+
+
+def pytest_report_header(config):
+    """Say what the event log guard is watching, so a quiet run is not read as a clean one."""
+    if _SUITE_EVENT_LOG is None:
+        return "live event log guard: off (no log resolved)"
+    if _LIVE_CLIENT:
+        return ("live event log guard: off inside a live client session; "
+                "run the suite isolated to turn it on")
+    return (f"live event log guard: on, watching {_SUITE_EVENT_LOG} "
+            "(an error in CI, a warning elsewhere)")
+
+
+@pytest.fixture(scope="module", autouse=True)
+def live_event_log_is_left_alone(request):
+    """Fail the module whose tests or fixtures wrote to the environment's own event log.
+
+    isolated_events_log points every test at a log of its own, and that should
+    make this impossible. It did not. A module-scoped fixture that warmed up the
+    real session-start hook ran before any function-scoped isolation existed,
+    with the caller's environment and working directory, so every run of the
+    suite inside an agent's session wrote session and command events into that
+    agent's own log. The modes looked fine, and nothing noticed.
+
+    Module scope is the point. Fixtures of a wider scope are set up first, so a
+    function-scoped guard opens its window after a module's own warm-up has
+    already written, and sees nothing. At module scope the window covers the
+    module's fixtures and its tests, and the failure names the module.
+
+    As with the task store above, it is strict only where nothing else can
+    write: in CI. Elsewhere it warns, because an agent's own daemons may write
+    to its log while the suite runs. Inside a live client session it is off.
+    """
+    log = _SUITE_EVENT_LOG
+    if _LIVE_CLIENT or log is None:
+        yield
+        return
+
+    before = log.stat().st_size if log.exists() else 0
+    yield
+    after = log.stat().st_size if log.exists() else 0
+    if after == before:
+        return
+
+    detail = (
+        f"{request.module.__name__} changed {log} from {before} to {after} bytes. "
+        "That is the event log of the environment the suite runs in: in an "
+        "agent's session it is that agent's own record, and its modes are read "
+        "from it, so no test may write there."
+    )
+    if os.environ.get("CI"):
+        pytest.fail(detail, pytrace=False)
+    warnings.warn(detail, LiveEventLogTouched, stacklevel=1)
 
 
 @pytest.fixture
