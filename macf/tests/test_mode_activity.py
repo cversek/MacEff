@@ -260,7 +260,8 @@ def test_a_queued_channel_message_takes_its_server_from_the_delivery(monkeypatch
 
 ACTIVITY_DETECTORS = {"detect_user_activity", "detect_permission_denial",
                       "detect_dialog_answer", "detect_mid_turn_enqueue"}
-OTHER_DETECTORS = {"detect_compact_boundary", "detect_api_error", "detect_context_collapse"}
+OTHER_DETECTORS = {"detect_compact_boundary", "detect_api_error", "detect_context_collapse",
+                   "detect_harness_compaction", "detect_compaction_ask"}
 
 
 def test_the_audit_reaches_every_detector():
