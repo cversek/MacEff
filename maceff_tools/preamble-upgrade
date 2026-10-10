@@ -1,33 +1,111 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# Upgrade the framework preamble of a container's agents (user content above the boundary is kept).
+#
+#   preamble-upgrade <username>                       one agent; no confirmation
+#   preamble-upgrade --all-agents                     every MacEff agent the deployment declares;
+#                                                     asks for confirmation at a terminal
+#   preamble-upgrade --all-agents --confirm-all-agents   the same, confirmed, for automation
+#
+# This used to upgrade ONE agent per call, defaulting to a username from common.sh, and said
+# nothing about the agents it skipped. On a container with several agents a partial upgrade
+# looked exactly like a complete one (issue #388). Now the agents come from what the deployment
+# declares (/etc/maceff/agents.yaml, read through MacEff's own model so default usernames and
+# flavors resolve as provisioning resolves them), each gets one verdict line, a failure on one
+# does not stop the rest, and the breadth of "every agent" is what asks for confirmation.
+# A vanilla account receives no MacEff footprint and is never upgraded.
+set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-
-# Source common config for PA username
+# shellcheck source=common.sh
 source "${SCRIPT_DIR}/common.sh"
-
-# Accept optional PA username argument
-PA_USER="${1:-${PA}}"
 CONTAINER="${CONTAINER_NAME:-maceff-sandbox}"
 
-if ! docker inspect -f '{{.State.Running}}' "$CONTAINER" >/dev/null 2>&1; then
-  echo "error: container '$CONTAINER' not running. Try: make up" >&2
+ALL=0; CONFIRMED=0; ONE=""
+for arg in "$@"; do
+  case "$arg" in
+    --all-agents) ALL=1 ;;
+    --confirm-all-agents) CONFIRMED=1 ;;
+    -h|--help) sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -*) echo "preamble-upgrade: unknown option $arg" >&2; exit 2 ;;
+    *) [[ -n "$ONE" ]] && { echo "preamble-upgrade: one username at most" >&2; exit 2; }; ONE="$arg" ;;
+  esac
+done
+
+if ! docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null | grep -q '^true$'; then
+  echo "preamble-upgrade: container '$CONTAINER' is not running (set CONTAINER_NAME, or: make up)" >&2
   exit 1
 fi
 
-echo "Upgrading preamble for PA user: ${PA_USER}"
+# username<TAB>maceff|vanilla, one line per declared agent, in declaration order
+ENUM_PY='
+import yaml
+from macf.models.agent_spec import AgentsConfig
+c = AgentsConfig.model_validate(yaml.safe_load(open("/etc/maceff/agents.yaml")))
+for name, spec in c.agents.items():
+    print(f"{spec.username}\t{\"vanilla\" if spec.is_vanilla else \"maceff\"}")
+'
+if ! declared="$(docker exec "$CONTAINER" /opt/maceff-venv/bin/python -c "$ENUM_PY" 2>&1)"; then
+  echo "preamble-upgrade: cannot read the deployment's agents from /etc/maceff/agents.yaml:" >&2
+  echo "$declared" | sed 's/^/  /' >&2
+  exit 1
+fi
+maceff=(); vanilla=()
+while IFS=$'\t' read -r user flavor; do
+  [[ -z "$user" ]] && continue
+  if [[ "$flavor" == "vanilla" ]]; then vanilla+=("$user"); else maceff+=("$user"); fi
+done <<< "$declared"
 
-# Step 1: Sync latest templates to container
+if [[ "$ALL" == 1 && -n "$ONE" ]]; then
+  echo "preamble-upgrade: name one agent or pass --all-agents, not both" >&2; exit 2
+fi
+if [[ "$ALL" == 0 && -z "$ONE" ]]; then
+  echo "preamble-upgrade: name the agent, or pass --all-agents. Declared agents:" >&2
+  for u in "${maceff[@]}"; do echo "  $u" >&2; done
+  for u in "${vanilla[@]}"; do echo "  $u (vanilla: never upgraded)" >&2; done
+  exit 2
+fi
+
+targets=()
+if [[ -n "$ONE" ]]; then
+  for u in "${vanilla[@]}"; do
+    [[ "$u" == "$ONE" ]] && { echo "preamble-upgrade: $ONE is a vanilla account; it receives no MacEff footprint" >&2; exit 2; }
+  done
+  found=0; for u in "${maceff[@]}"; do [[ "$u" == "$ONE" ]] && found=1; done
+  if [[ "$found" == 0 ]]; then
+    echo "preamble-upgrade: $ONE is not an agent this deployment declares. Declared: ${maceff[*]:-none}" >&2
+    exit 2
+  fi
+  targets=("$ONE")
+else
+  if [[ "${#maceff[@]}" == 0 ]]; then
+    echo "preamble-upgrade: the deployment declares no MacEff agent; nothing to upgrade" >&2; exit 1
+  fi
+  if [[ "$CONFIRMED" == 0 ]]; then
+    if [[ -t 0 ]]; then
+      echo "This upgrades the preamble of all ${#maceff[@]} agent(s), including any mid-session: ${maceff[*]}"
+      read -r -p "Type ALL to go on: " answer
+      [[ "$answer" == "ALL" ]] || { echo "preamble-upgrade: not confirmed; nothing changed" >&2; exit 1; }
+    else
+      echo "preamble-upgrade: --all-agents upgrades ${#maceff[@]} agent(s); confirm the breadth with --confirm-all-agents" >&2
+      exit 2
+    fi
+  fi
+  targets=("${maceff[@]}")
+fi
+
 echo "[1/2] Syncing templates..."
-"${SCRIPT_DIR}/template-sync"
+"${SCRIPT_DIR}/template-sync" || { echo "preamble-upgrade: template sync failed; no agent was upgraded" >&2; exit 1; }
 
-# Step 2: Run agent init inside container as PA user
-echo "[2/2] Running agent init (preserves user content above boundary)..."
-docker exec -u "${PA_USER}" "$CONTAINER" bash -lc "
-  set -e
-  macf_tools agent init --yes
-"
+echo "[2/2] Running agent init for ${#targets[@]} agent(s) (preserves user content above the boundary)..."
+ok=(); failed=()
+for u in "${targets[@]}"; do
+  if docker exec -u "$u" "$CONTAINER" bash -lc 'set -e; macf_tools agent init --yes' >/dev/null 2>&1; then
+    echo "  upgraded: $u"; ok+=("$u")
+  else
+    echo "  FAILED:   $u (rerun: maceff_tools/preamble-upgrade $u)"; failed+=("$u")
+  fi
+done
+[[ "$ALL" == 1 ]] && for u in "${vanilla[@]}"; do echo "  skipped:  $u (vanilla)"; done
 
-echo "✅ Preamble upgrade complete"
-echo "   User content above boundary marker preserved"
-echo "   Framework sections below boundary updated"
+echo "Preambles: ${#ok[@]} upgraded, ${#failed[@]} failed, ${#vanilla[@]} vanilla skipped."
+[[ "${#failed[@]}" == 0 ]]
