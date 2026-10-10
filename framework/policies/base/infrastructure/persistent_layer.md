@@ -28,14 +28,19 @@ MacEff's long-lived machinery grew one piece at a time, and most of it died with
 - Why does the channel offer no tools and relay no permission prompts?
 - How is the channel installed and loaded?
 
-**2 Observation**
+**2 The Harness's Own Compactions**
+- Who may compact my session, and what happens when the client compacts it on its own?
+- How is the client's idle compaction turned off, and when is it kept?
+- How do I tell, after the fact, who asked for a compaction?
+
+**3 Observation**
 - Who may watch a session, and how does an onlooker get in?
 - What does an onlooker see, and what is kept from it?
 - How does the owner keep a stretch of work from an onlooker?
 - How does an observation end, and who may end it?
 - How does the agent know who is watching?
 
-**3 Not Yet Landed**
+**4 Not Yet Landed**
 - Which parts of the persistent layer are specified but not yet in this policy?
 
 === CEP_NAV_BOUNDARY ===
@@ -92,19 +97,48 @@ A channel not on Claude Code's allowlist loads only under the development flag, 
 
 ---
 
-## 2 Observation
+## 2 The Harness's Own Compactions
 
-### 2.1 Presence
+### 2.1 Turning off the client's idle compaction
 
-**The observed agent's per-call line shows each onlooker that watches and each operator surface that is present** [MIS-0002-R91 (call_line_MUST_show_presence)]. A paused onlooker is marked as paused.
+A compaction ends the agent's working memory. The persistent layer compacts a session only when the operator or the agent's declared wind-down asks [MIS-0002-R108 (compaction_MUST_be_asked_by_operator_or_wind-down)]. The harness can also compact a session on its own: Claude Code compacts an idle session about 54 minutes after its last request, once the context has passed a threshold.
 
-- **A surface claims only what it can know.** A keyboard surface that can see its viewer says `attached` while someone is there. One that cannot detect its viewer says `enabled`, never `attached` [MIS-0002-R98 (presence_MUST_say_enabled_when_undetectable)]. A channel, which carries messages and no keyboard, says `reachable`, so an operator reachable by channel is told apart from one attached at a keyboard [MIS-0002-R102 (presence_SHOULD_show_reachable)]. Which keyboard surfaces set presence is judged per surface [MIS-0002-R97 (keyboard_surface_MUST_set_presence)].
-- **Presence is derived, not stored.** The per-call hook folds it from the agent's own event log, which it already reads: onlookers from the observation acts, surfaces from their recorded states. A copy kept elsewhere could drift from the acts or outlive its writer.
-- **When the primal daemon is not alive, presence is unknown,** and the line says so. It never shows a stale onlooker, and never "nobody".
+**The harness adapter turns that off unless the declaration keeps it** [MIS-0002-R126 (adapter_MUST_turn_off_harness_idle_compaction)]. From Claude Code 2.1.290 the settings key `idleCompaction: false` stops the idle compaction alone, and leaves compaction at the context limit on. The declaration's `keep_harness_idle_compaction`, false by default, is the one way to keep it.
+
+- `macf_tools claude-config idle-compaction status` reports the state, with the settings file it read. `off` sets the key and leaves every other key alone. `on` removes it, which returns the client to its default.
+- On a client older than 2.1.290 the command refuses and names the version. That client ignores the key, so writing it there would claim a protection that does not exist.
+- Each change is an event, `harness_setting_changed`.
+
+**Check the version the session runs, not the one installed.** The launcher can move to a new version while a running session still maps the old one. A key that needs 2.1.290 protects only a session that runs it.
+
+### 2.2 Recording who asked
+
+**When the harness compacts a session that nobody asked to compact, the compaction is recorded with the harness as the asker** [MIS-0002-R127 (harness_compaction_MUST_be_recorded)]. The PreCompact hook's `trigger` cannot say this alone: under 2.1.289 an idle compaction reports `manual`, and under 2.1.290 it reports `auto`. The reliable mark is the client's own row after the boundary, a system row that begins "Compacted while idle".
+
+- **The asks are recorded where they happen.**
+  - An operator's typed `/compact` appears in the transcript as a command row, and is recorded as `compaction_asked` with the asker `operator`.
+  - A compaction asked through `macf_tools inject compact` is recorded with the asker `wind_down`.
+- **The client's idle row** is recorded as `harness_compaction_detected` with the asker `harness`.
+- **The hook records `trigger` as the client sent it**, and `unknown` when the field is absent, never a guess.
+- No event carries the content of the work, only who asked, how and when.
+
+Until the primal daemon lands, the transcript monitor makes these records. The daemon's control record for a harness compaction then names the harness in its `asked_by` (`Asker.kind == "harness"`), with no peer, because nobody requested it.
 
 ---
 
-## 3 Not Yet Landed
+## 3 Observation
+
+### 3.1 Presence
+
+**Presence is one record of each onlooker that watches and each operator surface that is present**, with a paused onlooker marked as paused, and a segment of the per-call line that shows it [MIS-0002-R91 (call_line_MUST_show_presence)]. **The per-call line carries it once the per-call hook calls `call_line`,** which comes with the primal daemon or in a small pull request of its own. Until then the line shows no presence.
+
+- **A surface claims only what it can know.** A keyboard surface that can see its viewer says `attached` while someone is there. One that cannot detect its viewer says `enabled`, never `attached` [MIS-0002-R98 (presence_MUST_say_enabled_when_undetectable)]. A channel, which carries messages and no keyboard, says `reachable`, so an operator reachable by channel is told apart from one attached at a keyboard [MIS-0002-R102 (presence_SHOULD_show_reachable)]. Which keyboard surfaces set presence is judged per surface [MIS-0002-R97 (keyboard_surface_MUST_set_presence)].
+- **Presence is derived, not stored.** It is folded from the agent's own event log: onlookers from the observation acts, surfaces from their recorded states. A copy kept elsewhere could drift from the acts or outlive its writer.
+- **When the primal daemon is not alive, presence is unknown,** and the segment says so. It never shows a stale onlooker, and never "nobody".
+
+---
+
+## 4 Not Yet Landed
 
 Specified in MIS-0002 and arriving with their landing steps, each in the pull request that enforces it:
 - **The primal daemon itself:** declarations, liveness events, health derived from runs, outside control and the outside watch (MIS-0002 §6.1 to §6.4, §6.7, §6.12).
