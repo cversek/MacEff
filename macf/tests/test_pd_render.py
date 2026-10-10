@@ -12,7 +12,7 @@ import pytest
 from macf.platform.launchd import launchctl_argv, pd_label, render_pd_launch_agent
 
 CARD = "IraMacEff@ee9a78"
-ARGV = ["/usr/bin/python3", "-m", "macf.primal_daemon"]
+ARGV = ["/usr/bin/python3", "-m", "macf.pd", "--agent-home", "/Users/someone/agent"]
 
 
 def _plist(**overrides):
@@ -35,7 +35,7 @@ class TestMacOSLaunchAgent:
     def test_label_uses_maceff_pd_and_the_card(self):
         """R06's identifier, made unique per agent from the calling card, so two agents on
         one login never share a label."""
-        assert pd_label(CARD) == "maceff_pd.IraMacEff.ee9a78"
+        assert pd_label(CARD) == "maceff_pd.IraMacEff_ee9a78"
         assert pd_label("ClaudeTheBuilder@6c888f") != pd_label(CARD)
         with pytest.raises(ValueError):
             pd_label("bad card/with slash")

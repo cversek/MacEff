@@ -9,26 +9,28 @@ whenever it exits (MIS-0002-R03 (outer_tier_MUST_restart_pd)).
 Rendering only. Nothing here runs launchctl; the argv it builds is for the installer.
 """
 import plistlib
-import re
 from typing import List, Optional, Tuple
 
 PD_IDENTIFIER = "maceff_pd"
-_CARD = re.compile(r"^([A-Za-z0-9_-]+)@([0-9a-f]+)$")
 _VERBS = ("bootstrap", "bootout", "kickstart", "print")
 
 
 def pd_label(card: str) -> str:
-    """The launchd label for one agent's primal daemon.
+    """The launchd label for one agent's primal daemon: ``maceff_pd.<session identifier>``.
 
-    MIS-0002-R06 (pd_identifiers_MUST_use_maceff_pd) names the identifier; several
-    agents can share one login, so the label adds the calling card, taken from the
-    identity file and never from the environment (MIS-0002-R02
-    (pd_MUST-NOT_take_identity_from_env)). ``Name@idfrag`` becomes ``maceff_pd.Name.idfrag``.
+    MIS-0002-R06 (pd_identifiers_MUST_use_maceff_pd) names the identifier, and the
+    calling card from the identity file makes it one per agent, never the environment
+    (MIS-0002-R02 (pd_MUST-NOT_take_identity_from_env)). The card maps to a name the
+    same way every other surface of the daemon names it (the step-1 interface's
+    ``session_identifier``), so ``IraMacEff@ee9a78`` becomes ``maceff_pd.IraMacEff_ee9a78``.
     """
-    match = _CARD.match(card or "")
-    if match is None:
+    from macf.utils.identity import session_identifier
+    if not card or "@" not in card:
         raise ValueError(f"not a calling card: {card!r} (expected Name@hexid)")
-    return f"{PD_IDENTIFIER}.{match.group(1)}.{match.group(2)}"
+    ident = session_identifier(card)
+    if not ident or "/" in ident:
+        raise ValueError(f"not a calling card: {card!r}")
+    return f"{PD_IDENTIFIER}.{ident}"
 
 
 def render_pd_launch_agent(card: str, program_argv: List[str], home: str,
