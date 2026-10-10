@@ -2190,6 +2190,8 @@ JSONL transcript monitoring daemon for idle detection and event processing.
 
 A monitor watches one transcript for one Claude Code process, as a process of its own that `ps` shows as `python -m macf.transcript_monitor ... --transcript <path>`. It stops when that Claude Code process ends; the next session start, AUTO_MODE entry or sprint creation starts another. Which monitors run is read from the process table each time, so agents that share a login never count each other's. A second monitor on a transcript gives way to the first. Every event a monitor writes carries its `monitor_pid`, and its start and end are events too (`transcript_monitor_started`, `transcript_monitor_stopped` with a `reason`). Its stderr goes to `macf_transcript_monitor.log` in this user's runtime directory.
 
+With `MACF_TRANSCRIPT_MONITOR_DISABLED=1` in the environment, nothing starts a monitor: `start`, the SessionStart hook, AUTO_MODE entry and sprint creation each say so on stderr and go on. The test suite sets it for every test, so that a hook a test runs as a subprocess cannot start a real monitor on the developer's own session.
+
 ### transcript-monitor start
 
 Start a monitor for this session's transcript, unless one already serves it.

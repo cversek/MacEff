@@ -53,7 +53,8 @@ def test_a_started_monitor_is_named_holds_nothing_of_its_starter_and_ends_with_i
         tmp_path, isolated_events_log):
     transcript = tmp_path / "s1.jsonl"
     transcript.write_text("")
-    env = {**os.environ, "XDG_RUNTIME_DIR": str(tmp_path)}
+    env = {k: v for k, v in os.environ.items() if k != daemon.DISABLE_ENV}  # a real start, by design
+    env["XDG_RUNTIME_DIR"] = str(tmp_path)
     starter = subprocess.Popen([sys.executable, "-c", STARTER, str(transcript)],
                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=env)
     monitor_pid = 0

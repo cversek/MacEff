@@ -46,6 +46,7 @@ class TestStartDaemonKeepsStdoutClean:
         a call reporting success for a narrower question than the caller asked.
         """
         from macf.transcript_monitor import daemon as d
+        monkeypatch.delenv(d.DISABLE_ENV)  # the already-running path, past the switch
         monkeypatch.setattr(d, "is_running", lambda transcript=None: True)
         out, err = self._capture(d.start_daemon)
         assert out == "", f"stdout must stay parseable, got: {out!r}"
