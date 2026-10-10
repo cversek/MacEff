@@ -43,9 +43,11 @@ Format: one line per term, `- **term**: definition.`, in alphabetical order. `ma
 - **liveness event**: an event in an agent's event log by which a managed unit shows that it is alive, keyed by the agent's identity and naming its process.
 - **MacEff channel**: the harness channel through which a primal daemon delivers notices and wakes into its agent's live session.
 - **maintainer**: an agent that the operator has designated to maintain MacEff.
+- **major architectural change**: a change that adds a subsystem or changes architecture across components.
 - **managed unit**: one process or one schedule that a primal daemon runs for its agent, such as the session, the transcript monitor, the notifier or a mail clock.
 - **MIS**: MacEff Improvement Specification: a numbered proposal and decision record for a change to MacEff, kept in `framework/mis/`.
 - **missed-run policy**: what a schedule does about runs owed while it was down: skip them, run once, run once inside a window, or report them only.
+- **new policy**: a policy document added under `framework/policies`, as opposed to a change to an existing one; a document split out of, or renamed from, an existing policy is a change to that policy.
 - **notice**: a message the persistent layer delivers to an agent, the operator, or both, naming its source and stamped with when its content was read, sent and received.
 - **notifier**: the managed unit that delivers notices into a live session, with masking, de-duplication and a budget.
 - **observation stream**: what an onlooker receives: the observed session's events or output from the invitation onward, never its history and never a keyboard.

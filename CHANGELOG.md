@@ -64,6 +64,10 @@ Gmail, event-log rotation, and commit-message guards. Sprints now survive compac
 
 **The prompt and Stop lines carry the week's usage** (#441): `wk 42%` from the newest budget sample, read without walking the week's history, marked with its age when the sample is more than an hour old, and left out rather than failing the hook when the budget cannot be read.
 
+### Changed
+
+- **An MIS is required only for a new policy or a major architectural change** (MIS-0003, `mis` policy §1.2): MIS-0001 also required one for any change to what an agent may do, counting every MUST added to policy text, so a small rule in an existing policy needed the whole process. The operator raised the bar on 2026-10-04. A rule added to an existing policy now ships with its capability in one reviewed pull request, and any author may still write an MIS for any change. MIS-0003 updates MIS-0001's R01 by the amendment path MIS-0001 defines, the first use of it; MIS-0001 records the change in its revision history
+
 ### Fixed
 
 - **`mis check` reports a file that is not UTF-8 instead of stopping** (`mis.read_utf8`): one Latin-1 byte in a copy of the template stopped the whole run with a traceback, so no file after it was checked. Every read now decodes UTF-8 bytes in one place; a file that is not UTF-8 is one finding naming its line and byte, and the run goes on. An unreadable glossary skips the term check instead of failing every term, and an unreadable policy is reported by the citation check, the only check that reads policies. The checker's tests now write their fixtures as UTF-8, so they pass in any locale: under an ASCII locale with UTF-8 mode off, 38 of 40 failed before and all 43 pass now. Three new tests; three planted defects, each caught (`test_mis_check.py`)
