@@ -153,7 +153,12 @@ def pause(onlooker: str, state: Dict[str, Observation], *, at: int) -> dict:
 
 
 def resume(onlooker: str, state: Dict[str, Observation], *, at: int) -> dict:
-    """The observed agent resumes a paused stream; ``at`` is the transcript offset when it does."""
+    """The observed agent resumes a paused stream; ``at`` is the transcript offset when it does.
+
+    Take ``at`` after the paused work's output is in the transcript. A resume run beside
+    the tool that prints, in the same turn, is too early: whatever that tool writes after
+    the offset is read falls outside the pause and goes out.
+    """
     o = _live(onlooker, state)
     if o.status != PAUSED:
         raise ActRefused(f"{onlooker}'s observation is {o.status}, not paused")
