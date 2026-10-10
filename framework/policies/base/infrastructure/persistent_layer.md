@@ -43,7 +43,14 @@ MacEff's long-lived machinery grew one piece at a time, and most of it died with
 - How does attach find the session to attach to?
 - What does the readout say when nothing can attach?
 
-**5 Not Yet Landed**
+**5 Observation**
+- Who may watch a session, and how does an onlooker get in?
+- What does an onlooker see, and what is kept from it?
+- How does the owner keep a stretch of work from an onlooker?
+- How does an observation end, and who may end it?
+- How does the agent know who is watching?
+
+**6 Not Yet Landed**
 - Which parts of the persistent layer are specified but not yet in this policy?
 
 === CEP_NAV_BOUNDARY ===
@@ -190,12 +197,29 @@ The operator may attach to any session without an invitation [MIS-0002-R81 (oper
 
 ---
 
-## 5 Not Yet Landed
+## 5 Observation
+
+### 5.1 Invitations, and the acts that change them
+
+**An onlooker sees a session only after the observed agent invites it** [MIS-0002-R82 (onlooker_MUST_be_invited)]. The invitation names the onlooker by calling card, never by login user [MIS-0002-R94 (invitation_MUST_name_card)], and an agent never invites an onlooker that runs in another container [MIS-0002-R111 (invitation_MUST-NOT_cross_containers)]. Between containers, collaboration stays with agent mail.
+
+**Each invitation carries a secret.** On a shared login a socket's peer credentials cannot say which agent is reading, so the stream admits whoever presents the secret, and the secret reaches the onlooker through its own channel. The log keeps only the secret's SHA-256, so the record can be read without handing out the key. An onlooker that already has a live observation is not invited again; end it first.
+
+**Every invitation, pause, resume and ending is an event in the observed agent's own log** [MIS-0002-R90 (observation_acts_MUST_be_events)], and the state is whatever the log folds to. It is kept nowhere else.
+
+**Ending.**
+- The observed agent or the onlooker may end an observation at any time [MIS-0002-R86 (either_party_MAY_end_observation)], and the operator may end any [MIS-0002-R87 (operator_MAY_end_observation)].
+- Who is ending is established from the transport the request arrived on, never from a field in it, or an onlooker could end an observation as the operator.
+- An invitation may carry a lease [MIS-0002-R88 (invitation_MAY_carry_lease)]. When it runs out, the log records the same ending event a party's ending records [MIS-0002-R89 (lease_end_MUST_match_party_end)]. A lapsed lease is refused at admission even before its end is logged, because the lease ends the invitation itself.
+
+---
+
+## 6 Not Yet Landed
 
 Specified in MIS-0002 and arriving with their landing steps, each in the pull request that enforces it:
 - **The primal daemon itself:** declarations, liveness events, health derived from runs, outside control and the outside watch (MIS-0002 §6.1 to §6.4, §6.7, §6.12).
 - **Schedules and the notifier,** including the keystroke fallback, the dark-channel event, and every producer of the operator's activity (MIS-0002 §6.5, §6.6, the rest of §6.14).
-- **Mail, containers, the tray and observation** (MIS-0002 §6.8, §6.9, §6.11, §6.13).
+- **Mail, containers and the tray** (MIS-0002 §6.8, §6.9, §6.11).
 
 Until a section lands, the rules in force are the existing policies: `service_supervision`, `notification_delivery` and `amail`.
 
