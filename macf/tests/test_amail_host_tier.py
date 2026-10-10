@@ -60,10 +60,10 @@ def test_host_tier_requires_a_named_supervision():
 def test_a_host_tier_file_refuses_to_load_inside_a_container(tmp_path, monkeypatch):
     marker = tmp_path / "dockerenv"
     monkeypatch.setattr(dc, "CONTAINER_MARKER", marker)
-    AddressingConfig.model_validate(addressing("host", "hypervisor"))       # no marker: fine
+    AddressingConfig.model_validate(addressing("host", "primal-daemon"))    # no marker: fine
     marker.write_text("")
     with pytest.raises(ValidationError, match="inside a container"):
-        AddressingConfig.model_validate(addressing("host", "hypervisor"))
+        AddressingConfig.model_validate(addressing("host", "primal-daemon"))
     # the container tier is untouched by the marker
     AddressingConfig.model_validate(addressing(uids=(1002, 1003), shared=(False, False)))
 
