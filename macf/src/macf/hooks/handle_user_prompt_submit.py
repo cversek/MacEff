@@ -30,7 +30,11 @@ from macf.modes import detect_auto_mode
 from macf.hooks.hook_logging import log_hook_event
 from macf.observability import Warning, emit_warning
 from macf.agent_events_log import shared_event_reads
-from macf.utils.input_origin import opening_channel_source, opens_with_harness_notice
+from macf.utils.input_origin import (
+    opening_channel_source,
+    opens_with_harness_notice,
+    opens_with_wake,
+)
 
 # Lines that change on every prompt by design. The diff header carries them
 # (clock, breadcrumb, CL); diffing them would report a change every time.
@@ -90,7 +94,9 @@ def record_user_activity_from_payload(prompt: str) -> bool:
     command, or channel message) is user input. A non-empty prompt is not
     always one: the client also delivers a background task's completion
     notice and another session's message as prompts, and those open with
-    the client's own notice forms, so they record nothing.
+    the client's own notice forms, so they record nothing. Nor does a wake,
+    which the persistent layer types into the input box with its own opening
+    (MIS-0002-R106).
 
     Emitting here (rather than only suppressing the indicator) also corrects
     the clock for the renders that follow — Stop, PreToolUse — instead of
@@ -104,7 +110,7 @@ def record_user_activity_from_payload(prompt: str) -> bool:
     """
     if not prompt or not prompt.strip():
         return False
-    if opens_with_harness_notice(prompt):
+    if opens_with_harness_notice(prompt) or opens_with_wake(prompt):
         return False
 
     source = "channel" if opening_channel_source(prompt) is not None else "direct"

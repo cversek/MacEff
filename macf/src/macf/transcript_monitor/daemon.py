@@ -35,6 +35,7 @@ from ..utils.input_origin import (
     HARNESS_ORIGIN_KINDS,
     opening_channel_source,
     opens_with_harness_notice,
+    opens_with_wake,
 )
 from ..utils.paths import user_runtime_dir
 
@@ -103,7 +104,9 @@ def detect_user_activity(entry: dict) -> Optional[Detection]:
     Not tool results, meta entries or compaction summaries, and not input the
     client delivers by itself: a background task's completion notice, or a
     message from another session. The origin record names those; an entry
-    written without one is read by how its text opens.
+    written without one is read by how its text opens. A wake is not the
+    operator either (MIS-0002-R106): its keys are recorded as typed, so its
+    opening is read before the origin record.
     """
     if entry.get("type") != "user":
         return None
@@ -114,15 +117,17 @@ def detect_user_activity(entry: dict) -> Optional[Detection]:
     if entry.get("isCompactSummary"):
         return None
 
+    message = entry.get("message")
+    content = message.get("content", "") if isinstance(message, dict) else ""
+    if opens_with_wake(_entry_text(content)):
+        return None
+
     origin = entry.get("origin")
     kind = origin.get("kind") if isinstance(origin, dict) else None
     if kind in HARNESS_ORIGIN_KINDS:
         return None
-    if kind is None:
-        message = entry.get("message")
-        content = message.get("content", "") if isinstance(message, dict) else ""
-        if opens_with_harness_notice(_entry_text(content)):
-            return None
+    if kind is None and opens_with_harness_notice(_entry_text(content)):
+        return None
 
     source = "direct"
     channel_server = ""
@@ -209,7 +214,8 @@ def detect_mid_turn_enqueue(entry: dict) -> Optional[Detection]:
     named by that tag, the way ``detect_user_activity`` records one from its
     origin. Recorded as ``mid_turn_enqueue`` it would end USER_REMOTE on
     every message from the operator's phone. A notice the client queues for
-    itself, a background task's or another session's, is not activity at all.
+    itself, a background task's or another session's, is not activity at all,
+    and neither is a wake the persistent layer typed while a turn ran.
     """
     if entry.get("type") != "queue-operation":
         return None
@@ -217,7 +223,7 @@ def detect_mid_turn_enqueue(entry: dict) -> Optional[Detection]:
         return None
 
     content = entry.get("content", "")
-    if isinstance(content, str) and opens_with_harness_notice(content):
+    if isinstance(content, str) and (opens_with_harness_notice(content) or opens_with_wake(content)):
         return None
     data = {
         "source": "mid_turn_enqueue",
