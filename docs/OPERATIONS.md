@@ -16,7 +16,7 @@ maceff_tools/framework-upgrade
 maceff_tools/policy-sync [set_name]     # Sync policies (+ manifest.json)
 maceff_tools/template-sync              # Sync templates
 maceff_tools/assets-sync [tree...]      # Sync commands/skills/subagents/output-styles
-maceff_tools/preamble-upgrade [pa_user] # Upgrade PA preambles
+maceff_tools/preamble-upgrade <user> | --all-agents  # Upgrade PA preambles
 ```
 
 ---
@@ -113,23 +113,36 @@ docker exec maceff-sandbox bash -lc "ls /opt/maceff/framework/skills"
 
 ## Upgrading PA Preambles
 
-**Command**: `maceff_tools/preamble-upgrade [pa_user]`
+**Command**: `maceff_tools/preamble-upgrade <user> | --all-agents [--confirm-all-agents]`
 
 **Purpose**: Update PA CLAUDE.md files with latest framework preamble while preserving user content
 
 **Usage**:
 ```bash
-# Upgrade default PA (from common.sh)
-maceff_tools/preamble-upgrade
-
-# Upgrade specific PA
+# One agent: no confirmation
 maceff_tools/preamble-upgrade alice
-maceff_tools/preamble-upgrade maceff_user001
+
+# Every MacEff agent the deployment declares (/etc/maceff/agents.yaml).
+# At a terminal it asks you to type ALL; automation names the breadth with the flag.
+maceff_tools/preamble-upgrade --all-agents
+maceff_tools/preamble-upgrade --all-agents --confirm-all-agents
+
+# No argument lists the declared agents and changes nothing.
+maceff_tools/preamble-upgrade
 ```
+
+**Scope**: a container's agents, as `/etc/maceff/agents.yaml` declares them. A host with no
+container declares its agents nowhere this tool reads, so `--all-agents` cannot reach them;
+upgrade each host agent's preamble with `macf_tools agent init` from that agent's home.
 
 **What it does**:
 1. Syncs latest templates (ensures PA_PREAMBLE.md is current)
-2. Runs `macf_tools agent init` inside container as PA user
+2. Runs `macf_tools agent init` inside the container as each chosen agent, and prints one
+   verdict per agent (upgraded, FAILED, or skipped for a vanilla account) and a summary. A
+   failure on one agent does not stop the rest, and the exit status is non-zero if any
+   failed, with the last lines of that agent's output under its FAILED line. A vanilla
+   account receives no MacEff footprint and is never upgraded.
+   `framework-upgrade` runs it with `--all-agents --confirm-all-agents`.
 3. Replaces framework content below upgrade boundary
 4. **Preserves user content above boundary marker**
 
