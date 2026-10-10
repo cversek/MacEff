@@ -571,6 +571,14 @@ def send_slash_to_self(command: str, target: str = "", then: Optional[str] = Non
         # another session, and this log's gates are this session's.
         from .stop_bypass import arm
         arm(command)
+        if cmd == "/compact":
+            # The ask is recorded so that a compaction without one can be found
+            # (MIS-0002-R127 (harness_compaction_MUST_be_recorded)).
+            try:
+                from .agent_events_log import append_event
+                append_event("compaction_asked", {"asker": "agent", "via": "macf_tools inject"})
+            except (OSError, ValueError) as e:
+                print(f"⚠️ MACF: could not record the compaction ask: {e}", file=sys.stderr)
         if then and command.lstrip("/") == "compact":
             _start_compact_followup(data.get("name") or str(data.get("supervisor_pid")), then)
     return rc

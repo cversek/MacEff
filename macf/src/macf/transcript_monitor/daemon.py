@@ -275,6 +275,44 @@ def detect_compact_boundary(entry: dict) -> Optional[Detection]:
     })
 
 
+#: The client's own row after a compaction it started on an idle session. Present
+#: in 2.1.289 and 2.1.290, where ``compactMetadata.trigger`` says "manual" and
+#: "auto" respectively, so the row and not the trigger tells who asked.
+_IDLE_COMPACTION_NOTICE = "Compacted while idle"
+_TYPED_COMPACT = "<command-name>/compact</command-name>"
+
+
+def detect_harness_compaction(entry: dict) -> Optional[Detection]:
+    """A compaction the client started on its own, recorded with the harness as the
+    asker (MIS-0002-R127 (harness_compaction_MUST_be_recorded))."""
+    if entry.get("type") != "system" or entry.get("subtype") != "informational":
+        return None
+    if not str(entry.get("content", "")).startswith(_IDLE_COMPACTION_NOTICE):
+        return None
+    return Detection("harness_compaction_detected", {
+        "asker": "harness",
+        "marker": "compacted_while_idle",
+        "timestamp": entry.get("timestamp", ""),
+        "detector": "transcript_monitor",
+    })
+
+
+def detect_compaction_ask(entry: dict) -> Optional[Detection]:
+    """A /compact the operator typed: the client records it as a command row."""
+    if entry.get("type") != "user":
+        return None
+    message = entry.get("message") or {}
+    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, str) or not content.lstrip().startswith(_TYPED_COMPACT):
+        return None
+    return Detection("compaction_asked", {
+        "asker": "operator",
+        "via": "typed /compact",
+        "timestamp": entry.get("timestamp", ""),
+        "detector": "transcript_monitor",
+    })
+
+
 def detect_api_error(entry: dict) -> Optional[Detection]:
     """Detect API error with retry info."""
     if entry.get("type") != "system":
@@ -310,6 +348,8 @@ DEFAULT_DETECTORS: List[Detector] = [
     detect_dialog_answer,
     detect_mid_turn_enqueue,
     detect_compact_boundary,
+    detect_harness_compaction,
+    detect_compaction_ask,
     detect_api_error,
     detect_context_collapse,
 ]
