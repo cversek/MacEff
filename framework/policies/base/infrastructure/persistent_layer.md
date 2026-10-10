@@ -84,7 +84,15 @@ MacEff's long-lived machinery grew one piece at a time, and most of it died with
 - Who writes a unit's liveness, and when is a unit overdue?
 - How does a control act say who asked?
 
-**12 Not Yet Landed**
+**12 The Daemon and Its Control Socket**
+- How does an agent get exactly one daemon, and where does its identity come from?
+- What does a daemon's start mark, and what happens when it stops?
+- Where is the control socket, and what does a connection to it prove?
+- What does the socket do, and what does it refuse?
+- How is the daemon read from outside, and when is it believed?
+- What happens to the units when a daemon dies?
+
+**13 Not Yet Landed**
 - Which parts of the persistent layer are specified but not yet in this policy?
 
 === CEP_NAV_BOUNDARY ===
@@ -435,10 +443,56 @@ Every start, stop and restart the core performs is a `pd_control` event naming w
 
 ---
 
-## 12 Not Yet Landed
+## 12 The Daemon and Its Control Socket
+
+### 12.1 One daemon per agent, and whose it is
+
+`python -m macf.pd <agent home>` runs the agent's primal daemon. It takes its agent's calling card from the identity file in that home, never from an environment variable [MIS-0002-R02 (pd_MUST-NOT_take_identity_from_env)]. A variable is inherited by everything started below the shell that set it, and a client started from such a shell has taken another agent's name as its own. The daemon then loads the declaration (10.1), and wherever a unit's environment names the agent home, the card or the daemon's runtime directory, it fills in the values only it knows.
+
+**One daemon per agent** [MIS-0002-R01 (agent_MUST_have_one_primal_daemon)]. Once its control socket is bound, the daemon writes a record beside it holding its pid, its process start time and a version. A second daemon for the same agent refuses to start while that record names a live process by pid and start time, or while something answers on the socket. A record whose process is gone, or whose pid now belongs to another process, is stale and is replaced. The MacEff channel checks its peer against the same record [MIS-0002-R123 (channel_MUST_check_its_peer_is_its_pd)].
+
+**A daemon's start bounds what it observed.** After writing its record, and before it adopts or starts any unit, the daemon writes `pd_daemon_start` with the record's fields and the agent, so a second daemon that is refused never writes one. What a daemon observes outside its units, such as a surface's state, holds only for its own life, so a reader folding those observations starts from the newest start. Unit state carries across a start, because the next daemon reads it to adopt the units still running (11.1).
+
+On SIGTERM, SIGINT or SIGHUP the daemon stops every unit, then removes its socket and its record. It exits with 75 when a daemon for the agent is already running and with 78 when the agent home can't be used, so an outer tier's log tells the two apart.
+
+### 12.2 Where the socket is
+
+The daemon listens on Unix sockets only, never on a network port [MIS-0002-R80 (pd_MUST-NOT_listen_on_network)]: the control socket here and, once the notifier lands, the channel socket of 1.3. Both live in the runtime directory, `$XDG_RUNTIME_DIR/maceff_pd/`, or `/tmp/maceff_pd-<uid>/` where that variable is unset, each named for the agent's card, so every path carries `maceff_pd` and the card [MIS-0002-R06 (pd_identifiers_MUST_use_maceff_pd)]. The daemon checks the socket path against the platform's length limit before binding, as the adapter does at install (3.1), with a message naming the path and the limit. Without the check, a path that's too long fails at bind with an error that names neither.
+
+**The runtime directory must be private.** The daemon creates it with mode 0700, and refuses to start when an existing one belongs to another user or is open to group or others. Under `/tmp`, another local user could have made the directory first, and every socket in it would then be theirs to replace.
+
+### 12.3 Who may connect, and what that proves
+
+The control socket accepts a connection only from the daemon's own user, as the kernel reports it for the connection. **That is all the check proves.** On a login that several agents share, or an agent and its operator, the kernel can't tell them apart. So a request names its asker, and the daemon records that claim beside the user, pid and start time it observed (11.3). The claim is an attribution, not an authentication, until each agent runs under its own account.
+
+A request may claim only the operator or the agent's declared wind-down. The restart policy and the harness ask from inside the daemon, so a request that claims either is refused with the reason, and nothing is done.
+
+### 12.4 What it does, and what it refuses
+
+- **`status`** returns each declared unit's state, pid, start time and when it entered that state.
+- **`start`, `stop` and `restart`** act on one declared unit. A stop sends SIGTERM to the unit's process group and SIGKILL after its grace period, and it succeeds whatever gate the session enforces [MIS-0002-R48 (outside_stop_MUST_override_gates)]. It is how the operator takes back a session that a loop holds. An asked restart first lets the unit's work in flight drain, up to a timeout it names when it gives up [MIS-0002-R49 (pd_MUST_check_work_in_flight)].
+- **A unit the declaration doesn't name is refused.** The daemon never starts, stops or signals another agent's units [MIS-0002-R07 (pd_MUST-NOT_control_other_agents)].
+- **A malformed request, an unknown operation or an unknown field refuses the whole request**, and nothing is done.
+- **A compaction is refused** in step 1. The layer never compacts a session on its own initiative [MIS-0002-R51 (layer_MUST-NOT_compact_on_own)], and compaction on request arrives with the session unit, accepted only from the operator or the agent's declared wind-down [MIS-0002-R108 (compaction_MUST_be_asked_by_operator_or_wind-down)].
+
+Each connection carries one request. A refusal says what was refused and why, and names this policy, `macf_tools policy navigate persistent_layer`, as `capability_boundaries` requires of every refusal.
+
+### 12.5 Reading it from outside
+
+**`macf_tools pd status`** shows each declared unit's state. It believes the daemon only after checking it: the record must name a live process by pid and start time, and the process answering the socket must be that one. Otherwise it reads each declared unit's last state and liveness from the event log, through the shared health verdict (11.2). Either way it says which source it used, and why.
+
+### 12.6 A unit outlives a daemon that dies
+
+The daemon starts its units as its children, but they don't die with it: the outer tier renders the daemon so that its exit leaves them running, as the LaunchAgent does with `AbandonProcessGroup` (3.1) and the systemd unit with `KillMode=process` (6.1). Taking every unit down with a daemon that crashed would drop their work in flight unasked, and leave the restart nothing to carry. The next daemon adopts the units that are still the processes it recorded (11.1). A daemon asked to stop still stops its units first (12.1).
+
+**Between a daemon's death and its restart, the units run unsupervised.** The window is the outer tier's restart delay. A unit whose process dies inside it isn't adopted, and the new daemon starts it as at any boot.
+
+---
+
+## 13 Not Yet Landed
 
 Specified in MIS-0002 and arriving with their landing steps, each in the pull request that enforces it:
-- **The primal daemon's process:** its control socket, its record and the identity it reads, outside control over the socket, and health derived from runs (MIS-0002 §6.1 to §6.4, §6.7).
+- **The rest of the primal daemon:** health derived from runs owed and done, and compaction on request (MIS-0002 §6.1 to §6.4, §6.7).
 - **Schedules and the notifier,** including the keystroke fallback, the dark-channel event, and every producer of the operator's activity (MIS-0002 §6.5, §6.6, the rest of §6.14).
 - **Mail and the rest of containers** (MIS-0002 §6.8, §6.9).
 - **Adopting a session Claude Code's own daemon already hosts** [MIS-0002-R66 (pd_MUST_adopt_harness_supervisor)] (3.3). Until it lands, the core starts a declared session unit itself.
