@@ -6,9 +6,12 @@ network or authentication errors. A LaunchAgent in the user's GUI session holds 
 the user holds. On macOS launchd is the outer tier: KeepAlive restarts the daemon
 whenever it exits (MIS-0002-R03 (outer_tier_MUST_restart_pd)).
 
-Rendering only. Nothing here runs launchctl; the argv it builds is for the installer.
+Rendering, then install and removal as plans: ``install_plan`` and ``uninstall_plan`` say
+what would be written and run, and only ``apply_plan`` does it. A LaunchAgent persists on
+the host, so a plan is shown before it is applied.
 """
 import plistlib
+from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 PD_IDENTIFIER = "maceff_pd"
@@ -74,3 +77,109 @@ def launchctl_argv(verb: str, label: str, uid: int, plist_path: Optional[str] = 
     if verb == "kickstart":
         return ["launchctl", "kickstart", "-k", f"{domain}/{label}"]
     return ["launchctl", verb, f"{domain}/{label}"]
+
+
+# ---------------------------------------------------------------------------
+# Install, remove and status: plans first, applied only when asked
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Step:
+    """One thing an install or removal does: write or remove a file, or run launchctl."""
+
+    what: str
+    path: Optional[str] = None
+    content: Optional[bytes] = None
+    argv: Optional[List[str]] = None
+
+    def describe(self) -> str:
+        if self.what == "launchctl":
+            return " ".join(self.argv or [])
+        return f"{self.what} {self.path}"
+
+
+def check_socket_path(path: str) -> None:
+    """MIS-0002-R129 (adapter_MUST_check_socket_path_length): refuse, with the reason, a
+    socket path the kernel would refuse at bind with a bare error."""
+    from macf.amail.broker import SUN_PATH_MAX
+    size = len(str(path).encode())
+    if size > SUN_PATH_MAX:
+        raise ValueError(f"socket path {path} is {size} bytes; this platform allows {SUN_PATH_MAX}. "
+                         f"Use a shorter runtime directory.")
+
+
+def install_plan(card: str, program_argv: List[str], home: str, log_dir: str, uid: int,
+                 socket_paths: List[str]) -> List[Step]:
+    """What installing one agent's primal daemon does, in order, without doing it.
+
+    Every socket path the daemon will bind is checked first, so a path that cannot work
+    stops the install before anything is written (R129).
+    """
+    for sp in socket_paths:
+        check_socket_path(sp)
+    path, data = render_pd_launch_agent(card, program_argv, home, log_dir)
+    return [Step("write", path=path, content=data),
+            Step("launchctl", argv=launchctl_argv("bootstrap", pd_label(card), uid, plist_path=path))]
+
+
+def uninstall_plan(card: str, home: str, uid: int) -> List[Step]:
+    """What removing one agent's primal daemon does: boot it out, then remove its plist."""
+    label = pd_label(card)
+    return [Step("launchctl", argv=launchctl_argv("bootout", label, uid)),
+            Step("remove", path=f"{home}/Library/LaunchAgents/{label}.plist")]
+
+
+def apply_plan(steps: List[Step], run=None, force: bool = False) -> List[str]:
+    """Carry out a plan. A plist that exists and differs is not overwritten without ``force``.
+
+    Returns one line per step. Stops at the first launchctl failure and raises with its
+    output, so a half-done install is said, not hidden.
+    """
+    import os
+    import subprocess
+    run = run or (lambda argv: subprocess.run(argv, capture_output=True, text=True))
+    for s in steps:
+        if s.what == "write" and os.path.exists(s.path) and not force:
+            with open(s.path, "rb") as fh:
+                if fh.read() != s.content:
+                    raise FileExistsError(f"{s.path} exists and differs from the rendered plist; "
+                                          f"review it, then apply with force")
+    done = []
+    for s in steps:
+        if s.what == "write":
+            os.makedirs(os.path.dirname(s.path), exist_ok=True)
+            with open(s.path, "wb") as fh:
+                fh.write(s.content)
+        elif s.what == "remove":
+            if os.path.exists(s.path):
+                os.unlink(s.path)
+        elif s.what == "launchctl":
+            r = run(s.argv)
+            if r.returncode != 0:
+                raise RuntimeError(f"{s.describe()} failed ({r.returncode}): {(r.stderr or r.stdout).strip()}")
+        done.append(s.describe())
+    return done
+
+
+@dataclass(frozen=True)
+class AgentStatus:
+    """What launchd says about one agent's daemon."""
+
+    loaded: bool
+    running: bool
+    pid: Optional[int] = None
+    last_exit: Optional[str] = None
+
+
+def parse_print(output: str) -> AgentStatus:
+    """Read ``launchctl print gui/<uid>/<label>``: absent, loaded and stopped, or running."""
+    if "Could not find service" in output:
+        return AgentStatus(loaded=False, running=False)
+    fields = {}
+    for line in output.splitlines():
+        key, sep, value = line.strip().partition(" = ")
+        if sep and key in ("state", "pid", "last exit code") and key not in fields:
+            fields[key] = value.strip()
+    pid = int(fields["pid"]) if fields.get("pid", "").isdigit() else None
+    return AgentStatus(loaded=True, running=fields.get("state") == "running", pid=pid,
+                       last_exit=fields.get("last exit code"))
