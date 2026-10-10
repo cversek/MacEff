@@ -7,7 +7,9 @@ nothing, and nothing failed on the way. These tests resolve every such name
 against the framework tree.
 """
 
+import argparse
 import re
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -87,6 +89,89 @@ def test_every_name_a_framework_file_uses_exists(path):
     missing = _dangling(text, _skills(), _commands(), _policies(), _tools())
     assert not missing, f"{path.relative_to(FRAMEWORK)} names what does not exist: {missing}"
 
+
+
+# ---- macf_tools commands, resolved against the CLI's own parser ----------------------------
+
+# `macf_tools policy read x`, `macf_tools task create bug`: the words after macf_tools.
+MACF_COMMAND = re.compile(r"macf_tools((?:[ \t]+[a-z][a-z0-9_-]*)+)")
+
+# Commands framework text names on purpose although they do not exist, and how many times.
+# A count, not a name, so a stale command beside a deliberate one still fails.
+DELIBERATE = {
+    # Examples of bad command names, in the CLI naming guidance.
+    ("policies/base/development/cli_development.md", "get-current-session-information"): 1,
+    ("policies/base/development/cli_development.md", "hooks do-install"): 1,
+    ("policies/base/development/cli_development.md", "bc"): 1,
+    # Sketches of commands not built yet, each labelled as future where it appears.
+    ("policies/base/consciousness/scholarship.md", "memory"): 6,
+    ("policies/base/consciousness/structure_governance.md", "ca"): 2,
+    ("policies/base/development/release_workflow.md", "tasks"): 1,
+    ("templates/SUBAGENT_DEF_TEMPLATE.md", "subagent"): 1,
+}
+
+
+def _cli():
+    from macf.cli import _build_parser
+    return _build_parser()
+
+
+def _subcommands(parser):
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return action.choices
+    return None
+
+
+def _code(text):
+    """Fenced blocks and inline code: where text gives a command. In prose, "macf_tools"
+    is often followed by an English word ("the macf_tools commands")."""
+    fenced = re.findall(r"```.*?```", text, re.S)
+    inline = re.findall(r"`[^`\n]+`", re.sub(r"```.*?```", "", text, flags=re.S))
+    return "\n".join(fenced + inline)
+
+
+def _unknown_commands(text, cli):
+    """Each `macf_tools <words>` in text's code whose words leave the CLI's subcommands, as
+    the words up to and including the first unknown one."""
+    unknown = []
+    for m in MACF_COMMAND.finditer(_code(text)):
+        parser, walked = cli, []
+        for word in m.group(1).split():
+            subs = _subcommands(parser)
+            if subs is None:
+                break  # the rest are arguments
+            walked.append(word)
+            if word not in subs:
+                unknown.append(" ".join(walked))
+                break
+            parser = subs[word]
+    return unknown
+
+
+def test_an_unknown_command_is_reported_and_known_ones_are_not():
+    text = (
+        "Run `macf_tools agent skills`, then `macf_tools policy read scholarship`.\n"
+        "```bash\nmacf_tools task create bug --plan x title\nmacf_tools idea capture x\n```\n"
+        "The macf_tools commands, in prose, are not read as commands.\n"
+    )
+    assert sorted(_unknown_commands(text, _cli())) == ["agent skills", "idea capture"]
+
+
+@pytest.mark.parametrize("path", _sources(), ids=lambda p: str(p.relative_to(FRAMEWORK)))
+def test_every_macf_tools_command_a_framework_file_gives_exists(path):
+    rel = str(path.relative_to(FRAMEWORK))
+    found = Counter(_unknown_commands(path.read_text(errors="replace"), _cli()))
+    expected = Counter({cmd: n for (f, cmd), n in DELIBERATE.items() if f == rel})
+    assert found == expected, (
+        f"{rel}: macf_tools commands that do not exist {dict(found)}; "
+        f"deliberate ones listed for this file {dict(expected)}")
+
+
+def test_every_deliberate_example_is_still_there():
+    """An entry whose text has gone must leave the list, or it would excuse a stale one later."""
+    for f in {f for f, _ in DELIBERATE}:
+        assert (FRAMEWORK / f).is_file(), f
 
 def test_the_wind_down_dispatcher_can_find_its_protocol():
     """The dispatcher reads its order from the wind-down protocol, found by

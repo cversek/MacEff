@@ -188,8 +188,8 @@ Release workflow policy ensures consistent, traceable, and reversible software r
 
 **How to Verify**:
 ```bash
-# Check TODO list for release-targeted incomplete tasks
-macf_tools todos list
+# Check the task tree for incomplete work targeted at this release
+macf_tools task tree
 
 # Verify roadmaps for planned work completion
 # (Multiple roadmaps may contribute to one release)
@@ -710,9 +710,9 @@ macf_tools tasks archive --version v0.3.3 \
 **After tagging release, update task state**:
 
 ```bash
-# 1. Archive v0.3.3 work
-macf_tools tasks archive --version v0.3.3 \
-  --output agent/public/task_archives/v0.3.3/archive.md
+# 1. Archive the release's completed work, one MISSION at a time
+#    (the version-aware archive above is a future command)
+macf_tools task archive <mission_id>
 
 # 2. Mark completed MISSIONs with breadcrumb
 # (MISSIONs that finished in this release)
