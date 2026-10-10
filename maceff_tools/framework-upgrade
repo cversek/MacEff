@@ -26,7 +26,10 @@ STEPS=(
   "Syncing policies:policy-sync"
   "Syncing templates:template-sync"
   "Syncing framework assets:assets-sync"
-  "Upgrading preambles:preamble-upgrade"
+  # Every agent the deployment declares (#388). Running framework-upgrade is the operator's
+  # act on the whole deployment, so it confirms the breadth itself: a prompt at this, the last
+  # step, would come after three steps had written.
+  "Upgrading preambles:preamble-upgrade --all-agents --confirm-all-agents"
 )
 
 echo "=== MacEff Framework Upgrade ==="
@@ -35,7 +38,7 @@ echo ""
 # Preflight, part 1: every step script must exist and be executable.
 missing=0
 for step in "${STEPS[@]}"; do
-  script="${step#*:}"
+  script="${step#*:}"; script="${script%% *}"
   if [[ ! -x "${SCRIPT_DIR}/${script}" ]]; then
     echo "error: upgrade step script missing or not executable: maceff_tools/${script}" >&2
     missing=$((missing + 1))
@@ -50,7 +53,7 @@ fi
 # Collect all failures rather than stopping at the first, then refuse as a set.
 unmet=0
 for step in "${STEPS[@]}"; do
-  script="${step#*:}"
+  script="${step#*:}"; script="${script%% *}"
   check="${SCRIPT_DIR}/${script}.preflight"
   [[ -x "$check" ]] || continue
   if ! "$check"; then
@@ -66,10 +69,10 @@ total="${#STEPS[@]}"
 n=0
 for step in "${STEPS[@]}"; do
   label="${step%%:*}"
-  script="${step#*:}"
+  read -r -a cmd <<< "${step#*:}"
   n=$((n + 1))
   echo "[${n}/${total}] ${label}..."
-  "${SCRIPT_DIR}/${script}"
+  "${SCRIPT_DIR}/${cmd[0]}" "${cmd[@]:1}"
   echo ""
 done
 
@@ -77,4 +80,4 @@ echo "✅ Framework upgrade complete"
 echo "   - Policies synced (+ manifest)"
 echo "   - Templates synced"
 echo "   - Framework assets synced (commands, skills, subagents, output-styles)"
-echo "   - Preambles upgraded (user content preserved)"
+echo "   - Preambles upgraded for every declared agent (user content preserved)"
