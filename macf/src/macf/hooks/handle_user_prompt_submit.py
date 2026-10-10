@@ -9,6 +9,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import traceback
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -32,11 +33,13 @@ from macf.observability import Warning, emit_warning
 from macf.agent_events_log import shared_event_reads
 from macf.utils.input_origin import (
     entry_text,
+    from_maceff_channel,
     opening_channel_source,
     opens_with_harness_notice,
     opens_with_wake,
     typed_by_framework,
 )
+from macf.channels.channel_tag import CHANNEL_SOURCE, is_maceff_notice, opening_tag
 
 # Lines that change on every prompt by design. The diff header carries them
 # (clock, breadcrumb, CL); diffing them would report a change every time.
@@ -161,7 +164,13 @@ def record_user_activity_from_payload(prompt: str, transcript_path: Optional[str
     if typed_by_framework(prompt):
         return False
 
-    source = "channel" if opening_channel_source(prompt) is not None else "direct"
+    channel_source = opening_channel_source(prompt)
+    # A notice from the MacEff channel is the persistent layer speaking, never the
+    # operator. The transcript monitor applies the same test to the same name.
+    if from_maceff_channel(channel_source):
+        return False
+
+    source = "channel" if channel_source is not None else "direct"
     try:
         from macf.agent_events_log import append_event
         append_event("user_activity_detected", {
@@ -174,6 +183,41 @@ def record_user_activity_from_payload(prompt: str, transcript_path: Optional[str
             source="user_prompt_submit",
             kind="user_activity_emit_failed",
             detail=f"could not record user activity from payload: {e}",
+        ))
+        return False
+
+
+def record_channel_receipt(prompt: str) -> bool:
+    """Record that this session took a MacEff channel notice, and when.
+
+    Claude Code acknowledges nothing to a channel, so the received time of a notice
+    (the third time of MIS-0002-R39 (notice_MUST_carry_three_times)) has to come from
+    inside the session. This hook runs on the event 26 ms after the channel sent it,
+    measured on 2.1.296 (MIS-0002-R120 (prompt_hook_MUST_record_notice_receipt)). On a
+    busy session the hook runs when the client hands the event to the turn, and that is
+    the time recorded.
+
+    Returns:
+        True when a receipt event was recorded.
+    """
+    if not is_maceff_notice(prompt):
+        return False
+    attrs = opening_tag(prompt) or {}
+    try:
+        from macf.agent_events_log import append_event
+        append_event("notice_received", {
+            "notice_id": attrs.get("notice_id"),
+            "notice_source": attrs.get("notice_source"),
+            "channel": CHANNEL_SOURCE,
+            "sent_at": attrs.get("sent_at"),
+            "received_at": f"{time.time():.3f}",
+        })
+        return True
+    except (OSError, ValueError, ImportError) as e:
+        emit_warning(Warning(
+            source="user_prompt_submit",
+            kind="notice_receipt_emit_failed",
+            detail=f"could not record a channel notice's receipt: {e}",
         ))
         return False
 
@@ -223,6 +267,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # staleness from the event log, so this render and the ones after it
         # agree with the event that produced them (#181).
         record_user_activity_from_payload(prompt, transcript_path)
+        record_channel_receipt(prompt)
 
         # USER_REMOTE auto-restore: a CLI prompt means the operator is back at the
         # keyboard, which auto-clears USER_REMOTE (detection derives that from the
