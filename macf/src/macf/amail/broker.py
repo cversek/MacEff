@@ -2465,7 +2465,11 @@ class _Server(socketserver.ThreadingUnixStreamServer):
     def _audit_overload(self, uid: Optional[int]) -> None:
         now = time.monotonic()
         with self._meter_lock:
-            if now - self._overload_audited.get(uid, 0.0) < OVERLOAD_AUDIT_INTERVAL:
+            # A uid never audited has no entry. Defaulting it to 0.0 would read as
+            # "audited at boot", because monotonic() counts from boot: on a machine
+            # up for less than the interval, the first refusal went unrecorded.
+            last = self._overload_audited.get(uid)
+            if last is not None and now - last < OVERLOAD_AUDIT_INTERVAL:
                 return
             self._overload_audited[uid] = now
             depth = len(self._inflight)

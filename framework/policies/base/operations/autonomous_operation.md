@@ -303,7 +303,7 @@ This command performs all settings changes atomically:
 - `permissions.defaultMode` set to the configured AUTO_MODE permission mode
   (default `auto`)
 - `Write` removed from the `ask` permission list
-- Asymmetric safety permissions installed (AUTO_MODE in ask, MANUAL_MODE in allow)
+- Asymmetric safety permissions installed: AUTO_MODE in ask; MANUAL_MODE and exactly `macf_tools inject compact` in allow, so an agent can always de-escalate and always compact itself (see `play_time` 5.4 for compacting under a timer)
 - Permanent deny list installed (destructive operations)
 - AUTO_MODE-specific ask list installed (public-facing operations)
 

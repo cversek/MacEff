@@ -1453,6 +1453,24 @@ class TestConnectionMetering:
         assert len(entries) == 1, f"50 refusals produced {len(entries)} audit records"
         assert "1234" in entries[0]["detail"]
 
+    def test_the_first_refusal_is_audited_on_a_machine_just_booted(self, deployment, monkeypatch):
+        """monotonic() counts from boot, so a CI runner or a host can be up for
+        less than the rate limit's interval. The first refusal for a uid has never
+        been audited and must be, however soon after boot it comes.
+        """
+        from macf.amail import broker as bmod
+
+        monkeypatch.setattr(bmod.time, "monotonic", lambda: 5.0)
+        srv = bmod._Server.__new__(bmod._Server)
+        srv._meter_lock = bmod.threading.Lock()
+        srv._inflight, srv._per_uid, srv._overload_audited = {}, {}, {}
+        srv.broker = deployment["broker"]
+        for _ in range(3):
+            srv._audit_overload(1234)
+        entries = [r for r in deployment["broker"].audit.records()
+                   if r.get("context") == "overload"]
+        assert len(entries) == 1, f"5 s after boot, 3 refusals produced {len(entries)} audit records"
+
 
 class TestAuditLogIsBounded:
     """~280 bytes per refused submission, produced at will by any agent, on a

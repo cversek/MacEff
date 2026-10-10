@@ -10,6 +10,44 @@ import sys
 from .environment import get_rich_environment_string
 
 
+def _running_executable(pid: int) -> str:
+    """Path of the binary process ``pid`` runs, or "" when the system won't say.
+
+    macOS names it through libproc's proc_pidpath and Linux through
+    /proc/<pid>/exe. Both name the binary the process actually runs, not the
+    launcher on PATH, which an auto-update can move under a running session.
+    """
+    import os
+    import platform
+
+    system = platform.system()
+    if system == "Linux":
+        link = f"/proc/{pid}/exe"
+        if not os.path.exists(link):
+            return ""
+        try:
+            target = os.readlink(link)
+        except OSError as e:
+            print(f"⚠️ MACF: cannot read {link} (using the installed version): {e}", file=sys.stderr)
+            return ""
+        # The updater prunes old versions while sessions still run them. The
+        # kernel then names the binary with this suffix, and keeps its content
+        # readable through the link itself.
+        return target[: -len(" (deleted)")] if target.endswith(" (deleted)") else target
+    if system == "Darwin":
+        import ctypes
+        import ctypes.util
+        try:
+            libproc = ctypes.CDLL(ctypes.util.find_library("proc") or "/usr/lib/libproc.dylib")
+        except OSError as e:
+            print(f"⚠️ MACF: cannot load libproc (using the installed version): {e}", file=sys.stderr)
+            return ""
+        buf = ctypes.create_string_buffer(4096)
+        length = libproc.proc_pidpath(pid, buf, ctypes.sizeof(buf))
+        return buf.value.decode("utf-8", errors="replace") if length > 0 else ""
+    return ""
+
+
 @lru_cache(maxsize=1)
 def get_claude_code_version() -> str:
     """
@@ -18,11 +56,16 @@ def get_claude_code_version() -> str:
     Cached to avoid repeated subprocess calls (hooks may call this multiple times per session).
 
     Strategies (in order):
-    0. MACF_CC_VERSION env var (explicit override — required for Mac alias-launched CC)
-    1. Linux: Read /proc/PPID/cmdline to find the actual CC binary, extract version from it
-    2. Auto-updater filename: ~/.local/share/claude/versions/X.Y.Z (version is the filename)
+    0. MACF_CC_VERSION env var (explicit override)
+    1. The running session: the binary CLAUDE_PID runs, named by the system;
+       versions/X.Y.Z gives the version by its name, any other binary by its content
+    2. Linux: Read /proc/PPID/cmdline to find the actual CC binary, extract version from it
     3. Binary content: Read shutil.which("claude") resolved target for version pattern
     4. Direct binary: Try `claude --version` (may find stale global install)
+
+    Strategies 2 to 4 read what is installed. An auto-update moves the launcher
+    under a running session, so they can report a version the session isn't
+    running, which is why the running binary is asked first.
 
     Returns:
         Version string (e.g., "2.1.32") or empty string if unavailable.
@@ -32,8 +75,6 @@ def get_claude_code_version() -> str:
     import re
 
     # Strategy 0: Explicit env var override (highest priority)
-    # Required for Mac when CC is launched via alias (e.g., claude-2.1.86)
-    # because Mac provides no way to trace the running binary from a subprocess.
     env_version = os.environ.get("MACF_CC_VERSION")
     if env_version:
         return env_version
@@ -62,7 +103,23 @@ def get_claude_code_version() -> str:
             print(f"⚠️ MACF: failed to read claude script for version extraction: {e}", file=sys.stderr)
         return ""
 
-    # Strategy 1: Linux — read /proc/PPID/cmdline
+    # Strategy 1: the running session's own binary. Claude Code gives its
+    # hooks and tool commands its pid as CLAUDE_PID.
+    pid = os.environ.get("CLAUDE_PID", "")
+    if pid.isdigit():
+        exe = _running_executable(int(pid))
+        if exe:
+            name = os.path.basename(exe)
+            if re.fullmatch(r"\d+\.\d+\.\d+", name):
+                return name
+            # A pruned binary is gone from its path but still readable through
+            # /proc/<pid>/exe, where that exists.
+            readable = exe if os.path.exists(exe) else f"/proc/{pid}/exe"
+            version = _extract_version_from_script(readable)
+            if version:
+                return version
+
+    # Strategy 2: Linux — read /proc/PPID/cmdline
     if platform.system() == "Linux":
         try:
             ppid = os.getppid()
@@ -90,7 +147,7 @@ def get_claude_code_version() -> str:
         except (OSError, subprocess.SubprocessError) as e:
             print(f"⚠️ MACF: Linux /proc-based claude version detection failed: {e}", file=sys.stderr)
 
-    # Strategy 2: Extract version from the claude binary file content
+    # Strategy 3: Extract version from the claude binary file content
     # The claude binary is a self-contained node script with version embedded.
     # This avoids executing it (which could trigger npx downloads or TTY issues).
     import shutil
@@ -100,7 +157,7 @@ def get_claude_code_version() -> str:
         if version:
             return version
 
-    # Strategy 3: Direct binary (may find stale global install)
+    # Strategy 4: Direct binary (may find stale global install)
     try:
         result = subprocess.run(
             ["claude", "--version"],
