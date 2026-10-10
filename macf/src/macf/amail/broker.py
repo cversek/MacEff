@@ -175,44 +175,10 @@ def strip_inbound_headers(message: Message) -> List[str]:
     return cleared
 
 
-#: macOS / BSD: getsockopt(SOL_LOCAL, LOCAL_PEERCRED) fills a `struct xucred`
-#: {u_int cr_version; uid_t cr_uid; short cr_ngroups; gid_t cr_groups[16]}.
-#: The constants are not in Python's socket module on any platform.
-#: Usable bytes of `sun_path` (the array is 104 on macOS/BSD, 108 on Linux, and
-#: the last byte is the terminator).
-SUN_PATH_MAX = 103 if (sys.platform == "darwin" or sys.platform.endswith("bsd")) else 107
-
-_SOL_LOCAL = 0
-_LOCAL_PEERCRED = 0x0001
-_XUCRED_SIZE = 76
-_XUCRED_VERSION = 0
-
-
-def peer_uid(conn: socket.socket) -> int:
-    """The uid the kernel recorded for the connected process.
-
-    One implementation, used both to authenticate a submission and to meter
-    connections, so the two can never disagree about who is calling.
-
-    Linux supplies it as SO_PEERCRED (pid, uid, gid); macOS and the BSDs as
-    LOCAL_PEERCRED (a `struct xucred`). Both are set by the kernel at connect
-    time and neither can be influenced by the peer, which is the property the
-    caller relies on. Any other platform raises, and the caller fails closed.
-    """
-    if hasattr(socket, "SO_PEERCRED"):
-        raw = conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED,
-                              struct.calcsize("3I"))
-        # ucred fields are unsigned; reading them signed turns a high uid negative.
-        # It failed closed, but a lookup should not depend on that.
-        _pid, uid, _gid = struct.unpack("3I", raw)
-        return uid
-    if sys.platform == "darwin" or sys.platform.endswith("bsd"):
-        raw = conn.getsockopt(_SOL_LOCAL, _LOCAL_PEERCRED, _XUCRED_SIZE)
-        version, uid = struct.unpack_from("II", raw)
-        if version != _XUCRED_VERSION:
-            raise OSError(f"unexpected xucred version {version} from LOCAL_PEERCRED")
-        return uid
-    raise OSError(f"no kernel peer-credential source on {sys.platform}")
+# The kernel peer credentials and the sun_path limit live in one shared module, so
+# the broker and the MacEff channel can never disagree about who is calling.
+# Re-exported here because callers and tests import them from the broker.
+from macf.utils.peercred import SUN_PATH_MAX, peer_uid
 
 #: The trust classification, as data rather than prose. canonicalize() asserts
 #: its union covers every Message field, so a field added later fails loudly
