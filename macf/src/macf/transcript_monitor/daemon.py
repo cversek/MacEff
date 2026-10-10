@@ -20,6 +20,7 @@ time it is asked, never from a file (#529).
 """
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -30,6 +31,11 @@ from subprocess import DEVNULL, Popen
 from typing import Callable, Dict, List, Optional
 
 from ..agent_events_log import append_event
+from ..utils.input_origin import (
+    HARNESS_ORIGIN_KINDS,
+    opening_channel_source,
+    opens_with_harness_notice,
+)
 from ..utils.paths import user_runtime_dir
 
 # ============================================================================
@@ -42,6 +48,15 @@ CHUNK_SIZE = 65536  # 64KB read chunks
 #: The module a monitor runs as. It is the monitor's name in ``ps``, and how
 #: ``find_monitors`` tells a monitor from every other process.
 MONITOR_MODULE = "macf.transcript_monitor"
+
+#: Where the code before this one recorded its monitor. That monitor was forked
+#: from the session-start hook without exec, so its command line is the hook's
+#: and ``find_monitors`` cannot see it; it also never exits on its own.
+LEGACY_PID_FILE_NAME = "macf_transcript_monitor.pid"
+LEGACY_HOOK_SCRIPT = "session_start.py"
+#: A session-start hook finishes within its timeout (60 s by default), so a
+#: process with the hook's command line that has run longer is a monitor.
+LEGACY_MIN_AGE_S = 120
 
 #: Replaced in the test suite, so that no test starts a real monitor.
 _execv = os.execv
@@ -79,7 +94,13 @@ Detector = Callable[[dict], Optional[Detection]]
 # ============================================================================
 
 def detect_user_activity(entry: dict) -> Optional[Detection]:
-    """Detect real user messages (not tool results, not meta)."""
+    """Detect a message the operator typed or sent through a channel.
+
+    Not tool results, meta entries or compaction summaries, and not input the
+    client delivers by itself: a background task's completion notice, or a
+    message from another session. The origin record names those; an entry
+    written without one is read by how its text opens.
+    """
     if entry.get("type") != "user":
         return None
     if "toolUseResult" in entry:
@@ -89,11 +110,19 @@ def detect_user_activity(entry: dict) -> Optional[Detection]:
     if entry.get("isCompactSummary"):
         return None
 
-    # Check for channel message (Telegram etc.)
     origin = entry.get("origin")
+    kind = origin.get("kind") if isinstance(origin, dict) else None
+    if kind in HARNESS_ORIGIN_KINDS:
+        return None
+    if kind is None:
+        message = entry.get("message")
+        content = message.get("content", "") if isinstance(message, dict) else ""
+        if opens_with_harness_notice(_entry_text(content)):
+            return None
+
     source = "direct"
     channel_server = ""
-    if isinstance(origin, dict) and origin.get("kind") == "channel":
+    if kind == "channel":
         source = "channel"
         channel_server = origin.get("server", "")
 
@@ -141,19 +170,62 @@ def detect_permission_denial(entry: dict) -> Optional[Detection]:
     })
 
 
+def detect_dialog_answer(entry: dict) -> Optional[Detection]:
+    """Detect the user answering a question the agent asked in a dialog.
+
+    The answer arrives as a tool result, which `detect_user_activity` drops, so
+    a user answering a question was read as idle the moment they had answered.
+    An answered question is a `user` entry whose `toolUseResult` holds the
+    `questions` asked and the `answers` given. Only a person writes `answers`,
+    so, unlike an approval, it is unambiguous, and it is recorded the way a
+    rejection is (`detect_permission_denial`): as direct activity. Like a
+    rejection, it cannot tell the terminal from a Remote Control view.
+    """
+    if entry.get("type") != "user":
+        return None
+    result = entry.get("toolUseResult")
+    if not isinstance(result, dict) or not result.get("answers"):
+        return None
+
+    return Detection("user_activity_detected", {
+        "source": "direct",
+        "timestamp": entry.get("timestamp", ""),
+        "detector": "transcript_monitor_dialog_answer",
+    })
+
+
 def detect_mid_turn_enqueue(entry: dict) -> Optional[Detection]:
-    """Detect mid-turn user message (queue-operation enqueue)."""
+    """Detect a message the session queued (queue-operation enqueue).
+
+    A typed message queued while a turn runs is the operator at the CLI.
+    A channel message is not, and it comes through here too: the client
+    queues every channel message before delivering it, idle or not, and a
+    queue entry carries no origin record. So a queued message whose text
+    opens with a channel tag is recorded as ``channel``, with the server
+    named by that tag, the way ``detect_user_activity`` records one from its
+    origin. Recorded as ``mid_turn_enqueue`` it would end USER_REMOTE on
+    every message from the operator's phone. A notice the client queues for
+    itself, a background task's or another session's, is not activity at all.
+    """
     if entry.get("type") != "queue-operation":
         return None
     if entry.get("operation") != "enqueue":
         return None
 
-    return Detection("user_activity_detected", {
+    content = entry.get("content", "")
+    if isinstance(content, str) and opens_with_harness_notice(content):
+        return None
+    data = {
         "source": "mid_turn_enqueue",
         "timestamp": entry.get("timestamp", ""),
-        "content_preview": str(entry.get("content", ""))[:50],
+        "content_preview": str(content)[:50],
         "detector": "transcript_monitor",
-    })
+    }
+    channel_server = opening_channel_source(content) if isinstance(content, str) else None
+    if channel_server is not None:
+        data["source"] = "channel"
+        data["channel_server"] = channel_server
+    return Detection("user_activity_detected", data)
 
 
 def detect_compact_boundary(entry: dict) -> Optional[Detection]:
@@ -204,6 +276,7 @@ def detect_context_collapse(entry: dict) -> Optional[Detection]:
 DEFAULT_DETECTORS: List[Detector] = [
     detect_user_activity,
     detect_permission_denial,
+    detect_dialog_answer,
     detect_mid_turn_enqueue,
     detect_compact_boundary,
     detect_api_error,
@@ -404,6 +477,81 @@ def _alive(pid: int) -> bool:
     except OSError:
         return False
     return True
+
+
+_ETIME = re.compile(r"^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$")
+
+
+def _parse_etime(text: str) -> Optional[int]:
+    """Seconds from ``ps -o etime``'s ``[[dd-]hh:]mm:ss``, or None if it is not one."""
+    match = _ETIME.match(text.strip())
+    if match is None:
+        return None
+    days, hours, minutes, seconds = (int(g) if g else 0 for g in match.groups())
+    return ((days * 24 + hours) * 60 + minutes) * 60 + seconds
+
+
+def legacy_monitor() -> Optional[int]:
+    """The pid of a monitor started by the code before this one, if one still runs.
+
+    Three facts identify it, because a pid alone is not proof: the pid in the
+    file that code wrote is alive, its command line names the session-start hook,
+    and it has run longer than any hook does. A pid that fails any of them is left
+    alone.
+    """
+    path = user_runtime_dir() / LEGACY_PID_FILE_NAME
+    if not path.exists():
+        return None  # the normal case: no monitor from before the upgrade
+    try:
+        pid = int(path.read_text().strip())
+    except (OSError, ValueError) as e:
+        print(f"⚠️ MACF: cannot read {path}: {e}", file=sys.stderr)
+        return None
+    if not _alive(pid):
+        return None
+    try:
+        out = subprocess.run(["ps", "-ww", "-o", "etime=", "-o", "args=", "-p", str(pid)],
+                             capture_output=True, text=True, timeout=10,
+                             env={**os.environ, "LC_ALL": "C"}).stdout.strip()
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"⚠️ MACF: cannot read process {pid} from ps: {e}", file=sys.stderr)
+        return None
+    fields = out.split(None, 1)
+    if len(fields) != 2:
+        return None  # ps printed no such process
+    etime, args = fields
+    age = _parse_etime(etime)
+    if age is None or age < LEGACY_MIN_AGE_S or LEGACY_HOOK_SCRIPT not in args:
+        return None
+    return pid
+
+
+def stop_legacy_monitor() -> Optional[int]:
+    """Stop a monitor the code before this one started, and remove its pid file.
+
+    Returns the pid it stopped, or None when there was none or it did not exit.
+    """
+    pid = legacy_monitor()
+    if pid is None:
+        return None
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError as e:
+        print(f"⚠️ Could not signal the old-form monitor {pid}: {e}", file=sys.stderr)
+        return None
+    for _ in range(10):
+        if not _alive(pid):
+            break
+        time.sleep(0.5)
+    if _alive(pid):
+        print(f"⚠️ The old-form monitor {pid} is still running after 5s", file=sys.stderr)
+        return None
+    try:
+        (user_runtime_dir() / LEGACY_PID_FILE_NAME).unlink()
+    except OSError as e:
+        print(f"⚠️ MACF: could not remove the old monitor's pid file: {e}", file=sys.stderr)
+    print(f"📡 Stopped a transcript monitor started before the upgrade (PID {pid})", file=sys.stderr)
+    return pid
 
 
 def _process_started(pid: int) -> Optional[float]:
@@ -865,6 +1013,9 @@ def start_daemon(foreground: bool = False, poll_interval: float = DEFAULT_POLL_I
     Returns:
         0 on success, 1 on error
     """
+    # A monitor the code before this one started is invisible to find_monitors,
+    # so it would serve beside the new one and outlive it.
+    stop_legacy_monitor()
     if is_running():
         # stderr, not stdout: start_daemon is called from the SessionStart hook,
         # whose stdout must be parseable JSON. See the note on the started-banner
@@ -964,7 +1115,8 @@ def _agent_monitors(monitors: List[MonitorProcess]) -> List[MonitorProcess]:
 
 
 def stop_daemon() -> int:
-    """Stop every monitor of this agent."""
+    """Stop every monitor of this agent, including one the code before this one started."""
+    stop_legacy_monitor()
     monitors = find_monitors()
     if monitors is None:
         print("⚠️ Which monitors run is unknown; nothing was signaled.", file=sys.stderr)
@@ -997,6 +1149,10 @@ def stop_daemon() -> int:
 
 def daemon_status() -> int:
     """Print this agent's monitors, one line each."""
+    legacy = legacy_monitor()
+    if legacy is not None:
+        print(f"⚠️ A transcript monitor started before the upgrade is running (PID {legacy}); "
+              f"'macf_tools transcript-monitor start' or 'stop' stops it")
     monitors = find_monitors()
     if monitors is None:
         print("❓ Transcript Monitor state unknown: the process table cannot be read")

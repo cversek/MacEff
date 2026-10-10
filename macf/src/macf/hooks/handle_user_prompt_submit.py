@@ -30,6 +30,7 @@ from macf.modes import detect_auto_mode
 from macf.hooks.hook_logging import log_hook_event
 from macf.observability import Warning, emit_warning
 from macf.agent_events_log import shared_event_reads
+from macf.utils.input_origin import opening_channel_source, opens_with_harness_notice
 
 # Lines that change on every prompt by design. The diff header carries them
 # (clock, breadcrumb, CL); diffing them would report a change every time.
@@ -86,9 +87,10 @@ def record_user_activity_from_payload(prompt: str) -> bool:
     ones, which reset the idle timer from the agent's own activity. That
     constraint still holds, so the discrimination is made from the payload
     rather than by trusting every invocation: a typed prompt (direct, slash
-    command, or channel message) is present only for genuine user input.
-    Empirically the split is near-even across a long event log, and every
-    non-empty prompt corresponds to real user input.
+    command, or channel message) is user input. A non-empty prompt is not
+    always one: the client also delivers a background task's completion
+    notice and another session's message as prompts, and those open with
+    the client's own notice forms, so they record nothing.
 
     Emitting here (rather than only suppressing the indicator) also corrects
     the clock for the renders that follow — Stop, PreToolUse — instead of
@@ -102,8 +104,10 @@ def record_user_activity_from_payload(prompt: str) -> bool:
     """
     if not prompt or not prompt.strip():
         return False
+    if opens_with_harness_notice(prompt):
+        return False
 
-    source = "channel" if prompt.lstrip().startswith("<channel ") else "direct"
+    source = "channel" if opening_channel_source(prompt) is not None else "direct"
     try:
         from macf.agent_events_log import append_event
         append_event("user_activity_detected", {

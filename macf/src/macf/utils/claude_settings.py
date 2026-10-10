@@ -257,9 +257,14 @@ _PERMANENT_ASK = [
     "Bash(macf_tools mode set AUTO_MODE:*)",
 ]
 
-# Permissions that must always be in 'allow' (agent can always de-escalate)
+# Permissions that must always be in 'allow': the agent can always de-escalate,
+# and can always compact itself. The injected /compact passes every Stop gate
+# once (stop_bypass), so under the client's auto mode the only thing that could
+# stop it is a refusal of the command itself (GH #479). Exact, not a wildcard:
+# `inject` takes any slash command.
 _PERMANENT_ALLOW = [
     "Bash(macf_tools mode set MANUAL_MODE:*)",
+    "Bash(macf_tools inject compact)",
 ]
 
 # Operations that are NEVER legitimate in normal development (permanent deny)

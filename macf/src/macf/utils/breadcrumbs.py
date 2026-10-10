@@ -8,7 +8,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
-from .paths import find_git_worktree, find_project_root, git_location_redirected
+from .paths import find_git_worktree, find_project_root, git_location_redirected, session_root
 from .session import get_current_session_id
 from .json_io import read_json
 
@@ -201,7 +201,7 @@ def _find_possible_agent_ids(session_id: str) -> list:
         List of agent_id strings that have this session (most likely first)
     """
     try:
-        tmp_macf = Path("/tmp/macf")
+        tmp_macf = session_root()
         if not tmp_macf.exists():
             return []
 

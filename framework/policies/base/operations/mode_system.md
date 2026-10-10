@@ -152,15 +152,14 @@ Five operational modes, independently triggered, simultaneously active:
 ### USER_IDLE 😴
 - **Trigger**: Computed from timestamp of last user activity
 - **Detection**: `time.time() - last_user_activity > MACF_USER_IDLE_TIMEOUT_MINS * 60`
-- **Activity sources (v1)**: `dev_drv_started` event timestamp from UserPromptSubmit hook
-- **Activity sources (v2+)**: JSONL `queue-operation` enqueue entries (sub-turn precision)
+- **Activity sources**: `user_activity_detected` events, from any source. The prompt hook records a typed prompt the moment it is submitted; the transcript monitor records a typed message, a message queued mid-turn, a channel message, a rejected permission dialog and an answered question. An approval is not counted, because an approved call looks the same as an auto-allowed one. Neither producer counts input the client delivers by itself, a background task's completion notice or a message from another session: the transcript's origin record names it, and where there is none, the opening the client writes for it does. `dev_drv_started` is not a source: it fires on the agent's own system prompts too.
 - **Default timeout**: 10 minutes (`MACF_USER_IDLE_TIMEOUT_MINS`)
-- **Deactivation**: Automatic when user sends next message
+- **Deactivation**: Automatic at the user's next activity
 
 ### USER_REMOTE 📡
 - **Trigger**: Explicit `macf_tools mode set USER_REMOTE` — the operator declares they have stepped away from the CLI and are reachable **only** through a remote channel (Telegram).
 - **Meaning**: The user is *present and responsive*, but the **CLI is unattended**. This is the opposite failure surface from USER_IDLE: the hazard is not that the agent stops, but that it **blocks on a tool needing CLI input nobody is there to give** — a permission prompt, or an `AskUserQuestion` that never renders on the remote channel — and hangs the whole session until the operator physically returns.
-- **Deactivation**: **Automatic, the instant the operator sends a message from the CLI** — a `user_activity_detected` event with `source == "direct"`. A message from Telegram (`source == "channel"`) does **not** clear it: the operator is still remote. The Transcript Monitor already records this direct-vs-channel distinction (`detect_user_activity`), so the discriminator is a read, not a new signal.
+- **Deactivation**: **Automatic, the instant the operator sends a message from the CLI** — a `user_activity_detected` event with `source == "direct"`, or `"mid_turn_enqueue"` for a typed message queued during a turn. A message from Telegram (`source == "channel"`) does **not** clear it: the operator is still remote. The client queues every channel message before it delivers it, idle or not, and a queued entry has no origin record, so the Transcript Monitor reads the channel from the tag that opens a queued message (`detect_mid_turn_enqueue`), as it reads it from the origin record of a delivered one (`detect_user_activity`). The discriminator is a read, not a new signal.
 - **Forbidden while active** (each blocks on the absent CLI):
   - `AskUserQuestion` — its prompt does not propagate to Telegram, so a remote operator can never answer it. Ask in a Telegram `reply` instead, or in the turn-final message, which the Stop hook forwards to the channel **only while the hook trace is on** (§6, *The Hook Trace*).
   - Every **Ask-list** command (`git push`, `gh pr create`, `gh pr merge`, `gh issue create/close`, `git reset --hard`, `rm -r`, docker teardown, …) — each raises a CLI permission prompt. Accumulate commits locally and **hold pushes/PRs** until USER_REMOTE clears.
