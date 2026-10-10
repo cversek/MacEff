@@ -2071,11 +2071,11 @@ macf_tools knowledge viz [output]
 Keep the master learnings index (`agent/private/learnings/INDEX.md`) and its consultation trigger true.
 
 ```bash
-macf_tools learnings index add <file> --cluster <name> [--hook "<WHEN ...>"]
+macf_tools learnings index add <file> --cluster <name> [--hook "<WHEN ...>"] [--new-cluster]
 macf_tools learnings index verify [--memory PATH] [--json]
 ```
 
-`add` files one learning under its cluster heading, in the shape of the cluster's existing entries, and updates the cluster's `(N)`, the total and the date; a new cluster is created and named in the output as one the trigger must now carry. `verify` is the doctor for this corpus: entries that name no file, learnings no entry names, counts that are wrong, and a trigger that misses a cluster, does not point at the index, or states a stale count. The trigger is looked for at the platform's per-project memory file; `--memory` names another path, and a trigger it cannot find is reported with every path it tried.
+`add` files one learning under its cluster heading, in the shape of the cluster's existing entries (a backticked file name, or a link to the bare file name), and updates the cluster's `(N)`, the total and the date. A cluster name that matches no heading is refused, with the nearest existing names, unless `--new-cluster` is given; a new cluster goes after the last one and is named in the output as one the trigger must now carry. `verify` is the doctor for this corpus: entries that name no file, learnings no entry names, counts that are wrong, and a trigger that misses a cluster (naming the linked memory file when the cluster appears only there, since a linked file loads on recall), does not point at the index, or states a stale count. The trigger is looked for at the platform's per-project memory file; `--memory` names another path, and a trigger it cannot find is reported with every path it tried.
 
 ---
 
