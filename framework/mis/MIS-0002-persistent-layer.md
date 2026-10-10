@@ -409,22 +409,22 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R04 | judgment | the head maintainer, at review of each rendering | standing |
 | R05 | decidable | macf/tests/test_pd_render.py::test_launchd_is_launchagent | planned |
 | R06 | decidable | macf/tests/test_pd_render.py::test_identifier | planned |
-| R07 | decidable | macf/tests/test_primal_daemon.py::test_no_cross_agent_control | planned |
+| R07 | decidable | macf/tests/test_primal_daemon.py::test_no_cross_agent_control | passing |
 | R08 | decidable | macf/tests/test_pd_declaration.py::test_every_unit_declared | planned |
 | R09 | decidable | macf/tests/test_pd_declaration.py::test_unit_fields | planned |
 | R10 | decidable | macf/tests/test_pd_declaration.py::test_renderings_exist | planned |
 | R11 | decidable | macf/tests/test_pd_declaration.py::test_schedules_hosted | planned |
-| R12 | decidable | macf/tests/test_primal_daemon.py::test_clean_parent | planned |
-| R13 | decidable | macf/tests/test_primal_daemon.py::test_env_rendered_at_start | planned |
+| R12 | decidable | macf/tests/test_primal_daemon.py::test_clean_parent | passing |
+| R13 | decidable | macf/tests/test_primal_daemon.py::test_env_rendered_at_start | passing |
 | R14 | decidable | macf/tests/test_primal_daemon.py::test_liveness_events | planned |
 | R15 | decidable | macf/tests/test_pd_readout.py::test_liveness_probed | planned |
 | R16 | judgment | the head maintainer, at review of each landing pull request | standing |
 | R17 | decidable | macf/tests/test_pd_readout.py::test_health_is_runs | planned |
 | R18 | decidable | macf/tests/test_pd_readout.py::test_overdue_is_unhealthy | planned |
 | R19 | decidable | macf/tests/test_pd_readout.py::test_auth_failure_is_failed | planned |
-| R20 | decidable | macf/tests/test_primal_daemon.py::test_states | planned |
+| R20 | decidable | macf/tests/test_primal_daemon.py::test_states | passing |
 | R21 | decidable | macf/tests/test_pd_harness.py::test_waiting_reported | planned |
-| R22 | decidable | macf/tests/test_primal_daemon.py::test_no_restart_while_waiting | planned |
+| R22 | decidable | macf/tests/test_primal_daemon.py::test_no_restart_while_waiting | passing |
 | R23 | judgment | the head maintainer, at review of each harness adapter | standing |
 | R24 | decidable | macf/tests/test_pd_schedule.py::test_policy_declared | planned |
 | R25 | decidable | macf/tests/test_pd_schedule.py::test_policy_values | planned |
@@ -450,8 +450,8 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R45 | decidable | macf/tests/test_pd_harness.py::test_keystrokes_only_into_empty_idle_box | planned |
 | R46 | judgment | the Secretary, at review of each notice source | standing |
 | R47 | decidable | macf/tests/test_pd_notice.py::test_after_restart_notice | planned |
-| R48 | decidable | macf/tests/test_primal_daemon.py::test_outside_stop_beats_gates | planned |
-| R49 | decidable | macf/tests/test_primal_daemon.py::test_work_in_flight_checked | planned |
+| R48 | decidable | macf/tests/test_primal_daemon.py::test_outside_stop_beats_gates | passing |
+| R49 | decidable | macf/tests/test_primal_daemon.py::test_work_in_flight_checked | passing |
 | R50 | decidable | macf/tests/test_primal_daemon.py::test_quiet_window | planned |
 | R51 | decidable | macf/tests/test_primal_daemon.py::test_no_own_compaction | planned |
 | R52 | decidable | macf/tests/test_primal_daemon.py::test_control_events | planned |
