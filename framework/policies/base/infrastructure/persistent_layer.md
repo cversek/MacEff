@@ -28,7 +28,14 @@ MacEff's long-lived machinery grew one piece at a time, and most of it died with
 - Why does the channel offer no tools and relay no permission prompts?
 - How is the channel installed and loaded?
 
-**2 Not Yet Landed**
+**2 Observation**
+- Who may watch a session, and how does an onlooker get in?
+- What does an onlooker see, and what is kept from it?
+- How does the owner keep a stretch of work from an onlooker?
+- How does an observation end, and who may end it?
+- How does the agent know who is watching?
+
+**3 Not Yet Landed**
 - Which parts of the persistent layer are specified but not yet in this policy?
 
 === CEP_NAV_BOUNDARY ===
@@ -85,12 +92,24 @@ A channel not on Claude Code's allowlist loads only under the development flag, 
 
 ---
 
-## 2 Not Yet Landed
+## 2 Observation
+
+### 2.1 Presence
+
+**The observed agent's per-call line shows each onlooker that watches and each operator surface that is present** [MIS-0002-R91 (call_line_MUST_show_presence)]. A paused onlooker is marked as paused.
+
+- **A surface claims only what it can know.** A keyboard surface that can see its viewer says `attached` while someone is there. One that cannot detect its viewer says `enabled`, never `attached` [MIS-0002-R98 (presence_MUST_say_enabled_when_undetectable)]. A channel, which carries messages and no keyboard, says `reachable`, so an operator reachable by channel is told apart from one attached at a keyboard [MIS-0002-R102 (presence_SHOULD_show_reachable)]. Which keyboard surfaces set presence is judged per surface [MIS-0002-R97 (keyboard_surface_MUST_set_presence)].
+- **Presence is derived, not stored.** The per-call hook folds it from the agent's own event log, which it already reads: onlookers from the observation acts, surfaces from their recorded states. A copy kept elsewhere could drift from the acts or outlive its writer.
+- **When the primal daemon is not alive, presence is unknown,** and the line says so. It never shows a stale onlooker, and never "nobody".
+
+---
+
+## 3 Not Yet Landed
 
 Specified in MIS-0002 and arriving with their landing steps, each in the pull request that enforces it:
 - **The primal daemon itself:** declarations, liveness events, health derived from runs, outside control and the outside watch (MIS-0002 §6.1 to §6.4, §6.7, §6.12).
 - **Schedules and the notifier,** including the keystroke fallback, the dark-channel event, and every producer of the operator's activity (MIS-0002 §6.5, §6.6, the rest of §6.14).
-- **Mail, containers, macOS, the tray, observation and attach** (MIS-0002 §6.8 to §6.11, §6.13).
+- **Mail, containers, macOS, the tray and attach** (MIS-0002 §6.8, §6.9, §6.10, §6.11, §6.13).
 
 Until a section lands, the rules in force are the existing policies: `service_supervision`, `notification_delivery` and `amail`.
 
