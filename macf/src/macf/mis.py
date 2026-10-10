@@ -363,17 +363,29 @@ def check(paths: Iterable[Path], glossary: Optional[Path] = None) -> list[Findin
 def check_citations(files: list, glossary: Optional[Path] = None) -> list:
     """R49: each `MIS-NNNN-Rnn (slug)` in framework text names a requirement and slug that exist.
 
-    The MIS files checked define what can be cited. The texts searched are those files, the
-    glossary, and every policy under framework/policies beside the MIS directory.
+    Every MIS beside the files checked defines what can be cited, so a check of one file also
+    resolves its citations of other MIS, and a citation of an MIS that does not exist is a
+    finding. The texts searched are the files checked, the glossary, and every policy under
+    framework/policies beside the MIS directory. In the glossary and the policies, a run that
+    names only some MIS checks only citations of those, so a check of one file reports nothing
+    about the others.
     """
-    defined: dict = {}
-    for f in files:
+    tree = sorted({s for f in files for s in f.parent.glob("MIS-*.md")} | set(files))
+    defined: dict = {}  # number -> {requirement ID: slug}, or None when the file is unreadable
+    named: set = set()
+    for f in tree:
         text, unreadable = read_utf8(f)
-        if unreadable:  # reported by check_file
-            continue
-        num = read_header(text.splitlines()).get("Number", ("", 1))[0].strip()
+        if unreadable:  # reported by check_file when named; its citations cannot be resolved
+            m = re.match(r"MIS-(\d+)-", f.name)
+            num, reqs = (m.group(1) if m else ""), None
+        else:
+            num = read_header(text.splitlines()).get("Number", ("", 1))[0].strip()
+            reqs = dict(REQ_SLUG_RE.findall(text))
         if num:
-            defined[num] = dict(REQ_SLUG_RE.findall(text))
+            defined[num] = reqs
+            if f in files:
+                named.add(num)
+    whole_tree = set(files) >= set(tree)
     reported = set(files) | ({glossary} if glossary else set())
     texts = list(files) + ([glossary] if glossary else [])
     for f in files[:1]:
@@ -387,9 +399,16 @@ def check_citations(files: list, glossary: Optional[Path] = None) -> list:
             if path not in reported:  # a policy: only this check reads it
                 out.append(unreadable)
             continue
+        own = path in files
         for n, line in enumerate(text.splitlines(), start=1):
             for num, rid, slug in CITATION_RE.findall(line):
+                if not (own or whole_tree or num in named):
+                    continue
                 if num not in defined:
+                    out.append(Finding(path=str(path), line=n, rule="R49",
+                                       message=f"cites MIS-{num}-{rid} ({slug}), but there is no MIS-{num}"))
+                    continue
+                if defined[num] is None:
                     continue
                 want = defined[num].get(rid)
                 if want is None:
