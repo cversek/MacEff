@@ -42,6 +42,11 @@ lint = [
 proxy = [
     "aiohttp>=3.9.0",  # For API proxy streaming
 ]
+tray = [
+    # The optional menu-bar app (MIS-0002-R67, R68): macOS only, never imported by the
+    # persistent layer. python -m macf.tray
+    "rumps>=0.4.0; sys_platform == 'darwin'",
+]
 completion = [
     "argcomplete>=3.0.0",  # Shell tab completion for macf_tools CLI
 ]
@@ -75,3 +80,8 @@ amail-receiver = "macf.amail.daemons.receiver:main"
 # .mcp.json, which names this command, so it has to resolve on PATH wherever macf
 # is installed rather than depend on which interpreter a session finds first.
 maceff-channel = "macf.channels.maceff_channel:main"
+
+# The tray's state glyphs are files, not modules, so a wheel carries them only when
+# they are named here (an editable install reads them from the tree either way).
+[tool.setuptools.package-data]
+"macf.tray" = ["glyphs/*.svg", "glyphs/*.png"]
