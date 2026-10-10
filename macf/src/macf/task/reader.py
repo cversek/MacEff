@@ -16,6 +16,7 @@ from typing import List, Optional, Dict, Any, Union, Set
 
 from .models import MacfTask
 from ..utils.paths import find_project_root
+from ..utils.atomic import write_json_atomic
 
 
 class TaskReader:
@@ -442,8 +443,7 @@ def update_task_file(task_id: str, updates: Dict[str, Any], session_uuid: Option
             data[key] = value
 
         # Write back
-        with open(task_file, "w") as f:
-            json.dump(data, f, indent=2)
+        write_json_atomic(task_file, data)
 
         return True
     except (json.JSONDecodeError, IOError):
