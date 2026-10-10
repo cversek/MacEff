@@ -13,8 +13,13 @@ Three subcommands, one state directory per app (~/.maceff/ghapp/<name>/, mode 07
                 before it expires.
   whoami        Print the app's slug, id and installations (no secrets).
 
-Which app: --name, else $GHAPP_NAME, else the one state directory under ~/.maceff/ghapp/.
-More than one and no name is an error, never a guess.
+Which app: --name, else $GHAPP_NAME, else the one app under the agent's home
+($MACEFF_AGENT_HOME_DIR, else ~)/.maceff/ghapp/. More than one and no name is an error, never
+a guess.
+
+A token is a live credential: an agent runs ``token`` only inside a command substitution
+(``GH_TOKEN="$(ghapp.py token --repo O/R)"``), never where its output is captured, since an
+agent's tool output is a transcript.
 
 Why: an agent that posts through the operator's own token cannot be told apart from the
 operator on the platform, and a leaked personal token lives for months. An installation
@@ -37,7 +42,10 @@ from pathlib import Path
 import jwt  # PyJWT, with cryptography for RS256; both in /opt/maceff-venv
 
 API = "https://api.github.com"
-ROOT = Path(os.path.expanduser("~/.maceff/ghapp"))
+# The agent's own home, not the login's: where several agents share one login, ~ is the
+# login's, and "the only app there" could be another agent's. MACEFF_AGENT_HOME_DIR names the
+# agent's home, as macf.utils.paths.find_agent_home reads it; inside a container it is ~.
+ROOT = Path(os.environ.get("MACEFF_AGENT_HOME_DIR") or os.path.expanduser("~")) / ".maceff" / "ghapp"
 
 
 class NoApp(Exception):
@@ -57,8 +65,12 @@ def resolve_name(given):
     raise NoApp(f"several apps under {ROOT} ({', '.join(apps)}): pass --name or set GHAPP_NAME")
 
 
-def state_dir(name: str) -> Path:
+def state_dir(name: str, create: bool = False) -> Path:
+    """The app's state directory. Only ``convert`` creates one; any other command naming an
+    app that does not exist is told so in a sentence, not left with an empty directory."""
     d = ROOT / name
+    if not create and not (d / "app.json").is_file():
+        raise NoApp(f"no app named {name!r} under {ROOT} (run convert first, or check --name / GHAPP_NAME)")
     d.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(d, 0o700)
     return d
@@ -116,7 +128,7 @@ def cmd_convert(args) -> int:
     if not args.name:
         print("convert needs --name: the state directory this app will live in", file=sys.stderr)
         return 2
-    d = state_dir(args.name)
+    d = state_dir(args.name, create=True)
     if (d / "private-key.pem").exists() and not args.force:
         print(f"refusing: {d}/private-key.pem exists (use --force to replace)", file=sys.stderr)
         return 1
@@ -137,6 +149,19 @@ def app_jwt(d: Path) -> str:
     return jwt.encode({"iat": now - 60, "exp": now + 540, "iss": str(facts["id"])}, key, algorithm="RS256")
 
 
+def _installed_repos(token: str) -> list:
+    """Every repository the installation reaches, following the pages (100 a page)."""
+    repos, page = [], 1
+    while True:
+        got = call("GET", f"/installation/repositories?per_page=100&page={page}", token=token)
+        batch = got.get("repositories", []) if isinstance(got, dict) else []
+        repos += [r["full_name"].lower() for r in batch]
+        total = got.get("total_count", len(repos)) if isinstance(got, dict) else len(repos)
+        if not batch or len(repos) >= total:
+            return repos
+        page += 1
+
+
 def cmd_token(args) -> int:
     d = state_dir(resolve_name(args.name))
     facts = json.loads((d / "app.json").read_text())
@@ -152,11 +177,17 @@ def cmd_token(args) -> int:
         if want and want not in c.get("repos", []):
             return 3
         sys.stdout.write(c["token"])
+        if args.expiry:
+            sys.stdout.write("\n" + str(int(c["expires_epoch"])))
         return 0
 
     c = read_cache(cache)
     if c and c.get("expires_epoch", 0) - time.time() > 300:
-        return emit(c)
+        # A repository added to the installation after this token was cached is not in its
+        # list; mint once more before answering "not installed", rather than act as the
+        # operator there until the cached token nears expiry.
+        if not want or want in c.get("repos", []):
+            return emit(c)
     j = app_jwt(d)
     inst = [i for i in call("GET", "/app/installations", bearer_jwt=j)
             if (i.get("account") or {}).get("login", "").lower() == owner]
@@ -165,8 +196,7 @@ def cmd_token(args) -> int:
         return 3
     tok = call("POST", f"/app/installations/{inst[0]['id']}/access_tokens", bearer_jwt=j)
     exp = calendar.timegm(time.strptime(tok["expires_at"], "%Y-%m-%dT%H:%M:%SZ"))  # UTC
-    repos = [r["full_name"].lower() for r in
-             call("GET", "/installation/repositories?per_page=100", token=tok["token"]).get("repositories", [])]
+    repos = _installed_repos(tok["token"])
     c = {"token": tok["token"], "expires_epoch": exp, "installation": inst[0]["id"], "repos": repos}
     write_secret(cache, json.dumps(c))
     return emit(c)
@@ -189,6 +219,7 @@ def main(argv=None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("convert"); c.add_argument("code"); c.add_argument("--force", action="store_true")
     t = sub.add_parser("token"); t.add_argument("--owner"); t.add_argument("--repo", help="owner/name; exit 3 if not installed there")
+    t.add_argument("--expiry", action="store_true", help="also print the token's expiry (epoch seconds) on a second line")
     sub.add_parser("whoami")
     args = p.parse_args(argv)
     try:

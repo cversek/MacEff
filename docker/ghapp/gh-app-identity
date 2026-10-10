@@ -18,13 +18,25 @@ GHAPP = os.path.join(os.path.dirname(os.path.realpath(__file__)), "ghapp.py")
 argv = sys.argv[1:]
 
 
+def _owner_repo(value):
+    """OWNER/REPO from what gh accepts for -R: OWNER/REPO, HOST/OWNER/REPO, or a URL."""
+    v = value.strip().lower().removesuffix(".git").rstrip("/")
+    if "://" in v:
+        v = v.split("://", 1)[1]
+    parts = [p for p in v.split("/") if p]
+    if len(parts) >= 3 and "." in parts[0]:   # a host first
+        parts = parts[1:]
+    return "/".join(parts[:2]) if len(parts) >= 2 else ""
+
+
 def target():
     for j, a in enumerate(argv):
-        if a in ("-R", "--repo") and j + 1 < len(argv): return argv[j + 1].lower()
-        if a.startswith(("-R=", "--repo=")): return a.split("=", 1)[1].lower()
+        if a in ("-R", "--repo") and j + 1 < len(argv): return _owner_repo(argv[j + 1])
+        if a.startswith(("-R=", "--repo=")): return _owner_repo(a.split("=", 1)[1])
     for a in argv:
-        if a.startswith("repos/"):
-            seg = a.split("/")
+        path = a.lstrip("/")   # gh api accepts /repos/... as well as repos/...
+        if path.startswith("repos/"):
+            seg = path.split("/")
             if len(seg) >= 3: return f"{seg[1]}/{seg[2]}".lower().split("?")[0]
     try:
         url = subprocess.run(["git", "remote", "get-url", "origin"], capture_output=True, text=True, timeout=5).stdout.strip().lower()

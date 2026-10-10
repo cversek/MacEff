@@ -269,14 +269,21 @@ git push origin main
 | `git-credential-ghapp` | git credential helper: answers with a token minted for exactly the repository git asks about, nothing where the app is not installed |
 | `gh-app-identity` | `gh` as the app where it is installed, as the operator elsewhere |
 
-**What stays the agent's own.** The key, the app's facts and the token cache live in `~/.maceff/ghapp/<name>/` (mode 0700, key 0600). The tools pick the app from `--name`, else `$GHAPP_NAME`, else the one app in that directory, and refuse to guess between several.
+**What stays the agent's own.** The key, the app's facts and the token cache live in `<agent home>/.maceff/ghapp/<name>/` (mode 0700, key 0600), where the agent home is `$MACEFF_AGENT_HOME_DIR`, else `~`. The tools pick the app from `--name`, else `$GHAPP_NAME`, else the one app in that directory, and refuse to guess between several. A token is a live credential: run `ghapp.py token` only inside a command substitution (`GH_TOKEN="$(…)"`), never where its output is captured. An agent's tool output is a transcript.
 
-**Wiring it up, once per agent:**
+**Wiring it up, for an agent whose home is its own** (a container, or an account of its own). The order matters. The empty value resets the list, so a helper configured earlier (Homebrew git's system-wide `osxkeychain`, or `gh auth setup-git`'s) cannot answer first, and the operator's helper comes last, for repositories the app is not installed on:
 ```bash
-git config --global credential.https://github.com.helper /opt/maceff-ghapp/git-credential-ghapp
+git config --global --replace-all credential.https://github.com.helper ''
+git config --global --add credential.https://github.com.helper /opt/maceff-ghapp/git-credential-ghapp
+git config --global --add credential.https://github.com.helper '!gh auth git-credential'
 git config --global credential.https://github.com.useHttpPath true
 ln -s /opt/maceff-ghapp/gh-app-identity ~/.local/bin/gh   # ahead of /usr/bin/gh on PATH
 ```
+
+**Where several agents and the operator share one login,** `--global` and `~/.local/bin` belong to the login, so wiring them would send the operator's own pushes and posts out as the agent's app. Instead:
+- set the same four values in the agent's own clone (`git -C <clone> config ...`), never `--global`;
+- call the wrapper by its full path, or from a bin directory only the agent's own sessions put on PATH;
+- set `MACEFF_AGENT_HOME_DIR` for the agent's sessions, so its app's state is under its own home and never another agent's.
 
 **Falling back is visible, never silent.** Where the app is not installed, the operator's login is used as before, and that is expected. Where the app should have answered and could not (no key, a broken install), both wrappers say so on stderr, because the command then acts in the operator's name. `GH_AS_OPERATOR=1` is the deliberate way to act as the operator for one command.
 

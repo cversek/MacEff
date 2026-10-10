@@ -102,3 +102,70 @@ def test_a_credential_helper_that_cannot_mint_says_so(tmp_path):
 def test_the_tools_run_from_the_image_venv():
     for name in ("ghapp.py", "git-credential-ghapp", "gh-app-identity"):
         assert (TOOLS / name).read_text().splitlines()[0] == "#!/opt/maceff-venv/bin/python3"
+
+
+def _api(later, pages, calls):
+    def call(method, path, token="", bearer_jwt="", body=None):
+        calls.append(path)
+        if path == "/app/installations":
+            return [{"id": 7, "account": {"login": "acme"}}]
+        if path.endswith("/access_tokens"):
+            return {"token": "fresh", "expires_at": later}
+        page = int(path.rsplit("page=", 1)[1]) if "page=" in path else 1
+        return {"total_count": sum(len(p) for p in pages),
+                "repositories": [{"full_name": n} for n in pages[page - 1]] if page <= len(pages) else []}
+    return call
+
+
+def _later():
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 3600))
+
+
+def test_a_repository_added_after_the_cache_is_minted_for_not_refused(ghapp, monkeypatch, capsys):
+    """Review of this PR: a cached token's list predates a newly installed repository."""
+    d = _app(ghapp, "manny2")
+    (d / "token-acme.json").write_text(json.dumps(
+        {"token": "old", "expires_epoch": time.time() + 3000, "repos": ["acme/x"]}))
+    monkeypatch.setattr(ghapp, "call", _api(_later(), [["acme/x", "acme/new"]], []))
+    assert ghapp.main(["token", "--repo", "acme/new"]) == 0
+    assert capsys.readouterr().out == "fresh"
+
+
+def test_every_page_of_repositories_is_read(ghapp, monkeypatch, capsys):
+    _app(ghapp, "manny2")
+    pages = [[f"acme/r{i}" for i in range(100)], [f"acme/r{i}" for i in range(100, 150)]]
+    calls = []
+    monkeypatch.setattr(ghapp, "call", _api(_later(), pages, calls))
+    assert ghapp.main(["token", "--repo", "acme/r149"]) == 0
+    assert sum("installation/repositories" in c for c in calls) == 2
+
+
+def test_an_unknown_app_name_is_a_sentence_and_creates_nothing(ghapp, capsys):
+    _app(ghapp, "manny2")
+    assert ghapp.main(["--name", "nosuch", "token", "--repo", "acme/x"]) == 2
+    assert "no app named 'nosuch'" in capsys.readouterr().err
+    assert not (ghapp.ROOT / "nosuch").exists()
+
+
+def test_the_state_lives_under_the_agents_home_when_one_is_named(tmp_path, monkeypatch):
+    monkeypatch.setitem(sys.modules, "jwt", types.SimpleNamespace(encode=lambda *a, **k: "signed"))
+    monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(tmp_path / "agent_home"))
+    spec = importlib.util.spec_from_file_location("ghapp_home", TOOLS / "ghapp.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.ROOT == tmp_path / "agent_home" / ".maceff" / "ghapp"
+
+
+@pytest.mark.parametrize("args,expected", [
+    (["api", "/repos/other/thing/issues"], "other/thing"),
+    (["api", "repos/other/thing/pulls"], "other/thing"),
+    (["pr", "view", "1", "-R", "https://github.com/Other/Thing.git"], "other/thing"),
+    (["pr", "view", "1", "-R", "github.com/other/thing"], "other/thing"),
+])
+def test_the_wrapper_mints_for_the_repository_the_command_names(tmp_path, args, expected):
+    """With no app in this home the token call fails, and the wrapper's message names the
+    repository it decided on, which is what this checks."""
+    r = subprocess.run([sys.executable, str(TOOLS / "gh-app-identity"), *args],
+                       env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin", "GH_REAL": "/bin/true"},
+                       capture_output=True, text=True, cwd=tmp_path, timeout=60)
+    assert f"app token unavailable for {expected} " in r.stderr
