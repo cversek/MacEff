@@ -486,20 +486,19 @@ def test_an_end_and_a_new_invitation_the_stream_never_saw_still_end_it(tmp_path)
 # Presence (R91, R98, R102): one record the call line reads
 # ---------------------------------------------------------------------------
 
-def test_presence_on_call_line(tmp_path):
-    """R91: the line shows each onlooker watching (paused ones marked) and each surface present."""
+def test_presence_on_call_line():
+    """R91: the line shows each onlooker watching (paused ones marked) and each surface present,
+    derived from the agent's own log at read time."""
     inv, log = _invited()
     log.append(acts.pause(THEM, acts.fold(log), at=1300))
     other = acts.invite(ME, "SecondOnlooker@cd34ef", 0, acts.fold(log), container_of=_host)
     log.append(other.event)
-    rec = presence.build([presence.Surface("terminal", keyboard=True, viewer_seen=True)], acts.fold(log))
-    path = tmp_path / "presence.json"
-    presence.write(path, rec)
-    assert oct(path.stat().st_mode & 0o777) == "0o600"
-    line = presence.call_line(presence.read(path))
+    log.append(presence.surface_event(presence.Surface("terminal", keyboard=True, viewer_seen=True)))
+    line = presence.call_line(presence.from_events(log, daemon_alive=True))
     assert line == "onlookers: OnlookerAgent@ab12cd (paused), SecondOnlooker@cd34ef \u00b7 operator: terminal attached"
     log.append(acts.end(THEM, "observed", acts.fold(log)))
-    assert "OnlookerAgent" not in presence.call_line(presence.build([], acts.fold(log)))
+    log.append(presence.surface_event(presence.Surface("terminal", keyboard=True, viewer_seen=False)))
+    assert presence.call_line(presence.from_events(log, daemon_alive=True)) == "onlookers: SecondOnlooker@cd34ef"
 
 
 def test_undetectable_viewer_said():
@@ -518,8 +517,9 @@ def test_reachable_state():
     assert presence.call_line(presence.build([term, tg], {})) == "operator: terminal attached, telegram reachable"
 
 
-def test_an_unreadable_record_is_unknown_not_empty(tmp_path):
-    bad = tmp_path / "presence.json"
-    bad.write_text("{not json")
-    assert presence.call_line(presence.read(bad)) == "presence: unknown"
-    assert presence.call_line(presence.read(tmp_path / "missing.json")) == ""
+def test_presence_is_unknown_when_the_daemon_is_not_alive():
+    """Nothing outlives its writer: with no live daemon the line says unknown, never a stale
+    'watching' and never 'nobody'; an empty log with a live daemon is nobody."""
+    inv, log = _invited()
+    assert presence.call_line(presence.from_events(log, daemon_alive=False)) == "presence: unknown"
+    assert presence.call_line(presence.from_events([], daemon_alive=True)) == ""

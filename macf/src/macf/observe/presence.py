@@ -9,20 +9,16 @@ told apart from an operator attached at a keyboard.
 MIS-0002-R97 (keyboard_surface_MUST_set_presence) is the head maintainer's judgment per
 surface; ``surface_state`` is where a surface declares what it can know.
 
-The primal daemon writes the record; hooks only read it. A record that cannot be read is
-said on the line as unknown, never shown as nobody there.
+The record is not kept anywhere: the per-call hook derives it from the agent's own event
+log, which it already reads, so it cannot drift from the acts (R16) or outlive the daemon.
+When the daemon is not alive, presence is said as unknown, never shown as nobody there.
 """
 from __future__ import annotations
 
-import json
-import os
-import sys
-import tempfile
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
-from .acts import ENDED, PAUSED, Observation
+from .acts import ENDED, PAUSED, Observation, fold
 
 ATTACHED = "attached"
 ENABLED = "enabled"
@@ -65,37 +61,41 @@ def build(surfaces: Iterable[Surface], observations: Dict[str, Observation]) -> 
     return {"version": 1, "surfaces": present, "onlookers": watching}
 
 
-def write(path: Path, record: dict) -> None:
-    """Replace the record whole, owner-only, so a reader never sees half of one."""
-    path = Path(path)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
-    try:
-        with os.fdopen(fd, "w") as fh:
-            json.dump(record, fh)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+#: A surface's state, as the primal daemon records it when the state changes. The name is
+#: provisional until the step-1 contract settles it.
+EVENT_SURFACE = "pd_surface_state"
+GONE = "gone"
 
 
-def read(path: Path) -> Optional[dict]:
-    """The record, or None when there is none or it cannot be read (said, never guessed)."""
-    try:
-        record = json.loads(Path(path).read_text())
-    except FileNotFoundError:
-        return {"version": 1, "surfaces": [], "onlookers": []}
-    except (OSError, ValueError) as e:
-        print(f"⚠️ MACF: presence record unreadable at {path}: {e}", file=sys.stderr)
+def surface_event(s: Surface) -> dict:
+    """The event recording a surface's current state, or that it is gone."""
+    return {"event": EVENT_SURFACE, "data": {"surface": s.name, "state": surface_state(s) or GONE}}
+
+
+def fold_surfaces(events: Iterable[dict]) -> Dict[str, str]:
+    """Each surface's latest state from the log; a surface last recorded gone is absent."""
+    states: Dict[str, str] = {}
+    for ev in events:
+        if ev.get("event") == EVENT_SURFACE:
+            data = ev.get("data") or {}
+            states[data.get("surface")] = data.get("state")
+    return {name: st for name, st in states.items() if name and st and st != GONE}
+
+
+def from_events(events: Iterable[dict], daemon_alive: bool) -> Optional[dict]:
+    """The presence record, derived from the observed agent's own log at read time.
+
+    Nothing is copied into a file of its own, so nothing outlives its writer: when the
+    primal daemon is not alive, presence is unknown (None), never a stale "watching" and
+    never "nobody". Onlookers come from the observation acts (R90), surfaces from their
+    recorded states.
+    """
+    if not daemon_alive:
         return None
-    if not isinstance(record, dict) or record.get("version") != 1:
-        print(f"⚠️ MACF: presence record at {path} has an unknown shape", file=sys.stderr)
-        return None
+    events = list(events)
+    surfaces = [{"surface": name, "state": st} for name, st in sorted(fold_surfaces(events).items())]
+    record = build([], fold(events))
+    record["surfaces"] = surfaces
     return record
 
 
