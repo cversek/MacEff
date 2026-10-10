@@ -13,11 +13,17 @@ tests (existing test_recovery.py only covers format_consciousness_recovery_messa
 the compaction-trauma path).
 """
 
+import re
+from pathlib import Path
+
 from macf.hooks.recovery import (
+    format_fresh_session_manual_recovery_message,
     format_session_migration_message,
     read_recovery_policy,
     _format_todo_list,
 )
+
+SKILLS = Path(__file__).resolve().parents[2] / "framework" / "skills"
 
 
 def test_format_session_migration_message_includes_both_session_id_prefixes():
@@ -86,3 +92,32 @@ def test_read_recovery_policy_reads_custom_file_and_falls_back_when_missing(tmp_
     missing = tmp_path / "does_not_exist.md"
     fallback = read_recovery_policy(str(missing))
     assert "No custom recovery policy found" in fallback
+
+
+def _migration_messages():
+    args = {"previous_session_id": "prev1234", "current_session_id": "curr1234",
+            "orphaned_todo_path": ""}
+    return {
+        "auto": format_session_migration_message(**args),
+        "manual": format_fresh_session_manual_recovery_message(**args),
+    }
+
+
+def test_a_migration_message_names_only_skills_that_exist():
+    """The agent does what this message says, at the start of a session. A
+    skill it names that no longer exists is an order nobody can carry out."""
+    skills = {p.parent.name for p in SKILLS.glob("*/SKILL.md")}
+    assert len(skills) >= 10
+    for mode, msg in _migration_messages().items():
+        # Not a flag such as --maceff-root in the command tree the message embeds.
+        named = set(re.findall(r"(?<![\w-])maceff-[a-z][a-z0-9-]*[a-z0-9]\b", msg))
+        assert named <= skills, f"{mode} message names {sorted(named - skills)}"
+
+
+def test_a_migration_message_sends_the_agent_to_the_work_stack():
+    """A new session without a compaction keeps the task store and loses the
+    conversation, so recovery starts from the stack, not from a TODO file."""
+    for mode, msg in _migration_messages().items():
+        assert "macf_tools task trace" in msg, mode
+        assert "macf_tools task tree" in msg, mode
+

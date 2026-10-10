@@ -310,11 +310,13 @@ def format_session_migration_message(
     """
     Format session migration recovery message (calm directive, not traumatic).
 
-    Session migration occurs when session ID changes (crashes, restarts) orphaning
-    the TODO file in ~/.claude/todos/. This is distinct from compaction (same session
-    ID, context loss).
+    Session migration is a new session ID without a compaction: a fresh start
+    or a cleared session. The conversation does not carry over; the task store
+    does. Distinct from compaction (context loss with a cycle boundary) and from
+    a resume (the same conversation continues).
 
-    Message directs agent to invoke maceff-todo-restoration skill immediately.
+    Message directs the agent to read the work stack (task tree, task trace)
+    before resuming.
 
     Args:
         previous_session_id: Old session ID (orphaned TODO file)
@@ -349,17 +351,16 @@ Environment: {environment if environment else 'Unknown'}
 
     # Recovery directive (concise, not prescriptive)
     directive = """
-⚠️ RECOVERY REQUIRED:
+⚠️ ORIENT BEFORE RESUMING:
 
-Session ID changed - previous TODO file orphaned.
+The session ID changed without a compaction, so this conversation did not
+carry over. The task store did.
 
-CRITICAL: The user has lost UI access to the TODO list even though Claude Code
-may show TODOs in system-reminders to you (the agent). The user CANNOT see them.
+Read the stack before acting:
+  macf_tools task tree    what work exists, and how it stands
+  macf_tools task trace   which frame attention left, and owes a return to
 
-🔧 You MUST invoke maceff-todo-restoration skill immediately to restore user's TODO access.
-
-DO NOT proceed with new work until TODOs are restored.
-DO NOT rely on Claude Code's TODO system-reminders - those are invisible to the user."""
+Then resume the frame the trace names, reading its notes first."""
 
     # Proprioception awareness (fresh session needs orientation)
     proprioception_section = "\n" + format_proprioception_awareness()
@@ -389,7 +390,7 @@ def format_fresh_session_manual_recovery_message(
     Format MANUAL_MODE fresh session recovery message (requires artifact review).
 
     Fresh session (restart without compaction) in MANUAL_MODE requires the agent to:
-    1. Restore TODO access for user
+    1. Read the work stack (task tree, task trace)
     2. Review consciousness artifacts before proceeding
     3. Await user authorization before new work
 
@@ -443,11 +444,12 @@ Mode: MANUAL_MODE (user intervention required)
     directive = """
 ⚠️ MANUAL_MODE RECOVERY REQUIRED:
 
-Session restarted - previous TODO file orphaned.
+The session ID changed without a compaction, so this conversation did not
+carry over. The task store did.
 
 MANDATORY STEPS:
 1. Run `macf_tools policy list` - discover current policies (they persist, your memory doesn't)
-2. Invoke maceff-todo-restoration skill to restore user's TODO access
+2. Read the stack: `macf_tools task tree`, then `macf_tools task trace`
 3. Review latest consciousness artifacts (checkpoint, reflection)
 4. Report recovery status to user
 5. STOP and AWAIT user authorization before any new work
