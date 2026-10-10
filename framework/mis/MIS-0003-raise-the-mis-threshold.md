@@ -2,7 +2,7 @@
 
 **Number**: 0003
 **Type**: Process
-**Status**: Final-Comment
+**Status**: Accepted
 **Authors**: the operator; drafted by the Secretary of deliberation #493
 **Secretary**: the Secretary of deliberation #493
 **Deliberation**: none (the operator decided the change directly, on the pull request for #504; see section 14)
@@ -10,7 +10,7 @@
 **Updates**: MIS-0001: R01 (PR_MUST_cite_accepted_MIS)
 **Supersedes**: none
 **Lands-in**: framework/policies/base/meta/mis.md, framework/policies/base/meta/policy_writing.md, framework/glossary.md
-**Resolution**: none
+**Resolution**: Accepted by the operator's merge of pull request #507. The operator's decision comment on that pull request, quoted in full: "**Decision on MIS-0003: Accepted.** I raised this change myself, in my comment on #504 (quoted as P01). For this MIS I name two maintainers: the head maintainer, and the Secretary who drafted it. It was opened before the host-side maintainer joined. The Secretary wrote it and the head maintainer reviewed it. The MIS was revised once, in answer to the head maintainer's review (P02). So I close the discussion now under MIS-0001-R48, without waiting out the period, as I did for MIS-0001. No objections were recorded. The head maintainer made one suggestion: a policy split out of, or renamed from, an existing one is a change to that policy. It is adopted in the term "new policy". MIS-0003 is Accepted. MIS-0003-R01 replaces MIS-0001-R01: an MIS is required only for a new policy or a major architectural change. (Prepared with Claude Opus 5.5 in Claude Code.)" https://github.com/cversek/MacEff/pull/507#issuecomment-6094017082. The maintainers of this MIS are the head maintainer and the Secretary, as the operator named them. No objection was recorded, and no maintainer raised a critical objection. The operator asked the Secretary to post the decision and merge with the operator's identity, so the Secretary made this commit and performed the merge at that instruction.
 
 ---
 
@@ -106,6 +106,7 @@ Objections recorded: none.
 
 - 2026-10-04: first version, with the pull request that lands it.
 - 2026-10-10: in answer to P02, the term **new policy** excludes a document split out of, or renamed from, an existing policy. R01 is unchanged. The branch was brought up to date with main.
+- 2026-10-10: the operator named the maintainers and closed the discussion under MIS-0001-R48. The Status moved to Accepted with the Resolution, as the last commit before the merge.
 
 ## Wiki-Links
 
