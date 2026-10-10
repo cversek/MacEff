@@ -83,6 +83,7 @@ LOG_FILE_NAME = "macf_transcript_monitor.log"
 
 from ..notify.coalescing import coalesce
 from ..notify.contracts import validate_detector, validate_sink, validate_source
+from ..notify.session import proc_start_from_key
 
 
 class Detection:
@@ -415,14 +416,16 @@ class MonitorProcess:
     """A live monitor, as the process table shows it."""
 
     pid: int
-    #: When it started. Comparable between processes on one host, nothing more.
-    started: float
+    #: When it started, as the key ``notify.session.proc_start_key`` gives for the
+    #: same process: clock ticks since boot on Linux, epoch seconds on macOS.
+    #: Comparable between processes on one host, and with a recorded start.
+    started: int
     #: The Claude Code process it serves; 0 when it was started outside one.
     owner: int
     transcript: Path
 
 
-def _monitor_from_argv(pid: int, started: float, argv: List[str]) -> Optional[MonitorProcess]:
+def _monitor_from_argv(pid: int, started: int, argv: List[str]) -> Optional[MonitorProcess]:
     """The monitor these arguments start, or None when they start something else."""
     def after(flag: str) -> Optional[str]:
         i = argv.index(flag) + 1 if flag in argv else len(argv)
@@ -434,21 +437,21 @@ def _monitor_from_argv(pid: int, started: float, argv: List[str]) -> Optional[Mo
     return MonitorProcess(pid, started, int(owner), Path(transcript))
 
 
-def _stat_started(stat: str) -> float:
-    """The start time in a Linux ``/proc/<pid>/stat`` line, in seconds since boot.
+def _stat_started(stat: str) -> int:
+    """The start time in a Linux ``/proc/<pid>/stat`` line, in clock ticks since boot.
 
     Field 22, counted after the parenthesised command name, which may itself
     contain spaces and parentheses.
     """
-    return int(stat.rsplit(")", 1)[1].split()[19]) / os.sysconf("SC_CLK_TCK")
+    return int(stat.rsplit(")", 1)[1].split()[19])
 
 
-def _parse_lstart(text: str) -> float:
-    """A start time as ``ps -o lstart`` prints it in the C locale.
+def _parse_lstart(text: str) -> int:
+    """A start time as ``ps -o lstart`` prints it in the C locale, in epoch seconds.
 
     Raises ValueError when *text* is not one.
     """
-    return time.mktime(time.strptime(" ".join(text.split()), "%a %b %d %H:%M:%S %Y"))
+    return int(time.mktime(time.strptime(" ".join(text.split()), "%a %b %d %H:%M:%S %Y")))
 
 
 def _monitors_from_proc(proc: Path) -> List[MonitorProcess]:
@@ -621,8 +624,12 @@ def stop_legacy_monitor() -> Optional[int]:
     return pid
 
 
-def _process_started(pid: int) -> Optional[float]:
+def _process_started(pid: int) -> Optional[int]:
     """When process *pid* started, in the units of ``MonitorProcess.started``.
+
+    One start-time form for the framework: the value equals
+    ``notify.session.proc_start_key(notify.session.proc_start(pid))``, so a start
+    recorded here can confirm the same incarnation anywhere else.
 
     None when the process table does not say: there is no such process, or its
     answer could not be read, which is warned on stderr.
@@ -1203,7 +1210,11 @@ def run_monitor(transcript: Path, poll_interval: float = DEFAULT_POLL_INTERVAL, 
     me = os.getpid()
     monitors = find_monitors()
     older = _duplicate_of(me, transcript, monitors) if monitors else None
-    identity = {"pid": me, "owner": owner, "transcript": str(transcript)}
+    # The start in the form the events record (notify.session's stored form), so
+    # a readout confirms this pid's incarnation the way it confirms a unit's.
+    started = _process_started(me)
+    identity = {"pid": me, "proc_start": None if started is None else proc_start_from_key(started),
+                "owner": owner, "transcript": str(transcript)}
     append_event("transcript_monitor_started", identity)
 
     monitor = TranscriptMonitor(transcript, poll_interval=poll_interval, owner=owner)

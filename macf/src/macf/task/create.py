@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional, Generator
 from .models import MacfTaskMetaData
 from .reader import TaskReader
 from ..utils.paths import find_agent_home
+from ..utils.atomic import write_json_atomic
 
 
 def validate_plan_ca_ref(plan_ca_ref: Optional[str]) -> None:
@@ -425,8 +426,7 @@ Claude Code purges ALL task files when all tasks become 'completed'. This sentin
     }
 
     # Write sentinel file
-    with open(sentinel_file, "w") as f:
-        json.dump(sentinel_data, f, indent=2)
+    write_json_atomic(sentinel_file, sentinel_data)
 
     # Make sentinel read-only (444) - can't be accidentally modified
     os.chmod(sentinel_file, stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
@@ -608,8 +608,7 @@ def _create_task_file(
         task_file = reader.session_path / f"{task_id}.json"
 
         # Write task file
-        with open(task_file, "w") as f:
-            json.dump(task_data, f, indent=2)
+        write_json_atomic(task_file, task_data)
 
     return task_file
 
