@@ -239,10 +239,10 @@ stateDiagram-v2
 
 - **R67** [MAY · judgment: the operator] Where a host has a desktop session, the operator MAY run the tray. (operator_MAY_run_tray)
 - **R68** [MUST NOT · decidable: macf/tests/test_pd_render.py::test_runs_without_tray (planned)] The outer tier and each primal daemon MUST NOT depend on the tray. (layer_MUST-NOT_depend_on_tray)
-- **R69** [MUST · decidable: macf/tests/test_pd_tray.py::test_icon_per_card (planned)] The tray MUST show one icon per agent, keyed by the calling card in the agent's identity file. (tray_MUST_show_icon_per_agent)
+- **R69** [MUST · decidable: macf/tests/test_pd_tray.py::test_icon_per_card (planned)] The tray MUST show one icon for all the agents installed on the host, with a menu entry per agent keyed by the calling card in the agent's identity file. (tray_MUST_show_icon_per_agent)
 - **R70** [MUST · decidable: macf/tests/test_pd_tray.py::test_acts_through_pd (planned)] The tray MUST send each start, stop or restart through that agent's primal daemon. (tray_MUST_act_through_pd)
 - **R71** [MUST NOT · judgment: the head maintainer, at review of the tray] The tray MUST NOT type into a session. (tray_MUST-NOT_type_into_session)
-- **R72** [MUST · decidable: macf/tests/test_pd_tray.py::test_waiting_icon (planned)] When a session waits on a person, the tray MUST change that agent's icon. (tray_MUST_flag_waiting_on_person)
+- **R72** [MUST · decidable: macf/tests/test_pd_tray.py::test_waiting_icon (planned)] When a session waits on a person, the tray MUST change that agent's menu entry and show the most urgent state among the agents on its icon. (tray_MUST_flag_waiting_on_person)
 - **R73** [MUST · decidable: macf/tests/test_pd_readout.py::test_tray_unavailable_said (planned)] Where a host cannot show the tray, the readout MUST say so. (readout_MUST_say_tray_unavailable)
 
 ### 6.12 Watching the layer, and the old name
@@ -639,6 +639,7 @@ Objections recorded:
 - 2026-10-10: conformance, from the pull request for the shared view (landing step 3): R103 passing. R62 is built (each agent publishes a summary of its units, with no command or environment, in its own public tree, and the view reads every one and the container's cgroup, read-only) and waits on its judgment at the container landing. No requirement changed.
 
 - 2026-10-10: conformance, from the pull request for landing step 6 (the code rename of `hypervisor`): R76 passing. The deploy configuration documents `primal-daemon` and reads the retired value as it. No requirement changed.
+- 2026-10-10: R69 and R72 amended to the operator's decision of 2026-10-09 (one tray icon for every agent on the host, a menu entry per agent, the icon showing the most urgent state among them), which replaces the "tray per agent" reading in P13. Carried at the operator's word of 2026-10-10, in the host-side maintainer's text, with R72 folded into one sentence with one keyword. Slugs and conformance rows unchanged.
 
 ## Wiki-Links
 
