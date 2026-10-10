@@ -38,3 +38,13 @@ def test_container_start_order():
     for slow in ("create_workspace_structure", "install_macf_tools", "initialize_agents",
                  "start_amail_services", "build_policy_index", "start_search_service_daemon"):
         assert at["sshd"] < at[slow], f"sshd waits on {slow}"
+
+
+def test_optional_units_independent():
+    """MIS-0002-R58: the optional units (the policy index and the search service) come
+    after every required one, so a slow or hung optional unit delays nothing else. Each
+    already runs under its own timeout (120 s, 30 s)."""
+    at = _first_calls()
+    for optional in ("build_policy_index", "start_search_service_daemon"):
+        for required in ("sshd", "initialize_agents", "place_secrets", "start_amail_services"):
+            assert at[required] < at[optional], f"{required} waits on the optional {optional}"
