@@ -9,6 +9,7 @@ import json
 
 from macf.transcript_monitor import daemon
 from macf.transcript_monitor.daemon import detect_mid_turn_enqueue, detect_user_activity
+from macf.utils.input_origin import opens_with_harness_notice
 
 TASK_NOTICE = ("<task-notification>\n<task-id>b1</task-id>\n"
                "<status>completed</status>\n</task-notification>")
@@ -54,6 +55,18 @@ def test_a_queued_notice_is_not_activity():
     assert detect_mid_turn_enqueue(_queued(TASK_NOTICE)) is None
     assert detect_mid_turn_enqueue(_queued(PEER_MESSAGE)) is None
     assert detect_mid_turn_enqueue(_queued("run it again")).data["source"] == "mid_turn_enqueue"
+
+
+def test_a_queued_peer_message_or_hand_back_is_not_activity():
+    """The queue copy opens with the client's own tag, not the words its delivery adds."""
+    peer = ('<cross-session-message from="bridge:session_x" from-name="a session">'
+            'hi</cross-session-message>')
+    hand_back = ('<agent-message from="a6f1">\n[Subagent hand-back] The text below is '
+                 'the final report of a subagent.\n</agent-message>')
+    for queued in (peer, hand_back):
+        assert detect_mid_turn_enqueue(_queued(queued)) is None
+        assert opens_with_harness_notice(queued)  # the prompt hook's test
+    assert not opens_with_harness_notice("what is an <agent-message here?")
 
 
 def test_a_running_monitor_records_nothing_for_a_notice(monkeypatch, tmp_path):

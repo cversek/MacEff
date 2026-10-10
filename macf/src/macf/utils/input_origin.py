@@ -19,10 +19,15 @@ CHANNEL_TAG_OPENING = "<channel "
 # task's completion notice, and a message from another session.
 HARNESS_ORIGIN_KINDS = frozenset({"task-notification", "peer"})
 
-# How the client opens the same input where no origin record is kept.
+# How the client opens the same input where no origin record is kept. A queued
+# copy carries the client's own tag, without the words its delivery adds: a
+# message from another session opens with its cross-session tag, and a
+# subagent's hand-back with its agent-message tag.
 HARNESS_NOTICE_OPENINGS = (
     "<task-notification>",
     "Another Claude session sent a message:",
+    "<cross-session-message ",
+    "<agent-message ",
 )
 
 
