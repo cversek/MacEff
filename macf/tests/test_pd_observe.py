@@ -73,7 +73,7 @@ def test_nothing_attachable_said():
 # Observation acts (R82, R86-R90, R92, R94, R111): events in the observed agent's log
 # ---------------------------------------------------------------------------
 
-ME, THEM = "IraMacEff@ee9a78", "ThomMacEff@ee5cd8"
+ME, THEM = "IraMacEff@ee9a78", "OnlookerAgent@ab12cd"
 
 
 def _host(card):
@@ -168,7 +168,7 @@ def test_lease_end_same_event():
 
 def test_onlooker_by_card():
     """R94: an invitation names its onlooker by calling card, never by login user."""
-    for name in ("cversek", "thom", "ThomMacEff", "ThomMacEff@EE5CD8", "ThomMacEff@ee5cd8x"):
+    for name in ("someuser", "operator", "OnlookerAgent", "OnlookerAgent@AB12CD", "OnlookerAgent@ab12cdx"):
         with pytest.raises(acts.ActRefused):
             acts.invite(ME, name, 0, {}, container_of=_host)
     with pytest.raises(acts.ActRefused):
