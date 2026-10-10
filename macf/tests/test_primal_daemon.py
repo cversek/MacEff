@@ -316,6 +316,58 @@ def test_foreign_account_refused(tmp_path, script):
         load_declaration(tmp_path, CARD)
 
 
+def test_no_cross_agent_control(tmp_path, script):
+    """A declaration naming another agent is refused whole, so one copied from another
+    agent's home never starts that agent's units under this agent's name (R07)."""
+    path = declaration_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    unit = make_unit("worker", script, {})
+    path.write_text(Declaration(version=1, agent="Someone@fff000", units=[unit]).model_dump_json())
+
+    with pytest.raises(DeclarationRefused, match="R07"):
+        load_declaration(tmp_path, CARD)
+
+
+RESTART_BY_EXIT = [
+    # restart,     exit code, restarts, state it is left in when it does not restart
+    ("always",     0,  True,  None),
+    ("always",     78, False, "stopped"),
+    ("always",     1,  True,  None),
+    ("on-failure", 0,  False, "stopped"),
+    ("on-failure", 78, False, "stopped"),
+    ("on-failure", 1,  True,  None),
+    ("never",      0,  False, "stopped"),
+    ("never",      78, False, "stopped"),
+    ("never",      1,  False, "failed"),
+]
+
+
+@pytest.mark.parametrize("restart, code, restarts, left", RESTART_BY_EXIT)
+def test_restart_policy_by_exit(make_core, script, restart, code, restarts, left):
+    """A unit that exits on its own is restarted exactly when its policy and its exit code
+    together say so: success and failure under "always", failure under "on-failure", and
+    never a code that asks not to be restarted."""
+    core = make_core([make_unit("worker", script, {"exit_after": 0.2, "code": code}, restart=restart)])
+    core.boot()
+    assert drive(core, lambda: core.state("worker") == "running")
+    first = core.pid("worker")
+    assert drive(core, lambda: core.state("worker") != "running" or core.pid("worker") != first)
+    came_back = drive(core, lambda: core.pid("worker") not in (None, first), timeout=1.5)
+    assert came_back == restarts
+    if not restarts:
+        assert core.state("worker") == left
+
+
+def test_failures_count_and_clear(make_core, script, tmp_path):
+    """A crash counts toward the restart backoff, and a unit that then runs stably for ten
+    of its intervals, counted from its start, has the count cleared."""
+    core = make_core([make_unit("worker", script, {"crash_once": str(tmp_path / "crashed")})])
+    core.boot()
+    assert drive(core, lambda: core.failures("worker") == 1)
+    assert drive(core, lambda: core.state("worker") == "running")
+    assert drive(core, lambda: core.failures("worker") == 0)
+
+
 def test_stop_after_a_failure_is_stopped(make_core, script):
     """An operator's stop of a unit already failed and being killed ends in stopped, not failed."""
     core = make_core([make_unit("worker", script, {"alive_for": 0.15}, restart="never")])
