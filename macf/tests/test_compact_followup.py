@@ -110,3 +110,21 @@ def test_follow_types_nothing_when_something_else_woke_the_agent():
     outcome, sent = _run([[], rows])
     assert outcome.startswith("skipped")
     assert sent == []
+
+
+def test_the_recovery_prompt_is_never_the_operators_activity(isolated_events_log):
+    """Review of this PR: a prompt the framework types must not read as the operator at the
+    keyboard, or every self-compaction would end remote mode for an operator still away. The
+    follower types through send_keys, which records the keys first; the prompt hook then
+    counts nothing for that text."""
+    import subprocess
+    from macf import supervisor
+    from macf.hooks.handle_user_prompt_submit import record_user_activity_from_payload
+    done = subprocess.CompletedProcess([], 0, "", "")
+    with patch.object(supervisor, "_tmux_available", return_value=True), \
+         patch.object(supervisor, "_find_supervisor", return_value={"tmux_session": "seat", "name": "s"}), \
+         patch.object(supervisor.subprocess, "run", return_value=done):
+        assert supervisor.send_keys("s", [cf.DEFAULT_TEXT], enter=True) == 0
+    assert record_user_activity_from_payload(cf.DEFAULT_TEXT) is False
+    # and an operator's own prompt still counts
+    assert record_user_activity_from_payload("check the indexer") is True

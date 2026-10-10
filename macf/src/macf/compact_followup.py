@@ -85,11 +85,12 @@ def main(argv: Optional[list] = None) -> int:
     p.add_argument("--text", default=DEFAULT_TEXT)
     a = p.parse_args(argv)
     outcome = follow(a.target, a.since, a.text)
-    try:
-        from .agent_events_log import append_event
-        append_event("compact_followup", {"target": a.target, "outcome": outcome})
-    except Exception:  # the outcome is a record, never a reason to fail
-        pass
+    from .agent_events_log import append_event
+    # append_event catches its own I/O errors and returns False; a wrapper here could only
+    # hide a defect, so a failed record is said, not swallowed.
+    if not append_event("compact_followup", {"target": a.target, "outcome": outcome}):
+        print("[inject] compact follow-up: the outcome could not be recorded in the event log",
+              file=sys.stderr)
     print(f"[inject] compact follow-up: {outcome}")
     return 0 if outcome in ("sent",) or outcome.startswith("skipped") else 1
 

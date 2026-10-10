@@ -582,9 +582,18 @@ def _start_compact_followup(target: str, text: str) -> None:
     import time as _time
     argv = [sys.executable, "-m", "macf.compact_followup", target, repr(_time.time()),
             "--text", text]
+    # Its stderr goes to the transcript monitor's log in the user's runtime directory, so a
+    # follower that dies before recording its outcome still leaves a traceback somewhere.
+    log = subprocess.DEVNULL
+    try:
+        from .transcript_monitor.daemon import get_log_file_path
+        log = os.open(str(get_log_file_path()), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    except (OSError, ImportError) as e:
+        print(f"[inject] No log for the recovery follow-up ({e}); its errors are discarded.",
+              file=sys.stderr)
     try:
         subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, start_new_session=True)
+                         stderr=log, start_new_session=True)
         print("[inject] After the compaction, a recovery prompt will be typed into this pane "
               "(skipped if something else wakes the session first).")
     except OSError as e:
