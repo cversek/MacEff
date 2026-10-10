@@ -135,6 +135,8 @@ Gmail, event-log rotation, and commit-message guards. Sprints now survive compac
 
 - **A wake is not the operator acting** (`utils/input_origin.py`, the prompt hook, the transcript monitor, `mode_system`, MIS-0002-R106): keys typed into a session to wake it were recorded as the operator's typing, which cleared USER_IDLE and ended USER_REMOTE while the operator was away. Both producers now read an input that opens with `[maceff:wake]`, followed only by the layer's own words and message identifiers, as a wake and never the operator, and they read that opening before any origin record. Nothing in the framework types a wake yet: the notifier will, and until then a deployment's wake script gets this by opening its wakes with the same words. `test_mode_activity.py` adds the conformance tests MIS-0002 names for R106, R121 and R128, and a door audit that runs every way input reaches a session through both producers.
 
+- **Only a person's refusal of a tool call counts as the operator acting** (the transcript monitor): every denial counted, but the client writes three denial kinds of its own besides a person's rejection in the dialog: a hook or permission rule refusing the call, the auto mode classifier refusing it, and the classifier being unable to run. So each time a hook refused the agent's own call, the operator read as present and USER_IDLE cleared. Only `user-rejected` counts now, and a kind a later client adds does not until shown to be a person's.
+
 ## [0.6.0] - 2026-08-29
 
 ### Summary

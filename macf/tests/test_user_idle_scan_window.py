@@ -95,6 +95,24 @@ class TestPermissionDenialCountsAsPresence:
         assert detect_permission_denial(
             {"type": "user", "toolUseResult": "ok", "timestamp": "x"}) is None
 
+    @pytest.mark.parametrize("kind, counts", [
+        ("user-rejected", True),          # someone rejected the call in its dialog
+        ("permission-rule", False),       # a hook or a permission rule refused it
+        ("automode-blocked", False),      # the auto mode classifier refused it
+        ("automode-unavailable", False),  # the classifier could not run
+        ("some-later-kind", False),       # unknown until shown to be a person's
+    ])
+    def test_only_a_person_s_refusal_counts(self, kind, counts):
+        """The four kinds one session's transcript held, measured in 2026-10.
+
+        A hook refusing the agent's own call wrote the operator's activity and
+        cleared USER_IDLE while nobody was at the terminal.
+        """
+        from macf.transcript_monitor.daemon import detect_permission_denial
+        entry = {"type": "user", "toolDenialKind": kind,
+                 "toolUseResult": "Error: refused", "timestamp": "2026-10-10T13:46:27Z"}
+        assert (detect_permission_denial(entry) is not None) is counts
+
 
 def _answered(answers):
     """A question the user answered, as the transcript records it."""
