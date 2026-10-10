@@ -2,10 +2,42 @@
 Artifacts utilities.
 """
 
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
+
+# Files a tool may keep beside the artifacts; never an artifact themselves.
+_NOT_ARTIFACTS = {"CLAUDE.md", "README.md", "INDEX.md"}
+
+_NAME_DATE = re.compile(r"^(\d{4}-\d{2}-\d{2})(?:_(\d{6}))?")
+
+
+def _artifact_files(directory: Path) -> List[Path]:
+    return [p for p in directory.glob("*.md") if p.is_file() and p.name not in _NOT_ARTIFACTS]
+
+
+@dataclass(frozen=True, kw_only=True, order=True)
+class _Recency:
+    """A sort key, compared field by field in this order."""
+    date: str
+    time: str
+    mtime: float
+
+
+def _recency(path: Path) -> _Recency:
+    """How recent an artifact is: the date (and time) it is named for, then mtime.
+
+    Curation edits old artifacts in place (`knowledge link` adds wiki-links), which
+    moves their mtimes past the newest one; the date in the name does not move. A
+    folder roadmap is named by its folder. An undated name sorts before every dated one.
+    """
+    name = path.parent.name if path.name == "roadmap.md" else path.name
+    m = _NAME_DATE.match(name)
+    return _Recency(date=m.group(1) if m else "", time=(m.group(2) or "") if m else "",
+                    mtime=path.stat().st_mtime)
+
 
 @dataclass
 class ConsciousnessArtifacts:
@@ -25,24 +57,24 @@ class ConsciousnessArtifacts:
 
     @property
     def latest_reflection(self) -> Optional[Path]:
-        """Most recent reflection by mtime."""
+        """Most recent reflection, by the date in its name, then mtime."""
         if not self.reflections:
             return None
-        return max(self.reflections, key=lambda p: p.stat().st_mtime)
+        return max(self.reflections, key=_recency)
 
     @property
     def latest_checkpoint(self) -> Optional[Path]:
-        """Most recent checkpoint by mtime."""
+        """Most recent checkpoint, by the date in its name, then mtime."""
         if not self.checkpoints:
             return None
-        return max(self.checkpoints, key=lambda p: p.stat().st_mtime)
+        return max(self.checkpoints, key=_recency)
 
     @property
     def latest_roadmap(self) -> Optional[Path]:
-        """Most recent roadmap by mtime."""
+        """Most recent roadmap, by the date in its name, then mtime."""
         if not self.roadmaps:
             return None
-        return max(self.roadmaps, key=lambda p: p.stat().st_mtime)
+        return max(self.roadmaps, key=_recency)
 
     def all_paths(self) -> List[Path]:
         """Flatten all artifacts into single list."""
@@ -81,12 +113,17 @@ def get_latest_consciousness_artifacts(
         # Ensure agent_root is a Path
         agent_root = Path(agent_root)
 
+        # A root that is not there is a failed search, not an agent with nothing to read.
         if not agent_root.exists():
-            return ConsciousnessArtifacts()
+            return ConsciousnessArtifacts(error=f"agent directory not found: {agent_root}")
 
         # agent_root already points to agent/ directory from ConsciousnessConfig
         public_dir = agent_root / "public"
         private_dir = agent_root / "private"
+        if not public_dir.exists() and not private_dir.exists():
+            # Every agent tree has both; a root with neither is the wrong directory
+            # (a repository root given for its agent/), not an empty agent.
+            return ConsciousnessArtifacts(error=f"neither public/ nor private/ under {agent_root}")
 
         # Discover artifacts with safe empty list fallbacks
         # Reflections and checkpoints are private (consciousness preservation)
@@ -99,26 +136,27 @@ def get_latest_consciousness_artifacts(
         reflections = []
         if reflections_dir and reflections_dir.exists():
             reflections = sorted(
-                [p for p in reflections_dir.glob("*.md") if p.is_file()],
-                key=lambda p: p.stat().st_mtime,
+                _artifact_files(reflections_dir),
+                key=_recency,
                 reverse=True
             )[:limit]
 
         checkpoints = []
         if checkpoints_dir and checkpoints_dir.exists():
             checkpoints = sorted(
-                [p for p in checkpoints_dir.glob("*.md") if p.is_file()],
-                key=lambda p: p.stat().st_mtime,
+                _artifact_files(checkpoints_dir),
+                key=_recency,
                 reverse=True
             )[:limit]
 
         roadmaps = []
         if roadmaps_dir and roadmaps_dir.exists():
             roadmaps = sorted(
-                # A roadmap is a folder holding roadmap.md (roadmaps_drafting); a
-                # top-level *.md glob matched nothing on any real agent tree.
-                [p for p in roadmaps_dir.glob("*/roadmap.md") if p.is_file()],
-                key=lambda p: p.stat().st_mtime,
+                # A roadmap is a folder holding roadmap.md (roadmaps_drafting). Agents
+                # that predate the folder form keep loose files, which still count.
+                [p for p in roadmaps_dir.glob("*/roadmap.md") if p.is_file()]
+                + _artifact_files(roadmaps_dir),
+                key=_recency,
                 reverse=True
             )[:limit]
 
