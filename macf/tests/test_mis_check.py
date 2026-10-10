@@ -25,12 +25,25 @@ def test_repo_mis_files_pass():
     assert len(mis.mis_files([MIS_DIR])) >= 2
 
 
+def _mis_tree(d, skip=()):
+    """Copy the repository's MIS files into d.
+
+    MIS-0001 cites other MIS, and a check resolves each citation against the MIS beside the
+    file, so a copy of MIS-0001 alone would report its own citations as citations of MIS that
+    do not exist.
+    """
+    for f in MIS_DIR.glob("MIS-*.md"):
+        if f not in skip:
+            (d / f.name).write_bytes(f.read_bytes())
+
+
 @pytest.fixture
 def plant(tmp_path):
-    """Copy MIS-0001 and the glossary into a temporary framework tree, apply one edit, and check."""
+    """Copy MIS-0001, the MIS beside it and the glossary into a temporary framework tree, apply one edit, and check."""
     def run(edit=None, name=MIS1.name, glossary_edit=None, extra=None):
         d = tmp_path / "framework" / "mis"
         d.mkdir(parents=True, exist_ok=True)
+        _mis_tree(d, skip={MIS1})
         text = MIS1.read_text(encoding="utf-8")
         if edit:
             text = edit(text)
@@ -248,6 +261,52 @@ def test_r49_a_correct_citation_passes(plant):
     assert "R49" not in plant(extra=_with_policy("A rule [MIS-0001-R14 (req_MUST_have_30_words_max)].\n"))
 
 
+def _beside_mis1(tmp_path, name, text, policy=None):
+    """The repository's MIS files with one file written among them, the glossary, and optionally a policy."""
+    d = _framework(tmp_path)
+    (d / name).write_bytes(text if isinstance(text, bytes) else text.encode("utf-8"))
+    if policy:
+        _with_policy(policy)(d)
+    return d, GLOSSARY
+
+
+TEMPLATE = (MIS_DIR / "MIS-0000-template.md").read_text(encoding="utf-8")
+
+
+def test_r49_one_file_checked_alone_has_its_citations_of_other_mis_resolved(tmp_path):
+    # The template tells an author to check their own file. That run defined only the file's
+    # own requirements, so a citation of another MIS was never resolved.
+    d, g = _beside_mis1(tmp_path, "MIS-0000-template.md",
+                        TEMPLATE + "\nSee MIS-0001-R14 (req_MUST_be_short).\n")
+    messages = [f.message for f in mis.check([d / "MIS-0000-template.md"], g) if f.rule == "R49"]
+    # Resolved, not merely unknown: the finding names the slug MIS-0001 gives R14.
+    assert messages == ["cites MIS-0001-R14 (req_MUST_be_short); MIS-0001 names it (req_MUST_have_30_words_max)"]
+
+
+def test_r49_a_citation_of_an_mis_that_does_not_exist(plant):
+    assert "R49" in plant(extra=_with_policy("A rule (MIS-0099-R01 (no_such_mis)).\n"))
+
+
+def test_one_file_checked_alone_reports_nothing_about_the_others(tmp_path):
+    # A stale citation of MIS-0001 in a policy is MIS-0001's business: a check of the template
+    # alone does not report it, and a check of the directory does.
+    d, g = _beside_mis1(tmp_path, "MIS-0000-template.md", TEMPLATE,
+                        policy="A rule (MIS-0001-R14 (req_MUST_be_short)).\n")
+    assert "R49" not in {f.rule for f in mis.check([d / "MIS-0000-template.md"], g)}
+    assert "R49" in {f.rule for f in mis.check([d], g)}
+
+
+def test_a_citation_of_an_unreadable_mis_is_not_called_missing(tmp_path):
+    # The unreadable file is reported when it is checked; a citation of it cannot be resolved,
+    # and must not be reported as a citation of an MIS that does not exist.
+    d, g = _beside_mis1(tmp_path, "MIS-0000-template.md", "café\n".encode("latin-1"))
+    cited = d / "MIS-0002-cites.md"
+    cited.write_text(MIS1.read_text(encoding="utf-8")
+                     + "\nSee MIS-0000-R01 (MIS_MUST_pass_check).\n", encoding="utf-8")
+    messages = [f.message for f in mis.check_citations([cited], g)]
+    assert not any("there is no MIS-0000" in m for m in messages), messages
+
+
 def test_reads_are_utf8_whatever_the_locale():
     """The tag's middle dot decodes wrongly under a Latin-1 locale unless every read is UTF-8.
 
@@ -282,7 +341,7 @@ def _with_latin1_line(src: Path, dst: Path) -> int:
 def _framework(tmp_path):
     d = tmp_path / "framework" / "mis"
     d.mkdir(parents=True)
-    (d / MIS1.name).write_bytes(MIS1.read_bytes())
+    _mis_tree(d)
     return d
 
 
