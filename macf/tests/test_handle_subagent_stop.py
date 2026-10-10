@@ -1,4 +1,6 @@
 """Tests for handle_subagent_stop hook module."""
+import json
+
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -112,3 +114,60 @@ def test_exception_handling(mock_dependencies):
     assert result["continue"] is True
     assert "systemMessage" in result
     assert "error" in result["systemMessage"].lower()
+
+
+def _stop(agent_id, agent_type=""):
+    """A SubagentStop payload as the client sends it."""
+    return json.dumps({
+        "session_id": "test-session-123",
+        "hook_event_name": "SubagentStop",
+        "agent_id": agent_id,
+        "agent_type": agent_type,
+        "agent_transcript_path": "",
+        "last_assistant_message": "Reading notes.md",
+    })
+
+
+def _events(name):
+    from macf.agent_events_log import read_events
+    return [e for e in read_events() if e.get("event") == name]
+
+
+def test_an_agent_nobody_delegated_is_not_a_delegation(mock_dependencies):
+    """A stop with no agent_type and no SubagentStart behind it is the client's own agent."""
+    from macf.hooks.handle_subagent_stop import run
+
+    result = run(_stop("a0123456789abcdef"))
+
+    assert result == {"continue": True}
+    assert [e["data"]["agent_id"] for e in _events("undelegated_agent_stopped")] == ["a0123456789abcdef"]
+    assert _events("delegation_completed") == []
+    assert _events("deleg_drv_ended") == []
+
+
+def test_a_bridged_agent_still_counts(mock_dependencies):
+    """A stop whose agent SubagentStart recorded is a delegation, with or without its type."""
+    from macf.hooks.handle_subagent_stop import run
+    from macf.utils.drives import start_deleg_drv, bridge_deleg_drv_to_agent
+
+    start_deleg_drv("test-session-123", subagent_type="Explore",
+                    tool_use_id="toolu_01abcdefghijklmnopqrstuv")
+    bridge_deleg_drv_to_agent("test-session-123", "a0123456789abcdef", agent_type="Explore")
+
+    result = run(_stop("a0123456789abcdef"))
+
+    assert "systemMessage" in result
+    assert len(_events("delegation_completed")) == 1
+    assert [e["data"]["bridged"] for e in _events("deleg_drv_ended")] == [True]
+    assert _events("undelegated_agent_stopped") == []
+
+
+def test_a_typed_stop_counts_without_a_recorded_start(mock_dependencies):
+    """A stop the client sends with a type is a delegation even when its start was missed."""
+    from macf.hooks.handle_subagent_stop import run
+
+    run(_stop("a0123456789abcdef", agent_type="Explore"))
+
+    assert len(_events("delegation_completed")) == 1
+    assert [e["data"]["bridged"] for e in _events("deleg_drv_ended")] == [False]
+    assert _events("undelegated_agent_stopped") == []
