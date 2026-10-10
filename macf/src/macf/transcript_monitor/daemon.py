@@ -287,6 +287,58 @@ def detect_compact_boundary(entry: dict) -> Optional[Detection]:
     })
 
 
+#: The client's own row after a compaction it started on an idle session, matched by
+#: the English text 2.1.289 and 2.1.290 write ("Compacted while idle, before the prompt
+#: cache expired"). Those versions say "manual" and "auto" in ``compactMetadata.trigger``
+#: respectively, so the row and not the trigger tells who asked. A client that rewords
+#: the row will stop matching here first; check this text against the new version.
+#:
+#: Not detected here: a compaction at the context limit, which has no ask and no idle
+#: row. It is the harness's too, for a different reason, and it is recorded by the
+#: primal daemon's control event for a compaction nobody asked for (step 1), which sees
+#: the boundary with no ask before it.
+_IDLE_COMPACTION_NOTICE = "Compacted while idle"
+_TYPED_COMPACT = "<command-name>/compact</command-name>"
+
+
+def detect_harness_compaction(entry: dict) -> Optional[Detection]:
+    """A compaction the client started on its own, recorded with the harness as the
+    asker (MIS-0002-R127 (harness_compaction_MUST_be_recorded))."""
+    if entry.get("type") != "system" or entry.get("subtype") != "informational":
+        return None
+    if not str(entry.get("content", "")).startswith(_IDLE_COMPACTION_NOTICE):
+        return None
+    return Detection("harness_compaction_detected", {
+        "asker": "harness",
+        "marker": "compacted_while_idle",
+        "timestamp": entry.get("timestamp", ""),
+        "detector": "transcript_monitor",
+    })
+
+
+def detect_compaction_ask(entry: dict) -> Optional[Detection]:
+    """A /compact the operator typed: the client records it as a command row.
+
+    ``macf_tools inject compact`` types the same command into the pane, and records
+    its own ask first; the framework's recorded keystroke tells the two apart, so an
+    agent's own compaction is never also recorded as the operator's.
+    """
+    if entry.get("type") != "user":
+        return None
+    message = entry.get("message") or {}
+    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, str) or not content.lstrip().startswith(_TYPED_COMPACT):
+        return None
+    if typed_by_framework(typed_text(content)):
+        return None
+    return Detection("compaction_asked", {
+        "asker": "operator",
+        "via": "typed /compact",
+        "timestamp": entry.get("timestamp", ""),
+        "detector": "transcript_monitor",
+    })
+
+
 def detect_api_error(entry: dict) -> Optional[Detection]:
     """Detect API error with retry info."""
     if entry.get("type") != "system":
@@ -322,6 +374,8 @@ DEFAULT_DETECTORS: List[Detector] = [
     detect_dialog_answer,
     detect_mid_turn_enqueue,
     detect_compact_boundary,
+    detect_harness_compaction,
+    detect_compaction_ask,
     detect_api_error,
     detect_context_collapse,
 ]
