@@ -28,13 +28,18 @@ MacEff's long-lived machinery grew one piece at a time, and most of it died with
 - Why does the channel offer no tools and relay no permission prompts?
 - How is the channel installed and loaded?
 
-**2 macOS**
+**2 The Harness's Own Compactions**
+- Who may compact my session, and what happens when the client compacts it on its own?
+- How is the client's idle compaction turned off, and when is it kept?
+- How do I tell, after the fact, who asked for a compaction?
+
+**3 macOS**
 - How does a primal daemon run on macOS, and under what name?
 - Which privacy grants can a unit declare, and how is a denied grant told from a network fault?
 - What happens to a session that Claude Code's own background daemon already runs?
 - Why must a socket path be checked at install?
 
-**3 Not Yet Landed**
+**4 Not Yet Landed**
 - Which parts of the persistent layer are specified but not yet in this policy?
 
 === CEP_NAV_BOUNDARY ===
@@ -91,21 +96,35 @@ A channel not on Claude Code's allowlist loads only under the development flag, 
 
 ---
 
-## 2 macOS
+## 2 The Harness's Own Compactions
 
-### 2.1 Privacy grants
+### 2.1 Turning off the client's idle compaction
+
+A compaction ends the agent's working memory. The persistent layer compacts a session only when the operator or the agent's declared wind-down asks [MIS-0002-R108 (compaction_MUST_be_asked_by_operator_or_wind-down)]. The harness can also compact a session on its own: Claude Code compacts an idle session about 54 minutes after its last request, once the context has passed a threshold.
+
+**The harness adapter turns that off unless the declaration keeps it** [MIS-0002-R126 (adapter_MUST_turn_off_harness_idle_compaction)]. From Claude Code 2.1.290 the settings key `idleCompaction: false` stops the idle compaction alone, and leaves compaction at the context limit on. The declaration's `keep_harness_idle_compaction`, false by default, is the one way to keep it.
+
+- `macf_tools claude-config idle-compaction status` reports the state, with the settings file it read. `off` sets the key and leaves every other key alone. `on` removes it, which returns the client to its default.
+- On a client older than 2.1.290 the command refuses and names the version. That client ignores the key, so writing it there would claim a protection that does not exist.
+- Each change is an event, `harness_setting_changed`.
+
+**Check the version the session runs, not the one installed.** The launcher can move to a new version while a running session still maps the old one. A key that needs 2.1.290 protects only a session that runs it.
+
+---
+
+## 3 macOS
+
+### 3.1 Privacy grants
 
 macOS attaches a privacy grant to the **responsible process**. A unit started by launchd does not hold what the terminal held, and its denial looks like an ordinary error. For example, the Local Network grant refuses a LAN connection with `EHOSTUNREACH` at once, while ping, which the grant does not cover, still answers.
 
 - **Each unit declares the grants it needs** [MIS-0002-R63 (unit_MUST_declare_privacy_grants)], from a closed list: `local_network`, `accessibility`, `full_disk_access`, `keychain`, and `automation:<bundle id>` per target app. A misspelt grant fails at declaration, not as a silent missing grant at run time.
-- **The adapter tests the declared grants at install** [MIS-0002-R64 (adapter_MUST_test_grants_at_install)], from the launchd context, because a test from the terminal proves the terminal's grant.
-- **A denied grant raises a notice that names it** [MIS-0002-R65 (denied_grant_MUST_raise_notice)]. An instant `EHOSTUNREACH` while ping answers is read as `local_network` denied. A timeout, a refusal or a slow unreachable host stays the network failure it is, never reported as a grant.
-
-**Probes can raise permission dialogs.** Run them only when a person is at the machine, and say so first.
+- **A denial is read as the grant it is.** An instant `EHOSTUNREACH` while ping answers is read as `local_network` denied. A timeout, a refusal or a slow unreachable host stays the network failure it is, never reported as a grant.
+- **Still to come.** The install-time probe [MIS-0002-R64 (adapter_MUST_test_grants_at_install)] arrives with the installer. It will run from the launchd context, because a test from the terminal proves the terminal's grant, and since its runs can raise permission dialogs, only when a person is at the machine. The notice that names a denied grant [MIS-0002-R65 (denied_grant_MUST_raise_notice)] arrives with the notifier. Until then a denial is read, not announced.
 
 ---
 
-## 3 Not Yet Landed
+## 4 Not Yet Landed
 
 Specified in MIS-0002 and arriving with their landing steps, each in the pull request that enforces it:
 - **The primal daemon itself:** declarations, liveness events, health derived from runs, outside control and the outside watch (MIS-0002 §6.1 to §6.4, §6.7, §6.12).
