@@ -56,7 +56,8 @@ CONTAINER_ENV_SCRIPT = Path('/etc/profile.d/maceff-deployment-env.sh')
 #   PyJWT is required by macf.amail.daemons.receiver to verify Cloudflare
 #   Access assertions. Declared here rather than left to a hand-install: it is
 #   the library that decides whether an inbound request is authenticated, and
-#   an undeclared security dependency is one a rebuild silently omits.
+#   an undeclared security dependency is one a rebuild silently omits. The image's
+#   GitHub App tools (/opt/maceff-ghapp/) sign their RS256 tokens with it too.
 INSTALL_EXTRA_DEPS = ["lancedb", "sentence-transformers", "PyJWT"]
 
 # Extras installed WITH the editable macf package, so their version constraints
