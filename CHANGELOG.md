@@ -129,6 +129,8 @@ Gmail, event-log rotation, and commit-message guards. Sprints now survive compac
 - **roles: the calendar does not call a date-only occurrence missed during its day** (#462, part of #390): the one comparison in the roles package that read a date-only occurrence's 00:00 as its deadline instead of asking `end_of_day`, as the tiers and marks do
 - **The sprint close counts its ideas and learnings, and fills the scope table** (#464): the synthesis read counters that plain 💡 notes never move and that nothing writes, so it reported 0 ideas and 0 learnings; it now counts the 💡 notes on the sprint and its scope since it began and the learning files dated inside it, says "not counted" when it cannot, and fills the log's scoped-task table from the scope
 
+- **A wake is not the operator acting** (`utils/input_origin.py`, the prompt hook, the transcript monitor, `mode_system`, MIS-0002-R106): keys the persistent layer types into a session to wake it were recorded as the operator's typing, which cleared USER_IDLE and ended USER_REMOTE while the operator was away. A wake now opens with `[maceff:wake]`, followed only by the layer's own words and message identifiers, and both producers read that opening before any origin record. `test_mode_activity.py` adds the conformance tests MIS-0002 names for R106, R121 and R128, and a door audit that runs every way input reaches a session through both producers.
+
 ## [0.6.0] - 2026-08-29
 
 ### Summary
