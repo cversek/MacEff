@@ -28,7 +28,14 @@ MacEff's long-lived machinery grew one piece at a time, and most of it died with
 - Why does the channel offer no tools and relay no permission prompts?
 - How is the channel installed and loaded?
 
-**2 Not Yet Landed**
+**2 Observation**
+- Who may watch a session, and how does an onlooker get in?
+- What does an onlooker see, and what is kept from it?
+- How does the owner keep a stretch of work from an onlooker?
+- How does an observation end, and who may end it?
+- How does the agent know who is watching?
+
+**3 Not Yet Landed**
 - Which parts of the persistent layer are specified but not yet in this policy?
 
 === CEP_NAV_BOUNDARY ===
@@ -85,12 +92,33 @@ A channel not on Claude Code's allowlist loads only under the development flag, 
 
 ---
 
-## 2 Not Yet Landed
+## 2 Observation
+
+### 2.1 The stream
+
+**The stream holds nothing from before its invitation** [MIS-0002-R84 (stream_MUST_start_at_invitation)]: it reads the transcript from the byte offset recorded with the invitation.
+
+**It carries what a person watching the terminal would see, and less** where the more would be data the onlooker was not invited to see. It sends a typed prompt, a channel message's text with its source but never the chat's identifiers, the agent's own text, and each tool call by name with its stated purpose. A tool's result is a marker saying whether it failed, never its body. Thinking, hook output, skill text, peer messages and the client's housekeeping rows are not sent at all.
+
+**An onlooker never types** [MIS-0002-R83 (onlooker_MUST-NOT_type)]. The socket is read for one handshake line and never again, so there is no input path to close. A connection that sends no handshake within five seconds is refused.
+
+**The stream stops at once when the observation ends** [MIS-0002-R85 (stream_MUST_stop_at_end)]. The state is read before every frame, so an ending or a lapsed lease stops it before the next one. The stream is bound to the invitation it was admitted under. A new invitation for the same onlooker carries another secret, so an end and a re-invitation that both fall between two reads still end it.
+
+**The pause.** Everything a session shows is in scope of an invitation, so the owner protects other people's records and credentials by pausing the stream before work that prints them [MIS-0002-R92 (owner_MAY_pause_stream)].
+- **A pause records the transcript offset where it began, and the resume the offset where it ended.** The stream sends no row that starts inside that range, wherever its reads happen to fall. A pause and its resume can both come between two reads, and what was written between them is still withheld.
+- **The onlooker sees the pause** [MIS-0002-R93 (onlooker_MUST_see_pause)]. When the stream reaches a pause it sends one frame saying the owner paused it, and one more when it passes the end. A stream opened after a pause sends what came before and after it, and marks the gap the same way.
+- **A pause covers what is written from its offset on.** It cannot take back what was printed before it, which the onlooker may already have.
+- **Offsets only grow.** A pause or a resume at an offset earlier than the last one recorded is refused, since a resume before its own pause would withhold nothing.
+- **Resume only after the paused work is written.** The resume's offset is read when the resume is taken, so anything the paused work writes after that falls outside the range and goes out. A resume run beside the tool that prints, in the same turn, is too early. Resume once that tool's output is in the transcript.
+
+---
+
+## 3 Not Yet Landed
 
 Specified in MIS-0002 and arriving with their landing steps, each in the pull request that enforces it:
 - **The primal daemon itself:** declarations, liveness events, health derived from runs, outside control and the outside watch (MIS-0002 §6.1 to §6.4, §6.7, §6.12).
 - **Schedules and the notifier,** including the keystroke fallback, the dark-channel event, and every producer of the operator's activity (MIS-0002 §6.5, §6.6, the rest of §6.14).
-- **Mail, containers, macOS, the tray, observation and attach** (MIS-0002 §6.8 to §6.11, §6.13).
+- **Mail, containers, macOS, the tray and attach** (MIS-0002 §6.8, §6.9, §6.10, §6.11, §6.13).
 
 Until a section lands, the rules in force are the existing policies: `service_supervision`, `notification_delivery` and `amail`.
 
