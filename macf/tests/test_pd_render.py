@@ -87,7 +87,7 @@ class TestMacOSInstall:
         from macf.amail.broker import SUN_PATH_MAX
         from macf.platform.launchd import install_plan
         too_long = "/tmp/" + "d" * SUN_PATH_MAX + "/x.sock"
-        with pytest.raises(ValueError, match="allows"):
+        with pytest.raises(OSError, match="longer than"):
             install_plan(CARD, ARGV, "/Users/someone", "/tmp/logs", 501, [too_long])
 
     def test_install_writes_the_plist_then_bootstraps(self):
@@ -125,3 +125,12 @@ class TestMacOSInstall:
         assert stopped.loaded and not stopped.running and stopped.pid is None and stopped.last_exit == "0"
         absent = parse_print('Bad request.\nCould not find service "maceff_pd.X_000000" in domain for user gui: 501\n')
         assert not absent.loaded and not absent.running
+
+
+class TestMacOSFollowsTheInterface:
+    """The label and the socket limit come from the step-1 interface, so one place names them."""
+
+    def test_the_label_is_the_interfaces(self):
+        from macf.pd.interface import launchd_label
+        from macf.platform.launchd import pd_label
+        assert pd_label(CARD) == launchd_label(CARD)

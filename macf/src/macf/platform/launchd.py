@@ -14,27 +14,20 @@ import plistlib
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
-PD_IDENTIFIER = "maceff_pd"
+from macf.pd.interface import PD_IDENTIFIER, launchd_label
 _VERBS = ("bootstrap", "bootout", "kickstart", "print")
 
 
 def pd_label(card: str) -> str:
-    """The launchd label for one agent's primal daemon: ``maceff_pd.<session identifier>``.
-
-    MIS-0002-R06 (pd_identifiers_MUST_use_maceff_pd) names the identifier, and the
-    calling card from the identity file makes it one per agent, never the environment
-    (MIS-0002-R02 (pd_MUST-NOT_take_identity_from_env)). The card maps to a name the
-    same way every other surface of the daemon names it (the step-1 interface's
-    ``session_identifier``), so ``IraMacEff@ee9a78`` becomes ``maceff_pd.IraMacEff_ee9a78``.
+    """The launchd label for one agent's primal daemon, as the step-1 interface names it
+    (``launchd_label``): ``maceff_pd.<pd_id>``, so ``IraMacEff@ee9a78`` becomes
+    ``maceff_pd.IraMacEff_ee9a78``. MIS-0002-R06 (pd_identifiers_MUST_use_maceff_pd); the
+    card comes from the identity file, never the environment (MIS-0002-R02). A string
+    that is not a calling card is refused here rather than rendered into a label.
     """
-    from macf.utils.identity import session_identifier
-    if not card or "@" not in card:
+    if not card or "@" not in card or "/" in card:
         raise ValueError(f"not a calling card: {card!r} (expected Name@hexid)")
-    ident = session_identifier(card)
-    if not ident or "/" in ident:
-        raise ValueError(f"not a calling card: {card!r}")
-    return f"{PD_IDENTIFIER}.{ident}"
-
+    return launchd_label(card)
 
 def render_pd_launch_agent(card: str, program_argv: List[str], home: str,
                            log_dir: str) -> Tuple[str, bytes]:
@@ -105,14 +98,11 @@ class Step:
 
 
 def check_socket_path(path: str) -> None:
-    """MIS-0002-R129 (adapter_MUST_check_socket_path_length): refuse, with the reason, a
-    socket path the kernel would refuse at bind with a bare error."""
-    from macf.amail.broker import SUN_PATH_MAX
-    size = len(str(path).encode())
-    if size > SUN_PATH_MAX:
-        raise ValueError(f"socket path {path} is {size} bytes; this platform allows {SUN_PATH_MAX}. "
-                         f"Use a shorter runtime directory.")
-
+    """MIS-0002-R129 (adapter_MUST_check_socket_path_length), through the interface's own
+    check, so the limit lives in one place. Raises ``OSError`` with the path and the limit."""
+    from macf.pd.interface import check_socket_path as _check
+    from pathlib import Path
+    _check(Path(path))
 
 def install_plan(card: str, program_argv: List[str], home: str, log_dir: str, uid: int,
                  socket_paths: List[str]) -> List[Step]:
