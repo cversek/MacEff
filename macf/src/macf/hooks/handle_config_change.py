@@ -141,9 +141,11 @@ def settings_files(cwd: Optional[str] = None) -> list:
 def seed_baselines(paths, session_id: Optional[str] = None) -> int:
     """At session start: baseline each settings file not seen before, and diff the rest.
 
-    The first change during a session is then a diff, not a baseline, and a change made
-    while no session ran is recorded with source ``between_sessions`` instead of being
-    folded into the next in-session change. Returns how many events were recorded.
+    The first change during a session is then a diff, not a baseline. A difference found
+    here is recorded with source ``found_at_session_start``: what is known is when it was
+    found, not when it was made. It covers edits made while no session ran, and changes the
+    client wrote itself (a dialog's "always allow"), for which ConfigChange never fires.
+    Returns how many events were recorded.
     """
     recorded = 0
     for path in paths:
@@ -154,7 +156,7 @@ def seed_baselines(paths, session_id: Optional[str] = None) -> int:
         if rules is None:
             continue
         common = {"source": "session_start", "file_path": str(path), "session_id": session_id}
-        recorded += observe(path, rules, common, changed_source="between_sessions")
+        recorded += observe(path, rules, common, changed_source="found_at_session_start")
     return recorded
 
 

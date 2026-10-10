@@ -97,14 +97,14 @@ def test_the_hook_is_installed():
     assert ("config_change.py", "handle_config_change") in _hooks_to_install_list()
 
 
-def test_a_change_between_sessions_is_recorded_at_session_start(isolated_events_log, tmp_path):
+def test_a_change_found_at_session_start_says_only_that(isolated_events_log, tmp_path):
     f = tmp_path / ".claude" / "settings.json"
     _settings(f, allow=["A"])
     cc.seed_baselines([f], "s1")
     _settings(f, allow=["A", "B"])                    # edited while no session ran
     assert cc.seed_baselines([f], "s2") == 1
     (ev,) = _events(cc.CHANGED_EVENT)
-    assert ev["data"]["source"] == "between_sessions"
+    assert ev["data"]["source"] == "found_at_session_start"
     assert ev["data"]["added"] == {"allow": ["B"]}
     assert cc.seed_baselines([f], "s3") == 0          # recorded once, not every session
 

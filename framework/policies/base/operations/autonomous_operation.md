@@ -708,8 +708,16 @@ block: a system timer, a cron job, a supervisor.
   file it came from. A file seen for the first time is recorded as a
   `permission_rules_baseline` naming every rule it holds. Session start compares
   the user, project and local settings files too: it baselines a file never
-  seen, so the first change in a session is a diff, and it records a change made
-  while no session ran with the source `between_sessions`. A file that cannot be
+  seen, so the first change in a session is a diff, and it records a difference
+  it finds with the source `found_at_session_start`: when it was found, not when
+  it was made. **The client does not fire ConfigChange for its own writes**, so a
+  rule it adds itself (a permission dialog's "always allow", or an in-session
+  permission edit) is not recorded when it happens. It shows up at the next
+  session start, or folded into the next outside edit of the same file. A
+  dialog's "allow for this session" lives in memory and reaches no file, so no
+  event shows it. The client also ignores changes for a few seconds after its
+  own write, so an outside edit landing in that window can be recorded later,
+  as part of something else. A file that cannot be
   read is skipped, never recorded as every rule removed. The events are the
   record: the rules a file last held are its latest baseline plus the diffs
   after it, so a copy kept beside the log only saves reading it back, and when
