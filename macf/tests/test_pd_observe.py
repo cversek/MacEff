@@ -1,13 +1,14 @@
 """Observation and attach (MIS-0002 R81-R102, R111).
 
 Attach: R100 (attach_MUST_resolve_from_pd) and R101 (readout_MUST_say_nothing_attachable).
-Observation acts: R82, R86-R90, R92, R94 and R111. The stream and presence land after.
+Observation acts: R82, R86-R90, R92, R94 and R111. The stream: R83, R84, R85 and R93.
 """
+import json as _json
 from dataclasses import dataclass
 
 import pytest
 
-from macf.observe import acts
+from macf.observe import acts, stream
 from macf.utils.attach import CLIENT, NONE, TMUX, plan_attach, readout_line
 
 
@@ -207,3 +208,154 @@ def test_a_lapsed_lease_is_not_admitted_before_its_end_is_logged():
     assert state[THEM].status == acts.ACTIVE  # no end event yet
     assert acts.admit(THEM, inv.secret, state, now=1999.0) is not None
     assert acts.admit(THEM, inv.secret, state, now=2000.0) is None
+
+
+# ---------------------------------------------------------------------------
+# The stream (R83, R84, R85, R93): from the invitation on, what a person would see, no input
+# ---------------------------------------------------------------------------
+
+
+def _row(**kw):
+    return _json.dumps(kw) + "\n"
+
+
+def _transcript(tmp_path, rows):
+    p = tmp_path / "session.jsonl"
+    p.write_text("".join(rows))
+    return p
+
+
+BEFORE = _row(type="user", origin={"kind": "human"}, message={"content": "a secret plan from before"})
+AFTER = [
+    _row(type="user", origin={"kind": "human"}, message={"content": "please run the tests"}),
+    _row(type="assistant", message={"content": [
+        {"type": "thinking", "thinking": "private reasoning"},
+        {"type": "text", "text": "Running them now."},
+        {"type": "tool_use", "name": "Bash", "input": {"command": "pytest -q", "description": "Run the tests"}}]}),
+    _row(type="user", message={"content": [{"type": "tool_result", "content": "token=abc123 leaked output",
+                                            "is_error": False}]}),
+    _row(type="attachment", attachment={"type": "hook_additional_context", "content": "hook text"}),
+    _row(type="user", isMeta=True, message={"content": "Base directory for this skill: ..."}),
+    _row(type="user", isMeta=True, origin={"kind": "channel"},
+         message={"content": '<channel source="plugin:telegram:telegram" chat_id="8660107588" message_id="9">'
+                             'are you done?</channel>'}),
+]
+
+
+class _Clock:
+    def __init__(self, t=1500.0):
+        self.t = t
+
+    def __call__(self):
+        return self.t
+
+
+def _serve_once(path, state_log, start, rounds=1, clock=None, on_send=None):
+    sent = []
+
+    def send(frame):
+        sent.append(frame)
+        if on_send:
+            on_send(frame)
+    stream.serve(send, THEM, lambda: acts.fold(state_log), lambda off: stream.rows_from(path, off),
+                 clock or _Clock(), lambda: None, start, rounds=rounds)
+    return sent
+
+
+def test_stream_starts_at_invitation(tmp_path):
+    """R84: nothing from before the invitation's offset is ever sent."""
+    path = _transcript(tmp_path, [BEFORE] + AFTER)
+    offset = len(BEFORE.encode())
+    inv = acts.invite(ME, THEM, offset, {}, container_of=_host)
+    sent = _serve_once(path, [inv.event], offset)
+    assert "a secret plan from before" not in str(sent)
+    assert sent[0] == {"t": "", "kind": "prompt", "text": "please run the tests"}
+
+
+def test_what_a_person_would_see_and_no_more(tmp_path):
+    path = _transcript(tmp_path, AFTER)
+    inv = acts.invite(ME, THEM, 0, {}, container_of=_host)
+    kinds = [f["kind"] for f in _serve_once(path, [inv.event], 0)]
+    assert kinds == ["prompt", "agent", "tool", "result", "channel"]
+    text = str(_serve_once(path, [inv.event], 0))
+    for withheld in ("private reasoning", "token=abc123", "hook text", "Base directory", "8660107588"):
+        assert withheld not in text
+    assert "Run the tests" in text and "plugin:telegram:telegram" in text and "are you done?" in text
+
+
+def test_stream_stops_at_end(tmp_path):
+    """R85: the end is read before every frame, so nothing follows it."""
+    path = _transcript(tmp_path, AFTER)
+    inv = acts.invite(ME, THEM, 0, {}, container_of=_host)
+    log = [inv.event]
+
+    def end_after_first(frame):
+        if frame.get("kind") == "prompt":
+            log.append(acts.end(THEM, "observed", acts.fold(log)))
+    sent = _serve_once(path, log, 0, rounds=2, on_send=end_after_first)
+    assert [f["kind"] for f in sent] == ["prompt", "ended"]
+
+
+def test_a_lease_that_runs_out_stops_the_stream(tmp_path):
+    path = _transcript(tmp_path, AFTER)
+    inv = acts.invite(ME, THEM, 0, {}, container_of=_host, lease_until=1600.0, now=1000.0)
+    clock = _Clock(1500.0)
+
+    def tick(frame):
+        clock.t = 1700.0
+    sent = _serve_once(path, [inv.event], 0, rounds=2, clock=clock, on_send=tick)
+    assert sent[0]["kind"] == "prompt" and sent[-1] == {"kind": "ended"} and len(sent) == 2
+
+
+def test_pause_shown(tmp_path):
+    """R93: a paused stream says the owner paused it, once, and sends nothing else."""
+    path = _transcript(tmp_path, AFTER)
+    inv = acts.invite(ME, THEM, 0, {}, container_of=_host)
+    log = [inv.event]
+    log.append(acts.pause(THEM, acts.fold(log)))
+    sent = _serve_once(path, log, 0, rounds=3)
+    assert sent == [{"kind": "paused", "by": "the observed agent"}]
+    log.append(acts.resume(THEM, acts.fold(log)))
+    assert _serve_once(path, log, 0)[0]["kind"] == "prompt"
+
+
+class _Sock:
+    def __init__(self, first_line):
+        self._incoming = [first_line]
+        self.recv_calls = 0
+        self.out = b""
+
+    def recv(self, n):
+        self.recv_calls += 1
+        return self._incoming.pop(0) if self._incoming else b"typed into the session\n"
+
+    def sendall(self, data):
+        self.out += data
+
+
+def test_onlooker_has_no_keyboard(tmp_path):
+    """R83: the socket is read for the one handshake line and never again."""
+    path = _transcript(tmp_path, AFTER)
+    inv = acts.invite(ME, THEM, 0, {}, container_of=_host)
+    log = [inv.event]
+    sock = _Sock(_json.dumps({"onlooker": THEM, "secret": inv.secret}).encode() + b"\n")
+    stream.serve_connection(sock, lambda: acts.fold(log), lambda off: stream.rows_from(path, off),
+                            _Clock(), lambda: None, poll_rounds=3)
+    assert sock.recv_calls == 1 and b"please run the tests" in sock.out
+    assert b"typed into the session" not in sock.out
+
+
+def test_a_wrong_secret_is_refused_and_told(tmp_path):
+    path = _transcript(tmp_path, AFTER)
+    inv = acts.invite(ME, THEM, 0, {}, container_of=_host)
+    sock = _Sock(_json.dumps({"onlooker": THEM, "secret": "guess"}).encode() + b"\n")
+    why = stream.serve_connection(sock, lambda: acts.fold([inv.event]), lambda off: stream.rows_from(path, off),
+                                  _Clock(), lambda: None, poll_rounds=1)
+    assert why == "not admitted" and b"refused" in sock.out and b"please run" not in sock.out
+
+
+def test_a_half_written_row_waits(tmp_path):
+    p = tmp_path / "t.jsonl"
+    p.write_text(AFTER[0] + '{"type": "user", "mess')
+    rows = list(stream.rows_from(p, 0))
+    assert len(rows) == 1 and rows[0][0] == len(AFTER[0].encode())
