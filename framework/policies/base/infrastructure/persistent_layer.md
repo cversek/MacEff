@@ -39,7 +39,11 @@ MacEff's long-lived machinery grew one piece at a time, and most of it died with
 - What happens to a session that Claude Code's own background daemon already runs?
 - Why must a socket path be checked at install?
 
-**4 Not Yet Landed**
+**4 Attach**
+- How does attach find the session to attach to?
+- What does the readout say when nothing can attach?
+
+**5 Not Yet Landed**
 - Which parts of the persistent layer are specified but not yet in this policy?
 
 === CEP_NAV_BOUNDARY ===
@@ -165,12 +169,33 @@ Claude Code can run a session in the background under its own daemon (`claude --
 
 ---
 
-## 4 Not Yet Landed
+## 4 Attach
+
+### 4.1 Resolved from the primal daemon
+
+**Attach by name resolves the session from the agent's primal daemon** [MIS-0002-R100 (attach_MUST_resolve_from_pd)], never from a tmux name. A name lookup cannot see a renamed session, cannot tell two similar names apart, and cannot see a session Claude Code's own daemon hosts.
+
+1. Attach takes the session unit's pid from the daemon's status, and checks it against the recorded start time, so a recycled pid is refused.
+2. A session hosted by Claude Code's daemon attaches with `claude attach <id>`.
+3. A session under tmux attaches to its pane's session by exact name (`=name`).
+4. A daemon that does not answer resolves nothing; there is no fallback to a name.
+
+The operator may attach to any session without an invitation [MIS-0002-R81 (operator_MAY_attach_without_invitation)]. An onlooker is never given a keyboard.
+
+**From the operator's side of a container**, the command also needs the way in (`ssh -t` or `docker exec -it -u <agent>`). The plan will add it once the daemon's status says where the daemon runs; until then it does not.
+
+### 4.2 When nothing can attach
+
+**Where nothing attachable hosts the session, the readout says so, with the reason** [MIS-0002-R101 (readout_MUST_say_nothing_attachable)]: a stopped or undeclared unit, a pid that changed, or a session in a plain terminal that neither tmux nor Claude Code's daemon hosts.
+
+---
+
+## 5 Not Yet Landed
 
 Specified in MIS-0002 and arriving with their landing steps, each in the pull request that enforces it:
 - **The primal daemon itself:** declarations, liveness events, health derived from runs, outside control and the outside watch (MIS-0002 §6.1 to §6.4, §6.7, §6.12).
 - **Schedules and the notifier,** including the keystroke fallback, the dark-channel event, and every producer of the operator's activity (MIS-0002 §6.5, §6.6, the rest of §6.14).
-- **Mail, containers, the tray, observation and attach** (MIS-0002 §6.8, §6.9, §6.11, §6.13).
+- **Mail, containers, the tray and observation** (MIS-0002 §6.8, §6.9, §6.11, §6.13).
 
 Until a section lands, the rules in force are the existing policies: `service_supervision`, `notification_delivery` and `amail`.
 
