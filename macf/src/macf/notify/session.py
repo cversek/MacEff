@@ -29,6 +29,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from macf.supervisor import ancestor_pids
+
 SESSIONS_DIRNAME = ".claude/sessions"
 SOCKET_DIRNAME = "cc-socks"
 
@@ -240,6 +242,27 @@ def verify_incarnation(pid: int, declared_start) -> bool:
             f"against a recycled pid) declared={declared} actual={actual}",
             file=sys.stderr,
         )
+        return False
+    return True
+
+
+def descends_from(pid: int, ancestor_pid: int, ancestor_start) -> bool:
+    """True when *pid* is *ancestor_pid* or below it, and the ancestor is the same
+    INCARNATION it declared.
+
+    For a peer check on a local socket (MIS-0002-R122
+    (pd_MUST_check_channel_peer_lineage)): the kernel names the peer's pid and uid,
+    but every command an agent runs has the same uid and descends from the same
+    session, so the uid alone cannot tell the agent's channel from anything else
+    the agent runs. Lineage under the live session narrows it to that session's
+    process tree. The incarnation check stops a recycled session pid from passing,
+    and a channel left running after its session ended fails because its old
+    session is no longer its ancestor.
+    """
+    if not verify_incarnation(ancestor_pid, ancestor_start):
+        return False
+    if ancestor_pid not in ancestor_pids(pid):
+        print(f"⚠️ MACF: pid {pid} does not descend from pid {ancestor_pid} (refusing)", file=sys.stderr)
         return False
     return True
 
