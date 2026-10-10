@@ -102,3 +102,37 @@ def test_a_new_file_gets_the_mode_open_would_give(tmp_path):
     finally:
         os.umask(old)
     assert stat.S_IMODE((store / "new.json").stat().st_mode) == 0o644
+
+
+def test_two_writers_in_a_protected_store_both_land(tmp_path):
+    """Re-review of this PR: without a lock, one writer restored 555 while the other was
+    between its temporary file and its rename, and that update (and its cleanup) failed."""
+    import subprocess
+    import sys
+    import time
+    from pathlib import Path
+    store = tmp_path / "store"
+    store.mkdir()
+    (store / "7.json").write_text(json.dumps({"id": "7", "subject": "s", "description": "",
+                                              "status": "pending", "blocks": [], "blockedBy": []}))
+    store.chmod(0o555)
+    src = str(Path(task_reader.__file__).resolve().parents[2])
+    go = tmp_path / "go"
+    # Both writers wait for one start signal, so their updates overlap rather than run in turn.
+    script = ("import os, sys, time\nfrom macf.task import reader\n"
+              f"while not os.path.exists({str(go)!r}): time.sleep(0.001)\n"
+              "fails = sum(not reader.update_task_file('7', {'activeForm': f'w{i}'}) for i in range(300))\n"
+              "print(fails)\n")
+    env = {"PATH": "/usr/bin:/bin", "PYTHONPATH": src, "MACF_TASK_STORE_DIR": str(store), "HOME": str(tmp_path)}
+    try:
+        procs = [subprocess.Popen([sys.executable, "-c", script], env=env, stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE, text=True) for _ in range(2)]
+        time.sleep(0.5)
+        go.write_text("")
+        outs = [p.communicate(timeout=120) for p in procs]
+        assert [o[0].strip() for o in outs] == ["0", "0"], [o[1][-300:] for o in outs]
+        assert [p.name for p in store.iterdir()] == ["7.json"]
+        assert stat.S_IMODE(store.stat().st_mode) == 0o555
+        json.loads((store / "7.json").read_text())
+    finally:
+        store.chmod(0o755)

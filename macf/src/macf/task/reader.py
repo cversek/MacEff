@@ -7,6 +7,7 @@ Completed tasks may be dot-prefixed (.{id}.json) to hide them from CC's native
 scanner while remaining fully accessible to MACF CLI commands.
 """
 
+import fcntl
 import json
 from contextlib import contextmanager
 import os
@@ -463,18 +464,28 @@ def writable_store(dir_path: Path) -> Iterator[None]:
     hiding already take. A store the operator made writable is left as it was.
     """
     try:
-        mode = dir_path.stat().st_mode
+        fd = os.open(str(dir_path), os.O_RDONLY)
     except FileNotFoundError:
         yield
         return
-    protected = not (mode & stat.S_IWUSR)
-    if protected:
-        os.chmod(dir_path, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
     try:
-        yield
-    finally:
+        # One writer at a time holds the lift: otherwise writer A restores 555 while
+        # writer B, which found the store already writable, is between its temporary
+        # file and its rename, and B's update (and its cleanup) fails. A directory can be
+        # opened read-only and locked, so a 555 store needs no lock file it couldn't create.
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        mode = os.fstat(fd).st_mode
+        protected = not (mode & stat.S_IWUSR)
         if protected:
-            os.chmod(dir_path, stat.S_IMODE(mode))
+            os.chmod(dir_path, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+        try:
+            yield
+        finally:
+            if protected:
+                os.chmod(dir_path, stat.S_IMODE(mode))
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
 
 def add_task_note(
