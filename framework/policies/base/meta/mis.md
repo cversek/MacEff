@@ -73,16 +73,16 @@ This is the shape of Python's PEPs: a proposal becomes a historical record once 
 
 ### 1.2 When an MIS is required
 
-A pull request MUST cite an accepted MIS when it [MIS-0001-R01 (PR_MUST_cite_accepted_MIS)]:
-- adds a subsystem;
-- changes architecture across components; or
-- changes what an agent is allowed to do.
+A pull request MUST cite an accepted MIS when it introduces a new policy or makes a major architectural change [MIS-0003-R01 (PR_MUST_cite_MIS_for_major_change)]:
+- **a new policy:** a policy document added under `framework/policies`. A document split out of, or renamed from, an existing policy is a change to that policy, not a new one;
+- **a major architectural change:** a change that adds a subsystem or changes architecture across components.
 
-An author MAY write an MIS for any other change [MIS-0001-R02 (author_MAY_write_MIS_for_any_change)]. Bug fixes and small features stay an issue and a pull request. A pull request that needs an MIS may be opened as a draft while the MIS is decided, but it does not merge until the MIS is Accepted.
+An author MAY write an MIS for any other change [MIS-0001-R02 (author_MAY_write_MIS_for_any_change)]. A rule added to an existing policy, or a change to what an agent is allowed to do, needs no MIS unless it is part of one of the two changes above: it ships with its policy text in one reviewed pull request, as `core_principles` requires. Bug fixes and small features stay an issue and a pull request. A pull request that needs an MIS may be opened as a draft while the MIS is decided, but it does not merge until the MIS is Accepted.
 
-**The test for "a subsystem" and "what an agent is allowed to do":**
+The threshold was narrowed by MIS-0003 on 2026-10-04. MIS-0001 had also required an MIS for any change to what an agent may do, counting every MUST added to policy text; the operator found that "going too far if every other policy tweak kicks the MIS process off".
+
+**The tests for a major architectural change:**
 - **A subsystem:** a new long-lived process, a new store of agent state, a new command group, or a new channel to or from an agent.
-- **What an agent is allowed to do:** any hook, gate, permission or policy rule that newly blocks, allows or requires an action. Enforcement is the test, and policy text enforces too: a MUST or MUST NOT added to policy counts whether or not a hook backs it. A SHOULD, a clarification, a reordering, or a display or recommendation that an agent may ignore requires nothing.
 - **Changes architecture across components:** moves a responsibility from one component to another, or changes how two components talk to each other (a file format, a protocol, a shared store).
 - **A small feature:** extends an existing command or behavior without either of those. For example, a new output format for an existing command, or a new value shown in an existing hook line.
 - **If in doubt, ask the operator.** The operator's answer is the test.
