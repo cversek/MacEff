@@ -326,6 +326,17 @@ def find_agent_home() -> Path:
     # 3. Default to user home directory
     return Path.home()
 
+def session_root() -> Path:
+    """Where per-session directories live: ``/tmp/macf`` unless ``MACF_SESSION_ROOT``
+    names another.
+
+    Each agent and session gets a directory under it for the hook log, scratch
+    scripts and caches. The test suite points it at a temporary directory, so a
+    run inside a live session cannot write into that session's hook log.
+    """
+    return Path(os.environ.get("MACF_SESSION_ROOT") or "/tmp/macf")
+
+
 def get_session_dir(
     session_id: Optional[str] = None,
     agent_id: Optional[str] = None,
@@ -335,7 +346,8 @@ def get_session_dir(
     """
     Get agent-scoped session directory with optional subdirectory.
 
-    Path structure: /tmp/macf/{agent_id}/{session_id}/{subdir}/
+    Path structure: {session_root}/{agent_id}/{session_id}/{subdir}/, where the
+    root is /tmp/macf by default (see ``session_root``).
 
     Args:
         session_id: Session ID (auto-detected if None)
@@ -372,8 +384,8 @@ def get_session_dir(
             print(f"⚠️ MACF: Config load failed (using env fallback): {e}", file=sys.stderr)
             agent_id = os.environ.get('MACEFF_USER') or os.environ.get('USER') or 'unknown_agent'
 
-    # Build unified path: /tmp/macf/{agent_id}/{session_id}/{subdir}/
-    base_path = Path("/tmp/macf") / agent_id / session_id
+    # Build unified path: {session_root}/{agent_id}/{session_id}/{subdir}/
+    base_path = session_root() / agent_id / session_id
 
     if subdir:
         base_path = base_path / subdir

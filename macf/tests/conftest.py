@@ -116,6 +116,40 @@ def clean_temp_dir(tmp_path):
     # Cleanup happens automatically with tmp_path
 
 
+@pytest.fixture(scope="session", autouse=True)
+def isolated_session_root(tmp_path_factory):
+    """Point the per-session directories (the hook log among them) at a temporary root.
+
+    Their root is /tmp/macf unless MACF_SESSION_ROOT names another, and the session
+    under it is resolved from the environment, so a suite run inside a live agent
+    session wrote its tests' hook errors into that session's own hook log. Session
+    scope, so module-scoped fixtures, and the subprocesses anything starts with the
+    inherited environment, are covered as well.
+    """
+    root = tmp_path_factory.mktemp("macf_sessions")
+    previous = os.environ.get("MACF_SESSION_ROOT")
+    os.environ["MACF_SESSION_ROOT"] = str(root)
+    yield root
+    if previous is None:
+        os.environ.pop("MACF_SESSION_ROOT", None)
+    else:
+        os.environ["MACF_SESSION_ROOT"] = previous
+
+
+@pytest.fixture(scope="session", autouse=True)
+def no_live_proxy_captures():
+    """Run without the developer's proxy capture directory, as CI does.
+
+    The proxy writes request and response captures wherever MACF_PROXY_CAPTURE_DIR
+    points, and a live agent's environment often names one. A proxy test that did
+    not clear it wrote its captures among the live agent's own.
+    """
+    previous = os.environ.pop("MACF_PROXY_CAPTURE_DIR", None)
+    yield
+    if previous is not None:
+        os.environ["MACF_PROXY_CAPTURE_DIR"] = previous
+
+
 @pytest.fixture(autouse=True)
 def isolated_events_log(tmp_path, monkeypatch):
     """
