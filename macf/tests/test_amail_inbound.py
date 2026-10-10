@@ -158,6 +158,9 @@ def test_audit_records_seen_and_exactly_one_terminal(deploy):
     decisions = [r["decision"] for r in records if r.get("direction") == "inbound"]
     assert decisions.count(inbound.SEEN) == 1
     assert decisions.count(HANDED_OFF) == 1
+    # amail.md §3.3: every inbound record names its rung and the tier it was written under.
+    assert all(r.get("rung") == "internet" and r.get("tier") for r in records
+               if r.get("direction") == "inbound"), records
 
 
 # ---- refusals: one variable each -------------------------------------------
@@ -329,7 +332,7 @@ def test_in_flight_spool_entries_are_not_shortfalls(deploy):
     from macf.amail.audit import AuditLog
     raw = make_raw()
     spool(deploy, raw)  # spooled, SEEN recorded manually, never processed
-    AuditLog(deploy.broker_config.audit_path).inbound(
+    AuditLog(deploy.broker_config.audit_path).inbound(rung="internet", 
         sender="unknown", recipient="unknown",
         message_id=hashlib.sha256(raw).hexdigest(),
         decision=inbound.SEEN, reason="test in-flight")
