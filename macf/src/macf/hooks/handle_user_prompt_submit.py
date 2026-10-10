@@ -116,6 +116,29 @@ def scheduled_prompt(prompt: str, transcript_path: Optional[str]) -> bool:
     return False
 
 
+def maybe_restore_user_remote(prompt: str, recorded: bool) -> bool:
+    """Lift USER_REMOTE's deny only for a prompt the operator typed: one that counted as
+    activity (so not framework-typed, not a wake or a harness notice) and arrived directly
+    rather than through a channel. Returns whether a restore was asked for."""
+    if not recorded or opening_channel_source(prompt) is not None:
+        return False
+    try:
+        from macf.utils.claude_settings import restore_user_remote_deny_if_active
+        restored = restore_user_remote_deny_if_active()
+        if restored and restored.get("restored"):
+            from macf.agent_events_log import append_event
+            append_event("mode_change", {
+                "mode": "USER_REMOTE",
+                "enabled": False,
+                "source": "auto_restore_on_cli_activity",
+            })
+    except Exception as e:  # noqa: BLE001 - a failed restore is reported, never fatal to the prompt
+        emit_warning(Warning(source="user_prompt_submit",
+                             kind="user_remote_auto_restore_failed",
+                             detail=str(e)))
+    return True
+
+
 def record_user_activity_from_payload(prompt: str, transcript_path: Optional[str] = None) -> bool:
     """Record user activity when *this* invocation carries a typed prompt.
 
@@ -222,28 +245,14 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # Record activity from the payload in hand before anything derives
         # staleness from the event log, so this render and the ones after it
         # agree with the event that produced them (#181).
-        record_user_activity_from_payload(prompt, transcript_path)
+        recorded = record_user_activity_from_payload(prompt, transcript_path)
 
-        # USER_REMOTE auto-restore: a CLI prompt means the operator is back at the
-        # keyboard, which auto-clears USER_REMOTE (detection derives that from the
-        # activity just recorded). Restore the deny'd permissions here too —
-        # otherwise the tools USER_REMOTE walled off stay denied until an explicit
-        # `mode set USER_PRESENT`, stranding the returned operator. No-op when
-        # nothing is denied; full permission enforcement reloads on the next restart.
-        try:
-            from macf.utils.claude_settings import restore_user_remote_deny_if_active
-            _ur_restored = restore_user_remote_deny_if_active()
-            if _ur_restored and _ur_restored.get("restored"):
-                from macf.agent_events_log import append_event
-                append_event("mode_change", {
-                    "mode": "USER_REMOTE",
-                    "enabled": False,
-                    "source": "auto_restore_on_cli_activity",
-                })
-        except Exception as e:
-            emit_warning(Warning(source="user_prompt_submit",
-                                 kind="user_remote_auto_restore_failed",
-                                 detail=str(e)))
+        # USER_REMOTE auto-restore: a prompt the operator typed at the keyboard means
+        # they are back, which auto-clears USER_REMOTE; restore the deny'd permissions
+        # too. Only that prompt: one the framework typed (a wake, a recovery prompt)
+        # or a channel message is not the operator at the keyboard, and lifting the
+        # deny for it ended remote mode for an operator still away.
+        maybe_restore_user_remote(prompt, recorded)
 
         # Start Development Drive tracking with current UUID and prompt preview
         # Note: start_dev_drv() emits dev_drv_started event internally
