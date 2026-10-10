@@ -19,6 +19,7 @@ through which the persistent layer delivers notices. Both producers ask
 """
 
 import re
+import sys
 import time
 from typing import Optional
 
@@ -56,10 +57,15 @@ WAKE_OPENING = "[maceff:wake]"
 # The event a keystroke the framework sends is recorded as, before it is sent.
 KEYS_SENT_EVENT = "keys_sent"
 
+# The event a producer records when it takes a framework keystroke as the input that
+# arrived, so that a record names one arrival per producer, not every input with its text.
+KEYS_MATCHED_EVENT = "keys_matched"
+
 # How long a record names what arrives: long enough for keys typed during a
-# turn to be delivered when the turn ends. Someone who types the same text
-# themselves within it reads as away, which errs toward the agent being more
-# careful.
+# turn to be delivered when the turn ends. A record names one arrival per
+# producer, so someone who types the same text after the framework's keys have
+# arrived reads as themselves. Only an input that arrives before the framework's
+# own can take its record, which errs toward the agent being more careful.
 KEYS_SENT_WINDOW_SECONDS = 10 * 60
 
 _COMMAND = re.compile(r"<command-name>(.*?)</command-name>.*?<command-args>(.*?)</command-args>", re.S)
@@ -112,28 +118,50 @@ def typed_text(content) -> str:
     return text
 
 
-def typed_by_framework(text: str, now: Optional[float] = None) -> Optional[str]:
+def typed_by_framework(text: str, now: Optional[float] = None, *, consumer: str = "",
+                       consume: bool = True) -> Optional[str]:
     """The kind of keystroke the framework recorded for ``text`` within the window, or None.
 
     The client records whatever reaches its input box as typing, so a
     framework keystroke is known only by the record its sender made first.
     The event log is read newest first, stopping at the window's edge.
+
+    Each record names one arrival for each ``consumer``, a producer of the
+    operator's activity: the first input with its text that the consumer reads
+    takes the oldest record still open, and says so with a ``keys_matched``
+    event. So the operator typing the same text afterwards reads as the
+    operator, not as the framework again. ``consume=False`` looks without
+    taking, for a copy the consumer will read again once it is delivered.
     """
     wanted = text.strip()
     if not wanted:
         return None
-    from macf.agent_events_log import read_events
+    from macf.agent_events_log import append_event, read_events
     cutoff = (time.time() if now is None else now) - KEYS_SENT_WINDOW_SECONDS
+    sends, taken = {}, set()
     for event in read_events(limit=None, reverse=True):
         stamp = event.get("timestamp")
         if isinstance(stamp, (int, float)) and stamp < cutoff:
-            return None
-        if event.get("event") != KEYS_SENT_EVENT:
-            continue
+            break
         data = event.get("data") or {}
-        if str(data.get("text", "")).strip() == wanted:
-            return str(data.get("kind") or "keys")
-    return None
+        if str(data.get("text", "")).strip() != wanted:
+            continue
+        if event.get("event") == KEYS_SENT_EVENT:
+            sends[stamp] = str(data.get("kind") or "keys")
+        elif event.get("event") == KEYS_MATCHED_EVENT and data.get("consumer") == consumer:
+            taken.add(data.get("send_ts"))
+    still_open = sorted(ts for ts in sends if ts not in taken and isinstance(ts, (int, float)))
+    if not still_open:
+        return None
+    kind = sends[still_open[0]]
+    if consume:
+        try:
+            append_event(KEYS_MATCHED_EVENT, {"text": wanted, "kind": kind, "consumer": consumer,
+                                              "send_ts": still_open[0]})
+        except (OSError, ValueError) as e:
+            print(f"⚠️ MACF: could not record that a framework keystroke arrived, so its text "
+                  f"typed again within the window will read as the framework's: {e}", file=sys.stderr)
+    return kind
 
 
 def from_maceff_channel(source: Optional[str]) -> bool:
