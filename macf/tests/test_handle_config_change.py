@@ -107,3 +107,39 @@ def test_a_change_between_sessions_is_recorded_at_session_start(isolated_events_
     assert ev["data"]["source"] == "between_sessions"
     assert ev["data"]["added"] == {"allow": ["B"]}
     assert cc.seed_baselines([f], "s3") == 0          # recorded once, not every session
+
+
+def test_a_baseline_names_every_rule(isolated_events_log, tmp_path):
+    f = tmp_path / ".claude" / "settings.json"
+    _settings(f, allow=["Bash(ls:*)", "Read"], deny=["Bash(rm:*)"])
+    _fire(f)
+    assert _events(cc.BASELINE_EVENT)[0]["data"]["rules"] == {
+        "allow": ["Bash(ls:*)", "Read"], "ask": [], "deny": ["Bash(rm:*)"]}
+
+
+def test_a_rule_added_after_the_cache_is_lost_is_still_named(isolated_events_log, tmp_path):
+    """The head maintainer's reproduction on this PR: baseline, lose the cache (a home restored
+    without .maceff/, a recreated volume), widen the allowlist. The record must name the rule."""
+    import shutil
+    f = tmp_path / ".claude" / "settings.json"
+    _settings(f, allow=["Bash(ls:*)"])
+    _fire(f)
+    _settings(f, allow=["Bash(ls:*)", "Bash(git:*)"], mode="acceptEdits")
+    _fire(f)
+    shutil.rmtree(cc._cache_path(f).parent)
+    _settings(f, allow=["Bash(ls:*)", "Bash(git:*)", "Bash(rm:*)"], mode="acceptEdits")
+    _fire(f)
+    changes = _events(cc.CHANGED_EVENT)
+    assert len(_events(cc.BASELINE_EVENT)) == 1                       # no second baseline
+    assert changes[-1]["data"]["added"] == {"allow": ["Bash(rm:*)"]}   # rebuilt from the log
+    assert "default_mode" not in changes[-1]["data"]                   # the mode change was replayed
+
+
+def test_the_rules_are_rebuilt_from_the_log_alone(isolated_events_log, tmp_path):
+    f = tmp_path / ".claude" / "settings.json"
+    _settings(f, allow=["A", "B"])
+    _fire(f)
+    _settings(f, allow=["B", "C"], deny=["D"])
+    _fire(f)
+    assert cc.rules_from_log(f) == {"allow": ["B", "C"], "ask": [], "deny": ["D"], "defaultMode": None}
+    assert cc.rules_from_log(tmp_path / "never-seen.json") is None

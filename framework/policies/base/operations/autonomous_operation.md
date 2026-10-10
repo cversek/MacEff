@@ -706,12 +706,18 @@ block: a system timer, a cron job, a supervisor.
   `deny` rules and its `defaultMode` with the copy it last saw, and records a
   `permission_rules_changed` event naming each rule added or removed and the
   file it came from. A file seen for the first time is recorded as a
-  `permission_rules_baseline`. Session start compares the user, project and
-  local settings files too: it baselines a file never seen, so the first change
-  in a session is a diff, and it records a change made while no session ran with
-  the source `between_sessions`. A file that cannot be read is skipped, never
-  recorded as every rule removed. The copy is a cache for comparing; the events
-  are the record. Query them with `macf_tools events query --event
+  `permission_rules_baseline` naming every rule it holds. Session start compares
+  the user, project and local settings files too: it baselines a file never
+  seen, so the first change in a session is a diff, and it records a change made
+  while no session ran with the source `between_sessions`. A file that cannot be
+  read is skipped, never recorded as every rule removed. The events are the
+  record: the rules a file last held are its latest baseline plus the diffs
+  after it, so a copy kept beside the log only saves reading it back, and when
+  that copy is lost (a home restored without `.maceff/`, a recreated volume) the
+  log answers and a rule added afterwards is still named. A mode switch records
+  both `mode_permissions_changed` (what the switch did, and why) and
+  `permission_rules_changed` (what the file now holds); count changes from one
+  of them, not both. Query them with `macf_tools events query --event
   permission_rules_changed`.
 
 **What a deployment must do.** Run `macf_tools permissions watch` as the

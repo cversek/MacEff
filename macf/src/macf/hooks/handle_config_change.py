@@ -7,10 +7,13 @@ narrowed allowlist is countable from the agent's event log (autonomous_operation
 
 Claude Code runs this hook about a second after a settings file changes during a session,
 and tells it only which file and which kind (user, project, local, policy or skills). It
-does not say what changed. So the hook keeps the rules it last saw for each file and diffs
-against them. That copy is a cache for diffing, never the record: the record is the
-``permission_rules_changed`` event. A file seen for the first time is recorded as a
-``permission_rules_baseline`` event, since there is nothing to diff it against.
+does not say what changed. So the hook diffs against the rules it last saw for each file.
+The record is the events: a file seen for the first time is a ``permission_rules_baseline``
+carrying every rule it holds, and each change after it a ``permission_rules_changed``
+naming what was added and removed. The rules a file last held are its latest baseline plus
+the diffs after it, so they can always be rebuilt from the log. A copy kept beside the log
+only saves reading it back; when that copy is lost (a home restored without ``.maceff/``, a
+recreated volume), the log answers instead, and a rule added afterwards is still named.
 
 The hook never blocks a change and adds nothing to the model's context.
 """
@@ -20,7 +23,7 @@ import traceback
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from macf.agent_events_log import append_event, get_log_path
+from macf.agent_events_log import append_event, get_log_path, read_events, shared_event_reads
 from macf.hooks.hook_logging import log_hook_event
 
 BUCKETS = ("allow", "ask", "deny")
@@ -60,6 +63,67 @@ def diff_rules(old: dict, new: dict) -> dict:
     return out
 
 
+def rules_from_log(path: Path) -> Optional[dict]:
+    """The rules ``path`` last held by the record: its latest baseline plus the diffs after
+    it, read newest first and stopping at that baseline. None when the log never saw it."""
+    wanted = str(path)
+    diffs = []
+    for event in read_events(reverse=True, scope="all", only=(BASELINE_EVENT, CHANGED_EVENT)):
+        data = event.get("data") or {}
+        if data.get("file_path") != wanted:
+            continue
+        if event.get("event") == CHANGED_EVENT:
+            diffs.append(data)
+            continue
+        base = data.get("rules")
+        if not isinstance(base, dict):
+            return None  # noqa: MACEFF003 - None means "no usable baseline"; the caller then baselines afresh, naming every rule
+        rules = {b: set(base.get(b) or []) for b in BUCKETS}
+        mode = data.get("default_mode")
+        for d in reversed(diffs):
+            for b, added in (d.get("added") or {}).items():
+                rules.setdefault(b, set()).update(added)
+            for b, removed in (d.get("removed") or {}).items():
+                rules.setdefault(b, set()).difference_update(removed)
+            if "default_mode" in d:
+                mode = d["default_mode"].get("to")
+        out = {b: sorted(rules.get(b, set())) for b in BUCKETS}
+        out["defaultMode"] = mode
+        return out
+    return None  # noqa: MACEFF003 - never baselined: the caller records a baseline
+
+
+def _last_seen(path: Path) -> Optional[dict]:
+    """The rules last seen for ``path``: the copy beside the log, else the log itself."""
+    try:
+        return json.loads(_cache_path(path).read_text())
+    except (OSError, ValueError):
+        return rules_from_log(path)
+
+
+def observe(path: Path, rules: dict, common: dict, changed_source: Optional[str] = None) -> bool:
+    """Record what ``rules`` says about ``path`` against what was last seen: a baseline naming
+    every rule, a diff, or nothing. Returns whether an event was recorded."""
+    old = _last_seen(path)
+    recorded = False
+    if old is None:
+        append_event(BASELINE_EVENT, {**common,
+                                      "rules": {b: rules[b] for b in BUCKETS},
+                                      "counts": {b: len(rules[b]) for b in BUCKETS},
+                                      "default_mode": rules.get("defaultMode")})
+        recorded = True
+    else:
+        change = diff_rules(old, rules)
+        if change:
+            extra = {"source": changed_source} if changed_source else {}
+            append_event(CHANGED_EVENT, {**common, **extra, **change})
+            recorded = True
+    cache = _cache_path(path)
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps(rules))
+    return recorded
+
+
 def _cache_path(settings_path: Path) -> Path:
     key = hashlib.sha256(str(settings_path.resolve()).encode()).hexdigest()[:16]
     return get_log_path().parent / "permission_rules_seen" / f"{key}.json"
@@ -89,28 +153,12 @@ def seed_baselines(paths, session_id: Optional[str] = None) -> int:
         rules = read_rules(path)
         if rules is None:
             continue
-        cache = _cache_path(path)
-        common = {"file_path": str(path), "session_id": session_id}
-        try:
-            old = json.loads(cache.read_text())
-        except (OSError, ValueError):
-            old = None
-        if old is None:
-            append_event(BASELINE_EVENT, {"source": "session_start", **common,
-                                          "counts": {b: len(rules[b]) for b in BUCKETS},
-                                          "default_mode": rules.get("defaultMode")})
-            recorded += 1
-        else:
-            change = diff_rules(old, rules)
-            if not change:
-                continue
-            append_event(CHANGED_EVENT, {"source": "between_sessions", **common, **change})
-            recorded += 1
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.write_text(json.dumps(rules))
+        common = {"source": "session_start", "file_path": str(path), "session_id": session_id}
+        recorded += observe(path, rules, common, changed_source="between_sessions")
     return recorded
 
 
+@shared_event_reads
 def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
     try:
         data = json.loads(stdin_json) if stdin_json else {}
@@ -123,26 +171,8 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         if new is None:
             return {"continue": True}
 
-        cache = _cache_path(path)
-        old = None
-        try:
-            old = json.loads(cache.read_text())
-        except (OSError, ValueError):
-            pass
-
-        common = {"source": source, "file_path": str(path),
-                  "session_id": data.get("session_id")}
-        if old is None:
-            append_event(BASELINE_EVENT, {**common,
-                                          "counts": {b: len(new[b]) for b in BUCKETS},
-                                          "default_mode": new.get("defaultMode")})
-        else:
-            change = diff_rules(old, new)
-            if change:
-                append_event(CHANGED_EVENT, {**common, **change})
-
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.write_text(json.dumps(new))
+        observe(path, new, {"source": source, "file_path": str(path),
+                            "session_id": data.get("session_id")})
         return {"continue": True}
 
     except Exception as e:
