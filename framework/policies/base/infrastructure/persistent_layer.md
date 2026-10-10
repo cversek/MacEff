@@ -33,7 +33,13 @@ MacEff's long-lived machinery grew one piece at a time, and most of it died with
 - How is the client's idle compaction turned off, and when is it kept?
 - How do I tell, after the fact, who asked for a compaction?
 
-**3 Not Yet Landed**
+**3 macOS**
+- How does a primal daemon run on macOS, and under what name?
+- Which privacy grants can a unit declare, and how is a denied grant told from a network fault?
+- What happens to a session that Claude Code's own background daemon already runs?
+- Why must a socket path be checked at install?
+
+**4 Not Yet Landed**
 - Which parts of the persistent layer are specified but not yet in this policy?
 
 === CEP_NAV_BOUNDARY ===
@@ -119,12 +125,33 @@ Until the primal daemon lands, the transcript monitor makes these records. The d
 
 ---
 
-## 3 Not Yet Landed
+## 3 macOS
+
+### 3.1 The daemon as a LaunchAgent
+
+**On macOS each primal daemon runs as a per-user LaunchAgent** [MIS-0002-R05 (macos_MUST_render_LaunchAgent)], in the user's GUI session (`LimitLoadToSessionType: Aqua`), never as a LaunchDaemon that runs as root on someone's behalf.
+
+- **Its label is `maceff_pd.<id>`** [MIS-0002-R06 (pd_identifiers_MUST_use_maceff_pd)], where `<id>` is the calling card with `@` written as `_`: `IraMacEff@ee9a78` becomes `maceff_pd.IraMacEff_ee9a78`. Several agents can share one login, so every name carries the agent.
+- **launchd is the outer tier here.** `KeepAlive` and `RunAtLoad` restart the daemon whenever it exits.
+- **The identity never travels in the environment.** The program is `python -m macf.pd <agent home>`, and the daemon reads its card from the identity file in that home.
+- **Install, remove and restart go through `launchctl bootstrap`, `bootout` and `kickstart`** against `gui/<uid>`. The legacy `load` and `unload` are not offered.
+- **Removal finishes even when nothing is loaded.** A boot-out of a service launchd does not have exits 3 ("No such process"), which happens after a failed bootstrap, after a reboot outside the GUI session, or on a second removal. The removal counts that as done and removes the plist.
+- **The units outlive the daemon.** `AbandonProcessGroup` keeps launchd from killing the daemon's process group when the daemon exits, so the session keeps running for the restarted daemon to find. Linux renders the same with `KillMode=process`.
+
+**The daemon runs only while its user is logged in to the GUI.** That is the price of the grants: a unit outside the GUI session holds none of the user's. A Mac reached only over SSH, or sitting at the login window after a reboot, runs no daemon and none of the agent's units. On Linux the user unit starts at boot and outlives a logout, so an operator moving between the two should expect the difference.
+
+**launchd does not rotate `StandardOutPath` or `StandardErrorPath`.** They are for what the daemon cannot log itself, such as a crash. A daemon that wrote a line per poll there would grow them without bound.
+
+**Check the socket path at install** [MIS-0002-R129 (adapter_MUST_check_socket_path_length)]. A Unix socket path longer than the platform allows fails at bind with a bare error. On macOS the limit is 103 bytes (Linux: 107), and a long home path or runtime directory reaches it. The install refuses with the path and the limit.
+
+---
+
+## 4 Not Yet Landed
 
 Specified in MIS-0002 and arriving with their landing steps, each in the pull request that enforces it:
 - **The primal daemon itself:** declarations, liveness events, health derived from runs, outside control and the outside watch (MIS-0002 §6.1 to §6.4, §6.7, §6.12).
 - **Schedules and the notifier,** including the keystroke fallback, the dark-channel event, and every producer of the operator's activity (MIS-0002 §6.5, §6.6, the rest of §6.14).
-- **Mail, containers, macOS, the tray, observation and attach** (MIS-0002 §6.8 to §6.11, §6.13).
+- **Mail, containers, the tray, observation and attach** (MIS-0002 §6.8, §6.9, §6.11, §6.13).
 
 Until a section lands, the rules in force are the existing policies: `service_supervision`, `notification_delivery` and `amail`.
 
