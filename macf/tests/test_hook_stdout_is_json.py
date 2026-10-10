@@ -35,8 +35,8 @@ class TestStartDaemonKeepsStdoutClean:
         """NOTE the absence of raising=False.
 
         The first version of this test patched `_read_pidfile` and
-        `_process_alive` with raising=False. Neither name exists — the real ones
-        are `is_running` and `read_pid_file` — so the patches silently did
+        `_process_alive` with raising=False. Neither name existed — the real
+        ones were `is_running` and `read_pid_file` — so the patches silently did
         nothing, start_daemon took an entirely different early-return path, and
         the test passed locally only because this machine happened to have a
         resolvable session transcript. CI, which does not, caught it.
@@ -46,8 +46,7 @@ class TestStartDaemonKeepsStdoutClean:
         a call reporting success for a narrower question than the caller asked.
         """
         from macf.transcript_monitor import daemon as d
-        monkeypatch.setattr(d, "is_running", lambda: True)
-        monkeypatch.setattr(d, "read_pid_file", lambda: 4242)
+        monkeypatch.setattr(d, "is_running", lambda transcript=None: True)
         out, err = self._capture(d.start_daemon)
         assert out == "", f"stdout must stay parseable, got: {out!r}"
         assert "already running" in err
