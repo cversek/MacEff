@@ -68,3 +68,27 @@ def test_the_layer_does_not_import_the_tray():
     offenders = [str(p.relative_to(root)) for p in root.rglob("*.py")
                  if "tray" not in p.parts and ("macf.tray" in p.read_text(errors="ignore") or "from ..tray" in p.read_text(errors="ignore"))]
     assert offenders == []
+
+
+def test_every_union_state_has_a_template_glyph():
+    """One glyph per state the icon can show, at menu-bar size and @2x, drawn in black only.
+
+    A macOS template image is read for its alpha alone, so any white in a glyph would
+    tint like black and erase a knock-out; knock-outs are masks instead.
+    """
+    import pathlib
+    import re
+    import struct
+    import macf.tray
+    from macf.tray.model import URGENCY
+    glyphs = pathlib.Path(macf.tray.__file__).parent / "glyphs"
+    for state in URGENCY:
+        if state == "declared":
+            continue  # never the icon's state: a unit only declared has not been asked to run
+        svg = (glyphs / f"{state}.svg").read_text()
+        drawn = re.sub(r"<mask.*?</mask>", "", svg, flags=re.S)
+        assert set(re.findall(r'(?:fill|stroke)="(#[0-9a-fA-F]{3,6})"', drawn)) <= {"#000"}, state
+        for name, side in ((f"{state}.png", 18), (f"{state}@2x.png", 36)):
+            head = (glyphs / name).read_bytes()[:24]
+            assert head[:8] == b"\x89PNG\r\n\x1a\n", name
+            assert struct.unpack(">II", head[16:24]) == (side, side), name
