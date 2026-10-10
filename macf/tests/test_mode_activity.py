@@ -302,7 +302,7 @@ def test_a_recorded_keystroke_names_only_its_own_text_within_its_window(isolated
 
 
 def test_a_recorded_keystroke_pairs_with_one_arrival(isolated_events_log):
-    """#1533: the framework types /compact and its arrival is the framework's; the operator
+    """The framework types /compact and its arrival is the framework's; the operator
     then types /compact inside the window, and that one is the operator's, through both
     producers. A copy queued while a turn runs only looks, so its delivery takes the record."""
     append_event(KEYS_SENT_EVENT, {"text": "/compact", "kind": "inject", "tmux_session": "s"})
@@ -320,7 +320,7 @@ def test_a_recorded_keystroke_pairs_with_one_arrival(isolated_events_log):
 
 
 def test_an_operators_compact_after_an_injected_one_is_their_ask(isolated_events_log):
-    """#1533 with the compaction-ask detector: after macf_tools inject compact, the operator's
+    """With the compaction-ask detector: after macf_tools inject compact, the operator's
     own /compact inside the window is recorded as the operator's ask, and the activity
     detector, reading the same rows, still counts it as the operator too."""
     from macf.transcript_monitor.daemon import detect_compaction_ask
