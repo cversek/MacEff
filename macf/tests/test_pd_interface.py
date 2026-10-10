@@ -227,3 +227,40 @@ def test_a_schedule_needs_a_wall_clock_limit():
                 "target": "isolated", "run": {"command": ["true"], "wake_when": "stdout"}}
     with pytest.raises(ValidationError):
         pdi.Declaration.model_validate(_declaration(schedules=[schedule]))
+
+
+def _schedule(**over):
+    schedule = {"name": "s", "cron": "0 7 * * *", "missed_run": {"kind": "skip"},
+                "target": "isolated", "run": {"command": ["true"], "wake_when": "stdout"},
+                "timeout_s": 60}
+    schedule.update(over)
+    return schedule
+
+
+def test_a_declaration_with_schedules_names_its_timezone():
+    """A bare cron reads in local time on a host and usually in UTC in a container, so a
+    declaration with schedules names the timezone they are all read in, and a name that
+    is not one is refused rather than read as some other zone."""
+    with pytest.raises(ValidationError, match="timezone"):
+        pdi.Declaration.model_validate(_declaration(schedules=[_schedule()]))
+    with pytest.raises(ValidationError, match="unknown timezone"):
+        pdi.Declaration.model_validate(_declaration(schedules=[_schedule()], timezone="Mars/Olympus"))
+    assert pdi.Declaration.model_validate(_declaration(schedules=[_schedule()], timezone="UTC")).timezone == "UTC"
+    assert pdi.Declaration.model_validate(_declaration()).timezone is None
+
+
+def test_a_schedule_whose_act_restarts_a_unit_says_so():
+    """R27: a run that restarts a unit is never replayed after a downtime, so the schedule
+    marks it; nothing restarts unless the declaration says it does."""
+    decl = _declaration(schedules=[_schedule(), _schedule(name="t", restarts_unit=True)], timezone="UTC")
+    marked = {s.name: s.restarts_unit for s in pdi.Declaration.model_validate(decl).schedules}
+    assert marked == {"s": False, "t": True}
+
+
+def test_a_daemon_start_carries_its_record_and_nothing_else():
+    """pd_daemon_start: the fields of the daemon's record and the agent, closed like every event."""
+    start = pdi.DaemonStart(agent=CARD, pid=4242, proc_start="1")
+    assert (pdi.EVENT_DAEMON_START, start.version) == ("pd_daemon_start", 1)
+    assert set(start.model_dump()) == set(pdi.DaemonRecord.model_fields) | {"agent"}
+    with pytest.raises(ValidationError):
+        pdi.DaemonStart(agent=CARD, pid=4242, proc_start="1", units=["session"])
