@@ -83,6 +83,43 @@ class TestRunningSessionVersion:
         monkeypatch.setattr(formatting, "_running_executable", lambda pid: str(running))
         assert get_claude_code_version() == "2.1.200"
 
+    def test_a_pruned_binary_still_names_its_version(self, monkeypatch):
+        """Once the updater prunes the running version, Linux names its binary
+        '<path> (deleted)'. The version is still the running one."""
+        import os
+        import platform
+        monkeypatch.setattr(platform, "system", lambda: "Linux")
+        monkeypatch.setattr(os.path, "exists", lambda p: p == "/proc/4321/exe")
+        monkeypatch.setattr(os, "readlink",
+                            lambda p: "/home/u/.local/share/claude/versions/2.1.281 (deleted)")
+        assert formatting._running_executable(4321) == "/home/u/.local/share/claude/versions/2.1.281"
+        monkeypatch.setenv("CLAUDE_PID", "4321")
+        formatting.get_claude_code_version.cache_clear()
+        assert formatting.get_claude_code_version() == "2.1.281"
+
+    def test_a_pruned_binarys_content_is_read_through_the_proc_link(self, monkeypatch):
+        """When the version must come from the content and the named file is gone,
+        the read goes through /proc/<pid>/exe, which the kernel keeps readable."""
+        import builtins
+        import io
+        import os
+        real_open = builtins.open
+        read_from = []
+
+        def fake_open(path, *args, **kwargs):
+            if path == "/proc/4321/exe":
+                read_from.append(path)
+                return io.StringIO('"2.1.281 (Claude Code)"')
+            return real_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(formatting, "_running_executable", lambda pid: "/gone/claude-binary")
+        monkeypatch.setattr(os.path, "exists", lambda p: False)
+        monkeypatch.setattr(builtins, "open", fake_open)
+        monkeypatch.setenv("CLAUDE_PID", "4321")
+        formatting.get_claude_code_version.cache_clear()
+        assert formatting.get_claude_code_version() == "2.1.281"
+        assert read_from == ["/proc/4321/exe"]
+
     def test_without_a_running_session_the_launcher_answers(self, monkeypatch, tmp_path):
         self._launcher(monkeypatch, tmp_path, "2.1.290")
         assert get_claude_code_version() == "2.1.290"

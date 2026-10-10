@@ -26,10 +26,14 @@ def _running_executable(pid: int) -> str:
         if not os.path.exists(link):
             return ""
         try:
-            return os.readlink(link)
+            target = os.readlink(link)
         except OSError as e:
             print(f"⚠️ MACF: cannot read {link} (using the installed version): {e}", file=sys.stderr)
             return ""
+        # The updater prunes old versions while sessions still run them. The
+        # kernel then names the binary with this suffix, and keeps its content
+        # readable through the link itself.
+        return target[: -len(" (deleted)")] if target.endswith(" (deleted)") else target
     if system == "Darwin":
         import ctypes
         import ctypes.util
@@ -108,7 +112,10 @@ def get_claude_code_version() -> str:
             name = os.path.basename(exe)
             if re.fullmatch(r"\d+\.\d+\.\d+", name):
                 return name
-            version = _extract_version_from_script(exe)
+            # A pruned binary is gone from its path but still readable through
+            # /proc/<pid>/exe, where that exists.
+            readable = exe if os.path.exists(exe) else f"/proc/{pid}/exe"
+            version = _extract_version_from_script(readable)
             if version:
                 return version
 
