@@ -31,7 +31,7 @@ def exec_quote(arg: str) -> str:
     return '"' + escaped.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def render_pd_user_unit(card: str, program_argv: List[str], home: str) -> Tuple[str, str]:
+def render_pd_user_unit(card: str, program_argv: List[str], user_home: str) -> Tuple[str, str]:
     """The user unit for one agent's primal daemon, and where it belongs.
 
     The unit's name comes from the step 1 interface (``maceff_pd-<id>.service``, MIS-0002-R06
@@ -39,6 +39,16 @@ def render_pd_user_unit(card: str, program_argv: List[str], home: str) -> Tuple[
     agent home; the unit carries no declaration, no agent configuration and no environment
     (MIS-0002-R04 (outer_tier_MUST-NOT_hold_agent_config)), so the daemon reads everything
     from the home it is given (MIS-0002-R02 (pd_MUST-NOT_take_identity_from_env)).
+    *user_home* is the login's home, where ``~/.config/systemd/user`` lives; it is not the
+    agent home.
+
+    ``KillMode=process``: the daemon is the parent of every unit it manages (R12), so they
+    share this unit's cgroup. Under the default, ``control-group``, a daemon that exits or
+    crashes takes the session and every other managed unit with it, with no drain (R49) and
+    no regard for a quiet window (R50). With ``process`` only the daemon is signalled; its
+    units keep running, and the restarted daemon finds them (R47). Measured on systemd 259
+    with a child process: ``control-group`` killed it when the daemon exited, ``process``
+    left it running.
     """
     if not program_argv:
         raise ValueError("program_argv is empty")
@@ -54,11 +64,13 @@ def render_pd_user_unit(card: str, program_argv: List[str], home: str) -> Tuple[
         f"ExecStart={' '.join(exec_quote(a) for a in program_argv)}\n"
         "Restart=always\n"
         "RestartSec=10\n"
+        # Only the daemon is signalled when it exits; the units it manages outlive it.
+        "KillMode=process\n"
         "\n"
         "[Install]\n"
         "WantedBy=default.target\n"
     )
-    return f"{home}/.config/systemd/user/{unit}", text
+    return f"{user_home}/.config/systemd/user/{unit}", text
 
 
 def systemctl_argv(verb: str, unit: Optional[str] = None) -> List[str]:

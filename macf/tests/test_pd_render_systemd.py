@@ -32,6 +32,13 @@ def test_outer_tier_restarts_pd():
     assert "StartLimitIntervalSec" not in unit["Service"]
 
 
+def test_the_managed_units_outlive_the_daemon():
+    """R12 makes the daemon the parent of its units, so they share its cgroup. The default
+    KillMode, control-group, would kill them all whenever the daemon exits (R49, R50)."""
+    unit = _parsed(systemd.render_pd_user_unit(CARD, ARGV, "/home/resident")[1])
+    assert unit["Service"]["KillMode"] == "process"
+
+
 def test_identifier():
     """MIS-0002-R06: the unit is named by the step 1 interface, from the calling card."""
     path, _ = systemd.render_pd_user_unit(CARD, ARGV, "/home/resident")
