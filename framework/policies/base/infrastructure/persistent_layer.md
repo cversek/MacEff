@@ -104,6 +104,19 @@ A compaction ends the agent's working memory. The persistent layer compacts a se
 
 **Check the version the session runs, not the one installed.** The launcher can move to a new version while a running session still maps the old one. A key that needs 2.1.290 protects only a session that runs it.
 
+### 2.2 Recording who asked
+
+**When the harness compacts a session that nobody asked to compact, the compaction is recorded with the harness as the asker** [MIS-0002-R127 (harness_compaction_MUST_be_recorded)]. The PreCompact hook's `trigger` cannot say this alone: under 2.1.289 an idle compaction reports `manual`, and under 2.1.290 it reports `auto`. The reliable mark is the client's own row after the boundary, a system row that begins "Compacted while idle".
+
+- **The asks are recorded where they happen.**
+  - An operator's typed `/compact` appears in the transcript as a command row, and is recorded as `compaction_asked` with the asker `operator`.
+  - A compaction asked through `macf_tools inject compact` is recorded with the asker `wind_down`.
+- **The client's idle row** is recorded as `harness_compaction_detected` with the asker `harness`.
+- **The hook records `trigger` as the client sent it**, and `unknown` when the field is absent, never a guess.
+- No event carries the content of the work, only who asked, how and when.
+
+Until the primal daemon lands, the transcript monitor makes these records. The daemon's control record for a harness compaction then names the harness in its `asked_by` (`Asker.kind == "harness"`), with no peer, because nobody requested it.
+
 ---
 
 ## 3 Not Yet Landed
