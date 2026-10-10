@@ -54,6 +54,15 @@ def encode_cc_project_path(path: str) -> str:
     return re.sub(r'[^a-zA-Z0-9]', '-', path)
 
 
+def cc_project_dir(project_root: Path) -> Path:
+    """The one Claude Code transcript directory of the project at ``project_root``.
+
+    A match on the project's name instead would also take every project whose
+    path contains it: for an agent home, each repository under it.
+    """
+    return Path.home() / ".claude" / "projects" / encode_cc_project_path(str(project_root))
+
+
 # The parent of the per-user fallback below. A module constant so that a test
 # can point it at a temporary directory instead of the real /tmp.
 _TMP_ROOT = "/tmp"

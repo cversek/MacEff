@@ -98,7 +98,7 @@ class TestSessionIDExtraction:
         # transcripts are candidates.
         with patch('pathlib.Path.home', return_value=mock_claude_project), \
              patch('macf.utils.session.find_project_root') as mock_root:
-            mock_root.return_value.name = "test-project"
+            mock_root.return_value = Path("/work/test-project")
             session_id = get_current_session_id()
 
         assert session_id is not None
@@ -106,23 +106,34 @@ class TestSessionIDExtraction:
         assert session_id == "550e8400-e29b-41d4-a716-446655440000"
 
     def test_get_current_session_id_multiple_jsonl_files(self, mock_multiple_projects):
-        """
-        Test session ID extraction with multiple JSONL files.
-
-        When multiple {session_id}.jsonl files exist, should:
-        - Process all files to find most recent session
-        - Use file modification time to determine current session
-        - Handle files with different modification times
-        """
+        """A newer transcript in another project is not this project's session,
+        even when both directories' names contain the word "project"."""
         with patch('pathlib.Path.home', return_value=mock_multiple_projects), \
              patch('macf.utils.session.find_project_root') as mock_root:
-            # Pin a project name both fixture dirs contain, so selection is
-            # deterministic and hermetic against the real cwd. The function
-            # picks the newest by mtime regardless of glob/iterdir order.
-            mock_root.return_value.name = "project"
+            mock_root.return_value = Path("/work/old-project")
             session_id = get_current_session_id()
 
-        assert session_id == "most-recent-session-uuid"
+        assert session_id == "old-session-uuid"
+
+    def test_a_repository_under_the_agent_home_is_not_the_agent_homes_project(self, tmp_path):
+        """The agent home's own directory is the only candidate. Every repository
+        under the home has a directory whose name contains the home's name, and
+        a match on the name took the newest transcript among all of them."""
+        projects = tmp_path / ".claude" / "projects"
+        own, repo = projects / "-home-agent", projects / "-home-agent-gitwork-repo"
+        own.mkdir(parents=True)
+        repo.mkdir()
+        now = datetime.now().timestamp()
+        for path, age in ((own / "older-own.jsonl", 300), (own / "newest-own.jsonl", 200),
+                          (repo / "repo-session.jsonl", 0)):
+            path.write_text("{}\n")
+            os.utime(path, (now - age, now - age))
+        with patch('pathlib.Path.home', return_value=tmp_path), \
+             patch('macf.utils.session.find_project_root') as mock_root:
+            mock_root.return_value = Path("/home/agent")
+            session_id = get_current_session_id()
+
+        assert session_id == "newest-own"
 
     def test_another_projects_transcript_is_never_borrowed(self, mock_multiple_projects):
         """A project with no transcript of its own gets "unknown", not another
@@ -130,7 +141,7 @@ class TestSessionIDExtraction:
         another agent's, and a sessionless process would stamp it on every event."""
         with patch('pathlib.Path.home', return_value=mock_multiple_projects), \
              patch('macf.utils.session.find_project_root') as mock_root:
-            mock_root.return_value.name = "macf-test-cwd"
+            mock_root.return_value = Path("/work/macf-test-cwd")
             session_id = get_current_session_id()
 
         assert session_id == "unknown"
@@ -141,7 +152,7 @@ class TestSessionIDExtraction:
         monkeypatch.setattr("macf.utils.session._warned_no_session_started", False)
         with patch('pathlib.Path.home', return_value=mock_multiple_projects), \
              patch('macf.utils.session.find_project_root') as mock_root:
-            mock_root.return_value.name = "macf-test-cwd"
+            mock_root.return_value = Path("/work/macf-test-cwd")
             for _ in range(3):
                 get_current_session_id()
 
@@ -172,7 +183,7 @@ class TestSessionIDExtraction:
         """
         with patch('pathlib.Path.home', return_value=mock_corrupted_jsonl), \
              patch('macf.utils.session.find_project_root') as mock_root:
-            mock_root.return_value.name = "mixed-project"
+            mock_root.return_value = Path("/work/mixed-project")
             session_id = get_current_session_id()
 
         # Should extract from filename, not parse corrupted content
@@ -258,7 +269,7 @@ class TestSessionTempDirectories:
 @pytest.fixture
 def mock_claude_project(tmp_path):
     """Create mock .claude project with session JSONL file."""
-    claude_dir = tmp_path / ".claude" / "projects" / "test-project"
+    claude_dir = tmp_path / ".claude" / "projects" / "-work-test-project"
     claude_dir.mkdir(parents=True)
 
     # Create JSONL file named with session ID (not "uuid.jsonl")
@@ -278,7 +289,7 @@ def mock_multiple_projects(tmp_path):
     base_dir = tmp_path / ".claude" / "projects"
 
     # Create older project
-    old_project = base_dir / "old-project"
+    old_project = base_dir / "-work-old-project"
     old_project.mkdir(parents=True)
     old_session_id = "old-session-uuid"
     old_file = old_project / f"{old_session_id}.jsonl"
@@ -289,7 +300,7 @@ def mock_multiple_projects(tmp_path):
     old_file.write_text(json.dumps(old_data) + "\n")
 
     # Create recent project
-    recent_project = base_dir / "recent-project"
+    recent_project = base_dir / "-work-recent-project"
     recent_project.mkdir(parents=True)
     recent_session_id = "most-recent-session-uuid"
     recent_file = recent_project / f"{recent_session_id}.jsonl"
@@ -313,7 +324,7 @@ def mock_multiple_projects(tmp_path):
 @pytest.fixture
 def mock_corrupted_jsonl(tmp_path):
     """Create .claude project with mixed valid/invalid JSONL entries."""
-    claude_dir = tmp_path / ".claude" / "projects" / "mixed-project"
+    claude_dir = tmp_path / ".claude" / "projects" / "-work-mixed-project"
     claude_dir.mkdir(parents=True)
 
     # Create JSONL file named with session ID

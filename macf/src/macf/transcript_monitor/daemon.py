@@ -1079,8 +1079,8 @@ class TranscriptMonitor:
 
 def _transcripts_dir() -> Path:
     """This agent's Claude Code transcript directory: one per project root."""
-    from ..utils.paths import find_project_root, encode_cc_project_path
-    return Path.home() / ".claude" / "projects" / encode_cc_project_path(str(find_project_root()))
+    from ..utils.paths import cc_project_dir, find_project_root
+    return cc_project_dir(find_project_root())
 
 
 def find_current_transcript() -> Optional[Path]:
