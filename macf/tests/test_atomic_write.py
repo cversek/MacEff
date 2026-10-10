@@ -57,3 +57,16 @@ def test_a_task_update_that_fails_part_way_leaves_the_task_readable(tmp_path, mo
 
     assert task_reader.update_task_file("481", {"status": "in_progress"}) is False
     assert json.loads((tmp_path / "481.json").read_text()) == task
+
+
+def test_a_read_only_file_is_refused_as_open_for_writing_refused_it(tmp_path):
+    """The sentinel task is 444 so it cannot be modified; a rename must not get around that."""
+    store = tmp_path / "store"
+    store.mkdir()
+    path = store / "sentinel.json"
+    path.write_text('{"old": true}')
+    path.chmod(0o444)
+    with pytest.raises(PermissionError):
+        atomic.write_json_atomic(path, {"new": True})
+    assert json.loads(path.read_text()) == {"old": True}
+    assert [p.name for p in store.iterdir()] == ["sentinel.json"]

@@ -28,6 +28,10 @@ def write_text_atomic(path: Union[str, Path], text: str, encoding: str = "utf-8"
         mode = path.stat().st_mode & 0o7777
     except FileNotFoundError:
         pass
+    # A rename needs write permission on the directory, not on the file, so without this a
+    # read-only file (the 444 sentinel task) would be replaced where open(path, "w") refused.
+    if mode is not None and not os.access(path, os.W_OK):
+        raise PermissionError(f"{path} is read-only; not replacing it")
     fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding=encoding) as fh:
