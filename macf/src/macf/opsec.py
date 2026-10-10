@@ -349,13 +349,29 @@ def merging():
                           capture_output=True).returncode == 0
 
 
+def incoming_published():
+    """Whether the incoming side of a merge is already on a remote-tracking branch.
+
+    The narrowing below rests on the incoming side having been scanned and
+    published before. A local branch committed past the gate, made before the
+    hook was installed, or never pushed would otherwise reach a remote for the
+    first time through this merge, unscanned. A remote-tracking ref can be
+    written by hand: like the gate itself, this guards accidents."""
+    r = subprocess.run(["git", "branch", "-r", "--contains", "MERGE_HEAD"],
+                       capture_output=True, text=True)
+    return r.returncode == 0 and bool(r.stdout.strip())
+
+
 def staged_added_lines():
-    """The lines this commit adds. In a merge, only those neither parent has:
-    what the incoming side brings was scanned when it was committed there, under
-    the profile of whoever committed it. A squash or a cherry-pick has no
-    MERGE_HEAD and is scanned whole."""
+    """The lines this commit adds. In a merge whose incoming side is already on a
+    remote, only those neither parent has: that side was scanned and published
+    before. Any other merge, a squash and a cherry-pick are scanned whole."""
     added = list(_added_lines())
     if not merging():
+        return added
+    if not incoming_published():
+        print("pre-commit gate: merge commit: the incoming side is not on any remote, "
+              "so it is scanned whole", file=sys.stderr)
         return added
     new_to_both = set(_added_lines("MERGE_HEAD"))
     kept = [pair for pair in added if pair in new_to_both]

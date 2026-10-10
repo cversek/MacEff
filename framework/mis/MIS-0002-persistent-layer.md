@@ -478,7 +478,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R73 | decidable | macf/tests/test_pd_readout.py::test_tray_unavailable_said | planned |
 | R74 | decidable | macf/tests/test_pd_render.py::test_outside_watch_rendered | planned |
 | R75 | judgment | the operator, at review of each deployment's alert path | standing |
-| R76 | decidable | macf/tests/test_amail_deploy_config.py::test_hypervisor_value_accepted | planned |
+| R76 | decidable | macf/tests/test_amail_deploy_config.py::test_hypervisor_value_accepted | passing |
 | R77 | decidable | macf/tests/test_pd_harness.py::test_wake_text_fixed | planned |
 | R78 | judgment | the operator, at review of each declaration | standing |
 | R79 | judgment | the head maintainer, at review of each landing pull request | standing |
@@ -523,14 +523,14 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R118 | decidable | macf/tests/test_pd_harness.py::test_restart_needs_no_confirmation | planned |
 | R119 | judgment | the operator, at review of each deployment | standing |
 | R120 | decidable | macf/tests/test_pd_channel.py::test_receipt_from_prompt_hook | planned |
-| R121 | decidable | macf/tests/test_mode_activity.py::test_source_from_origin_or_opening_tag | planned |
+| R121 | decidable | macf/tests/test_mode_activity.py::test_source_from_origin_or_opening_tag | passing |
 | R122 | decidable | macf/tests/test_pd_channel.py::test_peer_descends_from_live_session | planned |
 | R123 | decidable | macf/tests/test_pd_channel.py::test_channel_checks_its_pd | planned |
 | R124 | decidable | macf/tests/test_pd_declaration.py::test_allowlist_lists_every_channel | planned |
 | R125 | judgment | the head maintainer, at review of the Claude Code harness adapter | standing |
 | R126 | decidable | macf/tests/test_pd_harness.py::test_idle_compaction_off | planned |
 | R127 | decidable | macf/tests/test_primal_daemon.py::test_unasked_compaction_recorded | planned |
-| R128 | decidable | macf/tests/test_mode_activity.py::test_dialog_answer_counts | planned |
+| R128 | decidable | macf/tests/test_mode_activity.py::test_dialog_answer_counts | passing |
 | R129 | decidable | macf/tests/test_pd_render.py::test_socket_path_length | planned |
 
 The test for **R106** is the head maintainer's (P25): set USER_REMOTE, type a wake through the adapter, and assert that USER_REMOTE and USER_IDLE are unchanged. Its channel form sends a notice through the MacEff channel and asserts the same. Both forms run at idle and again while a turn is running, because the queued path is the one main gets wrong (P30). The tests for R120 and R121 likewise include an event absorbed into a running turn (P31), and the test for R122 a channel whose session has ended.
@@ -633,6 +633,10 @@ Objections recorded:
 - 2026-10-09: every maintainer commented on the revision, with no critical objection (P30, P31), and this revision answers them under MIS-0001-R48 (discussion_MUST_close_after_one_revision). R15, R107, R115, R120 and R121 amended; R122 to R129 added; Q05 recorded as answered; rationale, security, platform labels, conformance and landing updated; the points the reviews leave to the landing are listed in section 14.
 
 - 2026-10-09: the operator named the maintainers and closed the discussion. The Status moved to Accepted with the Resolution, and the terms of section 5 not yet in the glossary entered it (development flag, harness channel, invitation, MacEff channel, observation stream, official listing, onlooker, operational mode, operator surface, organization allowlist, presence state, shared budget, wind-down), as the last commit before the merge.
+
+- 2026-10-10: conformance, from the pull request for R106's wakes: R121 and R128 passing. R106's test passes for a wake that opens with the wake words, and R106 stays planned for two reasons: nothing in the framework writes those words until the notifier lands, in step 2, and a MacEff channel notice, also a wake, is told apart by its channel's name only once that channel lands, which the door audit in the same test file holds as a known gap. No requirement changed.
+
+- 2026-10-10: conformance, from the pull request for landing step 6 (the code rename of `hypervisor`): R76 passing. The deploy configuration documents `primal-daemon` and reads the retired value as it. No requirement changed.
 
 ## Wiki-Links
 

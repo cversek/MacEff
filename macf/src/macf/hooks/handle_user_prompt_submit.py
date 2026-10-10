@@ -11,7 +11,7 @@ import subprocess
 import sys
 import traceback
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict, Optional
 
 from macf.utils import (
     format_macf_brand,
@@ -30,6 +30,13 @@ from macf.modes import detect_auto_mode
 from macf.hooks.hook_logging import log_hook_event
 from macf.observability import Warning, emit_warning
 from macf.agent_events_log import shared_event_reads
+from macf.utils.input_origin import (
+    entry_text,
+    opening_channel_source,
+    opens_with_harness_notice,
+    opens_with_wake,
+    typed_by_framework,
+)
 
 # Lines that change on every prompt by design. The diff header carries them
 # (clock, breadcrumb, CL); diffing them would report a change every time.
@@ -71,7 +78,45 @@ def get_memory_injection(prompt: str) -> str:
     return ""
 
 
-def record_user_activity_from_payload(prompt: str) -> bool:
+#: How much of the transcript's end is read to find the entry for a prompt.
+_TRANSCRIPT_TAIL_BYTES = 64 * 1024
+
+
+def scheduled_prompt(prompt: str, transcript_path: Optional[str]) -> bool:
+    """True when the transcript's newest entry for ``prompt`` says the client fired it on a schedule.
+
+    The payload carries a prompt's text and nothing about where it came from.
+    A session's scheduled prompt is written to the transcript, marked
+    ``turnOrigin: scheduled``, before this hook runs, so the end of the file
+    can say. When it cannot (no path, no entry yet, an unreadable file), the
+    prompt is read as typed, as it was before.
+    """
+    if not transcript_path:
+        return False
+    try:
+        with open(transcript_path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, fh.tell() - _TRANSCRIPT_TAIL_BYTES))
+            tail = fh.read().decode("utf-8", errors="replace")
+    except OSError as e:
+        print(f"⚠️ MACF: cannot read the transcript's end to place a prompt: {e}", file=sys.stderr)
+        return False
+    wanted = prompt.strip()
+    for line in reversed(tail.splitlines()):
+        if '"turnOrigin"' not in line:
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue  # only the window's first line can be cut short
+        message = entry.get("message")
+        if entry.get("type") == "user" and isinstance(message, dict) \
+                and entry_text(message.get("content", "")) == wanted:
+            return entry.get("turnOrigin") == "scheduled"
+    return False
+
+
+def record_user_activity_from_payload(prompt: str, transcript_path: Optional[str] = None) -> bool:
     """Record user activity when *this* invocation carries a typed prompt.
 
     USER_IDLE is derived from ``user_activity_detected`` events, which the
@@ -86,9 +131,14 @@ def record_user_activity_from_payload(prompt: str) -> bool:
     ones, which reset the idle timer from the agent's own activity. That
     constraint still holds, so the discrimination is made from the payload
     rather than by trusting every invocation: a typed prompt (direct, slash
-    command, or channel message) is present only for genuine user input.
-    Empirically the split is near-even across a long event log, and every
-    non-empty prompt corresponds to real user input.
+    command, or channel message) is user input. A non-empty prompt is not
+    always one: the client also delivers a background task's completion
+    notice and another session's message as prompts, and those open with
+    the client's own notice forms, so they record nothing. Nor does a wake,
+    which the persistent layer types into the input box with its own opening
+    (MIS-0002-R106), or a prompt the session's own schedule fired, which the
+    transcript marks before the hook runs, or keys the framework typed, which
+    their sender recorded before sending.
 
     Emitting here (rather than only suppressing the indicator) also corrects
     the clock for the renders that follow — Stop, PreToolUse — instead of
@@ -96,14 +146,22 @@ def record_user_activity_from_payload(prompt: str) -> bool:
 
     Args:
         prompt: The ``prompt`` field of the hook payload.
+        transcript_path: The payload's ``transcript_path``, where a scheduled
+            prompt's entry is looked up.
 
     Returns:
         True when an activity event was recorded.
     """
     if not prompt or not prompt.strip():
         return False
+    if opens_with_harness_notice(prompt) or opens_with_wake(prompt):
+        return False
+    if scheduled_prompt(prompt, transcript_path):
+        return False
+    if typed_by_framework(prompt):
+        return False
 
-    source = "channel" if prompt.lstrip().startswith("<channel ") else "direct"
+    source = "channel" if opening_channel_source(prompt) is not None else "direct"
     try:
         from macf.agent_events_log import append_event
         append_event("user_activity_detected", {
@@ -164,7 +222,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # Record activity from the payload in hand before anything derives
         # staleness from the event log, so this render and the ones after it
         # agree with the event that produced them (#181).
-        record_user_activity_from_payload(prompt)
+        record_user_activity_from_payload(prompt, transcript_path)
 
         # USER_REMOTE auto-restore: a CLI prompt means the operator is back at the
         # keyboard, which auto-clears USER_REMOTE (detection derives that from the

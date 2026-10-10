@@ -7,8 +7,13 @@ import os
 import sys
 from pathlib import Path
 from typing import Optional
-from .paths import find_project_root
+from .paths import cc_project_dir, find_project_root
 # Events are sole source of truth - state file reads removed
+
+# The missing-session_started notice is said once per process. A long-running
+# process with no session of its own resolves a session id for every event it
+# writes, and repeating the notice each time only buries its other output.
+_warned_no_session_started = False
 
 def get_current_session_id(hook_input: Optional[dict] = None) -> str:
     """Get current session ID.
@@ -49,13 +54,16 @@ def get_current_session_id(hook_input: Optional[dict] = None) -> str:
             return sid
 
     # TIER 3: Event-first approach - query session_started event
+    global _warned_no_session_started
     try:
         from ..event_queries import get_current_session_id_from_events
         session_id = get_current_session_id_from_events()
         if session_id:
             return session_id
-        # No session_started events yet - warn and fallback
-        print("⚠️ MACF: No session_started events found, falling back to mtime-based detection", file=sys.stderr)
+        # No session_started events yet - warn (once per process) and fall back
+        if not _warned_no_session_started:
+            _warned_no_session_started = True
+            print("⚠️ MACF: No session_started events found, falling back to mtime-based detection", file=sys.stderr)
     except Exception as e:
         print(f"⚠️ MACF: Event query failed ({e}), falling back to mtime-based detection", file=sys.stderr)
 
@@ -70,38 +78,32 @@ def _get_session_id_from_mtime() -> str:
     before any session_started events exist.
 
     Selection is order-independent: among the candidate JSONL files it picks
-    the globally newest by mtime, with the filename as a tiebreaker, so the
-    result does not depend on glob / iterdir ordering (which is
-    filesystem-dependent and was a source of flaky behaviour).
+    the newest by mtime, with the filename as a tiebreaker, so the result does
+    not depend on glob / iterdir ordering (which is filesystem-dependent and
+    was a source of flaky behaviour).
+
+    Only this project's transcripts are candidates: the one directory Claude
+    Code keeps for this project root, not every directory whose name contains
+    the project's name, which for an agent home is each repository under it.
+    Another project's newest transcript belongs to another conversation, and
+    where agents share a login, possibly to another agent. A process with no
+    session of its own (a daemon, a scheduled command, a test) would otherwise
+    put that session's id on everything it records. "unknown" is the honest
+    answer.
 
     Returns:
         Session ID string or "unknown" if not found
     """
-    projects_dir = Path.home() / ".claude" / "projects"
-
-    if not projects_dir.exists():
+    project_dir = cc_project_dir(find_project_root())
+    if not project_dir.is_dir():
         return "unknown"
-
-    def _newest_stem(dirs) -> Optional[str]:
-        candidates = []
-        for project_dir in dirs:
-            if project_dir.is_dir():
-                candidates.extend(project_dir.glob("*.jsonl"))
-        if not candidates:
-            return None
-        # Global newest by mtime; filename tiebreaks equal mtimes so the
-        # result is deterministic regardless of iteration order.
-        newest = max(candidates, key=lambda p: (p.stat().st_mtime, p.name))
-        return newest.stem
-
-    # Prefer project directories matching the current project name; if none
-    # of them contain a JSONL, fall back to all projects.
-    project_name = find_project_root().name
-    return (
-        _newest_stem(projects_dir.glob(f"*{project_name}*"))
-        or _newest_stem(projects_dir.iterdir())
-        or "unknown"
-    )
+    candidates = list(project_dir.glob("*.jsonl"))
+    if not candidates:
+        return "unknown"
+    # Newest by mtime; the filename tiebreaks equal mtimes so the result is
+    # deterministic regardless of iteration order.
+    newest = max(candidates, key=lambda p: (p.stat().st_mtime, p.name))
+    return newest.stem
 
 def get_last_user_prompt_uuid(session_id: Optional[str] = None,
                               transcript_path: Optional[str] = None) -> Optional[str]:
