@@ -23,9 +23,13 @@ def test_icon_per_card():
     assert st.icon == "running" and not st.alerting
 
 
-def test_two_agents_with_one_card_are_refused():
-    with pytest.raises(ValueError):
-        union([entry("A@1", _resp(("s", "running"))), entry("A@1", _resp(("s", "stopped")))])
+def test_two_agents_with_one_card_degrade_to_failed_without_blanking_the_tray():
+    """A misinstall marks both claimants failed and alerts; every other agent still shows."""
+    st = union([entry("A@1", _resp(("s", "running"))), entry("A@1", _resp(("s", "stopped"))),
+                entry("B@2", _resp(("session", "waiting_on_a_person")))])
+    assert st.icon == "failed" and st.alerting and st.caused_by == ["A@1", "A@1"]
+    assert [e.status for e in st.entries] == ["failed", "failed", "waiting_on_a_person"]
+    assert all("claim" in e.error for e in st.entries[:2])
 
 
 def test_waiting_icon():
@@ -190,3 +194,12 @@ def test_installed_homes_come_from_the_launch_agents(tmp_path):
     (tmp_path / "maceff_pd.Odd_000000.plist").write_bytes(plistlib.dumps({"ProgramArguments": ["x"]}))
     (tmp_path / "com.other.plist").write_bytes(plistlib.dumps({"ProgramArguments": ["--agent-home", "/no"]}))
     assert [str(h) for h in installed_homes(tmp_path)] == ["/Users/x/IRA"]
+
+
+def test_two_homes_claiming_one_card_both_show_failed_and_take_no_acts():
+    from pathlib import Path
+    ctl, _ = _controller({"A@1": _resp(("session", "running"))},
+                         homes=[Path("/agents/A@1"), Path("/other/A@1")])
+    st = ctl.poll()
+    assert [e.status for e in st.entries] == ["failed", "failed"] and st.alerting
+    assert "two installed agents" in ctl.act("A@1", "stop", "session")["error"]

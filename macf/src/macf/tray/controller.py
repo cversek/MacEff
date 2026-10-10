@@ -7,6 +7,13 @@ The card comes from the identity file in that home, never from the label, a sock
 or the environment (MIS-0002-R69). Every request goes to that agent's own control socket
 (R70), and an answer counts only from the process the daemon's record names (R123); a
 peer that cannot be checked is unreachable, never trusted.
+
+``asked_by: operator`` in a request is a claim, not a proof. On a shared login every agent
+has the same uid, so the socket's peer credentials cannot tell the operator's tray from
+another agent's process. The daemon's control socket is where the operator is
+established, by whatever step 1 settles: a grant only the operator's session holds, or
+the socket's mode and group where the operator has a uid of its own. Until then, the
+daemon must not treat this field alone as the operator.
 """
 from __future__ import annotations
 
@@ -101,6 +108,7 @@ class Controller:
         self._peer_check = peer_check
         self._connect = connect or self._unix_connect
         self.agents: Dict[str, Agent] = {}
+        self.found: List[Agent] = []
         self.errors: List[str] = []
 
     @staticmethod
@@ -111,24 +119,30 @@ class Controller:
         return s
 
     def discover(self) -> Dict[str, Agent]:
-        """Installed agents by card. A home that names no agent is reported, not guessed at."""
+        """Installed agents by card. A home that names no agent is reported, not guessed at.
+
+        Every claimant is kept in ``found``, so two homes claiming one card reach the union,
+        which marks both failed. ``agents`` holds only cards with one claimant: an act on an
+        ambiguous card would not know which daemon to ask, so it is refused.
+        """
         self.errors = []
+        self.found = []
         try:
             paths = self._paths()
         except ImportError:
             self.errors.append("the primal daemon's interface is not installed")
             self.agents = {}
             return self.agents
-        found = {}
         for home in self._homes():
             try:
                 card = paths.card_of(home)
             except ValueError as e:
                 self.errors.append(f"{home}: {e}")
                 continue
-            found[card] = Agent(card, paths.control_socket(card), paths.record_path(card))
-        self.agents = found
-        return found
+            self.found.append(Agent(card, paths.control_socket(card), paths.record_path(card)))
+        cards = [a.card for a in self.found]
+        self.agents = {a.card: a for a in self.found if cards.count(a.card) == 1}
+        return self.agents
 
     def _ask(self, agent: Agent, line: str) -> Optional[dict]:
         """One request line to one daemon, one response line back, or None when unreachable."""
@@ -158,13 +172,15 @@ class Controller:
         """Every agent's entry from its own daemon, and the icon over all of them."""
         self.discover()
         entries: List[Entry] = []
-        for card, agent in self.agents.items():
-            entries.append(entry(card, self._ask(agent, json.dumps({"op": "status"}))))
+        for agent in self.found:
+            entries.append(entry(agent.card, self._ask(agent, json.dumps({"op": "status"}))))
         return union(entries)
 
     def act(self, card: str, act: str, unit: str) -> dict:
         """Send one start, stop or restart, asked by the operator, to that agent's daemon only."""
         agent = self.agents.get(card)
         if agent is None:
+            if any(a.card == card for a in self.found):
+                return {"ok": False, "error": f"two installed agents claim the card {card!r}; neither is asked"}
             return {"ok": False, "error": f"no installed agent with the card {card!r}"}
         return self._ask(agent, act_request(act, unit)) or {"ok": False, "error": "no answer"}

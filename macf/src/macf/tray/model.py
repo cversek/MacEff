@@ -84,16 +84,18 @@ class TrayState:
 def union(entries: Iterable[Entry]) -> TrayState:
     """One icon over all agents: the most urgent entry status, and who has it.
 
-    Entries are keyed by card and sorted by it, so the menu reads the same from one
-    poll to the next. Two entries for one card is a broken install, not a union, and
-    is refused.
+    Entries are sorted by card, so the menu reads the same from one poll to the next.
+    Two entries for one card is a broken install. It degrades rather than blanking the
+    tray: both entries are kept and marked failed with the reason, so the icon alerts on
+    it and every other agent's status, a waiting session among them, still shows.
     """
-    by_card: Dict[str, Entry] = {}
+    entries = list(entries)
+    counts: Dict[str, int] = {}
     for e in entries:
-        if e.card in by_card:
-            raise ValueError(f"two agents claim the calling card {e.card!r}")
-        by_card[e.card] = e
-    ordered = [by_card[c] for c in sorted(by_card)]
+        counts[e.card] = counts.get(e.card, 0) + 1
+    marked = [Entry(e.card, "failed", e.units, error="two agents claim this calling card")
+              if counts[e.card] > 1 else e for e in entries]
+    ordered = sorted(marked, key=lambda e: e.card)
     icon = most_urgent(e.status for e in ordered if e.status is not None)
     caused_by = [e.card for e in ordered if icon is not None and e.status == icon]
     return TrayState(icon=icon, alerting=icon in ALERTING, caused_by=caused_by, entries=ordered)
