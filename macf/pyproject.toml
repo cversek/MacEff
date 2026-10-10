@@ -70,3 +70,8 @@ macf_tools = "macf.cli:main"     # fastest startup (direct Python)
 amail-broker = "macf.amail.daemons.broker:main"
 amail-inbound = "macf.amail.daemons.inbound:main"
 amail-receiver = "macf.amail.daemons.receiver:main"
+
+# The MacEff channel (MIS-0002 section 6.14). Claude Code starts it from the plugin's
+# .mcp.json, which names this command, so it has to resolve on PATH wherever macf
+# is installed rather than depend on which interpreter a session finds first.
+maceff-channel = "macf.channels.maceff_channel:main"
