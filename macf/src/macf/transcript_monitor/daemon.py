@@ -20,6 +20,7 @@ time it is asked, never from a file (#529).
 """
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -27,9 +28,18 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from subprocess import DEVNULL, Popen
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 from ..agent_events_log import append_event
+from ..utils.input_origin import (
+    HARNESS_ORIGIN_KINDS,
+    entry_text,
+    opening_channel_source,
+    opens_with_harness_notice,
+    opens_with_wake,
+    typed_by_framework,
+    typed_text,
+)
 from ..utils.paths import user_runtime_dir
 
 # ============================================================================
@@ -43,8 +53,21 @@ CHUNK_SIZE = 65536  # 64KB read chunks
 #: ``find_monitors`` tells a monitor from every other process.
 MONITOR_MODULE = "macf.transcript_monitor"
 
+#: Where the code before this one recorded its monitor. That monitor was forked
+#: from the session-start hook without exec, so its command line is the hook's
+#: and ``find_monitors`` cannot see it; it also never exits on its own.
+LEGACY_PID_FILE_NAME = "macf_transcript_monitor.pid"
+LEGACY_HOOK_SCRIPT = "session_start.py"
+#: A session-start hook finishes within its timeout (60 s by default), so a
+#: process with the hook's command line that has run longer is a monitor.
+LEGACY_MIN_AGE_S = 120
+
 #: Replaced in the test suite, so that no test starts a real monitor.
 _execv = os.execv
+
+#: Set to "1" and ``start_daemon`` starts nothing. The test suite sets it for every
+#: test, so that it reaches the hooks a test runs as subprocesses.
+DISABLE_ENV = "MACF_TRANSCRIPT_MONITOR_DISABLED"
 
 #: Consecutive stat-failure counts at which the loop reports. A condition that
 #: persists must not produce one message per poll; these points give the first
@@ -79,7 +102,16 @@ Detector = Callable[[dict], Optional[Detection]]
 # ============================================================================
 
 def detect_user_activity(entry: dict) -> Optional[Detection]:
-    """Detect real user messages (not tool results, not meta)."""
+    """Detect a message the operator typed or sent through a channel.
+
+    Not tool results, meta entries or compaction summaries, and not input the
+    client delivers by itself: a background task's completion notice, or a
+    message from another session. The origin record names those; an entry
+    written without one is read by how its text opens. A wake is not the
+    operator either (MIS-0002-R106): its keys are recorded as typed, so its
+    opening is read before the origin record. Nor are keys the framework typed,
+    which their sender recorded in the event log before sending them.
+    """
     if entry.get("type") != "user":
         return None
     if "toolUseResult" in entry:
@@ -89,11 +121,23 @@ def detect_user_activity(entry: dict) -> Optional[Detection]:
     if entry.get("isCompactSummary"):
         return None
 
-    # Check for channel message (Telegram etc.)
+    message = entry.get("message")
+    content = message.get("content", "") if isinstance(message, dict) else ""
+    if opens_with_wake(entry_text(content)):
+        return None
+
     origin = entry.get("origin")
+    kind = origin.get("kind") if isinstance(origin, dict) else None
+    if kind in HARNESS_ORIGIN_KINDS:
+        return None
+    if kind is None and opens_with_harness_notice(entry_text(content)):
+        return None
+    if kind != "channel" and typed_by_framework(typed_text(content)):
+        return None
+
     source = "direct"
     channel_server = ""
-    if isinstance(origin, dict) and origin.get("kind") == "channel":
+    if kind == "channel":
         source = "channel"
         channel_server = origin.get("server", "")
 
@@ -103,6 +147,10 @@ def detect_user_activity(entry: dict) -> Optional[Detection]:
         "timestamp": entry.get("timestamp", ""),
         "detector": "transcript_monitor",
     })
+
+
+#: The one denial kind a person writes: rejecting the call in its permission dialog.
+PERSON_DENIAL_KIND = "user-rejected"
 
 
 def detect_permission_denial(entry: dict) -> Optional[Detection]:
@@ -122,6 +170,15 @@ def detect_permission_denial(entry: dict) -> Optional[Detection]:
     `toolUseResult: "User rejected tool use"`. `toolDenialKind` appears on
     denials and nowhere else, which is what makes it a clean discriminator.
 
+    Not every denial is a person's, though. A longer transcript (2026-10) held
+    four kinds: `user-rejected` when someone rejects the call in its dialog, and
+    three that a machine writes: `permission-rule` when a hook or a permission
+    rule refuses the call, `automode-blocked` when the auto mode classifier
+    does, and `automode-unavailable` when the classifier cannot run. Counting
+    those read the operator as present every time a hook refused the agent's own
+    call. Only `user-rejected` counts, so a kind a later client adds does not
+    count until someone shows a person writes it.
+
     Approvals are NOT covered. An approved ask-gated call is indistinguishable
     from an auto-allowed one at this layer, and inventing presence from an
     ambiguous signal is the failure this whole area already suffers from. The
@@ -130,8 +187,8 @@ def detect_permission_denial(entry: dict) -> Optional[Detection]:
     """
     if entry.get("type") != "user":
         return None
-    if not entry.get("toolDenialKind"):
-        return None
+    if entry.get("toolDenialKind") != PERSON_DENIAL_KIND:
+        return None  # no denial, or one a hook, a rule or the classifier made
 
     return Detection("user_activity_detected", {
         "source": "direct",
@@ -141,19 +198,64 @@ def detect_permission_denial(entry: dict) -> Optional[Detection]:
     })
 
 
+def detect_dialog_answer(entry: dict) -> Optional[Detection]:
+    """Detect the user answering a question the agent asked in a dialog.
+
+    The answer arrives as a tool result, which `detect_user_activity` drops, so
+    a user answering a question was read as idle the moment they had answered.
+    An answered question is a `user` entry whose `toolUseResult` holds the
+    `questions` asked and the `answers` given. Only a person writes `answers`,
+    so, unlike an approval, it is unambiguous, and it is recorded the way a
+    rejection is (`detect_permission_denial`): as direct activity. Like a
+    rejection, it cannot tell the terminal from a Remote Control view.
+    """
+    if entry.get("type") != "user":
+        return None
+    result = entry.get("toolUseResult")
+    if not isinstance(result, dict) or not result.get("answers"):
+        return None
+
+    return Detection("user_activity_detected", {
+        "source": "direct",
+        "timestamp": entry.get("timestamp", ""),
+        "detector": "transcript_monitor_dialog_answer",
+    })
+
+
 def detect_mid_turn_enqueue(entry: dict) -> Optional[Detection]:
-    """Detect mid-turn user message (queue-operation enqueue)."""
+    """Detect a message the session queued (queue-operation enqueue).
+
+    A typed message queued while a turn runs is the operator at the CLI.
+    A channel message is not, and it comes through here too: the client
+    queues every channel message before delivering it, idle or not, and a
+    queue entry carries no origin record. So a queued message whose text
+    opens with a channel tag is recorded as ``channel``, with the server
+    named by that tag, the way ``detect_user_activity`` records one from its
+    origin. Recorded as ``mid_turn_enqueue`` it would end USER_REMOTE on
+    every message from the operator's phone. A notice the client queues for
+    itself, a background task's or another session's, is not activity at all,
+    and neither is a wake the persistent layer typed while a turn ran.
+    """
     if entry.get("type") != "queue-operation":
         return None
     if entry.get("operation") != "enqueue":
         return None
 
-    return Detection("user_activity_detected", {
+    content = entry.get("content", "")
+    if isinstance(content, str) and (opens_with_harness_notice(content) or opens_with_wake(content)
+                                     or typed_by_framework(content)):
+        return None
+    data = {
         "source": "mid_turn_enqueue",
         "timestamp": entry.get("timestamp", ""),
-        "content_preview": str(entry.get("content", ""))[:50],
+        "content_preview": str(content)[:50],
         "detector": "transcript_monitor",
-    })
+    }
+    channel_server = opening_channel_source(content) if isinstance(content, str) else None
+    if channel_server is not None:
+        data["source"] = "channel"
+        data["channel_server"] = channel_server
+    return Detection("user_activity_detected", data)
 
 
 def detect_compact_boundary(entry: dict) -> Optional[Detection]:
@@ -204,6 +306,7 @@ def detect_context_collapse(entry: dict) -> Optional[Detection]:
 DEFAULT_DETECTORS: List[Detector] = [
     detect_user_activity,
     detect_permission_denial,
+    detect_dialog_answer,
     detect_mid_turn_enqueue,
     detect_compact_boundary,
     detect_api_error,
@@ -215,15 +318,47 @@ DEFAULT_DETECTORS: List[Detector] = [
 # Channel forwarding (#093) — mirror the live exchange to the remote channel
 # ============================================================================
 
-def _entry_text(content) -> str:
-    """Best-effort plain text from a transcript message `content` (str or blocks)."""
-    if isinstance(content, str):
-        return content.strip()
-    if isinstance(content, list):
-        parts = [b.get("text", "") for b in content
-                 if isinstance(b, dict) and b.get("type") == "text"]
-        return "\n".join(p for p in parts if p).strip()
-    return ""
+#: How long a queued copy waits for the entry that delivers it. The client
+#: fires a session's scheduled prompt only while the session is idle, so its
+#: delivery follows within milliseconds; a message typed during a turn waits
+#: for the turn, and is recorded from its queued copy once this runs out.
+QUEUED_TWIN_WAIT_SECONDS = 2.0
+
+#: Delivered prompts the client marks as not typed by the operator.
+_NOT_OPERATOR_TURN_ORIGINS = frozenset({"scheduled", "task_notification", "peer"})
+
+
+def _delivered_text(entry: dict) -> Optional[str]:
+    """The prompt an entry delivers: a user entry's text, or a queued command's."""
+    if entry.get("type") == "user" and "toolUseResult" not in entry:
+        message = entry.get("message")
+        return entry_text(message.get("content", "") if isinstance(message, dict) else "")
+    if entry.get("type") == "attachment":
+        attachment = entry.get("attachment")
+        if isinstance(attachment, dict) and attachment.get("type") == "queued_command":
+            return str(attachment.get("prompt", "")).strip()
+    return None
+
+
+def _as_delivered(twin: dict, queued: Detection) -> Optional[Detection]:
+    """What a queued copy was, by the record on the entry that delivered it.
+
+    A queued copy carries no provenance; its delivery does (MIS-0002-R121).
+    A channel event takes its server from that record. A prompt the client
+    fired itself, a scheduled one or a notice, is not the operator, and None
+    says so. Anything else stands as read from the queued copy.
+    """
+    record = twin.get("attachment") if twin.get("type") == "attachment" else twin
+    origin = record.get("origin")
+    kind = origin.get("kind") if isinstance(origin, dict) else None
+    if kind == "channel":
+        return Detection(queued.event_name, {**queued.data, "source": "channel",
+                                             "channel_server": origin.get("server", "")})
+    if (record.get("turnOrigin") in _NOT_OPERATOR_TURN_ORIGINS
+            or kind in HARNESS_ORIGIN_KINDS
+            or record.get("commandMode") == "task-notification"):
+        return None
+    return queued
 
 
 def extract_forwardable(entry: dict):
@@ -242,7 +377,7 @@ def extract_forwardable(entry: dict):
     content = msg.get("content")
 
     if etype == "assistant":
-        text = _entry_text(content)
+        text = entry_text(content)
         return ("💬", text) if text else None
 
     if etype == "user":
@@ -255,7 +390,7 @@ def extract_forwardable(entry: dict):
             isinstance(b, dict) and b.get("type") == "tool_result" for b in content
         ):
             return None
-        text = _entry_text(content)
+        text = entry_text(content)
         return ("👤 CLI", text) if text else None
 
     return None
@@ -406,6 +541,81 @@ def _alive(pid: int) -> bool:
     return True
 
 
+_ETIME = re.compile(r"^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$")
+
+
+def _parse_etime(text: str) -> Optional[int]:
+    """Seconds from ``ps -o etime``'s ``[[dd-]hh:]mm:ss``, or None if it is not one."""
+    match = _ETIME.match(text.strip())
+    if match is None:
+        return None
+    days, hours, minutes, seconds = (int(g) if g else 0 for g in match.groups())
+    return ((days * 24 + hours) * 60 + minutes) * 60 + seconds
+
+
+def legacy_monitor() -> Optional[int]:
+    """The pid of a monitor started by the code before this one, if one still runs.
+
+    Three facts identify it, because a pid alone is not proof: the pid in the
+    file that code wrote is alive, its command line names the session-start hook,
+    and it has run longer than any hook does. A pid that fails any of them is left
+    alone.
+    """
+    path = user_runtime_dir() / LEGACY_PID_FILE_NAME
+    if not path.exists():
+        return None  # the normal case: no monitor from before the upgrade
+    try:
+        pid = int(path.read_text().strip())
+    except (OSError, ValueError) as e:
+        print(f"⚠️ MACF: cannot read {path}: {e}", file=sys.stderr)
+        return None
+    if not _alive(pid):
+        return None
+    try:
+        out = subprocess.run(["ps", "-ww", "-o", "etime=", "-o", "args=", "-p", str(pid)],
+                             capture_output=True, text=True, timeout=10,
+                             env={**os.environ, "LC_ALL": "C"}).stdout.strip()
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"⚠️ MACF: cannot read process {pid} from ps: {e}", file=sys.stderr)
+        return None
+    fields = out.split(None, 1)
+    if len(fields) != 2:
+        return None  # ps printed no such process
+    etime, args = fields
+    age = _parse_etime(etime)
+    if age is None or age < LEGACY_MIN_AGE_S or LEGACY_HOOK_SCRIPT not in args:
+        return None
+    return pid
+
+
+def stop_legacy_monitor() -> Optional[int]:
+    """Stop a monitor the code before this one started, and remove its pid file.
+
+    Returns the pid it stopped, or None when there was none or it did not exit.
+    """
+    pid = legacy_monitor()
+    if pid is None:
+        return None
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError as e:
+        print(f"⚠️ Could not signal the old-form monitor {pid}: {e}", file=sys.stderr)
+        return None
+    for _ in range(10):
+        if not _alive(pid):
+            break
+        time.sleep(0.5)
+    if _alive(pid):
+        print(f"⚠️ The old-form monitor {pid} is still running after 5s", file=sys.stderr)
+        return None
+    try:
+        (user_runtime_dir() / LEGACY_PID_FILE_NAME).unlink()
+    except OSError as e:
+        print(f"⚠️ MACF: could not remove the old monitor's pid file: {e}", file=sys.stderr)
+    print(f"📡 Stopped a transcript monitor started before the upgrade (PID {pid})", file=sys.stderr)
+    return pid
+
+
 def _process_started(pid: int) -> Optional[float]:
     """When process *pid* started, in the units of ``MonitorProcess.started``.
 
@@ -543,6 +753,10 @@ class TranscriptMonitor:
         self.owner = owner
         self.stop_reason: Optional[str] = None
 
+        # Queued copies waiting for the entry that delivers them:
+        # (when held, the queued text, the detection the queued copy gave).
+        self._held: List[Tuple[float, str, Detection]] = []
+
         # Stats
         self.entries_processed = 0
         self.events_emitted = 0
@@ -647,12 +861,18 @@ class TranscriptMonitor:
             return
 
         self.entries_processed += 1
+        self._settle_held(entry)
 
         for detector in self.detectors:
             try:
                 detection = detector(entry)
-                if detection is not None:
-                    self._emit(detection.event_name, detection.data)
+                if detection is None:
+                    continue
+                if entry.get("type") == "queue-operation" and detection.event_name == "user_activity_detected":
+                    # Held until the entry that delivers it says what it was.
+                    self._held.append((time.monotonic(), str(entry.get("content", "")).strip(), detection))
+                    continue
+                self._emit(detection.event_name, detection.data)
             except (OSError, ValueError, TypeError) as e:
                 print(f"⚠️ TM: detector error: {e}", file=sys.stderr)
 
@@ -672,6 +892,38 @@ class TranscriptMonitor:
             # the monitor. Nothing here depends on which exception occurred, so
             # enumerating types would only add a way to crash.
             print(f"⚠️ TM: channel forward failed (non-blocking): {e}", file=sys.stderr)
+
+    def _settle_held(self, entry: dict) -> None:
+        """Settle held queued copies against an entry that follows them.
+
+        The entry that delivers a held copy decides what it was. Any other
+        user or assistant entry means the turn has moved on without delivering
+        it: the copy was typed during the turn, and it is recorded now.
+        """
+        if not self._held:
+            return
+        text = _delivered_text(entry)
+        if text is not None:
+            for i, (_, queued_text, detection) in enumerate(self._held):
+                if queued_text == text:
+                    del self._held[i]
+                    settled = _as_delivered(entry, detection)
+                    if settled is not None:
+                        self._emit(settled.event_name, settled.data)
+                    return
+        if entry.get("type") in ("user", "assistant"):
+            self._release_held()
+
+    def _release_held(self, older_than: Optional[float] = None) -> None:
+        """Record held queued copies, all of them or those held at least ``older_than`` seconds."""
+        now = time.monotonic()
+        kept = []
+        for held_at, queued_text, detection in self._held:
+            if older_than is not None and now - held_at < older_than:
+                kept.append((held_at, queued_text, detection))
+            else:
+                self._emit(detection.event_name, detection.data)
+        self._held = kept
 
     def _forward_to_channel_enabled(self) -> bool:
         """True iff USER_REMOTE is active. Cached for 5s to bound event-log reads.
@@ -767,6 +1019,10 @@ class TranscriptMonitor:
                         else:
                             self.stat_failures = 0
 
+                        # A queued copy whose delivery has not come in time was
+                        # typed during a turn; record it from the copy.
+                        self._release_held(older_than=QUEUED_TWIN_WAIT_SECONDS)
+
                         # Sources are polled on the idle path deliberately: the
                         # transcript is the primary input and must never wait
                         # behind a directory listing.
@@ -786,6 +1042,7 @@ class TranscriptMonitor:
             pass
         finally:
             self.running = False
+            self._release_held()
             print(
                 f"\n📡 Transcript Monitor stopped. "
                 f"Processed {self.entries_processed} entries, "
@@ -822,8 +1079,8 @@ class TranscriptMonitor:
 
 def _transcripts_dir() -> Path:
     """This agent's Claude Code transcript directory: one per project root."""
-    from ..utils.paths import find_project_root, encode_cc_project_path
-    return Path.home() / ".claude" / "projects" / encode_cc_project_path(str(find_project_root()))
+    from ..utils.paths import cc_project_dir, find_project_root
+    return cc_project_dir(find_project_root())
 
 
 def find_current_transcript() -> Optional[Path]:
@@ -865,6 +1122,16 @@ def start_daemon(foreground: bool = False, poll_interval: float = DEFAULT_POLL_I
     Returns:
         0 on success, 1 on error
     """
+    if os.environ.get(DISABLE_ENV) == "1":
+        # A test suite sets this so that a hook it runs as a subprocess, which
+        # resolves the developer's own transcript from the inherited environment,
+        # cannot start a real monitor there. The environment is the one thing
+        # that crosses into the hook's process; a patched name does not.
+        print(f"📡 Transcript Monitor not started: {DISABLE_ENV}=1", file=sys.stderr)
+        return 0
+    # A monitor the code before this one started is invisible to find_monitors,
+    # so it would serve beside the new one and outlive it.
+    stop_legacy_monitor()
     if is_running():
         # stderr, not stdout: start_daemon is called from the SessionStart hook,
         # whose stdout must be parseable JSON. See the note on the started-banner
@@ -964,7 +1231,8 @@ def _agent_monitors(monitors: List[MonitorProcess]) -> List[MonitorProcess]:
 
 
 def stop_daemon() -> int:
-    """Stop every monitor of this agent."""
+    """Stop every monitor of this agent, including one the code before this one started."""
+    stop_legacy_monitor()
     monitors = find_monitors()
     if monitors is None:
         print("⚠️ Which monitors run is unknown; nothing was signaled.", file=sys.stderr)
@@ -997,6 +1265,10 @@ def stop_daemon() -> int:
 
 def daemon_status() -> int:
     """Print this agent's monitors, one line each."""
+    legacy = legacy_monitor()
+    if legacy is not None:
+        print(f"⚠️ A transcript monitor started before the upgrade is running (PID {legacy}); "
+              f"'macf_tools transcript-monitor start' or 'stop' stops it")
     monitors = find_monitors()
     if monitors is None:
         print("❓ Transcript Monitor state unknown: the process table cannot be read")
