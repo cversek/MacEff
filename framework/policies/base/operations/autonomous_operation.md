@@ -700,6 +700,33 @@ block: a system timer, a cron job, a supervisor.
   (AskUserQuestion, ExitPlanMode) are dialogs but not permissions, and are left
   out unless `--include-questions`. It keeps no state of its own, by design: a
   second record of the same events would drift from the log it copies.
+- **A change to the permission rules is an event.** The ConfigChange hook runs
+  when a settings file changes during a session. Claude Code tells it which file
+  changed, never what changed, so the hook compares the file's `allow`, `ask` and
+  `deny` rules and its `defaultMode` with the copy it last saw, and records a
+  `permission_rules_changed` event naming each rule added or removed and the
+  file it came from. A file seen for the first time is recorded as a
+  `permission_rules_baseline` naming every rule it holds. Session start compares
+  the user, project and local settings files too: it baselines a file never
+  seen, so the first change in a session is a diff, and it records a difference
+  it finds with the source `found_at_session_start`: when it was found, not when
+  it was made. **The client does not fire ConfigChange for its own writes**, so a
+  rule it adds itself (a permission dialog's "always allow", or an in-session
+  permission edit) is not recorded when it happens. It shows up at the next
+  session start, or folded into the next outside edit of the same file. A
+  dialog's "allow for this session" lives in memory and reaches no file, so no
+  event shows it. The client also ignores changes for a few seconds after its
+  own write, so an outside edit landing in that window can be recorded later,
+  as part of something else. A file that cannot be
+  read is skipped, never recorded as every rule removed. The events are the
+  record: the rules a file last held are its latest baseline plus the diffs
+  after it, so a copy kept beside the log only saves reading it back, and when
+  that copy is lost (a home restored without `.maceff/`, a recreated volume) the
+  log answers and a rule added afterwards is still named. A mode switch records
+  both `mode_permissions_changed` (what the switch did, and why) and
+  `permission_rules_changed` (what the file now holds); count changes from one
+  of them, not both. Query them with `macf_tools events query --event
+  permission_rules_changed`.
 
 **What a deployment must do.** Run `macf_tools permissions watch` as the
 agent's own user, every few minutes, from a scheduler outside the agent's

@@ -207,6 +207,15 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             "session_id": session_id
         })
 
+        # Baseline the permission rules of this session's settings files, so the
+        # ConfigChange hook's first change is a diff, not a baseline (autonomous_operation 5.5).
+        try:
+            from macf.hooks.handle_config_change import seed_baselines, settings_files
+            seed_baselines(settings_files(data.get("cwd")), session_id)
+        except Exception as e:  # a record, never a reason to fail session start
+            log_hook_event({"hook_name": "session_start", "event_type": "ERROR",
+                            "error": f"permission baseline: {e}"})
+
         # Ensure the Transcript Monitor is running (#144). TM produces the
         # user_activity_detected events that USER_IDLE / USER_REMOTE detection
         # depend on. It was previously started only opportunistically (AUTO_MODE

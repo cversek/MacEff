@@ -785,7 +785,7 @@ def _update_settings_file(settings_path: Path, hooks_prefix: str) -> bool:
         if "hooks" not in settings:
             settings["hooks"] = {}
 
-        # 11 lifecycle hooks with their script names. SubagentStart joins
+        # 12 lifecycle hooks with their script names. SubagentStart joins
         # SubagentStop as the boot-boundary marker, used by MACF to bridge
         # the parent's tool_use_id to the subagent's agent_id (CC doesn't
         # supply a direct join key between the two surfaces).
@@ -801,6 +801,7 @@ def _update_settings_file(settings_path: Path, hooks_prefix: str) -> bool:
             ("PreCompact", "pre_compact.py"),
             ("PermissionRequest", "permission_request.py"),
             ("Notification", "notification.py"),
+            ("ConfigChange", "config_change.py"),
         ]
 
         # Register all hooks
@@ -926,6 +927,7 @@ def _hooks_to_install_list():
         ("pre_compact.py", "handle_pre_compact"),
         ("permission_request.py", "handle_permission_request"),
         ("notification.py", "handle_notification"),
+        ("config_change.py", "handle_config_change"),
     ]
 
 
@@ -1017,7 +1019,7 @@ def cmd_hook_install(args: argparse.Namespace) -> int:
         # Create hooks directory
         hooks_dir.mkdir(parents=True, exist_ok=True)
 
-        # 11 lifecycle hooks with their handler module names.
+        # 12 lifecycle hooks with their handler module names.
         # subagent_start.py was added alongside subagent_stop.py to act
         # as the parent→child join-key bridge for delegation events
         # (CC's SubagentStop hook input carries agent_id but not the
