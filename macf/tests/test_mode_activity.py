@@ -12,6 +12,8 @@ import json
 
 import pytest
 
+from macf import supervisor
+from macf.agent_events_log import append_event
 from macf.hooks.handle_user_prompt_submit import record_user_activity_from_payload
 from macf.transcript_monitor import daemon
 from macf.transcript_monitor.daemon import (
@@ -20,7 +22,12 @@ from macf.transcript_monitor.daemon import (
     detect_mid_turn_enqueue,
     detect_user_activity,
 )
-from macf.utils.input_origin import WAKE_OPENING
+from macf.utils.input_origin import (
+    KEYS_SENT_EVENT,
+    KEYS_SENT_WINDOW_SECONDS,
+    WAKE_OPENING,
+    typed_by_framework,
+)
 
 WAKE = f"{WAKE_OPENING} amail: new message 2026-10-10T07:12:03Z-ab12"
 TELEGRAM = '<channel source="plugin:telegram:telegram" chat_id="1">on my way</channel>'
@@ -29,6 +36,8 @@ TASK_NOTICE = "<task-notification>\n<task-id>b1</task-id>\n<status>completed</st
 PEER = '<cross-session-message from="bridge:session_x" from-name="a session">hi</cross-session-message>'
 HAND_BACK = '<agent-message from="a6f1">\n[Subagent hand-back] The final report.\n</agent-message>'
 CRON = "[cron:D1] Scheduled GitHub check for the duty"
+COMPACT_ENTRY = ("<command-name>/compact</command-name>\n            "
+                 "<command-message>compact</command-message>\n            <command-args></command-args>")
 RECOVERY = "You compacted yourself. Read your checkpoint, then continue."
 
 
@@ -178,14 +187,13 @@ DOORS = [
                   _user(CRON, isMeta=True, promptSource="system", turnOrigin="scheduled")],
                  [], [], id="cron"),
     pytest.param("inject", "/compact",
-                 [_user("/compact", {"kind": "human"}, promptSource="typed")], [], [],
-                 marks=_gap("keys the framework types are recorded first"), id="inject"),
+                 [_user(COMPACT_ENTRY, {"kind": "human"}, promptSource="typed")], [], [], id="inject"),
     pytest.param("supervisor keys after a start", "/maceff:resume",
                  [_user("/maceff:resume", {"kind": "human"}, promptSource="typed")], [], [],
-                 marks=_gap("keys the framework types are recorded first"), id="supervisor-keys"),
+                 id="supervisor-keys"),
     pytest.param("recovery prompt after a self-compaction", RECOVERY,
                  [_user(RECOVERY, {"kind": "human"}, promptSource="typed")], [], [],
-                 marks=_gap("keys the framework types are recorded first"), id="recovery-prompt"),
+                 id="recovery-prompt"),
     pytest.param("typed wake", WAKE,
                  [_queued(WAKE), _user(WAKE, {"kind": "human"}, promptSource="typed")],
                  [], [], id="wake"),
@@ -194,9 +202,20 @@ DOORS = [
 ]
 
 
+# The keys each framework door's sender records before typing them.
+RECORDED_KEYS = {
+    "inject": ("/compact", "inject"),
+    "supervisor keys after a start": ("/maceff:resume", "post-start"),
+    "recovery prompt after a self-compaction": (RECOVERY, "inject"),
+}
+
+
 @pytest.mark.parametrize("door, prompt, entries, hook, monitor", DOORS)
 def test_every_door_is_counted_as_audited(isolated_events_log, monkeypatch, tmp_path,
                                           door, prompt, entries, hook, monitor):
+    if door in RECORDED_KEYS:
+        text, kind = RECORDED_KEYS[door]
+        append_event(KEYS_SENT_EVENT, {"text": text, "kind": kind, "tmux_session": "s"})
     if prompt is not None:
         transcript = _transcript(tmp_path, entries)
         assert _hook_records(isolated_events_log, prompt, transcript) == hook, f"prompt hook, {door}"
@@ -253,3 +272,30 @@ def test_the_audit_reaches_every_detector():
         if not param.marks:
             fired |= _monitor_records(*param.values[2])[1]
     assert fired == ACTIVITY_DETECTORS
+
+
+def test_keys_the_framework_types_are_recorded_before_they_are_sent(isolated_events_log, monkeypatch):
+    """The record has to exist before the keys reach the input box, or the producers miss it."""
+    seen_at_send = []
+
+    def tmux(argv, **kwargs):
+        seen_at_send.append((argv[-1], typed_by_framework(argv[-1]) if argv[-1] != "Enter" else None))
+        return type("Done", (), {"returncode": 0})()
+
+    monkeypatch.setattr(supervisor, "_tmux_available", lambda: True)
+    monkeypatch.setattr(supervisor, "_find_supervisor", lambda target: {"name": "n", "tmux_session": "s"})
+    monkeypatch.setattr(supervisor.subprocess, "run", tmux)
+    assert supervisor.send_keys("n", ["/compact"], enter=True, kind="inject") == 0
+    supervisor._send_post_start_keys("s", "/maceff:resume", delay=0)
+    assert seen_at_send == [("/compact", "inject"), ("Enter", None), ("/maceff:resume", "post-start")]
+
+
+def test_a_recorded_keystroke_names_only_its_own_text_within_its_window(isolated_events_log, monkeypatch, tmp_path):
+    append_event(KEYS_SENT_EVENT, {"text": "/compact", "kind": "inject", "tmux_session": "s"})
+    assert _hook_records(isolated_events_log, "/compact") == []
+    assert _hook_records(isolated_events_log, "/clear") == ["direct"]
+    assert _monitor_run(monkeypatch, tmp_path, [_user(COMPACT_ENTRY, {"kind": "human"})]) == []
+    assert _monitor_run(monkeypatch, tmp_path, [_queued("/compact")]) == []
+    later = daemon.time.time() + KEYS_SENT_WINDOW_SECONDS + 1
+    assert typed_by_framework("/compact", now=later) is None
+

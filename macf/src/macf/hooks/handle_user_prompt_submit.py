@@ -35,6 +35,7 @@ from macf.utils.input_origin import (
     opening_channel_source,
     opens_with_harness_notice,
     opens_with_wake,
+    typed_by_framework,
 )
 
 # Lines that change on every prompt by design. The diff header carries them
@@ -136,7 +137,8 @@ def record_user_activity_from_payload(prompt: str, transcript_path: Optional[str
     the client's own notice forms, so they record nothing. Nor does a wake,
     which the persistent layer types into the input box with its own opening
     (MIS-0002-R106), or a prompt the session's own schedule fired, which the
-    transcript marks before the hook runs.
+    transcript marks before the hook runs, or keys the framework typed, which
+    their sender recorded before sending.
 
     Emitting here (rather than only suppressing the indicator) also corrects
     the clock for the renders that follow — Stop, PreToolUse — instead of
@@ -155,6 +157,8 @@ def record_user_activity_from_payload(prompt: str, transcript_path: Optional[str
     if opens_with_harness_notice(prompt) or opens_with_wake(prompt):
         return False
     if scheduled_prompt(prompt, transcript_path):
+        return False
+    if typed_by_framework(prompt):
         return False
 
     source = "channel" if opening_channel_source(prompt) is not None else "direct"
