@@ -28,11 +28,12 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from subprocess import DEVNULL, Popen
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 from ..agent_events_log import append_event
 from ..utils.input_origin import (
     HARNESS_ORIGIN_KINDS,
+    entry_text,
     opening_channel_source,
     opens_with_harness_notice,
     opens_with_wake,
@@ -119,14 +120,14 @@ def detect_user_activity(entry: dict) -> Optional[Detection]:
 
     message = entry.get("message")
     content = message.get("content", "") if isinstance(message, dict) else ""
-    if opens_with_wake(_entry_text(content)):
+    if opens_with_wake(entry_text(content)):
         return None
 
     origin = entry.get("origin")
     kind = origin.get("kind") if isinstance(origin, dict) else None
     if kind in HARNESS_ORIGIN_KINDS:
         return None
-    if kind is None and opens_with_harness_notice(_entry_text(content)):
+    if kind is None and opens_with_harness_notice(entry_text(content)):
         return None
 
     source = "direct"
@@ -298,15 +299,47 @@ DEFAULT_DETECTORS: List[Detector] = [
 # Channel forwarding (#093) — mirror the live exchange to the remote channel
 # ============================================================================
 
-def _entry_text(content) -> str:
-    """Best-effort plain text from a transcript message `content` (str or blocks)."""
-    if isinstance(content, str):
-        return content.strip()
-    if isinstance(content, list):
-        parts = [b.get("text", "") for b in content
-                 if isinstance(b, dict) and b.get("type") == "text"]
-        return "\n".join(p for p in parts if p).strip()
-    return ""
+#: How long a queued copy waits for the entry that delivers it. The client
+#: fires a session's scheduled prompt only while the session is idle, so its
+#: delivery follows within milliseconds; a message typed during a turn waits
+#: for the turn, and is recorded from its queued copy once this runs out.
+QUEUED_TWIN_WAIT_SECONDS = 2.0
+
+#: Delivered prompts the client marks as not typed by the operator.
+_NOT_OPERATOR_TURN_ORIGINS = frozenset({"scheduled", "task_notification", "peer"})
+
+
+def _delivered_text(entry: dict) -> Optional[str]:
+    """The prompt an entry delivers: a user entry's text, or a queued command's."""
+    if entry.get("type") == "user" and "toolUseResult" not in entry:
+        message = entry.get("message")
+        return entry_text(message.get("content", "") if isinstance(message, dict) else "")
+    if entry.get("type") == "attachment":
+        attachment = entry.get("attachment")
+        if isinstance(attachment, dict) and attachment.get("type") == "queued_command":
+            return str(attachment.get("prompt", "")).strip()
+    return None
+
+
+def _as_delivered(twin: dict, queued: Detection) -> Optional[Detection]:
+    """What a queued copy was, by the record on the entry that delivered it.
+
+    A queued copy carries no provenance; its delivery does (MIS-0002-R121).
+    A channel event takes its server from that record. A prompt the client
+    fired itself, a scheduled one or a notice, is not the operator, and None
+    says so. Anything else stands as read from the queued copy.
+    """
+    record = twin.get("attachment") if twin.get("type") == "attachment" else twin
+    origin = record.get("origin")
+    kind = origin.get("kind") if isinstance(origin, dict) else None
+    if kind == "channel":
+        return Detection(queued.event_name, {**queued.data, "source": "channel",
+                                             "channel_server": origin.get("server", "")})
+    if (record.get("turnOrigin") in _NOT_OPERATOR_TURN_ORIGINS
+            or kind in HARNESS_ORIGIN_KINDS
+            or record.get("commandMode") == "task-notification"):
+        return None
+    return queued
 
 
 def extract_forwardable(entry: dict):
@@ -325,7 +358,7 @@ def extract_forwardable(entry: dict):
     content = msg.get("content")
 
     if etype == "assistant":
-        text = _entry_text(content)
+        text = entry_text(content)
         return ("💬", text) if text else None
 
     if etype == "user":
@@ -338,7 +371,7 @@ def extract_forwardable(entry: dict):
             isinstance(b, dict) and b.get("type") == "tool_result" for b in content
         ):
             return None
-        text = _entry_text(content)
+        text = entry_text(content)
         return ("👤 CLI", text) if text else None
 
     return None
@@ -701,6 +734,10 @@ class TranscriptMonitor:
         self.owner = owner
         self.stop_reason: Optional[str] = None
 
+        # Queued copies waiting for the entry that delivers them:
+        # (when held, the queued text, the detection the queued copy gave).
+        self._held: List[Tuple[float, str, Detection]] = []
+
         # Stats
         self.entries_processed = 0
         self.events_emitted = 0
@@ -805,12 +842,18 @@ class TranscriptMonitor:
             return
 
         self.entries_processed += 1
+        self._settle_held(entry)
 
         for detector in self.detectors:
             try:
                 detection = detector(entry)
-                if detection is not None:
-                    self._emit(detection.event_name, detection.data)
+                if detection is None:
+                    continue
+                if entry.get("type") == "queue-operation" and detection.event_name == "user_activity_detected":
+                    # Held until the entry that delivers it says what it was.
+                    self._held.append((time.monotonic(), str(entry.get("content", "")).strip(), detection))
+                    continue
+                self._emit(detection.event_name, detection.data)
             except (OSError, ValueError, TypeError) as e:
                 print(f"⚠️ TM: detector error: {e}", file=sys.stderr)
 
@@ -830,6 +873,38 @@ class TranscriptMonitor:
             # the monitor. Nothing here depends on which exception occurred, so
             # enumerating types would only add a way to crash.
             print(f"⚠️ TM: channel forward failed (non-blocking): {e}", file=sys.stderr)
+
+    def _settle_held(self, entry: dict) -> None:
+        """Settle held queued copies against an entry that follows them.
+
+        The entry that delivers a held copy decides what it was. Any other
+        user or assistant entry means the turn has moved on without delivering
+        it: the copy was typed during the turn, and it is recorded now.
+        """
+        if not self._held:
+            return
+        text = _delivered_text(entry)
+        if text is not None:
+            for i, (_, queued_text, detection) in enumerate(self._held):
+                if queued_text == text:
+                    del self._held[i]
+                    settled = _as_delivered(entry, detection)
+                    if settled is not None:
+                        self._emit(settled.event_name, settled.data)
+                    return
+        if entry.get("type") in ("user", "assistant"):
+            self._release_held()
+
+    def _release_held(self, older_than: Optional[float] = None) -> None:
+        """Record held queued copies, all of them or those held at least ``older_than`` seconds."""
+        now = time.monotonic()
+        kept = []
+        for held_at, queued_text, detection in self._held:
+            if older_than is not None and now - held_at < older_than:
+                kept.append((held_at, queued_text, detection))
+            else:
+                self._emit(detection.event_name, detection.data)
+        self._held = kept
 
     def _forward_to_channel_enabled(self) -> bool:
         """True iff USER_REMOTE is active. Cached for 5s to bound event-log reads.
@@ -925,6 +1000,10 @@ class TranscriptMonitor:
                         else:
                             self.stat_failures = 0
 
+                        # A queued copy whose delivery has not come in time was
+                        # typed during a turn; record it from the copy.
+                        self._release_held(older_than=QUEUED_TWIN_WAIT_SECONDS)
+
                         # Sources are polled on the idle path deliberately: the
                         # transcript is the primary input and must never wait
                         # behind a directory listing.
@@ -944,6 +1023,7 @@ class TranscriptMonitor:
             pass
         finally:
             self.running = False
+            self._release_held()
             print(
                 f"\n📡 Transcript Monitor stopped. "
                 f"Processed {self.entries_processed} entries, "

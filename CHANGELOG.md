@@ -135,6 +135,8 @@ Gmail, event-log rotation, and commit-message guards. Sprints now survive compac
 
 - **A wake is not the operator acting** (`utils/input_origin.py`, the prompt hook, the transcript monitor, `mode_system`, MIS-0002-R106): keys typed into a session to wake it were recorded as the operator's typing, which cleared USER_IDLE and ended USER_REMOTE while the operator was away. Both producers now read an input that opens with `[maceff:wake]`, followed only by the layer's own words and message identifiers, as a wake and never the operator, and they read that opening before any origin record. Nothing in the framework types a wake yet: the notifier will, and until then a deployment's wake script gets this by opening its wakes with the same words. `test_mode_activity.py` adds the conformance tests MIS-0002 names for R106, R121 and R128, and a door audit that runs every way input reaches a session through both producers.
 
+- **A session's scheduled prompt is not the operator acting** (the transcript monitor, the prompt hook, `mode_system`): a prompt the client fires on the session's own schedule was queued like typing and counted as typing, so an agent with an hourly check never read as idle. The monitor now holds a queued copy until the entry that delivers it, which the client marks `turnOrigin: scheduled`, and the hook finds that entry at the end of the transcript. A copy that is not delivered within about two seconds, a message typed while a turn runs, is recorded from the copy as before, and a channel message takes its server from its delivery's record.
+
 ## [0.6.0] - 2026-08-29
 
 ### Summary
