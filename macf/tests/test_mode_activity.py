@@ -13,8 +13,10 @@ import json
 import pytest
 
 from macf.hooks.handle_user_prompt_submit import record_user_activity_from_payload
+from macf.transcript_monitor import daemon
 from macf.transcript_monitor.daemon import (
     DEFAULT_DETECTORS,
+    QUEUED_TWIN_WAIT_SECONDS,
     detect_mid_turn_enqueue,
     detect_user_activity,
 )
@@ -58,11 +60,41 @@ def _activity(log_path):
     return [e for e in events if e.get("event") == "user_activity_detected"]
 
 
-def _hook_records(log_path, prompt):
-    """The sources the prompt hook records for ``prompt``."""
+def _hook_records(log_path, prompt, transcript=None):
+    """The sources the prompt hook records for ``prompt``, given the transcript it would see."""
     before = len(_activity(log_path))
-    record_user_activity_from_payload(prompt)
+    record_user_activity_from_payload(prompt, str(transcript) if transcript else None)
     return [e["data"]["source"] for e in _activity(log_path)[before:]]
+
+
+def _transcript(tmp_path, entries):
+    path = tmp_path / "session.jsonl"
+    path.write_text("".join(json.dumps(e) + "\n" for e in entries))
+    return path
+
+
+class _Monitor:
+    """A transcript monitor fed entries one line at a time, recording what it emits."""
+
+    def __init__(self, monkeypatch, tmp_path):
+        self.emitted = []
+        monkeypatch.setattr(daemon, "append_event", lambda name, data: self.emitted.append((name, data)))
+        self.monitor = daemon.TranscriptMonitor(tmp_path / "watched.jsonl")
+
+    def feed(self, *entries):
+        for entry in entries:
+            self.monitor._process_line(json.dumps(entry))
+        return self
+
+    def sources(self):
+        return [d["source"] for name, d in self.emitted if name == "user_activity_detected"]
+
+
+def _monitor_run(monkeypatch, tmp_path, entries):
+    """What a running monitor records for these entries, once anything held is settled."""
+    run = _Monitor(monkeypatch, tmp_path).feed(*entries)
+    run.monitor._release_held()
+    return run.sources()
 
 
 def _monitor_records(*entries):
@@ -142,8 +174,9 @@ DOORS = [
                  [_queued(PEER), _user(PEER, {"kind": "peer"})], [], [], id="peer"),
     pytest.param("subagent hand-back", HAND_BACK, [_queued(HAND_BACK)], [], [], id="hand-back"),
     pytest.param("session cron prompt", CRON,
-                 [_queued(CRON), _user(CRON, isMeta=True, promptSource="system", turnOrigin="scheduled")],
-                 [], [], marks=_gap("a queued copy is read by its delivered twin"), id="cron"),
+                 [_queued(CRON), {"type": "queue-operation", "operation": "dequeue"}, {"type": "system"},
+                  _user(CRON, isMeta=True, promptSource="system", turnOrigin="scheduled")],
+                 [], [], id="cron"),
     pytest.param("inject", "/compact",
                  [_user("/compact", {"kind": "human"}, promptSource="typed")], [], [],
                  marks=_gap("keys the framework types are recorded first"), id="inject"),
@@ -162,10 +195,48 @@ DOORS = [
 
 
 @pytest.mark.parametrize("door, prompt, entries, hook, monitor", DOORS)
-def test_every_door_is_counted_as_audited(isolated_events_log, door, prompt, entries, hook, monitor):
+def test_every_door_is_counted_as_audited(isolated_events_log, monkeypatch, tmp_path,
+                                          door, prompt, entries, hook, monitor):
     if prompt is not None:
-        assert _hook_records(isolated_events_log, prompt) == hook, f"prompt hook, {door}"
-    assert _monitor_records(*entries)[0] == monitor, f"transcript monitor, {door}"
+        transcript = _transcript(tmp_path, entries)
+        assert _hook_records(isolated_events_log, prompt, transcript) == hook, f"prompt hook, {door}"
+    assert _monitor_run(monkeypatch, tmp_path, entries) == monitor, f"transcript monitor, {door}"
+
+
+def test_a_scheduled_prompt_is_not_operator_activity(isolated_events_log, monkeypatch, tmp_path):
+    """A session's own scheduled prompt is the client firing it: its queued copy waits for the
+    delivered entry, which says turnOrigin scheduled, and the hook finds that entry too."""
+    fired = [_queued(CRON), {"type": "queue-operation", "operation": "dequeue"}, {"type": "system"},
+             _user(CRON, isMeta=True, promptSource="system", turnOrigin="scheduled")]
+    run = _Monitor(monkeypatch, tmp_path).feed(*fired)
+    assert run.sources() == [] and run.monitor._held == []
+    assert _hook_records(isolated_events_log, CRON, _transcript(tmp_path, fired)) == []
+    # Without the delivered entry to say otherwise, the hook reads the prompt as typed, as before.
+    assert _hook_records(isolated_events_log, CRON, _transcript(tmp_path, fired[:1])) == ["direct"]
+
+
+def test_a_message_typed_during_a_turn_counts_once_the_turn_moves_on(monkeypatch, tmp_path):
+    run = _Monitor(monkeypatch, tmp_path).feed(_queued("also check the docs"))
+    assert run.sources() == []
+    run.feed({"type": "assistant", "message": {"role": "assistant", "content": []}})
+    assert run.sources() == ["mid_turn_enqueue"]
+
+
+def test_a_held_copy_counts_after_the_wait(monkeypatch, tmp_path):
+    run = _Monitor(monkeypatch, tmp_path).feed(_queued("also check the docs"))
+    run.monitor._release_held(older_than=QUEUED_TWIN_WAIT_SECONDS)
+    assert run.sources() == []
+    later = daemon.time.monotonic() + QUEUED_TWIN_WAIT_SECONDS + 1
+    monkeypatch.setattr(daemon.time, "monotonic", lambda: later)
+    run.monitor._release_held(older_than=QUEUED_TWIN_WAIT_SECONDS)
+    assert run.sources() == ["mid_turn_enqueue"]
+
+
+def test_a_queued_channel_message_takes_its_server_from_the_delivery(monkeypatch, tmp_path):
+    """MIS-0002-R121: where the delivery carries a record, the record names the source."""
+    delivered = _user(TELEGRAM, {"kind": "channel", "server": "plugin:telegram:operator"}, isMeta=True)
+    run = _Monitor(monkeypatch, tmp_path).feed(_queued(TELEGRAM), delivered)
+    assert [(d["source"], d["channel_server"]) for _, d in run.emitted] == [("channel", "plugin:telegram:operator")]
 
 
 ACTIVITY_DETECTORS = {"detect_user_activity", "detect_permission_denial",

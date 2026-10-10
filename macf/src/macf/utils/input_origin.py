@@ -41,6 +41,17 @@ HARNESS_NOTICE_OPENINGS = (
 WAKE_OPENING = "[maceff:wake]"
 
 
+def entry_text(content) -> str:
+    """Best-effort plain text from a transcript message's ``content`` (a string or blocks)."""
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = [b.get("text", "") for b in content
+                 if isinstance(b, dict) and b.get("type") == "text"]
+        return "\n".join(p for p in parts if p).strip()
+    return ""
+
+
 def opening_channel_source(text: str) -> Optional[str]:
     """The source named by the channel tag that opens ``text``, or None.
 
