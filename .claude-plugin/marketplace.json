@@ -1,0 +1,16 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "maceff",
+  "description": "Claude Code plugins that ship with the MacEff framework.",
+  "owner": {
+    "name": "MacEff maintainers"
+  },
+  "plugins": [
+    {
+      "name": "maceff-channel",
+      "description": "Notices from the agent's primal daemon, delivered as channel events instead of typed keystrokes (MIS-0002 section 6.14).",
+      "category": "productivity",
+      "source": "./plugins/maceff-channel"
+    }
+  ]
+}

@@ -39,7 +39,29 @@ def _commands():
 
 
 def _tools():
-    return {p.name for p in (FRAMEWORK.parent / "maceff_tools").iterdir() if p.is_file()}
+    """Files in maceff_tools/, console scripts the package installs, and plugins the
+    repository ships: each is a name a framework file may tell an agent to use."""
+    root = FRAMEWORK.parent
+    names = {p.name for p in (root / "maceff_tools").iterdir() if p.is_file()}
+    names |= _console_scripts(root / "macf" / "pyproject.toml")
+    plugins = root / "plugins"
+    if plugins.is_dir():
+        names |= {p.name for p in plugins.iterdir() if (p / ".claude-plugin" / "plugin.json").is_file()}
+    return names
+
+
+def _console_scripts(pyproject):
+    """Names under [project.scripts]. Parsed by line, not with tomllib, because CI
+    still runs Python 3.10, which has no tomllib."""
+    names, inside = set(), False
+    for line in pyproject.read_text().splitlines():
+        stripped = line.strip()
+        if stripped.startswith("["):
+            inside = stripped == "[project.scripts]"
+            continue
+        if inside and "=" in stripped and not stripped.startswith("#"):
+            names.add(stripped.split("=", 1)[0].strip())
+    return names
 
 
 def _policies():

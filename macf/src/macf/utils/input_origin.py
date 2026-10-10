@@ -12,6 +12,10 @@ writes on a wake. The content of a channel event or a notice can carry
 anything, including a forged tag of its own. Keys the framework types carry
 no opening at all, since a slash command has to open with "/", so the
 framework records them as it sends them, and that record is read instead.
+
+One channel is never the operator, whoever reads it: the MacEff channel,
+through which the persistent layer delivers notices. Both producers ask
+``from_maceff_channel`` of the source they found.
 """
 
 import re
@@ -19,6 +23,11 @@ import time
 from typing import Optional
 
 CHANNEL_TAG_OPENING = "<channel "
+
+# The MacEff channel's name as the client writes it, both in the source of the
+# tag that opens a channel event and in a delivered entry's origin record:
+# plugin:<plugin>:<server>.
+MACEFF_CHANNEL_SOURCE = "plugin:maceff-channel:maceff"
 
 # Origin kinds on a user entry that are not the operator acting: a background
 # task's completion notice, and a message from another session.
@@ -125,3 +134,14 @@ def typed_by_framework(text: str, now: Optional[float] = None) -> Optional[str]:
         if str(data.get("text", "")).strip() == wanted:
             return str(data.get("kind") or "keys")
     return None
+
+
+def from_maceff_channel(source: Optional[str]) -> bool:
+    """True when a channel source, from an origin record or an opening tag, is the MacEff channel.
+
+    Its notices are the persistent layer speaking, never the operator, so they
+    MUST NOT count as the operator's activity (MIS-0002-R106
+    (wake_MUST-NOT_count_as_operator_activity)). The name is the one the
+    transport sets (MIS-0002-R107 (hooks_MUST_tell_channels_apart_by_name)).
+    """
+    return source == MACEFF_CHANNEL_SOURCE

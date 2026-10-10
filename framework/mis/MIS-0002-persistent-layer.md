@@ -515,17 +515,17 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R110 | decidable | macf/tests/test_pd_schedule.py::test_no_default_policy | planned |
 | R111 | decidable | macf/tests/test_pd_observe.py::test_no_invitation_across_containers | planned |
 | R112 | judgment | the head maintainer, at review of the Claude Code harness adapter | standing |
-| R113 | decidable | macf/tests/test_pd_channel.py::test_unix_socket_peer | planned |
-| R114 | decidable | macf/tests/test_pd_channel.py::test_notice_metadata | planned |
+| R113 | decidable | macf/tests/test_pd_channel.py::test_unix_socket_peer | passing |
+| R114 | decidable | macf/tests/test_pd_channel.py::test_notice_metadata | passing |
 | R115 | decidable | macf/tests/test_pd_channel.py::test_dark_channel_event | planned |
 | R116 | decidable | macf/tests/test_pd_channel.py::test_onlooker_card_from_invitation | planned |
-| R117 | decidable | macf/tests/test_pd_channel.py::test_no_permission_relay | planned |
+| R117 | decidable | macf/tests/test_pd_channel.py::test_no_permission_relay | passing |
 | R118 | decidable | macf/tests/test_pd_harness.py::test_restart_needs_no_confirmation | planned |
 | R119 | judgment | the operator, at review of each deployment | standing |
-| R120 | decidable | macf/tests/test_pd_channel.py::test_receipt_from_prompt_hook | planned |
+| R120 | decidable | macf/tests/test_pd_channel.py::test_receipt_from_prompt_hook | passing |
 | R121 | decidable | macf/tests/test_mode_activity.py::test_source_from_origin_or_opening_tag | passing |
-| R122 | decidable | macf/tests/test_pd_channel.py::test_peer_descends_from_live_session | planned |
-| R123 | decidable | macf/tests/test_pd_channel.py::test_channel_checks_its_pd | planned |
+| R122 | decidable | macf/tests/test_pd_channel.py::test_peer_descends_from_live_session | planned (the lineage check passes its test; the primal daemon applies it when step 1 lands) |
+| R123 | decidable | macf/tests/test_pd_channel.py::test_channel_checks_its_pd | passing |
 | R124 | decidable | macf/tests/test_pd_declaration.py::test_allowlist_lists_every_channel | planned |
 | R125 | judgment | the head maintainer, at review of the Claude Code harness adapter | standing |
 | R126 | decidable | macf/tests/test_pd_harness.py::test_idle_compaction_off | planned |
@@ -634,6 +634,7 @@ Objections recorded:
 
 - 2026-10-09: the operator named the maintainers and closed the discussion. The Status moved to Accepted with the Resolution, and the terms of section 5 not yet in the glossary entered it (development flag, harness channel, invitation, MacEff channel, observation stream, official listing, onlooker, operational mode, operator surface, organization allowlist, presence state, shared budget, wind-down), as the last commit before the merge.
 
+- 2026-10-09: conformance, from the first landing pull request (the MacEff channel, landing step 2): R113, R114, R117, R120 and R123 passing; R122's lineage check tested, applied by the primal daemon when step 1 lands. No requirement changed.
 - 2026-10-10: conformance, from the pull request for R106's wakes: R121 and R128 passing. R106's test passes for a wake that opens with the wake words, and R106 stays planned for two reasons: nothing in the framework writes those words until the notifier lands, in step 2, and a MacEff channel notice, also a wake, is told apart by its channel's name only once that channel lands, which the door audit in the same test file holds as a known gap. No requirement changed.
 
 - 2026-10-10: conformance, from the pull request for landing step 6 (the code rename of `hypervisor`): R76 passing. The deploy configuration documents `primal-daemon` and reads the retired value as it. No requirement changed.

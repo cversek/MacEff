@@ -175,7 +175,7 @@ DOORS = [
                   _user(TELEGRAM, {"kind": "channel", "server": "plugin:telegram:telegram"}, isMeta=True)],
                  ["channel"], ["channel"], id="channel"),
     pytest.param("MacEff channel notice", MACEFF_NOTICE, [_queued(MACEFF_NOTICE)], [], [],
-                 marks=_gap("the MacEff channel is told apart by name when it lands"), id="maceff-notice"),
+                 id="maceff-notice"),
     pytest.param("task notification", TASK_NOTICE,
                  [_queued(TASK_NOTICE), _user(TASK_NOTICE, {"kind": "task-notification"})],
                  [], [], id="task-notification"),

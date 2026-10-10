@@ -453,12 +453,17 @@ def _ppid(pid: int) -> int:
 
 
 def _ancestor_pids(limit: int = 32) -> set:
-    """This process and its ancestors, walking up until init.
+    """This process and its ancestors, walking up until init."""
+    return ancestor_pids(os.getpid(), limit)
+
+
+def ancestor_pids(pid: int, limit: int = 32) -> set:
+    """*pid* and its ancestors, walking up until init.
 
     *limit* bounds the walk: a pid whose parent chain loops or lies would
     otherwise spin here, and this runs inside a CLI an agent invokes.
     """
-    pids, pid = set(), os.getpid()
+    pids = set()
     while pid > 1 and len(pids) < limit:
         pids.add(pid)
         parent = _ppid(pid)
