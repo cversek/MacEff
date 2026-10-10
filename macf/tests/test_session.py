@@ -93,8 +93,12 @@ class TestSessionIDExtraction:
         - Extract session ID from filename
         - Return valid UUID string
         """
-        # Mock Path.home() to return tmp_path so .claude/projects points to our fixture
-        with patch('pathlib.Path.home', return_value=mock_claude_project):
+        # Mock Path.home() to return tmp_path so .claude/projects points to our
+        # fixture, and pin the project to the fixture's: only this project's
+        # transcripts are candidates.
+        with patch('pathlib.Path.home', return_value=mock_claude_project), \
+             patch('macf.utils.session.find_project_root') as mock_root:
+            mock_root.return_value.name = "test-project"
             session_id = get_current_session_id()
 
         assert session_id is not None
@@ -112,14 +116,36 @@ class TestSessionIDExtraction:
         """
         with patch('pathlib.Path.home', return_value=mock_multiple_projects), \
              patch('macf.utils.session.find_project_root') as mock_root:
-            # Pin the project name to one that does not match the fixture's
-            # project dirs, so selection is deterministic and hermetic against
-            # the real cwd. The function picks the globally newest by mtime
-            # regardless of glob/iterdir order.
-            mock_root.return_value.name = "macf-test-cwd"
+            # Pin a project name both fixture dirs contain, so selection is
+            # deterministic and hermetic against the real cwd. The function
+            # picks the newest by mtime regardless of glob/iterdir order.
+            mock_root.return_value.name = "project"
             session_id = get_current_session_id()
 
         assert session_id == "most-recent-session-uuid"
+
+    def test_another_projects_transcript_is_never_borrowed(self, mock_multiple_projects):
+        """A project with no transcript of its own gets "unknown", not another
+        project's newest: that session is another conversation, and possibly
+        another agent's, and a sessionless process would stamp it on every event."""
+        with patch('pathlib.Path.home', return_value=mock_multiple_projects), \
+             patch('macf.utils.session.find_project_root') as mock_root:
+            mock_root.return_value.name = "macf-test-cwd"
+            session_id = get_current_session_id()
+
+        assert session_id == "unknown"
+
+    def test_missing_session_started_is_said_once(self, mock_multiple_projects, monkeypatch, capsys):
+        """A process that resolves its session for every event it writes says
+        "no session_started" once, not every time."""
+        monkeypatch.setattr("macf.utils.session._warned_no_session_started", False)
+        with patch('pathlib.Path.home', return_value=mock_multiple_projects), \
+             patch('macf.utils.session.find_project_root') as mock_root:
+            mock_root.return_value.name = "macf-test-cwd"
+            for _ in range(3):
+                get_current_session_id()
+
+        assert capsys.readouterr().err.count("No session_started events found") == 1
 
     def test_get_current_session_id_no_claude_directory(self, temp_dir):
         """
@@ -144,7 +170,9 @@ class TestSessionIDExtraction:
         - Extract session ID from filename (not file contents)
         - Not crash the application
         """
-        with patch('pathlib.Path.home', return_value=mock_corrupted_jsonl):
+        with patch('pathlib.Path.home', return_value=mock_corrupted_jsonl), \
+             patch('macf.utils.session.find_project_root') as mock_root:
+            mock_root.return_value.name = "mixed-project"
             session_id = get_current_session_id()
 
         # Should extract from filename, not parse corrupted content
