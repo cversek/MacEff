@@ -103,6 +103,13 @@ Detector = Callable[[dict], Optional[Detection]]
 # Built-in Detectors
 # ============================================================================
 
+def _keys_consumer() -> str:
+    """This monitor, as the consumer of framework keystroke records. Its own pid, so a
+    second monitor on the same log takes its own arrival instead of this one's.
+    A queued copy only looks: the same input is read again once it is delivered."""
+    return f"transcript_monitor:{os.getpid()}"
+
+
 def detect_user_activity(entry: dict) -> Optional[Detection]:
     """Detect a message the operator typed or sent through a channel.
 
@@ -134,7 +141,7 @@ def detect_user_activity(entry: dict) -> Optional[Detection]:
         return None
     if kind is None and opens_with_harness_notice(entry_text(content)):
         return None
-    if kind != "channel" and typed_by_framework(typed_text(content)):
+    if kind != "channel" and typed_by_framework(typed_text(content), consumer=_keys_consumer()):
         return None
 
     source = "direct"
@@ -247,7 +254,7 @@ def detect_mid_turn_enqueue(entry: dict) -> Optional[Detection]:
 
     content = entry.get("content", "")
     if isinstance(content, str) and (opens_with_harness_notice(content) or opens_with_wake(content)
-                                     or typed_by_framework(content)):
+                                     or typed_by_framework(content, consumer=_keys_consumer(), consume=False)):
         return None
     data = {
         "source": "mid_turn_enqueue",

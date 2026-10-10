@@ -295,7 +295,25 @@ def test_a_recorded_keystroke_names_only_its_own_text_within_its_window(isolated
     assert _hook_records(isolated_events_log, "/compact") == []
     assert _hook_records(isolated_events_log, "/clear") == ["direct"]
     assert _monitor_run(monkeypatch, tmp_path, [_user(COMPACT_ENTRY, {"kind": "human"})]) == []
-    assert _monitor_run(monkeypatch, tmp_path, [_queued("/compact")]) == []
     later = daemon.time.time() + KEYS_SENT_WINDOW_SECONDS + 1
-    assert typed_by_framework("/compact", now=later) is None
+    append_event(KEYS_SENT_EVENT, {"text": "/compact", "kind": "inject", "tmux_session": "s"})
+    assert typed_by_framework("/compact", now=later, consume=False) is None
+
+
+def test_a_recorded_keystroke_pairs_with_one_arrival(isolated_events_log):
+    """#1533: the framework types /compact and its arrival is the framework's; the operator
+    then types /compact inside the window, and that one is the operator's, through both
+    producers. A copy queued while a turn runs only looks, so its delivery takes the record."""
+    append_event(KEYS_SENT_EVENT, {"text": "/compact", "kind": "inject", "tmux_session": "s"})
+    assert [_hook_records(isolated_events_log, "/compact") for _ in range(2)] == [[], ["direct"]]
+
+    delivered = _user(COMPACT_ENTRY, {"kind": "human"})
+    assert _monitor_records(_queued("/compact"))[0] == []
+    assert _monitor_records(delivered)[0] == []
+    assert _monitor_records(_queued("/compact"))[0] == ["mid_turn_enqueue"]
+    assert _monitor_records(delivered)[0] == ["direct"]
+
+    for _ in range(2):
+        append_event(KEYS_SENT_EVENT, {"text": "/maceff:resume", "kind": "post-start", "tmux_session": "s"})
+    assert [_hook_records(isolated_events_log, "/maceff:resume") for _ in range(3)] == [[], [], ["direct"]]
 
