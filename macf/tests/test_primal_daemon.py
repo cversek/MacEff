@@ -8,8 +8,14 @@ report that it waits on a person.
 import json
 import os
 import pwd
+import shutil
 import signal
+import socket
+import stat
+import subprocess
 import sys
+import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,10 +23,12 @@ from pathlib import Path
 import pytest
 
 import macf
+import macf.pd.daemon as daemon_module
 from macf.agent_events_log import CYCLE_BOUNDARY_EVENT, append_event, get_log_path
-from macf.notify.session import proc_start
+from macf.notify.session import proc_start, verify_incarnation
 from macf.pd.core import Core, DeclarationRefused, backoff_s, load_declaration
-from macf.pd.interface import UNIT_STATES, Asker, Declaration, Peer, Unit, declaration_path
+from macf.pd.daemon import AlreadyRunning, Daemon, card_for_home
+from macf.pd.interface import UNIT_STATES, Asker, DaemonRecord, Declaration, Peer, Unit, declaration_path
 
 CARD = "Tester@abc123"
 ME = pwd.getpwuid(os.getuid()).pw_name
@@ -332,46 +340,6 @@ def test_no_cross_agent_control(tmp_path, script):
         load_declaration(tmp_path, CARD)
 
 
-RESTART_BY_EXIT = [
-    # restart,     exit code, restarts, state it is left in when it does not restart
-    ("always",     0,  True,  None),
-    ("always",     78, False, "stopped"),
-    ("always",     1,  True,  None),
-    ("on-failure", 0,  False, "stopped"),
-    ("on-failure", 78, False, "stopped"),
-    ("on-failure", 1,  True,  None),
-    ("never",      0,  False, "stopped"),
-    ("never",      78, False, "stopped"),
-    ("never",      1,  False, "failed"),
-]
-
-
-@pytest.mark.parametrize("restart, code, restarts, left", RESTART_BY_EXIT)
-def test_restart_policy_by_exit(make_core, script, restart, code, restarts, left):
-    """A unit that exits on its own is restarted exactly when its policy and its exit code
-    together say so: success and failure under "always", failure under "on-failure", and
-    never a code that asks not to be restarted."""
-    core = make_core([make_unit("worker", script, {"exit_after": 0.2, "code": code}, restart=restart)])
-    core.boot()
-    assert drive(core, lambda: core.state("worker") == "running")
-    first = core.pid("worker")
-    assert drive(core, lambda: core.state("worker") != "running" or core.pid("worker") != first)
-    came_back = drive(core, lambda: core.pid("worker") not in (None, first), timeout=1.5)
-    assert came_back == restarts
-    if not restarts:
-        assert core.state("worker") == left
-
-
-def test_failures_count_and_clear(make_core, script, tmp_path):
-    """A crash counts toward the restart backoff, and a unit that then runs stably for ten
-    of its intervals, counted from its start, has the count cleared."""
-    core = make_core([make_unit("worker", script, {"crash_once": str(tmp_path / "crashed")})])
-    core.boot()
-    assert drive(core, lambda: core.failures("worker") == 1)
-    assert drive(core, lambda: core.state("worker") == "running")
-    assert drive(core, lambda: core.failures("worker") == 0)
-
-
 def test_stop_after_a_failure_is_stopped(make_core, script):
     """An operator's stop of a unit already failed and being killed ends in stopped, not failed."""
     core = make_core([make_unit("worker", script, {"alive_for": 0.15}, restart="never")])
@@ -642,6 +610,366 @@ def test_backoff_doubles_to_its_cap():
     assert [backoff_s(n, 1.0, 8.0) for n in range(7)] == [0.0, 1.0, 2.0, 4.0, 8.0, 8.0, 8.0]
 
 
+# ---------------------------------------------------------------------------- the process
+
+def make_home(tmp_path, units):
+    """An agent home whose own files name it Tester@abc123, with the units declared."""
+    home = tmp_path / "home"
+    (home / ".maceff").mkdir(parents=True)
+    (home / ".maceff_primary_agent.id").write_text("abc123def4567890\n")
+    (home / ".maceff" / "config.json").write_text(json.dumps({"agent_identity": {"moniker": "Tester"}}))
+    path = declaration_path(home)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(Declaration(version=1, agent=CARD, units=units).model_dump_json())
+    return home
+
+
+@pytest.fixture
+def base():
+    """A runtime directory short enough for a socket path on every platform."""
+    path = Path(tempfile.mkdtemp(prefix="pd-", dir="/tmp"))
+    yield path
+    shutil.rmtree(path, ignore_errors=True)
+
+
+@pytest.fixture
+def run_daemon():
+    running = []
+
+    def run(home, base, **options):
+        options = {"backoff_base_s": 0.05, "backoff_cap_s": 0.2, **options}
+        daemon = Daemon(home, base=base, **options)
+        daemon.start()
+        thread = threading.Thread(target=daemon.serve, daemon=True)
+        thread.start()
+        running.append((daemon, thread))
+        return daemon
+
+    yield run
+    for daemon, thread in running:
+        daemon.stop()
+        thread.join(timeout=10)
+
+
+def ask(daemon, request):
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+        conn.settimeout(5)
+        conn.connect(str(daemon.control_path))
+        conn.sendall(json.dumps(request).encode() + b"\n")
+        data = b""
+        while not data.endswith(b"\n"):
+            chunk = conn.recv(4096)
+            if not chunk:
+                break
+            data += chunk
+    return json.loads(data)
+
+
+def unit_state(daemon, unit):
+    return {u["unit"]: u["state"] for u in ask(daemon, {"op": "status"})["units"]}[unit]
+
+
+def unit_pid(daemon, unit):
+    return {u["unit"]: u["pid"] for u in ask(daemon, {"op": "status"})["units"]}[unit]
+
+
+def wait_for(condition, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if condition():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def test_identity_not_from_env(tmp_path, script, monkeypatch):
+    """The daemon's identity comes from its home's own files, whatever the environment says (R02)."""
+    home = make_home(tmp_path, [make_unit("worker", script, {})])
+    monkeypatch.setenv("MACEFF_AGENT_NAME", "SomeoneElse")
+    assert card_for_home(home) == CARD
+
+
+def test_identity_needs_at_least_six_hex_chars(tmp_path, script):
+    """The card's identifier is the first six characters of the agent's own id file; exactly
+    six is the shortest usable identifier, not already too short to refuse."""
+    home = make_home(tmp_path, [make_unit("worker", script, {})])
+    (home / ".maceff_primary_agent.id").write_text("abc123\n")  # exactly six: the boundary
+    assert card_for_home(home) == "Tester@abc123"
+
+
+def test_the_daemon_fills_in_its_own_values(tmp_path, script, base, run_daemon):
+    """The values come from the daemon, not the declaration: the home it was given, the card
+    read from that home, and the runtime directory it binds in (R13)."""
+    dump = tmp_path / "seen.json"
+    home = make_home(tmp_path, [make_unit("worker", script, {"dump": str(dump)}, environment={
+        "WHERE": "{agent_home}", "WHO": "{card}", "RUN": "{runtime_dir}"})])
+    run_daemon(home, base)
+    assert wait_for(lambda: dump.exists())
+    env = json.loads(dump.read_text())["env"]
+    assert (env["WHERE"], env["WHO"], env["RUN"]) == (str(home), CARD, str(base))
+
+
+def test_one_per_agent(tmp_path, script, base, run_daemon):
+    """A second daemon for the same agent refuses to start while the first lives (R01)."""
+    home = make_home(tmp_path, [make_unit("worker", script, {})])
+    first = run_daemon(home, base)
+    with pytest.raises(AlreadyRunning):
+        Daemon(home, base=base).start()
+
+    first.stop()
+    assert wait_for(lambda: not first.record_path.exists())
+    second = run_daemon(home, base)
+    assert ask(second, {"op": "status"})["ok"]
+
+
+def test_no_network_listener(tmp_path, script, base, run_daemon):
+    """The daemon listens on a Unix socket and nothing else (R80)."""
+    daemon = run_daemon(make_home(tmp_path, [make_unit("worker", script, {})]), base)
+    assert daemon._listener.family == socket.AF_UNIX
+    assert "AF_INET" not in Path(daemon_module.__file__).read_text()
+
+
+def test_record_names_the_daemon(tmp_path, script, base, run_daemon):
+    """The record beside the socket names this process, and both go when the daemon stops."""
+    daemon = run_daemon(make_home(tmp_path, [make_unit("worker", script, {})]), base)
+    record = DaemonRecord.model_validate_json(daemon.record_path.read_text())
+    assert record.pid == os.getpid() and verify_incarnation(record.pid, record.proc_start)
+    assert daemon.control_path.exists()
+
+    daemon.stop()
+    assert wait_for(lambda: not daemon.record_path.exists() and not daemon.control_path.exists())
+
+
+def daemon_acts():
+    """The daemon's own events in log order: its start, and its acts on units."""
+    names = []
+    for line in get_log_path().read_text().splitlines():
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if row.get("event") in ("pd_daemon_start", "pd_unit_state", "pd_control"):
+            names.append(row["event"])
+    return names
+
+
+def test_a_daemon_says_it_started_before_any_unit(tmp_path, script, base, run_daemon):
+    """A daemon's life begins in the log with pd_daemon_start, naming the process its record
+    names, before the first act on a unit, so what it observes can be folded from there."""
+    daemon = run_daemon(make_home(tmp_path, [make_unit("worker", script, {})]), base)
+    assert wait_for(lambda: unit_state(daemon, "worker") == "running")
+    assert daemon_acts()[0] == "pd_daemon_start"
+    record = DaemonRecord.model_validate_json(daemon.record_path.read_text())
+    [start] = events("pd_daemon_start")
+    assert (start["agent"], start["pid"], start["proc_start"]) == (CARD, record.pid, record.proc_start)
+
+
+def test_a_refused_daemon_says_nothing_started(tmp_path, script, base, run_daemon):
+    """A second daemon refused for the agent writes no start (R01), so it cannot end the
+    life of the observations the running daemon made."""
+    home = make_home(tmp_path, [make_unit("worker", script, {})])
+    run_daemon(home, base)
+    with pytest.raises(AlreadyRunning):
+        Daemon(home, base=base).start()
+    assert len(events("pd_daemon_start")) == 1
+
+
+def test_private_artifacts_are_mode_0600(tmp_path, script, base, run_daemon):
+    """The control socket and the daemon record are reachable or readable by no one but this
+    user, whatever the process umask would otherwise leave them."""
+    daemon = run_daemon(make_home(tmp_path, [make_unit("worker", script, {})]), base)
+    assert stat.S_IMODE(daemon.control_path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(daemon.record_path.stat().st_mode) == 0o600
+
+
+def test_control_events(tmp_path, script, base, run_daemon):
+    """Status reports each unit, and a stop asked over the socket is done and recorded with
+    who asked, as claimed, and the process that asked, as the kernel says (R48, R52)."""
+    daemon = run_daemon(make_home(tmp_path, [make_unit("worker", script, {})]), base)
+    assert wait_for(lambda: unit_state(daemon, "worker") == "running")
+
+    reply = ask(daemon, {"op": "stop", "unit": "worker", "reason": "maintenance",
+                         "asked_by": {"kind": "operator", "card": "Operator@000000"}})
+    assert reply["ok"]
+    assert wait_for(lambda: unit_state(daemon, "worker") == "stopped")
+    control = events("pd_control", "worker")[-1]
+    assert (control["act"], control["asked_by"]["kind"], control["reason"]) == ("stop", "operator", "maintenance")
+    peer = control["peer"]
+    assert (peer["uid"], peer["pid"]) == (os.getuid(), os.getpid())
+    assert verify_incarnation(peer["pid"], peer["proc_start"])
+
+
+def test_a_request_cannot_claim_an_inside_asker(tmp_path, script, base, run_daemon):
+    """Over the socket the asker is the operator or the declared wind-down. A request that
+    claims the daemon's own policy is refused, and nothing is done (R52)."""
+    daemon = run_daemon(make_home(tmp_path, [make_unit("worker", script, {})]), base)
+    assert wait_for(lambda: unit_state(daemon, "worker") == "running")
+
+    reply = ask(daemon, {"op": "stop", "unit": "worker", "reason": "posing as policy",
+                         "asked_by": {"kind": "policy"}})
+    assert not reply["ok"] and "operator or the declared wind-down" in reply["error"]
+    assert unit_state(daemon, "worker") == "running"
+    assert all(d["reason"] != "posing as policy" for d in events("pd_control", "worker"))
+
+
+def test_start_and_restart_over_socket(tmp_path, script, base, run_daemon):
+    """The control socket's start and restart ops reach the core method of the same name, not
+    each other's: restart gives a running unit a new pid, and start brings a stopped one back
+    (R48, R52)."""
+    daemon = run_daemon(make_home(tmp_path, [make_unit("worker", script, {})]), base)
+    assert wait_for(lambda: unit_state(daemon, "worker") == "running")
+    first = unit_pid(daemon, "worker")
+
+    reply = ask(daemon, {"op": "restart", "unit": "worker", "reason": "pick up a change",
+                         "asked_by": {"kind": "operator", "card": "Operator@000000"}})
+    assert reply["ok"]
+    assert wait_for(lambda: unit_state(daemon, "worker") == "running" and unit_pid(daemon, "worker") != first)
+
+    reply = ask(daemon, {"op": "stop", "unit": "worker", "reason": "take it down",
+                         "asked_by": {"kind": "operator", "card": "Operator@000000"}})
+    assert reply["ok"]
+    assert wait_for(lambda: unit_state(daemon, "worker") == "stopped")
+
+    reply = ask(daemon, {"op": "start", "unit": "worker", "reason": "bring it back",
+                         "asked_by": {"kind": "operator", "card": "Operator@000000"}})
+    assert reply["ok"]
+    assert wait_for(lambda: unit_state(daemon, "worker") == "running")
+
+
+def test_control_refuses_what_it_cannot_do(tmp_path, script, base, run_daemon):
+    """An unknown operation, a unit outside the declaration, or a compaction is refused, and nothing is done."""
+    daemon = run_daemon(make_home(tmp_path, [make_unit("worker", script, {})]), base)
+    assert wait_for(lambda: unit_state(daemon, "worker") == "running")
+    operator = {"kind": "operator"}
+
+    assert not ask(daemon, {"op": "explode"})["ok"]
+    reply = ask(daemon, {"op": "stop", "unit": "elsewhere", "reason": "x", "asked_by": operator})
+    assert not reply["ok"] and "not a unit" in reply["error"]
+    assert not ask(daemon, {"op": "compact", "reason": "x", "asked_by": operator})["ok"]
+    assert unit_state(daemon, "worker") == "running"
+
+
+def test_runtime_dir_must_be_private(tmp_path, script, base):
+    """A runtime directory that group or others can open is refused before anything binds."""
+    base.chmod(0o755)
+    with pytest.raises(OSError, match="open to its group or others"):
+        Daemon(make_home(tmp_path, [make_unit("worker", script, {})]), base=base).start()
+
+
+def test_socket_path_too_long(tmp_path, script):
+    """A socket path the kernel would refuse is refused first, saying why (R129)."""
+    deep = tmp_path / ("d" * 120)
+    with pytest.raises(OSError, match="longer than"):
+        Daemon(make_home(tmp_path, [make_unit("worker", script, {})]), base=deep)
+
+
+def test_a_daemon_refuses_another_agents_declaration(tmp_path, script, base):
+    """A declaration naming another agent is refused, so one copied from another agent's
+    home never starts that agent's units under this agent's name (R07)."""
+    home = make_home(tmp_path, [make_unit("worker", script, {})])
+    path = declaration_path(home)
+    declared = Declaration.model_validate_json(path.read_text())
+    path.write_text(declared.model_copy(update={"agent": "Someone@fff000"}).model_dump_json())
+
+    with pytest.raises(DeclarationRefused, match="R07"):
+        Daemon(home, base=base)
+
+
+def test_refusals_name_the_policy(tmp_path, script, base, run_daemon):
+    """A refusal names the policy that explains it, over the socket and when the daemon
+    will not start (capability_boundaries: a refusal names its policy)."""
+    pointer = "macf_tools policy navigate persistent_layer"
+    daemon = run_daemon(make_home(tmp_path, [make_unit("worker", script, {})]), base)
+    reply = ask(daemon, {"op": "explode"})
+    assert not reply["ok"] and pointer in reply["error"]
+
+    unusable = tmp_path / "unusable"
+    (unusable / ".maceff").mkdir(parents=True)
+    started = subprocess.run([sys.executable, "-m", "macf.pd", str(unusable)],
+                             capture_output=True, text=True, timeout=60)
+    assert started.returncode == 78
+    assert pointer in started.stderr
+
+
+def test_failures_count_and_clear(make_core, script, tmp_path):
+    """A crash counts toward the restart backoff, and a unit that then runs stably for ten
+    of its intervals, counted from its start, has the count cleared."""
+    core = make_core([make_unit("worker", script, {"crash_once": str(tmp_path / "crashed")})])
+    core.boot()
+    assert drive(core, lambda: core.failures("worker") == 1)
+    assert drive(core, lambda: core.state("worker") == "running")
+    assert drive(core, lambda: core.failures("worker") == 0)
+
+
+def test_shutdown_never_held(make_core, script):
+    """The daemon's own shutdown kills a unit that ignores SIGTERM once the grace runs out in
+    real time, so it never waits forever. The clock here stands still: a unit's own kill
+    timer runs on the core's clock, and only shutdown's real-time fallback can end it."""
+    core = make_core([make_unit("worker", script, {"ignore_term": True}, stop_grace_s=0.3)],
+                     clock=lambda: 1000.0)
+    core.boot()
+    assert drive(core, lambda: core.state("worker") == "running")
+    pid = core.pid("worker")
+
+    stopping = threading.Thread(target=core.shutdown, args=("the daemon is stopping",), daemon=True)
+    stopping.start()
+    stopping.join(timeout=10)
+    held = stopping.is_alive()
+    if held:  # without the fallback: end the unit here, so the test fails without leaving it
+        os.killpg(pid, signal.SIGKILL)  # the unit leads its own process group
+        stopping.join(timeout=10)
+    assert not held, "shutdown kept waiting on a unit that ignored SIGTERM"
+
+
+def test_already_running_exits_75(tmp_path, script, run_daemon):
+    """A second start of the agent's daemon from the command line exits 75, which tells an
+    outer tier another daemon holds the slot, and names the policy."""
+    xdg = Path(tempfile.mkdtemp(prefix="pd-", dir="/tmp"))
+    try:
+        base = xdg / "maceff_pd"
+        base.mkdir(mode=0o700)
+        home = make_home(tmp_path, [make_unit("worker", script, {})])
+        run_daemon(home, base)
+        env = {k: v for k, v in os.environ.items() if k != "MACF_EVENTS_LOG_PATH"}
+        second = subprocess.run([sys.executable, "-m", "macf.pd", str(home)],
+                                capture_output=True, text=True, timeout=60,
+                                env={**env, "XDG_RUNTIME_DIR": str(xdg)})
+        assert second.returncode == 75
+        assert "macf_tools policy navigate persistent_layer" in second.stderr
+    finally:
+        shutil.rmtree(xdg, ignore_errors=True)
+
+
+# Restart policy crossed with how a unit exits: every cell, so a branch only a pairing
+# reaches cannot sit untested (the cell "always" with a clean exit once did).
+RESTART_BY_EXIT = [
+    # restart,     exit code, restarts, state it is left in when it does not restart
+    ("always",     0,  True,  None),
+    ("always",     78, False, "stopped"),
+    ("always",     1,  True,  None),
+    ("on-failure", 0,  False, "stopped"),
+    ("on-failure", 78, False, "stopped"),
+    ("on-failure", 1,  True,  None),
+    ("never",      0,  False, "stopped"),
+    ("never",      78, False, "stopped"),
+    ("never",      1,  False, "failed"),
+]
+
+
+@pytest.mark.parametrize("restart, code, restarts, left", RESTART_BY_EXIT)
+def test_restart_policy_by_exit(make_core, script, restart, code, restarts, left):
+    """A unit that exits on its own is restarted exactly when its policy and its exit code
+    together say so: success and failure under "always", failure under "on-failure", and
+    never a code that asks not to be restarted."""
+    core = make_core([make_unit("worker", script, {"exit_after": 0.2, "code": code}, restart=restart)])
+    core.boot()
+    assert drive(core, lambda: core.state("worker") == "running")
+    first = core.pid("worker")
+    assert drive(core, lambda: core.state("worker") != "running" or core.pid("worker") != first)
+    came_back = drive(core, lambda: core.pid("worker") not in (None, first), timeout=1.5)
+    assert came_back == restarts
+    if not restarts:
+        assert core.state("worker") == left
 
 
 def test_quiet_window(script):
