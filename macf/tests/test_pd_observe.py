@@ -1,7 +1,7 @@
 """Observation and attach (MIS-0002 R81-R102, R111).
 
 Attach: R100 (attach_MUST_resolve_from_pd) and R101 (readout_MUST_say_nothing_attachable).
-Observation acts: R82, R86-R90, R92, R94 and R111. The stream: R83, R84, R85 and R93.
+Observation acts: R82, R86-R90, R92, R94 and R111. The stream: R83, R84, R85 and R93. Presence: R91, R98 and R102.
 """
 import json as _json
 import socket
@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from macf.observe import acts, stream
+from macf.observe import acts, presence, stream
 from macf.utils.attach import CLIENT, NONE, TMUX, plan_attach, readout_line
 
 
@@ -480,3 +480,46 @@ def test_an_end_and_a_new_invitation_the_stream_never_saw_still_end_it(tmp_path)
             _write(path, _said("for the new invitation"))
     sent = _serve_once(path, log, rounds=3, wait=end_and_invite_again)
     assert sent == [{"t": "", "kind": "agent", "text": "before the end"}, {"kind": "ended"}]
+
+
+# ---------------------------------------------------------------------------
+# Presence (R91, R98, R102): one record the call line reads
+# ---------------------------------------------------------------------------
+
+def test_presence_on_call_line(tmp_path):
+    """R91: the line shows each onlooker watching (paused ones marked) and each surface present."""
+    inv, log = _invited()
+    log.append(acts.pause(THEM, acts.fold(log), at=1300))
+    other = acts.invite(ME, "SecondOnlooker@cd34ef", 0, acts.fold(log), container_of=_host)
+    log.append(other.event)
+    rec = presence.build([presence.Surface("terminal", keyboard=True, viewer_seen=True)], acts.fold(log))
+    path = tmp_path / "presence.json"
+    presence.write(path, rec)
+    assert oct(path.stat().st_mode & 0o777) == "0o600"
+    line = presence.call_line(presence.read(path))
+    assert line == "onlookers: OnlookerAgent@ab12cd (paused), SecondOnlooker@cd34ef \u00b7 operator: terminal attached"
+    log.append(acts.end(THEM, "observed", acts.fold(log)))
+    assert "OnlookerAgent" not in presence.call_line(presence.build([], acts.fold(log)))
+
+
+def test_undetectable_viewer_said():
+    """R98: a keyboard surface that cannot see its viewer says enabled, never attached."""
+    rc = presence.Surface("remote-control", keyboard=True, detects_viewer=False, viewer_seen=True)
+    assert presence.surface_state(rc) == presence.ENABLED
+    term_idle = presence.Surface("terminal", keyboard=True, detects_viewer=True, viewer_seen=False)
+    assert presence.surface_state(term_idle) is None
+    assert presence.call_line(presence.build([rc, term_idle], {})) == "operator: remote-control enabled"
+
+
+def test_reachable_state():
+    """R102: a channel the operator answers on is reachable, told apart from attached."""
+    tg = presence.Surface("telegram", keyboard=False)
+    term = presence.Surface("terminal", keyboard=True, viewer_seen=True)
+    assert presence.call_line(presence.build([term, tg], {})) == "operator: terminal attached, telegram reachable"
+
+
+def test_an_unreadable_record_is_unknown_not_empty(tmp_path):
+    bad = tmp_path / "presence.json"
+    bad.write_text("{not json")
+    assert presence.call_line(presence.read(bad)) == "presence: unknown"
+    assert presence.call_line(presence.read(tmp_path / "missing.json")) == ""
