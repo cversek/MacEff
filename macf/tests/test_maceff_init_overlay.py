@@ -194,3 +194,41 @@ def test_a_refresh_keeps_the_directory_a_container_mounts(deployment, tmp_path, 
     backups = list((deployment / "MacEff").glob(".maceff.backup-*"))
     assert len(backups) == 1 and (backups[0] / "framework" / "templates" / "t.md").exists()
     assert not list((deployment / "MacEff").glob(".maceff.build-*"))
+
+
+@pytest.mark.parametrize("sync", ["rsync", "portable"])
+def test_a_refresh_keeps_what_the_deployment_set_on_existing_entries(deployment, tmp_path, sync):
+    """A container's start-up gives the policies tree its own group and the setgid
+    bit, so that group may edit policy and new files join it. A refresh copied the
+    build tree's group and modes over the top, and that boundary was gone until the
+    next container start, with nothing to say so. Content changes; what the
+    deployment set on an entry that already exists does not."""
+    if sync == "rsync" and not shutil.which("rsync"):
+        pytest.skip("rsync not installed here")
+    env = None if sync == "rsync" else _path_without_rsync(tmp_path)
+    upstream = deployment / "MacEff" / "framework" / "policies" / "base"
+    _out, fw = _run(deployment, env)
+    policies = fw / "policies"
+    policy = policies / "sets" / "base" / "p.md"
+    # what the start-up does: a group on the whole tree, every directory 2775
+    other = [g for g in os.getgroups() if g != policies.stat().st_gid]
+    tree = [policies, *policies.rglob("*")]
+    for p in tree:
+        if p.is_symlink():
+            continue
+        if other:
+            os.chown(p, -1, other[0])
+        p.chmod(0o2775 if p.is_dir() else 0o664)
+    kept = [(p.stat().st_gid, p.stat().st_mode) for p in (policies, policy)]
+
+    (upstream / "p.md").write_text("revised\n")
+    (upstream / "added.md").write_text("added\n")
+    _out, fw = _run(deployment, env)
+
+    assert policy.read_text() == "revised\n"
+    assert [(p.stat().st_gid, p.stat().st_mode) for p in (policies, policy)] == kept
+    added = policies / "sets" / "base" / "added.md"
+    assert added.read_text() == "added\n"
+    if other:
+        # a new file in a setgid directory joins the directory's group
+        assert added.stat().st_gid == other[0]
