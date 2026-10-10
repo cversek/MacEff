@@ -305,10 +305,11 @@ class TestProfileExemptions:
         assert ("agent uuid", "@abcdef") in labels and ("agent uuid", "@63e6b2") not in labels
 
 
-def _merge_in_a_leak_from_main(repo, profile):
+def _merge_in_a_leak_from_main(repo, profile, published=True):
     """main gains a line the profile refuses, committed past the gate as if
     under another profile; a feature branch has a commit of its own; the
-    branch then merges main and stops before committing."""
+    branch then merges main and stops before committing. With *published*,
+    main is pushed to a bare remote and fetched first, as on a shared main."""
     install_hook(repo, profile)
     (repo / "base.txt").write_text("base\n")
     _git(repo, "add", "base.txt")
@@ -322,6 +323,12 @@ def _merge_in_a_leak_from_main(repo, profile):
     (repo / "upstream.txt").write_text("# fixed in c25 after the bench session\n")
     _git(repo, "add", "upstream.txt")
     _git(repo, "commit", "-q", "--no-verify", "-m", "upstream")
+    if published:
+        remote = repo.parent / "remote.git"
+        _git(repo, "init", "-q", "--bare", str(remote))
+        _git(repo, "remote", "add", "origin", str(remote))
+        _git(repo, "push", "-q", "origin", main)
+        _git(repo, "fetch", "-q", "origin")
     _git(repo, "switch", "-q", "feature")
     _git(repo, "merge", "--no-ff", "--no-commit", main)
 
@@ -334,6 +341,18 @@ def test_a_merge_is_not_refused_for_what_the_incoming_side_brings(repo, profile)
     r = _git(repo, "commit", "-m", "merge main", check=False)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "only what the merge adds" in r.stdout + r.stderr
+
+
+def test_an_unpublished_incoming_side_is_scanned_whole(repo, profile):
+    """A side never pushed was never scanned on its way out: committed past the
+    gate, or before it was installed. Merging it is how it would first become
+    public, so the whole merge is scanned and its line is refused."""
+    _merge_in_a_leak_from_main(repo, profile, published=False)
+    r = _git(repo, "commit", "-m", "merge main", check=False)
+    out = r.stdout + r.stderr
+    assert r.returncode != 0
+    assert "upstream.txt" in out
+    assert "not on any remote" in out
 
 
 def test_a_leak_written_while_merging_is_still_refused(repo, profile):
