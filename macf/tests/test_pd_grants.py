@@ -10,23 +10,7 @@ import errno
 
 import pytest
 
-from macf.platform.grants import classify_lan_connect, parse_grants
-
-
-def test_closed_vocabulary_accepts_the_known_grants():
-    assert parse_grants(["local_network", "accessibility", "full_disk_access", "keychain",
-                         "automation:com.googlecode.iterm2"]) == [
-        "local_network", "accessibility", "full_disk_access", "keychain", "automation:com.googlecode.iterm2"]
-
-
-def test_a_misspelt_grant_fails_at_declaration():
-    with pytest.raises(ValueError, match="local_netwrok"):
-        parse_grants(["local_netwrok"])
-
-
-def test_automation_needs_a_target_bundle():
-    with pytest.raises(ValueError):
-        parse_grants(["automation:"])
+from macf.platform.grants import classify_lan_connect
 
 
 def test_instant_unreachable_with_ping_answering_is_a_denied_grant():
@@ -38,3 +22,14 @@ def test_other_failures_stay_network_failures():
     assert classify_lan_connect(errno.ECONNREFUSED, elapsed_s=0.01, ping_ok=True) == "nothing_listening"
     assert classify_lan_connect(errno.ETIMEDOUT, elapsed_s=5.0, ping_ok=True) == "timeout"
     assert classify_lan_connect(None, elapsed_s=0.01, ping_ok=True) == "connected"
+
+
+def test_the_grant_names_are_the_interfaces():
+    """R63's closed list lives in the step-1 interface; a misspelt grant fails there, at declaration."""
+    import pydantic
+    from macf.pd.interface import PRIVACY_GRANTS, Unit
+    assert "local_network" in PRIVACY_GRANTS
+    unit = dict(name="u", command=["x"], account="a", restart="never", liveness_interval_s=1, memory_limit_mb=1)
+    Unit(**unit, privacy_grants=["local_network", "automation:com.apple.Terminal"])
+    with pytest.raises(pydantic.ValidationError):
+        Unit(**unit, privacy_grants=["local_netwrok"])
