@@ -63,3 +63,33 @@ def test_a_control_act_is_never_a_signal():
 def test_turn_state_never_claims_a_person_is_awaited():
     state, reason = unit_state("busy")
     assert state == "running" and "busy" in reason
+
+
+def test_a_session_in_a_project_under_the_home_is_adopted(tmp_path):
+    """Agents run sessions in project directories below their home; that is still the agent's session."""
+    home = tmp_path / "agent"
+    (home / "workspace" / "proj").mkdir(parents=True)
+    d = decide(_Unit("session", "session"), [_Hosted(7, "abcdef12-x", str(home / "workspace" / "proj"))], home)
+    assert d.action == ADOPT and d.pid == 7
+
+
+def test_a_neighbouring_home_is_not_inside_this_one(tmp_path):
+    """Containment is by path component: /x/agent2 is not under /x/agent, so it is never adopted."""
+    home, neighbour = tmp_path / "agent", tmp_path / "agent2"
+    home.mkdir()
+    (neighbour / "proj").mkdir(parents=True)
+    d = decide(_Unit("session", "session"), [_Hosted(8, "abcdef12-y", str(neighbour / "proj"))], home)
+    assert d.action == START
+
+
+def test_home_and_project_sessions_together_are_refused(tmp_path):
+    home = tmp_path / "agent"
+    (home / "proj").mkdir(parents=True)
+    hosted = [_Hosted(1, "aaaaaaaa-1", str(home)), _Hosted(2, "bbbbbbbb-2", str(home / "proj"))]
+    assert decide(_Unit("session", "session"), hosted, home).action == REFUSE
+
+
+def test_attach_is_not_a_daemon_act():
+    """Attaching needs a terminal; the operator's command runs it, the daemon never does."""
+    with pytest.raises(ValueError):
+        client_command("attach", "aaaaaaaa-1")

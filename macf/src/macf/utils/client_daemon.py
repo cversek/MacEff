@@ -30,12 +30,13 @@ REFUSE = "refuse"
 
 #: The control acts the primal daemon sends a unit (MIS-0002-R70), and the client verb
 #: each becomes for an adopted session. A restart is a respawn: the client restarts a
-#: running background session in place, under the same session id.
+#: running background session in place, under the same session id. Attaching is not a
+#: control act: it needs a terminal, so the operator's own command runs ``claude attach``
+#: (``utils.attach``) and the daemon never does.
 CLIENT_VERBS = {
     "start": "respawn",
     "restart": "respawn",
     "stop": "stop",
-    "attach": "attach",
 }
 
 
@@ -50,10 +51,17 @@ class AdoptionDecision:
     reason: str = ""
 
 
-def _same_dir(a: str, b: str) -> bool:
+def _in_home(cwd: str, home: Path) -> bool:
+    """True when ``cwd`` is the agent home or a directory below it, both resolved.
+
+    Agents often run their session in a project directory under their home, so an exact
+    match would miss them and start a second supervisor beside the client's. Containment
+    is by path component, so a neighbouring home whose name extends this one (``/x/ira``
+    and ``/x/ira2``) is never inside it.
+    """
     try:
-        return os.path.realpath(a) == os.path.realpath(b)
-    except (OSError, ValueError):
+        return Path(os.path.realpath(cwd)).is_relative_to(Path(os.path.realpath(home)))
+    except (OSError, ValueError, TypeError):
         return False
 
 
@@ -63,15 +71,16 @@ def decide(unit, hosted: Iterable, agent_home: Path) -> AdoptionDecision:
     ``unit`` needs ``name`` and ``kind``; ``hosted`` holds readout entries with
     ``session_id``, ``pid`` and ``cwd`` (``notify.session.harness_hosted_sessions``).
     A service unit is never the client's to supervise, so it is always started. A
-    session unit is adopted when exactly one hosted session runs in the agent's home.
-    Two or more is refused: adopting one would leave another supervised twice, and
-    picking by recency is a guess.
+    session unit is adopted when exactly one hosted session runs in the agent's home or
+    a directory below it. Two or more is refused: adopting one would leave another
+    supervised twice, and picking by recency is a guess.
     """
     if getattr(unit, "kind", "service") != "session":
         return AdoptionDecision(unit.name, START, reason="a service unit; the client does not host it")
-    mine = [h for h in hosted if _same_dir(h.cwd, str(agent_home))]
+    mine = [h for h in hosted if _in_home(h.cwd, Path(agent_home))]
     if not mine:
-        return AdoptionDecision(unit.name, START, reason="no session the client hosts runs in the agent home")
+        return AdoptionDecision(unit.name, START,
+                                reason="no session the client hosts runs in the agent home or below it")
     if len(mine) > 1:
         ids = ", ".join(h.session_id[:8] for h in mine)
         return AdoptionDecision(unit.name, REFUSE,
@@ -85,7 +94,9 @@ def decide(unit, hosted: Iterable, agent_home: Path) -> AdoptionDecision:
 def client_command(act: str, session_id: str, claude: str = "claude") -> List[str]:
     """The client's own command for a control act on an adopted session.
 
-    Never a signal: a signalled worker ends as "done" and stays down.
+    Never a signal: a signalled worker ends as "done" and stays down. A respawn can fail
+    once the client has pruned a finished job; the caller then treats the session as not
+    hosted and decides again, which starts it fresh, rather than retrying the respawn.
     """
     verb = CLIENT_VERBS.get(act)
     if verb is None:
