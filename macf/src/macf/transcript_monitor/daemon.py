@@ -69,6 +69,7 @@ LOG_FILE_NAME = "macf_transcript_monitor.log"
 
 from ..notify.coalescing import coalesce
 from ..notify.contracts import validate_detector, validate_sink, validate_source
+from ..notify.session import proc_start_from_key
 
 
 class Detection:
@@ -1025,8 +1026,11 @@ def run_monitor(transcript: Path, poll_interval: float = DEFAULT_POLL_INTERVAL, 
     me = os.getpid()
     monitors = find_monitors()
     older = _duplicate_of(me, transcript, monitors) if monitors else None
-    identity = {"pid": me, "started": _process_started(me), "owner": owner,
-                "transcript": str(transcript)}
+    # The start in the form the events record (notify.session's stored form), so
+    # a readout confirms this pid's incarnation the way it confirms a unit's.
+    started = _process_started(me)
+    identity = {"pid": me, "proc_start": None if started is None else proc_start_from_key(started),
+                "owner": owner, "transcript": str(transcript)}
     append_event("transcript_monitor_started", identity)
 
     monitor = TranscriptMonitor(transcript, poll_interval=poll_interval, owner=owner)

@@ -235,8 +235,10 @@ def test_a_monitors_start_event_records_its_start(monkeypatch, tmp_path):
     monkeypatch.setattr(daemon, "find_monitors",
                         lambda: [_m(11, 1, 0, transcript), _m(me, 2, 0, transcript)])
     daemon.run_monitor(transcript, owner=_ended_pid())
+    from macf.notify.session import proc_start, verify_incarnation
     started = next(data for name, data in emitted if name == "transcript_monitor_started")
-    assert started["started"] == daemon._process_started(me)
+    assert started["proc_start"] == proc_start(me)
+    assert verify_incarnation(me, started["proc_start"])
 
 
 def test_every_event_a_monitor_writes_names_it(monkeypatch, tmp_path):
