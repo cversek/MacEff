@@ -11242,8 +11242,10 @@ def _cmd_inject(args):
     mid-turn). The canonical use is an operator, away from the keyboard,
     directing the agent to compact itself.
     """
+    from .compact_followup import DEFAULT_TEXT
     from .supervisor import send_slash_to_self
-    return send_slash_to_self(args.command, target=getattr(args, "target", "") or "")
+    then = None if getattr(args, "no_then", False) else (getattr(args, "then", None) or DEFAULT_TEXT)
+    return send_slash_to_self(args.command, target=getattr(args, "target", "") or "", then=then)
 
 
 _HOOK_TRACE_ON_TEXT = (
@@ -13122,6 +13124,11 @@ def _build_parser() -> argparse.ArgumentParser:
     inject_parser.add_argument("--target", default="",
                                help="supervisor name/pid to target directly "
                                     "(default: self-resolve from this session id)")
+    inject_parser.add_argument("--then", default=None, metavar="TEXT",
+                               help="for compact: the prompt typed into this pane once the "
+                                    "compaction has finished (default: a short recovery prompt)")
+    inject_parser.add_argument("--no-then", action="store_true",
+                               help="for compact: type nothing after the compaction")
     inject_parser.set_defaults(func=lambda args: _cmd_inject(args))
 
     # channel: settings for the channels the operator reads (GH #477)
