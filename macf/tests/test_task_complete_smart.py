@@ -381,6 +381,28 @@ class TestSprintIdeaPrompt:
         assert "💡 2 ideas in task notes" in out
         assert "macf_tools idea create" in out
 
+    def test_only_notes_that_open_with_the_lightbulb_count(self, tmp_path, capsys):
+        """task_management counts 💡-PREFIX notes, the shape `task note --idea` writes
+        ("MODE: 💡 ...") and the skills write by hand. A note that only mentions the
+        lightbulb, or carries an idea in mid-paragraph, is not an idea note."""
+        updates = [
+            _make_fake_update("SPRINT: 💡 a mode-tagged idea"),
+            _make_fake_update("💡 a bare idea"),
+            _make_fake_update("SPRINT: the close will report the 💡 notes above"),
+            _make_fake_update("SPRINT: finished the parser; 💡 an idea buried mid-note"),
+        ]
+        sprint = _make_fake_task(81, task_type="SPRINT", custom={
+            "goal": "G",
+            "scoped_progress": {"completed": 1, "total": 1},
+        }, updates=updates)
+        reader = _make_reader(sprint, [], tmp_path)
+        args = _make_args(81, report="done")
+
+        rc = run_complete(args, reader)
+
+        assert rc == 0
+        assert "💡 2 ideas in task notes" in capsys.readouterr().out
+
 
 # ---------------------------------------------------------------------------
 # The close counts the session's ideas and learnings, and fills the scope table

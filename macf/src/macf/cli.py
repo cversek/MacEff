@@ -8910,12 +8910,17 @@ def _autowork_counts(task, reader, scoped_ids):
     reported 0 learnings whatever had been curated.
 
     Ideas: 💡 notes on the task itself, plus those written on the tasks in its
-    scope since it began. Learnings: files in the learnings directory named for
-    a moment at or after its creation, or None when that cannot be counted (no
-    creation time, no directory), so the report says so instead of 0.
+    scope since it began. A 💡 note is one that opens with the lightbulb, after
+    an optional work-mode tag ("SPRINT: 💡 ...", the shape `task note --idea`
+    writes); a note that only mentions it is not one. Learnings: files in the
+    learnings directory named for a moment at or after its creation, or None
+    when that cannot be counted (no creation time, no directory), so the
+    report says so instead of 0.
     """
     from datetime import datetime as _dt
     from .utils.breadcrumbs import parse_breadcrumb
+
+    idea_note = re.compile(r"(?:[A-Z][A-Z_/]*: )?💡 ")
 
     def _when(breadcrumb):
         parsed = parse_breadcrumb(breadcrumb) if isinstance(breadcrumb, str) else None
@@ -8924,7 +8929,7 @@ def _autowork_counts(task, reader, scoped_ids):
     def _ideas(t, since=None):
         n = 0
         for u in ((getattr(t.mtmd, "updates", None) or []) if t is not None and t.mtmd else []):
-            if "💡 " not in (getattr(u, "description", "") or ""):
+            if not idea_note.match(getattr(u, "description", "") or ""):
                 continue
             if since is not None:
                 at = _when(getattr(u, "breadcrumb", None))
