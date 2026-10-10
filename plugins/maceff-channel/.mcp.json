@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "maceff": {
+      "command": "maceff-channel",
+      "args": []
+    }
+  }
+}
