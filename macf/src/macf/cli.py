@@ -634,6 +634,14 @@ def cmd_permissions_pending(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_permissions_history(args: argparse.Namespace) -> int:
+    """Past permission dialogs of this agent, from the event log alone (autonomous_operation 5.5)."""
+    from macf import permission_watch as pw
+    dialogs = pw.read_history(args.days, include_questions=args.include_questions)
+    print(pw.history_json(dialogs) if args.json else pw.history_text(dialogs, by_rule=args.by_rule))
+    return 0
+
+
 def cmd_permissions_watch(args: argparse.Namespace) -> int:
     """One watch pass; meant for a timer OUTSIDE the watched session.
 
@@ -11801,6 +11809,17 @@ def _build_parser() -> argparse.ArgumentParser:
     pp.add_argument("--repeat", type=float, default=60.0, metavar="MIN", help="minutes between reminders while it still waits (default 60)")
     pp.add_argument("--dry-run", action="store_true", help="print the messages instead of sending them; the state file is not written")
     pp.set_defaults(func=cmd_permissions_watch)
+    pp = perm_sub.add_parser(
+        "history",
+        help="the permission dialogs this agent met, read from its event log: when, how long each waited "
+             "(until the session moved on; an approved command adds its run time), whether it then ran, "
+             "and the ask rule of today's settings that matches it",
+    )
+    pp.add_argument("--days", type=float, default=7.0, metavar="N", help="how far back to read (default 7)")
+    pp.add_argument("--by-rule", action="store_true", help="one line per matching ask rule: dialogs, total and longest wait")
+    pp.add_argument("--include-questions", action="store_true", help="also list question dialogs (AskUserQuestion, ExitPlanMode)")
+    pp.add_argument("--json", action="store_true")
+    pp.set_defaults(func=cmd_permissions_history)
 
     # New consciousness commands
     list_parser = sub.add_parser("list", help="list consciousness artifacts")
