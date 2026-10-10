@@ -147,6 +147,7 @@ Five operational modes, independently triggered, simultaneously active:
 - **Trigger**: Explicit `macf_tools mode set AUTO_MODE --auth-token ...` with safety phrase
 - **Persistence**: Event-based — survives compaction (SessionStart re-emits after compact_boundary)
 - **Deactivation**: `macf_tools mode set MANUAL_MODE` (with justification if scoped tasks active)
+- **Permissions**: entering AUTO_MODE adds a fixed list of ask rules to the agent's `settings.local.json` (pushes, pull-request and issue creation, merges and closes, releases, destructive git and docker operations, recursive deletes), and returning to MANUAL_MODE removes them and adds `Write` to the ask list. So a short MANUAL detour, to allow a compaction say, costs more than the stop gates: every file write asks until the next switch. A deployment that decides some of those operations another way (a hook that allows them for its own repository, since an ask rule always beats an allow) lists them under `modes.auto.ask_exclude` in `.maceff/config.json`, and the switch then neither adds nor removes them. Each change a switch makes is recorded as a `mode_permissions_changed` event naming the rules added, removed and excluded.
 
 ### USER_IDLE 😴
 - **Trigger**: Computed from timestamp of last user activity
