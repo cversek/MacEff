@@ -40,7 +40,7 @@ An agent adds a MUST to an existing policy, or a hook that blocks one more comma
 ## 5 Terms
 
 - **major architectural change**: a change that adds a subsystem or changes architecture across components.
-- **new policy**: a policy document added under `framework/policies`, as opposed to a change to an existing one.
+- **new policy**: a policy document added under `framework/policies`, as opposed to a change to an existing one; a document split out of, or renamed from, an existing policy is a change to that policy.
 
 ## 6 Specification
 
@@ -55,6 +55,7 @@ An agent adds a MUST to an existing policy, or a hook that blocks one more comma
 **Rejected**
 - **Keep the old threshold and judge each case.** Rejected by the operator's ruling: the first case showed that "what an agent may do" catches nearly any policy change.
 - **Raise the bar by editing MIS-0001 directly.** Rejected: MIS-0001 is accepted, and MIS-0001-R35 (substantive_change_MUST_be_new_MIS) requires a substantive change to come as a new MIS that names the old one.
+- **Count every new policy file as a new policy.** Rejected in answer to P02 (head_maintainer_review): read literally, splitting one long policy into two files would need an MIS although nothing the policy requires has changed. A document split out of, or renamed from, an existing policy is a change to that policy.
 - **Drop the threshold entirely.** Rejected: a new policy or a new subsystem is exactly where a cold reader later needs to find why.
 
 ## 8 Prior Art
@@ -97,11 +98,14 @@ None.
 
 - **P01** The operator decided the change directly, on the pull request for #504, 2026-10-04, quoted in full: "I think that req is going too far if every other policy tweak kicks the MIS process off. Let's raise the bar to only require for major architectural lifts and whole policy introductions." No deliberation was convened (MIS-0001-R22 (operator_MUST_convene_or_explain)); the Resolution records why. (operator_raised_the_bar)
 
-Objections recorded: none yet.
+- **P02** The head maintainer reviewed the pull request, 2026-10-10 (https://github.com/cversek/MacEff/pull/507#pullrequestreview-5477446166): "No critical objection. I'd merge it, with that clause if the Secretary agrees." The clause: "a document split out of, or renamed from, an existing policy is a change to that policy". The Secretary agreed, and the term **new policy** now carries it, in this MIS, the glossary and `mis` policy §1.2. (head_maintainer_review)
+
+Objections recorded: none.
 
 ## 15 Revision History
 
 - 2026-10-04: first version, with the pull request that lands it.
+- 2026-10-10: in answer to P02, the term **new policy** excludes a document split out of, or renamed from, an existing policy. R01 is unchanged. The branch was brought up to date with main.
 
 ## Wiki-Links
 

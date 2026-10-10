@@ -74,7 +74,7 @@ This is the shape of Python's PEPs: a proposal becomes a historical record once 
 ### 1.2 When an MIS is required
 
 A pull request MUST cite an accepted MIS when it introduces a new policy or makes a major architectural change [MIS-0003-R01 (PR_MUST_cite_MIS_for_major_change)]:
-- **a new policy:** a policy document added under `framework/policies`;
+- **a new policy:** a policy document added under `framework/policies`. A document split out of, or renamed from, an existing policy is a change to that policy, not a new one;
 - **a major architectural change:** a change that adds a subsystem or changes architecture across components.
 
 An author MAY write an MIS for any other change [MIS-0001-R02 (author_MAY_write_MIS_for_any_change)]. A rule added to an existing policy, or a change to what an agent is allowed to do, needs no MIS unless it is part of one of the two changes above: it ships with its policy text in one reviewed pull request, as `core_principles` requires. Bug fixes and small features stay an issue and a pull request. A pull request that needs an MIS may be opened as a draft while the MIS is decided, but it does not merge until the MIS is Accepted.
@@ -213,7 +213,7 @@ The keywords carry the strength:
 
 Requirements follow a softened Simplified Technical English (ASD-STE100):
 - Each requirement sentence MUST have 30 words or fewer [MIS-0001-R14 (req_MUST_have_30_words_max)].
-- Each requirement SHOULD use the active voice and an EARS pattern [MIS-0001-R15 (req_SHOULD_use_active_EARS)]: "When <trigger>, the <system> MUST ...", "While <state>, ...", "If <unwanted event>, then ...", "Where <feature is present>, ...".
+- Each requirement SHOULD use the active voice and an EARS pattern (Easy Approach to Requirements Syntax) [MIS-0001-R15 (req_SHOULD_use_active_EARS)]: "When <trigger>, the <system> MUST ...", "While <state>, ...", "If <unwanted event>, then ...", "Where <feature is present>, ...".
 - Each requirement MUST use only glossary terms, terms from its MIS's Terms section, and plain words with one meaning [MIS-0001-R16 (req_MUST_use_defined_words)]. Whether a word is plain is a judgment, made by the Secretary at review: when two positions in the deliberation used a word differently, it is not plain, and it goes into Terms.
 
 **The rest of an MIS is plain English.** Rationale needs "because", conditions and nuance, which strict STE removes. Write it in short sentences with glossary terms, but do not compress it. In MacEff the reason is part of the control: an agent that cannot find why a rule exists tends to route around it.

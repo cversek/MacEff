@@ -10030,7 +10030,8 @@ def cmd_gmail_sync(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(r, indent=2))
         return 0
-    print(f"✅ synced: {r['matched']} matched, {r['fetched']} fetched, {r['cached_threads']} thread(s) in cache")
+    print(f"✅ synced: {r['matched']} matched, {r['fetched']} fetched ({r['new']} new, {r['refreshed']} with new "
+          f"messages), {r['cached_threads']} thread(s) in cache")
     return 0
 
 
@@ -10038,7 +10039,7 @@ def cmd_gmail_read(args: argparse.Namespace) -> int:
     """Print one thread, from the cache when present, fetching otherwise."""
     from macf import gmail
     try:
-        rec, cached = gmail.read_thread(args.thread_id)
+        rec, cached = gmail.read_thread(args.thread_id, fresh=getattr(args, "fresh", False))
     except gmail.GmailError as e:
         return _gmail_fail(e)
     if args.json:
@@ -12938,6 +12939,8 @@ def _build_parser() -> argparse.ArgumentParser:
                "notes: CRLF line endings are normalised; a sent copy that duplicates the previous message is folded.")
     gmail_read.add_argument("--last", type=int, metavar="N", help="only the last N messages of the thread")
     gmail_read.add_argument("--no-quotes", action="store_true", help="strip quoted history from each body")
+    gmail_read.add_argument("--fresh", action="store_true",
+                            help="fetch the thread again even when a cached copy exists (replies since the last fetch)")
     gmail_read.add_argument("thread_id", help="thread id (see `gmail list`)")
     gmail_read.add_argument("--json", action="store_true", help="machine-readable output")
     gmail_read.set_defaults(func=cmd_gmail_read)

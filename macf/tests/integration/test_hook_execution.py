@@ -17,17 +17,24 @@ from pathlib import Path
 import tempfile
 import pytest
 
-from macf.utils import find_project_root
+import macf.hooks as hooks_package
+from macf.cli import _hooks_to_install_list
 
 
 def get_hook_script_path(hook_name):
-    """Get path to installed hook script using dynamic project root detection."""
-    project_root = find_project_root()
-    hook_path = project_root / '.claude' / 'hooks' / f'{hook_name}.py'
+    """The handler module an installed hook links to, from the imported package.
 
-    if not hook_path.exists():
-        pytest.skip(f"Hook {hook_name} not installed at {hook_path}")
-
+    `hooks install` links <hooks dir>/<name>.py to the package's handler module,
+    so that module IS the code Claude Code runs. Looking for an installed copy in
+    the project root made these tests depend on where pytest was started: in CI,
+    and anywhere outside a project with hooks installed, 8 of 9 skipped and the
+    suite stayed green while asserting nothing. A missing handler is a failure,
+    never a skip.
+    """
+    handlers = dict(_hooks_to_install_list())
+    assert f"{hook_name}.py" in handlers, f"{hook_name} is not a hook the installer installs"
+    hook_path = Path(hooks_package.__file__).parent / f"{handlers[hook_name + '.py']}.py"
+    assert hook_path.is_file(), f"handler for {hook_name} missing at {hook_path}"
     return hook_path
 
 
@@ -221,10 +228,7 @@ def test_all_hooks_execute_successfully():
     ]
 
     for hook_name in hooks:
-        try:
-            hook_path = get_hook_script_path(hook_name)
-        except pytest.skip.Exception:
-            continue  # Hook not installed, skip
+        hook_path = get_hook_script_path(hook_name)
 
         stdout, stderr, returncode = execute_hook(hook_path, "")
 

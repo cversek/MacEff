@@ -2,7 +2,7 @@
 
 **Number**: 0001
 **Type**: Process
-**Status**: Accepted
+**Status**: Final
 **Authors**: the operator; drafted by the Secretary of deliberation #493
 **Secretary**: the Secretary of deliberation #493
 **Deliberation**: none (designed with the operator in three rounds of questions; see section 14)
@@ -10,7 +10,7 @@
 **Updates**: none
 **Supersedes**: none
 **Lands-in**: framework/policies/base/meta/mis.md, framework/glossary.md, framework/mis/MIS-0000-template.md, macf_tools mis check
-**Resolution**: Accepted by the operator's merge. The operator's decision comment names three maintainers by their calling cards on the pull request: the head maintainer, the container-management specialist, and the generalist for host-side needs and operator liaison. It decides, quoted with the one name replaced by its role: "Quorum has been reach and pending minor revisions by [the Secretary], I will merge." https://github.com/cversek/MacEff/pull/500#issuecomment-5971935869. No deliberation was convened (R22): the operator commissioned this process and settled its design directly (P01). O01 (fixed_72h_period_too_slow), the operator's own objection, is answered in the operator's words by the quorum ruling (P06), which R25 and R48 carry; the operator merged with the proposed slug in place. Neither of the other two maintainers raised a critical objection (P07, P08).
+**Resolution**: Accepted by the operator's merge; Final on 2026-10-08, after cold-reader trial 3 on the landed policy (§11), by the operator's merge of the change that records it. The operator's decision comment names three maintainers by their calling cards on the pull request: the head maintainer, the container-management specialist, and the generalist for host-side needs and operator liaison. It decides, quoted with the one name replaced by its role: "Quorum has been reach and pending minor revisions by [the Secretary], I will merge." https://github.com/cversek/MacEff/pull/500#issuecomment-5971935869. No deliberation was convened (R22): the operator commissioned this process and settled its design directly (P01). O01 (fixed_72h_period_too_slow), the operator's own objection, is answered in the operator's words by the quorum ruling (P06), which R25 and R48 carry; the operator merged with the proposed slug in place. Neither of the other two maintainers raised a critical objection (P07, P08).
 
 ---
 
@@ -256,18 +256,18 @@ MacEff has one ratifier, the operator, as it has one owner. The IETF's real safe
 | R23 | decidable | mis check: Secretary named outside Draft | passing |
 | R24 | judgment | the operator | n/a: no deliberation was held for this MIS |
 | R25 | judgment | the operator | recorded: started 2026-10-03 at 17:05 UTC, when the head maintainer's review was the third maintainer's first comment; the operator closed the discussion under R48 at 18:01 UTC |
-| R26 | judgment | the operator | pending: the operator's merge |
+| R26 | judgment | the operator | recorded: the operator merged the pull request that adopted this MIS, 2026-10-03 |
 | R27 | decidable | mis check: Resolution present once decided | passing |
 | R28 | judgment | the operator | recorded: the Resolution answers O01 |
-| R29 | judgment | the reviewers of the landing pull request | pending: this pull request carries both |
+| R29 | judgment | the reviewers of the landing pull request | recorded: the adopting pull request carried the policy, the checker and its tests together, 2026-10-03 |
 | R30 | judgment | the reviewers of the landing pull request | recorded: a maintainer checked all 60 citations in this pull request, 2026-10-03 |
 | R31 | decidable | mis check: Lands-in present once Final | passing |
-| R32 | judgment | the Secretary, from the test results | pending: at Final |
-| R33 | judgment | the Secretary | pending |
+| R32 | judgment | the Secretary, from the test results | recorded: on main at 82518d0, mis check reports 0 findings over framework/mis/ and the glossary, and test_mis_check.py passes 43 of 43, 2026-10-08 |
+| R33 | judgment | the Secretary | recorded: cold-reader trial 3, on the landed policy, succeeded, 2026-10-08 (below) |
 | R34 | judgment | the reviewers of each pull request | standing |
 | R35 | judgment | the Secretary | standing |
 | R36 | judgment | the reviewers of the change | standing |
-| R37 | judgment | the Secretary | pending |
+| R37 | judgment | the Secretary | recorded: every one-time judgment row is recorded or n/a, and every standing row names its reviewer, 2026-10-08 |
 | R38 | decidable | mis check: slug at the end of each requirement line | passing |
 | R39 | decidable | mis check: unique slugs | passing |
 | R40 | judgment | the operator, on each synthesis | standing |
@@ -277,7 +277,7 @@ MacEff has one ratifier, the operator, as it has one owner. The IETF's real safe
 | R44 | judgment | the reviewers of each pull request | standing |
 | R45 | decidable | mis check: IDs and slugs on open questions, positions and objections | passing |
 | R46 | judgment | the operator, on each Deliberation Record | standing |
-| R47 | judgment | the operator | recorded: Q01 and Q02 block no requirement; the operator answered Q03 for this MIS by naming the maintainers (P09) |
+| R47 | judgment | the operator | recorded: Q01, Q02 and Q04 to Q07 block no requirement; the operator answered Q03 for this MIS by naming the maintainers (P09) |
 | R48 | judgment | the operator | recorded: revised once (P04 to P06 answered), no critical objection (P07, P08), closed by the operator (P09) |
 | R49 | decidable | mis check: citations resolve to their MIS slug | passing |
 | R50 | judgment | the operator, on each glossary change | standing |
@@ -328,6 +328,15 @@ MacEff has one ratifier, the operator, as it has one owner. The IETF's real safe
 - **Not fixed by design:** the R-ID order (R37 after R36) follows when each requirement was written, and IDs are never renumbered. The policy now says so.
 - **Result:** the main path succeeded cold again, and every gap is fixed in the policy, the glossary or the template. The trial records are kept with the drafting roadmap. A trial on the landed policy after merge, by a reader who saw neither trial, is the evidence R33 needs at Final.
 
+**Cold-reader trial 3 (2026-10-08, on the landed policy after merge).** Two fresh agents on a different model from the drafter's, who saw neither earlier trial. Each was given only the files on main: the writer the policy, the template and the glossary; the answerer the policy and the glossary. Neither the Secretary nor an author was a reader (policy section 7.3).
+- **The writer** was given the same change as trial 1 (a `--json` option for `mis check`). It answered first that the change needs no MIS, quoting the policy's own example of a small feature ("a new output format for an existing command"), and wrote one anyway as told. Its MIS passed the checker with 0 findings, though the writer was not allowed to run it.
+- **The answerer** answered 23 of the 24 navigation questions clearly and inferred one (the length of a final comment period). None went unanswered. Of five scenarios it answered three clearly, inferred one, and found one part unanswered.
+- **Gaps found:**
+  - EARS was named but not expanded. Fixed in policy section 3.3.
+  - The rest change what the process says, so each is recorded as an open question (R35): Q04 to Q07.
+- **Wording notes kept for the next revision, with no change to any requirement:** a placeholder for an unknown link or test file in a Draft; the Lands-in form in a Draft; which Type fits a small capability; how a code token counts toward the word limit and the defined-words rule.
+- **Result:** the governed task succeeded cold on the landed policy, and every gap is fixed or recorded. With R32 and R37 recorded above, this MIS meets the Final gate (policy section 7.2).
+
 ## 12 Landing Plan
 
 One pull request to MacEff carries all of this:
@@ -343,6 +352,10 @@ One pull request to MacEff carries all of this:
 - **Q01** Should `mis check` also lint policy files for the language rules? Not now: policies adopt the rules as they are changed. The operator decides later, from experience with MIS-0002. (lint_policies_too)
 - **Q02** Should small MIS be decided by a delegate of the operator, as a PEP-Delegate decides some PEPs? Not now. The operator decides when the volume makes it worthwhile. (delegate_small_decisions)
 - **Q03** Where is the list of maintainers kept, so that R25 and R48 can tell when every maintainer has commented? For this MIS the operator named them on the pull request (P09), and until a standing list is kept the policy says the operator names them that way. Where a standing list lives stays open; it blocks no requirement. (where_maintainers_are_listed)
+- **Q04** Should a final comment period have a default length, and who is the initiator when no deliberation was convened? R25 leaves the length to the initiator, and trial 3's reader found neither a default nor the initiator on the path without a deliberation. Blocks no requirement. (default_final_comment_length)
+- **Q05** What path does an implementer take when a MUST cannot be met? A MUST has no departure (R36 covers SHOULD only). Trial 3's reader inferred a new MIS under R35. Whether to say so outright stays open. Blocks no requirement. (unmeetable_MUST_path)
+- **Q06** Should the §1.2 test name a changed default outright? Trial 3's reader reached the right answer by mapping "default" onto "newly blocks, allows or requires", but the word never appears. MIS-0003 (pull request 507), which revises the threshold, is the natural place. (changed_default_in_threshold)
+- **Q07** How does a code token, such as a command flag, count toward R14's word limit and R16's defined words? Trial 3's writer had to guess. Blocks no requirement. (code_tokens_in_requirements)
 
 ## 14 Deliberation Record
 
@@ -377,7 +390,8 @@ Objections recorded:
 - 2026-10-03: at the operator's choice, open questions, positions and objections gained IDs and slugs too (R45), R39 now covers every numbered item, and R28 answers objections by ID and slug. Made before acceptance, in the same pull request.
 - 2026-10-03: the final comment period began when the last maintainer commented; the Status moved back to Final-Comment and the Resolution to none, so that the merge records a decision actually reached. After two maintainers' reviews and the operator's ruling: R25 rewritten (the initiator sets the period, starting after every maintainer's first comment), R30, R36, R37, R40 and R41 amended, R46 to R51 added, and O01 recorded. Made before acceptance, in the same pull request.
 - 2026-10-03: the operator named the maintainers and closed the discussion under R48 (P09). Final revision, from P07 and P08: "critical objection", "subsystem" and "architecture across components" defined; the stale "at least 72 hours" corrected in the glossary and in the policy's status table; policy §6.2 says who judges a critical objection, that closing ends revision but not recording, and who the maintainers are; P04 and P05 link their reviews exactly; Q03 answered for this MIS. No requirement changed. The Status moved to Accepted with the Resolution, as the last commit before the merge.
-- 2026-10-04: R01 (PR_MUST_cite_accepted_MIS) no longer holds. MIS-0003 replaces it with MIS-0003-R01 (PR_MUST_cite_MIS_for_major_change): an MIS is required only for a new policy or a major architectural change, and no longer for every change to what an agent may do. Every other requirement of this MIS stays in force. An editorial line under R34 (accepted_MIS_MUST_change_editorially), landing with MIS-0003.
+- 2026-10-08: after cold-reader trial 3 on the landed policy (§11), the pending Conformance rows (R26, R29, R32, R33, R37) were recorded, Q04 to Q07 were added, and policy section 3.3 now expands EARS. No requirement changed. The Status moved to Final; the operator's merge of this change is the Final gate's reviewed pull request (policy section 7.2).
+- 2026-10-10: R01 (PR_MUST_cite_accepted_MIS) no longer holds. MIS-0003 replaces it with MIS-0003-R01 (PR_MUST_cite_MIS_for_major_change): an MIS is required only for a new policy or a major architectural change, and no longer for every change to what an agent may do. Every other requirement of this MIS stays in force. An editorial line under R34 (accepted_MIS_MUST_change_editorially), landing with MIS-0003.
 
 ## Wiki-Links
 
