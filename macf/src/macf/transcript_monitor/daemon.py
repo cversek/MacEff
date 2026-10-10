@@ -61,6 +61,10 @@ LEGACY_MIN_AGE_S = 120
 #: Replaced in the test suite, so that no test starts a real monitor.
 _execv = os.execv
 
+#: Set to "1" and ``start_daemon`` starts nothing. The test suite sets it for every
+#: test, so that it reaches the hooks a test runs as subprocesses.
+DISABLE_ENV = "MACF_TRANSCRIPT_MONITOR_DISABLED"
+
 #: Consecutive stat-failure counts at which the loop reports. A condition that
 #: persists must not produce one message per poll; these points give the first
 #: occurrence immediately and then back off by an order of magnitude.
@@ -1013,6 +1017,13 @@ def start_daemon(foreground: bool = False, poll_interval: float = DEFAULT_POLL_I
     Returns:
         0 on success, 1 on error
     """
+    if os.environ.get(DISABLE_ENV) == "1":
+        # A test suite sets this so that a hook it runs as a subprocess, which
+        # resolves the developer's own transcript from the inherited environment,
+        # cannot start a real monitor there. The environment is the one thing
+        # that crosses into the hook's process; a patched name does not.
+        print(f"📡 Transcript Monitor not started: {DISABLE_ENV}=1", file=sys.stderr)
+        return 0
     # A monitor the code before this one started is invisible to find_monitors,
     # so it would serve beside the new one and outlive it.
     stop_legacy_monitor()

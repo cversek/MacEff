@@ -244,9 +244,15 @@ def no_transcript_monitor_started(monkeypatch):
 
     The one test that runs a real monitor starts it in a subprocess, on a
     temporary transcript, for an owner process the test controls.
+
+    The two names are replaced only in this process. A test that runs a hook as
+    a subprocess, such as tests/integration/test_hook_execution.py, starts the
+    real code there, so the switch below is set in the environment, which the
+    subprocess inherits.
     """
     from macf.transcript_monitor import daemon
 
+    monkeypatch.setenv(daemon.DISABLE_ENV, "1")
     started = []
 
     class _NotStarted:
