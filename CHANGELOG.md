@@ -139,6 +139,8 @@ Gmail, event-log rotation, and commit-message guards. Sprints now survive compac
 
 - **Keys the framework types are not the operator acting** (`supervisor.py`, `utils/input_origin.py`, the prompt hook, the transcript monitor, `mode_system`): `macf_tools inject`, `auto-restart send-keys` and the supervisor's keys after a start reach the client as typing, so a self-compaction's `/compact` read as the operator present. The sender now records the text as a `keys_sent` event before typing it, and both producers skip input that matches a record from the last ten minutes, a slash command matched by its name and arguments.
 
+- **Only a person's refusal of a tool call counts as the operator acting** (the transcript monitor): every denial counted, but the client writes three denial kinds of its own besides a person's rejection in the dialog: a hook or permission rule refusing the call, the auto mode classifier refusing it, and the classifier being unable to run. So each time a hook refused the agent's own call, the operator read as present and USER_IDLE cleared. Only `user-rejected` counts now, and a kind a later client adds does not until shown to be a person's.
+
 ## [0.6.0] - 2026-08-29
 
 ### Summary

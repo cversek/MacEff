@@ -149,6 +149,10 @@ def detect_user_activity(entry: dict) -> Optional[Detection]:
     })
 
 
+#: The one denial kind a person writes: rejecting the call in its permission dialog.
+PERSON_DENIAL_KIND = "user-rejected"
+
+
 def detect_permission_denial(entry: dict) -> Optional[Detection]:
     """Detect a permission dialog the user answered by rejecting the call.
 
@@ -166,6 +170,15 @@ def detect_permission_denial(entry: dict) -> Optional[Detection]:
     `toolUseResult: "User rejected tool use"`. `toolDenialKind` appears on
     denials and nowhere else, which is what makes it a clean discriminator.
 
+    Not every denial is a person's, though. A longer transcript (2026-10) held
+    four kinds: `user-rejected` when someone rejects the call in its dialog, and
+    three that a machine writes: `permission-rule` when a hook or a permission
+    rule refuses the call, `automode-blocked` when the auto mode classifier
+    does, and `automode-unavailable` when the classifier cannot run. Counting
+    those read the operator as present every time a hook refused the agent's own
+    call. Only `user-rejected` counts, so a kind a later client adds does not
+    count until someone shows a person writes it.
+
     Approvals are NOT covered. An approved ask-gated call is indistinguishable
     from an auto-allowed one at this layer, and inventing presence from an
     ambiguous signal is the failure this whole area already suffers from. The
@@ -174,8 +187,8 @@ def detect_permission_denial(entry: dict) -> Optional[Detection]:
     """
     if entry.get("type") != "user":
         return None
-    if not entry.get("toolDenialKind"):
-        return None
+    if entry.get("toolDenialKind") != PERSON_DENIAL_KIND:
+        return None  # no denial, or one a hook, a rule or the classifier made
 
     return Detection("user_activity_detected", {
         "source": "direct",
