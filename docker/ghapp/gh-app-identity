@@ -1,0 +1,48 @@
+#!/opt/maceff-venv/bin/python3
+"""gh, as this agent's GitHub App where the app is installed; as the operator elsewhere.
+
+Link it as `gh` earlier on PATH than the real one (ln -s /opt/maceff-ghapp/gh-app-identity
+~/.local/bin/gh), or call it directly. GH_AS_OPERATOR=1 forces the operator's login for one
+command; GH_REAL names the real gh (default /usr/bin/gh). Policy: git_discipline, section 4.
+
+The target repository comes from -R/--repo, from repos/<owner>/<repo> in gh api, or from the
+working tree's origin. The token is minted only if the app is installed on that exact
+repository; otherwise the command runs as before, unchanged. A token that SHOULD have come
+and did not (the app is broken, not merely absent there) is reported on stderr, because the
+command then acts in the operator's name.
+"""
+import os, subprocess, sys
+
+REAL = os.environ.get("GH_REAL", "/usr/bin/gh")
+GHAPP = os.path.join(os.path.dirname(os.path.realpath(__file__)), "ghapp.py")
+argv = sys.argv[1:]
+
+
+def target():
+    for j, a in enumerate(argv):
+        if a in ("-R", "--repo") and j + 1 < len(argv): return argv[j + 1].lower()
+        if a.startswith(("-R=", "--repo=")): return a.split("=", 1)[1].lower()
+    for a in argv:
+        if a.startswith("repos/"):
+            seg = a.split("/")
+            if len(seg) >= 3: return f"{seg[1]}/{seg[2]}".lower().split("?")[0]
+    try:
+        url = subprocess.run(["git", "remote", "get-url", "origin"], capture_output=True, text=True, timeout=5).stdout.strip().lower()
+        return url.split("github.com")[-1].strip(":/").removesuffix(".git") if "github.com" in url else ""
+    except Exception:
+        return ""
+
+
+# IDENTITY
+if os.environ.get("GH_AS_OPERATOR") != "1" and not os.environ.get("GH_TOKEN"):
+    t = target()
+    if t.count("/") == 1:
+        r = subprocess.run([sys.executable, "-I", GHAPP, "token", "--repo", t],
+                           capture_output=True, text=True, timeout=30)
+        if r.returncode == 0 and r.stdout:
+            os.environ["GH_TOKEN"] = r.stdout
+        elif r.returncode not in (0, 3):
+            print(f"gh-app-identity: app token unavailable for {t} ({r.stderr.strip()[:200]}); "
+                  "this command acts as the operator", file=sys.stderr)
+
+os.execv(REAL, [REAL] + argv)

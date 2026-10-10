@@ -61,6 +61,8 @@ still gets the work done; the same boundary unexplained produces the workaround.
 - How do I verify identity before operations?
 - What causes "Repository not found" errors?
 - How do I handle silent switch failures?
+- How do I act on GitHub as myself rather than as the operator?
+- Where do the GitHub App tools live in a container, and what stays mine?
 
 **5 Submodule Workflows**
 - What is detached HEAD state?
@@ -254,6 +256,31 @@ gh auth switch --user <correct-identity>
 gh auth status
 git push origin main
 ```
+
+### An Agent's Own GitHub App Identity
+
+**An agent that acts on GitHub through the operator's login cannot be told apart from the operator.** Every comment, commit, review and merge reads as the human's, and the personal token behind it lives for months. Where the operator has given an agent its own GitHub App, the agent acts as `<app-slug>[bot]` instead: the platform shows which agent acted, and each token reaches only the repositories the app is installed on and expires within the hour.
+
+**What a container provides.** The image carries three tools, shared and read-only, in `/opt/maceff-ghapp/`:
+
+| Tool | What it does |
+|------|--------------|
+| `ghapp.py` | `convert CODE --name <n>` stores the app's key from the App Manifest flow (never printed); `token --repo OWNER/NAME` prints a token, exit 3 when the app is not installed there; `whoami` lists installations |
+| `git-credential-ghapp` | git credential helper: answers with a token minted for exactly the repository git asks about, nothing where the app is not installed |
+| `gh-app-identity` | `gh` as the app where it is installed, as the operator elsewhere |
+
+**What stays the agent's own.** The key, the app's facts and the token cache live in `~/.maceff/ghapp/<name>/` (mode 0700, key 0600). The tools pick the app from `--name`, else `$GHAPP_NAME`, else the one app in that directory, and refuse to guess between several.
+
+**Wiring it up, once per agent:**
+```bash
+git config --global credential.https://github.com.helper /opt/maceff-ghapp/git-credential-ghapp
+git config --global credential.https://github.com.useHttpPath true
+ln -s /opt/maceff-ghapp/gh-app-identity ~/.local/bin/gh   # ahead of /usr/bin/gh on PATH
+```
+
+**Falling back is visible, never silent.** Where the app is not installed, the operator's login is used as before, and that is expected. Where the app should have answered and could not (no key, a broken install), both wrappers say so on stderr, because the command then acts in the operator's name. `GH_AS_OPERATOR=1` is the deliberate way to act as the operator for one command.
+
+**What the app may do is the operator's decision**: which repositories it is installed on, and what it may merge. Creating the app and installing it are the operator's acts. An agent never widens its own app's permissions or installations.
 
 ### Post-Compaction Identity Recovery
 
