@@ -1425,6 +1425,31 @@ def cmd_claude_config_init(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_claude_config_idle_compaction(args: argparse.Namespace) -> int:
+    """Report or set the client's idle compaction for this agent (MIS-0002-R126)."""
+    from .utils.claude_settings import idle_compaction_status, set_idle_compaction
+    if args.action == "status":
+        status = idle_compaction_status()
+        print(f"idle compaction: {status['state']} ({status['settings_path']})")
+        return 0
+    try:
+        version = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=15).stdout
+        result = set_idle_compaction(args.action == "on", client_version=version)
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        print(f"❌ {e}", file=sys.stderr)
+        return 1
+    if result["changed"]:
+        from .agent_events_log import append_event
+        append_event("harness_setting_changed", {"setting": "idleCompaction",
+                                                 "state": "off" if args.action == "off" else "client default",
+                                                 "settings_path": result["settings_path"]})
+        print(f"idle compaction {'off' if args.action == 'off' else 'back to the client default'}: "
+              f"{result['settings_path']} (takes effect when the session next starts)")
+    else:
+        print(f"idle compaction already {'off' if args.action == 'off' else 'at the client default'}")
+    return 0
+
+
 def cmd_claude_config_show(args: argparse.Namespace) -> int:
     """Show current .claude.json configuration."""
     try:
@@ -11888,6 +11913,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
     claude_config_sub.add_parser("init", help="set recommended defaults (verbose=true, autoCompact=false)").set_defaults(func=cmd_claude_config_init)
     claude_config_sub.add_parser("show", help="show current .claude.json configuration").set_defaults(func=cmd_claude_config_show)
+    idle_parser = claude_config_sub.add_parser("idle-compaction", help="report, or turn off, the client's own compaction of an idle session (MIS-0002-R126)")
+    idle_parser.add_argument("action", choices=["status", "off", "on"])
+    idle_parser.set_defaults(func=cmd_claude_config_idle_compaction)
 
     # Agent commands
     agent_parser = sub.add_parser("agent", help="agent initialization and management")
