@@ -25,12 +25,25 @@ def test_repo_mis_files_pass():
     assert len(mis.mis_files([MIS_DIR])) >= 2
 
 
+def _mis_tree(d, skip=()):
+    """Copy the repository's MIS files into d.
+
+    MIS-0001 cites other MIS, and a check resolves each citation against the MIS beside the
+    file, so a copy of MIS-0001 alone would report its own citations as citations of MIS that
+    do not exist.
+    """
+    for f in MIS_DIR.glob("MIS-*.md"):
+        if f not in skip:
+            (d / f.name).write_bytes(f.read_bytes())
+
+
 @pytest.fixture
 def plant(tmp_path):
-    """Copy MIS-0001 and the glossary into a temporary framework tree, apply one edit, and check."""
+    """Copy MIS-0001, the MIS beside it and the glossary into a temporary framework tree, apply one edit, and check."""
     def run(edit=None, name=MIS1.name, glossary_edit=None, extra=None):
         d = tmp_path / "framework" / "mis"
         d.mkdir(parents=True, exist_ok=True)
+        _mis_tree(d, skip={MIS1})
         text = MIS1.read_text(encoding="utf-8")
         if edit:
             text = edit(text)
@@ -249,7 +262,7 @@ def test_r49_a_correct_citation_passes(plant):
 
 
 def _beside_mis1(tmp_path, name, text, policy=None):
-    """MIS-0001, a second MIS file beside it, the glossary, and optionally a policy."""
+    """The repository's MIS files with one file written among them, the glossary, and optionally a policy."""
     d = _framework(tmp_path)
     (d / name).write_bytes(text if isinstance(text, bytes) else text.encode("utf-8"))
     if policy:
@@ -328,7 +341,7 @@ def _with_latin1_line(src: Path, dst: Path) -> int:
 def _framework(tmp_path):
     d = tmp_path / "framework" / "mis"
     d.mkdir(parents=True)
-    (d / MIS1.name).write_bytes(MIS1.read_bytes())
+    _mis_tree(d)
     return d
 
 
