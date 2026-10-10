@@ -28,11 +28,16 @@ MacEff's long-lived machinery grew one piece at a time, and most of it died with
 - Why does the channel offer no tools and relay no permission prompts?
 - How is the channel installed and loaded?
 
-**2 Attach**
+**2 The Harness's Own Compactions**
+- Who may compact my session, and what happens when the client compacts it on its own?
+- How is the client's idle compaction turned off, and when is it kept?
+- How do I tell, after the fact, who asked for a compaction?
+
+**3 Attach**
 - How does attach find the session to attach to?
 - What does the readout say when nothing can attach?
 
-**3 Not Yet Landed**
+**4 Not Yet Landed**
 - Which parts of the persistent layer are specified but not yet in this policy?
 
 === CEP_NAV_BOUNDARY ===
@@ -89,9 +94,25 @@ A channel not on Claude Code's allowlist loads only under the development flag, 
 
 ---
 
-## 2 Attach
+## 2 The Harness's Own Compactions
 
-### 2.1 Resolved from the primal daemon
+### 2.1 Turning off the client's idle compaction
+
+A compaction ends the agent's working memory. The persistent layer compacts a session only when the operator or the agent's declared wind-down asks [MIS-0002-R108 (compaction_MUST_be_asked_by_operator_or_wind-down)]. The harness can also compact a session on its own: Claude Code compacts an idle session about 54 minutes after its last request, once the context has passed a threshold.
+
+**The harness adapter turns that off unless the declaration keeps it** [MIS-0002-R126 (adapter_MUST_turn_off_harness_idle_compaction)]. From Claude Code 2.1.290 the settings key `idleCompaction: false` stops the idle compaction alone, and leaves compaction at the context limit on. The declaration's `keep_harness_idle_compaction`, false by default, is the one way to keep it.
+
+- `macf_tools claude-config idle-compaction status` reports the state, with the settings file it read. `off` sets the key and leaves every other key alone. `on` removes it, which returns the client to its default.
+- On a client older than 2.1.290 the command refuses and names the version. That client ignores the key, so writing it there would claim a protection that does not exist.
+- Each change is an event, `harness_setting_changed`.
+
+**Check the version the session runs, not the one installed.** The launcher can move to a new version while a running session still maps the old one. A key that needs 2.1.290 protects only a session that runs it.
+
+---
+
+## 3 Attach
+
+### 3.1 Resolved from the primal daemon
 
 **Attach by name resolves the session from the agent's primal daemon** [MIS-0002-R100 (attach_MUST_resolve_from_pd)], never from a tmux name. A name lookup cannot see a renamed session, cannot tell two similar names apart, and cannot see a session Claude Code's own daemon hosts.
 
@@ -102,15 +123,15 @@ A channel not on Claude Code's allowlist loads only under the development flag, 
 
 The operator may attach to any session without an invitation [MIS-0002-R81 (operator_MAY_attach_without_invitation)]. An onlooker is never given a keyboard.
 
-**From the operator's side of a container**, the attach is the plan's command wrapped in the way into the container (`ssh -t` or `docker exec -it -u <agent>`), which the daemon's status tells the plan by saying where it runs.
+**From the operator's side of a container**, the command also needs the way in (`ssh -t` or `docker exec -it -u <agent>`). The plan will add it once the daemon's status says where the daemon runs; until then it does not.
 
-### 2.2 When nothing can attach
+### 3.2 When nothing can attach
 
 **Where nothing attachable hosts the session, the readout says so, with the reason** [MIS-0002-R101 (readout_MUST_say_nothing_attachable)]: a stopped or undeclared unit, a pid that changed, or a session in a plain terminal that neither tmux nor Claude Code's daemon hosts.
 
 ---
 
-## 3 Not Yet Landed
+## 4 Not Yet Landed
 
 Specified in MIS-0002 and arriving with their landing steps, each in the pull request that enforces it:
 - **The primal daemon itself:** declarations, liveness events, health derived from runs, outside control and the outside watch (MIS-0002 §6.1 to §6.4, §6.7, §6.12).
