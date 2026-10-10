@@ -107,7 +107,7 @@ The hooks tell the MacEff channel from the operator's channels by the channel's 
 
 **Read the source only from the tag that opens the prompt.** Content sent through any channel can contain an opening channel tag of its own, unescaped, naming a different source. A hook that searches the whole prompt for a source can be fooled by it [MIS-0002-R121 (hooks_MUST_read_source_from_origin_or_opening_tag)]. `macf.utils.input_origin` is the one reader of a source, for both producers of the operator's activity: the prompt hook and the transcript monitor. A delivered entry's origin record names the same source, and is read first where it exists. `macf.channels.channel_tag` reads a MacEff notice's other attributes.
 
-The rule for every producer of the operator's activity, with names checked against the agent's declaration, lands with the hooks step of MIS-0002. What is here now is the part the channel needs in order to ship safely.
+Every producer of the operator's activity counts a channel only by a name the agent's declaration lists as the operator's, and never the MacEff channel [MIS-0002-R107 (hooks_MUST_tell_channels_apart_by_name)]. `mode_system` states the rule for an agent that hasn't declared its list yet.
 
 ### 1.5 Receipt
 
