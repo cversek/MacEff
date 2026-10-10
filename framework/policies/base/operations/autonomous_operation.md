@@ -603,12 +603,14 @@ AUTO_MODE work is LOCAL ONLY. All operations visible to others are deferred to M
 
 Wind-down thresholds scale with context window size:
 
-| Window | Wind-down begins | CCP | JOTEWR |
+| Window | Wind-down begins | CCP no later than | JOTEWR no later than |
 |--------|-----------------|-----|--------|
 | 200K   | CL20 (~31K left) | CL5 | CL2 |
 | 1M     | CL10 (~95K left) | CL1 | CL0 |
 
 The 1M start is measured: the sequence below, with step 3 skipped, took about nine CL points on a 1M window with policies read by section, so a later start leaves the reflection to auto-compaction. A deployment that compacts before CL0 (an auto-compact override) starts earlier by the difference. The 200K row predates that measurement.
+
+The checkpoint and the reflection are written wherever steps 1 to 3 end; the last two columns are the latest points for each. The cost depends on how much of the policy the cycle has already read: on another 1M deployment, steps 4 and 5 took about two CL points where they had taken five on the first measured deployment, because some of their policies had been read earlier in the cycle. CL10 stays a safe start, and nine points is not the sequence's fixed cost.
 
 **Who starts it.** In AUTO_MODE the agent starts the wind-down at the threshold. In MANUAL_MODE the operator starts it, and starting the whole sequence authorizes every step in it.
 
@@ -622,7 +624,7 @@ The 1M start is measured: the sequence below, with step 3 skipped, took about ni
 | 4 | `/maceff:ccp` | After curation, so the checkpoint can point at what curation produced. |
 | 5 | `/maceff:jotewr` | Last, with the whole cycle in view: 5k tokens on a 1M window, 2k on 200K. |
 
-The CL15 condition and the reflection sizes are operator settings (2026-10). The condition protects steps 4 and 5, which on one measured 1M deployment took about five CL points between them with policies read by section.
+The CL15 condition and the reflection sizes (5k tokens on a 1M window, 2k on 200K) are operator settings, set in 2026-10 and confirmed by the operator, as quoted on the pull request that added this sentence. The condition protects steps 4 and 5, which on one measured 1M deployment took about five CL points between them with policies read by section. An automatic wind-down on a 1M window starts at CL10, so step 3 runs only when the operator starts the sequence earlier.
 
 **Dispatching it within the context available.** Where a dispatched skill asks for more than these rules allow, the rules govern the dispatch; a skill invoked on its own keeps its own instructions.
 
