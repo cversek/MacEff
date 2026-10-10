@@ -315,6 +315,21 @@ def create_amail_tree(public: Path, username: str) -> Path:
     return amail
 
 
+def create_pd_view_dir(public: Path, username: str) -> Path:
+    """Where this agent publishes its units for the container's shared view (MIS-0002-R62).
+
+    ``agent/public/pd/``: the owner writes its own ``units.json`` (a summary with no command
+    and no environment, macf.pd.shared_view), and peers read it through ``agents_all``.
+    Created at init, beside the mailbox, because agent/public is 550 afterwards. Each agent
+    publishes only in its own home, so none can publish for another.
+    """
+    pd = public / 'pd'
+    pd.mkdir(mode=0o750, exist_ok=True)
+    run_command(['chown', f'{username}:agents_all', str(pd)])
+    run_command(['chmod', '750', str(pd)])
+    return pd
+
+
 # Every path here is installed by some MacEff provisioning step. A vanilla account
 # is defined as an account where none of them exist, so this tuple IS the
 # definition — when a new provisioning step is added, its artifact belongs here or
@@ -966,6 +981,9 @@ def create_agent_tree(username: str, agent_spec: AgentSpec, defaults_config: Opt
 
     # Create the amail mailbox (MACF infrastructure, always needed).
     create_amail_tree(public, username)
+
+    # Create the shared view's publishing point (MACF infrastructure, always needed).
+    create_pd_view_dir(public, username)
 
     # Create subagents directory (owner-only, like private)
     subagents = agent / 'subagents'

@@ -505,7 +505,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R100 | decidable | macf/tests/test_pd_observe.py::test_attach_resolves_from_pd | planned |
 | R101 | decidable | macf/tests/test_pd_observe.py::test_nothing_attachable_said | planned |
 | R102 | decidable | macf/tests/test_pd_observe.py::test_reachable_state | planned |
-| R103 | decidable | macf/tests/test_pd_declaration.py::test_shared_budget_operator_only | planned |
+| R103 | decidable | macf/tests/test_pd_declaration.py::test_shared_budget_operator_only | passing |
 | R104 | decidable | macf/tests/test_pd_harness.py::test_channel_first | planned |
 | R105 | decidable | macf/tests/test_pd_harness.py::test_keystrokes_only_as_fallback | planned |
 | R106 | decidable | macf/tests/test_mode_activity.py::test_wake_is_not_operator_activity | planned |
@@ -635,6 +635,7 @@ Objections recorded:
 - 2026-10-09: the operator named the maintainers and closed the discussion. The Status moved to Accepted with the Resolution, and the terms of section 5 not yet in the glossary entered it (development flag, harness channel, invitation, MacEff channel, observation stream, official listing, onlooker, operational mode, operator surface, organization allowlist, presence state, shared budget, wind-down), as the last commit before the merge.
 
 - 2026-10-10: conformance, from the pull request for R106's wakes: R121 and R128 passing. R106's test passes for a wake that opens with the wake words, and R106 stays planned for two reasons: nothing in the framework writes those words until the notifier lands, in step 2, and a MacEff channel notice, also a wake, is told apart by its channel's name only once that channel lands, which the door audit in the same test file holds as a known gap. No requirement changed.
+- 2026-10-10: conformance, from the pull request for the shared view (landing step 3): R103 passing. R62 is built (each agent publishes a summary of its units, with no command or environment, in its own public tree, and the view reads every one and the container's cgroup, read-only) and waits on its judgment at the container landing. No requirement changed.
 
 ## Wiki-Links
 
