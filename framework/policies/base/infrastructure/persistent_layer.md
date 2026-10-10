@@ -148,7 +148,15 @@ Until the primal daemon lands, the transcript monitor makes these records. The d
 
 **Check the socket path at install** [MIS-0002-R129 (adapter_MUST_check_socket_path_length)]. A Unix socket path longer than the platform allows fails at bind with a bare error. On macOS the limit is 103 bytes (Linux: 107), and a long home path or runtime directory reaches it. The install refuses with the path and the limit.
 
-### 3.2 Claude Code's own supervisor
+### 3.2 Privacy grants
+
+macOS attaches a privacy grant to the **responsible process**. A unit started by launchd does not hold what the terminal held, and its denial looks like an ordinary error. For example, the Local Network grant refuses a LAN connection with `EHOSTUNREACH` at once, while ping, which the grant does not cover, still answers.
+
+- **Each unit declares the grants it needs** [MIS-0002-R63 (unit_MUST_declare_privacy_grants)], from a closed list: `local_network`, `accessibility`, `full_disk_access`, `keychain`, and `automation:<bundle id>` per target app. A misspelt grant fails at declaration, not as a silent missing grant at run time.
+- **A denial is read as the grant it is.** An instant `EHOSTUNREACH` while ping answers is read as `local_network` denied. A timeout, a refusal or a slow unreachable host stays the network failure it is, never reported as a grant.
+- **Still to come.** The install-time probe [MIS-0002-R64 (adapter_MUST_test_grants_at_install)] arrives with the installer. It will run from the launchd context, because a test from the terminal proves the terminal's grant, and since its runs can raise permission dialogs, only when a person is at the machine. The notice that names a denied grant [MIS-0002-R65 (denied_grant_MUST_raise_notice)] arrives with the notifier. Until then a denial is read, not announced.
+
+### 3.3 Claude Code's own supervisor
 
 Claude Code can run a session in the background under its own daemon (`claude --bg`, `/background`). **Where it already runs the agent's session, the primal daemon adopts that session** instead of starting a second supervisor over it [MIS-0002-R66 (pd_MUST_adopt_harness_supervisor)].
 
