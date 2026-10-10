@@ -478,7 +478,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R73 | decidable | macf/tests/test_pd_readout.py::test_tray_unavailable_said | planned |
 | R74 | decidable | macf/tests/test_pd_render.py::test_outside_watch_rendered | planned |
 | R75 | judgment | the operator, at review of each deployment's alert path | standing |
-| R76 | decidable | macf/tests/test_amail_deploy_config.py::test_hypervisor_value_accepted | planned |
+| R76 | decidable | macf/tests/test_amail_deploy_config.py::test_hypervisor_value_accepted | passing |
 | R77 | decidable | macf/tests/test_pd_harness.py::test_wake_text_fixed | planned |
 | R78 | judgment | the operator, at review of each declaration | standing |
 | R79 | judgment | the head maintainer, at review of each landing pull request | standing |
@@ -633,6 +633,8 @@ Objections recorded:
 - 2026-10-09: every maintainer commented on the revision, with no critical objection (P30, P31), and this revision answers them under MIS-0001-R48 (discussion_MUST_close_after_one_revision). R15, R107, R115, R120 and R121 amended; R122 to R129 added; Q05 recorded as answered; rationale, security, platform labels, conformance and landing updated; the points the reviews leave to the landing are listed in section 14.
 
 - 2026-10-09: the operator named the maintainers and closed the discussion. The Status moved to Accepted with the Resolution, and the terms of section 5 not yet in the glossary entered it (development flag, harness channel, invitation, MacEff channel, observation stream, official listing, onlooker, operational mode, operator surface, organization allowlist, presence state, shared budget, wind-down), as the last commit before the merge.
+
+- 2026-10-10: conformance, from the pull request for landing step 6 (the code rename of `hypervisor`): R76 passing. The deploy configuration documents `primal-daemon` and reads the retired value as it. No requirement changed.
 
 ## Wiki-Links
 
