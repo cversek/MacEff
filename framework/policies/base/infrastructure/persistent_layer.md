@@ -28,7 +28,12 @@ MacEff's long-lived machinery grew one piece at a time, and most of it died with
 - Why does the channel offer no tools and relay no permission prompts?
 - How is the channel installed and loaded?
 
-**2 Not Yet Landed**
+**2 The Harness's Own Compactions**
+- Who may compact my session, and what happens when the client compacts it on its own?
+- How is the client's idle compaction turned off, and when is it kept?
+- How do I tell, after the fact, who asked for a compaction?
+
+**3 Not Yet Landed**
 - Which parts of the persistent layer are specified but not yet in this policy?
 
 === CEP_NAV_BOUNDARY ===
@@ -85,7 +90,24 @@ A channel not on Claude Code's allowlist loads only under the development flag, 
 
 ---
 
-## 2 Not Yet Landed
+## 2 The Harness's Own Compactions
+
+### 2.1 Recording who asked
+
+**When the harness compacts a session that nobody asked to compact, the compaction is recorded with the harness as the asker** [MIS-0002-R127 (harness_compaction_MUST_be_recorded)]. The PreCompact hook's `trigger` cannot say this alone: under 2.1.289 an idle compaction reports `manual`, and under 2.1.290 it reports `auto`. The reliable mark is the client's own row after the boundary, a system row that begins "Compacted while idle".
+
+- **The asks are recorded where they happen.**
+  - An operator's typed `/compact` appears in the transcript as a command row, and is recorded as `compaction_asked` with the asker `operator`.
+  - A compaction asked through `macf_tools inject compact` is recorded with the asker `wind_down`.
+- **The client's idle row** is recorded as `harness_compaction_detected` with the asker `harness`.
+- **The hook records `trigger` as the client sent it**, and `unknown` when the field is absent, never a guess.
+- No event carries the content of the work, only who asked, how and when.
+
+Until the primal daemon lands, the transcript monitor makes these records. The daemon's control record for a harness compaction then names the harness in its `asked_by` (`Asker.kind == "harness"`), with no peer, because nobody requested it.
+
+---
+
+## 3 Not Yet Landed
 
 Specified in MIS-0002 and arriving with their landing steps, each in the pull request that enforces it:
 - **The primal daemon itself:** declarations, liveness events, health derived from runs, outside control and the outside watch (MIS-0002 §6.1 to §6.4, §6.7, §6.12).
