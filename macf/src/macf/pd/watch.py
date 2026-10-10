@@ -14,9 +14,12 @@ What it reads, per agent home named in its rendered config:
   against the cadence the unit itself published (``Liveness.interval_s``), never a
   bound kept here (MIS-0002-R16 (layer_MUST-NOT_keep_second_ledger)).
 
-The only thing it keeps is which stretches it has already alerted on, so that each
-stretch gives one alert and one recovery line. That is the notifier's memory, not a
-record of liveness: delete it and the next pass alerts again, nothing more.
+It keeps one record: the durable alert log, one line per pass that had something to
+say, carrying each transition (a stretch opened or closed) and whether the push was
+delivered. The open stretches are read back from the delivered lines, so an alert whose
+push failed is sent again on the next pass, never lost; and there is no second file
+that could disagree with the log. That log is the notifier's memory, not a record of
+liveness (R16).
 
 Verdicts per subject (``service_supervision`` section 2.1): ALIVE, STALE (stamped, then
 stopped), GONE (the stamping process no longer exists), ABSENT (never stamped within
@@ -35,7 +38,7 @@ from typing import Callable, Dict, List, Literal, Optional, Sequence, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from macf.notify.session import proc_start
+from macf.notify.session import verify_incarnation
 from macf.pd import interface
 from macf.utils.streaming import iter_lines_reverse
 
@@ -55,7 +58,10 @@ _EXIT_FOR = {"ALIVE": EXIT_HEALTHY, "STALE": EXIT_UNHEALTHY, "GONE": EXIT_UNHEAL
              "ABSENT": EXIT_UNHEALTHY, "UNREACHABLE": EXIT_UNREACHABLE,
              "UNREADABLE": EXIT_CHECK_FAILED, "CHECK-FAILED": EXIT_CHECK_FAILED}
 
-Probe = Callable[[int], Optional[str]]
+#: ``(pid, recorded start) -> is that process still the one recorded``, in the shape of
+#: ``verify_incarnation``, which puts both starts through ``proc_start_key`` so a start
+#: the client wrote and one read from /proc compare as the same value.
+Probe = Callable[[int, str], bool]
 
 
 @dataclass(frozen=True)
@@ -101,20 +107,18 @@ def check_daemon(card: str, base: Optional[Path], probe: Probe) -> Finding:
         record = interface.DaemonRecord.model_validate_json(text)
     except ValidationError:
         return Finding(card, "daemon", "UNREADABLE", f"record {path.name} does not parse")
-    now_start = probe(record.pid)
-    if now_start is None:
-        return Finding(card, "daemon", "GONE", f"pid {record.pid} from its record is not running")
-    if now_start != record.proc_start:
+    if not probe(record.pid, record.proc_start):
         return Finding(card, "daemon", "GONE",
-                       f"pid {record.pid} is running but started at {now_start}, not {record.proc_start}: another process")
+                       f"pid {record.pid} is not the process its record names: not running, or another process")
     return Finding(card, "daemon", "ALIVE", f"pid {record.pid}")
 
 
-def last_liveness(log_path: Path, units: Sequence[str], now: float,
+def last_liveness(log_path: Path, card: str, units: Sequence[str], now: float,
                   lookback_s: float = LOOKBACK_S) -> Dict[str, Optional[dict]]:
-    """The newest ``pd_unit_alive`` record of each named unit, or None if there is none
-    within the lookback. Reads newest first and stops at the first event older than the
-    lookback or once every unit is found: bounded by meaning, not by a row count."""
+    """The newest ``pd_unit_alive`` record of each named unit of agent *card*, or None if
+    there is none within the lookback. A log more than one agent writes to is read for
+    this agent's events only. Reads newest first and stops at the first event older than
+    the lookback or once every unit is found: bounded by meaning, not by a row count."""
     wanted = set(units)
     found: Dict[str, Optional[dict]] = dict.fromkeys(units)
     cutoff = now - lookback_s
@@ -133,7 +137,9 @@ def last_liveness(log_path: Path, units: Sequence[str], now: float,
         if event.get("event") != interface.EVENT_LIVENESS:
             continue
         data = event.get("data")
-        unit = data.get("unit") if isinstance(data, dict) else None
+        if not isinstance(data, dict) or data.get("agent") != card:
+            continue
+        unit = data.get("unit")
         if unit in wanted:
             found[unit] = event
             wanted.discard(unit)
@@ -154,13 +160,13 @@ def check_unit(card: str, unit: interface.Unit, event: Optional[dict], now: floa
     if age > bound:
         return Finding(card, unit.name, "STALE",
                        f"last liveness {_age(age)} ago, its interval is {_age(live.interval_s)}")
-    if probe is not None and probe(live.pid) != live.proc_start:
+    if probe is not None and not probe(live.pid, live.proc_start):
         return Finding(card, unit.name, "GONE", f"pid {live.pid} that stamped it {_age(age)} ago is gone")
     return Finding(card, unit.name, "ALIVE", f"last liveness {_age(age)} ago")
 
 
 def check_home(home: Path, now: float, base: Optional[Path] = None,
-               probe: Optional[Probe] = proc_start) -> List[Finding]:
+               probe: Optional[Probe] = verify_incarnation) -> List[Finding]:
     """Every finding for one agent home. ``probe`` None skips the process probes, for a
     home whose processes run in a pid namespace this watch cannot see."""
     home = Path(home)
@@ -183,7 +189,7 @@ def check_home(home: Path, now: float, base: Optional[Path] = None,
     findings = [check_daemon(card, base, probe)] if probe is not None else []
     log_path = home / ".maceff" / "agent_events_log.jsonl"
     try:
-        events = last_liveness(log_path, [u.name for u in declaration.units], now)
+        events = last_liveness(log_path, card, [u.name for u in declaration.units], now)
     except FileNotFoundError:
         events = {u.name: None for u in declaration.units}
     except OSError as e:
@@ -300,12 +306,17 @@ def render_systemd(config_path: Path, every_s: int = 120,
             f"{interface.PD_IDENTIFIER}_watch.timer": timer}
 
 
-def send(alert_command: Sequence[str], text: str, durable_log: Path) -> bool:
+def send(alert_command: Sequence[str], text: str, durable_log: Path,
+         open_after: Optional[Dict[str, dict]] = None) -> bool:
     """Push the lines through the alert command, and record them whatever happens.
 
-    A notifier that cannot notify must not also fall silent (``service_supervision``
-    section 4.4): a failed push is still written to the durable log and to stderr.
-    The command's own output is never echoed, since a transport error can carry its URL.
+    Each record carries whether it was delivered and, when it was, the stretches open
+    after it (``open_after``): ``open_stretches`` reads them back from the newest
+    delivered record, so a failed push changes nothing and its lines go out again on the
+    next pass. A notifier that cannot notify must not also fall silent
+    (``service_supervision`` section 4.4): a failed push is still written here and to
+    stderr. The command's own output is never echoed, since a transport error can carry
+    its URL.
     """
     durable_log.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -316,34 +327,45 @@ def send(alert_command: Sequence[str], text: str, durable_log: Path) -> bool:
     except (OSError, subprocess.TimeoutExpired) as e:
         delivered = False
         outcome = f"alert command failed: {type(e).__name__}"
+    record = {"ts": time.time(), "delivered": delivered, "outcome": outcome, "text": text}
+    if open_after is not None:
+        record["open_after"] = open_after
     with durable_log.open("a") as fh:
-        fh.write(json.dumps({"ts": time.time(), "outcome": outcome, "text": text}) + "\n")
+        fh.write(json.dumps(record) + "\n")
     if not delivered:
         print(f"MacEff outside watch: {outcome}; the alert is in {durable_log}:\n{text}", file=sys.stderr)
     return delivered
 
 
-def run_pass(config: WatchConfig, now: Optional[float] = None,
-             base: Optional[Path] = None, probe: Probe = proc_start) -> int:
-    """One pass: check every home, send the transitions, keep the open stretches."""
-    now = time.time() if now is None else now
-    state_dir = Path(config.state_dir)
-    stretches_path = state_dir / "stretches.json"
+def open_stretches(durable_log: Path) -> Dict[str, dict]:
+    """The stretches a person has been told are open: ``open_after`` of the newest record
+    that was delivered and carries it. Records that failed, or that carry no stretch state
+    (the watch's own fault alert), are passed over."""
     try:
-        open_stretches = json.loads(stretches_path.read_text())
-    except (FileNotFoundError, ValueError):
-        open_stretches = {}
+        for line in iter_lines_reverse(durable_log):
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(record, dict) and record.get("delivered") and "open_after" in record:
+                return dict(record["open_after"])
+    except FileNotFoundError:
+        pass
+    return {}
+
+
+def run_pass(config: WatchConfig, now: Optional[float] = None,
+             base: Optional[Path] = None, probe: Probe = verify_incarnation) -> int:
+    """One pass: check every home, and send what changed since the last delivered alert."""
+    now = time.time() if now is None else now
+    durable_log = Path(config.state_dir) / "alerts.jsonl"
     findings: List[Finding] = []
     for home in config.homes:
         findings += check_home(Path(home.path), now, base, probe if home.probe else None)
-    lines, after = transitions(findings, open_stretches, now)
+    lines, after = transitions(findings, open_stretches(durable_log), now)
     if lines:
         send(config.alert_command, "MacEff outside watch\n" + "\n".join(lines) + "\n",
-             state_dir / "alerts.jsonl")
-    state_dir.mkdir(parents=True, exist_ok=True)
-    tmp = stretches_path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(after))
-    tmp.replace(stretches_path)
+             durable_log, open_after=after)
     return exit_code(findings)
 
 

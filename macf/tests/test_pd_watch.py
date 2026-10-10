@@ -42,7 +42,8 @@ def _record(base, pid=5151, start="888"):
 
 
 def _probe(starts):
-    return lambda pid: starts.get(pid)
+    """A probe in verify_incarnation's shape: is pid still the process that started then."""
+    return lambda pid, start: starts.get(pid) == start
 
 
 ALL_RUNNING = _probe({5151: "888", 4242: "777"})
@@ -90,7 +91,7 @@ def test_corrupt_removed_and_backdated_heartbeats_are_three_verdicts_none_alive(
     log = home / ".maceff" / "agent_events_log.jsonl"
     with log.open("a") as fh:
         fh.write(json.dumps({"timestamp": NOW - 1, "event": pdi.EVENT_LIVENESS,
-                             "data": {"unit": "broken", "pid": "not a pid"}}) + "\n")
+                             "data": {"agent": CARD, "unit": "broken", "pid": "not a pid"}}) + "\n")
     _record(tmp_path / "run")
     verdicts = {f.subject: f.verdict for f in watch.check_home(home, NOW, tmp_path / "run", ALL_RUNNING)}
     assert verdicts == {"daemon": "ALIVE", "fresh": "ALIVE", "old": "STALE",
@@ -182,3 +183,44 @@ def test_the_watch_breaking_is_itself_an_alert(tmp_path, monkeypatch):
     monkeypatch.setattr(watch, "run_pass", broken)
     assert watch.main(["--config", str(path)]) == watch.EXIT_CHECK_FAILED
     assert "the watch itself: CHECK-FAILED, RuntimeError: instrument fault" in sink.read_text()
+
+
+def test_an_alert_whose_push_failed_is_sent_again(tmp_path):
+    """The head maintainer's reproduction on #574: a stale unit, a first pass whose alert
+    command exits 1, then a pass with a working command. The second command must hear it."""
+    home, base, sink = _home(tmp_path), tmp_path / "run", tmp_path / "sink.txt"
+    _stamp(home, "broker", age_s=600)  # stale
+    _record(base)
+    config = _config(tmp_path, [home], sink)
+    failing = config.model_copy(update={"alert_command": [sys.executable, "-c", "raise SystemExit(1)"]})
+    assert watch.run_pass(failing, now=NOW, base=base, probe=ALL_RUNNING) == watch.EXIT_UNHEALTHY
+    assert not sink.exists()
+    watch.run_pass(config, now=NOW + 120, base=base, probe=ALL_RUNNING)
+    assert "ALERT: Resident@1a2b3c broker: STALE" in sink.read_text()
+    # Delivered now: the next pass is quiet, and the one record holds both attempts.
+    watch.run_pass(config, now=NOW + 240, base=base, probe=ALL_RUNNING)
+    assert sink.read_text().count("ALERT") == 1
+    records = [json.loads(line) for line in (tmp_path / "state" / "alerts.jsonl").read_text().splitlines()]
+    assert [r["delivered"] for r in records] == [False, True]
+    assert not (tmp_path / "state" / "stretches.json").exists()
+
+
+def test_another_agents_liveness_in_the_same_log_is_not_this_agents(tmp_path):
+    home = _home(tmp_path)
+    log = home / ".maceff" / "agent_events_log.jsonl"
+    other = {"agent": "Neighbor@9f8e7d", "unit": "broker", "pid": 4242, "proc_start": "777", "interval_s": 15.0}
+    log.write_text(json.dumps({"timestamp": NOW - 5, "event": pdi.EVENT_LIVENESS, "data": other}) + "\n")
+    _record(tmp_path / "run")
+    unit = watch.check_home(home, NOW, tmp_path / "run", ALL_RUNNING)[1]
+    assert unit.verdict == "ABSENT"
+
+
+def test_the_default_probe_compares_starts_as_the_interface_says(tmp_path):
+    """verify_incarnation puts the recorded start and /proc's through proc_start_key."""
+    import os
+    from macf.notify.session import proc_start
+    me = os.getpid()
+    _record(tmp_path / "run", pid=me, start=proc_start(me))
+    assert watch.check_daemon(CARD, tmp_path / "run", watch.verify_incarnation).verdict == "ALIVE"
+    _record(tmp_path / "run", pid=me, start=str(int(proc_start(me)) + 1))
+    assert watch.check_daemon(CARD, tmp_path / "run", watch.verify_incarnation).verdict == "GONE"
