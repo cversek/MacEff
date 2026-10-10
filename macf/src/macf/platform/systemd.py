@@ -83,13 +83,20 @@ def linger_enabled(user: str) -> Optional[bool]:
     one. Turning it on (``loginctl enable-linger``) is the operator's decision on the host.
     """
     try:
-        out = subprocess.run(["loginctl", "show-user", user, "-p", "Linger"],
-                             capture_output=True, text=True, timeout=10).stdout.strip()
+        done = subprocess.run(["loginctl", "show-user", user, "-p", "Linger"],
+                              capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.TimeoutExpired) as e:
         print(f"⚠️ MACF: cannot read linger for {user}: {type(e).__name__}: {e}", file=sys.stderr)
         return None
+    out, err = done.stdout.strip(), done.stderr.strip()
     if out == "Linger=yes":
         return True
     if out == "Linger=no":
         return False
+    # A user with no session and no linger is answered as an error ("... is not logged in
+    # or lingering", measured on systemd 259): that is a definite no, not unknown.
+    if "not logged in or lingering" in err:
+        return False
+    print(f"⚠️ MACF: cannot read linger for {user}: loginctl said {err or out or 'nothing'!r}",
+          file=sys.stderr)
     return None

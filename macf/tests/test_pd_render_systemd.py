@@ -86,7 +86,7 @@ def test_linger_is_reported_and_an_unreadable_answer_says_so(monkeypatch, capsys
     """Linger is the operator's switch: read it, never flip it, and never read a failure as no."""
     class Done:
         def __init__(self, out):
-            self.stdout = out
+            self.stdout, self.stderr = out, ""
     for out, want in (("Linger=yes\n", True), ("Linger=no\n", False), ("", None)):
         monkeypatch.setattr(systemd.subprocess, "run", lambda *a, _o=out, **k: Done(_o))
         assert systemd.linger_enabled("resident") is want
@@ -96,3 +96,16 @@ def test_linger_is_reported_and_an_unreadable_answer_says_so(monkeypatch, capsys
     monkeypatch.setattr(systemd.subprocess, "run", missing)
     assert systemd.linger_enabled("resident") is None
     assert "cannot read linger for resident" in capsys.readouterr().err
+
+
+def test_linger_reads_a_user_with_no_session_as_no_and_says_when_it_cannot_tell(monkeypatch, capsys):
+    import subprocess
+    from macf.platform import systemd
+
+    def answer(stdout, stderr, code):
+        return lambda *a, **k: subprocess.CompletedProcess(a, code, stdout, stderr)
+    monkeypatch.setattr(systemd.subprocess, "run", answer("", "Failed to get user: User ID 65534 is not logged in or lingering\n", 1))
+    assert systemd.linger_enabled("nobody") is False
+    monkeypatch.setattr(systemd.subprocess, "run", answer("", "Access denied\n", 1))
+    assert systemd.linger_enabled("x") is None
+    assert "Access denied" in capsys.readouterr().err
