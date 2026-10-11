@@ -366,8 +366,9 @@ A declaration with one unit:
   "units": [
     {
       "name": "transcript-monitor",
-      "command": ["macf_tools", "transcript-monitor", "start"],
+      "command": ["/usr/local/bin/macf_tools", "transcript-monitor", "start"],
       "account": "example",
+      "environment": {"MACEFF_AGENT_HOME_DIR": "{agent_home}"},
       "restart": "always",
       "liveness_interval_s": 30,
       "memory_limit_mb": 256
@@ -380,7 +381,7 @@ A declaration with one unit:
 - `account` is the login the daemon itself runs as (10.3).
 - `liveness_interval_s` is a promise the unit makes: it writes its liveness at least this often, and the core judges it by that promise (11.2).
 
-**The core starts each unit itself, as the unit's parent, with the declared environment and nothing inherited** [MIS-0002-R12 (pd_MUST_start_units_itself)]. It renders that environment at each start, rather than reading files a persistent volume carried forward [MIS-0002-R13 (pd_MUST_render_env_at_start)]. Each unit leads a process group of its own, so a stop reaches every process the unit started.
+**The core starts each unit itself, as the unit's parent, with the declared environment and nothing inherited** [MIS-0002-R12 (pd_MUST_start_units_itself)]. It renders that environment at each start, rather than reading files a persistent volume carried forward [MIS-0002-R13 (pd_MUST_render_env_at_start)]. Nothing inherited includes `PATH`, so a unit names its command by its absolute path, as the example does, or declares the `PATH` it needs. A unit that reads or writes the agent's event log declares `MACEFF_AGENT_HOME_DIR` as `{agent_home}`, which the core fills in at the start. Each unit leads a process group of its own, so a stop reaches every process the unit started.
 
 ### 10.3 Validation, and the account a unit runs as
 
@@ -392,7 +393,7 @@ A declaration with one unit:
 
 Schedules are declared in the same file, although step 2 of MIS-0002's landing runs them, so that the format holds still while the later steps land. A schedule names its missed-run policy from a closed list, `skip`, `run_once`, `run_once_in_window` or `report_only` [MIS-0002-R25 (missed-run_policy_MUST_be_listed)], and there is no default: a schedule without one is refused. A default would decide, for every schedule nobody thought about, what happens to the runs a downtime missed. A schedule also names its target, an isolated session or the live session of a named agent [MIS-0002-R29 (schedule_MUST_declare_target)].
 
-`quiet_windows` lists the times in which the layer neither restarts nor compacts a session [MIS-0002-R50 (layer_MUST-NOT_act_in_quiet_window)]. A session unit's restart waits for the window's end, whether its own restart policy or a request asked for it. An asked restart is recorded when it arrives and carried out when the window ends. Until then the unit's status names the window's end, so whoever asked reads that the restart waits, not that it happened. A stop never waits [MIS-0002-R48 (outside_stop_MUST_override_gates)]. Windows are read in the declaration's timezone, which a declaration with windows must name, and one whose end comes before its start runs past midnight. A window that isn't a time of day is refused at load.
+`quiet_windows` lists the times in which the layer neither restarts nor compacts a session [MIS-0002-R50 (layer_MUST-NOT_act_in_quiet_window)]. A session unit's restart waits for the window's end, whether its own restart policy or a request asked for it. An asked restart is recorded when it arrives and carried out when the window ends. Until then the unit's status names the window's end, so whoever asked reads that the restart waits, not that it happened. A stop never waits [MIS-0002-R48 (outside_stop_MUST_override_gates)]. The window holds an operator's restart as well as the restart policy's, because it is the layer's own rule, declared by the agent, and not a gate the session enforces; a stop and then a start still get through, since a start does not consult the window. Windows are read in the declaration's timezone, which a declaration with windows must name, and one whose end comes before its start runs past midnight. A window that isn't a time of day is refused at load.
 
 ---
 
@@ -405,6 +406,7 @@ Schedules are declared in the same file, although step 2 of MIS-0002's landing r
 | `pd_unit_alive` | the unit, at its declared interval | this pid, started at this time, is running its loop |
 | `pd_unit_state` | the core | the unit entered one of the six states, and why |
 | `pd_control` | the core | a start, stop or restart of a unit, who asked for it, and why |
+| `pd_daemon_start` | the daemon | its life began, with its pid and start time, before it adopts or starts any unit |
 
 All of them go to the agent's own event log, which is the only store the layer keeps: no status file and no ledger of runs beside it [MIS-0002-R16 (layer_MUST-NOT_keep_second_ledger)]. A second store is a second answer to the same question, and the two drift apart. The fields are in `macf.pd.interface`.
 
@@ -412,7 +414,7 @@ The six states are declared, starting, running, waiting on a person, failed and 
 
 An event carries states, times and identities. It never carries file content from the agent's home [MIS-0002-R79 (layer_MUST-NOT_copy_home_content)].
 
-**A unit outlives a daemon that dies, and the next daemon adopts it.** At boot the core reads each unit's last recorded state. A unit recorded live, whose process is still that process by pid and start time, is adopted rather than started a second time, and the state event says it was carried. A unit whose pid now names another process is started fresh. An adopted unit is stopped through its process group, as one the core started is.
+**A unit outlives a daemon that dies, and the next daemon adopts it.** At boot the core reads each unit's last recorded state, back past any compaction or rotation as far as the previous daemon's start, since every unit that daemon left running was recorded after it. A unit recorded live, whose process is still that process by pid and start time, is adopted rather than started a second time, and the state event says it was carried. A unit whose pid now names another process is started fresh. An adopted unit is stopped through its process group, as one the core started is, and its first liveness is judged from its adoption, as a started unit's is from its start, so a unit that went silent while no daemon ran becomes overdue.
 
 ### 11.2 Liveness is the unit's own
 
@@ -432,6 +434,7 @@ Specified in MIS-0002 and arriving with their landing steps, each in the pull re
 - **The primal daemon's process:** its control socket, its record and the identity it reads, outside control over the socket, and health derived from runs (MIS-0002 §6.1 to §6.4, §6.7).
 - **Schedules and the notifier,** including the keystroke fallback, the dark-channel event, and every producer of the operator's activity (MIS-0002 §6.5, §6.6, the rest of §6.14).
 - **Mail and the rest of containers** (MIS-0002 §6.8, §6.9).
+- **Adopting a session Claude Code's own daemon already hosts** [MIS-0002-R66 (pd_MUST_adopt_harness_supervisor)] (3.3). Until it lands, the core starts a declared session unit itself.
 
 Until a section lands, the rules in force are the existing policies: `service_supervision`, `notification_delivery` and `amail`.
 

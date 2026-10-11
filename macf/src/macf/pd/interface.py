@@ -413,8 +413,9 @@ class Asker(_Closed):
     (MIS-0002-R52 (control_act_MUST_name_who_asked)).
 
     ``harness`` is for a compaction nobody asked for, found by the absence of an ask
-    (MIS-0002-R127 (harness_compaction_MUST_be_recorded)); ``policy`` for the daemon's
-    own restart policy acting on a failed unit.
+    (MIS-0002-R127 (harness_compaction_MUST_be_recorded)); ``policy`` for the daemon
+    acting on its own declared rules: a unit's restart policy after a failure, the start of
+    declared units at boot, and the stops of a shutdown.
     """
 
     kind: Literal["operator", "wind_down", "policy", "harness"]
