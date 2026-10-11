@@ -9580,6 +9580,7 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
         })
 
         # Auto-complete scoped task if it's in the active scope
+        scope_result = {}
         try:
             from .task.scope import complete_scoped_task
             scope_result = complete_scoped_task(str(task_id))
@@ -9599,11 +9600,20 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
         # at their real status; they are not fake-completed). Paused members are
         # released here too: completing a member never clears them away, since a
         # paused task is still open, so its owner's completion is what lets go.
-        if task_type in ("SPRINT", "PLAY_TIME"):
+        # Only the scope's owner lets go, though: a sprint whose scope another
+        # sprint has since replaced releases nothing, and neither does one that
+        # shares the scope with a sprint or play time still running in it.
+        # Completing an old sprint once emptied the scope a newer sprint had just
+        # taken over, silently ending that sprint's mode lock.
+        if task_type in ("SPRINT", "PLAY_TIME") and scope_result.get("success"):
             try:
                 from .task.scope import get_scope_check, clear_scope
+                from .task.sprint_gate import get_sprint_play_time_in_scope
                 _check = get_scope_check()
-                if _check.get("active_count", 0) + _check.get("paused_count", 0) > 0:
+                _held = get_sprint_play_time_in_scope()
+                if _held.get("sprint_task") or _held.get("play_time_task"):
+                    print("   ↪️  Another sprint or play time still holds the scope; nothing released")
+                elif _check.get("active_count", 0) + _check.get("paused_count", 0) > 0:
                     clr = clear_scope()
                     if clr.get("success"):
                         swept = len(set(
