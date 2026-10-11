@@ -35,7 +35,8 @@ def test_liveness_probed():
 
     The probe is asked with the pid and start time the unit wrote; a pid that now
     belongs to another process reads GONE however recent the write. The default
-    probe is checked against this test's own process.
+    probe is checked against this test's own process, with its own start time and with
+    pid 1's, which a probe that looked at the pid alone would accept.
     """
     now = time.time()
     asked = []
@@ -55,6 +56,8 @@ def test_liveness_probed():
     me = os.getpid()
     real = health(declaration("worker"), [alive("worker", at=now - 5, pid=me, start=proc_start(me))], now)
     assert real[0].liveness == ALIVE
+    wrong = proc_start(1)   # pid 1's start: real on Linux and macOS, never this process's
+    assert health(declaration("worker"), [alive("worker", at=now - 5, pid=me, start=wrong)], now)[0].liveness == GONE
 
 
 def test_stopped_never_started_and_unreadable():
@@ -127,3 +130,12 @@ def test_the_watch_and_the_readout_agree():
         readout = health(decl, [event] if event else [], now, lambda pid, start: start == "t0")[0]
         watched = watch.check_unit(CARD, decl.units[0], event, now, lambda pid, start: start == "t0")
         assert readout.liveness == watched.verdict == name.upper(), (name, readout, watched)
+
+
+def test_a_malformed_row_costs_only_itself():
+    """A row that isn't an event, or whose data isn't one, is skipped. One bad line in the
+    log takes away no other unit's verdict."""
+    now = time.time()
+    rows = ["not an event", {"event": "pd_unit_alive", "data": "not data"}, alive("worker", at=now - 5)]
+    found = by_unit(health(declaration("worker"), rows, now, lambda pid, start: True))
+    assert found["worker"].liveness == ALIVE
