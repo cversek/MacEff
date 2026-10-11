@@ -99,3 +99,38 @@ class TestScopeReleaseOnOwnerCompletion:
 
         # t1 goes inactive; t2 stays active — no over-clear.
         assert _active_count(env) == 1
+
+    def test_a_sprint_that_no_longer_owns_the_scope_releases_nothing(self, isolated_task_env):
+        """An older sprint left the scope, which a newer sprint holds. Completing the older
+        one, even by force, leaves the newer sprint's scope as it was."""
+        env = isolated_task_env["env"]
+        created = json.loads(_task(["create", "sprint", "Old sprint", "--children", "Old child", "--json"],
+                                   env).stdout)
+        old = created["task_id"]
+        assert _task(["create", "sprint", "New sprint", "--children", "New A", "--json"], env).returncode == 0
+        old_members = [str(t["id"]) for t in json.loads(_task(["list", "--json"], env).stdout)
+                       if str(t.get("parent_id")) == str(old)]
+        assert _task(["scope", "remove", str(old), *old_members], env).returncode == 0
+        held = _active_count(env)
+        assert held == 2  # the new sprint and its child
+
+        done = _task(["complete", str(old), "--force",
+                      "--justification", "test: the old sprint's goal is met; the scope is the new one's",
+                      "--report", "old sprint done"], env)
+        assert done.returncode == 0, done.stderr
+        assert _active_count(env) == held
+
+    def test_a_sprint_sharing_the_scope_with_a_running_one_releases_only_itself(self, isolated_task_env):
+        """Two sprints in one scope: completing one makes only itself inactive, and the
+        other keeps everything it holds."""
+        env = isolated_task_env["env"]
+        old = json.loads(_task(["create", "sprint", "Old sprint", "--children", "Old child", "--json"],
+                               env).stdout)["task_id"]
+        assert _task(["create", "sprint", "New sprint", "--children", "New A", "--json"], env).returncode == 0
+        held = _active_count(env)
+
+        done = _task(["complete", str(old), "--force",
+                      "--justification", "test: a second sprint still runs", "--report", "old sprint done"], env)
+        assert done.returncode == 0, done.stderr
+        assert _active_count(env) == held - 1
+        assert "still holds the scope" in done.stdout
