@@ -115,6 +115,7 @@ Task management policy governs the use of Claude Code native Task* tools (TaskCr
 - How do I record out-of-order execution so a successor can tell it from skipped work?
 - What type-specific completion gates exist?
 - How does GH_ISSUE closeout work?
+- What does completing a GH_PR task post, and who reads it?
 
 **7 Archive Protocol**
 - How do I archive completed tasks?
@@ -1106,10 +1107,16 @@ The gate pattern generalizes to any task type. Each gate redirects to its own po
 | Type | Gate Concept | Status |
 |------|-------------|--------|
 | GH_ISSUE | Commit citations + verification method + GitHub closeout + calling card (opt-in via opsec.public_attribution) | Implemented (DETOUR #99) |
-| GH_PR | Terminal outcome (MERGED/CLOSED_UNMERGED) + verification + cascade to linked GH_ISSUE tasks (§2.3.3) | Spec'd — impl MISSION #1161 |
+| GH_PR | Terminal outcome (MERGED/CLOSED_UNMERGED) + verification + cascade to linked GH_ISSUE tasks (§2.3.3) | Implemented: the close-out is §6.5.3 |
 | MISSION | All phases completed | Future |
 | EXPERIMENT | Results documented | Future |
 | DELEG_PLAN | Delegation executed | Future |
+
+#### 6.5.3 GH_PR Close-out
+
+Completing a GH_PR task reads the pull request's terminal state from GitHub and posts a **Review Close-out** comment on it: the agent's `--report` as the body, then the outcome (MERGED or CLOSED_UNMERGED) and the `--verified` text, then the calling card where `opsec.public_attribution` is on, as for an issue (§6.5.1).
+
+**The report is public text.** Write it for the pull request's readers, with no private context, under the same rules as an issue's close-out (`../development/public_voice.md` §2.1). A report written as a private task record lands on the pull request unchanged. The comment goes out through the `gh` the agent runs, as whatever account that `gh` is authenticated as.
 
 ---
 
