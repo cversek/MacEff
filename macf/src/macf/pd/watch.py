@@ -139,7 +139,7 @@ def last_liveness(log_path: Path, card: str, units: Sequence[str], now: float,
         if not isinstance(data, dict) or data.get("agent") != card:
             continue
         unit = data.get("unit")
-        if unit in wanted:
+        if isinstance(unit, str) and unit in wanted:   # a list or a dict would raise in the set
             found[unit] = event
             wanted.discard(unit)
     return found

@@ -104,7 +104,10 @@ def health(declaration: Declaration, events: Iterable[dict], now: float,
         data = event.get("data") or {}
         if not isinstance(data, dict):
             continue
-        if data.get("agent") != declaration.agent or data.get("unit") not in declared:
+        unit = data.get("unit")
+        # A unit that isn't a string can't be a declared name, and a list or a dict would
+        # raise in the membership test and cost every unit its verdict.
+        if data.get("agent") != declaration.agent or not isinstance(unit, str) or unit not in declared:
             continue
         (states if kind == EVENT_STATE else lives)[data["unit"]] = event
     return [_unit_health(u.name, states.get(u.name), lives.get(u.name), now, probe)

@@ -2,6 +2,8 @@
 import os
 import time
 
+import pytest
+
 from macf.notify.session import proc_start
 from macf.pd.health import ABSENT, ALIVE, GONE, STALE, UNREADABLE, health
 from macf.pd.interface import Declaration, Unit
@@ -130,6 +132,18 @@ def test_the_watch_and_the_readout_agree():
         readout = health(decl, [event] if event else [], now, lambda pid, start: start == "t0")[0]
         watched = watch.check_unit(CARD, decl.units[0], event, now, lambda pid, start: start == "t0")
         assert readout.liveness == watched.verdict == name.upper(), (name, readout, watched)
+
+
+@pytest.mark.parametrize("bad_unit", [["worker"], {"name": "worker"}])
+def test_a_row_whose_unit_is_not_a_name_costs_only_itself(bad_unit):
+    """A row whose unit is a list or a dict is skipped like any other malformed row; it must
+    not stop the readout and take every unit's verdict with it."""
+    now = time.time()
+    bad = alive("worker", at=now - 1)
+    bad["data"]["unit"] = bad_unit
+    rows = [alive("worker", at=now - 5), bad]
+    found = by_unit(health(declaration("worker"), rows, now, lambda pid, start: True))
+    assert found["worker"].liveness == ALIVE
 
 
 def test_a_malformed_row_costs_only_itself():
