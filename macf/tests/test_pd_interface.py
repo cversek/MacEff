@@ -227,3 +227,67 @@ def test_a_schedule_needs_a_wall_clock_limit():
                 "target": "isolated", "run": {"command": ["true"], "wake_when": "stdout"}}
     with pytest.raises(ValidationError):
         pdi.Declaration.model_validate(_declaration(schedules=[schedule]))
+
+
+def _schedule(**over):
+    schedule = {"name": "s", "cron": "0 7 * * *", "missed_run": {"kind": "skip"},
+                "target": "isolated", "run": {"command": ["true"], "wake_when": "stdout"},
+                "timeout_s": 60}
+    schedule.update(over)
+    return schedule
+
+
+def test_a_declaration_with_schedules_or_quiet_windows_names_its_timezone():
+    """A bare time of day reads in local time on a host and usually in UTC in a container,
+    so a declaration with schedules or quiet windows names the timezone they are all read
+    in, and a name that is not one is refused rather than read as some other zone."""
+    window = {"start": "22:00", "end": "07:00"}
+    for over in ({"schedules": [_schedule()]}, {"quiet_windows": [window]}):
+        with pytest.raises(ValidationError, match="timezone"):
+            pdi.Declaration.model_validate(_declaration(**over))
+        with pytest.raises(ValidationError, match="unknown timezone"):
+            pdi.Declaration.model_validate(_declaration(**over, timezone="Mars/Olympus"))
+        assert pdi.Declaration.model_validate(_declaration(**over, timezone="UTC")).timezone == "UTC"
+    assert pdi.Declaration.model_validate(_declaration()).timezone is None
+
+
+def test_a_timezone_that_names_a_directory_is_refused(monkeypatch):
+    """Where zones come from the tzdata package, 'America' is one of its directories, and
+    opening it raises OSError rather than the not-found error. The loader refuses it with a
+    reason instead of crashing. The second half makes every platform take that path, since
+    without the tzdata package the name is reported as not found either way."""
+    with pytest.raises(ValidationError, match="unknown timezone 'America'"):
+        pdi.Declaration.model_validate(_declaration(timezone="America"))
+
+    def tzdata_directory(key):
+        raise IsADirectoryError(21, "Is a directory", key)
+
+    monkeypatch.setattr(pdi, "ZoneInfo", tzdata_directory)
+    with pytest.raises(ValidationError, match="unknown timezone 'Europe'"):
+        pdi.Declaration.model_validate(_declaration(timezone="Europe"))
+
+
+def test_a_schedule_whose_act_restarts_a_unit_says_so():
+    """R27: a run that restarts a unit is never replayed after a downtime, so the schedule
+    marks it; nothing restarts unless the declaration says it does."""
+    decl = _declaration(schedules=[_schedule(), _schedule(name="t", restarts_unit=True)], timezone="UTC")
+    marked = {s.name: s.restarts_unit for s in pdi.Declaration.model_validate(decl).schedules}
+    assert marked == {"s": False, "t": True}
+
+
+def test_a_daemon_start_carries_its_record_and_nothing_else():
+    """pd_daemon_start: the fields of the daemon's record and the agent, closed like every event."""
+    start = pdi.DaemonStart(agent=CARD, pid=4242, proc_start="1")
+    assert (pdi.EVENT_DAEMON_START, start.version) == ("pd_daemon_start", 1)
+    assert set(start.model_dump()) == set(pdi.DaemonRecord.model_fields) | {"agent"}
+    with pytest.raises(ValidationError):
+        pdi.DaemonStart(agent=CARD, pid=4242, proc_start="1", units=["session"])
+
+
+def test_operator_channels_absent_is_not_the_same_as_none_declared():
+    """R107: a declaration written for its units says nothing about channels, and must not
+    decide by default that the operator's phone stops counting."""
+    assert pdi.Declaration.model_validate(_declaration()).operator_channels is None
+    assert pdi.Declaration.model_validate(_declaration(operator_channels=[])).operator_channels == []
+    named = pdi.Declaration.model_validate(_declaration(operator_channels=["plugin:telegram:telegram"]))
+    assert named.operator_channels == ["plugin:telegram:telegram"]
