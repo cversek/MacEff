@@ -2435,7 +2435,7 @@ def run_after_access(steps) -> List[str]:
             continue
         try:
             call()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - GUARD, not handler: no start step may end the container
             log(f"STEP FAILED {name} (sshd stays up): {e}")
             traceback.print_exc()
             failed.append(name)
