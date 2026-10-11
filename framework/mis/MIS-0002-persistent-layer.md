@@ -412,7 +412,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R07 | decidable | macf/tests/test_primal_daemon.py::test_no_cross_agent_control | passing |
 | R08 | decidable | macf/tests/test_pd_declaration.py::test_every_unit_declared | planned |
 | R09 | decidable | macf/tests/test_pd_declaration.py::test_unit_fields | planned |
-| R10 | decidable | macf/tests/test_pd_declaration.py::test_renderings_exist | planned |
+| R10 | decidable | macf/tests/test_pd_declaration.py::test_renderings_exist | passing |
 | R11 | decidable | macf/tests/test_pd_declaration.py::test_schedules_hosted | planned |
 | R12 | decidable | macf/tests/test_primal_daemon.py::test_clean_parent | passing |
 | R13 | decidable | macf/tests/test_primal_daemon.py::test_env_rendered_at_start | passing |

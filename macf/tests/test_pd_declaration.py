@@ -166,8 +166,48 @@ def test_one_adapter_per_platform(registry):
     assert registry.missing_renderings() == ["darwin"]
 
 
-@pytest.mark.xfail(strict=True, reason="planned: the systemd unit and the LaunchAgent (#549) are not registered yet")
 def test_renderings_exist():
-    """Every supported platform has an outer tier (R10). Planned, never skipped: it fails
-    until both renderings are registered, and passing unexpectedly fails it too."""
+    """Every supported platform has an outer tier (R10): the LaunchAgent and the systemd user unit."""
     assert adapters.missing_renderings() == []
+
+
+CARD_T = "Tester@abc123"
+
+
+class _Ran:
+    """A stand-in for running a command: records each argv and answers success."""
+
+    def __init__(self):
+        self.argvs = []
+
+    def __call__(self, argv):
+        from types import SimpleNamespace
+        self.argvs.append(list(argv))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+
+def test_renderings_hold_only_the_agent_home(tmp_path):
+    """Each outer tier runs ``python -m macf.pd <agent home>`` and carries no agent configuration (R04)."""
+    home = tmp_path / "agent"
+    launch = adapters.LaunchdAdapter(user_home=tmp_path, uid=501).render(CARD_T, home)
+    unit = adapters.SystemdAdapter(user_home=tmp_path).render(CARD_T, home)
+    for text in (launch, unit):
+        assert "macf.pd" in text and str(home) in text
+    assert "EnvironmentVariables" not in launch
+    assert not any(line.startswith("Environment=") for line in unit.splitlines())
+
+
+def test_systemd_install_writes_the_unit_then_enables_it(tmp_path):
+    ran = _Ran()
+    path = adapters.SystemdAdapter(user_home=tmp_path, run=ran).install(CARD_T, tmp_path / "agent")
+    assert path.exists() and path.parent == tmp_path / ".config" / "systemd" / "user"
+    assert ran.argvs == [["systemctl", "--user", "daemon-reload"],
+                         ["systemctl", "--user", "enable", "--now", path.name]]
+
+
+def test_launchd_install_writes_the_plist_then_bootstraps_it(tmp_path):
+    ran = _Ran()
+    path = adapters.LaunchdAdapter(user_home=tmp_path, uid=501, run=ran).install(CARD_T, tmp_path / "agent")
+    assert path.exists() and path.parent == tmp_path / "Library" / "LaunchAgents"
+    assert any("bootstrap" in argv for argv in ran.argvs)
+
