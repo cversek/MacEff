@@ -132,3 +132,19 @@ def test_the_command_reports_its_source(tmp_path, monkeypatch, capsys):
     assert exited.value.code == 0
     report = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert (report["card"], report["source"]) == (CARD, "event log")
+
+
+def test_the_command_shows_a_held_restart(tmp_path, monkeypatch, capsys):
+    """A session's restart that a quiet window holds is shown with the window's end, so the
+    operator reads that it waits, not that it happened (R50)."""
+    from macf.pd import client
+    monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(make_home(tmp_path)))
+    unit = {"unit": "session", "state": "stopped", "since": 1.0, "restart_held_until": "07:00"}
+    monkeypatch.setattr(client, "status", lambda home, card: client.StatusReport(
+        card=card, source="daemon", why="its record and its socket agree", units=[unit]))
+    with pytest.raises(SystemExit) as exited:
+        main(["pd", "status"])
+    assert exited.value.code == 0
+    line = next(ln for ln in capsys.readouterr().out.splitlines() if "session:" in ln)
+    assert line.startswith("  session: stopped")
+    assert line.endswith("; restart held until 07:00 (quiet window)")

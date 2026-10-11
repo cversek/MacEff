@@ -55,6 +55,8 @@ def cmd_pd_status(args: argparse.Namespace) -> int:
         if unit.get("pid"):
             line += f", pid {unit['pid']}"
         line += f", since {_when(unit.get('since'))}"
+        if unit.get("restart_held_until"):
+            line += f"; restart held until {unit['restart_held_until']} (quiet window)"
         if "liveness" in unit:
             line += f"; liveness {unit['liveness']}: {unit['detail']}"
         print(line)
