@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36">
+  <defs>
+    <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="36" height="36"><rect width="36" height="36" fill="#fff"/><path d="M 21 22 h 13 a 2 2 0 0 1 2 2 v 7 a 2 2 0 0 1 -2 2 h -8 l -3.5 3 v -3 h -1.5 a 2 2 0 0 1 -2 -2 v -7 a 2 2 0 0 1 2 -2 z" fill="#000" stroke="#000" stroke-width="3.2" stroke-linejoin="round"/></mask>
+    <mask id="b" maskUnits="userSpaceOnUse" x="0" y="0" width="36" height="36"><rect width="36" height="36" fill="#fff"/><circle cx="24.5" cy="27.5" r="1.15" fill="#000"/><circle cx="27.5" cy="27.5" r="1.15" fill="#000"/><circle cx="30.5" cy="27.5" r="1.15" fill="#000"/></mask>
+  </defs>
+  <g mask="url(#m)"><rect x="8.0" y="22.5" width="20.0" height="6.0" rx="1.2" fill="#000"/><rect x="8.0" y="15.0" width="20.0" height="6.0" rx="1.2" fill="#000"/><rect x="8.0" y="7.5" width="20.0" height="6.0" rx="1.2" fill="#000"/><line x1="4" y1="31.0" x2="32" y2="31.0" stroke="#000" stroke-width="2.4" stroke-linecap="round"/></g><path d="M 21 22 h 13 a 2 2 0 0 1 2 2 v 7 a 2 2 0 0 1 -2 2 h -8 l -3.5 3 v -3 h -1.5 a 2 2 0 0 1 -2 -2 v -7 a 2 2 0 0 1 2 -2 z" fill="#000" mask="url(#b)"/>
+</svg>
