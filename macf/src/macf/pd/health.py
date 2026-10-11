@@ -97,10 +97,13 @@ def health(declaration: Declaration, events: Iterable[dict], now: float,
     states: Dict[str, dict] = {}
     lives: Dict[str, dict] = {}
     for event in events:
-        kind = event.get("event")
+        # A malformed row costs that row's verdict, never the whole readout.
+        kind = event.get("event") if isinstance(event, dict) else None
         if kind not in (EVENT_STATE, EVENT_LIVENESS):
             continue
         data = event.get("data") or {}
+        if not isinstance(data, dict):
+            continue
         if data.get("agent") != declaration.agent or data.get("unit") not in declared:
             continue
         (states if kind == EVENT_STATE else lives)[data["unit"]] = event

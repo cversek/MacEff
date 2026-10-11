@@ -149,7 +149,9 @@ def check_unit(card: str, unit: interface.Unit, event: Optional[dict], now: floa
                probe: Optional[Probe]) -> Finding:
     """A unit's verdict by the rule the readout uses (``health.read_liveness``): a unit is
     STALE past three of the intervals it published, the core's bound, so the watch and the
-    daemon never disagree about when one is."""
+    readout never disagree about when one is. The core differs for a unit waiting on a person,
+    which it never calls overdue (MIS-0002-R22 (layer_MUST-NOT_restart_waiting_unit)); the
+    watch reads liveness alone and can call such a unit STALE."""
     r = read_liveness(event, now, probe)
     if r.verdict == "ABSENT":
         return Finding(card, unit.name, "ABSENT", f"no liveness within {_age(LOOKBACK_S)}")
