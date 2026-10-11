@@ -531,11 +531,17 @@ Request = Union[StatusRequest, ActRequest, CompactRequest]
 
 
 class UnitStatus(_Closed):
+    """A unit as the daemon sees it now. ``restart_held_until`` is the end of the quiet
+    window, ``HH:MM`` in the declaration's time, that a session's restart waits for,
+    asked or due by its policy (MIS-0002-R50 (layer_MUST-NOT_act_in_quiet_window)), so
+    whoever asked for it learns that it waits rather than that it happened."""
+
     unit: str
     state: State
     pid: Optional[int] = None
     proc_start: Optional[str] = None
     since: float
+    restart_held_until: Optional[str] = None
 
 
 class Response(_Closed):

@@ -344,8 +344,20 @@ class Core:
     def statuses(self) -> List[UnitStatus]:
         """Every declared unit as the core sees it now, for the control socket's status."""
         return [UnitStatus(unit=r.spec.name, state=r.state, pid=r.pid if r.proc else None,
-                           proc_start=r.proc_start if r.proc else None, since=r.since)
+                           proc_start=r.proc_start if r.proc else None, since=r.since,
+                           restart_held_until=self._restart_held_until(r))
                 for r in self._units.values()]
+
+    def _restart_held_until(self, r: _Runner) -> Optional[str]:
+        """The end of the quiet window a session's restart waits for, asked or due by its
+        policy, or None when nothing waits (MIS-0002-R50 (layer_MUST-NOT_act_in_quiet_window))."""
+        if r.spec.kind != "session":
+            return None
+        window = quiet_window_at(self.declaration, self._wall())
+        if window is None:
+            return None
+        due = r.proc is None and r.want_up and r.restart_at is not None and self._clock() >= r.restart_at
+        return window.end if r.held_restart is not None or due else None
 
     # ------------------------------------------------------------------ acts
 
