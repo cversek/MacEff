@@ -110,6 +110,24 @@ def test_a_socket_path_too_long_stops_the_launchd_install_before_anything_is_wri
     assert calls == [] and not (tmp_path / "Library").exists()
 
 
+def test_a_socket_path_too_long_stops_the_systemd_install_before_anything_is_written(tmp_path, monkeypatch):
+    """MIS-0002-R129 (adapter_MUST_check_socket_path_length) on Linux too."""
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / ("x" * 120)))
+    calls = []
+    tier = adapters.SystemdAdapter(user_home=tmp_path, run=lambda argv: calls.append(argv))
+    with pytest.raises(OSError):
+        tier.install(CARD, tmp_path / "home")
+    assert calls == [] and not (tmp_path / ".config").exists()
+
+
+def test_the_plan_names_the_interpreter_and_the_macf_it_runs(tmp_path, monkeypatch, tier, capsys):
+    import macf
+    monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(make_home(tmp_path)))
+    assert run("install", "--plan") == 0
+    out = capsys.readouterr().out
+    assert sys.executable in out and str(Path(macf.__file__).resolve().parent) in out
+
+
 def _ok(argv):
     return subprocess.CompletedProcess(argv, 0, "", "")
 

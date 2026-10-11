@@ -85,6 +85,8 @@ def _this_agent():
 
 
 def cmd_pd_install(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
     from macf.pd import adapter as adapters
     from macf.pd.core import POLICY_POINTER, DeclarationRefused, load_declaration
 
@@ -95,8 +97,10 @@ def cmd_pd_install(args: argparse.Namespace) -> int:
     except (DeclarationRefused, LookupError) as e:
         print(f"maceff_pd: nothing installed: {e}\n{POLICY_POINTER}", file=sys.stderr)
         return 1
+    import macf
+    runs = f"it runs {sys.executable}, with macf from {Path(macf.__file__).resolve().parent}"
     if args.plan:
-        print(f"# {card}: the outer tier for {home} on {sys.platform}, not installed (--plan)")
+        print(f"# {card}: the outer tier for {home} on {sys.platform}, not installed (--plan); {runs}")
         print(tier.render(card, home))
         return 0
     try:
@@ -104,7 +108,7 @@ def cmd_pd_install(args: argparse.Namespace) -> int:
     except (OSError, RuntimeError) as e:
         print(f"maceff_pd: install stopped: {e}\n{POLICY_POINTER}", file=sys.stderr)
         return 1
-    print(f"{card}: installed at {where}; the service manager says: {tier.status(card)}")
+    print(f"{card}: installed at {where}; {runs}; the service manager says: {tier.status(card)}")
     if sys.platform.startswith("linux"):
         import os
         import pwd
