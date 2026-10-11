@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 import macf
-from macf.agent_events_log import append_event, get_log_path
+from macf.agent_events_log import CYCLE_BOUNDARY_EVENT, append_event, get_log_path
 from macf.notify.session import proc_start
 from macf.pd.core import Core, DeclarationRefused, backoff_s, load_declaration
 from macf.pd.interface import UNIT_STATES, Asker, Declaration, Peer, Unit, declaration_path
@@ -66,6 +66,8 @@ while True:
                 "proc_start": start, "interval_s": spec["interval"]}
         if spec.get("imposter"):
             data["pid"], data["proc_start"] = os.getppid(), proc_start(os.getppid())
+        if spec.get("wrong_start"):
+            data["proc_start"] = "not this process's start"
         for key in ("waiting_on", "in_flight"):
             if key in spec and t < spec.get(key + "_for", 1e9):
                 data[key] = spec[key]
@@ -221,22 +223,24 @@ def test_starting_event_names_the_new_pid(make_core, script):
 
 
 def test_liveness_verdicts(make_core, script):
-    """Silence from the start, liveness that stops, liveness that cannot be read, and liveness
-    in another process's name are four failures, and none of them is alive
-    (service_supervision: unknown is not healthy; R15: a pid alone is not the unit)."""
-    names = ("silent", "stale", "garbled", "imposter")
+    """Silence from the start, liveness that stops, liveness that cannot be read, liveness
+    in another process's name, and liveness under the unit's own pid with a start time that
+    isn't its own are five failures, and none of them is alive (service_supervision: unknown
+    is not healthy; R15: a pid alone is not the unit)."""
+    names = ("silent", "stale", "garbled", "imposter", "wrong_start")
     core = make_core([
         make_unit("silent", script, {"alive_for": 0}, restart="never"),
         make_unit("stale", script, {"alive_for": 0.2}, restart="never"),
         make_unit("garbled", script, {"garbage": True}, restart="never"),
         make_unit("imposter", script, {"imposter": True}, restart="never"),
+        make_unit("wrong_start", script, {"wrong_start": True}, restart="never"),
     ])
     core.boot()
 
     assert drive(core, lambda: all(core.state(u) == "failed" for u in names))
     reasons = {u: events("pd_unit_state", u)[-1]["reason"] for u in names}
     assert "stale" in reasons["stale"] and "running" in states("stale")
-    for u in ("silent", "garbled", "imposter"):
+    for u in ("silent", "garbled", "imposter", "wrong_start"):
         assert "no liveness" in reasons[u] and "running" not in states(u)
 
 
@@ -537,6 +541,101 @@ def test_an_adopted_unit_stops_when_asked(make_core, script):
     second.stop("worker", OPERATOR, "the test is done with it", peer=PEER)
     survivor.left["worker"].wait(timeout=5)
     assert drive(second, lambda: second.state("worker") == "stopped")
+
+
+def test_a_survivor_is_adopted_across_a_compaction(make_core, script):
+    """A unit that runs steadily writes no state event, so after a compaction its last one
+    sits before the boundary. The next daemon still adopts it: it reads back past the
+    boundary and past its own start, as far as the previous daemon's."""
+    unit = make_unit("worker", script, {})
+    first = make_core([unit])
+    first.record_start(os.getpid(), "the first daemon's start")
+    first.boot()
+    assert drive(first, lambda: first.state("worker") == "running")
+    pid = first.pid("worker")
+    _crash(first)
+    append_event(CYCLE_BOUNDARY_EVENT, {"source": "test"})
+
+    second = make_core([unit])
+    second.record_start(os.getpid(), "the second daemon's start")
+    second.boot()
+    assert second.pid("worker") == pid
+    assert states("worker").count("starting") == 1
+
+
+def test_an_adopted_unit_that_went_silent_is_failed(make_core, script):
+    """A unit that stopped writing liveness while no daemon ran is judged from its adoption,
+    as a start is, so it becomes overdue instead of reading running forever (R15, R17)."""
+    unit = make_unit("worker", script, {"alive_for": 0.3}, restart="never")
+    first = make_core([unit])
+    first.boot()
+    assert drive(first, lambda: first.state("worker") == "running")
+    pid = first.pid("worker")
+    left = _crash(first)
+    time.sleep(0.5)   # silent now, with no daemon watching
+
+    second = make_core([unit])
+    second.boot()
+    assert second.pid("worker") == pid
+    assert drive(second, lambda: second.state("worker") == "failed", timeout=3.0)
+    left["worker"].wait(timeout=5)
+
+
+def _windowed(script):
+    """A core whose one session unit never fails, with a quiet window ahead of now that the
+    test can move the core's wall clock into and out of."""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    from macf.pd.interface import Window
+
+    zone = "Asia/Kathmandu"
+    ahead = datetime.now(ZoneInfo(zone))
+    window = Window(start=(ahead + timedelta(hours=1)).strftime("%H:%M"),
+                    end=(ahead + timedelta(hours=3)).strftime("%H:%M"))
+    unit = make_unit("worker", script, {}).model_copy(update={"kind": "session"})
+    shift = {"s": 0.0}
+    core = Core(Declaration(version=1, agent=CARD, units=[unit], quiet_windows=[window], timezone=zone),
+                CARD, wall=lambda: time.time() + shift["s"], backoff_base_s=0.05, backoff_cap_s=0.2)
+    return core, shift
+
+
+def test_a_held_restart_is_the_operators_act_when_the_window_ends(script):
+    """An operator's restart a quiet window holds is carried out when the window ends, as
+    the operator's act with the process that asked (R50, R52). The unit never fails, so
+    nothing but the held act can start its next run."""
+    core, shift = _windowed(script)
+    try:
+        core.boot()
+        assert drive(core, lambda: core.state("worker") == "running")
+        first = core.pid("worker")
+        shift["s"] = 2 * 3600.0   # inside the window
+        core.restart("worker", OPERATOR, "asked during the window", peer=PEER)
+        assert not drive(core, lambda: core.pid("worker") not in (None, first), timeout=0.5)
+        shift["s"] = 0.0          # the window has ended
+        assert drive(core, lambda: core.pid("worker") not in (None, first)
+                     and core.state("worker") == "running")
+        done = [d for d in events("pd_control", "worker") if d["act"] == "restart"][-1]
+        assert done["asked_by"]["kind"] == "operator" and done["peer"]["pid"] == PEER.pid
+        assert "held until a quiet window ended" in done["reason"]
+    finally:
+        core.shutdown("the test is over")
+
+
+def test_a_stop_ends_a_held_restart(script):
+    """A stop asked after a held restart wins: when the window ends the unit stays stopped
+    (R48)."""
+    core, shift = _windowed(script)
+    try:
+        core.boot()
+        assert drive(core, lambda: core.state("worker") == "running")
+        shift["s"] = 2 * 3600.0
+        core.restart("worker", OPERATOR, "asked during the window", peer=PEER)
+        core.stop("worker", OPERATOR, "and then stopped", peer=PEER)
+        assert drive(core, lambda: core.state("worker") == "stopped")
+        shift["s"] = 0.0
+        assert not drive(core, lambda: core.state("worker") != "stopped", timeout=1.0)
+    finally:
+        core.shutdown("the test is over")
 
 
 def test_backoff_doubles_to_its_cap():
