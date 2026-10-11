@@ -40,10 +40,9 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from macf.notify.session import verify_incarnation
 from macf.pd import interface
+from macf.pd.health import read_liveness
 from macf.utils.streaming import iter_lines_reverse
 
-#: A unit is STALE once this many of its own published intervals pass without a stamp.
-GRACE_BEATS = 3
 #: How far back a unit's last stamp is looked for. Older than this reads ABSENT: the
 #: verdict names the window, so it never claims more than was read.
 LOOKBACK_S = 7 * 86400
@@ -148,21 +147,20 @@ def last_liveness(log_path: Path, card: str, units: Sequence[str], now: float,
 
 def check_unit(card: str, unit: interface.Unit, event: Optional[dict], now: float,
                probe: Optional[Probe]) -> Finding:
-    if event is None:
+    """A unit's verdict by the rule the readout uses (``health.read_liveness``): a unit is
+    STALE past three of the intervals it published, the core's bound, so the watch and the
+    daemon never disagree about when one is."""
+    r = read_liveness(event, now, probe)
+    if r.verdict == "ABSENT":
         return Finding(card, unit.name, "ABSENT", f"no liveness within {_age(LOOKBACK_S)}")
-    try:
-        live = interface.Liveness.model_validate(event.get("data"))
-        stamped = float(event["timestamp"])
-    except (ValidationError, KeyError, TypeError, ValueError):
+    if r.verdict == "UNREADABLE":
         return Finding(card, unit.name, "UNREADABLE", "its last liveness event does not parse")
-    age = now - stamped
-    bound = GRACE_BEATS * live.interval_s
-    if age > bound:
+    if r.verdict == "STALE":
         return Finding(card, unit.name, "STALE",
-                       f"last liveness {_age(age)} ago, its interval is {_age(live.interval_s)}")
-    if probe is not None and not probe(live.pid, live.proc_start):
-        return Finding(card, unit.name, "GONE", f"pid {live.pid} that stamped it {_age(age)} ago is gone")
-    return Finding(card, unit.name, "ALIVE", f"last liveness {_age(age)} ago")
+                       f"last liveness {_age(r.age)} ago, its interval is {_age(r.live.interval_s)}")
+    if r.verdict == "GONE":
+        return Finding(card, unit.name, "GONE", f"pid {r.live.pid} that stamped it {_age(r.age)} ago is gone")
+    return Finding(card, unit.name, "ALIVE", f"last liveness {_age(r.age)} ago")
 
 
 def check_home(home: Path, now: float, base: Optional[Path] = None,

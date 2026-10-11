@@ -105,3 +105,25 @@ def test_work_in_flight_and_a_wait_are_carried():
         alive("session", at=now - 2, in_flight=2, waiting_on="a permission prompt"),
     ], now, lambda pid, start: True)[0]
     assert (found.liveness, found.in_flight, found.waiting_on) == (ALIVE, 2, "a permission prompt")
+
+
+def test_the_watch_and_the_readout_agree():
+    """The outside watch gives the readout's verdict on the same event (R15, R16): both
+    apply ``read_liveness``, so neither can drift to its own bound or probe. The stale
+    case sits between three and four intervals, where a second bound would part them."""
+    from macf.pd import watch
+
+    now = time.time()
+    decl = declaration("worker")
+    cases = {
+        "absent": None,
+        "unreadable": {"timestamp": now - 5, "event": "pd_unit_alive",
+                       "data": {"agent": CARD, "unit": "worker"}},
+        "stale": alive("worker", at=now - 35),
+        "gone": alive("worker", at=now - 5, start="t1"),
+        "alive": alive("worker", at=now - 5),
+    }
+    for name, event in cases.items():
+        readout = health(decl, [event] if event else [], now, lambda pid, start: start == "t0")[0]
+        watched = watch.check_unit(CARD, decl.units[0], event, now, lambda pid, start: start == "t0")
+        assert readout.liveness == watched.verdict == name.upper(), (name, readout, watched)

@@ -1,7 +1,7 @@
 """Each declared unit's health, derived from the agent's event log when it is asked for.
 
-The readout and the outside watch both call ``health``, so they give the same verdict
-from the same events. Nothing here is stored, and the daemon need not be running for it
+The readout calls ``health``, and the outside watch calls ``read_liveness``, the rule
+``health`` applies to each unit, so they give the same verdict from the same event. Nothing here is stored, and the daemon need not be running for it
 to answer (MIS-0002-R16 (layer_MUST-NOT_keep_second_ledger)).
 
 A unit's liveness has five verdicts, because unknown is not healthy:
@@ -17,17 +17,15 @@ A unit's liveness has five verdicts, because unknown is not healthy:
 Runs owed against runs done (MIS-0002-R17 (readout_MUST_derive_health_from_runs),
 MIS-0002-R18 (overdue_run_MUST_read_unhealthy)) join this function with the scheduler.
 """
+from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from macf.notify.session import verify_incarnation
+# The core's bound, so the daemon and every reader agree on when a unit is stale.
+from macf.pd.core import LIVENESS_TOLERANCE
 from macf.pd.interface import EVENT_LIVENESS, EVENT_STATE, Declaration, Liveness
-
-#: How many of its own intervals a unit may go without writing liveness before it reads
-#: as stale. Three tolerates two missed writes. It was chosen in 2026-10 without a
-#: measurement of real write jitter, and is to be re-derived once units have run under load.
-LIVENESS_TOLERANCE = 3
 
 Verdict = Literal["ALIVE", "STALE", "GONE", "ABSENT", "UNREADABLE"]
 ALIVE: Verdict = "ALIVE"
@@ -38,6 +36,36 @@ UNREADABLE: Verdict = "UNREADABLE"
 
 #: Whether the process with this pid is still the one that started at this time.
 Probe = Callable[[int, str], bool]
+
+
+@dataclass(frozen=True)
+class Reading:
+    """What a unit's last liveness says, before anyone words it."""
+
+    verdict: Verdict
+    live: Optional[Liveness] = None  # the record, when it could be read
+    age: float = 0.0                 # seconds since it was written
+    bound: float = 0.0               # how old it may be before the unit is stale
+    error: str = ""                  # why it could not be read
+
+
+def read_liveness(event: Optional[dict], now: float, probe: Optional[Probe]) -> Reading:
+    """The verdict on a unit's last ``pd_unit_alive`` event: the one rule the readout and
+    the outside watch share. ``probe`` None skips the process check, for a reader that
+    cannot see the pid namespace the unit runs in, and the verdict is then never GONE."""
+    if event is None:
+        return Reading(ABSENT)
+    try:
+        live = Liveness.model_validate(event.get("data"))
+        stamped = float(event["timestamp"])
+    except (ValidationError, KeyError, TypeError, ValueError) as e:
+        return Reading(UNREADABLE, error=str(e))
+    age, bound = now - stamped, LIVENESS_TOLERANCE * live.interval_s
+    if age > bound:
+        return Reading(STALE, live, age, bound)
+    if probe is not None and not probe(live.pid, live.proc_start):
+        return Reading(GONE, live, age, bound)
+    return Reading(ALIVE, live, age, bound)
 
 
 class UnitHealth(BaseModel):
@@ -89,30 +117,25 @@ def _unit_health(unit: str, state_event: Optional[dict], live_event: Optional[di
         "since": _float_or_none((state_event or {}).get("timestamp")),
         "reason": str(state_data.get("reason") or ""),
     }
-    if live_event is None:
+    reading = read_liveness(live_event, now, probe)
+    if reading.verdict == ABSENT:
         return UnitHealth(**known, liveness=ABSENT, detail="no liveness among the events read")
-
-    data = live_event.get("data") or {}
-    try:
-        live = Liveness.model_validate(data)
-        stamped = float(live_event["timestamp"])
-    except (ValidationError, KeyError, TypeError, ValueError) as e:
+    if reading.verdict == UNREADABLE:
+        data = live_event.get("data") or {}
         pid = data.get("pid") if isinstance(data.get("pid"), int) else None
         return UnitHealth(**known, liveness=UNREADABLE, pid=pid,
-                          detail=f"the last liveness cannot be read: {e}")
+                          detail=f"the last liveness cannot be read: {reading.error}")
 
+    live = reading.live
     reported = {"pid": live.pid, "in_flight": live.in_flight, "waiting_on": live.waiting_on}
-    age = now - stamped
-    bound = LIVENESS_TOLERANCE * live.interval_s
-    if age > bound:
-        return UnitHealth(**known, **reported, liveness=STALE,
-                          detail=(f"the last liveness was {age:.0f} s ago, against a bound of "
-                                  f"{bound:g} s from its interval of {live.interval_s:g} s"))
-    if not probe(live.pid, live.proc_start):
-        return UnitHealth(**known, **reported, liveness=GONE,
-                          detail=f"pid {live.pid} is no longer the process that wrote it")
-    return UnitHealth(**known, **reported, liveness=ALIVE,
-                      detail=f"liveness {age:.0f} s ago from pid {live.pid}, still that process")
+    if reading.verdict == STALE:
+        detail = (f"the last liveness was {reading.age:.0f} s ago, against a bound of "
+                  f"{reading.bound:g} s from its interval of {live.interval_s:g} s")
+    elif reading.verdict == GONE:
+        detail = f"pid {live.pid} is no longer the process that wrote it"
+    else:
+        detail = f"liveness {reading.age:.0f} s ago from pid {live.pid}, still that process"
+    return UnitHealth(**known, **reported, liveness=reading.verdict, detail=detail)
 
 
 def _str_or_none(value) -> Optional[str]:
