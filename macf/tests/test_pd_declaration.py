@@ -126,3 +126,15 @@ def test_every_agent_gets_its_publishing_point_at_init():
     calls = [n.func.id for n in ast.walk(ast.parse(src))
              if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)]
     assert "create_pd_view_dir" in calls
+
+
+def test_grants_declared():
+    """MIS-0002-R63 (unit_MUST_declare_privacy_grants): each unit carries the grants it states,
+    a unit that states none needs none, and a grant outside the closed list refuses the
+    declaration when it is read, not as a missing grant at run time."""
+    bot = dict(_unit("bot"), privacy_grants=["local_network", "automation:com.apple.Terminal"])
+    decl = _declaration(units=[bot, _unit("broker")])
+    assert [u.privacy_grants for u in decl.units] == [
+        ["local_network", "automation:com.apple.Terminal"], []]
+    with pytest.raises(ValidationError, match="unknown privacy grant"):
+        _declaration(units=[dict(_unit("bot"), privacy_grants=["local-network"])])
