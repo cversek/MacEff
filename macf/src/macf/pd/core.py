@@ -240,7 +240,7 @@ class _Runner:
     stopping: Optional[str] = None      # why a stop is under way, until the exit is reaped
     then_start: bool = False            # the stop under way is half of a restart
     drain: Optional[tuple] = None       # (asker, reason, deadline) of a restart waiting on R49
-    held_restart: Optional[tuple] = None  # (asker, reason) of an asked restart a quiet window holds (R50)
+    held_restart: Optional[tuple] = None  # (asker, reason, peer) of an asked restart a quiet window holds (R50)
 
 
 class _LivenessTail:
@@ -328,6 +328,7 @@ class Core:
             u.name: _Runner(spec=u, since=wall()) for u in declaration.units
         }
         self._tail = _LivenessTail(get_log_path())
+        self._own_start: Optional[tuple] = None  # (pid, proc_start) once record_start has run
 
     # ------------------------------------------------------------------ queries
 
@@ -364,6 +365,7 @@ class Core:
     def record_start(self, pid: int, start: str) -> None:
         """Say that this daemon's life began, before any unit is adopted or started, so a
         fold of what the daemon observes can begin from it (``DaemonStart``)."""
+        self._own_start = (pid, start)
         self._emit(EVENT_DAEMON_START, DaemonStart(agent=self.card, pid=pid, proc_start=start).model_dump())
 
     def boot(self) -> None:
@@ -387,12 +389,20 @@ class Core:
         log, read back from the newest; a pid whose start time no longer matches belongs to
         another process now, and that unit is started fresh."""
         last: Dict[str, dict] = {}
-        for event in read_events(limit=None, reverse=True):
-            if event.get("event") != EVENT_STATE:
-                continue
+        # The whole log, archives included: a unit that runs steadily writes no state event,
+        # so its last one can sit before a compaction or a rotation. The scan is bounded by
+        # meaning instead. Every unit a previous daemon left running has a state event since
+        # that daemon's start, its own start or its adoption, so the scan stops there.
+        for event in read_events(reverse=True, scope="all", only=(EVENT_STATE, EVENT_DAEMON_START)):
             data = event.get("data") or {}
+            if data.get("agent") != self.card:
+                continue
+            if event.get("event") == EVENT_DAEMON_START:
+                if (data.get("pid"), data.get("proc_start")) != self._own_start:
+                    break
+                continue
             unit = data.get("unit")
-            if data.get("agent") == self.card and unit in self._units and unit not in last:
+            if unit in self._units and unit not in last:
                 last[unit] = data
                 if len(last) == len(self._units):
                     break
@@ -406,6 +416,9 @@ class Core:
             r = self._units[name]
             r.proc, r.pid, r.proc_start = _Adopted(pid, start, self._probe), pid, start
             r.started_at = self._clock()
+            # Its first liveness under this daemon is judged from the adoption, as a start is,
+            # so a unit that went silent while no daemon ran becomes overdue, not running forever.
+            r.alive_at = r.started_at
             r.want_up = True
             self._transition(r, data["state"],
                              f"carried from the previous daemon: pid {pid}, its start time confirmed")
@@ -429,6 +442,7 @@ class Core:
         r.restart_at = None
         r.drain = None
         r.then_start = False
+        r.held_restart = None  # a stop also ends a restart a quiet window was holding
         if r.proc is not None:
             self._signal_stop(r, f"stopped as asked: {reason}")
         elif r.state != "stopped":
@@ -442,7 +456,7 @@ class Core:
         if window is not None:
             # Recorded now and carried out when the window ends (R50); a stop never waits (R48).
             self._control("restart", r, asked_by, f"{reason} (held: quiet window until {window.end})", peer)
-            r.held_restart = (asked_by, reason)
+            r.held_restart = (asked_by, reason, peer)
             return
         self._control("restart", r, asked_by, reason, peer)
         r.want_up = True
@@ -468,6 +482,7 @@ class Core:
             r.want_up = False
             r.restart_at = None
             r.drain = None
+            r.held_restart = None
             if r.proc is not None:
                 self._control("stop", r, POLICY, reason)
                 self._signal_stop(r, reason)
@@ -507,9 +522,10 @@ class Core:
 
     def _tick_unit(self, r: _Runner, now: float) -> None:
         if r.held_restart is not None and quiet_window_at(self.declaration, self._wall()) is None:
-            asked_by, reason = r.held_restart
+            asked_by, reason, peer = r.held_restart
             r.held_restart = None
-            self.restart(r.spec.name, asked_by, f"{reason} (held until a quiet window ended)")
+            # The asked act itself, by its asker and the process that asked (R52).
+            self.restart(r.spec.name, asked_by, f"{reason} (held until a quiet window ended)", peer=peer)
             return
         if r.proc is not None:
             code = r.proc.poll()
