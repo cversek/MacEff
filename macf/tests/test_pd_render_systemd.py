@@ -32,6 +32,17 @@ def test_outer_tier_restarts_pd():
     assert "StartLimitIntervalSec" not in unit["Service"]
 
 
+def test_a_daemon_that_cannot_start_backs_off_but_is_never_given_up_on():
+    """Exit 75 or 78 used to restart every 10 s forever. The delay now stretches to a
+    minute; no exit code stops the restarts, since 75 must take over when the other daemon
+    ends and 78 covers start errors that clear by themselves (R03)."""
+    service = _parsed(systemd.render_pd_user_unit(CARD, ARGV, "/home/resident")[1])["Service"]
+    assert service["RestartSec"] == "10"
+    assert service["RestartSteps"] == "3"
+    assert service["RestartMaxDelaySec"] == "60"
+    assert "RestartPreventExitStatus" not in service
+
+
 def test_the_managed_units_outlive_the_daemon():
     """R12 makes the daemon the parent of its units, so they share its cgroup. The default
     KillMode, control-group, would kill them all whenever the daemon exits (R49, R50)."""
