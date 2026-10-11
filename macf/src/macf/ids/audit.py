@@ -21,6 +21,7 @@ mean every place was read.
 """
 import json
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -59,6 +60,8 @@ class Report:
     held: Dict[str, Dict[int, List[Holder]]] = field(default_factory=dict)
     #: place -> why its tables could not be read.
     unreadable: Dict[str, str] = field(default_factory=dict)
+    #: why the host was left out of the comparison, when it was.
+    host_left_out: str = ""
 
     def overlaps(self, kind: str) -> Dict[int, List[Holder]]:
         """Numbers at or above 1000 held by more than one identity: these fail the audit."""
@@ -83,6 +86,7 @@ class Report:
     def to_dict(self) -> dict:
         return {
             "places": self.places,
+            "host_left_out": self.host_left_out,
             "unreadable": self.unreadable,
             "overlaps": {k: _as_json(self.overlaps(k)) for k in KINDS},
             "system_overlaps": {k: _as_json(self.system_overlaps(k)) for k in KINDS},
@@ -144,8 +148,20 @@ def running_containers(run: Runner) -> List[str]:
     return sorted(n for n in out.split() if n)
 
 
-def audit(containers: Optional[List[str]] = None, run: Runner = run_command) -> Report:
-    """Read the host and each container (every running one when *containers* is None)."""
+#: Why the host is not compared off Linux.
+NOT_SHARED_KERNEL = ("this host is not Linux: its containers run in a Linux VM whose kernel the "
+                     "host does not share, so a host number and a container number are not one "
+                     "identity here; the containers are compared with each other only")
+
+
+def audit(containers: Optional[List[str]] = None, run: Runner = run_command,
+          platform: str = sys.platform) -> Report:
+    """Read the host and each container (every running one when *containers* is None).
+
+    The host is compared only on Linux, where containers share its kernel. Elsewhere
+    (Docker Desktop or Colima on macOS) they run in a VM, the host's own accounts may not
+    even be in /etc/passwd, and only the containers, which share the VM's kernel, are
+    compared with each other."""
     unreadable: Dict[str, str] = {}
     if containers is None:
         try:
@@ -153,7 +169,9 @@ def audit(containers: Optional[List[str]] = None, run: Runner = run_command) -> 
         except Unreadable as e:
             unreadable["docker"] = str(e)
             containers = []
-    report = Report(places=[HOST] + list(containers), unreadable=unreadable)
+    on_linux = platform.startswith("linux")
+    report = Report(places=([HOST] if on_linux else []) + list(containers), unreadable=unreadable,
+                    host_left_out="" if on_linux else NOT_SHARED_KERNEL)
     for kind in KINDS:
         report.held[kind] = {}
     for place in report.places:
@@ -171,6 +189,8 @@ def audit(containers: Optional[List[str]] = None, run: Runner = run_command) -> 
 def render(report: Report) -> str:
     """One table per kind: each overlapping number, and who holds it in each place."""
     lines = [f"places read: {', '.join(p for p in report.places if p not in report.unreadable) or 'none'}"]
+    if report.host_left_out:
+        lines.append(f"host left out: {report.host_left_out}")
     for place, why in report.unreadable.items():
         lines.append(f"UNREADABLE {place}: {why}")
     def rows(found: Dict[int, List[Holder]]) -> List[str]:

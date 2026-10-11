@@ -164,3 +164,27 @@ def test_json_names_overlaps_and_the_exit_code():
 @pytest.mark.parametrize("line", ["", "# comment", "broken", "name:x:notanumber:0"])
 def test_lines_that_are_not_entries_are_skipped(line):
     assert ids.parse_table(line + "\nroot:x:0:0::/:/bin/sh\n") == [("root", 0)]
+
+
+def test_off_linux_the_host_is_not_compared_and_the_output_says_why():
+    """On macOS the containers run in a VM whose kernel the host doesn't share, and the Mac's
+    own accounts may not be in /etc/passwd: the host must not count as read, or compared."""
+    asked = []
+
+    def run(argv):
+        asked.append(list(argv))
+        return fake(measured())(argv)
+    report = ids.audit(run=run, platform="darwin")
+    assert report.places == ["seat"]
+    assert not any(a[0] in ("getent", "cat") for a in asked), "the host's tables were read"
+    assert "host left out" in ids.render(report) and report.host_left_out
+    assert not report.overlaps("passwd")
+
+
+def test_off_linux_containers_are_still_compared_with_each_other():
+    tables = measured()
+    tables[("other", "passwd")] = SEAT_PASSWD.replace("seat_a", "other_a")
+    tables[("other", "group")] = SEAT_GROUP
+    report = ids.audit(run=fake(tables), platform="darwin")
+    assert {h.place for h in report.overlaps("passwd")[1002]} == {"seat", "other"}
+    assert report.exit_code() == 1
