@@ -1,14 +1,17 @@
-"""The shared view of a container and its budget (MIS-0002-R62, MIS-0002-R103).
+"""The declaration's checks: the shared view of a container and its budget (MIS-0002-R62,
+MIS-0002-R103), and the outer tier's boundary, one adapter per supported platform (MIS-0002-R10).
 
 The cgroup numbers are a live shared container's, Oct 10: a 64 GiB limit, 24 CPUs, 44.2 GB
 of process memory and 1 GB of kernel memory held, 13.7 GB of page cache besides.
 """
 import json
 import os
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
+from macf.pd import adapter as adapters
 from macf.pd import interface, shared_view as sv
 
 GIB = 2 ** 30
@@ -126,3 +129,107 @@ def test_every_agent_gets_its_publishing_point_at_init():
     calls = [n.func.id for n in ast.walk(ast.parse(src))
              if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)]
     assert "create_pd_view_dir" in calls
+
+
+class _Fake:
+    def __init__(self, platform):
+        self.platform = platform
+
+    def render(self, card, agent_home):
+        return f"run python -m macf.pd {agent_home}"
+
+    def install(self, card, agent_home):
+        return Path("/nonexistent")
+
+    def uninstall(self, card):
+        return None
+
+    def status(self, card):
+        return "inactive"
+
+
+@pytest.fixture
+def registry(monkeypatch):
+    monkeypatch.setattr(adapters, "_ADAPTERS", {})
+    return adapters
+
+
+def test_one_adapter_per_platform(registry):
+    registry.register(_Fake("linux"))
+    with pytest.raises(ValueError, match="already registered"):
+        registry.register(_Fake("linux"))
+    with pytest.raises(ValueError, match="not a supported platform"):
+        registry.register(_Fake("plan9"))
+    with pytest.raises(TypeError):
+        registry.register(object())
+    assert registry.adapter_for("linux").platform == "linux"
+    assert registry.missing_renderings() == ["darwin"]
+
+
+def test_renderings_exist():
+    """Every supported platform has an outer tier (R10): the LaunchAgent and the systemd user unit."""
+    assert adapters.missing_renderings() == []
+
+
+CARD_T = "Tester@abc123"
+
+
+class _Ran:
+    """A stand-in for running a command: records each argv and answers success."""
+
+    def __init__(self):
+        self.argvs = []
+
+    def __call__(self, argv):
+        from types import SimpleNamespace
+        self.argvs.append(list(argv))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+
+def test_renderings_hold_only_the_agent_home(tmp_path):
+    """Each outer tier runs ``python -m macf.pd <agent home>`` and carries no agent configuration (R04)."""
+    home = tmp_path / "agent"
+    launch = adapters.LaunchdAdapter(user_home=tmp_path, uid=501).render(CARD_T, home)
+    unit = adapters.SystemdAdapter(user_home=tmp_path).render(CARD_T, home)
+    for text in (launch, unit):
+        assert "macf.pd" in text and str(home) in text
+    assert "EnvironmentVariables" not in launch
+    assert not any(line.startswith("Environment=") for line in unit.splitlines())
+
+
+def test_systemd_install_writes_the_unit_then_enables_it(tmp_path):
+    ran = _Ran()
+    path = adapters.SystemdAdapter(user_home=tmp_path, run=ran).install(CARD_T, tmp_path / "agent")
+    assert path.exists() and path.parent == tmp_path / ".config" / "systemd" / "user"
+    assert ran.argvs == [["systemctl", "--user", "daemon-reload"],
+                         ["systemctl", "--user", "enable", "--now", path.name]]
+
+
+def test_launchd_install_writes_the_plist_then_bootstraps_it(tmp_path):
+    ran = _Ran()
+    path = adapters.LaunchdAdapter(user_home=tmp_path, uid=501, run=ran).install(CARD_T, tmp_path / "agent")
+    assert path.exists() and path.parent == tmp_path / "Library" / "LaunchAgents"
+    assert any("bootstrap" in argv for argv in ran.argvs)
+
+
+@pytest.mark.parametrize("code, said", [(113, "not loaded"), (112, "no GUI session for uid 501"),
+                                        (5, "unknown: launchctl says why")])
+def test_launchd_status_tells_its_failures_apart(tmp_path, code, said):
+    """launchctl print answers 113 for a service the user's domain doesn't have and 112 when
+    the user has no GUI domain, as over SSH. Anything else is unknown, in launchctl's words."""
+    from types import SimpleNamespace
+
+    def run(argv):
+        return SimpleNamespace(returncode=code, stdout="", stderr="launchctl says why")
+    assert adapters.LaunchdAdapter(user_home=tmp_path, uid=501, run=run).status(CARD_T).startswith(said)
+
+
+
+def test_schedule_without_policy_fails():
+    """A schedule with no missed-run policy is refused, never given a default (R109): a
+    default would decide, for every schedule nobody thought about, what a downtime does."""
+    schedule = {"name": "nightly", "cron": "0 3 * * *", "target": "isolated",
+                "run": {"command": ["true"], "wake_when": "exit_code"}, "timeout_s": 60}
+    with pytest.raises(ValidationError, match="missed_run"):
+        interface.Schedule.model_validate(schedule)
+    interface.Schedule.model_validate({**schedule, "missed_run": {"kind": "skip"}})
