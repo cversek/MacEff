@@ -29,18 +29,18 @@ ENV_HOME = "MACEFF_AGENT_HOME_DIR"
 
 
 def liveness_event(card: str, unit: str, interval_s: float,
-                   in_flight: Optional[int] = None) -> Liveness:
-    """This process's liveness as the named unit of the agent *card*."""
-    pid = os.getpid()
+                   in_flight: Optional[int] = None, pid: Optional[int] = None) -> Liveness:
+    """The liveness of process *pid* (this process by default) as the named unit of *card*."""
+    pid = pid or os.getpid()
     return Liveness(agent=card, unit=unit, pid=pid, proc_start=proc_start(pid) or "unknown",
                     interval_s=interval_s, in_flight=in_flight)
 
 
 def emit(card: str, unit: str, interval_s: float, in_flight: Optional[int] = None,
-         append: Optional[Callable[[str, dict], bool]] = None) -> bool:
-    """Write one liveness event; True when the log took it."""
+         append: Optional[Callable[[str, dict], bool]] = None, pid: Optional[int] = None) -> bool:
+    """Write one liveness event for *pid* (this process by default); True when the log took it."""
     append = append or append_event
-    return append(EVENT_LIVENESS, liveness_event(card, unit, interval_s, in_flight).model_dump())
+    return append(EVENT_LIVENESS, liveness_event(card, unit, interval_s, in_flight, pid).model_dump())
 
 
 class Heartbeat:

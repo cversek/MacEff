@@ -92,7 +92,7 @@ def _alive(monkeypatch, env, in_flight=None):
         monkeypatch.setenv(k, v)
     events, append = recorder()
     monkeypatch.setattr(lv, "append_event", append)
-    return cli.cmd_pd_alive(Namespace(in_flight=in_flight)), events
+    return cli.cmd_pd_alive(Namespace(in_flight=in_flight, pid=None)), events
 
 
 def test_pd_alive_outside_a_daemon_does_nothing_and_succeeds(monkeypatch, tmp_path):
@@ -106,6 +106,8 @@ def test_pd_alive_as_a_declared_unit_writes_one_event(monkeypatch, tmp_path):
     assert rc == 0 and len(events) == 1
     data = events[0][1]
     assert (data["unit"], data["interval_s"], data["in_flight"]) == ("mail-clock", 60.0, 2)
+    # the unit is the loop that runs the command, so the event names the parent, not the CLI
+    assert data["pid"] == os.getppid()
 
 
 def test_pd_alive_with_a_malformed_setting_fails(monkeypatch, tmp_path):

@@ -34,6 +34,9 @@ def add_pd_parser(sub) -> None:
     alive = pd_sub.add_parser(
         "alive", help="write one liveness event for the unit this process runs as (for shell "
                       "units, once per pass); does nothing outside a primal daemon (MIS-0002-R14)")
+    alive.add_argument("--pid", type=int, default=None,
+                       help="the unit's own process (default: the parent of this command, the loop "
+                            "that runs it; the daemon credits only the process it started)")
     alive.add_argument("--in-flight", type=int, default=None, metavar="N",
                        help="work started and not finished, which the daemon checks before a restart")
     alive.set_defaults(func=cmd_pd_alive)
@@ -48,7 +51,8 @@ def cmd_pd_alive(args: argparse.Namespace) -> int:
     found = liveness.unit_from_env()
     if found is None:
         return 1
-    return 0 if liveness.emit(found.card, found.unit, found.interval_s, args.in_flight) else 1
+    pid = args.pid or os.getppid()
+    return 0 if liveness.emit(found.card, found.unit, found.interval_s, args.in_flight, pid=pid) else 1
 
 
 def _when(epoch: Optional[float]) -> str:
