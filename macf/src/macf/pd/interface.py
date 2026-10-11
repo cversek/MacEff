@@ -30,7 +30,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 
-from macf.amail.broker import SUN_PATH_MAX
+from macf.utils.peercred import SUN_PATH_MAX
 from macf.utils.identity import session_identifier
 
 #: MIS-0002-R06: every process, unit, label and socket name of a primal daemon carries it.

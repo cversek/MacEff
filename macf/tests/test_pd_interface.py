@@ -291,3 +291,18 @@ def test_operator_channels_absent_is_not_the_same_as_none_declared():
     assert pdi.Declaration.model_validate(_declaration(operator_channels=[])).operator_channels == []
     named = pdi.Declaration.model_validate(_declaration(operator_channels=["plugin:telegram:telegram"]))
     assert named.operator_channels == ["plugin:telegram:telegram"]
+
+
+def test_pd_imports_without_amail():
+    """The primal daemon uses nothing from amail, so importing it must not load amail, which
+    refuses to load without the amail extra's cryptography (MacEff #618)."""
+    import subprocess
+    import sys
+    probe = (
+        "import importlib, pkgutil, sys, macf.pd\n"
+        "for m in pkgutil.iter_modules(macf.pd.__path__):\n"
+        "    importlib.import_module('macf.pd.' + m.name)\n"
+        "print(sorted(n for n in sys.modules if n.startswith('macf.amail')))\n"
+    )
+    out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=True)
+    assert out.stdout.strip() == "[]", out.stdout
