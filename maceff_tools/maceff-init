@@ -357,6 +357,18 @@ if [[ -n "${REFRESH_TARGET:-}" ]]; then
     log "  ✓ Refreshed .maceff/ in place (running containers that mount it see the new files)"
 fi
 
+# No group or world write on the framework tree, outside policies/. Every agent's shell
+# sources files from it (env.d/, shell/), so whoever can write them runs code as every
+# agent: in a container, the host's group shows up as a container group that a service
+# account can belong to. New entries take the umask's defaults, often group-writable, so
+# this runs after every create and refresh. policies/ is left as it is: its group and
+# setgid bit are the policy editors' edit boundary, set by the container's start-up.
+fw="$MACEFF_DIR/framework"
+if [[ -d "$fw" ]]; then
+    find "$fw" -path "$fw/policies" -prune -o \( ! -type l -perm /022 \) -exec chmod go-w {} +
+    log "  ✓ Framework tree has no group or world write outside policies/"
+fi
+
 # Display success message
 echo ""
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
