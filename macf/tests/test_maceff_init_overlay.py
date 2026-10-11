@@ -232,3 +232,38 @@ def test_a_refresh_keeps_what_the_deployment_set_on_existing_entries(deployment,
     if other:
         # a new file in a setgid directory joins the directory's group
         assert added.stat().st_gid == other[0]
+
+
+# --- no one else writes what every agent's shell sources -------------------
+
+def _writable_by_others(fw):
+    """Entries outside policies/ that group or world could write."""
+    return sorted(str(p.relative_to(fw)) for p in fw.rglob("*")
+                  if not p.is_symlink() and "policies" not in p.relative_to(fw).parts
+                  and p.stat().st_mode & 0o022)
+
+
+@pytest.mark.parametrize("sync", ["rsync", "portable"])
+def test_the_framework_tree_has_no_group_write_outside_policies(deployment, tmp_path, sync):
+    """Every agent's shell sources env.d/ and shell/ from this tree, so a group that can
+    write them runs code as every agent; in a container a service account can share the
+    host's group. Under a group-writable umask, neither a fresh tree nor a refresh may
+    leave group or world write outside policies/, whose group is the editors' boundary."""
+    if sync == "rsync" and not shutil.which("rsync"):
+        pytest.skip("rsync not installed here")
+    env = None if sync == "rsync" else _path_without_rsync(tmp_path)
+    (deployment / "framework" / "env.d").mkdir()
+    (deployment / "framework" / "env.d" / "10-toolchain.sh").write_text("export X=1\n")
+    old = os.umask(0o002)
+    try:
+        _out, fw = _run(deployment, env)
+        assert (fw / "env.d" / "10-toolchain.sh").exists()
+        assert _writable_by_others(fw) == []
+        # an entry left group-writable by hand, and one new to this refresh
+        (fw / "env.d" / "10-toolchain.sh").chmod(0o664)
+        (deployment / "framework" / "env.d" / "20-new.sh").write_text("export Y=1\n")
+        _out, fw = _run(deployment, env)
+    finally:
+        os.umask(old)
+    assert _writable_by_others(fw) == []
+    assert (fw / "env.d" / "20-new.sh").exists()
