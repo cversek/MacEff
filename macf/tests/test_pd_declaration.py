@@ -212,6 +212,18 @@ def test_launchd_install_writes_the_plist_then_bootstraps_it(tmp_path):
     assert any("bootstrap" in argv for argv in ran.argvs)
 
 
+@pytest.mark.parametrize("code, said", [(113, "not loaded"), (112, "no GUI session for uid 501"),
+                                        (5, "unknown: launchctl says why")])
+def test_launchd_status_tells_its_failures_apart(tmp_path, code, said):
+    """launchctl print answers 113 for a service the user's domain doesn't have and 112 when
+    the user has no GUI domain, as over SSH. Anything else is unknown, in launchctl's words."""
+    from types import SimpleNamespace
+
+    def run(argv):
+        return SimpleNamespace(returncode=code, stdout="", stderr="launchctl says why")
+    assert adapters.LaunchdAdapter(user_home=tmp_path, uid=501, run=run).status(CARD_T).startswith(said)
+
+
 
 def test_schedule_without_policy_fails():
     """A schedule with no missed-run policy is refused, never given a default (R109): a
