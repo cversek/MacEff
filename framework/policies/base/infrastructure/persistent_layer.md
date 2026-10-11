@@ -479,7 +479,7 @@ Each connection carries one request. A refusal says what was refused and why, an
 
 ### 12.5 Reading it from outside
 
-**`macf_tools pd status`** shows each declared unit's state. It believes the daemon only after checking it: the record must name a live process by pid and start time, and the process answering the socket must be that one. Otherwise it reads each declared unit's last state and liveness from the event log, through the shared health verdict (11.2). Either way it says which source it used, and why.
+**`macf_tools pd status`** shows each declared unit's state. It believes the daemon only after checking it: the record must name a live process by pid and start time, and the process answering the socket must be that one. Otherwise it reads each declared unit's last state and liveness from the event log, through the shared health verdict (11.2). Either way it says which source it used, and why. A session whose restart a quiet window holds shows the window's end (10.4).
 
 ### 12.6 A unit outlives a daemon that dies
 
