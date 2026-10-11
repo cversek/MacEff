@@ -392,7 +392,7 @@ A declaration with one unit:
 
 Schedules are declared in the same file, although step 2 of MIS-0002's landing runs them, so that the format holds still while the later steps land. A schedule names its missed-run policy from a closed list, `skip`, `run_once`, `run_once_in_window` or `report_only` [MIS-0002-R25 (missed-run_policy_MUST_be_listed)], and there is no default: a schedule without one is refused. A default would decide, for every schedule nobody thought about, what happens to the runs a downtime missed. A schedule also names its target, an isolated session or the live session of a named agent [MIS-0002-R29 (schedule_MUST_declare_target)].
 
-`quiet_windows` lists the times in which the layer is not to restart or compact a session [MIS-0002-R50 (layer_MUST-NOT_act_in_quiet_window)]. The declaration carries them now. The core does not read them yet, so until it does, a restart by policy can fall inside one.
+`quiet_windows` lists the times in which the layer neither restarts nor compacts a session [MIS-0002-R50 (layer_MUST-NOT_act_in_quiet_window)]. A session unit's restart waits for the window's end, whether its own restart policy or a request asked for it. An asked restart is recorded when it arrives and carried out when the window ends. A stop never waits [MIS-0002-R48 (outside_stop_MUST_override_gates)]. Windows are read in the declaration's timezone, or the host's when it names none, and one whose end comes before its start runs past midnight. A window that isn't a time of day is refused at load.
 
 ---
 
@@ -429,7 +429,7 @@ Every start, stop and restart the core performs is a `pd_control` event naming w
 ## 12 Not Yet Landed
 
 Specified in MIS-0002 and arriving with their landing steps, each in the pull request that enforces it:
-- **The primal daemon's process:** its control socket, its record and the identity it reads, outside control over the socket, health derived from runs, and the quiet windows the declaration already carries (MIS-0002 §6.1 to §6.4, §6.7).
+- **The primal daemon's process:** its control socket, its record and the identity it reads, outside control over the socket, and health derived from runs (MIS-0002 §6.1 to §6.4, §6.7).
 - **Schedules and the notifier,** including the keystroke fallback, the dark-channel event, and every producer of the operator's activity (MIS-0002 §6.5, §6.6, the rest of §6.14).
 - **Mail and the rest of containers** (MIS-0002 §6.8, §6.9).
 

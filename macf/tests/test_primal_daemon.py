@@ -543,3 +543,33 @@ def test_backoff_doubles_to_its_cap():
     assert [backoff_s(n, 1.0, 8.0) for n in range(7)] == [0.0, 1.0, 2.0, 4.0, 8.0, 8.0, 8.0]
 
 
+
+
+def test_quiet_window(script):
+    """A session's restart waits for the end of a quiet window its agent declared, whether
+    its own policy or an operator asked for it (R50). The window is set ahead of now in
+    the host's time, and the core's wall clock is moved into it and out again."""
+    from datetime import datetime, timedelta
+    from macf.pd.interface import Window
+
+    ahead = datetime.now()
+    window = Window(start=(ahead + timedelta(hours=1)).strftime("%H:%M"),
+                    end=(ahead + timedelta(hours=3)).strftime("%H:%M"))
+    unit = make_unit("worker", script, {"exit_after": 0.3, "code": 1}, restart="always")
+    shift = {"s": 0.0}
+    core = Core(Declaration(version=1, agent=CARD, units=[unit.model_copy(update={"kind": "session"})],
+                            quiet_windows=[window]), CARD,
+                wall=lambda: time.time() + shift["s"], backoff_base_s=0.05, backoff_cap_s=0.2)
+    try:
+        core.boot()
+        assert drive(core, lambda: core.state("worker") == "running")
+        first = core.pid("worker")
+        shift["s"] = 2 * 3600.0   # inside the window
+        assert drive(core, lambda: core.state("worker") != "running")
+        assert not drive(core, lambda: core.pid("worker") not in (None, first), timeout=1.0)
+        core.restart("worker", OPERATOR, "asked during the window", peer=PEER)
+        assert not drive(core, lambda: core.pid("worker") not in (None, first), timeout=0.5)
+        shift["s"] = 0.0          # the window has ended
+        assert drive(core, lambda: core.pid("worker") not in (None, first), timeout=3.0)
+    finally:
+        core.shutdown("the test is over")
