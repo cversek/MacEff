@@ -417,7 +417,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R12 | decidable | macf/tests/test_primal_daemon.py::test_clean_parent | passing |
 | R13 | decidable | macf/tests/test_primal_daemon.py::test_env_rendered_at_start | passing |
 | R14 | decidable | macf/tests/test_primal_daemon.py::test_liveness_events | planned |
-| R15 | decidable | macf/tests/test_pd_readout.py::test_liveness_probed | planned |
+| R15 | decidable | macf/tests/test_pd_readout.py::test_liveness_probed | passing |
 | R16 | judgment | the head maintainer, at review of each landing pull request | standing |
 | R17 | decidable | macf/tests/test_pd_readout.py::test_health_is_runs | planned |
 | R18 | decidable | macf/tests/test_pd_readout.py::test_overdue_is_unhealthy | planned |
