@@ -44,11 +44,41 @@ def test_when_a_closeout_is_posted(choice, is_open, closed_by, me, post):
     assert closeout.should_post(choice, is_open, closed_by, me)[0] is post
 
 
-def test_a_gh_token_in_the_settings_is_the_agents_identity(monkeypatch):
-    monkeypatch.setenv("GH_TOKEN", "from-settings")
+def _home_with_settings(monkeypatch, tmp_path, name, env):
+    monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(tmp_path))
+    (tmp_path / ".claude").mkdir(exist_ok=True)
+    (tmp_path / ".claude" / name).write_text(json.dumps({"env": env}))
+
+
+def test_a_gh_token_in_the_agents_settings_is_its_identity(monkeypatch, tmp_path):
+    monkeypatch.setenv("GH_TOKEN", "operator-exported")
+    _home_with_settings(monkeypatch, tmp_path, "settings.local.json", {"GH_TOKEN": "from-settings"})
     run = Recorder()
     env, how = closeout.agent_env("o/r", run)
-    assert env["GH_TOKEN"] == "from-settings" and "GH_TOKEN" in how and run.calls == []
+    assert env["GH_TOKEN"] == "from-settings" and "settings" in how and run.calls == []
+
+
+def test_settings_local_wins_over_settings(monkeypatch, tmp_path):
+    _home_with_settings(monkeypatch, tmp_path, "settings.json", {"GH_TOKEN": "shared"})
+    _home_with_settings(monkeypatch, tmp_path, "settings.local.json", {"GH_TOKEN": "local"})
+    assert closeout._settings_token() == "local"
+
+
+def test_an_inherited_token_is_never_the_agents(monkeypatch, tmp_path):
+    """A token the operator exports reaches the session's environment; it must not post (#582)."""
+    monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(tmp_path))          # no settings token here
+    monkeypatch.setenv("GH_TOKEN", "operator-exported")
+    monkeypatch.setenv("GITHUB_TOKEN", "operator-exported")
+    monkeypatch.setattr(closeout, "_ghapp_tool", lambda: None)
+    env, how = closeout.agent_env("o/r", Recorder())
+    assert env is None and "no GH_TOKEN in the agent's settings" in how
+    tool = tmp_path / "ghapp.py"
+    tool.write_text("")
+    monkeypatch.setattr(closeout, "_ghapp_tool", lambda: tool)
+    run = Recorder({"token --repo o/r": _done(0, "minted")})
+    env, how = closeout.agent_env("o/r", run)
+    assert env["GH_TOKEN"] == "minted" and "GITHUB_TOKEN" not in env
+    assert all("GITHUB_TOKEN" not in (k.get("env") or {}) for _, k in run.calls)
 
 
 @pytest.mark.parametrize("rc, out, token, said", [
@@ -57,6 +87,7 @@ def test_a_gh_token_in_the_settings_is_the_agents_identity(monkeypatch):
     (2, "", None, "no GitHub App of the agent's own"),
 ])
 def test_the_agents_app_answers_for_it(monkeypatch, tmp_path, rc, out, token, said):
+    monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(tmp_path))
     monkeypatch.delenv("GH_TOKEN", raising=False)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     tool = tmp_path / "ghapp.py"
@@ -159,3 +190,20 @@ def test_the_issue_is_closed_under_the_agents_identity_too(monkeypatch):
             cli._gh_issue_closeout(42, mtmd, args, 's/c/g/p/t')
     closes = [c for c in mock_run.call_args_list if c[0][0][:3] == ['gh', 'issue', 'close']]
     assert len(closes) == 1 and closes[0][1]["env"]["GH_TOKEN"] == "app-token"
+
+
+def test_a_pr_closed_unmerged_takes_its_closer_from_the_issue_record(monkeypatch):
+    from macf.cli import _gh_pr_closeout
+    from macf.task.models import MacfTaskMetaData
+    mtmd = MacfTaskMetaData(task_type='GH_PR', custom={
+        'gh_owner': 'o', 'gh_repo': 'r', 'gh_pr_number': 9, 'linked_issues': []})
+    view = _done(stdout=json.dumps({"state": "CLOSED", "mergeCommit": None, "mergedBy": None}))
+    monkeypatch.setattr(closeout, "agent_login", lambda: "maceff-ira[bot]")
+    monkeypatch.setattr(closeout, "item_state", lambda repo, n, run=None: (False, "maceff-ira[bot]"))
+    monkeypatch.setattr(closeout, "check_body", lambda body, signed, run=None: None)
+    monkeypatch.setattr(closeout, "agent_env", lambda repo, run=None: ({"GH_TOKEN": "t"}, "the agent's GitHub App"))
+    args = SimpleNamespace(report="Closed: superseded.", verified=None, cascade=False, closeout=None)
+    with patch('macf.cli._public_attribution_enabled', return_value=False):
+        with patch('subprocess.run', side_effect=[view, _done()]) as mock_run:
+            assert _gh_pr_closeout(9, mtmd, args, 's/c/g/p/t') == 'CLOSED_UNMERGED'
+    assert [c for c in mock_run.call_args_list if c[0][0][:3] == ['gh', 'pr', 'comment']]

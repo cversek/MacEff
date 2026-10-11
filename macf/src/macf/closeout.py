@@ -3,8 +3,10 @@
 Completing a task that tracks a GitHub issue or pull request posts a close-out comment (#582).
 On a login that several agents and the operator share, a bare ``gh`` acts as whichever account
 is active, usually the operator's. So a close-out goes out only under an identity of the agent's
-own: ``GH_TOKEN`` from its settings, or its own GitHub App where the app is installed on that
-repository (git_discipline section 4). With neither, nothing is posted. The composed close-out
+own: a ``GH_TOKEN`` in its own settings files (``.claude/settings.local.json``, then
+``.claude/settings.json``, under the agent home), or its own GitHub App where the app is
+installed on that repository (git_discipline section 4). A token inherited from the environment
+is never taken for the agent's: on a shared login it may be the operator's. With neither, nothing is posted. The composed close-out
 and the command that would post it are printed, and the task still completes.
 
 The body passes the commit-message hooklets a pull request body passes, and a finding stops the
@@ -41,6 +43,28 @@ def _ghapp_root() -> Path:
     return Path(os.environ.get("MACEFF_AGENT_HOME_DIR") or os.path.expanduser("~")) / ".maceff" / "ghapp"
 
 
+def _settings_token() -> Optional[str]:
+    """The GH_TOKEN (or GITHUB_TOKEN) the agent's own Claude Code settings set, if any.
+
+    settings.local.json wins over settings.json, as Claude Code applies them. An unreadable
+    file is said on stderr and skipped, so it can never stand in for a token it doesn't hold.
+    """
+    home = Path(os.environ.get("MACEFF_AGENT_HOME_DIR") or os.path.expanduser("~"))
+    for name in ("settings.local.json", "settings.json"):
+        path = home / ".claude" / name
+        if not path.is_file():
+            continue
+        try:
+            env = json.loads(path.read_text()).get("env") or {}
+        except (OSError, ValueError, AttributeError) as e:
+            print(f"   ⚠️  cannot read {path}: {e}", file=sys.stderr)
+            continue
+        token = env.get("GH_TOKEN") or env.get("GITHUB_TOKEN")
+        if token:
+            return token
+    return None
+
+
 def _ghapp_tool() -> Optional[Path]:
     """The tool that mints this agent's app tokens: in the source tree, else in the image."""
     tree = _maceff_tree()
@@ -74,16 +98,18 @@ def agent_login() -> Optional[str]:
 def agent_env(repo_slug: str, run: Optional[Run] = None) -> Tuple[Optional[Dict[str, str]], str]:
     """The environment in which ``gh`` acts as this agent on repo_slug, or None and why not."""
     run = run or subprocess.run
-    env = dict(os.environ)
-    if env.get("GH_TOKEN") or env.get("GITHUB_TOKEN"):
-        return env, "the agent's GH_TOKEN"
+    env = {k: v for k, v in os.environ.items() if k not in ("GH_TOKEN", "GITHUB_TOKEN")}
+    token = _settings_token()
+    if token:
+        env["GH_TOKEN"] = token
+        return env, "the GH_TOKEN in the agent's settings"
     tool = _ghapp_tool()
     if tool is None:
-        return None, "no GH_TOKEN, and no GitHub App tool in this install"
+        return None, "no GH_TOKEN in the agent's settings, and no GitHub App tool in this install"
     try:
         # The token stays in this process's memory and the child's environment: never printed.
         r = run([sys.executable, "-I", str(tool), "token", "--repo", repo_slug],
-                capture_output=True, text=True, timeout=30)
+                capture_output=True, text=True, timeout=30, env=env)
     except (OSError, subprocess.TimeoutExpired) as e:
         return None, f"the app tool did not run: {e}"
     if r.returncode == 0 and r.stdout.strip():
@@ -92,7 +118,7 @@ def agent_env(repo_slug: str, run: Optional[Run] = None) -> Tuple[Optional[Dict[
     if r.returncode == 3:
         return None, f"the agent's GitHub App is not installed on {repo_slug}"
     if r.returncode == 2:
-        return None, "no GH_TOKEN, and no GitHub App of the agent's own"
+        return None, "no GH_TOKEN in the agent's settings, and no GitHub App of the agent's own"
     return None, "the agent's GitHub App gave no token: " + (r.stderr.strip()[:200] or f"exit {r.returncode}")
 
 
@@ -139,11 +165,15 @@ def should_post(choice: Optional[bool], is_open: Optional[bool], closed_by: Opti
 
 
 def _token_login(run: Run) -> Optional[str]:
-    """The account behind a GH_TOKEN from the agent's settings, when there is one."""
-    if not (os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")):
+    """The account behind the GH_TOKEN in the agent's settings, when there is one."""
+    token = _settings_token()
+    if not token:
         return None
+    env = {k: v for k, v in os.environ.items() if k not in ("GH_TOKEN", "GITHUB_TOKEN")}
+    env["GH_TOKEN"] = token
     try:
-        r = run(["gh", "api", "user", "--jq", ".login"], capture_output=True, text=True, timeout=15)
+        r = run(["gh", "api", "user", "--jq", ".login"], capture_output=True, text=True, timeout=15,
+                env=env)
     except (OSError, subprocess.TimeoutExpired) as e:
         print(f"   ⚠️  cannot read the GH_TOKEN account: {e}", file=sys.stderr)
         return None  # noqa: MACEFF003 - unknown login; the caller withholds the post and names --closeout

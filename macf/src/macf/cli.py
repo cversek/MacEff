@@ -9142,10 +9142,12 @@ def _gh_pr_closeout(task_id: int, mtmd, args, breadcrumb: str) -> str:
     # someone else merged or closed (#582).
     from . import closeout
     choice = getattr(args, "closeout", None)
+    # A pull request closed without merging names no merger; its closer is on the issue record.
+    closed_by = closeout.item_state(repo_slug, gh_pr_number)[1] if outcome == "CLOSED_UNMERGED" else merged_by
     closeout.post("pr", gh_pr_number, repo_slug, comment,
                   choice=choice if choice in (True, False) else None,
                   is_open=None if outcome == "UNKNOWN" else outcome == "OPEN",
-                  closed_by=merged_by, signed=_public_attribution_enabled())
+                  closed_by=closed_by, signed=_public_attribution_enabled())
 
     # Cascade to linked GH_ISSUE tasks (only when merged).
     linked_tasks = _gh_pr_find_linked_issue_tasks(linked_issues, repo_slug) if outcome == "MERGED" else []
