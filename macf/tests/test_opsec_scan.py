@@ -212,6 +212,7 @@ def _gated_broker(tmp_path, **cfg_kw):
     (peer_home / "Maildir").mkdir(parents=True)
     contacts = tmp_path / "contacts.json"
     contacts.write_text(_addressing({"alpha": ["peer@agents.test"]}))
+    (tmp_path / "handoff" / "peer").mkdir(mode=0o2770, parents=True)   # provisioned (amail.md §2.3)
     return Broker(BrokerConfig(
         domain="agents.test", contacts_path=contacts,
         dispositions_dir=tmp_path / "disp",

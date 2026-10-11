@@ -86,6 +86,10 @@ def deployment(tmp_path, sock_dir):
         inbound_handoff=tmp_path / "handoff",
         inbound_quarantine=tmp_path / "quarantine",
     )
+    # PROVISIONED, for the same reason: a deployment provisions every pickup box
+    # (amail.md §2.3), and this broker, running as 'alpha', may not create beta's.
+    for agent in homes:
+        (tmp_path / "handoff" / agent).mkdir(mode=0o2770, parents=True)
     def _pull(agent: str):
         """Custody transfer, as the recipient. Delivery no longer ends in the
         recipient's Maildir — it ends in a pickup box the recipient drains, so
@@ -178,6 +182,7 @@ class TestContactRestriction:
                             lambda self, agent, sender: "")
         deployment["cfg"].agent_homes["stranger"] = deployment["tmp"] / "stranger"
         (deployment["tmp"] / "stranger").mkdir()
+        (deployment["tmp"] / "handoff" / "stranger").mkdir(mode=0o2770)
         monkeypatch.setattr(deployment["cfg"], "domain", "elsewhere.test")
         # The sender-authenticity check (round-2 F1) is a SEPARATE control and
         # would refuse first once the domain moved. Satisfy it so this control
@@ -200,6 +205,7 @@ class TestContactRestriction:
         """
         deployment["cfg"].agent_homes["stranger"] = deployment["tmp"] / "stranger"
         (deployment["tmp"] / "stranger").mkdir()
+        (deployment["tmp"] / "handoff" / "stranger").mkdir(mode=0o2770)
         monkeypatch.setattr(deployment["cfg"], "domain", "elsewhere.test")
         m = msg(to="stranger@elsewhere.test", sender="alpha@elsewhere.test")
 
@@ -411,6 +417,7 @@ class TestContactListSemantics:
         assert b.submit("alpha", msg(to="late@example.test"))["ok"] is False
         deployment["cfg"].agent_homes["late"] = deployment["tmp"] / "late"
         (deployment["tmp"] / "late").mkdir()
+        (deployment["tmp"] / "handoff" / "late").mkdir(mode=0o2770)
         deployment["contacts"].write_text(_addressing({
             "alpha": [f"beta@{DOMAIN}", f"late@{DOMAIN}"], "beta": [f"alpha@{DOMAIN}"]}))
         assert b.submit("alpha", msg(to=f"late@{DOMAIN}"))["ok"] is True
@@ -1116,6 +1123,7 @@ class TestAuditCompleteness:
         deployment["contacts"].chmod(0o644)
         deployment["cfg"].agent_homes["gamma"] = deployment["tmp"] / "gamma"
         (deployment["tmp"] / "gamma").mkdir()
+        (deployment["tmp"] / "handoff" / "gamma").mkdir(mode=0o2770)
 
         real = store.deliver
         def boom(home, message):
@@ -2981,6 +2989,7 @@ class TestAuditRecordsEveryRecipientsVerdict:
         homes = deployment["homes"]
         homes["gamma"] = tmp_path / "gamma"
         homes["gamma"].mkdir(parents=True, exist_ok=True)
+        (tmp_path / "handoff" / "gamma").mkdir(mode=0o2770)
         deployment["cfg"].agent_homes = homes
         key = generate_keypair(tmp_path / "alpha.pem")
         deployment["contacts"].write_text(_addressing({
@@ -3533,3 +3542,41 @@ class TestScrubSplitsCredentialFromContext:
         from macf.opsec import DEFAULT_PROFILE, compiled_checks, scan_text, is_credential_label
         r = scan_text("please run macf_tools amail status", part="body", checks=compiled_checks(DEFAULT_PROFILE))
         assert r.findings and all(not is_credential_label(f.label) for f in r.findings)
+
+
+# ---------------------------------------------------------------------------
+# amail.md §2.3: a pickup box is provisioned, and a broker across a uid boundary
+# does not create one it cannot make readable to its agent
+# ---------------------------------------------------------------------------
+
+class TestAnUnprovisionedBoxIsRefusedAcrossAUidBoundary:
+    """The broker runs as 'alpha'. beta's box, missing, would be a box beta cannot
+    read, while the sender was told the mail was delivered. alpha's own box, missing,
+    is one this broker can make for its own uid, as a host-tier broker does."""
+
+    def test_a_missing_box_for_another_uid_is_refused_and_not_created(self, deployment):
+        box = deployment["tmp"] / "handoff" / "beta"
+        box.rmdir()
+        r = deployment["broker"].submit("alpha", msg())
+        assert r["ok"] is False, r
+        said = json.dumps(r)
+        assert "never provisioned" in said and "'beta'" in said
+        assert not box.exists()
+
+    def test_a_missing_box_for_the_brokers_own_uid_is_created(self, deployment):
+        deployment["contacts"].write_text(_addressing({
+            "alpha": [f"alpha@{DOMAIN}"], "beta": [f"alpha@{DOMAIN}"]}))
+        deployment["contacts"].chmod(0o644)
+        box = deployment["tmp"] / "handoff" / "alpha"
+        box.rmdir()
+        r = deployment["broker"].submit("alpha", msg(to=f"alpha@{DOMAIN}"))
+        assert r["ok"] is True, r
+        assert box.is_dir() and any(box.glob("*.amsg"))
+
+    def test_a_shared_uid_may_create_the_box_of_any_agent_bound_to_it(self, deployment):
+        cfg = deployment["cfg"]
+        cfg.shared_uid_agents = {os.getuid(): ("alpha", "beta")}
+        assert cfg.may_create_pickup_box("beta")
+        cfg.shared_uid_agents = {}
+        assert not cfg.may_create_pickup_box("beta")
+        assert cfg.may_create_pickup_box("alpha")
