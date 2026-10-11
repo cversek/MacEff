@@ -9580,6 +9580,7 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
         })
 
         # Auto-complete scoped task if it's in the active scope
+        scope_result = {}
         try:
             from .task.scope import complete_scoped_task
             scope_result = complete_scoped_task(str(task_id))
@@ -9599,11 +9600,20 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
         # at their real status; they are not fake-completed). Paused members are
         # released here too: completing a member never clears them away, since a
         # paused task is still open, so its owner's completion is what lets go.
-        if task_type in ("SPRINT", "PLAY_TIME"):
+        # Only the scope's owner lets go, though: a sprint whose scope another
+        # sprint has since replaced releases nothing, and neither does one that
+        # shares the scope with a sprint or play time still running in it.
+        # Completing an old sprint once emptied the scope a newer sprint had just
+        # taken over, silently ending that sprint's mode lock.
+        if task_type in ("SPRINT", "PLAY_TIME") and scope_result.get("success"):
             try:
                 from .task.scope import get_scope_check, clear_scope
+                from .task.sprint_gate import get_sprint_play_time_in_scope
                 _check = get_scope_check()
-                if _check.get("active_count", 0) + _check.get("paused_count", 0) > 0:
+                _held = get_sprint_play_time_in_scope()
+                if _held.get("sprint_task") or _held.get("play_time_task"):
+                    print("   ↪️  Another sprint or play time still holds the scope; nothing released")
+                elif _check.get("active_count", 0) + _check.get("paused_count", 0) > 0:
                     clr = clear_scope()
                     if clr.get("success"):
                         swept = len(set(
@@ -11463,6 +11473,7 @@ def cmd_idea_graph(args: argparse.Namespace) -> int:
         print(json.dumps({
             **graph["stats"],
             "top5": [{"id": i, "degree": d, "title": graph["ideas"][i].get("title", "")} for i, d in top5],
+            "isolated": [{"id": i, "title": graph["ideas"][i].get("title", "")} for i in graph["isolated"]],
         }, indent=2))
         return 0
 
@@ -11573,7 +11584,15 @@ def cmd_knowledge_doctor(args: argparse.Namespace) -> int:
             print(f"❌ {e}")
             return 2
     view = "all" if getattr(args, "all_orphans", False) else "summary"
-    dx = examine(orphans=view, since=since, orphan_type=getattr(args, "orphan_type", None))
+    orphan_type = getattr(args, "orphan_type", None)
+    dx = examine(orphans=view, since=since, orphan_type=orphan_type)
+    if orphan_type and orphan_type not in dx.chart.scope:
+        # A type the doctor never examines would match nothing, and the report
+        # would come back unchanged, as if the filter had run and found everything.
+        print(f"❌ the doctor does not examine {orphan_type!r}. It examines: {', '.join(dx.chart.scope)}")
+        if orphan_type.rstrip("s") == "idea":
+            print("   Ideas live in their own store: list the isolated ones with macf_tools idea graph --json")
+        return 2
     if getattr(args, "json_output", False):
         print(json.dumps(dx.to_dict(), indent=2, default=str))
     else:
@@ -13431,7 +13450,7 @@ def _build_parser() -> argparse.ArgumentParser:
     kg_doctor.add_argument("--since", metavar="DATE|Nd",
                            help="also list each orphan dated on or after this (2026-09-01, or 7d)")
     kg_doctor.add_argument("--type", dest="orphan_type", metavar="TYPE",
-                           help="list every orphan of one type (the bulk pass)")
+                           help="list every orphan of one type, and no other type (the bulk pass)")
     kg_doctor.add_argument("--all", dest="all_orphans", action="store_true",
                            help="list every orphan individually instead of one line per type")
     kg_doctor.set_defaults(func=cmd_knowledge_doctor)
