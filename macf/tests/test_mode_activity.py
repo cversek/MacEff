@@ -375,6 +375,8 @@ def test_channels_told_apart_by_name(isolated_events_log, capsys):
     assert [counted(p) for p in (TELEGRAM, DISCORD, MACEFF_NOTICE)] == [yes, no, no]
     _declare(_declared([]))                                                               # declared: none
     assert [counted(p) for p in (TELEGRAM, DISCORD)] == [no, no]
+    _declare(_declared(["plugin:telegram:TELEGRAM", "telegram"]))                         # near misses
+    assert counted(TELEGRAM) == no
 
     _declare("{not a declaration")
     assert counted(DISCORD) == yes

@@ -509,7 +509,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R104 | decidable | macf/tests/test_pd_harness.py::test_channel_first | planned |
 | R105 | decidable | macf/tests/test_pd_harness.py::test_keystrokes_only_as_fallback | planned |
 | R106 | decidable | macf/tests/test_mode_activity.py::test_wake_is_not_operator_activity | planned |
-| R107 | decidable | macf/tests/test_mode_activity.py::test_channels_told_apart_by_name | passing |
+| R107 | decidable | macf/tests/test_mode_activity.py::test_channels_told_apart_by_name | planned |
 | R108 | decidable | macf/tests/test_primal_daemon.py::test_compaction_askers | planned |
 | R109 | decidable | macf/tests/test_pd_declaration.py::test_schedule_without_policy_fails | planned |
 | R110 | decidable | macf/tests/test_pd_schedule.py::test_no_default_policy | planned |
@@ -641,6 +641,7 @@ Objections recorded:
 - 2026-10-10: conformance, from the pull request for landing step 6 (the code rename of `hypervisor`): R76 passing. The deploy configuration documents `primal-daemon` and reads the retired value as it. No requirement changed.
 - 2026-10-10: R69 and R72 amended to the operator's decision of 2026-10-09 (one tray icon for every agent on the host, a menu entry per agent, the icon showing the most urgent state among them), which replaces the "tray per agent" reading in P13. Carried at the operator's word of 2026-10-10, in the host-side maintainer's text, with R72 folded into one sentence with one keyword. Slugs and conformance rows unchanged.
 - 2026-10-10: conformance, from the pull request for the primal daemon's core (landing step 1): R07, R12, R13, R20, R22, R48, R49, R50 and R51 passing. R50's test holds a restart the unit's own policy asked for; a second test holds an operator's restart and carries it out as the operator's act when the window ends. R66, adopting a session Claude Code's own daemon already hosts, is not built yet, and the policy lists it as still to come. No requirement changed.
+- 2026-10-10: conformance, from the pull request for R107's channel names: built, a channel counts as the operator only by an exact name the declaration lists, and the MacEff channel never counts. R107 stays planned: until an agent declares `operator_channels`, a transitional rule counts every channel but the MacEff channel, which R107 as written doesn't allow, and its test asserts that rule. The row moves to passing when the transitional rule ends. No requirement changed.
 
 ## Wiki-Links
 
