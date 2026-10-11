@@ -1,9 +1,9 @@
 """``macf_tools pd``: the agent's primal daemon, from the command line.
 
-Only ``status`` for now: it reads, and acts on nothing. Starting, stopping and restarting a
-unit over the control socket must name who asks (MIS-0002-R52
-(control_act_MUST_name_who_asked)), and which asker a command line typed in a session
-claims is still an open question.
+``status`` reads; ``install`` and ``uninstall`` put the daemon under this platform's service
+manager and take it out. Starting, stopping and restarting a unit over the control socket
+must name who asks (MIS-0002-R52 (control_act_MUST_name_who_asked)), and which asker a
+command line typed in a session claims is still an open question, so no unit act is here.
 """
 import argparse
 import json
@@ -20,6 +20,16 @@ def add_pd_parser(sub) -> None:
                        "else from the event log, saying which")
     show.add_argument("--json", action="store_true", help="one JSON object")
     show.set_defaults(func=cmd_pd_status)
+    inst = pd_sub.add_parser(
+        "install", help="put this agent's primal daemon under the platform's service manager and "
+                        "start it; a declaration that fails installs nothing")
+    inst.add_argument("--plan", action="store_true", help="print the unit it would install, and change nothing")
+    inst.add_argument("--force", action="store_true", help="replace an installed unit that differs")
+    inst.set_defaults(func=cmd_pd_install)
+    rm = pd_sub.add_parser(
+        "uninstall", help="stop this agent's primal daemon and remove its unit; the units it "
+                          "supervises keep running, for a later daemon to adopt")
+    rm.set_defaults(func=cmd_pd_uninstall)
 
 
 def _when(epoch: Optional[float]) -> str:
@@ -60,4 +70,62 @@ def cmd_pd_status(args: argparse.Namespace) -> int:
         if "liveness" in unit:
             line += f"; liveness {unit['liveness']}: {unit['detail']}"
         print(line)
+    return 0
+
+
+def _this_agent():
+    """The agent home, resolved, and the card its own files name, or the refusal's reason."""
+    from pathlib import Path
+
+    from macf.pd.daemon import card_for_home
+    from macf.utils.paths import find_agent_home
+
+    home = Path(find_agent_home()).resolve()
+    return home, card_for_home(home)
+
+
+def cmd_pd_install(args: argparse.Namespace) -> int:
+    from macf.pd import adapter as adapters
+    from macf.pd.core import POLICY_POINTER, DeclarationRefused, load_declaration
+
+    try:
+        home, card = _this_agent()
+        load_declaration(home, card)
+        tier = adapters.adapter_for(sys.platform)
+    except (DeclarationRefused, LookupError) as e:
+        print(f"maceff_pd: nothing installed: {e}\n{POLICY_POINTER}", file=sys.stderr)
+        return 1
+    if args.plan:
+        print(f"# {card}: the outer tier for {home} on {sys.platform}, not installed (--plan)")
+        print(tier.render(card, home))
+        return 0
+    try:
+        where = tier.install(card, home, force=args.force)
+    except (OSError, RuntimeError) as e:
+        print(f"maceff_pd: install stopped: {e}\n{POLICY_POINTER}", file=sys.stderr)
+        return 1
+    print(f"{card}: installed at {where}; the service manager says: {tier.status(card)}")
+    if sys.platform.startswith("linux"):
+        import os
+        import pwd
+
+        from macf.platform.systemd import linger_enabled
+        if linger_enabled(pwd.getpwuid(os.getuid()).pw_name) is False:
+            print("note: linger is off, so the daemon stops at your last logout; "
+                  "`loginctl enable-linger` keeps it running, and is the host operator's call")
+    return 0
+
+
+def cmd_pd_uninstall(args: argparse.Namespace) -> int:
+    from macf.pd import adapter as adapters
+    from macf.pd.core import POLICY_POINTER, DeclarationRefused
+
+    try:
+        _home, card = _this_agent()
+        tier = adapters.adapter_for(sys.platform)
+        tier.uninstall(card)
+    except (DeclarationRefused, LookupError, OSError, RuntimeError) as e:
+        print(f"maceff_pd: uninstall stopped: {e}\n{POLICY_POINTER}", file=sys.stderr)
+        return 1
+    print(f"{card}: uninstalled; the service manager says: {tier.status(card)}")
     return 0

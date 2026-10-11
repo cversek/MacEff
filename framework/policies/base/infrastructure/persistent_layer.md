@@ -410,6 +410,8 @@ Schedules are declared in the same file, although step 2 of MIS-0002's landing r
 
 **The daemon is the one thing a platform renders.** A declared unit needs no rendering of its own, because the core starts it as its child (10.2). Each supported platform supplies an adapter behind one interface, `macf.pd.adapter`, that renders and installs the daemon's outer tier: the LaunchAgent on macOS (3.1) and the systemd user unit on Linux (6.1). The core imports no platform code. CI fails when a supported platform has no adapter [MIS-0002-R10 (CI_MUST_fail_unrendered_unit)]. That is how this policy reads R10 while every unit is the daemon's child.
 
+**`macf_tools pd install` puts the daemon under the platform's service manager, and `pd uninstall` takes it out.** Install reads the agent's card from its home and the declaration from that home first, and installs nothing from a declaration that fails (10.3). `--plan` prints the unit it would install and changes nothing, and a unit already installed that differs is replaced only with `--force`, so a hand edit is never lost silently. On Linux it says when linger is off, since without it the daemon stops at the user's last logout, and turning it on is the host operator's decision (6.1). Uninstall stops the daemon and removes its unit, and on Linux it stops at any failure other than a unit that isn't loaded. The units the daemon supervised keep running, as after any daemon's exit (12.6), for a later daemon to adopt.
+
 ---
 
 ## 11 The Events

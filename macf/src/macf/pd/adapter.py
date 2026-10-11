@@ -28,8 +28,9 @@ class PlatformAdapter(Protocol):
     def render(self, card: str, agent_home: Path) -> str:
         """The outer tier's unit text for this agent, with nothing in it but the home."""
 
-    def install(self, card: str, agent_home: Path) -> Path:
-        """Write and load the rendered unit; return where it was written."""
+    def install(self, card: str, agent_home: Path, force: bool = False) -> Path:
+        """Write and load the rendered unit; return where it was written. An installed unit
+        that differs from the rendering is refused unless ``force``."""
 
     def uninstall(self, card: str) -> None:
         """Unload and remove the unit, leaving the agent's home untouched."""
@@ -94,13 +95,13 @@ class LaunchdAdapter:
                                                       self._log_dir(agent_home))
         return plist.decode("utf-8")
 
-    def install(self, card: str, agent_home: Path) -> Path:
+    def install(self, card: str, agent_home: Path, force: bool = False) -> Path:
         from macf.pd.interface import channel_socket, control_socket
         from macf.platform import launchd
         argv, log_dir = _program(agent_home), self._log_dir(agent_home)
         steps = launchd.install_plan(card, argv, self._home, log_dir, self._uid,
                                      [str(control_socket(card)), str(channel_socket(card))])
-        launchd.apply_plan(steps, run=self._run)
+        launchd.apply_plan(steps, run=self._run, force=force)
         return Path(launchd.render_pd_launch_agent(card, argv, self._home, log_dir)[0])
 
     def uninstall(self, card: str) -> None:
@@ -144,10 +145,13 @@ class SystemdAdapter:
     def render(self, card: str, agent_home: Path) -> str:
         return self._unit(card, agent_home)[1]
 
-    def install(self, card: str, agent_home: Path) -> Path:
+    def install(self, card: str, agent_home: Path, force: bool = False) -> Path:
         from macf.platform import systemd
         path, text = self._unit(card, agent_home)
         path = Path(path)
+        if path.exists() and path.read_text() != text and not force:
+            raise FileExistsError(f"{path} exists and differs from the rendered unit; "
+                                  f"review it, then install with force")
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(path.name + ".tmp")
         tmp.write_text(text)
@@ -164,9 +168,14 @@ class SystemdAdapter:
         name = systemd_unit(card)
         for verb in ("stop", "disable"):
             out = self._run(systemd.systemctl_argv(verb, name))
-            if out.returncode != 0:
-                # A unit that was never loaded has nothing to stop or disable; removal goes on.
-                print(f"⚠️ MACF: pd: systemctl {verb} {name}: {out.stderr.strip()}", file=sys.stderr)
+            if out.returncode == 0:
+                continue
+            said = out.stderr.strip()
+            # A unit that was never loaded has nothing to stop or disable, and removal goes on.
+            # Any other failure stops it, so a unit still running is never left without its file.
+            if "not loaded" not in said and "does not exist" not in said:
+                raise RuntimeError(f"systemctl {verb} {name} failed ({out.returncode}): {said}")
+            print(f"⚠️ MACF: pd: systemctl {verb} {name}: {said}", file=sys.stderr)
         path = Path(self._home) / ".config" / "systemd" / "user" / name
         if path.exists():
             path.unlink()
