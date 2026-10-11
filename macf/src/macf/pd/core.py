@@ -26,6 +26,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 from zoneinfo import ZoneInfo
@@ -119,6 +120,11 @@ def load_declaration(agent_home: Path, card: str) -> Declaration:
                 check_window(schedule.missed_run.window)
         except ValueError as e:
             raise DeclarationRefused(f"{path}: schedule {schedule.name}: {e}") from e
+    for window in declaration.quiet_windows:
+        try:
+            check_window(window)
+        except ValueError as e:
+            raise DeclarationRefused(f"{path}: quiet window: {e}") from e
     me = pwd.getpwuid(os.getuid()).pw_name
     foreign = [u.name for u in declaration.units if u.account != me]
     if foreign:
@@ -128,6 +134,27 @@ def load_declaration(agent_home: Path, card: str) -> Declaration:
             "write itself (MIS-0002-R78 (layer_MUST-NOT_widen_permissions))"
         )
     return declaration
+
+
+def quiet_window_at(declaration: Declaration, at: float):
+    """The declared quiet window the time ``at`` (epoch seconds) falls in, or None.
+
+    MIS-0002-R50 (layer_MUST-NOT_act_in_quiet_window). Windows are read in the declaration's
+    timezone, or the host's when it names none, and one whose end comes before its start
+    runs past midnight. Times compare as ``HH:MM``, so a window ends at its minute.
+    """
+    if not declaration.quiet_windows:
+        return None
+    tz = ZoneInfo(declaration.timezone) if declaration.timezone else None
+    hhmm = datetime.fromtimestamp(at, tz).strftime("%H:%M")
+    for window in declaration.quiet_windows:
+        if window.start <= window.end:
+            inside = window.start <= hhmm < window.end
+        else:
+            inside = hhmm >= window.start or hhmm < window.end
+        if inside:
+            return window
+    return None
 
 
 def backoff_s(failures: int, base: float = BACKOFF_BASE_S, cap: float = BACKOFF_CAP_S) -> float:
@@ -213,6 +240,7 @@ class _Runner:
     stopping: Optional[str] = None      # why a stop is under way, until the exit is reaped
     then_start: bool = False            # the stop under way is half of a restart
     drain: Optional[tuple] = None       # (asker, reason, deadline) of a restart waiting on R49
+    held_restart: Optional[tuple] = None  # (asker, reason) of an asked restart a quiet window holds (R50)
 
 
 class _LivenessTail:
@@ -398,6 +426,12 @@ class Core:
         """Restart a unit, once its work in flight has drained or the drain has timed
         out (MIS-0002-R49 (pd_MUST_check_work_in_flight))."""
         r = self._runner(unit)
+        window = quiet_window_at(self.declaration, self._wall()) if r.spec.kind == "session" else None
+        if window is not None:
+            # Recorded now and carried out when the window ends (R50); a stop never waits (R48).
+            self._control("restart", r, asked_by, f"{reason} (held: quiet window until {window.end})", peer)
+            r.held_restart = (asked_by, reason)
+            return
         self._control("restart", r, asked_by, reason, peer)
         r.want_up = True
         if r.proc is None:
@@ -460,6 +494,11 @@ class Core:
                       f"(continuing with the others): {e}", file=sys.stderr)
 
     def _tick_unit(self, r: _Runner, now: float) -> None:
+        if r.held_restart is not None and quiet_window_at(self.declaration, self._wall()) is None:
+            asked_by, reason = r.held_restart
+            r.held_restart = None
+            self.restart(r.spec.name, asked_by, f"{reason} (held until a quiet window ended)")
+            return
         if r.proc is not None:
             code = r.proc.poll()
             if code is not None:
@@ -482,6 +521,8 @@ class Core:
                         r, f"{reason} (work in flight did not drain in {self._drain_timeout:g} s)")
             return
         if r.want_up and r.restart_at is not None and now >= r.restart_at:
+            if r.spec.kind == "session" and quiet_window_at(self.declaration, self._wall()) is not None:
+                return  # the session's restart waits for the window's end (R50)
             r.restart_at = None
             self._control("start", r, POLICY,
                           f"restart policy {r.spec.restart} after failure {r.failures}")
