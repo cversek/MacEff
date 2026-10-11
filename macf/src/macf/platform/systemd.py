@@ -4,7 +4,12 @@ On Linux the user's systemd instance is the outer tier. ``Restart=always`` resta
 daemon whenever it exits, clean exit included (MIS-0002-R03 (outer_tier_MUST_restart_pd)),
 and ``StartLimitIntervalSec=0`` in ``[Unit]`` keeps systemd from giving up after a burst
 of quick exits: in ``[Service]`` that key is ignored by current systemd, and the daemon
-would stay down after its fifth fast crash. Linger keeps the user's instance, and so the
+would stay down after its fifth fast crash. ``RestartSteps`` and ``RestartMaxDelaySec``
+stretch the delay between restarts from 10 s to 60 s, so a daemon that keeps exiting 75 or
+78 tries once a minute rather than every 10 s. Neither code stops the restarts: 75 means
+another daemon holds the agent, and this unit should take over when that one ends; 78 also
+covers start errors that clear by themselves, such as a directory not yet there. systemd
+older than 254 ignores the two keys and keeps the fixed 10 s. Linger keeps the user's instance, and so the
 daemon, running with no login session; it is the operator's switch
 (``loginctl enable-linger``), reported here and never flipped.
 
@@ -64,6 +69,10 @@ def render_pd_user_unit(card: str, program_argv: List[str], user_home: str) -> T
         f"ExecStart={' '.join(exec_quote(a) for a in program_argv)}\n"
         "Restart=always\n"
         "RestartSec=10\n"
+        # A daemon that cannot start (exit 78) or finds another running (75) backs off to
+        # one try a minute instead of every 10 s, and is never given up on (R03).
+        "RestartSteps=3\n"
+        "RestartMaxDelaySec=60\n"
         # Only the daemon is signalled when it exits; the units it manages outlive it.
         "KillMode=process\n"
         "\n"
