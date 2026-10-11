@@ -413,8 +413,9 @@ class Asker(_Closed):
     (MIS-0002-R52 (control_act_MUST_name_who_asked)).
 
     ``harness`` is for a compaction nobody asked for, found by the absence of an ask
-    (MIS-0002-R127 (harness_compaction_MUST_be_recorded)); ``policy`` for the daemon's
-    own restart policy acting on a failed unit.
+    (MIS-0002-R127 (harness_compaction_MUST_be_recorded)); ``policy`` for the daemon
+    acting on its own declared rules: a unit's restart policy after a failure, the start of
+    declared units at boot, and the stops of a shutdown.
     """
 
     kind: Literal["operator", "wind_down", "policy", "harness"]
@@ -531,11 +532,17 @@ Request = Union[StatusRequest, ActRequest, CompactRequest]
 
 
 class UnitStatus(_Closed):
+    """A unit as the daemon sees it now. ``restart_held_until`` is the end of the quiet
+    window, ``HH:MM`` in the declaration's time, that a session's restart waits for,
+    asked or due by its policy (MIS-0002-R50 (layer_MUST-NOT_act_in_quiet_window)), so
+    whoever asked for it learns that it waits rather than that it happened."""
+
     unit: str
     state: State
     pid: Optional[int] = None
     proc_start: Optional[str] = None
     since: float
+    restart_held_until: Optional[str] = None
 
 
 class Response(_Closed):
