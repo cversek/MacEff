@@ -42,6 +42,8 @@ def sender(tmp_path, monkeypatch):
                                  contacts_path=contacts,
                                  inbound_handoff=tmp_path / "handoff",
                                  agent_homes={"alpha": home, "peer": peer_home}))
+    for agent in ("alpha", "peer"):           # provisioned, as a deployment does (§2.3)
+        (tmp_path / "handoff" / agent).mkdir(mode=0o2770, parents=True)
     submitted = []
 
     def submit(agent, message, socket_path, timeout=10.0):
