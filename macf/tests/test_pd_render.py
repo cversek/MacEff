@@ -6,6 +6,8 @@ step 1 and get their own classes here.
 import plistlib
 import shutil
 import subprocess
+import sys
+import textwrap
 
 import pytest
 
@@ -148,3 +150,41 @@ class TestMacOSFollowsTheInterface:
         from macf.pd.interface import launchd_label
         from macf.platform.launchd import pd_label
         assert pd_label(CARD) == launchd_label(CARD)
+
+
+#: Run in a fresh interpreter, so a tray module another test already imported can't hide
+#: an import of it here. The finder records every attempt, so a guarded
+#: ``try: import macf.tray`` fails the test too: the layer may not even reach for it.
+_WITHOUT_TRAY = textwrap.dedent("""
+    import importlib, pkgutil, sys
+
+    attempts = []
+
+    class NoTray:
+        def find_spec(self, name, path=None, target=None):
+            if name == "macf.tray" or name.startswith("macf.tray."):
+                attempts.append(name)
+                raise ImportError("no tray on this host")
+
+    sys.meta_path.insert(0, NoTray())
+    import macf.observe, macf.pd, macf.platform
+    for pkg in (macf.pd, macf.platform, macf.observe):
+        for mod in pkgutil.iter_modules(pkg.__path__, pkg.__name__ + "."):
+            if not mod.name.endswith(".__main__"):    # importing a __main__ would run it
+                importlib.import_module(mod.name)
+    from macf.platform.launchd import render_pd_launch_agent
+    from macf.platform.systemd import render_pd_user_unit
+    argv = ["/usr/bin/python3", "-m", "macf.pd", "/home/someone/agent"]
+    _, plist = render_pd_launch_agent("IraMacEff@ee9a78", argv, "/Users/someone", "/tmp/logs")
+    _, unit = render_pd_user_unit("IraMacEff@ee9a78", argv, "/home/someone")
+    assert b"tray" not in plist and "tray" not in unit
+    assert attempts == [], attempts
+""")
+
+
+def test_runs_without_tray():
+    """MIS-0002-R68 (layer_MUST-NOT_depend_on_tray): where the tray can't be imported, every
+    module of the daemon, its platform adapters and observation still imports without reaching
+    for it, and both outer-tier units render without naming it."""
+    run = subprocess.run([sys.executable, "-c", _WITHOUT_TRAY], capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr
