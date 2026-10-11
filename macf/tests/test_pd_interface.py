@@ -237,16 +237,34 @@ def _schedule(**over):
     return schedule
 
 
-def test_a_declaration_with_schedules_names_its_timezone():
-    """A bare cron reads in local time on a host and usually in UTC in a container, so a
-    declaration with schedules names the timezone they are all read in, and a name that
-    is not one is refused rather than read as some other zone."""
-    with pytest.raises(ValidationError, match="timezone"):
-        pdi.Declaration.model_validate(_declaration(schedules=[_schedule()]))
-    with pytest.raises(ValidationError, match="unknown timezone"):
-        pdi.Declaration.model_validate(_declaration(schedules=[_schedule()], timezone="Mars/Olympus"))
-    assert pdi.Declaration.model_validate(_declaration(schedules=[_schedule()], timezone="UTC")).timezone == "UTC"
+def test_a_declaration_with_schedules_or_quiet_windows_names_its_timezone():
+    """A bare time of day reads in local time on a host and usually in UTC in a container,
+    so a declaration with schedules or quiet windows names the timezone they are all read
+    in, and a name that is not one is refused rather than read as some other zone."""
+    window = {"start": "22:00", "end": "07:00"}
+    for over in ({"schedules": [_schedule()]}, {"quiet_windows": [window]}):
+        with pytest.raises(ValidationError, match="timezone"):
+            pdi.Declaration.model_validate(_declaration(**over))
+        with pytest.raises(ValidationError, match="unknown timezone"):
+            pdi.Declaration.model_validate(_declaration(**over, timezone="Mars/Olympus"))
+        assert pdi.Declaration.model_validate(_declaration(**over, timezone="UTC")).timezone == "UTC"
     assert pdi.Declaration.model_validate(_declaration()).timezone is None
+
+
+def test_a_timezone_that_names_a_directory_is_refused(monkeypatch):
+    """Where zones come from the tzdata package, 'America' is one of its directories, and
+    opening it raises OSError rather than the not-found error. The loader refuses it with a
+    reason instead of crashing. The second half makes every platform take that path, since
+    without the tzdata package the name is reported as not found either way."""
+    with pytest.raises(ValidationError, match="unknown timezone 'America'"):
+        pdi.Declaration.model_validate(_declaration(timezone="America"))
+
+    def tzdata_directory(key):
+        raise IsADirectoryError(21, "Is a directory", key)
+
+    monkeypatch.setattr(pdi, "ZoneInfo", tzdata_directory)
+    with pytest.raises(ValidationError, match="unknown timezone 'Europe'"):
+        pdi.Declaration.model_validate(_declaration(timezone="Europe"))
 
 
 def test_a_schedule_whose_act_restarts_a_unit_says_so():

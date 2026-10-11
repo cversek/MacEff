@@ -59,7 +59,7 @@ JSON, validated closed: an unknown key is refused, because a key the daemon igno
 - **Missed-run policy:** no default; a schedule without one is refused [MIS-0002-R109 (CI_MUST_fail_schedule_without_policy)]. The policy is `skip`, `run_once`, `run_once_in_window` with its window, or `report_only` [MIS-0002-R25 (missed-run_policy_MUST_be_listed)].
 - **Target:** `isolated` or a named agent's live session [MIS-0002-R29 (schedule_MUST_declare_target)].
 - **Time limit:** `timeout_s` is required [MIS-0002-R36 (run_MUST_have_wall-clock_limit)].
-- **Timezone:** the declaration's `timezone`, an IANA name, is required once any schedule is declared, and every cron and window is read in it. Without it, a host would read a cron in local time and a container in UTC.
+- **Timezone:** every cron and missed-run window is read in the declaration's `timezone` (below), so a declaration with schedules must name one.
 - **A restarting act:** `restarts_unit` marks a schedule whose act restarts a unit; a downtime never replays such a run [MIS-0002-R27 (scheduler_MUST-NOT_replay_restart_runs)].
 - **The run** is one of two shapes:
   - `{"prompt_file", "allowed_tools"}`, a model turn whose permissions are settled when the schedule is created, so a run that meets a prompt fails instead of waiting [MIS-0002-R31 (schedule_MUST_settle_permission_at_creation), MIS-0002-R32 (run_MUST_fail_on_prompt)];
@@ -68,7 +68,8 @@ JSON, validated closed: an unknown key is refused, because a key the daemon igno
 **The agent-level fields:**
 - `operator_channels`: the channel names whose events count as the operator's activity; every other name counts as not the operator [MIS-0002-R107 (hooks_MUST_tell_channels_apart_by_name)]. Absent means not yet declared, and an empty list declares that no channel is the operator's, so a declaration written for its units never decides by default whether the operator's phone counts.
 - `notice_routes`: per notice source, `agent`, `operator`, `both` or `held_until_present` [MIS-0002-R42 (notice_source_MUST_be_routed)].
-- `quiet_windows`: when the layer neither restarts nor compacts [MIS-0002-R50 (layer_MUST-NOT_act_in_quiet_window)].
+- `quiet_windows`: when the layer neither restarts nor compacts, read in `timezone` [MIS-0002-R50 (layer_MUST-NOT_act_in_quiet_window)].
+- `timezone`: an IANA name, required once any schedule or quiet window is declared. Without it, a host would read a time of day in its local time and a container in UTC. A name that isn't a zone is refused with the reason, including one that names a directory of zones, such as `America`.
 - `keep_harness_idle_compaction`: `false` by default, so the harness's own idle compaction is turned off [MIS-0002-R126 (adapter_MUST_turn_off_harness_idle_compaction)].
 - `wind_down`: the skill that winds the agent down and asks for its compaction through the control socket. Absent means only the operator may ask [MIS-0002-R108 (compaction_MUST_be_asked_by_operator_or_wind-down)].
 

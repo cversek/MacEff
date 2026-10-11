@@ -320,9 +320,10 @@ class Declaration(_Closed):
     - ``keep_harness_idle_compaction``: the harness's own idle compaction stays off unless
       this keeps it (MIS-0002-R126 (adapter_MUST_turn_off_harness_idle_compaction)).
     - ``wind_down``: absent means no wind-down, so only the operator may ask to compact.
-    - ``timezone``: the IANA name crons and windows are read in, required once any schedule
-      is declared, because a host reads a bare cron in local time and a container usually
-      in UTC, so the same declaration would fire at different moments.
+    - ``timezone``: the IANA name crons and quiet windows are read in, required once any
+      schedule or quiet window is declared, because a host reads a bare time of day in its
+      local time and a container usually in UTC, so the same declaration would act at
+      different moments.
     """
 
     version: Literal[1]
@@ -347,14 +348,17 @@ class Declaration(_Closed):
         return self
 
     @model_validator(mode="after")
-    def _schedules_name_their_timezone(self) -> "Declaration":
-        if self.schedules and not self.timezone:
-            raise ValueError("a declaration with schedules names the timezone its crons and windows "
-                             "are read in, as an IANA name such as 'UTC' or 'America/New_York'")
+    def _crons_and_windows_name_their_timezone(self) -> "Declaration":
+        if (self.schedules or self.quiet_windows) and not self.timezone:
+            raise ValueError("a declaration with schedules or quiet windows names the timezone "
+                             "its crons and windows are read in, as an IANA name such as 'UTC' "
+                             "or 'America/New_York'")
         if self.timezone:
             try:
                 ZoneInfo(self.timezone)
-            except (ZoneInfoNotFoundError, ValueError) as e:
+            except (ZoneInfoNotFoundError, ValueError, OSError) as e:
+                # Where zones come from the tzdata package, a name that is one of its
+                # directories, such as 'America', is opened as a file and raises OSError.
                 raise ValueError(f"unknown timezone {self.timezone!r}: {e}") from e
         return self
 
