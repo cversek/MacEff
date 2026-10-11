@@ -43,7 +43,11 @@ jobs:
           --ignore=macf/tests/test_env_cli.py
           --ignore=macf/tests/test_get_token_info.py
           --ignore=macf/tests/test_handle_session_start.py
-        timeout-minutes: 3
+        # MEASURED 2026-10-11: main's hermetic run took 2:48 on 3.10 and 2:12 on
+        # 3.12, so the old 3-minute limit failed the first pull request that
+        # added tests driving real processes, at 77% and with nothing failing.
+        # Six minutes still stops a hang.
+        timeout-minutes: 6
 
       - name: Run tests (live external state)
         # MEASURED on this runner, not predicted: 26 passed, 7 skipped. The
