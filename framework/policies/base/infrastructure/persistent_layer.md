@@ -302,7 +302,9 @@ If the container is near its limit and a peer's unit holds most of it, tell the 
 
 ### 9.1 What it is
 
-**The tray is optional** [MIS-0002-R67 (operator_MAY_run_tray)]. It is a menu-bar app the operator may run where the host has a desktop. The outer tier and every primal daemon run the same without it, and no part of the layer imports it [MIS-0002-R68 (layer_MUST-NOT_depend_on_tray)]. It is installed as the `tray` extra and run with `python -m macf.tray`. Where a host cannot show it, as on stock GNOME without an extension, the readout is to say so once it lands [MIS-0002-R73 (readout_MUST_say_tray_unavailable)]; until then nothing does.
+**The tray is optional** [MIS-0002-R67 (operator_MAY_run_tray)]. It is a menu-bar app the operator may run where the host has a desktop. The outer tier and every primal daemon run the same without it, and no part of the layer imports it [MIS-0002-R68 (layer_MUST-NOT_depend_on_tray)]. It is installed as the `tray` extra and run with `python -m macf.tray`.
+
+**Whether a host can show it is checked, with the reason when it can't** (`macf.platform.tray_host`). The tray runs only on macOS so far. There it needs its extra, which is looked up and never imported, and a GUI session that belongs to the user: a Mac at the login window, reached over SSH, has nowhere to show it. The check sits outside the tray package so that asking never imports the tray. The readout is to print its answer [MIS-0002-R73 (readout_MUST_say_tray_unavailable)] once `pd status` lands and calls it; until then nothing prints it.
 
 ### 9.2 One icon for every agent
 
