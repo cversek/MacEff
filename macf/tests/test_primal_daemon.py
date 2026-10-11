@@ -473,6 +473,20 @@ def test_survivor_adopted_not_started_twice(make_core, script):
     assert drive(second, lambda: second.state("worker") == "running")
 
 
+def test_an_adopted_unit_reads_since_its_own_start(make_core, script):
+    """An adopted unit's "since" is when its process began, not the adoption, so a daemon's
+    restart doesn't make its units read as just restarted."""
+    began = time.time()
+    survivor = _survivor(make_core, script)
+    time.sleep(1.5)
+    second = make_core([survivor.unit])
+    adopted_at = time.time()
+    second.boot()
+    since = {s.unit: s.since for s in second.statuses()}["worker"]
+    # proc_start has one-second resolution on macOS.
+    assert began - 1.0 <= since <= adopted_at - 0.5
+
+
 def test_a_reused_pid_is_not_adopted(make_core, script):
     """A recorded pid whose start time no longer matches is another process now. The unit is
     started fresh and that process is left alone."""
