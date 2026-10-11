@@ -148,6 +148,13 @@ def check_body(body: str, signed: bool, run: Optional[Run] = None) -> Optional[s
     return None
 
 
+def _login(name: str) -> str:
+    """One spelling for a GitHub login. ``gh pr view`` names an app ``app/<slug>``, where
+    the REST API and the app's own facts say ``<slug>[bot]``."""
+    name = name.lower()
+    return name[4:] + "[bot]" if name.startswith("app/") else name
+
+
 def should_post(choice: Optional[bool], is_open: Optional[bool], closed_by: Optional[str],
                 me: Optional[str]) -> Tuple[bool, str]:
     """Whether to post, and why. ``choice`` is --closeout (True) or --no-closeout (False)."""
@@ -157,7 +164,7 @@ def should_post(choice: Optional[bool], is_open: Optional[bool], closed_by: Opti
         return True, "the item's state could not be read"
     if is_open:
         return True, "the item is open"
-    if closed_by and me and closed_by.lower() == me.lower():
+    if closed_by and me and _login(closed_by) == _login(me):
         return True, "this agent closed it"
     if not closed_by:
         return False, "it is closed and who closed it is unknown; pass --closeout to post anyway"
