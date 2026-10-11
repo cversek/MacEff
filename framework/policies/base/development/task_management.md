@@ -115,6 +115,8 @@ Task management policy governs the use of Claude Code native Task* tools (TaskCr
 - How do I record out-of-order execution so a successor can tell it from skipped work?
 - What type-specific completion gates exist?
 - How does GH_ISSUE closeout work?
+- What does completing a GH_PR task post, and who reads it?
+- Under whose identity is a close-out posted, what must its body pass, and when is it not posted?
 
 **7 Archive Protocol**
 - How do I archive completed tasks?
@@ -542,7 +544,7 @@ The maintainer workflow for landing an inbound PR. Where §2.3.1 authors a fix, 
    ```bash
    macf_tools task complete N --verified "CI green, tested locally, merged as <sha>"
    ```
-   Completion records **MERGED** (success) or **CLOSED_UNMERGED** (rejected).
+   Completion records **MERGED** (success) or **CLOSED_UNMERGED** (rejected). Its close-out comment follows "Who posts a close-out, and when" in §6.5.1: as the agent, through the publishing checks, and by default not on a pull request someone else merged or closed.
 
 7. **Cascade linkage**: on a MERGED gh_pr whose `linked_issues` names locally-tracked GH_ISSUE tasks, those issue tasks are completed too (the merge already closed the GitHub issues). Default behavior reports the cascade for confirmation; `--cascade` completes them automatically.
 
@@ -1034,7 +1036,7 @@ GH_ISSUE tasks bridge to external GitHub issues. Completion requires the agent t
    - Verification evidence
    - Any related follow-up work identified
 
-4. **GitHub Issue Comment**: On successful completion, the system automatically posts a structured close-out comment on the GitHub issue and closes it. The comment contains:
+4. **GitHub Issue Comment**: On completion, the system posts a structured close-out comment on the GitHub issue, under the rules for every close-out below, and closes the issue once the fix has landed. The comment contains:
    - The agent's `--report` text as the body (the agent's conscious, professional contribution)
    - Commit links (automated from `--commit` hashes)
    - Verification method (automated from `--verified` text)
@@ -1078,6 +1080,11 @@ GH_ISSUE tasks bridge to external GitHub issues. Completion requires the agent t
    - Include root cause analysis, what was changed and why
    - The system handles structured metadata; the agent handles professional communication
 
+**Who posts a close-out, and when** (GH_ISSUE and GH_PR alike):
+- **Only as the agent.** A close-out goes out under an identity of the agent's own: a `GH_TOKEN` in its own settings files (`.claude/settings.local.json`, then `.claude/settings.json`, under the agent home), or its own GitHub App where the app is installed on that repository (`git_discipline` §4). A token inherited from the environment is never taken for the agent's, because on a shared login it may be the operator's. On a login that the operator and other agents share, a bare `gh` acts as whichever account is active, usually the operator's, so it is never used for a close-out. With no identity of its own, the agent's close-out is printed with the command that would post it, nothing is posted, and the task still completes. Closing the issue takes the same identity.
+- **Through the publishing checks.** The body passes the commit-message hooklets a pull request body passes (`10-no-session-url`, `20-no-private-refs`, and `30-calling-card` where the deployment signs), and a finding stops the post. A check that cannot run counts as a finding.
+- **When it says something.** By default a close-out is posted while the item is open, or when this agent closed or merged it. It is not posted when someone else did, since a comment there tells nobody anything. `--closeout` posts anyway, and `--no-closeout` completes without posting.
+
 **CLI Invocation**:
 ```bash
 macf_tools task complete #97 \
@@ -1106,10 +1113,16 @@ The gate pattern generalizes to any task type. Each gate redirects to its own po
 | Type | Gate Concept | Status |
 |------|-------------|--------|
 | GH_ISSUE | Commit citations + verification method + GitHub closeout + calling card (opt-in via opsec.public_attribution) | Implemented (DETOUR #99) |
-| GH_PR | Terminal outcome (MERGED/CLOSED_UNMERGED) + verification + cascade to linked GH_ISSUE tasks (§2.3.3) | Spec'd — impl MISSION #1161 |
+| GH_PR | Terminal outcome (MERGED/CLOSED_UNMERGED) + verification + cascade to linked GH_ISSUE tasks (§2.3.3) | Implemented: the close-out is §6.5.3 |
 | MISSION | All phases completed | Future |
 | EXPERIMENT | Results documented | Future |
 | DELEG_PLAN | Delegation executed | Future |
+
+#### 6.5.3 GH_PR Close-out
+
+Completing a GH_PR task reads the pull request's terminal state from GitHub and posts a **Review Close-out** comment on it: the agent's `--report` as the body, then the outcome (MERGED or CLOSED_UNMERGED) and the `--verified` text, then the calling card where `opsec.public_attribution` is on, as for an issue (§6.5.1).
+
+**The report is public text.** Write it for the pull request's readers, with no private context, under the same rules as an issue's close-out (`../development/public_voice.md` §2.1). A report written as a private task record lands on the pull request unchanged. Who posts it, what it must pass first, and when it isn't posted at all are in "Who posts a close-out, and when" (§6.5.1).
 
 ---
 

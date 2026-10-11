@@ -13,15 +13,17 @@ anything, including a forged tag of its own. Keys the framework types carry
 no opening at all, since a slash command has to open with "/", so the
 framework records them as it sends them, and that record is read instead.
 
-One channel is never the operator, whoever reads it: the MacEff channel,
-through which the persistent layer delivers notices. Both producers ask
-``from_maceff_channel`` of the source they found.
+A channel counts as the operator only by its exact name, among those the agent
+declares as the operator's. One is never the operator, whoever reads it: the
+MacEff channel, through which the persistent layer delivers notices. Both
+producers ask ``operator_channel`` of the source they found.
 """
 
 import re
 import sys
 import time
-from typing import Optional
+from pathlib import Path
+from typing import FrozenSet, Optional
 
 CHANNEL_TAG_OPENING = "<channel "
 
@@ -173,3 +175,56 @@ def from_maceff_channel(source: Optional[str]) -> bool:
     transport sets (MIS-0002-R107 (hooks_MUST_tell_channels_apart_by_name)).
     """
     return source == MACEFF_CHANNEL_SOURCE
+
+
+#: Each declaration read, by path: its modification time and the names it lists. The
+#: transcript monitor asks for every row it reads.
+_DECLARED: dict = {}
+
+
+def declared_operator_channels(agent_home: Optional[Path] = None) -> Optional[FrozenSet[str]]:
+    """The channel names the agent's declaration lists as the operator's, or None while it
+    lists none: no declaration, ``operator_channels`` absent, or a declaration that can't
+    be read, which is said on stderr because the primal daemon refuses it too."""
+    from macf.pd.interface import Declaration, declaration_path
+    if agent_home is None:
+        from macf.utils.paths import find_agent_home
+        agent_home = find_agent_home()
+    path = declaration_path(agent_home)
+    if not path.exists():
+        return None    # nothing declared yet
+    try:
+        mtime = path.stat().st_mtime_ns
+    except OSError as e:
+        print(f"⚠️ MACF: the declaration at {path} can't be read, so every channel but the "
+              f"MacEff channel counts as the operator's: {e}", file=sys.stderr)
+        return None
+    cached = _DECLARED.get(path)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+    try:
+        listed = Declaration.model_validate_json(path.read_text()).operator_channels
+    except (OSError, ValueError) as e:
+        print(f"⚠️ MACF: the declaration at {path} can't be read, so every channel but the "
+              f"MacEff channel counts as the operator's: {e}", file=sys.stderr)
+        listed = None
+    names = frozenset(listed) if listed is not None else None
+    _DECLARED[path] = (mtime, names)
+    return names
+
+
+def operator_channel(source: Optional[str], agent_home: Optional[Path] = None) -> bool:
+    """True when a channel's events count as the operator's activity
+    (MIS-0002-R107 (hooks_MUST_tell_channels_apart_by_name)).
+
+    The MacEff channel never does. Otherwise the exact name must be one the agent's
+    declaration lists in ``operator_channels``. Until the agent declares that list, every
+    other channel counts, an unnamed one included: the transitional rule ``mode_system``
+    states, which keeps an agent that hasn't declared counted as it always was.
+    """
+    if from_maceff_channel(source):
+        return False
+    declared = declared_operator_channels(agent_home)
+    if declared is None:
+        return True
+    return bool(source) and source in declared
