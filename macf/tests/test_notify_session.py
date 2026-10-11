@@ -129,3 +129,18 @@ def test_read_credential_yields_None_rather_than_a_partial_credential(tmp_path):
     assert session.read_credential(malformed) is None
 
     assert session.read_credential(tmp_path / "absent.key") is None
+
+
+def test_a_pid_not_running_is_an_answer_not_a_warning(capsys):
+    """The start-time check is shared by the wake, the readout, the MacEff channel's peer
+    check and the transcript monitor. For all of them a pid that is not running is an
+    ordinary answer, so it returns None and puts nothing on stderr."""
+    import subprocess
+    import sys as _sys
+    from macf.notify.session import proc_start, verify_incarnation
+
+    done = subprocess.Popen([_sys.executable, "-c", "pass"])
+    done.wait()
+    assert proc_start(done.pid) is None
+    assert verify_incarnation(done.pid, "1") is False
+    assert capsys.readouterr().err == ""
