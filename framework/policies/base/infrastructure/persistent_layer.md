@@ -336,7 +336,8 @@ The first three alert. A session that starts waiting on a person changes its own
 
 Specified in MIS-0002 and arriving with their landing steps, each in the pull request that enforces it:
 - **The primal daemon itself:** declarations, liveness events, health derived from runs, and outside control (MIS-0002 §6.1 to §6.4, §6.7).
-- **Schedules and the notifier,** including the keystroke fallback, the dark-channel event, and every producer of the operator's activity (MIS-0002 §6.5, §6.6, the rest of §6.14).
+- **Schedules and the notifier,** including the keystroke fallback and the dark-channel event (MIS-0002 §6.5, §6.6, the rest of §6.14).
+- **The end of R107's transitional rule** [MIS-0002-R107 (hooks_MUST_tell_channels_apart_by_name)] (1.4): until an agent declares `operator_channels`, every channel but the MacEff channel counts as the operator's.
 - **Mail and the rest of containers** (MIS-0002 §6.8, §6.9).
 
 Until a section lands, the rules in force are the existing policies: `service_supervision`, `notification_delivery` and `amail`.
