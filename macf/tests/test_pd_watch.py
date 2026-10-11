@@ -228,3 +228,17 @@ def test_the_default_probe_compares_starts_as_the_interface_says(tmp_path):
     assert wrong and wrong != proc_start(me)
     _record(tmp_path / "run", pid=me, start=wrong)
     assert watch.check_daemon(CARD, tmp_path / "run", watch.verify_incarnation).verdict == "GONE"
+
+
+def test_a_row_whose_unit_is_not_a_name_does_not_stop_the_watch(tmp_path):
+    """The outside watch skips a liveness row whose unit is a list, as the readout does, and
+    still finds the unit's good row behind it."""
+    log, now = tmp_path / "events.jsonl", time.time()
+    good = {"timestamp": now - 5, "event": pdi.EVENT_LIVENESS,
+            "data": {"agent": "Resident@1a2b3c", "unit": "broker", "pid": 4242, "proc_start": "777",
+                     "interval_s": 15.0}}
+    bad = {"timestamp": now - 1, "event": pdi.EVENT_LIVENESS,
+           "data": dict(good["data"], unit=["broker"])}
+    log.write_text(json.dumps(good) + "\n" + json.dumps(bad) + "\n")
+    found = watch.last_liveness(log, "Resident@1a2b3c", ["broker"], now)
+    assert found["broker"]["data"]["pid"] == 4242
