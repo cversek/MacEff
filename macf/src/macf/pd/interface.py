@@ -26,6 +26,7 @@ import re
 import stat
 from pathlib import Path
 from typing import Annotated, Dict, List, Literal, Optional, Union, get_args
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 
@@ -281,7 +282,9 @@ class CommandRun(_Closed):
 class Schedule(_Closed):
     """A schedule, for step 2 (MIS-0002-R24, MIS-0002-R29 (schedule_MUST_declare_target)).
     Declared now so the format does not change under the steps that come later.
-    ``timeout_s`` is required (MIS-0002-R36 (run_MUST_have_wall-clock_limit))."""
+    ``timeout_s`` is required (MIS-0002-R36 (run_MUST_have_wall-clock_limit)). ``restarts_unit``
+    marks a schedule whose act restarts a unit, a run a downtime never replays
+    (MIS-0002-R27 (scheduler_MUST-NOT_replay_restart_runs))."""
 
     name: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,47}$")
     cron: str = Field(min_length=1)
@@ -289,6 +292,7 @@ class Schedule(_Closed):
     target: Union[Literal["isolated"], str]
     run: Union[PromptRun, CommandRun]
     timeout_s: float = Field(gt=0)
+    restarts_unit: bool = False
 
 
 class WindDown(_Closed):
@@ -308,23 +312,30 @@ class Declaration(_Closed):
 
     - ``operator_channels``: the channel names whose events count as the operator's
       activity; every other name counts as not the operator
-      (MIS-0002-R107 (hooks_MUST_tell_channels_apart_by_name)).
+      (MIS-0002-R107 (hooks_MUST_tell_channels_apart_by_name)). Absent means not yet
+      declared, and an empty list declares that no channel is the operator's: a default
+      here would decide for a deployment whether its operator's phone counts.
     - ``notice_routes``: per notice source, who must hear it
       (MIS-0002-R42 (notice_source_MUST_be_routed)).
     - ``keep_harness_idle_compaction``: the harness's own idle compaction stays off unless
       this keeps it (MIS-0002-R126 (adapter_MUST_turn_off_harness_idle_compaction)).
     - ``wind_down``: absent means no wind-down, so only the operator may ask to compact.
+    - ``timezone``: the IANA name crons and quiet windows are read in, required once any
+      schedule or quiet window is declared, because a host reads a bare time of day in its
+      local time and a container usually in UTC, so the same declaration would act at
+      different moments.
     """
 
     version: Literal[1]
     agent: str = Field(min_length=1)
     units: List[Unit] = Field(default_factory=list)
     schedules: List[Schedule] = Field(default_factory=list)
-    operator_channels: List[str] = Field(default_factory=list)
+    operator_channels: Optional[List[str]] = None
     notice_routes: Dict[str, NoticeRoute] = Field(default_factory=dict)
     quiet_windows: List[Window] = Field(default_factory=list)
     keep_harness_idle_compaction: bool = False
     wind_down: Optional[WindDown] = None
+    timezone: Optional[str] = None
 
     @model_validator(mode="after")
     def _names_unique(self) -> "Declaration":
@@ -336,6 +347,21 @@ class Declaration(_Closed):
             raise ValueError("at most one unit may be the session")
         return self
 
+    @model_validator(mode="after")
+    def _crons_and_windows_name_their_timezone(self) -> "Declaration":
+        if (self.schedules or self.quiet_windows) and not self.timezone:
+            raise ValueError("a declaration with schedules or quiet windows names the timezone "
+                             "its crons and windows are read in, as an IANA name such as 'UTC' "
+                             "or 'America/New_York'")
+        if self.timezone:
+            try:
+                ZoneInfo(self.timezone)
+            except (ZoneInfoNotFoundError, ValueError, OSError) as e:
+                # Where zones come from the tzdata package, a name that is one of its
+                # directories, such as 'America', is opened as a file and raises OSError.
+                raise ValueError(f"unknown timezone {self.timezone!r}: {e}") from e
+        return self
+
 
 # ============================================================================
 # 3. The events (all appended to the agent's own event log)
@@ -345,6 +371,7 @@ class Declaration(_Closed):
 EVENT_LIVENESS = "pd_unit_alive"
 EVENT_STATE = "pd_unit_state"
 EVENT_CONTROL = "pd_control"
+EVENT_DAEMON_START = "pd_daemon_start"
 
 
 class Liveness(_Closed):
@@ -386,8 +413,9 @@ class Asker(_Closed):
     (MIS-0002-R52 (control_act_MUST_name_who_asked)).
 
     ``harness`` is for a compaction nobody asked for, found by the absence of an ask
-    (MIS-0002-R127 (harness_compaction_MUST_be_recorded)); ``policy`` for the daemon's
-    own restart policy acting on a failed unit.
+    (MIS-0002-R127 (harness_compaction_MUST_be_recorded)); ``policy`` for the daemon
+    acting on its own declared rules: a unit's restart policy after a failure, the start of
+    declared units at boot, and the stops of a shutdown.
     """
 
     kind: Literal["operator", "wind_down", "policy", "harness"]
@@ -425,6 +453,24 @@ class Control(_Closed):
             raise ValueError("an act asked for over the control socket records its peer, "
                              "and only such an act does")
         return self
+
+
+class DaemonStart(_Closed):
+    """A daemon's life began, written once by the daemon itself, with the fields of its
+    record: after its sockets are bound and the record is written, and before it adopts or
+    starts any unit. A second daemon refused for the agent never writes one
+    (MIS-0002-R01 (agent_MUST_have_one_primal_daemon)).
+
+    What a daemon observes outside its own units, such as a surface's state, is good only
+    for that daemon's life, so a fold of those observations starts from the newest of
+    these. Unit state is not reset by it: a restarted daemon reads its units' last states
+    to adopt the ones still running.
+    """
+
+    agent: str
+    pid: int = Field(gt=1)
+    proc_start: str = Field(min_length=1)
+    version: Literal[1] = 1
 
 
 # ============================================================================
@@ -486,11 +532,17 @@ Request = Union[StatusRequest, ActRequest, CompactRequest]
 
 
 class UnitStatus(_Closed):
+    """A unit as the daemon sees it now. ``restart_held_until`` is the end of the quiet
+    window, ``HH:MM`` in the declaration's time, that a session's restart waits for,
+    asked or due by its policy (MIS-0002-R50 (layer_MUST-NOT_act_in_quiet_window)), so
+    whoever asked for it learns that it waits rather than that it happened."""
+
     unit: str
     state: State
     pid: Optional[int] = None
     proc_start: Optional[str] = None
     since: float
+    restart_held_until: Optional[str] = None
 
 
 class Response(_Closed):

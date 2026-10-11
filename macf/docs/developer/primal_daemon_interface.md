@@ -59,14 +59,17 @@ JSON, validated closed: an unknown key is refused, because a key the daemon igno
 - **Missed-run policy:** no default; a schedule without one is refused [MIS-0002-R109 (CI_MUST_fail_schedule_without_policy)]. The policy is `skip`, `run_once`, `run_once_in_window` with its window, or `report_only` [MIS-0002-R25 (missed-run_policy_MUST_be_listed)].
 - **Target:** `isolated` or a named agent's live session [MIS-0002-R29 (schedule_MUST_declare_target)].
 - **Time limit:** `timeout_s` is required [MIS-0002-R36 (run_MUST_have_wall-clock_limit)].
+- **Timezone:** every cron and missed-run window is read in the declaration's `timezone` (below), so a declaration with schedules must name one.
+- **A restarting act:** `restarts_unit` marks a schedule whose act restarts a unit; a downtime never replays such a run [MIS-0002-R27 (scheduler_MUST-NOT_replay_restart_runs)].
 - **The run** is one of two shapes:
   - `{"prompt_file", "allowed_tools"}`, a model turn whose permissions are settled when the schedule is created, so a run that meets a prompt fails instead of waiting [MIS-0002-R31 (schedule_MUST_settle_permission_at_creation), MIS-0002-R32 (run_MUST_fail_on_prompt)];
   - `{"command", "wake_when": "exit_code" | "stdout"}`, work that needs no judgment, which wakes the agent only when its condition holds [MIS-0002-R37 (no-judgment_work_SHOULD_skip_model_turn)].
 
 **The agent-level fields:**
-- `operator_channels`: the channel names whose events count as the operator's activity; every other name counts as not the operator [MIS-0002-R107 (hooks_MUST_tell_channels_apart_by_name)].
+- `operator_channels`: the channel names whose events count as the operator's activity; every other name counts as not the operator [MIS-0002-R107 (hooks_MUST_tell_channels_apart_by_name)]. Absent means not yet declared, and an empty list declares that no channel is the operator's, so a declaration written for its units never decides by default whether the operator's phone counts.
 - `notice_routes`: per notice source, `agent`, `operator`, `both` or `held_until_present` [MIS-0002-R42 (notice_source_MUST_be_routed)].
-- `quiet_windows`: when the layer neither restarts nor compacts [MIS-0002-R50 (layer_MUST-NOT_act_in_quiet_window)].
+- `quiet_windows`: when the layer neither restarts nor compacts, read in `timezone` [MIS-0002-R50 (layer_MUST-NOT_act_in_quiet_window)].
+- `timezone`: an IANA name, required once any schedule or quiet window is declared. Without it, a host would read a time of day in its local time and a container in UTC. A name that isn't a zone is refused with the reason, including one that names a directory of zones, such as `America`.
 - `keep_harness_idle_compaction`: `false` by default, so the harness's own idle compaction is turned off [MIS-0002-R126 (adapter_MUST_turn_off_harness_idle_compaction)].
 - `wind_down`: the skill that winds the agent down and asks for its compaction through the control socket. Absent means only the operator may ask [MIS-0002-R108 (compaction_MUST_be_asked_by_operator_or_wind-down)].
 
@@ -76,10 +79,12 @@ All go to the agent's own event log; there is no second store [MIS-0002-R16 (lay
 
 | Event | Written by | Data |
 |---|---|---|
+| `pd_daemon_start` | the daemon, once at boot | `agent`, `pid`, `proc_start`, `version`: the fields of its record |
 | `pd_unit_alive` | the unit, at its interval | `agent`, `unit`, `pid`, `proc_start`, `interval_s`, `in_flight`, `waiting_on` |
 | `pd_unit_state` | the daemon | `agent`, `unit`, `state` (one of the six of R20), `pid`, `proc_start`, `reason` |
 | `pd_control` | the daemon | `agent`, `act`, `unit`, `asked_by` (`kind`, `card`), `peer` (`uid`, `pid`, `proc_start`), `reason` |
 
+- **A daemon's start bounds what it observed.** `pd_daemon_start` is written after the sockets are bound and the record is written, and before any unit is adopted or started, so a second daemon refused for the agent never writes one [MIS-0002-R01 (agent_MUST_have_one_primal_daemon)]. What a daemon observes outside its units, such as a surface's state, holds only until the next start, so a fold of it starts from the newest one. Unit state carries across: a restarted daemon reads it to adopt the units still running.
 - **The unit writes its own liveness,** because a process that merely exists shows nothing about whether its loop runs [MIS-0002-R14 (unit_MUST_emit_liveness_events)]. The readout confirms the writer by `pid` and `proc_start` [MIS-0002-R15 (readout_MUST_probe_liveness)].
 - **`in_flight`** counts work the unit has started and not finished, checked before any restart [MIS-0002-R49 (pd_MUST_check_work_in_flight)]. A unit that reports none is taken as idle, and the daemon records that it assumed so.
 - **`waiting_on`** says what the unit waits on a person for [MIS-0002-R21 (pd_MUST_report_waiting_on_person)]. The daemon never restarts a unit for it [MIS-0002-R22 (layer_MUST-NOT_restart_waiting_unit)].
