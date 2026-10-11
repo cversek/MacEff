@@ -119,7 +119,7 @@ A channel event carries **a notice and nothing else**: the source's own fixed wo
 
 - The channel reaches its primal daemon only through a local Unix socket, never a network port [MIS-0002-R113 (channel_MUST_connect_by_unix_socket)]. The socket lives in the per-user runtime directory named `maceff_pd`.
 - **The channel checks that the listening peer is its own agent's primal daemon**: the same user, the pid the daemon published beside its socket, and that pid's process start time [MIS-0002-R123 (channel_MUST_check_its_peer_is_its_pd)]. Any process of the same user can bind a known path while the daemon is down, and a pid can be recycled. A peer that fails any of the three is refused, and the channel retries later.
-- **The daemon checks the channel the other way**: that the connecting process descends from the agent's live session, matched by pid and start time [MIS-0002-R122 (pd_MUST_check_channel_peer_lineage)]. The user alone cannot tell the channel from any other command the agent runs, and a channel left running after its session ended fails because its session is no longer its ancestor. The check is built and tested now (`macf.notify.session.descends_from`). The daemon applies it when the daemon lands.
+- **The daemon checks the channel the other way**: that the connecting process descends from the agent's live session, matched by pid and start time [MIS-0002-R122 (pd_MUST_check_channel_peer_lineage)]. The user alone cannot tell the channel from any other command the agent runs, and a channel left running after its session ended fails because its session is no longer its ancestor. The check is built and tested now (`macf.notify.session.descends_from`). The daemon applies it once it serves the channel socket, which arrives with the notifier (13).
 
 ### 1.4 Telling a MacEff notice from the operator
 
@@ -174,7 +174,7 @@ A compaction ends the agent's working memory. The persistent layer compacts a se
 - **The hook records `trigger` as the client sent it**, and `unknown` when the field is absent, never a guess.
 - No event carries the content of the work, only who asked, how and when.
 
-Until the primal daemon lands, the transcript monitor makes these records. The daemon's control record for a harness compaction then names the harness in its `asked_by` (`Asker.kind == "harness"`), with no peer, because nobody requested it.
+The transcript monitor makes these records today. Once the daemon supervises the session unit, its control record for a harness compaction names the harness in its `asked_by` (`Asker.kind == "harness"`), with no peer, because nobody requested it [MIS-0002-R127 (harness_compaction_MUST_be_recorded)]. That is still to come (13).
 
 ---
 
@@ -311,7 +311,7 @@ The operator may attach to any session without an invitation [MIS-0002-R81 (oper
 
 In a container several agents share, you can see every agent's units and the container's budget, and change neither [MIS-0002-R62 (agent_MUST_see_shared_container)]. `python -m macf.pd.shared_view` lists them.
 
-- **Your own units appear once your primal daemon publishes a summary of them** into your `agent/public/pd/units.json`: names, kinds, memory limits, restart rules, whether optional. Never your commands or environment. Only you write your public tree, and a reader refuses a summary owned by another account. **Until the daemon lands, nothing publishes, so every home, your own included, reads UNPUBLISHED;** the command only reads.
+- **Your own units appear once your primal daemon publishes a summary of them** into your `agent/public/pd/units.json`: names, kinds, memory limits, restart rules, whether optional. Never your commands or environment. Only you write your public tree, and a reader refuses a summary owned by another account. **The daemon doesn't publish its summary yet, so every home, your own included, reads UNPUBLISHED;** the command only reads.
 - **The summary is declaration facts only.** A unit's state written into a published file would be a second store of liveness, stale the moment its writer dies. When you need a peer's state, it comes from where it is live.
 - **The budget** is the container's memory and processor limits, read from its cgroup: `memory.max`, `cpu.max`, and what the kernel cannot reclaim (anonymous and kernel memory, not the page cache). **Only the operator sets it**, in the deployment's compose files [MIS-0002-R103 (shared_budget_MUST_change_only_by_operator)], and no agent's declaration can carry it.
 - **Unknown is never empty.** A home that published nothing is UNPUBLISHED, one whose summary does not parse is UNREADABLE, and a budget file that cannot be read is unknown.
@@ -348,7 +348,7 @@ The first three alert. A session that starts waiting on a person changes its own
 - It offers no compaction, which only the operator's own command or the declared wind-down may ask for.
 - **It never types into a session** [MIS-0002-R71 (tray_MUST-NOT_type_into_session)].
 
-**The operator asker is a claim.** On a shared login a socket's peer credentials cannot tell the operator's tray from another agent's process, so the control socket must establish the operator by its own means, never from the field alone. How it does is still to be decided, and comes with the primal daemon.
+**The operator asker is a claim.** On a shared login a socket's peer credentials cannot tell the operator's tray from another agent's process, so the control socket must establish the operator by its own means, never from the field alone. For step 1 the operator settled it on 2026-10-10, as 12.3 says: the asker is recorded beside the process the socket observed, as an attribution and never an authentication, and nothing over the socket gives a claimed operator more than any caller of the same login. Before compaction on request lands, the operator has to be established some other way (13).
 
 **An answer counts only from the agent's own daemon.** The tray accepts an answer only from the socket peer that the daemon's record names, matched by pid and start time [MIS-0002-R123 (channel_MUST_check_its_peer_is_its_pd), applied to the control socket]. A peer that cannot be checked makes the agent unreachable, never trusted.
 
@@ -360,7 +360,7 @@ The first three alert. A session that starts waiting on a person changes its own
 
 An agent's declaration is one JSON file in its own home, `<agent home>/.maceff/pd/declaration.json`. Every managed unit and every schedule appears in it [MIS-0002-R08 (unit_MUST_be_declared)]. A process the declaration does not name is not supervised by the layer, however it was started.
 
-**A declaration that names another agent is refused whole** [MIS-0002-R07 (pd_MUST-NOT_control_other_agents)]. The core is given its agent's calling card and compares it with the declaration's `agent`, so a declaration copied from another agent's home never starts that agent's units under this agent's name. Where the card comes from, the identity file in the agent's home and never an environment variable [MIS-0002-R02 (pd_MUST-NOT_take_identity_from_env)], is the daemon process's to read, and arrives with it.
+**A declaration that names another agent is refused whole** [MIS-0002-R07 (pd_MUST-NOT_control_other_agents)]. The core is given its agent's calling card and compares it with the declaration's `agent`, so a declaration copied from another agent's home never starts that agent's units under this agent's name. Where the card comes from, the identity file in the agent's home and never an environment variable [MIS-0002-R02 (pd_MUST-NOT_take_identity_from_env)], is the daemon process's to read (12.1).
 
 ### 10.2 What a unit states
 
@@ -439,7 +439,7 @@ An event carries states, times and identities. It never carries file content fro
 
 ### 11.3 Who asked
 
-Every start, stop and restart the core performs is a `pd_control` event naming who asked and why [MIS-0002-R52 (control_act_MUST_name_who_asked)]: the operator, the agent's declared wind-down, or the unit's own restart policy. An operator's act needs the process that asked, its user, pid and start time, and the core records it beside the asker, because the asker is a claim and the process is observed. How the process is observed, from the kernel's report on the connection, arrives with the daemon's control socket.
+Every start, stop and restart the core performs is a `pd_control` event naming who asked and why [MIS-0002-R52 (control_act_MUST_name_who_asked)]: the operator, the agent's declared wind-down, or the unit's own restart policy. An operator's act needs the process that asked, its user, pid and start time, and the core records it beside the asker, because the asker is a claim and the process is observed. The process is observed from the kernel's report on the control socket's connection (12.3).
 
 ---
 
@@ -449,11 +449,11 @@ Every start, stop and restart the core performs is a `pd_control` event naming w
 
 `python -m macf.pd <agent home>` runs the agent's primal daemon. It takes its agent's calling card from the identity file in that home, never from an environment variable [MIS-0002-R02 (pd_MUST-NOT_take_identity_from_env)]. A variable is inherited by everything started below the shell that set it, and a client started from such a shell has taken another agent's name as its own. The daemon then loads the declaration (10.1), and wherever a unit's environment names the agent home, the card or the daemon's runtime directory, it fills in the values only it knows.
 
-**One daemon per agent** [MIS-0002-R01 (agent_MUST_have_one_primal_daemon)]. Once its control socket is bound, the daemon writes a record beside it holding its pid, its process start time and a version. A second daemon for the same agent refuses to start while that record names a live process by pid and start time, or while something answers on the socket. A record whose process is gone, or whose pid now belongs to another process, is stale and is replaced. The MacEff channel checks its peer against the same record [MIS-0002-R123 (channel_MUST_check_its_peer_is_its_pd)].
+**One daemon per agent** [MIS-0002-R01 (agent_MUST_have_one_primal_daemon)]. Once its control socket is bound, the daemon writes a record beside it holding its pid, its process start time and a version. A second daemon for the same agent refuses to start while that record names a live process by pid and start time, or while something answers on the socket, whatever the record says: a record can go missing, as after a sweep of the runtime directory. A daemon that stops removes the socket and the record only while they are still its own, so one stopping late never removes a successor's. A record whose process is gone, or whose pid now belongs to another process, is stale and is replaced. The MacEff channel checks its peer against the same record [MIS-0002-R123 (channel_MUST_check_its_peer_is_its_pd)].
 
 **A daemon's start bounds what it observed.** After writing its record, and before it adopts or starts any unit, the daemon writes `pd_daemon_start` with the record's fields and the agent, so a second daemon that is refused never writes one. What a daemon observes outside its units, such as a surface's state, holds only for its own life, so a reader folding those observations starts from the newest start. Unit state carries across a start, because the next daemon reads it to adopt the units still running (11.1).
 
-On SIGTERM, SIGINT or SIGHUP the daemon stops every unit, then removes its socket and its record. It exits with 75 when a daemon for the agent is already running and with 78 when the agent home can't be used, so an outer tier's log tells the two apart.
+On SIGTERM, SIGINT or SIGHUP the daemon removes its socket and its record and ends, and its units keep running for the next daemon to adopt (12.6). A restart through the outer tier, `launchctl kickstart -k` or `systemctl --user restart`, therefore restarts the daemon alone, as the operator ruled on 2026-10-10. Stopping every unit is its own act, which the daemon takes only when asked for it; no command line offers it yet (13). It exits with 75 when a daemon for the agent is already running and with 78 when the agent home can't be used, so an outer tier's log tells the two apart.
 
 ### 12.2 Where the socket is
 
@@ -463,9 +463,9 @@ The daemon listens on Unix sockets only, never on a network port [MIS-0002-R80 (
 
 ### 12.3 Who may connect, and what that proves
 
-The control socket accepts a connection only from the daemon's own user, as the kernel reports it for the connection. **That is all the check proves.** On a login that several agents share, or an agent and its operator, the kernel can't tell them apart. So a request names its asker, and the daemon records that claim beside the user, pid and start time it observed (11.3). The claim is an attribution, not an authentication, until each agent runs under its own account.
+The control socket accepts a connection only from the daemon's own user, as the kernel reports it for the connection. **That is all the check proves.** On a login that several agents share, or an agent and its operator, the kernel can't tell them apart. So a request names its asker, and the daemon records that claim beside the user, pid and start time it observed [MIS-0002-R52 (control_act_MUST_name_who_asked)]. The claim is an attribution, not an authentication, until each agent runs under its own account, and nothing over the socket gives a claimed operator more than any caller of the same login.
 
-A request may claim only the operator or the agent's declared wind-down. The restart policy and the harness ask from inside the daemon, so a request that claims either is refused with the reason, and nothing is done.
+A request may claim only the operator or the agent's wind-down. Which of the two it claims isn't checked against the declaration in step 1, and is recorded as any claim is. The restart policy and the harness ask from inside the daemon, so a request that claims either is refused with the reason, and nothing is done.
 
 ### 12.4 What it does, and what it refuses
 
@@ -473,17 +473,17 @@ A request may claim only the operator or the agent's declared wind-down. The res
 - **`start`, `stop` and `restart`** act on one declared unit. A stop sends SIGTERM to the unit's process group and SIGKILL after its grace period, and it succeeds whatever gate the session enforces [MIS-0002-R48 (outside_stop_MUST_override_gates)]. It is how the operator takes back a session that a loop holds. An asked restart first lets the unit's work in flight drain, up to a timeout it names when it gives up [MIS-0002-R49 (pd_MUST_check_work_in_flight)].
 - **A unit the declaration doesn't name is refused.** The daemon never starts, stops or signals another agent's units [MIS-0002-R07 (pd_MUST-NOT_control_other_agents)].
 - **A malformed request, an unknown operation or an unknown field refuses the whole request**, and nothing is done.
-- **A compaction is refused** in step 1. The layer never compacts a session on its own initiative [MIS-0002-R51 (layer_MUST-NOT_compact_on_own)], and compaction on request arrives with the session unit, accepted only from the operator or the agent's declared wind-down [MIS-0002-R108 (compaction_MUST_be_asked_by_operator_or_wind-down)].
+- **A compaction is refused** in step 1. The layer never compacts a session on its own initiative [MIS-0002-R51 (layer_MUST-NOT_compact_on_own)], and compaction on request arrives with the session unit, accepted only from the operator or the agent's declared wind-down [MIS-0002-R108 (compaction_MUST_be_asked_by_operator_or_wind-down)], and only once the operator is established some other way than a claim (9.3).
 
 Each connection carries one request. A refusal says what was refused and why, and names this policy, `macf_tools policy navigate persistent_layer`, as `capability_boundaries` requires of every refusal.
 
 ### 12.5 Reading it from outside
 
-**`macf_tools pd status`** shows each declared unit's state. It believes the daemon only after checking it: the record must name a live process by pid and start time, and the process answering the socket must be that one. Otherwise it reads each declared unit's last state and liveness from the event log, through the shared health verdict (11.2). Either way it says which source it used, and why. A session whose restart a quiet window holds shows the window's end (10.4).
+**`macf_tools pd status`** shows each declared unit's state. It believes the daemon only after the check the MacEff channel makes of its peer [MIS-0002-R123 (channel_MUST_check_its_peer_is_its_pd)]: the record must name a live process by pid and start time, and the process answering the socket must be that one. Otherwise it reads each declared unit's last state and liveness from the event log, through the shared health verdict (11.2). Either way it says which source it used, and why. A session whose restart a quiet window holds shows the window's end (10.4).
 
 ### 12.6 A unit outlives a daemon that dies
 
-The daemon starts its units as its children, but they don't die with it: the outer tier renders the daemon so that its exit leaves them running, as the LaunchAgent does with `AbandonProcessGroup` (3.1) and the systemd unit with `KillMode=process` (6.1). Taking every unit down with a daemon that crashed would drop their work in flight unasked, and leave the restart nothing to carry. The next daemon adopts the units that are still the processes it recorded (11.1). A daemon asked to stop still stops its units first (12.1).
+The daemon starts its units as its children, but they don't die with it: the outer tier renders the daemon so that its exit leaves them running, as the LaunchAgent does with `AbandonProcessGroup` (3.1) and the systemd unit with `KillMode=process` (6.1). Taking every unit down with a daemon that crashed would drop their work in flight unasked, and leave the restart nothing to carry. The next daemon adopts the units that are still the processes it recorded (11.1). A daemon that ends on a signal leaves them running too, so its restart drops nothing; stopping every unit is its own act (12.1).
 
 **Between a daemon's death and its restart, the units run unsupervised.** The window is the outer tier's restart delay. A unit whose process dies inside it isn't adopted, and the new daemon starts it as at any boot.
 
@@ -492,7 +492,7 @@ The daemon starts its units as its children, but they don't die with it: the out
 ## 13 Not Yet Landed
 
 Specified in MIS-0002 and arriving with their landing steps, each in the pull request that enforces it:
-- **The rest of the primal daemon:** health derived from runs owed and done, and compaction on request (MIS-0002 §6.1 to §6.4, §6.7).
+- **The rest of the primal daemon:** health derived from runs owed and done; compaction on request, once the operator is established some other way than a claim on the socket (9.3, 12.3); the harness's compactions in the daemon's own control records [MIS-0002-R127 (harness_compaction_MUST_be_recorded)] (2.2); and a command-line act that stops every unit, with the question of which asker a command line claims (12.1) (MIS-0002 §6.1 to §6.4, §6.7).
 - **Schedules and the notifier,** including the keystroke fallback, the dark-channel event, and every producer of the operator's activity (MIS-0002 §6.5, §6.6, the rest of §6.14).
 - **Mail and the rest of containers** (MIS-0002 §6.8, §6.9).
 - **Adopting a session Claude Code's own daemon already hosts** [MIS-0002-R66 (pd_MUST_adopt_harness_supervisor)] (3.3). Until it lands, the core starts a declared session unit itself.
@@ -505,7 +505,7 @@ Until a section lands, the rules in force are the existing policies: `service_su
 
 - `notification_delivery`: what a notice may carry and what it licenses. The channel is a delivery transport and inherits every rule there.
 - `capability_boundaries`: the channel is a new way for notices to enter a session, held to a socket and a peer check rather than to trust.
-- `service_supervision`: the primal daemon, when it lands, is the supervisor this policy describes.
+- `service_supervision`: the primal daemon is the supervisor this policy describes, for the units its agent declares.
 - MIS-0002: the decision record, with each requirement's reason.
 
 ## Wiki-Links

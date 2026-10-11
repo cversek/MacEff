@@ -643,6 +643,7 @@ Objections recorded:
 - 2026-10-10: conformance, from the pull request for the primal daemon's core (landing step 1): R07, R12, R13, R20, R22, R48, R49, R50 and R51 passing. R50's test holds a restart the unit's own policy asked for; a second test holds an operator's restart and carries it out as the operator's act when the window ends. R66, adopting a session Claude Code's own daemon already hosts, is not built yet, and the policy lists it as still to come. No requirement changed.
 - 2026-10-10: conformance, from the pull request for the shared health verdict (landing step 1): R15 passing. The readout and the outside watch read liveness by one rule, and the readout's default probe tells a unit's own start time from another process's. No requirement changed.
 - 2026-10-10: conformance, from the pull request for the outer tier's adapters (landing step 1): R10 and R109 passing. R10 is read as the policy's 10.5 reads it, while every unit is the core's child: the outer tier renders the daemon, and the daemon starts the units. No requirement changed.
+- 2026-10-10: conformance, from the pull request for the primal daemon's process (landing step 1): R01, R02, R52 and R80 passing. At the operator's ruling of 2026-10-10, a daemon that ends on a signal leaves its units running for the next one to adopt, and stopping every unit is its own act. The operator asker over the control socket is recorded as an attribution, and compaction on request (R108) waits until the operator is established some other way. No requirement changed.
 
 ## Wiki-Links
 
