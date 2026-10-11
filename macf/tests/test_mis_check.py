@@ -249,12 +249,18 @@ def _with_policy(text):
     return extra
 
 
+def _cite(rid, slug, num="0001", between=" "):
+    """A citation built when the test runs. The check reads this file too, and the citations
+    these tests need are wrong on purpose, so the file's own text must not cite them."""
+    return f"MIS-{num}-{rid}{between}({slug})"
+
+
 def test_r49_citation_with_a_stale_slug(plant):
-    assert "R49" in plant(extra=_with_policy("A rule (MIS-0001-R14 (req_MUST_be_short)).\n"))
+    assert "R49" in plant(extra=_with_policy(f"A rule ({_cite('R14', 'req_MUST_be_short')}).\n"))
 
 
 def test_r49_citation_of_a_missing_requirement(plant):
-    assert "R49" in plant(extra=_with_policy("A rule (MIS-0001-R99 (no_such_req)).\n"))
+    assert "R49" in plant(extra=_with_policy(f"A rule ({_cite('R99', 'no_such_req')}).\n"))
 
 
 def test_r49_a_correct_citation_passes(plant):
@@ -277,23 +283,42 @@ def test_r49_one_file_checked_alone_has_its_citations_of_other_mis_resolved(tmp_
     # The template tells an author to check their own file. That run defined only the file's
     # own requirements, so a citation of another MIS was never resolved.
     d, g = _beside_mis1(tmp_path, "MIS-0000-template.md",
-                        TEMPLATE + "\nSee MIS-0001-R14 (req_MUST_be_short).\n")
+                        TEMPLATE + f"\nSee {_cite('R14', 'req_MUST_be_short')}.\n")
     messages = [f.message for f in mis.check([d / "MIS-0000-template.md"], g) if f.rule == "R49"]
     # Resolved, not merely unknown: the finding names the slug MIS-0001 gives R14.
-    assert messages == ["cites MIS-0001-R14 (req_MUST_be_short); MIS-0001 names it (req_MUST_have_30_words_max)"]
+    assert messages == [f"cites {_cite('R14', 'req_MUST_be_short')}; MIS-0001 names it (req_MUST_have_30_words_max)"]
 
 
 def test_r49_a_citation_of_an_mis_that_does_not_exist(plant):
-    assert "R49" in plant(extra=_with_policy("A rule (MIS-0099-R01 (no_such_mis)).\n"))
+    assert "R49" in plant(extra=_with_policy(f"A rule ({_cite('R01', 'no_such_mis', num='0099')}).\n"))
 
 
 def test_one_file_checked_alone_reports_nothing_about_the_others(tmp_path):
     # A stale citation of MIS-0001 in a policy is MIS-0001's business: a check of the template
     # alone does not report it, and a check of the directory does.
     d, g = _beside_mis1(tmp_path, "MIS-0000-template.md", TEMPLATE,
-                        policy="A rule (MIS-0001-R14 (req_MUST_be_short)).\n")
+                        policy=f"A rule ({_cite('R14', 'req_MUST_be_short')}).\n")
     assert "R49" not in {f.rule for f in mis.check([d / "MIS-0000-template.md"], g)}
     assert "R49" in {f.rule for f in mis.check([d], g)}
+
+
+def test_r49_a_citation_that_wraps_is_still_found(plant):
+    # Wrapped prose and docstrings break a citation between its ID and its slug. Read one
+    # line at a time, the citation was never seen.
+    wrapped = _cite("R14", "req_MUST_be_short", between="\n    ")
+    assert "R49" in plant(extra=_with_policy(f"A rule ({wrapped}).\n"))
+
+
+def test_r49_citations_in_the_packages_code_are_checked(tmp_path):
+    """In a checkout, code cites requirements in docstrings and comments, and a stale slug
+    there is found as it is in a policy, here wrapped across a comment's two lines."""
+    d = _framework(tmp_path)
+    src = tmp_path / "macf" / "src" / "macf"
+    src.mkdir(parents=True)
+    wrapped = _cite("R14", "req_MUST_be_short", between="\n# ")
+    (src / "example.py").write_text(f"x = 1\n# A rule, cited as {wrapped}.\n", encoding="utf-8")
+    found = [f for f in mis.check([d], GLOSSARY) if f.rule == "R49"]
+    assert [(Path(f.path).name, f.line) for f in found] == [("example.py", 2)]
 
 
 def test_a_citation_of_an_unreadable_mis_is_not_called_missing(tmp_path):
