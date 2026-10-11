@@ -63,8 +63,9 @@ def _calls_since(entered_epoch: float, role_id: str) -> Tuple[int, bool]:
         if ts < entered_epoch:
             break
         kind = ev.get("event")
-        if kind == FOCUS_EVENT and ev.get("data", {}).get("role_id") == role_id:
-            return n, True
+        data = ev.get("data", {})
+        if kind == FOCUS_EVENT and data.get("role_id") == role_id and not data.get("carried"):
+            return n, True                 # a carried focus continues one; it acknowledges nothing
         if kind == "tool_call_started":
             n += 1
     return n, False

@@ -381,7 +381,7 @@ A **service** is any touch of a task or a duty that writes a breadcrumbed update
 
 ### 7.3 Focus is a layer, not a mode
 
-Focus is **event-sourced**: `role focus <id>` and `role unfocus` emit `role_focus_change` events to the agent events log, and the current focus is derived by reverse scan, exactly as work mode is derived (`mode_system.md`, derive-do-not-store). No sidecar file holds it.
+Focus is **event-sourced**: `role focus <id>` and `role unfocus` emit `role_focus_change` events to the agent events log, and the current focus is derived by reverse scan, exactly as work mode is derived (`mode_system.md`, derive-do-not-store). No sidecar file holds it. The scan reads the current cycle only, because the cycle carry re-asserts the focused role at each boundary, as it does a mode. A carried focus is a continuation, not an act: it keeps the original focus time, and it never counts as acknowledging a duty (9.1).
 
 At most **one role is focused at a time**. Focusing a second role replaces the first; the event records both.
 

@@ -256,7 +256,7 @@ class TestCarryGapIsLoud:
                        for e in read_events(reverse=True, scope="all"))
 
 
-def _marker(ts, cycle, families=("mode", "scope", "timer"), complete=True):
+def _marker(ts, cycle, families=("mode", "scope", "timer", "focus"), complete=True):
     return _ev("state_carried", ts, cycle=cycle, keys=[],
                families=list(families), complete=complete)
 
@@ -351,9 +351,10 @@ class TestCarryBaseCaseAndOrder:
         assert event_queries.get_auto_mode_from_events("sess1234")[0] is False
 
     @pytest.mark.parametrize("families, complete, expect_carried", [
-        (("mode", "scope", "timer"), True, False),   # a complete carry bounds the walk
-        (("mode",), True, True),                     # an old-style marker does not
-        (("mode", "scope", "timer"), False, True),   # nor does a carry that failed
+        (("mode", "scope", "timer", "focus"), True, False),   # a complete carry bounds the walk
+        (("mode",), True, True),                              # an old-style marker does not
+        (("mode", "scope", "timer"), True, True),             # nor one from before focus carried
+        (("mode", "scope", "timer", "focus"), False, True),   # nor a carry that failed
     ])
     def test_the_walk_stops_at_a_complete_carry(self, isolated_events_log,
                                                  families, complete, expect_carried):
@@ -370,3 +371,72 @@ class TestCarryBaseCaseAndOrder:
         carried = carry_state_forward(current_cycle=3)
 
         assert ("USER_REMOTE" in carried) is expect_carried
+
+
+class TestFocusCarry:
+    """The focused role is lifetime state. Read cycle-scoped, it must be re-asserted at
+    the boundary, and the re-assertion must never pass for a fresh act of focusing:
+    the conscientiousness nag reads a focus change as the operator's acknowledgement."""
+
+    def test_focus_survives_a_boundary_with_its_original_time(self, isolated_events_log):
+        from macf.roles.focus import current_focus_event
+        _write(isolated_events_log, [
+            _ev("role_focus_change", 100, role_id="r1", previous=None),
+            _ev(CYCLE_BOUNDARY_EVENT, 200, cycle=2),
+        ])
+
+        assert "focus" in carry_state_forward(current_cycle=2)
+        assert current_focus_event() == ("r1", 100.0)
+
+    def test_focus_survives_a_second_boundary(self, isolated_events_log):
+        from macf.agent_events_log import append_event
+        from macf.roles.focus import current_focus_event
+        _write(isolated_events_log, [
+            _ev("role_focus_change", 100, role_id="r1", previous=None),
+            _ev(CYCLE_BOUNDARY_EVENT, 200, cycle=2),
+        ])
+        carry_state_forward(current_cycle=2)
+        append_event(CYCLE_BOUNDARY_EVENT, {"cycle": 3})
+        carry_state_forward(current_cycle=3)
+
+        assert current_focus_event() == ("r1", 100.0)
+
+    def test_an_unfocus_is_not_resurrected(self, isolated_events_log):
+        """The trap is r1 before the unfocus: a read that crosses the boundary past a
+        complete carry would find it."""
+        from macf.roles.focus import current_focus
+        _write(isolated_events_log, [
+            _ev("role_focus_change", 100, role_id="r1", previous=None),
+            _ev("role_focus_change", 101, role_id=None, previous="r1"),
+            _ev(CYCLE_BOUNDARY_EVENT, 200, cycle=2),
+        ])
+
+        assert "focus" not in carry_state_forward(current_cycle=2)
+        assert current_focus() is None
+
+    def test_a_focus_older_than_the_carry_is_still_found(self, isolated_events_log):
+        """A cycle with no carry marker naming focus, from before this carry existed,
+        reads the whole log rather than answering 'unfocused'."""
+        from macf.roles.focus import current_focus
+        _write(isolated_events_log, [
+            _ev("role_focus_change", 100, role_id="r1", previous=None),
+            _ev(CYCLE_BOUNDARY_EVENT, 200, cycle=2),
+            _marker(201, 2, families=("mode", "scope", "timer")),
+        ])
+
+        assert current_focus() == "r1"
+
+    def test_a_carried_focus_is_not_an_acknowledgement(self, isolated_events_log):
+        """A duty entered DUE_SOON at 150, after the focus but before the boundary. The
+        carried focus lands after 150; counting it would silence the nag on a duty
+        nobody acknowledged."""
+        from macf.roles.focus import last_focus_event_for
+        from macf.roles.hooks import _calls_since
+        _write(isolated_events_log, [
+            _ev("role_focus_change", 100, role_id="r1", previous=None),
+            _ev(CYCLE_BOUNDARY_EVENT, 200, cycle=2),
+        ])
+        carry_state_forward(current_cycle=2)
+
+        assert _calls_since(150, "r1") == (0, False)
+        assert last_focus_event_for("r1", 150) is False
