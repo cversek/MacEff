@@ -35,6 +35,9 @@ class Recorder:
     (None, True, None, "maceff-ira[bot]", True),                     # open: say it's done
     (None, False, "maceff-ira[bot]", "maceff-ira[bot]", True),       # this agent merged it
     (None, False, "claude-the-builder", "maceff-ira[bot]", False),   # someone else did
+    (None, False, "app/maceff-ira", "maceff-ira[bot]", True),        # gh pr view names an app this way
+    (None, False, "app/maceff-harbormaster", "maceff-ira[bot]", False),  # another app
+    (None, False, "maceff-ira", "maceff-ira[bot]", False),           # a user, not the app
     (None, False, None, "maceff-ira[bot]", False),                   # closed, closer unknown
     (None, None, None, None, True),                                  # state unreadable
     (True, False, "claude-the-builder", "maceff-ira[bot]", True),    # --closeout
