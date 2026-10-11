@@ -69,8 +69,11 @@ RULE_SLUGS = {
     "R45": "item_MUST_carry_ID_and_slug",
     "R49": "citation_MUST_match_slug",
 }
-# A citation of a requirement in framework text: MIS-0001-R14 (req_MUST_have_30_words_max).
-CITATION_RE = re.compile(r"\bMIS-(\d{4})-(R\d{2,}) \(([-_A-Za-z0-9]+)\)")
+# A citation of a requirement: MIS-0001-R14 (req_MUST_have_30_words_max). Between the ID and
+# the slug it may wrap, as docstrings and comments do: a line break, the next line's
+# indentation, and a comment marker or quote that carries the text on.
+CITATION_RE = re.compile(
+    r"\bMIS-(\d{4})-(R\d{2,})(?:[ \t]+|[ \t]*\n[ \t]*(?:(?:#+|//|\*|>)[ \t]*)?)\(([-_A-Za-z0-9]+)\)")
 # A requirement line's ID and trailing slug, for resolving citations.
 REQ_SLUG_RE = re.compile(r"^- \*\*(R\d{2,})\*\* \[.*\(([-_A-Za-z0-9]+)\)\s*$", re.M)
 # Open questions (Qnn), positions (Pnn) and objections (Onn): numbered items with slugs (R45).
@@ -365,10 +368,12 @@ def check_citations(files: list, glossary: Optional[Path] = None) -> list:
 
     Every MIS beside the files checked defines what can be cited, so a check of one file also
     resolves its citations of other MIS, and a citation of an MIS that does not exist is a
-    finding. The texts searched are the files checked, the glossary, and every policy under
-    framework/policies beside the MIS directory. In the glossary and the policies, a run that
-    names only some MIS checks only citations of those, so a check of one file reports nothing
-    about the others.
+    finding. The texts searched are the files checked, the glossary, every policy under
+    framework/policies beside the MIS directory, and, in a checkout of this repository, the
+    package's code, tests and developer documents, whose docstrings and comments cite
+    requirements too. Outside the files checked, a run that names only some MIS checks only
+    citations of those, so a check of one file reports nothing about the others. A citation
+    is found when it wraps between its ID and its slug.
     """
     tree = sorted({s for f in files for s in f.parent.glob("MIS-*.md")} | set(files))
     defined: dict = {}  # number -> {requirement ID: slug}, or None when the file is unreadable
@@ -389,35 +394,51 @@ def check_citations(files: list, glossary: Optional[Path] = None) -> list:
     reported = set(files) | ({glossary} if glossary else set())
     texts = list(files) + ([glossary] if glossary else [])
     for f in files[:1]:
-        pol = f.parent.parent / "policies"  # noqa: MACEFF002 - MIS-0001-R03 fixes framework/mis beside framework/policies
+        framework = f.parent.parent  # noqa: MACEFF002 - MIS-0001-R03 fixes framework/mis beside framework/policies
+        pol = framework / "policies"
         if pol.is_dir():
             texts.extend(sorted(pol.rglob("*.md")))
+        texts.extend(package_texts(framework.parent))
     out = []
     for path in texts:
         text, unreadable = read_utf8(path)
         if unreadable:
-            if path not in reported:  # a policy: only this check reads it
+            if path not in reported:  # a policy or the package's text: only this check reads it
                 out.append(unreadable)
             continue
         own = path in files
-        for n, line in enumerate(text.splitlines(), start=1):
-            for num, rid, slug in CITATION_RE.findall(line):
-                if not (own or whole_tree or num in named):
-                    continue
-                if num not in defined:
-                    out.append(Finding(path=str(path), line=n, rule="R49",
-                                       message=f"cites MIS-{num}-{rid} ({slug}), but there is no MIS-{num}"))
-                    continue
-                if defined[num] is None:
-                    continue
-                want = defined[num].get(rid)
-                if want is None:
-                    out.append(Finding(path=str(path), line=n, rule="R49",
-                                       message=f"cites MIS-{num}-{rid} ({slug}), but MIS-{num} has no {rid}"))
-                elif want != slug:
-                    out.append(Finding(path=str(path), line=n, rule="R49",
-                                       message=f"cites MIS-{num}-{rid} ({slug}); MIS-{num} names it ({want})"))
+        for m in CITATION_RE.finditer(text):
+            num, rid, slug = m.groups()
+            n = text.count("\n", 0, m.start()) + 1
+            if not (own or whole_tree or num in named):
+                continue
+            if num not in defined:
+                out.append(Finding(path=str(path), line=n, rule="R49",
+                                   message=f"cites MIS-{num}-{rid} ({slug}), but there is no MIS-{num}"))
+                continue
+            if defined[num] is None:
+                continue
+            want = defined[num].get(rid)
+            if want is None:
+                out.append(Finding(path=str(path), line=n, rule="R49",
+                                   message=f"cites MIS-{num}-{rid} ({slug}), but MIS-{num} has no {rid}"))
+            elif want != slug:
+                out.append(Finding(path=str(path), line=n, rule="R49",
+                                   message=f"cites MIS-{num}-{rid} ({slug}); MIS-{num} names it ({want})"))
     return out
+
+
+# In a checkout of this repository, the package's own texts that cite requirements: code and
+# tests in their docstrings and comments, and the developer documents.
+PACKAGE_TEXTS = (("macf/src", "*.py"), ("macf/tests", "*.py"), ("macf/docs", "*.md"))
+
+
+def package_texts(root: Path) -> list:
+    """The package's code, tests and developer documents under ``root``, when it is a checkout.
+
+    A deployment's framework tree has no package beside it, so nothing is added there."""
+    return [p for sub, pattern in PACKAGE_TEXTS if (root / sub).is_dir()
+            for p in sorted((root / sub).rglob(pattern))]
 
 
 def default_glossary(paths: list[Path]) -> Optional[Path]:
