@@ -49,9 +49,10 @@ def start_module():
 def _config(agents: dict, defaults: dict | None = None) -> AgentsConfig:
     """Build an AgentsConfig from terse dicts, so tests read as configuration."""
     payload = {
+        "ids": {"base": 21000},
         "agents": {
-            name: {"username": name, "personality": "agents/x.md", **body}
-            for name, body in agents.items()
+            name: {"username": name, "uid": 21100 + i, "personality": "agents/x.md", **body}
+            for i, (name, body) in enumerate(agents.items())
         },
         "subagents": {},
     }
@@ -72,7 +73,7 @@ class TestEgressSchema:
         This is the control that lets the feature ship: every pre-existing
         deployment validates unchanged and installs no rules.
         """
-        spec = AgentSpec(username="pa_x", personality="agents/x.md")
+        spec = AgentSpec(username="pa_x", uid=21100, personality="agents/x.md")
         assert spec.egress is None
 
         defaults = DefaultsConfig()
