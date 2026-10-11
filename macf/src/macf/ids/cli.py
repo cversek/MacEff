@@ -2,6 +2,7 @@
 import argparse
 
 from macf.ids import audit as ids_audit
+from macf.ids.renumber_cli import add_renumber_parser
 
 
 def add_ids_parser(sub) -> None:
@@ -15,6 +16,7 @@ def add_ids_parser(sub) -> None:
                    help="read only this container (repeatable); default: every running one")
     a.add_argument("--json", action="store_true", help="one JSON object")
     a.set_defaults(func=cmd_ids_audit)
+    add_renumber_parser(ids_sub)
 
 
 def cmd_ids_audit(args: argparse.Namespace) -> int:

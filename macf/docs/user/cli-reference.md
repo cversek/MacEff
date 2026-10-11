@@ -2573,6 +2573,19 @@ macf_tools ids audit --json
 - **Exit codes:** 0 when every place was read and nothing overlaps; 1 on an overlap; 2 when a place couldn't be read. A container it can't read is never counted as clear.
 - **System ids below 1000** held under different names are listed in their own section and don't affect the exit code. Each side's packages allocate those, so renumbering can't reach them. A system account held under the same name everywhere, such as `root`, isn't listed.
 
+### ids renumber
+
+Moves an existing deployment's accounts, groups and files onto the numbers agents.yaml declares, once. Run it as root inside the **old** container before recreating it, with the seats paused and their sessions stopped. The full procedure is in the `container_operations` policy.
+
+```bash
+macf_tools ids renumber --listing /root/renumber.txt          # plan only (default)
+macf_tools ids renumber --root /scratch --service indexer=21900 --apply
+```
+
+- Maps by name from the live account tables to the declared numbers. It refuses two names on one old number, an old number that is already someone's declared number, and a service outside the block.
+- Re-owns only `/home`, the shared workspace, the amail stores and each `--root`. It never follows a symlink and stays out of mounts it wasn't given. Bind-mount roots carry a warning that an old number there may be a host account's own file, and files with access lists are named.
+- After `--apply` it re-plans and exits 1 if anything is left on an old number. A second run is a no-op.
+
 ## Environment Variables
 
 - `MACF_AUTO_MODE` - Enable AUTO_MODE for autonomous recovery
