@@ -76,7 +76,9 @@ def examine(agent_home: Optional[Path] = None,
     ``orphans`` is how the orphan census is reported. ``"all"`` lists each
     orphan. ``"summary"`` gives one finding per type and lists individually only
     the orphans in view: those dated on or after ``since``, and every orphan of
-    ``orphan_type``. The chart's orphan count is the whole census either way.
+    ``orphan_type``. Given ``orphan_type``, the orphan findings are that type's
+    alone, the bulk pass over one type. The chart's orphan count is the whole
+    census either way.
     """
     from .knowledge_web import build_knowledge_web, concepts_of, iter_web_files
     from .utils.paths import find_agent_home
@@ -111,6 +113,8 @@ def examine(agent_home: Optional[Path] = None,
             mention_only.append(path)
 
     for ca_type, paths in sorted(orphans_by_type.items()):
+        if orphan_type and ca_type != orphan_type:
+            continue
         if orphans == "summary":
             in_view = [p for p in paths
                        if ca_type == orphan_type or (since is not None and artifact_date(p) >= since)]
