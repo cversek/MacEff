@@ -573,3 +573,17 @@ def test_quiet_window(script):
         assert drive(core, lambda: core.pid("worker") not in (None, first), timeout=3.0)
     finally:
         core.shutdown("the test is over")
+
+
+def test_no_own_compaction(make_core, script):
+    """The core never compacts a session on its own initiative (R51): a session that keeps
+    failing is restarted by its policy, and no act it records is a compaction."""
+    unit = make_unit("worker", script, {"exit_after": 0.1, "code": 1}, restart="always")
+    core = make_core([unit.model_copy(update={"kind": "session"})])
+    core.boot()
+    first = core.pid("worker")
+    assert drive(core, lambda: core.pid("worker") not in (None, first))
+    second = core.pid("worker")
+    assert drive(core, lambda: core.pid("worker") not in (None, first, second))
+    acts = [d.get("act") for d in events("pd_control", "worker")]
+    assert acts and "compact" not in acts
