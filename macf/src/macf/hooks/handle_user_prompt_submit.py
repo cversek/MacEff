@@ -33,10 +33,10 @@ from macf.observability import Warning, emit_warning
 from macf.agent_events_log import shared_event_reads
 from macf.utils.input_origin import (
     entry_text,
-    from_maceff_channel,
     opening_channel_source,
     opens_with_harness_notice,
     opens_with_wake,
+    operator_channel,
     typed_by_framework,
 )
 from macf.channels.channel_tag import CHANNEL_SOURCE, is_maceff_notice, opening_tag
@@ -189,9 +189,10 @@ def record_user_activity_from_payload(prompt: str, transcript_path: Optional[str
         return False
 
     channel_source = opening_channel_source(prompt)
-    # A notice from the MacEff channel is the persistent layer speaking, never the
-    # operator. The transcript monitor applies the same test to the same name.
-    if from_maceff_channel(channel_source):
+    # A channel counts as the operator only by a name the agent declares as theirs,
+    # and the MacEff channel, the persistent layer's, never does (R107). The
+    # transcript monitor asks the same of the same name.
+    if channel_source is not None and not operator_channel(channel_source):
         return False
 
     source = "channel" if channel_source is not None else "direct"

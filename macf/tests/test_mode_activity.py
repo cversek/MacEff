@@ -330,3 +330,54 @@ def test_an_operators_compact_after_an_injected_one_is_their_ask(isolated_events
     assert asks[0] is None and asks[1].data["asker"] == "operator"
     assert _monitor_records(row)[0] == [] and _monitor_records(row)[0] == ["direct"]
 
+
+
+DISCORD = '<channel source="plugin:discord:discord" chat_id="2">hello</channel>'
+
+
+def _declare(text):
+    """Write this test's agent home a declaration, as raw text, and drop what was cached."""
+    import os
+    from pathlib import Path
+    from macf.pd.interface import declaration_path
+    from macf.utils import input_origin
+    path = declaration_path(Path(os.environ["MACEFF_AGENT_HOME_DIR"]))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    input_origin._DECLARED.clear()
+
+
+def _declared(channels=None):
+    decl = {"version": 1, "agent": "Resident@1a2b3c"}
+    if channels is not None:
+        decl["operator_channels"] = channels
+    return json.dumps(decl)
+
+
+def test_channels_told_apart_by_name(isolated_events_log, capsys):
+    """MIS-0002-R107: each producer counts a channel as the operator's only by an exact
+    name the declaration lists. Until the agent lists any, every channel but the MacEff
+    channel counts, as it did before there was a list."""
+    from macf.utils.input_origin import opening_channel_source
+
+    def counted(prompt):
+        delivered = _user(prompt, {"kind": "channel", "server": opening_channel_source(prompt)})
+        return {"hook": _hook_records(isolated_events_log, prompt),
+                "delivered": _monitor_records(delivered)[0],
+                "queued": _monitor_records(_queued(prompt))[0]}
+    yes = {"hook": ["channel"], "delivered": ["channel"], "queued": ["channel"]}
+    no = {"hook": [], "delivered": [], "queued": []}
+
+    assert [counted(p) for p in (TELEGRAM, DISCORD, MACEFF_NOTICE)] == [yes, yes, no]   # no declaration
+    _declare(_declared())                                                                 # the list absent
+    assert [counted(p) for p in (TELEGRAM, DISCORD, MACEFF_NOTICE)] == [yes, yes, no]
+    _declare(_declared(["plugin:telegram:telegram"]))
+    assert [counted(p) for p in (TELEGRAM, DISCORD, MACEFF_NOTICE)] == [yes, no, no]
+    _declare(_declared([]))                                                               # declared: none
+    assert [counted(p) for p in (TELEGRAM, DISCORD)] == [no, no]
+    _declare(_declared(["plugin:telegram:TELEGRAM", "telegram"]))                         # near misses
+    assert counted(TELEGRAM) == no
+
+    _declare("{not a declaration")
+    assert counted(DISCORD) == yes
+    assert "can't be read" in capsys.readouterr().err

@@ -107,7 +107,7 @@ The hooks tell the MacEff channel from the operator's channels by the channel's 
 
 **Read the source only from the tag that opens the prompt.** Content sent through any channel can contain an opening channel tag of its own, unescaped, naming a different source. A hook that searches the whole prompt for a source can be fooled by it [MIS-0002-R121 (hooks_MUST_read_source_from_origin_or_opening_tag)]. `macf.utils.input_origin` is the one reader of a source, for both producers of the operator's activity: the prompt hook and the transcript monitor. A delivered entry's origin record names the same source, and is read first where it exists. `macf.channels.channel_tag` reads a MacEff notice's other attributes.
 
-The rule for every producer of the operator's activity, with names checked against the agent's declaration, lands with the hooks step of MIS-0002. What is here now is the part the channel needs in order to ship safely.
+Every producer of the operator's activity counts a channel only by a name the agent's declaration lists as the operator's, and never the MacEff channel [MIS-0002-R107 (hooks_MUST_tell_channels_apart_by_name)]. `mode_system` states the rule for an agent that hasn't declared its list yet.
 
 ### 1.5 Receipt
 
@@ -336,7 +336,8 @@ The first three alert. A session that starts waiting on a person changes its own
 
 Specified in MIS-0002 and arriving with their landing steps, each in the pull request that enforces it:
 - **The primal daemon itself:** declarations, liveness events, health derived from runs, and outside control (MIS-0002 §6.1 to §6.4, §6.7).
-- **Schedules and the notifier,** including the keystroke fallback, the dark-channel event, and every producer of the operator's activity (MIS-0002 §6.5, §6.6, the rest of §6.14).
+- **Schedules and the notifier,** including the keystroke fallback and the dark-channel event (MIS-0002 §6.5, §6.6, the rest of §6.14).
+- **The end of R107's transitional rule** [MIS-0002-R107 (hooks_MUST_tell_channels_apart_by_name)] (1.4): until an agent declares `operator_channels`, every channel but the MacEff channel counts as the operator's.
 - **Mail and the rest of containers** (MIS-0002 §6.8, §6.9).
 
 Until a section lands, the rules in force are the existing policies: `service_supervision`, `notification_delivery` and `amail`.
