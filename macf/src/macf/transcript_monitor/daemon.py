@@ -34,10 +34,10 @@ from ..agent_events_log import append_event
 from ..utils.input_origin import (
     HARNESS_ORIGIN_KINDS,
     entry_text,
-    from_maceff_channel,
     opening_channel_source,
     opens_with_harness_notice,
     opens_with_wake,
+    operator_channel,
     typed_by_framework,
     typed_text,
 )
@@ -149,8 +149,8 @@ def detect_user_activity(entry: dict) -> Optional[Detection]:
     if kind == "channel":
         source = "channel"
         channel_server = origin.get("server", "")
-        if from_maceff_channel(channel_server):
-            return None  # the persistent layer's notice, never the operator
+        if not operator_channel(channel_server):
+            return None  # counted only by a declared name (R107); never the MacEff channel
 
     return Detection("user_activity_detected", {
         "source": source,
@@ -263,8 +263,8 @@ def detect_mid_turn_enqueue(entry: dict) -> Optional[Detection]:
         "detector": "transcript_monitor",
     }
     channel_server = opening_channel_source(content) if isinstance(content, str) else None
-    if from_maceff_channel(channel_server):
-        return None  # the persistent layer's notice, never the operator
+    if channel_server is not None and not operator_channel(channel_server):
+        return None  # counted only by a declared name (R107); never the MacEff channel
     if channel_server is not None:
         data["source"] = "channel"
         data["channel_server"] = channel_server
