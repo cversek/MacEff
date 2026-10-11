@@ -420,7 +420,7 @@ Navigate policy framework to discover relevant policies for current need.
 **Read policy discovery infrastructure**:
 
 1. `framework/policies/base/policy_awareness.md` (§2-3) - Discovery patterns and CEP navigation
-2. `framework/policies/current/manifest.json` - Policy index and consciousness patterns
+2. `framework/policies/manifest.json` - Policy index and consciousness patterns
 
 ---
 
