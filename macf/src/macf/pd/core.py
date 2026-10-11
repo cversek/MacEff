@@ -140,13 +140,13 @@ def quiet_window_at(declaration: Declaration, at: float):
     """The declared quiet window the time ``at`` (epoch seconds) falls in, or None.
 
     MIS-0002-R50 (layer_MUST-NOT_act_in_quiet_window). Windows are read in the declaration's
-    timezone, or the host's when it names none, and one whose end comes before its start
-    runs past midnight. Times compare as ``HH:MM``, so a window ends at its minute.
+    timezone, which the interface requires once any window is declared, and one whose end
+    comes before its start runs past midnight. Times compare as ``HH:MM``, so a window ends
+    at its minute.
     """
     if not declaration.quiet_windows:
         return None
-    tz = ZoneInfo(declaration.timezone) if declaration.timezone else None
-    hhmm = datetime.fromtimestamp(at, tz).strftime("%H:%M")
+    hhmm = datetime.fromtimestamp(at, ZoneInfo(declaration.timezone)).strftime("%H:%M")
     for window in declaration.quiet_windows:
         if window.start <= window.end:
             inside = window.start <= hhmm < window.end

@@ -548,18 +548,21 @@ def test_backoff_doubles_to_its_cap():
 def test_quiet_window(script):
     """A session's restart waits for the end of a quiet window its agent declared, whether
     its own policy or an operator asked for it, and its status says until when (R50). The
-    window is set ahead of now in the host's time, and the core's wall clock is moved into
-    it and out again."""
+    window is set ahead of now in the timezone the declaration names, Kathmandu's, whose
+    offset no test host is likely to share, so a core that read windows in its host's time
+    would look in the wrong hours. The core's wall clock is moved into it and out again."""
     from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
     from macf.pd.interface import Window
 
-    ahead = datetime.now()
+    zone = "Asia/Kathmandu"
+    ahead = datetime.now(ZoneInfo(zone))
     window = Window(start=(ahead + timedelta(hours=1)).strftime("%H:%M"),
                     end=(ahead + timedelta(hours=3)).strftime("%H:%M"))
     unit = make_unit("worker", script, {"exit_after": 0.3, "code": 1}, restart="always")
     shift = {"s": 0.0}
     core = Core(Declaration(version=1, agent=CARD, units=[unit.model_copy(update={"kind": "session"})],
-                            quiet_windows=[window]), CARD,
+                            quiet_windows=[window], timezone=zone), CARD,
                 wall=lambda: time.time() + shift["s"], backoff_base_s=0.05, backoff_cap_s=0.2)
 
     def held():
