@@ -198,7 +198,7 @@ macOS attaches a privacy grant to the **responsible process**. A unit started by
 
 ### 3.3 Claude Code's own supervisor
 
-Claude Code can run a session in the background under its own daemon (`claude --bg`, `/background`). **Where it already runs the agent's session, the primal daemon adopts that session** instead of starting a second supervisor over it [MIS-0002-R66 (pd_MUST_adopt_harness_supervisor)].
+Claude Code can run a session in the background under its own daemon (`claude --bg`, `/background`). **Where it already runs the agent's session, the primal daemon is to adopt that session** instead of starting a second supervisor over it [MIS-0002-R66 (pd_MUST_adopt_harness_supervisor)]. The decision and the client verbs below are in `macf/utils/client_daemon.py`, and the readout already reports a hosted session. **Still to come:** the daemon does not call them yet, so today it neither adopts nor refuses a hosted session. The rules below are the ones the wiring will follow.
 
 - **Recognise a hosted session by its sidecar's `kind: "bg"`, never by argv.** A respawned worker runs in a pre-started spare whose argv is generic, so the session's launch flags, its channels among them, are read from the client's job record (`respawnFlags`).
 - **Adopt only when it is unambiguous.** Exactly one hosted session in the agent's home is adopted. Two or more are refused with their ids named, because picking by recency is a guess. With none, the daemon starts the session itself.
