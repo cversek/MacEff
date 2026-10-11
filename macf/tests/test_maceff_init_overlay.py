@@ -239,7 +239,7 @@ def test_a_refresh_keeps_what_the_deployment_set_on_existing_entries(deployment,
 def _writable_by_others(fw):
     """Entries outside policies/ that group or world could write."""
     return sorted(str(p.relative_to(fw)) for p in fw.rglob("*")
-                  if not p.is_symlink() and "policies" not in p.relative_to(fw).parts
+                  if not p.is_symlink() and p.relative_to(fw).parts[:1] != ("policies",)
                   and p.stat().st_mode & 0o022)
 
 
@@ -254,13 +254,16 @@ def test_the_framework_tree_has_no_group_write_outside_policies(deployment, tmp_
     env = None if sync == "rsync" else _path_without_rsync(tmp_path)
     (deployment / "framework" / "env.d").mkdir()
     (deployment / "framework" / "env.d" / "10-toolchain.sh").write_text("export X=1\n")
+    (deployment / "framework" / "env.d" / "15-world.sh").write_text("export W=1\n")
     old = os.umask(0o002)
     try:
         _out, fw = _run(deployment, env)
         assert (fw / "env.d" / "10-toolchain.sh").exists()
         assert _writable_by_others(fw) == []
-        # an entry left group-writable by hand, and one new to this refresh
+        # an entry left group-writable by hand, one world-writable only, and one new to
+        # this refresh
         (fw / "env.d" / "10-toolchain.sh").chmod(0o664)
+        (fw / "env.d" / "15-world.sh").chmod(0o646)
         (deployment / "framework" / "env.d" / "20-new.sh").write_text("export Y=1\n")
         _out, fw = _run(deployment, env)
     finally:
