@@ -110,8 +110,15 @@ class LaunchdAdapter:
     def status(self, card: str) -> str:
         from macf.platform import launchd
         out = self._run(launchd.launchctl_argv("print", launchd.pd_label(card), self._uid))
-        if out.returncode != 0:
+        # launchctl print's own answers, measured on macOS 15.5: 113 for a service the user's
+        # domain doesn't have, and 112 when there is no gui/<uid> domain at all, as over SSH or
+        # at the login window (3.1).
+        if out.returncode == 113:
             return "not loaded"
+        if out.returncode == 112:
+            return f"no GUI session for uid {self._uid}, so no LaunchAgent can run"
+        if out.returncode != 0:
+            return f"unknown: {(out.stderr or '').strip() or f'launchctl exit {out.returncode}'}"
         state = launchd.parse_print(out.stdout)
         words = ["running" if state.running else "loaded"]
         if state.pid:
