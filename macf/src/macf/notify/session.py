@@ -119,17 +119,16 @@ def proc_start_ticks(pid: int) -> Optional[int]:
     try:
         with open(f"/proc/{pid}/stat") as fh:
             data = fh.read()
-    except (FileNotFoundError, ProcessLookupError) as e:
-        print(f"⚠️ MACF: pid {pid} is not running (no wake): {e}", file=sys.stderr)
-        return None
+    except (FileNotFoundError, ProcessLookupError):
+        return None  # noqa: MACEFF003 - not running is this function's answer, not a failure
     except (PermissionError, OSError) as e:
-        print(f"⚠️ MACF: /proc unreadable for pid {pid} (no wake): {e}", file=sys.stderr)
+        print(f"⚠️ MACF: /proc unreadable for pid {pid}: {e}", file=sys.stderr)
         return None
     try:
         tail = data[data.rfind(")") + 2:].split()
         return int(tail[19])
     except (IndexError, ValueError) as e:
-        print(f"⚠️ MACF: /proc stat unparseable for pid {pid} (no wake): {e}", file=sys.stderr)
+        print(f"⚠️ MACF: /proc stat unparseable for pid {pid}: {e}", file=sys.stderr)
         return None
 
 
@@ -146,17 +145,16 @@ def _proc_start_darwin(pid: int) -> Optional[str]:
         out = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)],
                              capture_output=True, text=True, timeout=5)
     except (OSError, subprocess.SubprocessError) as e:
-        print(f"⚠️ MACF: ps unavailable for pid {pid} (no wake): {e}", file=sys.stderr)
+        print(f"⚠️ MACF: ps unavailable for pid {pid}: {e}", file=sys.stderr)
         return None
     raw = out.stdout.strip()
     if out.returncode != 0 or not raw:
-        print(f"⚠️ MACF: pid {pid} is not running (no wake)", file=sys.stderr)
-        return None
+        return None  # not running: an ordinary answer for every caller, so nothing to warn about
     try:
         local = time.strptime(raw, _ASCTIME)
         return time.asctime(time.gmtime(time.mktime(local)))
     except (ValueError, OverflowError) as e:
-        print(f"⚠️ MACF: ps lstart unparseable for pid {pid} (no wake): {e!r} {raw!r}", file=sys.stderr)
+        print(f"⚠️ MACF: ps lstart unparseable for pid {pid}: {e!r} {raw!r}", file=sys.stderr)
         return None
 
 
@@ -167,13 +165,15 @@ def proc_start(pid: int) -> Optional[str]:
     macOS: ``asctime`` of the start instant in UTC (see ``_proc_start_darwin``).
     None when the pid is not running or the platform has no known source --
     which every caller treats as "not live", so an unknown platform fails closed.
+    The wake, the readout, the MacEff channel's peer check and the transcript monitor
+    all ask through here, so a pid that is not running is an answer, not a warning.
     """
     if sys.platform.startswith("linux"):
         ticks = proc_start_ticks(pid)
         return None if ticks is None else str(ticks)
     if sys.platform == "darwin":
         return _proc_start_darwin(pid)
-    print(f"⚠️ MACF: no process-start source on {sys.platform} (no wake)", file=sys.stderr)
+    print(f"⚠️ MACF: no process-start source on {sys.platform}", file=sys.stderr)
     return None
 
 
@@ -224,7 +224,7 @@ def verify_incarnation(pid: int, declared_start) -> bool:
     """
     if declared_start is None:
         print(
-            f"⚠️ MACF: credential for pid {pid} declares no procStart (refusing: "
+            f"⚠️ MACF: no recorded start time for pid {pid} (refusing: "
             "an incarnation check cannot fail open)",
             file=sys.stderr,
         )
@@ -234,12 +234,12 @@ def verify_incarnation(pid: int, declared_start) -> bool:
         return False
     declared = proc_start_key(declared_start)
     if declared is None:
-        print(f"⚠️ MACF: procStart unusable for pid {pid} (refusing): {declared_start!r}", file=sys.stderr)
+        print(f"⚠️ MACF: recorded start time unusable for pid {pid} (refusing): {declared_start!r}", file=sys.stderr)
         return False
     if declared != actual:
         print(
-            f"⚠️ MACF: incarnation mismatch for pid {pid} (refusing: stale credential "
-            f"against a recycled pid) declared={declared} actual={actual}",
+            f"⚠️ MACF: incarnation mismatch for pid {pid} (refusing: the recorded start "
+            f"is stale against a recycled pid) declared={declared} actual={actual}",
             file=sys.stderr,
         )
         return False
