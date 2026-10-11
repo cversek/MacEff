@@ -11473,6 +11473,7 @@ def cmd_idea_graph(args: argparse.Namespace) -> int:
         print(json.dumps({
             **graph["stats"],
             "top5": [{"id": i, "degree": d, "title": graph["ideas"][i].get("title", "")} for i, d in top5],
+            "isolated": [{"id": i, "title": graph["ideas"][i].get("title", "")} for i in graph["isolated"]],
         }, indent=2))
         return 0
 
@@ -11583,7 +11584,15 @@ def cmd_knowledge_doctor(args: argparse.Namespace) -> int:
             print(f"❌ {e}")
             return 2
     view = "all" if getattr(args, "all_orphans", False) else "summary"
-    dx = examine(orphans=view, since=since, orphan_type=getattr(args, "orphan_type", None))
+    orphan_type = getattr(args, "orphan_type", None)
+    dx = examine(orphans=view, since=since, orphan_type=orphan_type)
+    if orphan_type and orphan_type not in dx.chart.scope:
+        # A type the doctor never examines would match nothing, and the report
+        # would come back unchanged, as if the filter had run and found everything.
+        print(f"❌ the doctor does not examine {orphan_type!r}. It examines: {', '.join(dx.chart.scope)}")
+        if orphan_type.rstrip("s") == "idea":
+            print("   Ideas live in their own store: list the isolated ones with macf_tools idea graph --json")
+        return 2
     if getattr(args, "json_output", False):
         print(json.dumps(dx.to_dict(), indent=2, default=str))
     else:
@@ -13441,7 +13450,7 @@ def _build_parser() -> argparse.ArgumentParser:
     kg_doctor.add_argument("--since", metavar="DATE|Nd",
                            help="also list each orphan dated on or after this (2026-09-01, or 7d)")
     kg_doctor.add_argument("--type", dest="orphan_type", metavar="TYPE",
-                           help="list every orphan of one type (the bulk pass)")
+                           help="list every orphan of one type, and no other type (the bulk pass)")
     kg_doctor.add_argument("--all", dest="all_orphans", action="store_true",
                            help="list every orphan individually instead of one line per type")
     kg_doctor.set_defaults(func=cmd_knowledge_doctor)
