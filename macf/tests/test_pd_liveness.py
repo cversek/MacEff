@@ -79,3 +79,36 @@ def test_a_home_that_names_no_agent_starts_nothing(tmp_path, capsys):
     assert lv.heartbeat_from_env(environ={"MACF_PD_UNIT": "u", "MACF_PD_LIVENESS_S": "30",
                                           "MACEFF_AGENT_HOME_DIR": str(tmp_path)}) is None
     assert "no liveness from this unit" in capsys.readouterr().err
+
+
+# --- `macf_tools pd alive`, for units that are not Python (a shell loop calls it each pass) -------
+
+def _alive(monkeypatch, env, in_flight=None):
+    from argparse import Namespace
+    from macf.pd import cli
+    for k in ("MACF_PD_UNIT", "MACF_PD_LIVENESS_S", "MACEFF_AGENT_HOME_DIR"):
+        monkeypatch.delenv(k, raising=False)
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    events, append = recorder()
+    monkeypatch.setattr(lv, "append_event", append)
+    return cli.cmd_pd_alive(Namespace(in_flight=in_flight)), events
+
+
+def test_pd_alive_outside_a_daemon_does_nothing_and_succeeds(monkeypatch, tmp_path):
+    rc, events = _alive(monkeypatch, {"MACEFF_AGENT_HOME_DIR": str(_home(tmp_path))})
+    assert (rc, events) == (0, [])
+
+
+def test_pd_alive_as_a_declared_unit_writes_one_event(monkeypatch, tmp_path):
+    rc, events = _alive(monkeypatch, {"MACF_PD_UNIT": "mail-clock", "MACF_PD_LIVENESS_S": "60",
+                                      "MACEFF_AGENT_HOME_DIR": str(_home(tmp_path))}, in_flight=2)
+    assert rc == 0 and len(events) == 1
+    data = events[0][1]
+    assert (data["unit"], data["interval_s"], data["in_flight"]) == ("mail-clock", 60.0, 2)
+
+
+def test_pd_alive_with_a_malformed_setting_fails(monkeypatch, tmp_path):
+    rc, events = _alive(monkeypatch, {"MACF_PD_UNIT": "mail-clock", "MACF_PD_LIVENESS_S": "often",
+                                      "MACEFF_AGENT_HOME_DIR": str(_home(tmp_path))})
+    assert (rc, events) == (1, [])

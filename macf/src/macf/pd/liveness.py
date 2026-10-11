@@ -16,6 +16,7 @@ import os
 import sys
 import threading
 from pathlib import Path
+from dataclasses import dataclass
 from typing import Callable, Optional
 
 from macf.agent_events_log import append_event
@@ -79,6 +80,23 @@ def heartbeat_from_env(in_flight: Optional[Callable[[], Optional[int]]] = None,
     Runs as a unit when the environment names the unit, its interval and the agent home.
     A partial or malformed setting is reported on stderr and no heartbeat starts: liveness
     for the wrong unit or agent would be worse than none, since the daemon reads it."""
+    found = unit_from_env(environ)
+    if found is None:
+        return None
+    return Heartbeat(found.card, found.unit, found.interval_s, in_flight, append).start()
+
+
+@dataclass(frozen=True)
+class DeclaredUnit:
+    card: str
+    unit: str
+    interval_s: float
+
+
+def unit_from_env(environ=os.environ) -> Optional[DeclaredUnit]:
+    """The unit this process runs as, when this process runs as a declared unit; None when the
+    environment names no unit at all. A partial or malformed setting is reported on stderr
+    and read as None, because liveness for the wrong unit or agent would be worse than none."""
     unit, raw, home = environ.get(ENV_UNIT), environ.get(ENV_INTERVAL), environ.get(ENV_HOME)
     if not unit and not raw:
         return None
@@ -86,9 +104,8 @@ def heartbeat_from_env(in_flight: Optional[Callable[[], Optional[int]]] = None,
         interval = float(raw or "")
         if interval <= 0 or not unit or not home:
             raise ValueError("needs a unit name, a positive interval and the agent home")
-        card = agent_card(Path(home))
+        return DeclaredUnit(agent_card(Path(home)), unit, interval)
     except (ValueError, IdentityError) as e:
         print(f"⚠️ MACF: pd: no liveness from this unit ({ENV_UNIT}={unit!r}, "
               f"{ENV_INTERVAL}={raw!r}): {e}", file=sys.stderr)
         return None
-    return Heartbeat(card, unit, interval, in_flight, append).start()

@@ -442,6 +442,7 @@ An event carries states, times and identities. It never carries file content fro
 
 **How a unit writes it.** A unit learns which unit it is only from its declaration's environment, since that's the only environment it gets (R12, R13). So a unit that reports its own liveness is declared with `MACF_PD_UNIT` (its unit name) and `MACF_PD_LIVENESS_S` (its interval) beside `MACEFF_AGENT_HOME_DIR`.
 - **A Python unit** calls `macf.pd.liveness.heartbeat_from_env()` once its loop runs. It writes a `pd_unit_alive` event at once and then at that interval, naming its own pid and start time.
+- **A unit in any other language,** a shell loop for example, runs `macf_tools pd alive` once per pass, with `--in-flight N` when it has work under way. It writes one event from the same variables and exits 1 when it can't.
 - **Outside a daemon** the variables are absent, and the call does nothing, so the same program runs with or without a daemon.
 - **A partial or malformed setting** writes nothing and says why on stderr, because liveness credited to the wrong unit or agent is worse than none.
 - **Silence:** a unit that writes no liveness reads `starting` for as long as it runs. The mail broker reports this way.
