@@ -150,7 +150,7 @@ class _Fake:
     def render(self, card, agent_home):
         return f"run python -m macf.pd {agent_home}"
 
-    def install(self, card, agent_home):
+    def install(self, card, agent_home, force=False):
         return Path("/nonexistent")
 
     def uninstall(self, card):
