@@ -453,7 +453,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R48 | decidable | macf/tests/test_primal_daemon.py::test_outside_stop_beats_gates | passing |
 | R49 | decidable | macf/tests/test_primal_daemon.py::test_work_in_flight_checked | passing |
 | R50 | decidable | macf/tests/test_primal_daemon.py::test_quiet_window | passing |
-| R51 | decidable | macf/tests/test_primal_daemon.py::test_no_own_compaction | planned |
+| R51 | decidable | macf/tests/test_primal_daemon.py::test_no_own_compaction | passing |
 | R52 | decidable | macf/tests/test_primal_daemon.py::test_control_events | planned |
 | R53 | decidable | macf/tests/test_pd_declaration.py::test_mail_units | planned |
 | R54 | decidable | macf/tests/test_pd_declaration.py::test_periodic_clock_is_schedule | planned |
