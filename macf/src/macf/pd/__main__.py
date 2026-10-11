@@ -5,6 +5,9 @@ It is also made this process's own agent home, so everything the daemon writes l
 that agent's event log whatever the service manager's working directory is; a unit
 still gets only its declared environment.
 
+A signal ends the daemon and leaves its units running for the next daemon to adopt, so
+a restart through the outer tier restarts the daemon alone.
+
 Exit codes: 0 after a clean stop, 75 when the agent's daemon already runs (another
 start will not help), 78 when the home or its declaration is unusable (nothing a
 restart can fix).

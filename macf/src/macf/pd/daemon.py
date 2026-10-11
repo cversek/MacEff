@@ -86,6 +86,9 @@ class Daemon:
         self._wake_r, self._wake_w = os.pipe()
         os.set_blocking(self._wake_w, False)
         self._stopping = False
+        self._stop_units = False
+        self._bound: Optional[tuple] = None             # (st_dev, st_ino) of the socket bound
+        self._record: Optional[DaemonRecord] = None     # the record this daemon wrote
 
     # ------------------------------------------------------------------ life
 
@@ -96,16 +99,20 @@ class Daemon:
         self._claim()
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         listener.bind(str(self.control_path))
+        st = os.stat(self.control_path)
+        self._bound = (st.st_dev, st.st_ino)
         os.chmod(self.control_path, 0o600)
         listener.listen(8)
         listener.setblocking(False)
         self._listener = listener
-        record = self._write_record()
+        record = self._record = self._write_record()
         self.core.record_start(record.pid, record.proc_start)
         self.core.boot()
 
     def serve(self) -> None:
-        """Run until ``stop``; then stop every unit and remove the socket and record."""
+        """Run until ``stop``, then remove the socket and record. The units keep running for
+        the next daemon to adopt unless the stop asked for them too, so a restart through
+        the outer tier restarts the daemon alone."""
         sel = selectors.DefaultSelector()
         sel.register(self._listener, selectors.EVENT_READ, "control")
         sel.register(self._wake_r, selectors.EVENT_READ, "wake")
@@ -119,11 +126,14 @@ class Daemon:
                 self.core.tick()
         finally:
             sel.close()
-            self.core.shutdown("the daemon is stopping")
+            if self._stop_units:
+                self.core.shutdown("every unit stopped as asked, with the daemon")
             self._release()
 
-    def stop(self) -> None:
-        """Ask ``serve`` to finish. Safe from a signal handler or another thread."""
+    def stop(self, units: bool = False) -> None:
+        """Ask ``serve`` to finish, and with ``units`` to stop every unit first; a plain stop,
+        as a signal gives, leaves them running. Safe from a signal handler or another thread."""
+        self._stop_units = self._stop_units or units
         self._stopping = True
         try:
             os.write(self._wake_w, b"x")
@@ -143,9 +153,11 @@ class Daemon:
             if record is not None and verify_incarnation(record.pid, record.proc_start):
                 raise AlreadyRunning(
                     f"{self.card}'s primal daemon already runs as pid {record.pid}")
-            if record is None and self._socket_answers():
-                raise AlreadyRunning(f"something answers on {self.control_path}")
-        # Whatever is left belongs to a daemon that is gone.
+        # Whatever the record says, a socket something answers on is a live daemon's: its
+        # record can be missing, as after a sweep of the runtime directory.
+        if self.control_path.exists() and self._socket_answers():
+            raise AlreadyRunning(f"something answers on {self.control_path}")
+        # What is left belongs to a daemon that is gone.
         self.control_path.unlink(missing_ok=True)
         self.record_path.unlink(missing_ok=True)
 
@@ -169,13 +181,28 @@ class Daemon:
         return record
 
     def _release(self) -> None:
+        """Remove the socket and record only while they are still this daemon's. A daemon
+        started after a missing record may already have bound the path and written its own."""
         if self._listener is not None:
             self._listener.close()
-        for path in (self.control_path, self.record_path):
+        for path, still_mine in ((self.control_path, self._socket_is_mine),
+                                 (self.record_path, self._record_is_mine)):
             try:
-                path.unlink(missing_ok=True)
-            except OSError as e:
-                print(f"⚠️ MACF: pd: could not remove {path}: {e}", file=sys.stderr)
+                if still_mine():
+                    path.unlink()
+            except FileNotFoundError:
+                continue  # already gone, which is what a release wants
+            except (OSError, ValidationError) as e:
+                print(f"⚠️ MACF: pd: could not release {path}: {e}", file=sys.stderr)
+
+    def _socket_is_mine(self) -> bool:
+        st = os.stat(self.control_path)
+        return (st.st_dev, st.st_ino) == self._bound
+
+    def _record_is_mine(self) -> bool:
+        record = DaemonRecord.model_validate_json(self.record_path.read_text())
+        return self._record is not None and (record.pid, record.proc_start) == (
+            self._record.pid, self._record.proc_start)
 
     # ------------------------------------------------------------------ requests
 
@@ -235,7 +262,7 @@ class Daemon:
             except KeyError as e:
                 return Response(ok=False, error=str(e.args[0]))
             return Response(ok=True, units=self.core.statuses())
-        return Response(ok=False, error="compaction is not available yet: no session unit is supervised")
+        return Response(ok=False, error="compaction is not available in step 1")
 
     @staticmethod
     def _read_line(conn: socket.socket) -> Optional[str]:

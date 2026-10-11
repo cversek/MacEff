@@ -647,8 +647,9 @@ def run_daemon():
 
     yield run
     for daemon, thread in running:
-        daemon.stop()
+        daemon.stop(units=True)
         thread.join(timeout=10)
+        daemon.core.shutdown("the test is over")   # units a plain stop left running
 
 
 def ask(daemon, request):
@@ -738,6 +739,52 @@ def test_record_names_the_daemon(tmp_path, script, base, run_daemon):
 
     daemon.stop()
     assert wait_for(lambda: not daemon.record_path.exists() and not daemon.control_path.exists())
+
+
+def test_a_signal_leaves_the_units_for_the_next_daemon(tmp_path, script, base, run_daemon):
+    """A daemon that ends on a signal, as a restart through the outer tier ends it, leaves its
+    units running, and the next daemon adopts them, so the session outlives a restart of the
+    daemon. Stopping every unit is its own act (the operator's ruling of 2026-10-10)."""
+    home = make_home(tmp_path, [make_unit("worker", script, {})])
+    first = run_daemon(home, base)
+    assert wait_for(lambda: unit_state(first, "worker") == "running")
+    pid = unit_pid(first, "worker")
+    first.stop()
+    assert wait_for(lambda: not first.record_path.exists())
+    assert verify_incarnation(pid, proc_start(pid))   # still running, with no daemon
+    second = run_daemon(home, base)
+    assert unit_pid(second, "worker") == pid
+
+
+def test_a_missing_record_does_not_let_a_second_daemon_in(tmp_path, script, base, run_daemon):
+    """With the record gone, as a sweep of the runtime directory leaves it, the socket still
+    answers, so a second daemon is refused and the first keeps its socket (R01)."""
+    home = make_home(tmp_path, [make_unit("worker", script, {})])
+    first = run_daemon(home, base)
+    first.record_path.unlink()
+    with pytest.raises(AlreadyRunning):
+        Daemon(home, base=base).start()
+    assert ask(first, {"op": "status"})["ok"]
+
+
+def test_a_stopping_daemon_removes_only_what_is_still_its_own(tmp_path, script, base, run_daemon):
+    """A daemon that stops after a successor has bound the path and written its record
+    removes neither."""
+    home = make_home(tmp_path, [make_unit("worker", script, {})])
+    first = run_daemon(home, base)
+    record = DaemonRecord.model_validate_json(first.record_path.read_text())
+    theirs = record.model_copy(update={"pid": 1, "proc_start": "the successor's start"}).model_dump_json()
+    first.control_path.unlink()
+    successor = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    successor.bind(str(first.control_path))
+    first.record_path.write_text(theirs)
+    try:
+        first.stop()
+        assert wait_for(lambda: first._listener.fileno() == -1)
+        assert first.control_path.exists() and first.record_path.read_text() == theirs
+    finally:
+        successor.close()
+        first.control_path.unlink(missing_ok=True)
 
 
 def daemon_acts():
