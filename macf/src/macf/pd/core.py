@@ -195,7 +195,7 @@ class _Adopted:
     still running and adopts them instead of starting second copies. It is not their
     parent, so it reads neither their exit status nor their end from the kernel: it asks
     whether the process is still the one its record names, by pid and start time
-    (MIS-0002-R15 (readout_MUST_confirm_by_pid_and_start)). Each unit leads its own
+    (MIS-0002-R15 (readout_MUST_probe_liveness)). Each unit leads its own
     process group, so the core's existing ``killpg`` stops an adopted one too.
     """
 
