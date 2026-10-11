@@ -440,6 +440,12 @@ An event carries states, times and identities. It never carries file content fro
 
 **The unit writes its own liveness**, because a process that exists shows nothing about whether its loop runs [MIS-0002-R14 (unit_MUST_emit_liveness_events)]. The core only reads it.
 
+**How a unit writes it.** A unit learns which unit it is only from its declaration's environment, since that's the only environment it gets (R12, R13). So a unit that reports its own liveness is declared with `MACF_PD_UNIT` (its unit name) and `MACF_PD_LIVENESS_S` (its interval) beside `MACEFF_AGENT_HOME_DIR`.
+- **A Python unit** calls `macf.pd.liveness.heartbeat_from_env()` once its loop runs. It writes a `pd_unit_alive` event at once and then at that interval, naming its own pid and start time.
+- **Outside a daemon** the variables are absent, and the call does nothing, so the same program runs with or without a daemon.
+- **A partial or malformed setting** writes nothing and says why on stderr, because liveness credited to the wrong unit or agent is worse than none.
+- **Silence:** a unit that writes no liveness reads `starting` for as long as it runs. The mail broker reports this way.
+
 **The unit publishes its interval, and the observer computes the bound from it**, as `service_supervision` requires, so a unit that changes its interval changes its own bound. A unit is overdue when its last liveness is older than three of the intervals it published, and an overdue unit is failed, not running. Three tolerates two missed writes. It is the core's constant, chosen in 2026-10 without a measurement of real write jitter, and is re-derived once units have run under load.
 
 **The health verdict says alive only after a probe.** `macf.pd.health` confirms by pid and process start time that the process named in a unit's last liveness event is still that process before it calls the unit alive [MIS-0002-R15 (readout_MUST_probe_liveness)], because a pid can be reused. The start time has one stored form, `macf.notify.session.proc_start`, compared through `verify_incarnation`. It derives everything when asked and stores nothing. Its five verdicts are alive, stale, gone, absent and unreadable, and a liveness it cannot read is unreadable, never alive. It is the verdict the readout will print, and the outside watch (7.1) applies the same rule now, through `read_liveness`, so the two cannot disagree about a unit.
