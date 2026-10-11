@@ -65,6 +65,10 @@ def build(surfaces: Iterable[Surface], observations: Dict[str, Observation]) -> 
 #: provisional until the step-1 contract settles it.
 EVENT_SURFACE = "pd_surface_state"
 GONE = "gone"
+#: The primal daemon's start (``macf.pd.interface.EVENT_DAEMON_START``, pinned equal by a
+#: test). Named here rather than imported, because the per-call line reads presence on
+#: every tool call and the interface module builds the declaration's models on import.
+DAEMON_START = "pd_daemon_start"
 
 
 def surface_event(s: Surface) -> dict:
@@ -73,10 +77,14 @@ def surface_event(s: Surface) -> dict:
 
 
 def fold_surfaces(events: Iterable[dict]) -> Dict[str, str]:
-    """Each surface's latest state from the log; a surface last recorded gone is absent."""
+    """Each surface's latest state since the newest daemon start; a surface last recorded
+    gone is absent. A state an earlier daemon recorded says nothing about the operator now,
+    so a daemon's start begins the fold again."""
     states: Dict[str, str] = {}
     for ev in events:
-        if ev.get("event") == EVENT_SURFACE:
+        if ev.get("event") == DAEMON_START:
+            states.clear()
+        elif ev.get("event") == EVENT_SURFACE:
             data = ev.get("data") or {}
             states[data.get("surface")] = data.get("state")
     return {name: st for name, st in states.items() if name and st and st != GONE}
