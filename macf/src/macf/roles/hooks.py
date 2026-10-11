@@ -6,17 +6,38 @@ computed from observed state (tier entry from due and horizon, tool calls
 from events), naming the remedy (the exact command), cleared by the action
 (a focus change, a service).
 """
+from __future__ import annotations
+
+import hashlib
+import json
 import os
 import sys
+import tempfile
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from ..agent_events_log import read_events
 from .focus import EVENT as FOCUS_EVENT
 from .focus import current_focus
-from .models import Duty, Role
-from .priority import DUE_SOON, OVERDUE, Placement, duty_mark, now, rank, review_mark
-from .store import RoleError, RoleStore
+from .location import roles_dir
+from .priority import DUE_SOON, OVERDUE, TIER_NAMES, Placement, duty_mark, now, rank, review_mark
+
+if TYPE_CHECKING:
+    from .models import Duty, Role
+    from .store import RoleStore
+
+# PreToolUse calls the nag, the banner marker and the store's mtime on every tool call.
+# Building the roles models costs about 55 ms a call, more than the rest of the roles path,
+# so those three reach the store and its models only when they must (#460).
+NAG_CACHE_TTL_S = 60
+
+
+def _store(store: Optional[RoleStore]) -> RoleStore:
+    if store is not None:
+        return store
+    from .store import RoleStore
+    return RoleStore()
 
 TOUCH_NAG_BASE_DEFAULT = 20          # the touch nag's constant; MACF_TOUCH_NAG_BASE overrides both
 
@@ -87,29 +108,72 @@ def _fires(n: int, tier: int, base: int) -> Optional[str]:
     return None
 
 
-def conscientiousness_nag(store: Optional[RoleStore] = None, at: Optional[datetime] = None) -> str:
-    """One line when a duty of an UNFOCUSED role is due-now and unacknowledged."""
-    base = _base()
-    if base <= 0:
-        return ""
-    store = store or RoleStore()
-    at = at or now()
-    focused = current_focus()
+def _due_now(store: RoleStore, at: datetime) -> List[Dict[str, Any]]:
+    """Every active role's due-now duties, in the store's order and each role's rank: what
+    the nag chooses from. Builds the models; the cache below spares most calls this."""
+    out = []
     for role, folder in store.roles():
-        if role.state != "active" or role.id == focused:
+        if role.state != "active":
             continue
         duties = [d for d, _ in store.duties(folder)]
         for p in rank(duties, at, role.expires):
-            if p.tier not in (OVERDUE, DUE_SOON) or p.entered is None:
-                continue
-            n, acked = _calls_since(_epoch(p.entered), role.id)
-            if acked:
-                continue
-            tone = _fires(n, p.tier, base)
-            if tone:
-                mark = duty_mark(p, at)
-                return (f"{tone} Duty {p.tier_name} in an unfocused role: {role.icon} {role.title} -- "
-                        f"\"{p.duty.title}\" ({mark}). Focus it for the full list:  macf_tools role focus R{role.id}")
+            if p.tier in (OVERDUE, DUE_SOON) and p.entered is not None:
+                out.append({"role_id": role.id, "icon": role.icon, "title": role.title,
+                            "duty": p.duty.title, "tier": p.tier, "entered": _epoch(p.entered),
+                            "mark": duty_mark(p, at)})
+    return out
+
+
+def _nag_cache_path(root: Path) -> Path:
+    key = hashlib.sha256(str(root.resolve()).encode()).hexdigest()[:16]
+    return Path(tempfile.gettempdir()) / f"macf-roles-nag-{os.getuid()}-{key}.json"
+
+
+def _due_now_cached(at: datetime) -> List[Dict[str, Any]]:
+    """``_due_now`` for the hook's own call, reused while the store is unchanged and for
+    at most NAG_CACHE_TTL_S. Any write to the store rebuilds it at once; a duty crossing a
+    tier boundary with no write shows up within the TTL, and its mark is at most that
+    stale. A cache that can't be read or written only costs the rebuild."""
+    root = roles_dir()
+    mtime = roles_store_mtime(root=root)
+    path = _nag_cache_path(root)
+    try:
+        cached = json.loads(path.read_text())
+        if (cached.get("root") == str(root) and cached.get("mtime") == mtime
+                and 0 <= at.timestamp() - cached.get("at", 0) < NAG_CACHE_TTL_S):
+            return cached["due_now"]
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    due = _due_now(_store(None), at)
+    try:
+        tmp = path.with_name(path.name + f".{os.getpid()}")
+        tmp.write_text(json.dumps({"root": str(root), "mtime": mtime, "at": at.timestamp(), "due_now": due}))
+        os.replace(tmp, path)
+    except OSError as e:
+        print(f"⚠️ MACF: roles nag cache not written ({e})", file=sys.stderr)
+    return due
+
+
+def conscientiousness_nag(store: Optional[RoleStore] = None, at: Optional[datetime] = None) -> str:
+    """One line when a duty of an UNFOCUSED role is due-now and unacknowledged.
+
+    Called with neither argument, as the hook calls it, it reads through the cache; the
+    focus and the tool-call counts are always read live."""
+    base = _base()
+    if base <= 0:
+        return ""
+    due = _due_now_cached(now()) if store is None and at is None else _due_now(_store(store), at or now())
+    focused = current_focus()
+    for d in due:
+        if d["role_id"] == focused:
+            continue
+        n, acked = _calls_since(d["entered"], d["role_id"])
+        if acked:
+            continue
+        tone = _fires(n, d["tier"], base)
+        if tone:
+            return (f"{tone} Duty {TIER_NAMES[d['tier']]} in an unfocused role: {d['icon']} {d['title']} -- "
+                    f"\"{d['duty']}\" ({d['mark']}). Focus it for the full list:  macf_tools role focus R{d['role_id']}")
     return ""
 
 
@@ -137,7 +201,8 @@ def focus_gate(auto_mode: bool, store: Optional[RoleStore] = None, at: Optional[
     "unserviced": [duty ids]}. The stop is blocked only in AUTO_MODE and only
     while due-now duties are unserviced. Undated duties never block.
     """
-    store = store or RoleStore()
+    store = _store(store)
+    from .store import RoleError
     at = at or now()
     focused = current_focus()
     if not focused:
@@ -191,7 +256,8 @@ def focus_text(focus: Dict[str, Any], session_id: str, reader: str) -> str:
 def prompt_line(store: Optional[RoleStore] = None, at: Optional[datetime] = None) -> str:
     """One line for UserPromptSubmit when the focused role has anything due
     today/overdue, or a review inside its horizon. Empty otherwise."""
-    store = store or RoleStore()
+    store = _store(store)
+    from .store import RoleError
     at = at or now()
     focused = current_focus()
     if not focused:
@@ -214,25 +280,30 @@ def prompt_line(store: Optional[RoleStore] = None, at: Optional[datetime] = None
 
 
 def focus_marker(store: Optional[RoleStore] = None) -> str:
-    """The focused role's icon, for the banner's work-mode slot."""
+    """The focused role's icon, for the banner's work-mode slot. Read from the role's own
+    record without building the model, so an edited icon shows at once."""
     focused = current_focus()
     if not focused:
         return ""
-    store = store or RoleStore()
-    try:
-        role, _ = store.find_role(focused)
-    except RoleError as e:
-        print(f"⚠️ MACF: focused role {focused} not found ({e}); no banner marker", file=sys.stderr)
-        return ""
-    return role.icon
+    root = store.root if store is not None else roles_dir()
+    for data in sorted(root.glob("*/data.json")) if root.exists() else []:
+        try:
+            role = json.loads(data.read_text())
+        except (OSError, ValueError) as e:
+            print(f"⚠️ MACF: {data} unreadable ({e}); skipped for the banner marker", file=sys.stderr)
+            continue
+        if role.get("id") == focused:
+            return role.get("icon") or ""
+    print(f"⚠️ MACF: focused role {focused} not found; no banner marker", file=sys.stderr)
+    return ""
 
 
-def roles_store_mtime(store: Optional[RoleStore] = None) -> float:
+def roles_store_mtime(store: Optional[RoleStore] = None, root: Optional[Path] = None) -> float:
     """Newest write in the roles store, so the touch nag counts duty touches."""
-    store = store or RoleStore()
-    if not store.root.exists():
+    root = root or (store.root if store is not None else roles_dir())
+    if not root.exists():
         return 0.0
-    return max((p.stat().st_mtime for p in store.root.rglob("*.json")), default=0.0)
+    return max((p.stat().st_mtime for p in root.rglob("*.json")), default=0.0)
 
 
 def charter_context(store: Optional[RoleStore] = None) -> str:
@@ -242,7 +313,8 @@ def charter_context(store: Optional[RoleStore] = None) -> str:
     focused = current_focus()
     if not focused:
         return ""
-    store = store or RoleStore()
+    store = _store(store)
+    from .store import RoleError
     try:
         role, folder = store.find_role(focused)
     except RoleError as e:
