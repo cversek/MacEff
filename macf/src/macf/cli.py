@@ -8866,22 +8866,14 @@ def _gh_issue_closeout(task_id: int, mtmd, args, breadcrumb: str) -> None:
 
     comment_body = "\n".join(comment_lines)
 
-    # Post comment
-    try:
-        comment_result = _subprocess.run(
-            ["gh", "issue", "comment", str(gh_issue_number),
-             "--repo", repo_slug,
-             "--body", comment_body],
-            capture_output=True, text=True, timeout=15
-        )
-        if comment_result.returncode == 0:
-            print(f"   📝 Close-out comment posted to {repo_slug}#{gh_issue_number}")
-        else:
-            print(f"   ⚠️  Failed to post comment: {comment_result.stderr.strip()}")
-    except FileNotFoundError:
-        print("   ⚠️  gh CLI not found — skipping GitHub comment")
-    except _subprocess.TimeoutExpired:
-        print("   ⚠️  gh CLI timed out — skipping GitHub comment")
+    # Post the close-out as this agent, through the publishing checks, when it says
+    # something (#582): never through whatever gh account happens to be active.
+    from . import closeout
+    choice = getattr(args, "closeout", None)
+    is_open, closed_by = closeout.item_state(repo_slug, gh_issue_number)
+    env = closeout.post("issue", gh_issue_number, repo_slug, comment_body,
+                        choice=choice if choice in (True, False) else None, is_open=is_open,
+                        closed_by=closed_by, signed=_public_attribution_enabled())
 
     # Status-aware closure (GH issue #79): close the upstream issue only when
     # the fix has actually landed (at least one --commit hash is in a merged
@@ -8895,6 +8887,17 @@ def _gh_issue_closeout(task_id: int, mtmd, args, breadcrumb: str) -> None:
             f"GitHub will auto-close on PR merge if the PR body links the issue."
         )
         return
+    if is_open is False:
+        print(f"   ℹ️  Issue {repo_slug}#{gh_issue_number} already closed")
+        return
+
+    # Closing is an act in someone's name too, so it takes the agent's identity even
+    # when no comment was posted.
+    if env is None:
+        env, how = closeout.agent_env(repo_slug)
+        if env is None:
+            print(f"   ⚠️  Issue {repo_slug}#{gh_issue_number} left OPEN: no identity of this agent's own ({how})")
+            return
 
     # Close issue
     try:
@@ -8902,7 +8905,7 @@ def _gh_issue_closeout(task_id: int, mtmd, args, breadcrumb: str) -> None:
             ["gh", "issue", "close", str(gh_issue_number),
              "--repo", repo_slug,
              "--reason", "completed"],
-            capture_output=True, text=True, timeout=15
+            capture_output=True, text=True, timeout=15, env=env
         )
         if close_result.returncode == 0:
             print(f"   🔒 Issue {repo_slug}#{gh_issue_number} closed")
@@ -9086,17 +9089,18 @@ def _gh_pr_closeout(task_id: int, mtmd, args, breadcrumb: str) -> str:
 
     # Ground-truth outcome from GitHub (live), plus the merge commit and CI
     # conclusion (statusCheckRollup folded into the same call — no extra request).
-    outcome, merge_commit, ci_red = "OPEN", None, False
+    outcome, merge_commit, ci_red, merged_by = "OPEN", None, False, None
     try:
         r = _subprocess.run(
             ["gh", "pr", "view", str(gh_pr_number), "--repo", repo_slug,
-             "--json", "state,mergeCommit,statusCheckRollup"],
+             "--json", "state,mergeCommit,statusCheckRollup,mergedBy"],
             capture_output=True, text=True, timeout=15)
         if r.returncode == 0:
             d = _json.loads(r.stdout)
             state = d.get("state", "OPEN")
             outcome = "MERGED" if state == "MERGED" else ("CLOSED_UNMERGED" if state == "CLOSED" else "OPEN")
             merge_commit = (d.get("mergeCommit") or {}).get("oid")
+            merged_by = (d.get("mergedBy") or {}).get("login")
             _bad = {"FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "ERROR", "STARTUP_FAILURE"}
             for chk in (d.get("statusCheckRollup") or []):
                 if (chk.get("conclusion") or chk.get("state") or "").upper() in _bad:
@@ -9134,16 +9138,14 @@ def _gh_pr_closeout(task_id: int, mtmd, args, breadcrumb: str) -> str:
             agent_name = "unknown"
         comment_lines += ["", "---", f"*[{agent_name}: task#{task_id} {breadcrumb}]*"]
     comment = "\n".join(comment_lines)
-    try:
-        cr = _subprocess.run(
-            ["gh", "pr", "comment", str(gh_pr_number), "--repo", repo_slug, "--body", comment],
-            capture_output=True, text=True, timeout=15)
-        if cr.returncode == 0:
-            print(f"   📝 Close-out comment posted to {repo_slug}#{gh_pr_number}")
-        else:
-            print(f"   ⚠️  Failed to post PR comment: {cr.stderr.strip()}")
-    except (FileNotFoundError, _subprocess.TimeoutExpired):
-        print("   ⚠️  gh CLI unavailable — skipping PR comment")
+    # As this agent, through the publishing checks, and by default not on a pull request
+    # someone else merged or closed (#582).
+    from . import closeout
+    choice = getattr(args, "closeout", None)
+    closeout.post("pr", gh_pr_number, repo_slug, comment,
+                  choice=choice if choice in (True, False) else None,
+                  is_open=None if outcome == "UNKNOWN" else outcome == "OPEN",
+                  closed_by=merged_by, signed=_public_attribution_enabled())
 
     # Cascade to linked GH_ISSUE tasks (only when merged).
     linked_tasks = _gh_pr_find_linked_issue_tasks(linked_issues, repo_slug) if outcome == "MERGED" else []
@@ -12814,6 +12816,11 @@ def _build_parser() -> argparse.ArgumentParser:
                                            "See autonomous_sprint.md §3.3.2 for acceptable vs unacceptable justifications.")
     task_complete_parser.add_argument("--cascade", action="store_true", default=False,
                                       help="GH_PR only: auto-complete linked GH_ISSUE tasks when the PR is merged")
+    closeout_choice = task_complete_parser.add_mutually_exclusive_group()
+    closeout_choice.add_argument("--closeout", dest="closeout", action="store_const", const=True, default=None,
+                                 help="GH_ISSUE/GH_PR: post the close-out even when someone else closed or merged the item")
+    closeout_choice.add_argument("--no-closeout", dest="closeout", action="store_const", const=False,
+                                 help="GH_ISSUE/GH_PR: complete without posting a close-out")
     task_complete_parser.set_defaults(func=cmd_task_complete)
 
     # task block - add blocking relationship

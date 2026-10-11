@@ -611,7 +611,8 @@ class TestGHIssueCloseoutFunction:
         bc = 's_test/c_1/g_abc/p_def/t_123'
 
         with patch('subprocess.run', return_value=Mock(returncode=0, stdout='', stderr='')) as mock_run, \
-             patch('macf.cli._public_attribution_enabled', return_value=True):
+             patch('macf.cli._public_attribution_enabled', return_value=True), \
+             patch.dict('os.environ', {'GH_TOKEN': 'agent-token'}):
             _gh_issue_closeout(42, mtmd, args, bc)
             assert mock_run.call_count >= 2
             body = self._closeout_body(mock_run)
@@ -636,7 +637,8 @@ class TestGHIssueCloseoutFunction:
         bc = 's_test/c_1/g_abc/p_def/t_123'
 
         with patch('subprocess.run', return_value=Mock(returncode=0, stdout='', stderr='')) as mock_run, \
-             patch('macf.cli._public_attribution_enabled', return_value=False):
+             patch('macf.cli._public_attribution_enabled', return_value=False), \
+             patch.dict('os.environ', {'GH_TOKEN': 'agent-token'}):
             _gh_issue_closeout(42, mtmd, args, bc)
             body = self._closeout_body(mock_run)
             assert 'Close-out Report' in body
@@ -785,12 +787,17 @@ class TestGHPRCloseoutFunction:
         args.verified = 'make test green'
         args.cascade = False
         view = Mock(returncode=0, stdout=json.dumps(
-            {"state": "MERGED", "mergeCommit": {"oid": "deadbeef1234"}}), stderr="")
+            {"state": "MERGED", "mergeCommit": {"oid": "deadbeef1234"},
+             "mergedBy": {"login": "test-agent[bot]"}}), stderr="")
         comment = Mock(returncode=0, stdout="", stderr="")
         # Patch identity so it never shells out — otherwise get_agent_identity()
         # consumes a subprocess.run slot in environments without a cached identity
         # (green locally, StopIteration in CI). Keep the mock to exactly view+comment.
-        with patch('macf.utils.identity.get_agent_identity', return_value='TestAgent'):
+        # This agent merged it, so the close-out posts by default (#582).
+        with patch('macf.utils.identity.get_agent_identity', return_value='TestAgent'), \
+             patch('macf.closeout.agent_login', return_value='test-agent[bot]'), \
+             patch('macf.closeout.check_body', return_value=None), \
+             patch.dict('os.environ', {'GH_TOKEN': 'agent-token'}):
             with patch('macf.cli._public_attribution_enabled', return_value=True):
                 with patch('subprocess.run', side_effect=[view, comment]) as mock_run:
                     outcome = _gh_pr_closeout(168, mtmd, args, 's_test/c_1/g_abc/p_def/t_123')
@@ -814,7 +821,9 @@ class TestGHPRCloseoutFunction:
             "state": "MERGED", "mergeCommit": {"oid": "abc123"},
             "statusCheckRollup": [{"conclusion": "SUCCESS"}, {"conclusion": "FAILURE"}]}), stderr="")
         comment = Mock(returncode=0, stdout="", stderr="")
-        with patch('macf.utils.identity.get_agent_identity', return_value='T'):
+        with patch('macf.utils.identity.get_agent_identity', return_value='T'), \
+             patch('macf.closeout.check_body', return_value=None), \
+             patch.dict('os.environ', {'GH_TOKEN': 'agent-token'}):
             with patch('macf.cli._public_attribution_enabled', return_value=False):
                 with patch('subprocess.run', side_effect=[view, comment]):
                     outcome = _gh_pr_closeout(9, mtmd, args, 's/c/g/p/t')
