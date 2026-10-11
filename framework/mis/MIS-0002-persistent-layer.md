@@ -403,8 +403,8 @@ Every decidable requirement names a planned test; every judgment names its revie
 
 | Requirement | Check | How | State |
 |---|---|---|---|
-| R01 | decidable | macf/tests/test_primal_daemon.py::test_one_per_agent | planned |
-| R02 | decidable | macf/tests/test_primal_daemon.py::test_identity_not_from_env | planned |
+| R01 | decidable | macf/tests/test_primal_daemon.py::test_one_per_agent | passing |
+| R02 | decidable | macf/tests/test_primal_daemon.py::test_identity_not_from_env | passing |
 | R03 | decidable | macf/tests/test_pd_render.py::test_outer_tier_restarts_pd | planned |
 | R04 | judgment | the head maintainer, at review of each rendering | standing |
 | R05 | decidable | macf/tests/test_pd_render.py::test_launchd_is_launchagent | planned |
@@ -454,7 +454,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R49 | decidable | macf/tests/test_primal_daemon.py::test_work_in_flight_checked | passing |
 | R50 | decidable | macf/tests/test_primal_daemon.py::test_quiet_window | passing |
 | R51 | decidable | macf/tests/test_primal_daemon.py::test_no_own_compaction | passing |
-| R52 | decidable | macf/tests/test_primal_daemon.py::test_control_events | planned |
+| R52 | decidable | macf/tests/test_primal_daemon.py::test_control_events | passing |
 | R53 | decidable | macf/tests/test_pd_declaration.py::test_mail_units | planned |
 | R54 | decidable | macf/tests/test_pd_declaration.py::test_periodic_clock_is_schedule | planned |
 | R55 | decidable | macf/tests/test_pd_notice.py::test_unread_mail_notice | planned |
@@ -482,7 +482,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R77 | decidable | macf/tests/test_pd_harness.py::test_wake_text_fixed | planned |
 | R78 | judgment | the operator, at review of each declaration | standing |
 | R79 | judgment | the head maintainer, at review of each landing pull request | standing |
-| R80 | decidable | macf/tests/test_primal_daemon.py::test_no_network_listener | planned |
+| R80 | decidable | macf/tests/test_primal_daemon.py::test_no_network_listener | passing |
 | R81 | judgment | the operator | standing |
 | R82 | decidable | macf/tests/test_pd_observe.py::test_onlooker_needs_invitation | planned |
 | R83 | decidable | macf/tests/test_pd_observe.py::test_onlooker_has_no_keyboard | planned |
@@ -644,6 +644,7 @@ Objections recorded:
 - 2026-10-10: conformance, from the pull request for R107's channel names: built, a channel counts as the operator only by an exact name the declaration lists, and the MacEff channel never counts. R107 stays planned: until an agent declares `operator_channels`, a transitional rule counts every channel but the MacEff channel, which R107 as written doesn't allow, and its test asserts that rule. The row moves to passing when the transitional rule ends. No requirement changed.
 - 2026-10-10: conformance, from the pull request for the shared health verdict (landing step 1): R15 passing. The readout and the outside watch read liveness by one rule, and the readout's default probe tells a unit's own start time from another process's. No requirement changed.
 - 2026-10-10: conformance, from the pull request for the outer tier's adapters (landing step 1): R10 and R109 passing. R10 is read as the policy's 10.5 reads it, while every unit is the core's child: the outer tier renders the daemon, and the daemon starts the units. No requirement changed.
+- 2026-10-10: conformance, from the pull request for the primal daemon's process (landing step 1): R01, R02, R52 and R80 passing. At the operator's ruling of 2026-10-10, a daemon that ends on a signal leaves its units running for the next one to adopt, and stopping every unit is its own act. The operator asker over the control socket is recorded as an attribution, and compaction on request (R108) waits until the operator is established some other way. No requirement changed.
 
 ## Wiki-Links
 
