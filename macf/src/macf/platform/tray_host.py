@@ -6,10 +6,8 @@ package so that asking never imports it (MIS-0002-R68 (layer_MUST-NOT_depend_on_
 Whether the tray's extra is installed is answered by ``find_spec``, which locates a
 module without running it.
 """
-import getpass
 import importlib.util
 import os
-import pwd
 import sys
 from dataclasses import dataclass
 from typing import Callable, Optional
@@ -25,20 +23,22 @@ class TrayHost:
         return "tray: available" if self.available else f"tray: unavailable ({self.reason})"
 
 
-def console_owner() -> str:
-    """Who owns the GUI console: the logged-in user, or root at the login window."""
-    return pwd.getpwuid(os.stat("/dev/console").st_uid).pw_name
+def console_uid() -> int:
+    """The uid that owns the GUI console: the logged-in user's, or 0 at the login window."""
+    return os.stat("/dev/console").st_uid
 
 
 def tray_host(platform: str = sys.platform,
               find_spec: Callable = importlib.util.find_spec,
-              owner: Callable[[], str] = console_owner,
-              user: Optional[str] = None) -> TrayHost:
+              owner: Callable[[], int] = console_uid,
+              uid: Optional[int] = None) -> TrayHost:
     """Whether this user, on this host, can be shown the tray; the reason when not.
 
     The tray is a macOS menu-bar app for now, so any other platform says so. On macOS
     it needs its extra, and a GUI session that belongs to this user: over SSH to a Mac
-    sitting at the login window there is nowhere to show it.
+    sitting at the login window there is nowhere to show it. The console's owner is
+    compared by uid with this process's, never by name: a name comes from LOGNAME or
+    USER first, and the environment can say anything.
     """
     if platform != "darwin":
         return TrayHost(False, "the tray runs only on macOS so far")
@@ -46,10 +46,10 @@ def tray_host(platform: str = sys.platform,
         return TrayHost(False, "its extra is not installed: pip install 'macf[tray]'")
     try:
         who = owner()
-    except (OSError, KeyError) as e:
+    except OSError as e:
         return TrayHost(False, f"the GUI console's owner cannot be read: {e}")
-    if who == "root":
+    if who == 0:
         return TrayHost(False, "nobody is logged in to the GUI")
-    if who != (user or getpass.getuser()):
+    if who != (os.getuid() if uid is None else uid):
         return TrayHost(False, "the GUI belongs to another user")
     return TrayHost(True)
