@@ -511,7 +511,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R106 | decidable | macf/tests/test_mode_activity.py::test_wake_is_not_operator_activity | planned |
 | R107 | decidable | macf/tests/test_mode_activity.py::test_channels_told_apart_by_name | planned |
 | R108 | decidable | macf/tests/test_primal_daemon.py::test_compaction_askers | planned |
-| R109 | decidable | macf/tests/test_pd_declaration.py::test_schedule_without_policy_fails | planned |
+| R109 | decidable | macf/tests/test_pd_declaration.py::test_schedule_without_policy_fails | passing |
 | R110 | decidable | macf/tests/test_pd_schedule.py::test_no_default_policy | planned |
 | R111 | decidable | macf/tests/test_pd_observe.py::test_no_invitation_across_containers | planned |
 | R112 | judgment | the head maintainer, at review of the Claude Code harness adapter | standing |

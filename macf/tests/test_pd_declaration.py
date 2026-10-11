@@ -211,3 +211,13 @@ def test_launchd_install_writes_the_plist_then_bootstraps_it(tmp_path):
     assert path.exists() and path.parent == tmp_path / "Library" / "LaunchAgents"
     assert any("bootstrap" in argv for argv in ran.argvs)
 
+
+
+def test_schedule_without_policy_fails():
+    """A schedule with no missed-run policy is refused, never given a default (R109): a
+    default would decide, for every schedule nobody thought about, what a downtime does."""
+    schedule = {"name": "nightly", "cron": "0 3 * * *", "target": "isolated",
+                "run": {"command": ["true"], "wake_when": "exit_code"}, "timeout_s": 60}
+    with pytest.raises(ValidationError, match="missed_run"):
+        interface.Schedule.model_validate(schedule)
+    interface.Schedule.model_validate({**schedule, "missed_run": {"kind": "skip"}})
