@@ -305,6 +305,7 @@ class _Runner:
     client_binary: Optional[str] = None  # the claude found on the session unit's declared PATH
     remnant: Optional[tuple] = None     # (pgid, [(pid, start)], kill_at, killed_at): members left after a stop reaped the leader
     start_after_remnant: bool = False   # a start waits for the remnant to end
+    stop_pending: Optional[str] = None  # the stopped transition's reason, recorded once the remnant ends
 
 
 class _LivenessTail:
@@ -608,7 +609,7 @@ class Core:
                             except (ProcessLookupError, PermissionError) as e:
                                 print(f"⚠️ MACF: pd: cannot signal what is left of {r.spec.name} "
                                       f"(group {pgid}): {e}", file=sys.stderr)
-                        r.remnant = None
+                        self._end_remnant(r, "the rest of its group was killed as the daemon stopped")
             self.tick()
             time.sleep(0.02)
 
@@ -764,8 +765,13 @@ class Core:
                 self._transition(r, "failed", why)
         elif not r.want_up or r.state != "failed":
             # A stop this core sent. After a liveness failure the unit is already
-            # recorded failed, and stays so unless the stop was asked for.
-            self._transition(r, "stopped", f"{stopping} ({why})")
+            # recorded failed, and stays so unless the stop was asked for. While members of
+            # its group outlive the leader, the unit has not stopped: the transition waits
+            # for the group to end, so no reader is told the stop is done while it isn't.
+            if r.remnant is not None:
+                r.stop_pending = f"{stopping} ({why})"
+            else:
+                self._transition(r, "stopped", f"{stopping} ({why})")
 
         if not r.want_up:
             return
@@ -906,8 +912,12 @@ class Core:
         pgid, members, kill_at, killed_at = r.remnant
         live = [(pid, start) for pid, start in members if self._probe(pid, start)]
         if not live:
-            self._end_remnant(r)
+            self._end_remnant(r, "the rest of its group was killed at the stop's deadline"
+                              if killed_at is not None else "the rest of its group ended")
             return
+        # A live recorded member holds the group's id, so the group listed now is still the
+        # unit's: record what a member forked since the last pass, so it is reached too.
+        live += [m for m in group_members(pgid) if m not in live]
         if killed_at is None and now >= kill_at:
             try:
                 os.killpg(pgid, signal.SIGKILL)
@@ -920,12 +930,15 @@ class Core:
         elif killed_at is not None and now - killed_at >= KILL_WAIT_S:
             print(f"⚠️ MACF: pd: {len(live)} process(es) of {r.spec.name}'s group {pgid} have not ended "
                   f"{KILL_WAIT_S:g} s after SIGKILL; leaving them", file=sys.stderr)
-            self._end_remnant(r)
+            self._end_remnant(r, f"{len(live)} process(es) of its group outlived SIGKILL and were left")
         else:
             r.remnant = (pgid, live, kill_at, killed_at)
 
-    def _end_remnant(self, r: _Runner) -> None:
+    def _end_remnant(self, r: _Runner, how: str) -> None:
         r.remnant = None
+        if r.stop_pending is not None:
+            reason, r.stop_pending = r.stop_pending, None
+            self._transition(r, "stopped", f"{reason}; {how}")
         if r.start_after_remnant:
             r.start_after_remnant = False
             if r.want_up and r.proc is None:

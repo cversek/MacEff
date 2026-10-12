@@ -55,12 +55,21 @@ if spec.get("child_ignores_term"):
     # forked can; it writes its own pid once its handler is set.
     import subprocess
     subprocess.Popen([sys.executable, "-c",
-                      "import os, signal, sys, time\n"
+                      "import os, signal, subprocess, sys, time\n"
                       "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
-                      "tmp = sys.argv[1] + '.tmp'\n"
-                      "open(tmp, 'w').write(str(os.getpid()))\n"
-                      "os.replace(tmp, sys.argv[1])\n"
-                      "time.sleep(300)\n", spec["child_ignores_term"]])
+                      "def mark(path, pid):\n"
+                      "    open(path + '.tmp', 'w').write(str(pid))\n"
+                      "    os.replace(path + '.tmp', path)\n"
+                      "mark(sys.argv[1], os.getpid())\n"
+                      "if len(sys.argv) > 2:\n"
+                      "    leader = os.getppid()\n"
+                      "    while os.getppid() == leader:\n"
+                      "        time.sleep(0.02)\n"
+                      "    late = subprocess.Popen([sys.executable, '-c', 'import signal, time; "
+                      "signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(300)'])\n"
+                      "    mark(sys.argv[2], late.pid)\n"
+                      "time.sleep(300)\n", spec["child_ignores_term"]]
+                     + ([spec["child_forks_after"]] if spec.get("child_forks_after") else []))
 log, me = os.environ["MACF_EVENTS_LOG_PATH"], os.getpid()
 start, began = proc_start(me), time.monotonic()
 if spec.get("dump"):
@@ -1206,13 +1215,34 @@ def test_a_stop_reaches_the_units_whole_group(tmp_path, script, make_core):
     the unit's group that ignores SIGTERM outlives its leader's exit, and is killed at the
     stop's deadline rather than left running."""
     marker = tmp_path / "child.pid"
-    core = make_core([make_unit("worker", script, {"child_ignores_term": str(marker)}, stop_grace_s=0.5)])
+    core = make_core([make_unit("worker", script, {"child_ignores_term": str(marker)}, stop_grace_s=1.0)])
     core.boot()
     assert drive(core, lambda: core.state("worker") == "running")
     child = _child_pid(marker)
     core.stop("worker", OPERATOR, "test stop", peer=PEER)
-    assert drive(core, lambda: core.state("worker") == "stopped" and not _alive(child), timeout=5.0), \
-        f"state {core.state('worker')}, child {child} alive {_alive(child)}"
+    # The unit reads stopped only once its whole group has ended: at the first moment it
+    # does, the child is already gone, and the reason says the group was killed.
+    assert drive(core, lambda: core.state("worker") == "stopped", timeout=5.0)
+    assert not _alive(child), f"the unit read stopped while its child {child} still ran"
+    last = events("pd_unit_state", "worker")[-1]
+    assert last["state"] == "stopped" and "killed at the stop's deadline" in last["reason"], last
+
+
+def test_a_member_forked_after_the_leader_ended_is_reached_too(tmp_path, script, make_core):
+    """A recorded member that forks after the leader's reap adds a process the first listing
+    never saw. The group is listed again each pass while a recorded member holds its id, so
+    the newcomer is recorded and killed with the rest."""
+    marker, grandchild = tmp_path / "child.pid", tmp_path / "grandchild.pid"
+    core = make_core([make_unit("worker", script, {"child_ignores_term": str(marker),
+                                                   "child_forks_after": str(grandchild)},
+                                stop_grace_s=1.5)])
+    core.boot()
+    assert drive(core, lambda: core.state("worker") == "running")
+    child = _child_pid(marker)
+    core.stop("worker", OPERATOR, "test stop", peer=PEER)
+    late = _child_pid(grandchild)
+    assert drive(core, lambda: core.state("worker") == "stopped", timeout=6.0)
+    assert not _alive(child) and not _alive(late), f"child {_alive(child)}, late {_alive(late)}"
 
 
 def test_a_restart_waits_for_the_old_group(tmp_path, script, make_core):
