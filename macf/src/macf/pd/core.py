@@ -164,7 +164,8 @@ def backoff_s(failures: int, base: float = BACKOFF_BASE_S, cap: float = BACKOFF_
     return min(cap, base * 2 ** (failures - 1))
 
 
-#: How long shutdown waits for a unit to end after SIGKILL.
+#: How long a unit, or what is left of its group, is given to end after SIGKILL, by
+#: shutdown and by a stop's remnant, before the core stops waiting and says so.
 KILL_WAIT_S = 5.0
 
 #: The exit status of a unit this daemon adopted rather than started. It is not the
@@ -205,6 +206,18 @@ def _describe_exit(code: int) -> str:
             name = str(-code)
         return f"killed by {name}"
     return f"exited {code}"
+
+
+def _pid_in_use(pid: int) -> bool:
+    """Whether some process holds ``pid``. Permission to signal it doesn't matter: a pid
+    that exists, whoever owns it, is in use."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 def group_members(pgid: int) -> List[tuple]:
@@ -541,6 +554,11 @@ class Core:
         r.held_restart = None  # a stop also ends a restart a quiet window was holding
         if r.proc is not None:
             self._signal_stop(r, f"stopped as asked: {reason}")
+        elif r.remnant is not None:
+            # An earlier stop's group is still being ended. The unit reads stopped once, when
+            # that is done; this act is already recorded above, with who asked (R52).
+            if r.stop_pending is None:
+                r.stop_pending = f"stopped as asked: {reason}"
         elif r.state != "stopped":
             caught = " (a respawn was in flight; its worker is stopped when the client lists it)" \
                 if r.awaiting_respawn is not None else ""
@@ -908,16 +926,23 @@ class Core:
         """Members of a stopped unit's group that outlived its leader. A member still the
         process recorded, by pid and start time, keeps the group's id from being reused, so
         at the stop's deadline a SIGKILL to the group reaches only the unit's processes. If no
-        recorded member is left, the pids may be others' now and nothing is signalled."""
+        recorded member is left, the pids may be others' now and nothing is signalled.
+
+        A member that has ended but not been reaped still answers the probe. Where something
+        reaps orphans promptly (tini in the images, systemd on a host) that is brief; if the
+        daemon were ever PID 1 itself, such a zombie would hold the remnant until KILL_WAIT_S."""
         pgid, members, kill_at, killed_at = r.remnant
         live = [(pid, start) for pid, start in members if self._probe(pid, start)]
+        if not live and not _pid_in_use(pgid):
+            # Every recorded member is gone, but one may have forked and exited between two
+            # passes, as a wrapper running `cmd &` does. While no process holds the group's id
+            # as its pid, the id can't have been given to another group, so whatever is still
+            # in the group is the unit's (#639 review).
+            live = group_members(pgid)
         if not live:
             self._end_remnant(r, "the rest of its group was killed at the stop's deadline"
                               if killed_at is not None else "the rest of its group ended")
             return
-        # A live recorded member holds the group's id, so the group listed now is still the
-        # unit's: record what a member forked since the last pass, so it is reached too.
-        live += [m for m in group_members(pgid) if m not in live]
         if killed_at is None and now >= kill_at:
             try:
                 os.killpg(pgid, signal.SIGKILL)

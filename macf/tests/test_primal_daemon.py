@@ -65,11 +65,17 @@ if spec.get("child_ignores_term"):
                       "    leader = os.getppid()\n"
                       "    while os.getppid() == leader:\n"
                       "        time.sleep(0.02)\n"
+                      "    if len(sys.argv) > 3:\n"
+                      "        while not os.path.exists(sys.argv[3]):\n"
+                      "            time.sleep(0.02)\n"
                       "    late = subprocess.Popen([sys.executable, '-c', 'import signal, time; "
                       "signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(300)'])\n"
                       "    mark(sys.argv[2], late.pid)\n"
+                      "    if len(sys.argv) > 3:\n"
+                      "        os._exit(0)\n"
                       "time.sleep(300)\n", spec["child_ignores_term"]]
-                     + ([spec["child_forks_after"]] if spec.get("child_forks_after") else []))
+                     + ([spec["child_forks_after"]] if spec.get("child_forks_after") else [])
+                     + ([spec["child_forks_then_exits_on"]] if spec.get("child_forks_then_exits_on") else []))
 log, me = os.environ["MACF_EVENTS_LOG_PATH"], os.getpid()
 start, began = proc_start(me), time.monotonic()
 if spec.get("dump"):
@@ -1229,18 +1235,24 @@ def test_a_stop_reaches_the_units_whole_group(tmp_path, script, make_core):
 
 
 def test_a_member_forked_after_the_leader_ended_is_reached_too(tmp_path, script, make_core):
-    """A recorded member that forks after the leader's reap adds a process the first listing
-    never saw. The group is listed again each pass while a recorded member holds its id, so
-    the newcomer is recorded and killed with the rest."""
-    marker, grandchild = tmp_path / "child.pid", tmp_path / "grandchild.pid"
+    """A recorded member that forks after the leader's reap, then exits at once, as a wrapper
+    running `cmd &` does, leaves only a process the first listing never saw. The group is
+    listed again before the remnant is given up, so the newcomer is recorded and killed, and
+    the unit reads stopped only once it is gone."""
+    marker, grandchild, go = tmp_path / "child.pid", tmp_path / "grandchild.pid", tmp_path / "go"
     core = make_core([make_unit("worker", script, {"child_ignores_term": str(marker),
-                                                   "child_forks_after": str(grandchild)},
+                                                   "child_forks_after": str(grandchild),
+                                                   "child_forks_then_exits_on": str(go)},
                                 stop_grace_s=1.5)])
     core.boot()
     assert drive(core, lambda: core.state("worker") == "running")
     child = _child_pid(marker)
     core.stop("worker", OPERATOR, "test stop", peer=PEER)
+    assert drive(core, lambda: core._units["worker"].remnant is not None, timeout=3.0)
+    # Between two passes: the recorded child forks the late process and exits.
+    go.touch()
     late = _child_pid(grandchild)
+    assert wait_for(lambda: not _alive(child), timeout=5.0)
     assert drive(core, lambda: core.state("worker") == "stopped", timeout=6.0)
     assert not _alive(child) and not _alive(late), f"child {_alive(child)}, late {_alive(late)}"
 
@@ -1265,3 +1277,21 @@ def test_a_restart_waits_for_the_old_group(tmp_path, script, make_core):
     assert drive(core, new_incarnation, timeout=8.0)
     assert not seen_alive_with_new, "the new incarnation started while the old group's child still ran"
     assert not _alive(child)
+
+
+def test_a_second_stop_during_the_remnant_wait_does_not_read_stopped_early(tmp_path, script, make_core):
+    """A stop asked again while the first one's remnant is still running records nothing new:
+    the unit reads stopped once, when its group has ended."""
+    marker = tmp_path / "child.pid"
+    core = make_core([make_unit("worker", script, {"child_ignores_term": str(marker)}, stop_grace_s=1.5)])
+    core.boot()
+    assert drive(core, lambda: core.state("worker") == "running")
+    child = _child_pid(marker)
+    core.stop("worker", OPERATOR, "first stop", peer=PEER)
+    assert drive(core, lambda: core._units["worker"].remnant is not None, timeout=3.0)
+    core.stop("worker", OPERATOR, "second stop", peer=PEER)
+    assert not (core.state("worker") == "stopped" and _alive(child)), "stopped while the group still ran"
+    assert drive(core, lambda: core.state("worker") == "stopped", timeout=6.0)
+    assert not _alive(child)
+    stopped = [d for d in events("pd_unit_state", "worker") if d["state"] == "stopped"]
+    assert len(stopped) == 1, [d["reason"] for d in stopped]
