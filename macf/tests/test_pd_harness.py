@@ -103,7 +103,10 @@ class _Client:
     def __call__(self, argv):
         import subprocess
         self.calls.append(argv)
-        verb, sid = argv[1], argv[2]
+        verb, job = argv[1], argv[2]
+        if len(job) != 8:            # the client takes its job id, never the full session id
+            return subprocess.CompletedProcess(argv, 1, "", f"No job matching '{job}'")
+        sid = next(s for s in self.sessions if s.startswith(job))
         if verb == "stop":
             self.sessions[sid].terminate()
             self.sessions[sid].wait()
@@ -206,8 +209,8 @@ def test_decide_adopts_the_hosted_session_in_the_home(tmp_path):
     d = decide(_Unit("session", "session"), hosted, home)
 
     assert (d.action, d.session_id, d.pid) == (ADOPT, "3d52b89a-bbbb", 202)
-    assert client_command("restart", d.session_id) == ["claude", "respawn", "3d52b89a-bbbb"]
-    assert client_command("stop", d.session_id) == ["claude", "stop", "3d52b89a-bbbb"]
+    assert client_command("restart", d.session_id) == ["claude", "respawn", "3d52b89a"]
+    assert client_command("stop", d.session_id) == ["claude", "stop", "3d52b89a"]
 
 
 def test_two_hosted_sessions_in_the_home_are_refused_not_guessed(tmp_path):
