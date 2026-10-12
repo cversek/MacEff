@@ -309,6 +309,82 @@ def cmd_duty_add(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_duty_edit(args: argparse.Namespace) -> int:
+    from .store import RoleError, RoleStore
+    from .models import dump
+    store = RoleStore()
+    try:
+        duty, path = store.find_duty(args.duty)
+        if args.due and args.clear_due:
+            raise RoleError("--due and --clear-due contradict each other")
+        if args.cadence and args.clear_cadence:
+            raise RoleError("--cadence and --clear-cadence contradict each other")
+        changes: Dict[str, Any] = {}
+        for key in ("title", "body", "importance", "horizon", "cadence"):
+            if getattr(args, key) is not None:
+                changes[key] = getattr(args, key)
+        if args.due is not None:
+            changes["due"] = _datetime(args.due, "--due")
+        if args.clear_due:
+            changes["due"] = None
+        if args.clear_cadence:
+            changes["cadence"] = None
+        if args.clear_horizon:
+            changes["horizon"] = None
+        if args.depends_on is not None:
+            changes["depends_on"] = _csv(args.depends_on)
+        if not changes:
+            raise RoleError("say what to change: --title, --body, --due, --horizon, --cadence, --importance "
+                            "or --depends-on (state changes are engage, done, defer and reactivate)")
+        duty = store.edit_duty(duty, path.parent, changes, why=args.why or "")
+    except (RoleError, ValueError) as e:
+        return _fail(e, args.json)
+    if args.json:
+        print(json.dumps(dump(duty), indent=2))
+        return 0
+    print(f"✅ edited D{duty.id}: {duty.updates[-1].description}")
+    print("   " + _duty_line(duty))
+    return 0
+
+
+def cmd_role_edit(args: argparse.Namespace) -> int:
+    from .store import RoleError, RoleStore
+    store = RoleStore()
+    try:
+        role, folder = store.find_role(args.role)
+        if args.expires and args.clear_expires:
+            raise RoleError("--expires and --clear-expires contradict each other")
+        changes: Dict[str, Any] = {}
+        for key in ("title", "icon", "review_horizon"):
+            if getattr(args, key) is not None:
+                changes[key] = getattr(args, key)
+        if args.expires is not None:
+            changes["expires"] = _date(args.expires, "--expires")
+        if args.clear_expires:
+            changes["expires"] = None
+        if args.review_by is not None:
+            changes["review_by"] = _date(args.review_by, "--review-by")
+        add, drop = _csv(args.resource), _csv(args.drop_resource)
+        if add or drop:
+            missing = [r for r in drop if r not in role.resources]
+            if missing:
+                raise RoleError(f"not a resource of this role: {', '.join(missing)}")
+            changes["resources"] = [r for r in role.resources if r not in drop] + [r for r in add if r not in role.resources]
+        if not changes:
+            raise RoleError("say what to change: --title, --icon, --expires, --review-by, --review-horizon, "
+                            "--resource or --drop-resource (state changes are pause, resume, expire and retire)")
+        role = store.edit_role(role, folder, changes, why=args.why or "")
+    except (RoleError, ValueError) as e:
+        return _fail(e, args.json)
+    if args.json:
+        print(json.dumps(_role_record(store, role, folder), indent=2))
+        return 0
+    print(f"✅ edited R{role.id}: {role.updates[-1].description}")
+    if "icon" in changes and role.icon not in ICON_SHELF:
+        print(f"   icon {role.icon!r} is not on the policy shelf; kept as given")
+    return 0
+
+
 def print_duty_view(store: RoleStore, duty: Duty, path, role: Role, indent: str = "") -> None:
     """The formatted information view of one duty (what `duty show` prints)."""
     print(indent + _duty_line(duty))
@@ -696,6 +772,20 @@ def add_role_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--why", help="first note on the role")
     js(p); p.set_defaults(func=cmd_role_create)
 
+    p = rs.add_parser("edit", help="change a role on the record, with the old and new value and the reason "
+                                   "(state: pause, resume, expire, retire)")
+    p.add_argument("role", help="role id or title prefix")
+    p.add_argument("--title")
+    p.add_argument("--icon", help="one glyph; the policy shelf: " + " ".join(ICON_SHELF))
+    p.add_argument("--expires", help="YYYY-MM-DD")
+    p.add_argument("--clear-expires", action="store_true", help="the role no longer ends on a date")
+    p.add_argument("--review-by", help="YYYY-MM-DD")
+    p.add_argument("--review-horizon", help="e.g. 14d")
+    p.add_argument("--resource", action="append", help="add a path or URL (repeatable, or comma-separated)")
+    p.add_argument("--drop-resource", action="append", help="remove a path or URL")
+    p.add_argument("--why", help="the reason; required when a date or horizon changes")
+    js(p); p.set_defaults(func=cmd_role_edit)
+
     p = rs.add_parser("list", help="active and paused roles (--all for every state)")
     p.add_argument("--all", action="store_true")
     js(p); p.set_defaults(func=cmd_role_list)
@@ -759,13 +849,31 @@ def add_role_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--meta", action="store_true", help="the role's own upkeep (charter, review, migration): "
                    "untimed, done soon after; the charter meta duty is engageable while the Boundaries are the scaffold")
     p.add_argument("--due", help="YYYY-MM-DD or YYYY-MM-DDTHH:MM")
-    p.add_argument("--cadence", help="daily | weekly:tue[,thu] | monthly:15  [at HH:MM] [dur 6h] [until YYYY-MM-DD]")
-    p.add_argument("--horizon", help="lead time before due at which the duty is DUE_SOON: 3d, 36h, 90m")
+    p.add_argument("--cadence", help="daily | weekly:tue[,thu] | monthly:15  [at HH:MM] [dur 6h] [until YYYY-MM-DD]; "
+                        "or on:<event> [until ...], recurring on an event in the agent's log")
+    p.add_argument("--horizon", help="lead time before due at which the duty is DUE_SOON: 3d, 36h, 90m; "
+                        "for an on:<event> cadence, optional, the grace after the event before OVERDUE")
     p.add_argument("--why", help="the reasoning behind the horizon (required with --horizon); the duty's first note")
     p.add_argument("--depends-on", action="append", help="duty ids that must be done first, comma-separated")
     p.add_argument("--tracks", action="append", help="task ids implementing this duty, comma-separated")
     p.add_argument("--wiki-links", action="append", help="concepts, comma-separated")
     js(p); p.set_defaults(func=cmd_duty_add)
+
+    p = ds.add_parser("edit", help="change a declared duty on the record, with the old and new value and the "
+                                   "reason (state: engage, done, defer, reactivate)")
+    p.add_argument("duty", help="duty id or title prefix")
+    p.add_argument("--title")
+    p.add_argument("--body")
+    p.add_argument("--importance", choices=("critical", "high", "normal", "low"))
+    p.add_argument("--due", help="YYYY-MM-DD or YYYY-MM-DDTHH:MM")
+    p.add_argument("--clear-due", action="store_true")
+    p.add_argument("--horizon", help="3d, 36h, 90m")
+    p.add_argument("--clear-horizon", action="store_true", help="only for a duty left with no date or cadence")
+    p.add_argument("--cadence", help="as for duty add")
+    p.add_argument("--clear-cadence", action="store_true")
+    p.add_argument("--depends-on", action="append", help="replaces the list: duty ids, comma-separated")
+    p.add_argument("--why", help="the reason; required when due, horizon or cadence changes")
+    js(p); p.set_defaults(func=cmd_duty_edit)
 
     p = ds.add_parser("show", help="a duty with live task status and every update")
     p.add_argument("duty", help="id or title prefix")
