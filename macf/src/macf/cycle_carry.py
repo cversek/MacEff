@@ -41,8 +41,9 @@ CARRY_KEY_FIELD = "mode"
 #: The families of state this version of the carry re-asserts. Sprint and
 #: play-time scope are event-sourced and read cycle-scoped, so they are lost at a
 #: boundary unless carried, exactly like a mode. The play-time timer is read the
-#: same way and goes with them.
-CARRY_FAMILIES = ("mode", "scope", "timer")
+#: same way and goes with them. The focused role is read on every tool call, so it
+#: is read cycle-scoped too, and carried (#460).
+CARRY_FAMILIES = ("mode", "scope", "timer", "focus")
 
 #: Written after every carry, whether or not anything was carried. It is what
 #: bounds the next boundary's walk: a cycle holding a COMPLETE marker (every
@@ -51,6 +52,10 @@ CARRY_FAMILIES = ("mode", "scope", "timer")
 CARRY_MARKER_EVENT = "state_carried"
 
 TIMER_EVENT_TYPES = frozenset({"scope_timer_set", "scope_timer_cleared", "scope_cleared"})
+
+#: The roles package's focus event (``macf.roles.focus.EVENT``), named here so the
+#: carry does not import the roles package.
+FOCUS_EVENT = "role_focus_change"
 
 
 def _is_complete_marker(event: dict) -> bool:
@@ -76,7 +81,7 @@ def _read_window() -> Tuple[List[dict], bool]:
     reached the start of history without finding a complete marker.
     """
     from .task.scope import SCOPE_EVENT_TYPES
-    relevant = CARRIED_EVENT_TYPES | SCOPE_EVENT_TYPES | TIMER_EVENT_TYPES
+    relevant = CARRIED_EVENT_TYPES | SCOPE_EVENT_TYPES | TIMER_EVENT_TYPES | {FOCUS_EVENT}
 
     collected: List[dict] = []
     boundaries_seen = 0
@@ -129,6 +134,15 @@ def _terminal_timer(window: List[dict]) -> Optional[dict]:
             return None
         end = (event.get("data") or {}).get("timer_end_epoch") or 0
         return event if end > time.time() else None
+    return None
+
+
+def _terminal_focus(window: List[dict]) -> Optional[dict]:
+    """The role focused at the boundary, if any. An unfocus carries nothing: the
+    marker says focus was carried, so a cycle-scoped read answers 'unfocused'."""
+    for event in reversed(window):
+        if event.get("event") == FOCUS_EVENT:
+            return event if (event.get("data") or {}).get("role_id") else None
     return None
 
 
@@ -220,6 +234,17 @@ def carry_state_forward(current_cycle: Optional[int] = None) -> List[str]:
         data = dict(timer.get("data") or {})
         data.update(provenance)
         (carried if append_event("scope_timer_set", data) else failed).append("timer")
+
+    # A carried focus is a continuation, never a fresh act of focusing: readers take
+    # its time from carried_from_timestamp, and the nag does not count it as the
+    # operator acknowledging a duty (``roles.focus``).
+    focus = _terminal_focus(window)
+    if focus is not None:
+        data = dict(focus.get("data") or {})
+        data["carried_from_timestamp"] = data.get("carried_from_timestamp") or focus.get("timestamp")
+        data["origin_cycle"] = _origin_cycle(focus, data, current_cycle)
+        data.update(provenance)
+        (carried if append_event(FOCUS_EVENT, data) else failed).append("focus")
 
     marker = {
         "cycle": current_cycle,
